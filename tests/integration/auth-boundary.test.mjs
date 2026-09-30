@@ -3,11 +3,8 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import { mintSignedSessionToken } from '../../src/context.mjs';
 import { createServer } from '../../src/server.mjs';
 import { createAddressedSecret } from '../../src/lib/addressedSecrets.mjs';
-import { generateSalt, hashSecretWithSalt } from '../../src/lib/crypto.mjs';
-import { createBootstrapToken } from '../../src/services/tokens.mjs';
 
 import {
-  agentHeaders,
   demoHeaders,
   request,
   signedSessionHeaders,
@@ -74,9 +71,9 @@ describe('signed-session API boundary', () => {
       'x-role': 'admin',
       'x-tenant-id': 'ten_demo',
     };
-    const res = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', {
+    const res = await request(baseUrl, 'POST', '/v1/targets', {
       headers,
-      body: { name: 'should-fail', max_registrations: 1 },
+      body: { kind: 'fqdn', value: 'should-fail.example.com' },
     });
     assert.equal(res.status, 403);
     assert.equal(res.json.error, 'forbidden');
@@ -150,158 +147,4 @@ describe('signed-session API boundary', () => {
     assert.equal(denied.status, 403);
   });
 
-  it('agent register and heartbeat work without human session', async () => {
-    const adminCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret } = createBootstrapToken(adminCtx, {
-      target_group_id: 'tg_1',
-      max_registrations: 2,
-    });
-
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      body: {
-        bootstrap_token: secret,
-        hostname: 'signed-mode-host',
-        name: 'signed-agent',
-        capabilities: ['heartbeat'],
-      },
-    });
-    assert.equal(reg.status, 201);
-    assert.ok(reg.json.agent_credential?.startsWith('agc_v1.'));
-    const agentId = reg.json.agent.id;
-    const credential = reg.json.agent_credential;
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(credential),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(hb.status, 200);
-
-    const list = await request(baseUrl, 'GET', '/v1/agents', {
-      headers: signedSessionHeaders('engineer', 'ten_demo', 'usr_eng', TEST_SECRET, mintSignedSessionToken),
-    });
-    assert.equal(list.status, 200);
-    assert.ok(list.json.items.some((a) => a.id === agentId));
-
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders(credential),
-    });
-    assert.equal(jobs.status, 200);
-  });
-
-  it('admin can revoke an agent and the old credential stops working', async () => {
-    const adminCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret } = createBootstrapToken(adminCtx, {
-      target_group_id: 'tg_1',
-      max_registrations: 1,
-    });
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      body: {
-        bootstrap_token: secret,
-        hostname: 'revoke-host',
-        name: 'revoke-agent',
-        capabilities: ['heartbeat'],
-      },
-    });
-    assert.equal(reg.status, 201);
-    const agentId = reg.json.agent.id;
-    const credential = reg.json.agent_credential;
-
-    const viewerRevoke = await request(baseUrl, 'POST', `/v1/agents/${agentId}/revoke`, {
-      headers: signedSessionHeaders('viewer', 'ten_demo', 'usr_view', TEST_SECRET, mintSignedSessionToken),
-    });
-    assert.equal(viewerRevoke.status, 403);
-    assert.equal(viewerRevoke.json.permission, 'agent:revoke');
-
-    const revoked = await request(baseUrl, 'POST', `/v1/agents/${agentId}/revoke`, {
-      headers: signedSessionHeaders('admin', 'ten_demo', 'usr_admin', TEST_SECRET, mintSignedSessionToken),
-    });
-    assert.equal(revoked.status, 200);
-    assert.equal(revoked.json.agent.id, agentId);
-    assert.equal(revoked.json.agent.status, 'revoked');
-    assert.equal(revoked.json.agent.credential_hash, undefined);
-    assert.ok(getStore().auditLog.some((a) => a.action === 'agent.revoked' && a.resource_id === agentId));
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(credential),
-      body: { version: '0.1.1' },
-    });
-    assert.equal(hb.status, 401);
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders(credential),
-    });
-    assert.equal(jobs.status, 401);
-    const denial = getStore().auditLog.find(
-      (a) => a.action === 'agent.auth_denied'
-        && a.resource_id === agentId
-        && a.metadata?.reason === 'revoked',
-    );
-    assert.ok(denial);
-    assert.ok(!JSON.stringify(denial).includes(credential));
-  });
-
-  it('bogus nonexistent addressed agent bearer does not write tenant-local audit', async () => {
-    const ghostId = 'agent_integration_ghost';
-    const tampered = `${createAddressedSecret('agc_', 'ten_demo', ghostId)}tampered`;
-    const before = getStore().auditLog.length;
-    const res = await request(baseUrl, 'POST', `/v1/agents/${ghostId}/heartbeat`, {
-      headers: agentHeaders(tampered),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(res.status, 401);
-    const denials = getStore().auditLog
-      .slice(before)
-      .filter((a) => a.action === 'agent.auth_denied');
-    assert.equal(denials.length, 0);
-  });
-
-  it('invalid addressed agent bearer audits without secret material', async () => {
-    const adminCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret } = createBootstrapToken(adminCtx, {
-      target_group_id: 'tg_1',
-      max_registrations: 2,
-    });
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      body: {
-        bootstrap_token: secret,
-        hostname: 'audit-host',
-        capabilities: ['heartbeat'],
-      },
-    });
-    assert.equal(reg.status, 201);
-    const agentId = reg.json.agent.id;
-    const tampered = `${createAddressedSecret('agc_', 'ten_demo', agentId)}tampered`;
-    const before = getStore().auditLog.length;
-    const res = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(tampered),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(res.status, 401);
-    const denial = getStore().auditLog
-      .slice(before)
-      .find((a) => a.action === 'agent.auth_denied');
-    assert.ok(denial);
-    assert.equal(denial.tenant_id, 'ten_demo');
-    assert.equal(denial.resource_id, agentId);
-    assert.ok(!JSON.stringify(denial).includes(tampered));
-  });
-
-  it('legacy opaque agc_ credential still authenticates when manually seeded', async () => {
-    const legacyCredential = 'agc_manuallegacyopaque123456789012345';
-    const agentId = 'agent_legacy';
-    const salt = generateSalt();
-    getStore().agents.push({
-      id: agentId,
-      tenant_id: 'ten_demo',
-      name: 'legacy',
-      hostname: 'legacy-host',
-      status: 'online',
-      credential_salt: salt,
-      credential_hash: hashSecretWithSalt(legacyCredential, salt),
-    });
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(legacyCredential),
-      body: { version: '0.0.0' },
-    });
-    assert.equal(hb.status, 200);
-  });
 });

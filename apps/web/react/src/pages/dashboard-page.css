@@ -1,0 +1,418 @@
+/* AstraNull dashboard — outside-in readiness console.
+   Token-only: every color/space/radius comes from styles.css :root.
+   One bold element (the defense-path strip); everything else calm. */
+
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.dashboard-overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+}
+
+/* ---- Kill-switch banner spacing reuses shared .form-banner ---- */
+
+/* ---- Defense path strip: the single memorable element ---- */
+.defense-path {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--elev-inset);
+  padding: var(--space-5) var(--space-6);
+}
+
+.defense-path-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.defense-path-head h2 {
+  margin: 0;
+  font-family: 'Space Grotesk', 'Inter', system-ui;
+  font-size: 1.375rem;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.defense-path-head p {
+  margin: var(--space-1) 0 0;
+  color: var(--fg-2);
+  font-size: 0.9375rem;
+}
+
+.defense-path-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+}
+
+.defense-path-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: stretch;
+  gap: 0;
+}
+
+.defense-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
+  border: 1px solid var(--border-soft);
+  border-left-width: 3px;
+  background: var(--surface-sunk);
+}
+
+.defense-stage:first-child { border-top-left-radius: var(--radius-md); border-bottom-left-radius: var(--radius-md); }
+.defense-stage:last-child { border-top-right-radius: var(--radius-md); border-bottom-right-radius: var(--radius-md); }
+.defense-stage + .defense-stage { border-left-color: var(--border-soft); }
+
+/* Flow arrows between stages — carved from the gap, not decorative glyphs. */
+.defense-stage:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -7px;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%) rotate(45deg);
+  border-top: 2px solid var(--border-strong);
+  border-right: 2px solid var(--border-strong);
+  background: var(--surface);
+  z-index: 1;
+}
+
+.defense-stage[data-status='pass'] { border-left-color: var(--success); }
+.defense-stage[data-status='review'] { border-left-color: var(--warn); }
+.defense-stage[data-status='gap'] { border-left-color: var(--danger); }
+.defense-stage[data-status='none'] { border-left-color: var(--border-strong); }
+
+.defense-stage-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.defense-stage-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+}
+
+.defense-stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  border: 2px solid transparent;
+}
+.defense-stage-dot[data-status='pass'] { background: var(--success); }
+.defense-stage-dot[data-status='review'] { background: var(--warn); }
+.defense-stage-dot[data-status='gap'] { background: var(--danger); }
+.defense-stage-dot[data-status='none'] { background: transparent; border-color: var(--border-strong); }
+
+.defense-stage-headline {
+  font-family: 'Space Grotesk', 'Inter', system-ui;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.defense-stage-detail {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--fg-2);
+}
+
+/* ---- KPI row ---- */
+.dashboard-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+.dashboard-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--elev-inset);
+}
+
+.dashboard-kpi-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+}
+
+.dashboard-kpi-value {
+  font-family: 'Space Grotesk', 'Inter', system-ui;
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.dashboard-kpi-value .unit {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fg-2);
+  margin-left: 2px;
+}
+
+.dashboard-kpi-sub {
+  font-size: 0.8125rem;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+
+/* Severity split chips inside the findings KPI */
+.dashboard-kpi-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+/* ---- Two-column workspace grid ---- */
+.an-dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+  width: 100%;
+}
+
+.dashboard-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+/* ---- Prioritized fixes ---- */
+.fix-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.fix-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.fix-rank {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset);
+}
+.fix-rank[data-tone='danger'] { color: var(--danger); }
+.fix-rank[data-tone='warn'] { color: var(--warn); }
+
+.fix-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fix-copy strong { font-size: 0.9375rem; overflow-wrap: anywhere; }
+.fix-copy span { font-size: 0.8125rem; color: var(--fg-2); overflow-wrap: anywhere; }
+
+/* ---- Target posture table cell (targets-first) ---- */
+.posture-target {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.posture-target strong {
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+.posture-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: 2px;
+}
+.posture-tag {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: var(--fg-2);
+  padding: 1px var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset);
+  white-space: nowrap;
+}
+.posture-tags-empty { color: var(--fg-2); font-size: 0.75rem; }
+
+/* ---- Weighted factors (compact) ---- */
+.an-factor-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.factor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.factor-name {
+  font-size: 0.875rem;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.factor-score {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.8125rem;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.factor-track {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset);
+  overflow: hidden;
+}
+.factor-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  transition: width var(--motion-slow, 300ms) var(--ease-out-soft, ease);
+}
+.factor-fill[data-tone='success'] { background: var(--success); }
+.factor-fill[data-tone='warn'] { background: var(--warn); }
+.factor-fill[data-tone='danger'] { background: var(--danger); }
+.factor-detail {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+
+/* ---- Risk trends layout ---- */
+.risk-trends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.risk-trends-hero .card-content { min-height: 0; }
+.risk-secondary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+  align-items: start;
+}
+
+/* Severity distribution bars */
+.severity-dist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.severity-dist-row {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+.severity-dist-label {
+  font-size: 0.8125rem;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.severity-dist-track {
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset);
+  overflow: hidden;
+}
+.severity-dist-fill { display: block; height: 100%; border-radius: var(--radius-pill); }
+.severity-dist-fill[data-tone='danger'] { background: var(--danger); }
+.severity-dist-fill[data-tone='warn'] { background: var(--warn); }
+.severity-dist-fill[data-tone='muted'] { background: var(--border-strong); }
+.severity-dist-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+/* Aging findings list reuse of shared dashboard-link-list is fine; add nothing new. */
+
+/* ---- Responsive ---- */
+@media (max-width: 1100px) {
+  .an-dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-kpis { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 900px) {
+  .defense-path-track { grid-template-columns: minmax(0, 1fr); }
+  .defense-stage { border-left-width: 3px; border-radius: var(--radius-md); }
+  .defense-stage + .defense-stage { margin-top: var(--space-2); }
+  .defense-stage:not(:last-child)::after {
+    top: auto;
+    bottom: -9px;
+    right: 50%;
+    transform: translateX(50%) rotate(135deg);
+  }
+  .risk-secondary { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  .dashboard-kpis { grid-template-columns: minmax(0, 1fr); }
+  .severity-dist-row { grid-template-columns: 5.5rem minmax(0, 1fr) auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .factor-fill { transition: none; }
+}

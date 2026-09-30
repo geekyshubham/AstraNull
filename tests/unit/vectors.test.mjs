@@ -225,11 +225,11 @@ describe('vector catalog', () => {
       target_group_id: 'tg_1',
     });
     getStore().targetVerifications = [{
-      id: 'tv_vector_agent_verified',
+      id: 'tv_vector_dns_verified',
       tenant_id: 'ten_demo',
       target_id: 'tgt_1',
-      state: 'agent_verified',
-      source_kind: 'agent_observation',
+      state: 'dns_verified',
+      source_kind: 'dns_txt',
       source_ref: { ownership_verification_id: 'own_vector' },
       transitioned_at: new Date().toISOString(),
       transitioned_by: 'system',

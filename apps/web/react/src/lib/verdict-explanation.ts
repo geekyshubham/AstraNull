@@ -28,36 +28,6 @@ export function isSignedProbeEvidenceEvent(event: DataItem) {
     && getString(event, ['producer_kind']) === 'signed_probe';
 }
 
-export function isAuthenticatedAgentObservationEvent(event: DataItem) {
-  return getString(event, ['signal_type']) === 'agent_observation'
-    && getString(event, ['producer_kind']) === 'authenticated_agent';
-}
-
-export function isInternalControlPlaneNoObservationEvent(event: DataItem) {
-  return getString(event, ['signal_type']) === 'agent_no_observation'
-    && getString(event, ['producer_kind']) === 'internal_control_plane';
-}
-
-function isTrustedVerdictEvidenceEvent(event: DataItem) {
-  return isSignedProbeEvidenceEvent(event)
-    || isAuthenticatedAgentObservationEvent(event)
-    || isInternalControlPlaneNoObservationEvent(event);
-}
-
-function verdictExplanationMetaMode(event: DataItem) {
-  const meta = (event.metadata as DataItem | undefined) ?? {};
-  const signalType = getString(event, ['signal_type'], '');
-  if (signalType === 'agent_no_observation') {
-    if (meta.reason) return `no observation (${String(meta.reason)})`;
-    if (meta.phase) return String(meta.phase);
-  }
-  for (const key of ['observation_mode', 'mode', 'source', 'interface', 'log_source']) {
-    const value = meta[key];
-    if (value !== undefined && value !== null && value !== '') return String(value);
-  }
-  return signalType || 'event';
-}
-
 const KNOWN_REMEDIATION_TEMPLATE_KEYS = new Set(['waf_posture_remediation']);
 
 function parseFindingReasonCodes(finding: DataItem | null | undefined) {
@@ -88,17 +58,6 @@ function probeEventsHaveError(probeEvents: DataItem[]) {
   });
 }
 
-function agentPlacementUnbound(detail: DataItem | null | undefined) {
-  const placement = detail?.verdict && typeof detail.verdict === 'object'
-    ? (detail.verdict as DataItem).placement_confidence as DataItem | undefined
-    : undefined;
-  if (!placement || typeof placement !== 'object') return false;
-  const level = String(placement.level ?? '').toLowerCase();
-  const mode = String(placement.observation_mode ?? '').toLowerCase();
-  const reason = String(placement.reason ?? '').toLowerCase();
-  return level === 'invalid' || mode === 'unbound' || reason.includes('no agent is bound');
-}
-
 function resolveWafPostureRemediation(context: {
   finding?: DataItem | null;
   detail?: DataItem | null;
@@ -107,7 +66,6 @@ function resolveWafPostureRemediation(context: {
   const reasonCodes = parseFindingReasonCodes(context.finding);
   const postureStatus = parseFindingPostureStatus(context.finding);
   const probeEvents = (context.events ?? []).filter(isSignedProbeEvidenceEvent);
-  const noObsEvents = (context.events ?? []).filter(isInternalControlPlaneNoObservationEvent);
   const steps: string[] = [];
 
   if (reasonCodes.includes('origin_bypass_confirmed')) {
@@ -124,9 +82,6 @@ function resolveWafPostureRemediation(context: {
   }
   if (probeEventsHaveError(probeEvents)) {
     steps.push('Verify the declared URL is reachable from external probes.');
-  }
-  if (noObsEvents.length || agentPlacementUnbound(context.detail ?? null)) {
-    steps.push('Bind an outbound agent to the target group and confirm canary observation is enabled.');
   }
 
   if (steps.length) {
@@ -171,68 +126,6 @@ export function summarizeExternalProbeEvidence(probeEvents: DataItem[]) {
     .join('; ');
 }
 
-export function summarizeInternalAgentEvidence(obsEvents: DataItem[], noObsEvents: DataItem[]) {
-  const trustedObsEvents = obsEvents.filter(isAuthenticatedAgentObservationEvent);
-  const trustedNoObsEvents = noObsEvents.filter(isInternalControlPlaneNoObservationEvent);
-  const lines: string[] = [];
-  if (trustedObsEvents.length) {
-    trustedObsEvents.forEach((event) => {
-      const parts: string[] = [];
-      if (event.timestamp) parts.push(String(event.timestamp));
-      if (event.agent_id) parts.push(`agent ${String(event.agent_id)}`);
-      if (event.source) parts.push(`source ${String(event.source)}`);
-      if (event.nonce_hash) parts.push('nonce correlated');
-      const meta = (event.metadata as DataItem | undefined) ?? {};
-      if (meta.reason) parts.push(String(meta.reason));
-      lines.push(parts.length ? parts.join(' · ') : 'agent_observation recorded');
-    });
-  } else {
-    lines.push('No authenticated agent_observation events in this run timeline.');
-  }
-  trustedNoObsEvents.forEach((event) => {
-    const meta = (event.metadata as DataItem | undefined) ?? {};
-    const reason = meta.reason ? String(meta.reason) : 'no observation within bounded window';
-    lines.push(`agent_no_observation · ${reason}`);
-  });
-  return lines.join('; ');
-}
-
-export function summarizeObservationMode(events: DataItem[]) {
-  const trustedEvents = events.filter(isTrustedVerdictEvidenceEvent);
-  const agentSignals = trustedEvents.filter((event) => (
-    isAuthenticatedAgentObservationEvent(event)
-    || isInternalControlPlaneNoObservationEvent(event)
-  ));
-  const pool = agentSignals.length ? agentSignals : trustedEvents;
-  if (!pool.length) return 'Observation mode cannot be determined — no trusted agent or probe events yet.';
-  const modes = [...new Set(pool.map((event) => verdictExplanationMetaMode(event)))];
-  return modes.join(', ');
-}
-
-export function summarizePlacementConfidence(
-  matchingObs: DataItem[],
-  noObsEvents: DataItem[],
-  verdictPlacement?: DataItem
-) {
-  const trustedMatchingObs = matchingObs.filter(isAuthenticatedAgentObservationEvent);
-  const trustedNoObsEvents = noObsEvents.filter(isInternalControlPlaneNoObservationEvent);
-  if (trustedMatchingObs.length && verdictPlacement && typeof verdictPlacement === 'object') {
-    const parts: string[] = [];
-    if (verdictPlacement.level) parts.push(String(verdictPlacement.level));
-    if (verdictPlacement.observation_mode) parts.push(`mode ${String(verdictPlacement.observation_mode)}`);
-    if (verdictPlacement.reason) parts.push(String(verdictPlacement.reason));
-    if (verdictPlacement.agent_id) parts.push(`agent ${String(verdictPlacement.agent_id)}`);
-    if (parts.length) return parts.join(' · ');
-  }
-  if (trustedMatchingObs.length) {
-    return 'Placement confidence is supported by job-bound authenticated agent observation correlated to this run.';
-  }
-  if (trustedNoObsEvents.length) {
-    return 'Placement confidence is limited: the trusted observation window ended with agent_no_observation and no matching authenticated observation.';
-  }
-  return 'Placement confidence cannot be proven from trusted run events yet.';
-}
-
 export function buildVerdictExplanationFields(
   detail: DataItem | null,
   events: DataItem[],
@@ -241,12 +134,6 @@ export function buildVerdictExplanationFields(
   if (!detail?.verdict || typeof detail.verdict !== 'object') return [];
 
   const probeEvents = events.filter(isSignedProbeEvidenceEvent);
-  const obsEvents = events.filter(isAuthenticatedAgentObservationEvent);
-  const noObsEvents = events.filter(isInternalControlPlaneNoObservationEvent);
-  const nonceHash = getNestedString(detail, ['correlation', 'nonce_hash'], '');
-  const matchingObs = nonceHash
-    ? obsEvents.filter((event) => getString(event, ['nonce_hash'], '') === nonceHash)
-    : obsEvents;
 
   const verdict = detail.verdict as DataItem;
   const rawRemediation = options.remediationTemplate ?? getString(detail, ['remediation_template'], '');
@@ -260,12 +147,6 @@ export function buildVerdictExplanationFields(
 
   return [
     { label: 'External probe evidence', value: summarizeExternalProbeEvidence(probeEvents) },
-    { label: 'Internal agent evidence', value: summarizeInternalAgentEvidence(obsEvents, noObsEvents) },
-    { label: 'Observation mode', value: summarizeObservationMode(events) },
-    {
-      label: 'Placement confidence',
-      value: summarizePlacementConfidence(matchingObs, noObsEvents, verdict.placement_confidence as DataItem | undefined),
-    },
     { label: 'Conclusion', value: conclusion },
     {
       label: 'Remediation',
@@ -275,7 +156,6 @@ export function buildVerdictExplanationFields(
 }
 
 export function normalizeVerdictKey(verdict: string) {
-  if (verdict === 'misplaced_agent') return 'misplaced';
   return verdict;
 }
 
@@ -294,8 +174,7 @@ export function trafficHopState(hop: string, verdict?: string) {
 }
 
 export const TRUTH_TABLE_ROWS: Array<{ key: string; description: string }> = [
-  { key: 'protected', description: 'Blocked before origin; observation absent or consistent with policy.' },
-  { key: 'bypassable', description: 'Edge did not stop traffic; origin/agent observed the marker.' },
-  { key: 'penetrated', description: 'Protection failed; unwanted reach confirmed by evidence.' },
-  { key: 'misplaced', description: 'Agent or canary placement does not match the declared protected path.' },
+  { key: 'protected', description: 'Blocked before origin by external probe evidence.' },
+  { key: 'bypassable', description: 'Edge did not stop traffic; the external probe reached the origin.' },
+  { key: 'penetrated', description: 'Protection failed; unwanted reach confirmed by external probe evidence.' },
 ];

@@ -6,13 +6,19 @@
  * sibling or newly declared target.
  */
 
-/** Ordered strength of verification states. Higher means stronger evidence of control. */
+/**
+ * Ordered strength of verification states. Higher means stronger evidence of control.
+ *
+ * Outside-in only (ADR-0008): there is no agent, so `agent_verified` is intentionally absent
+ * from this map. Any legacy row still stored as `agent_verified` falls through to rank 0
+ * (unverified) via the `?? 0` lookups below and must re-prove control with DNS/HTTP before
+ * it authorizes any egress.
+ */
 export const VERIFICATION_RANK = Object.freeze({
   unverified: 0,
   pending: 1,
   dns_verified: 2,
   provider_verified: 2,
-  agent_verified: 3,
   user_confirmed: 4,
 });
 

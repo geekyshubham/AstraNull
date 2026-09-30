@@ -2,25 +2,20 @@ export const EVENT_PRODUCER_KINDS = Object.freeze({
   LEGACY_UNTRUSTED: 'legacy_untrusted',
   PUBLIC_API: 'public_api',
   SIGNED_PROBE: 'signed_probe',
-  AUTHENTICATED_AGENT: 'authenticated_agent',
   INTERNAL_SIMULATION: 'internal_simulation',
   INTERNAL_CONTROL_PLANE: 'internal_control_plane',
 });
 
+// ADR-0008: agents are removed. Verdicts derive from external probe evidence only, so no
+// signal is trusted from an authenticated agent. `ownership_observation` is trusted only
+// from signed probes.
 const TRUSTED_PRODUCERS_BY_SIGNAL = new Map([
   ['probe_result', new Set([
     EVENT_PRODUCER_KINDS.SIGNED_PROBE,
     EVENT_PRODUCER_KINDS.INTERNAL_SIMULATION,
   ])],
-  ['agent_observation', new Set([
-    EVENT_PRODUCER_KINDS.AUTHENTICATED_AGENT,
-  ])],
   ['ownership_observation', new Set([
     EVENT_PRODUCER_KINDS.SIGNED_PROBE,
-    EVENT_PRODUCER_KINDS.AUTHENTICATED_AGENT,
-  ])],
-  ['agent_no_observation', new Set([
-    EVENT_PRODUCER_KINDS.INTERNAL_CONTROL_PLANE,
   ])],
 ]);
 

@@ -550,20 +550,10 @@ export function createValidationEvidenceRepository(pool) {
            RETURNING id, test_run_id`,
           [tenantId, id, completedAt],
         );
-        const cancelledAgentJobs = await client.query(
-          `UPDATE agent_jobs
-           SET status = 'cancelled'
-           WHERE tenant_id = $1 AND test_run_id = $2
-             AND status IN ('pending', 'acked')
-           RETURNING id, test_run_id, agent_id`,
-          [tenantId, id],
-        );
         return {
           run: mapTestRunRow(updated.rows[0]),
           cancelled: true,
           cancelled_jobs: cancelledJobs.rows,
-          cancelled_agent_jobs: cancelledAgentJobs.rows,
-          cancelled_agent_job_ids: cancelledAgentJobs.rows.map((row) => row.id),
         };
       });
     },

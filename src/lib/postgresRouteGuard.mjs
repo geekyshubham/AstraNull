@@ -11,53 +11,6 @@ export function isNotificationManagementRoute(path, method) {
   return path === '/v1/notifications' && (method === 'GET' || method === 'POST');
 }
 
-/**
- * @param {string} path
- * @param {string} method
- */
-export function isAgentUpdateRoute(path, method) {
-  if (method === 'GET' && /^\/v1\/agents\/[^/]+\/update$/.test(path)) return true;
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/update-status$/.test(path)) return true;
-  if (path === '/v1/agent-update-trust-keys' && (method === 'GET' || method === 'POST')) return true;
-  if (method === 'POST' && /^\/v1\/agent-update-trust-keys\/[^/]+\/revoke$/.test(path)) return true;
-  if (path === '/v1/agent-updates' && (method === 'GET' || method === 'POST')) return true;
-  if (method === 'POST' && /^\/v1\/agent-updates\/[^/]+\/rollback$/.test(path)) return true;
-  return false;
-}
-
-/**
- * @param {string} path
- * @param {string} method
- * @returns {readonly string[]}
- */
-export function requiredAgentUpdateServiceMethods(path, method) {
-  if (method === 'GET' && /^\/v1\/agents\/[^/]+\/update$/.test(path)) {
-    return ['pollAgentUpdate'];
-  }
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/update-status$/.test(path)) {
-    return ['recordAgentUpdateStatus'];
-  }
-  if (path === '/v1/agent-update-trust-keys' && method === 'POST') {
-    return ['createAgentUpdateTrustKey'];
-  }
-  if (path === '/v1/agent-update-trust-keys' && method === 'GET') {
-    return ['listAgentUpdateTrustKeys'];
-  }
-  if (method === 'POST' && /^\/v1\/agent-update-trust-keys\/[^/]+\/revoke$/.test(path)) {
-    return ['revokeAgentUpdateTrustKey'];
-  }
-  if (path === '/v1/agent-updates' && method === 'POST') {
-    return ['createAgentUpdateRelease'];
-  }
-  if (path === '/v1/agent-updates' && method === 'GET') {
-    return ['listAgentUpdateReleases'];
-  }
-  if (method === 'POST' && /^\/v1\/agent-updates\/[^/]+\/rollback$/.test(path)) {
-    return ['requestAgentUpdateRollback'];
-  }
-  return [];
-}
-
 export function isHighScaleRoute(path, method) {
   if (path === '/v1/high-scale-requests' && (method === 'GET' || method === 'POST')) return true;
   if (/^\/v1\/high-scale-requests\/[^/]+\/artifacts$/.test(path) && (method === 'GET' || method === 'POST')) {
@@ -131,20 +84,6 @@ export function requiredHighScaleServiceMethods(path, method) {
     }
   }
   if (method === 'POST' && path === '/internal/soc/kill-switch') return ['setKillSwitch'];
-  return [];
-}
-
-export function isPlacementRoute(path, method) {
-  return method === 'GET' && path === '/v1/placement/reviews';
-}
-
-/**
- * @param {string} path
- * @param {string} method
- * @returns {readonly string[]}
- */
-export function requiredPlacementServiceMethods(path, method) {
-  if (isPlacementRoute(path, method)) return ['listPlacementReviews'];
   return [];
 }
 

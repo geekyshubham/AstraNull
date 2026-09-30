@@ -3,11 +3,9 @@ import { EmptyState } from '../components/ui/empty-state';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import type { PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { DetailRoutePage, ReportDetailPage } from './detail-pages';
-import { AgentsPage, ValidationSurfacePage } from './functional-surfaces';
+import { ValidationSurfacePage } from './functional-surfaces';
+import { DashboardPage } from './dashboard-page';
 import {
-  DashboardPage,
-  EnvironmentsPage,
-  IntegrationPage,
   PolicyPage,
   ReportsPage,
   SettingsPage,
@@ -16,6 +14,7 @@ import {
   SupportPage,
   TargetGroupsPage
 } from './page-components';
+import { IntegrationPage } from './integrations-page';
 import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } from './governance-pages';
 import { TargetsPage } from './targets-page';
 import { VectorLibraryPage } from './vector-library-page';
@@ -24,12 +23,10 @@ import { ScanDetailView } from './scan-detail-view';
 const DETAIL_ROUTES = new Set<RouteId>([
   'target-group-detail',
   'target-detail',
-  'agent-detail',
   'run-detail',
   'finding-detail',
   'evidence-detail',
   'check-detail',
-  'environment-detail',
   'policy-detail',
   'tenant-detail',
   'queue-detail'
@@ -69,15 +66,11 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
     );
   }
   if (route === 'dashboard') return <DashboardPage data={data} config={config} session={session} onRefresh={onRefresh} />;
-  if (route === 'environments') return <EnvironmentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'target-groups') {
     return <TargetGroupsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (route === 'targets') {
     return <TargetsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
-  }
-  if (route === 'agents') {
-    return <AgentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (DETAIL_ROUTES.has(route)) {
     return <DetailRoutePage route={route} data={data} config={config} session={session} onRefresh={onRefresh} />;

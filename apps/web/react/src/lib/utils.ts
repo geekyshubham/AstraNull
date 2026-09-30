@@ -87,7 +87,6 @@ const RESOURCE_TYPE_LABELS: Record<string, string> = {
   target_group: 'Target group',
   high_scale_request: 'SOC-governed test',
   waf_offensive_request: 'SOC-governed WAF test',
-  bootstrap_token: 'Agent install token',
   service_account: 'Service account',
 };
 

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
+import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+
+// ADR-0008: outside-in only. The validation loop is start -> external probe evidence ->
+// finalization -> verdict -> finding. There are no agents, bootstrap tokens, or observations.
 
 let baseUrl;
 let server;
@@ -19,25 +22,8 @@ before(() => {
 after(() => server.close());
 
 describe('e2e first slice', () => {
-  it('completes validation loop and state reflects evidence', async () => {
+  it('completes the external-only validation loop and state reflects evidence', async () => {
     const admin = demoHeaders('admin');
-    const tokenRes = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', {
-      headers: admin,
-      body: { name: 'e2e', target_group_id: 'tg_1', max_registrations: 1 },
-    });
-    const secret = tokenRes.json.secret;
-
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'e2e-host' },
-    });
-    const agentId = reg.json.agent.id;
-    const agentCredential = reg.json.agent_credential;
-
-    await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(agentCredential),
-      body: { version: '0.1.0' },
-    });
 
     const runRes = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: demoHeaders('engineer'),
@@ -47,32 +33,25 @@ describe('e2e first slice', () => {
         target_id: 'tgt_1',
       },
     });
+    assert.equal(runRes.status, 201);
     const runId = runRes.json.run.id;
-    const nonce_hash = runRes.json.run.correlation.nonce_hash;
-
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders(agentCredential),
-    });
-    const jobId = jobs.json.jobs[0].id;
-    await request(baseUrl, 'POST', `/v1/agents/${agentId}/jobs/${jobId}/ack`, {
-      headers: agentHeaders(agentCredential),
-    });
-
-    await request(baseUrl, 'POST', `/v1/agents/${agentId}/observations`, {
-      headers: agentHeaders(agentCredential),
-      body: { agent_job_id: jobId, test_run_id: runId, target_id: 'tgt_1', nonce_hash },
-    });
+    assert.ok(runId);
+    // Inline simulation mode records a probe_result event and moves the run to collecting.
+    assert.equal(runRes.json.run.status, 'collecting');
 
     const state = await request(baseUrl, 'GET', '/v1/state', { headers: admin });
     assert.equal(state.status, 200);
     assert.ok(state.json.readiness.score >= 0);
-    assert.ok(state.json.open_findings >= 1);
     assert.ok(state.json.recent_runs.some((r) => r.id === runId));
+    // No agent fields are exposed on state (ADR-0008).
+    assert.equal('agents_online' in state.json, false);
+    assert.equal('agents_total' in state.json, false);
 
     const events = await request(baseUrl, 'GET', `/v1/test-runs/${runId}/events`, {
       headers: admin,
     });
+    // Verdicts come from external probe evidence only — a probe_result event, never an agent one.
     assert.ok(events.json.items.some((e) => e.signal_type === 'probe_result'));
-    assert.ok(events.json.items.some((e) => e.signal_type === 'agent_observation'));
+    assert.equal(events.json.items.some((e) => e.signal_type === 'agent_observation'), false);
   });
 });

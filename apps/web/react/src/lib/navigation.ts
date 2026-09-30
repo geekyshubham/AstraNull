@@ -1,7 +1,6 @@
 import {
   Activity,
   Bell,
-  Bot,
   CalendarClock,
   ClipboardList,
   CreditCard,
@@ -14,7 +13,6 @@ import {
   ListChecks,
   LockKeyhole,
   PlugZap,
-  ServerCog,
   ShieldCheck,
   Target,
   TriangleAlert,
@@ -24,13 +22,13 @@ import type { NavItem, RouteId, SurfaceKind } from './types';
 
 export const NAV_GROUP_LABELS: Record<SurfaceKind, string> = {
   overview: 'Overview',
-  scope: 'Declared scope',
+  scope: 'Scope',
   validation: 'Validation',
   governance: 'Governance',
   staff: 'Staff'
 };
 
-/** Seventeen customer-visible sidebar items + two staff items (detail routes omitted). */
+/** Sixteen customer-visible sidebar items + two staff items (detail routes omitted). */
 export const NAV_ITEMS: NavItem[] = [
   {
     id: 'dashboard',
@@ -40,11 +38,11 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard
   },
   {
-    id: 'environments',
-    label: 'Environments',
+    id: 'targets',
+    label: 'Targets',
     group: 'scope',
-    description: 'Declared environment IDs with validation evidence, findings, and active scope counts.',
-    icon: ServerCog
+    description: 'All declared hostnames, IPs, and CIDRs with tags, verification, eligibility, and group context.',
+    icon: Crosshair
   },
   {
     id: 'target-groups',
@@ -52,20 +50,6 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'scope',
     description: 'Customer-declared business services, expected behavior, and owners.',
     icon: Target
-  },
-  {
-    id: 'targets',
-    label: 'Targets',
-    group: 'scope',
-    description: 'All declared hostnames and IPs with verification, eligibility, source, and group context.',
-    icon: Crosshair
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    group: 'scope',
-    description: 'Outbound-only observation agents, placement, versions, and health.',
-    icon: Bot
   },
   {
     id: 'checks',
@@ -85,7 +69,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'runs',
     label: 'Test runs',
     group: 'validation',
-    description: 'Execution timeline, probe results, agent observations, and verdicts.',
+    description: 'Execution timeline, probe results, and verdicts.',
     icon: Activity
   },
   {
@@ -170,13 +154,6 @@ export const NAV_ITEMS: NavItem[] = [
 /** Detail routes reachable via deep-link but hidden from the sidebar. */
 export const DETAIL_ROUTE_ITEMS: NavItem[] = [
   {
-    id: 'environment-detail',
-    label: 'Environment detail',
-    group: 'scope',
-    description: 'Declared environment scope, agents, target groups, validation evidence, and findings.',
-    icon: ServerCog
-  },
-  {
     id: 'check-detail',
     label: 'Check detail',
     group: 'validation',
@@ -205,17 +182,10 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     icon: Target
   },
   {
-    id: 'agent-detail',
-    label: 'Agent detail',
-    group: 'scope',
-    description: 'Identity, heartbeat, capabilities, placement evidence, logs, and update history for one outbound agent.',
-    icon: Bot
-  },
-  {
     id: 'run-detail',
     label: 'Run detail',
     group: 'validation',
-    description: 'Timeline, probe result, agent observation, correlation truth table, and evidence chain for one run.',
+    description: 'Timeline, probe result, correlation truth table, and evidence chain for one run.',
     icon: Activity
   },
   {
@@ -305,8 +275,8 @@ export const DEFENSIVE_RULES = [
     body: 'Core workflows start from customer-declared targets and do not require cloud credentials.'
   },
   {
-    title: 'Outbound-only agents',
-    body: 'Agents call AstraNull over outbound HTTPS; no inbound management ports are required.'
+    title: 'Outside-in only',
+    body: 'Validation runs from external probes against declared targets; nothing is installed in your network.'
   },
   {
     title: 'SOC-gated high-scale',
@@ -314,7 +284,7 @@ export const DEFENSIVE_RULES = [
   },
   {
     title: 'Evidence over assumptions',
-    body: 'Every verdict links back to observed probe data, agent observations, health signals, approvals, or declarations.'
+    body: 'Every verdict links back to observed external probe evidence, health signals, approvals, or declarations.'
   }
 ];
 

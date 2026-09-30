@@ -32,15 +32,12 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page, VIEWER_SESSION);
 
-    await gotoPortalRoute(page, 'environments', baseUrl);
-    await expectNoButton(page, 'Declare environment');
-
     await gotoPortalRoute(page, 'target-groups', baseUrl);
     await expectNoButton(page, 'Add target');
     await expectNoButton(page, 'Create target group');
 
     await gotoPortalRoute(page, 'targets', baseUrl);
-    await expectNoButton(page, 'Add single domain');
+    await expectNoButton(page, 'Add target');
     await expect(page.getByRole('button', { name: /^Remove target / })).toHaveCount(0);
 
     await gotoPortalRoute(page, 'test-policies', baseUrl);
@@ -56,9 +53,6 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await page.getByRole('tab', { name: 'Privacy' }).click();
     await expectNoButton(page, 'Save retention policy');
     await expect(page.getByText('Retention settings are read-only for your role.')).toBeVisible();
-
-    await gotoPortalRoute(page, 'agents', baseUrl);
-    await expect(page.getByRole('button', { name: /^Revoke agent / })).toHaveCount(0);
 
     await gotoPortalRoute(page, 'runs', baseUrl);
     await expectNoButton(page, 'Request SOC-gated run');
@@ -91,11 +85,6 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await expectNoButton(page, 'Close finding');
     await expectNoButton(page, 'Retest');
     await expect(page.getByText('Finding triage is read-only for your role.')).toBeVisible();
-
-    await gotoPortalRoute(page, 'agent-detail', baseUrl);
-    await expectNoButton(page, 'Revoke agent');
-    await expectNoButton(page, 'Run placement test');
-    await expect(page.getByText('Agent revocation is read-only for your role.')).toBeVisible();
   });
 
   test('keeps fine-grained permitted actions for engineer and auditor roles', async ({ page }) => {
@@ -104,9 +93,6 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
 
     await gotoPortalRoute(page, 'target-groups', baseUrl);
     await expect(page.getByRole('button', { name: 'Create target group' })).toBeVisible();
-
-    await gotoPortalRoute(page, 'agents', baseUrl);
-    await expect(page.getByRole('button', { name: /^Revoke agent / })).toHaveCount(0);
 
     await gotoPortalRoute(page, 'integrations', baseUrl);
     await page.getByRole('button', { name: 'Add provider' }).click();

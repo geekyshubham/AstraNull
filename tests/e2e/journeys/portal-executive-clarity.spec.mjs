@@ -33,40 +33,44 @@ test.describe('portal executive clarity', () => {
     await stopPortalPlaywrightServer();
   });
 
-  test('Dashboard answers readiness, protection, effectiveness, and top fixes in plain language', async ({ page }) => {
+  test('Dashboard answers readiness with the outside-in defense path and targets-first posture', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
 
-    const brief = page.locator('.executive-brief');
-    await expect(brief).toBeVisible();
-    await expect(brief.getByText('Are we ready for a DDoS attack?', { exact: true })).toBeVisible();
-    await expect(brief.getByRole('heading', { name: 'Not ready yet: high-priority gaps remain' })).toBeVisible();
-    await expect(brief.getByRole('heading', { name: 'What is protecting us?' })).toBeVisible();
-    await expect(brief.getByText('Web firewall', { exact: true })).toBeVisible();
-    await expect(brief.getByText('Origin firewall / access rules', { exact: true })).toBeVisible();
-    await expect(brief.getByText('WAF effectiveness', { exact: true })).toBeVisible();
-    await expect(brief.getByRole('heading', { name: 'Top fixes' })).toBeVisible();
-    await expect(brief.getByText('Block direct access to checkout.acme.com', { exact: true })).toBeVisible();
-    await expect(brief.locator('.executive-fix-list > li')).toHaveCount(1);
+    const defensePath = page.locator('.defense-path');
+    await expect(defensePath).toBeVisible();
+    await expect(defensePath.getByRole('heading', { name: 'Where does attack traffic get stopped?' })).toBeVisible();
+    for (const stage of ['Internet', 'Edge / CDN', 'WAF', 'Origin']) {
+      await expect(defensePath.getByText(stage, { exact: true })).toBeVisible();
+    }
 
-    const openFindings = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Open findings', exact: true }) });
-    await expect(openFindings).toContainText('Origin direct bypass · checkout.acme.com');
-    await expect(openFindings).toContainText(PORTAL_BASELINE_IDS.findingId);
-    const recentRuns = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Recent runs', exact: true }) });
-    await expect(recentRuns).toContainText('Origin Leak Scan (Safe) · checkout.acme.com');
-    await expect(recentRuns).toContainText(PORTAL_BASELINE_IDS.readinessRunId);
-    await expect(recentRuns).toContainText('Protection stopped the test traffic');
+    // KPI row is derived from loaded data, targets-first.
+    await expect(page.getByText('Declared targets', { exact: true })).toBeVisible();
+    await expect(page.getByText('Evidence coverage', { exact: true })).toBeVisible();
+    await expect(page.getByText('Open findings', { exact: true })).toBeVisible();
 
-    const glossary = brief.locator('.evidence-guide');
+    const posture = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target posture', exact: true }) });
+    await expect(posture).toContainText('checkout.acme.com');
+
+    const fixes = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'What to fix first', exact: true }) });
+    await expect(fixes).toBeVisible();
+
+    const activity = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Recent validation activity', exact: true }) });
+    await expect(activity).toContainText(PORTAL_BASELINE_IDS.readinessRunId);
+
+    // Removed features must not appear anywhere on the dashboard.
+    const mainText = await page.locator('#portal-main').innerText();
+    expect(mainText).not.toMatch(/Agent health|Agents healthy|Environment status/);
+
+    const glossary = page.locator('.evidence-guide');
     const summary = glossary.locator('summary');
     await summary.focus();
     await page.keyboard.press('Enter');
     await expect(glossary).toHaveAttribute('open', '');
     await expect(glossary.getByText('Declared only', { exact: true })).toBeVisible();
-    await expect(glossary.getByText('Attack traffic reached your server', { exact: true })).toBeVisible();
   });
 
-  test('Dashboard translates machine-coded WAF empty reasons', async ({ page }) => {
+  test('Dashboard defense path reports edge/WAF from coverage data, not raw codes', async ({ page }) => {
     await page.route('**/v1/waf/coverage/summary', async (route) => {
       await route.fulfill({
         status: 200,
@@ -84,31 +88,33 @@ test.describe('portal executive clarity', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
 
-    const wafSummary = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'WAF summary' }) });
-    await expect(wafSummary.getByRole('heading', { name: 'No WAF assets in scope.' })).toBeVisible();
-    await expect(wafSummary).toContainText('WAF coverage will appear after a declared WAF asset records evidence.');
-    await expect(wafSummary).not.toContainText('coverage_summary_not_populated');
+    const defensePath = page.locator('.defense-path');
+    await expect(defensePath).toBeVisible();
+    await expect(defensePath).not.toContainText('coverage_summary_not_populated');
+    // WAF stage with no coverage evidence reads "Not measured", never a fabricated number.
+    const wafStage = defensePath.locator('.defense-stage').filter({ hasText: 'WAF' });
+    await expect(wafStage).toContainText('Not measured');
   });
 
-  test('Dashboard and Target Detail do not overflow at 375, 768, 1024, or 1440 pixels', async ({ page }) => {
+  test('Dashboard does not overflow at 375, 768, 1024, or 1440 pixels', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport);
       await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
-      await expect(page.locator('.executive-brief')).toBeVisible();
+      await expect(page.locator('.defense-path')).toBeVisible();
       await expectNoPageOverflow(page);
       if (viewport.width === 1440) {
-        const groupCard = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target group status' }) });
-        const tableWrap = groupCard.locator('.table-wrap');
-        // Owner is secondary text under the group name so the half-width table never clips.
+        const postureCard = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target posture' }) });
+        const tableWrap = postureCard.locator('.table-wrap');
+        // DESIGN.md: data tables own their horizontal scroll; the region stays keyboard-focusable.
         const tableGeometry = await tableWrap.evaluate((node) => ({
           overflowX: getComputedStyle(node).overflowX,
-          fits: node.scrollWidth <= node.clientWidth + 1,
-          ownerShown: /unassigned|owner|@/i.test(node.textContent ?? ''),
+          tabIndex: node.getAttribute('tabindex'),
+          hasVerdict: /Pass|Gap|Review|No result/.test(node.textContent ?? ''),
         }));
         expect(tableGeometry.overflowX).toBe('auto');
-        expect(tableGeometry.fits, 'Target group status table must fit its card without clipping').toBe(true);
-        expect(tableGeometry.ownerShown, 'Owner must remain visible').toBe(true);
+        expect(tableGeometry.tabIndex).toBe('0');
+        expect(tableGeometry.hasVerdict, 'Latest verdict column must be present').toBe(true);
       }
 
       await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());

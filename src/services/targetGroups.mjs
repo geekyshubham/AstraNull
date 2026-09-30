@@ -2,6 +2,7 @@ import { audit } from '../audit.mjs';
 import {
   normalizeTargetInput,
   targetDedupeKey,
+  targetTagsFromRecord,
   targetValidationResponse,
 } from '../contracts/targetManagement.mjs';
 import { newId } from '../lib/ids.mjs';
@@ -45,11 +46,17 @@ function optionalString(...values) {
   return null;
 }
 
+/** Shape a stored target record for POST/PATCH responses: expose top-level `tags`. */
+function presentTarget(target) {
+  if (!target) return target;
+  return { ...target, tags: targetTagsFromRecord(target) };
+}
+
 function latestTargetVerifications(tenantId) {
   return effectiveTargetVerifications(getStore(), tenantId);
 }
 
-function targetInventoryItem(target, group, environment, verification) {
+function targetInventoryItem(target, group, verification) {
   const metadata = asObject(target.metadata ?? target.metadata_json);
   const verificationState = optionalString(verification?.state) ?? 'unverified';
   const sourceKind = optionalString(verification?.source_kind);
@@ -75,11 +82,10 @@ function targetInventoryItem(target, group, environment, verification) {
     tenant_id: target.tenant_id,
     target_group_id: target.target_group_id,
     target_group_name: group.name,
-    environment_id: group.environment_id ?? null,
-    environment_name: environment?.name ?? null,
     kind: target.kind,
     value: target.value,
     expected_behavior: target.expected_behavior ?? group.expected_behavior_default ?? null,
+    tags: targetTagsFromRecord(target),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     verification_state: verificationState,
     verification: {
@@ -105,11 +111,6 @@ export function listTargets(ctx) {
       .filter((group) => group.tenant_id === ctx.tenantId && !isArchivedTargetGroup(group))
       .map((group) => [group.id, group]),
   );
-  const environments = new Map(
-    store.environments
-      .filter((environment) => environment.tenant_id === ctx.tenantId)
-      .map((environment) => [environment.id, environment]),
-  );
   const verifications = latestTargetVerifications(ctx.tenantId);
 
   return store.targets
@@ -119,7 +120,6 @@ export function listTargets(ctx) {
       return targetInventoryItem(
         target,
         group,
-        environments.get(group.environment_id),
         verifications.get(target.id),
       );
     })
@@ -228,6 +228,7 @@ export function getTargetGroup(ctx, id) {
     .filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId && !isArchivedTarget(t))
     .map((target) => ({
       ...target,
+      tags: targetTagsFromRecord(target),
       verification_state: verifications.get(target.id)?.state ?? 'unverified',
       edge_detection: presentTargetEdgeDetection(edgeDetections[target.id] ?? null),
     }));
@@ -293,21 +294,22 @@ export function getTargetGroup(ctx, id) {
 }
 
 export function createTargetGroup(ctx, body = {}) {
-  const environmentId = String(body.environment_id ?? 'env_demo').trim();
   const name = String(body.name ?? 'New target group').trim() || 'New target group';
+  // ADR-0008: groups are tenant-scoped now that environments are gone; the uniqueness check
+  // is tenant-wide instead of per-environment.
   const duplicate = getStore().targetGroups.find(
     (group) => group.tenant_id === ctx.tenantId
       && !isArchivedTargetGroup(group)
-      && String(group.environment_id ?? '') === environmentId
       && String(group.name).trim().toLowerCase() === name.toLowerCase(),
   );
   if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
 
   const id = newId('tg');
+  const settings = body.settings_json && typeof body.settings_json === 'object' ? { ...body.settings_json } : {};
   const record = {
     id,
     tenant_id: ctx.tenantId,
-    environment_id: environmentId,
+    environment_id: null,
     name,
     description: String(body.description ?? ''),
     expected_behavior_default: body.expected_behavior_default ?? null,
@@ -316,7 +318,8 @@ export function createTargetGroup(ctx, body = {}) {
     safety_policy: normalizeSafetyPolicy(body.safety_policy),
     ownership_status: 'unverified',
     dns_ownership: null,
-    validation_mode: body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only',
+    validation_mode: 'external_only',
+    ...(Object.keys(settings).length > 0 ? { settings_json: settings } : {}),
     created_at: new Date().toISOString(),
   };
   getStore().targetGroups.push(record);
@@ -327,7 +330,7 @@ export function createTargetGroup(ctx, body = {}) {
     action: 'target_group.created',
     resource_type: 'target_group',
     resource_id: id,
-    metadata: { changed_fields: ['environment_id', 'name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
+    metadata: { changed_fields: ['name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
   });
   persistStore();
   return record;
@@ -379,12 +382,12 @@ export function addTarget(ctx, groupId, body = {}) {
     resource_id: id,
     metadata: {
       target_group_id: groupId,
-      changed_fields: ['kind', 'value', 'expected_behavior', ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
+      changed_fields: ['kind', 'value', 'expected_behavior', ...(normalized.tags.length ? ['tags'] : []), ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
       dropped_untrusted_fields: normalized.dropped_fields,
     },
   });
   persistStore();
-  return record;
+  return presentTarget(record);
 }
 
 export function importTargets(ctx, groupId, rows = []) {
@@ -452,7 +455,6 @@ export function patchTargetGroup(ctx, id, body = {}) {
       (candidate) => candidate.id !== id
         && candidate.tenant_id === ctx.tenantId
         && !isArchivedTargetGroup(candidate)
-        && String(candidate.environment_id ?? '') === String(body.environment_id ?? group.environment_id ?? '')
         && String(candidate.name).trim().toLowerCase() === name.toLowerCase(),
     );
     if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
@@ -460,7 +462,6 @@ export function patchTargetGroup(ctx, id, body = {}) {
     changedFields.push('name');
   }
   if (body.description !== undefined) { group.description = String(body.description ?? ''); changedFields.push('description'); }
-  if (body.environment_id !== undefined) { group.environment_id = String(body.environment_id).trim(); changedFields.push('environment_id'); }
   if (body.timezone !== undefined) { group.timezone = String(body.timezone).trim() || 'UTC'; changedFields.push('timezone'); }
   if (body.safe_test_windows !== undefined) {
     if (!Array.isArray(body.safe_test_windows)) return { error: 'invalid_target_group', status: 400, field: 'safe_test_windows' };
@@ -469,7 +470,8 @@ export function patchTargetGroup(ctx, id, body = {}) {
   }
   if (body.safety_policy !== undefined) { group.safety_policy = normalizeSafetyPolicy(body.safety_policy); changedFields.push('safety_policy'); }
   if (body.validation_mode !== undefined) {
-    group.validation_mode = body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only';
+    // ADR-0008: every group is external_only; the field stays for compatibility but is fixed.
+    group.validation_mode = 'external_only';
     changedFields.push('validation_mode');
   }
 
@@ -580,9 +582,13 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
     target.normalized_value = normalized.normalized_value;
     changedFields.push('kind', 'value');
   }
-  if (body.metadata !== undefined || body.metadata_json !== undefined) {
-    target.metadata = normalized.metadata;
-    changedFields.push('metadata');
+  // Tags live inside metadata; normalizeTargetInput has already merged the resolved tag list
+  // into normalized.metadata, so persist it whenever metadata OR tags were touched.
+  if (body.tags !== undefined) changedFields.push('tags');
+  if (body.metadata !== undefined || body.metadata_json !== undefined) changedFields.push('metadata');
+  if (body.metadata !== undefined || body.metadata_json !== undefined || body.tags !== undefined) {
+    if (Object.keys(normalized.metadata).length > 0) target.metadata = normalized.metadata;
+    else delete target.metadata;
   }
   if (body.expected_behavior !== undefined) {
     target.expected_behavior = body.expected_behavior ?? null;
@@ -599,7 +605,7 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
     metadata: { target_group_id: groupId, changed_fields: changedFields, dropped_untrusted_fields: normalized.dropped_fields },
   });
   persistStore();
-  return target;
+  return presentTarget(target);
 }
 
 export function deleteTarget(ctx, groupId, targetId) {
@@ -679,7 +685,6 @@ export function restoreArchived(ctx, groupId) {
     (candidate) => candidate.id !== groupId
       && candidate.tenant_id === ctx.tenantId
       && !isArchivedTargetGroup(candidate)
-      && String(candidate.environment_id ?? '') === String(group.environment_id ?? '')
       && String(candidate.name).trim().toLowerCase() === String(group.name).trim().toLowerCase(),
   );
   if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
@@ -926,4 +931,94 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
     persistStore();
   }
   return { imported, skipped, count: imported.length };
+}
+
+/**
+ * Resolve (or lazily create) the tenant's default target group for direct target creation
+ * (ADR-0008 §3). The default group is the active group whose `settings_json.default_scope`
+ * is `true`; if none exists it is created on demand as an external-only "Default" group.
+ *
+ * @param {import('../context.mjs').TenantScope} ctx
+ * @param {{ expected_behavior_default?: string|null }} [options]
+ */
+function resolveDefaultTargetGroup(ctx, options = {}) {
+  const existing = getStore().targetGroups.find(
+    (group) => group.tenant_id === ctx.tenantId
+      && !isArchivedTargetGroup(group)
+      && group.settings_json?.default_scope === true,
+  );
+  if (existing) return existing;
+
+  const id = newId('tg');
+  const record = {
+    id,
+    tenant_id: ctx.tenantId,
+    environment_id: null,
+    name: 'Default',
+    description: 'Default target group for directly declared targets.',
+    expected_behavior_default: options.expected_behavior_default ?? 'block_at_edge',
+    timezone: 'UTC',
+    safe_test_windows: [],
+    safety_policy: normalizeSafetyPolicy(undefined),
+    ownership_status: 'unverified',
+    dns_ownership: null,
+    validation_mode: 'external_only',
+    settings_json: { default_scope: true },
+    created_at: new Date().toISOString(),
+  };
+  getStore().targetGroups.push(record);
+  audit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action: 'target_group.created',
+    resource_type: 'target_group',
+    resource_id: id,
+    metadata: { changed_fields: ['name', 'validation_mode', 'settings_json'], default_scope: true },
+  });
+  return record;
+}
+
+/**
+ * Direct target creation (ADR-0008 `POST /v1/targets`). Omitted `target_group_id` lands the
+ * target in the tenant default group, created on demand.
+ *
+ * @param {import('../context.mjs').TenantScope} ctx
+ * @param {{ kind?: string, value?: string, expected_behavior?: string, tags?: string[], target_group_id?: string }} body
+ */
+export function createTargetDirect(ctx, body = {}) {
+  const explicitGroupId = optionalString(body.target_group_id);
+  let group;
+  if (explicitGroupId) {
+    group = getStore().targetGroups.find(
+      (candidate) => candidate.id === explicitGroupId
+        && candidate.tenant_id === ctx.tenantId
+        && !isArchivedTargetGroup(candidate),
+    );
+    if (!group) return { error: 'target_group_not_found', status: 404 };
+  } else {
+    group = resolveDefaultTargetGroup(ctx, { expected_behavior_default: body.expected_behavior });
+  }
+  return addTarget(ctx, group.id, body);
+}
+
+/**
+ * Direct target patch by id (ADR-0008 `PATCH /v1/targets/:id`). Body `{ tags?, expected_behavior? }`.
+ *
+ * @param {import('../context.mjs').TenantScope} ctx
+ * @param {string} targetId
+ * @param {{ tags?: string[], expected_behavior?: string }} body
+ */
+export function patchTargetById(ctx, targetId, body = {}) {
+  const target = getStore().targets.find(
+    (candidate) => candidate.id === targetId
+      && candidate.tenant_id === ctx.tenantId
+      && !isArchivedTarget(candidate),
+  );
+  if (!target) return { error: 'not_found', status: 404 };
+  // Route through the group-scoped patch so audit, dedupe, and immutability rules stay shared.
+  return patchTarget(ctx, target.target_group_id, targetId, {
+    ...(body.tags !== undefined ? { tags: body.tags } : {}),
+    ...(body.expected_behavior !== undefined ? { expected_behavior: body.expected_behavior } : {}),
+  });
 }

@@ -27,7 +27,7 @@ type AppShellProps = {
 
 const roles = [
   { value: 'admin', label: 'admin', description: 'Full developer validation access' },
-  { value: 'engineer', label: 'engineer', description: 'Runs, agents, target groups' },
+  { value: 'engineer', label: 'engineer', description: 'Runs, targets, target groups' },
   { value: 'soc', label: 'soc', description: 'SOC-gated workflow preview' },
   { value: 'auditor', label: 'auditor', description: 'Evidence and audit visibility' },
   { value: 'viewer', label: 'viewer', description: 'Read-only workspace' },

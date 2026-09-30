@@ -8,7 +8,6 @@ import { freshStore } from '../helpers/reset.mjs';
 import { createPostgresHighScaleServices, HIGH_SCALE_REPOSITORY_METHODS } from '../../src/persistence/postgres/highScaleServiceAdapters.mjs';
 import {
   createPostgresValidationServices,
-  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
   VALIDATION_EVIDENCE_REPOSITORY_METHODS,
 } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
 import { createPostgresProbeJobServices } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
@@ -16,15 +15,9 @@ import { createPostgresProbeJobServices } from '../../src/persistence/postgres/p
 const demoCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'soc' };
 const otherCtx = { tenantId: 'ten_other', userId: 'u2', role: 'soc' };
 
-function seedAgent(tenantId = 'ten_demo') {
-  getStore().agents.push({
-    id: `ag_${tenantId}`,
-    tenant_id: tenantId,
-    status: 'online',
-    capabilities: ['canary', 'packet', 'heartbeat'],
-    target_group_id: 'tg_1',
-  });
-}
+// ADR-0008: agents are removed. Runs no longer require an agent to start; this is a no-op
+// kept only to minimize churn in the individual test bodies.
+function seedAgent() {}
 
 function seedOtherTenant() {
   getStore().tenants.push({ id: 'ten_other', name: 'Other' });
@@ -479,20 +472,6 @@ function createKillSwitchInterleavingHarness(options = {}) {
     },
   };
 
-  const agentControl = {};
-  for (const method of VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS) {
-    agentControl[method] = async () => undefined;
-  }
-  agentControl.listAgents = async () => [
-    {
-      id: 'ag_1',
-      status: 'online',
-      capabilities: ['canary', 'heartbeat', 'packet'],
-      target_group_id: 'tg_1',
-    },
-  ];
-  agentControl.createAgentJob = async (ctx, job) => job;
-
   const probeJobs = {
     async leasePendingJobsForWorker(ctx, workerId) {
       leaseCalls.push({ tenantId: ctx.tenantId, workerId });
@@ -589,7 +568,6 @@ function createKillSwitchInterleavingHarness(options = {}) {
     killSwitch,
     validationEvidence,
     probeJobs,
-    agentControl,
   };
 
   return {

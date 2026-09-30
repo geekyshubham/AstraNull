@@ -4,12 +4,9 @@ export const ALLOWED_CHANNELS = new Set(['in_app', 'webhook', 'email', 'slack', 
 
 export const ALLOWED_TRIGGERS = new Set([
   'finding.high_severity',
-  'agent.offline',
   'safe_test.completed',
   'high_scale.state_change',
   'report.ready',
-  'bootstrap_token.created',
-  'bootstrap_token.revoked',
 ]);
 
 export const DEFAULT_TRIGGERS = ['finding.high_severity', 'high_scale.state_change'];

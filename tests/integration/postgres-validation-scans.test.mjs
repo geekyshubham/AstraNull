@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
-import { createAgentControlRepository } from '../../src/persistence/postgres/agentControlRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
@@ -34,7 +33,6 @@ function buildServices(pool) {
     validationEvidence: createValidationEvidenceRepository(pool),
     audit,
     coreCatalog: createCoreCatalogRepository(pool),
-    agentControl: createAgentControlRepository(pool),
     probeJobs: createProbeJobRepository(pool),
     killSwitch: createKillSwitchRepository(pool),
     validationScans: createPostgresValidationScanRepository(pool, { auditRepository: audit }),
@@ -252,7 +250,7 @@ describe('postgres validation scans (service adapters over a live database)', ()
     }, availability.env ?? process.env);
   });
 
-  it('cancels the scan, the active child run, and its pending probe and agent jobs', { timeout: 120_000 }, async (t) => {
+  it('cancels the scan, the active child run, and its pending probe jobs', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (skipUnlessAvailable(t, availability)) return;
     await withEphemeralPostgres(async (pool) => {
@@ -266,12 +264,6 @@ describe('postgres validation scans (service adapters over a live database)', ()
           `INSERT INTO probe_jobs (id, tenant_id, test_run_id, target_id, check_id, status, nonce_hash, target_descriptor_json)
            VALUES ('pjob_scan_cancel', $1, $2, $3, $4, 'leased', 'nh_scan_cancel', '{"id":"tgt_scan_int_a","kind":"fqdn"}'::jsonb)`,
           [TENANT, runId, TARGET_A, CHECK_ID],
-        );
-        await client.query(
-          `INSERT INTO agent_jobs (id, tenant_id, agent_id, test_run_id, check_id, target_id, status, nonce_hash)
-           VALUES ('ajob_scan_cancel', $1, $2, $3, $4, $5, 'acked', 'nh_scan_cancel'),
-                  ('ajob_scan_done', $1, $2, $3, $4, $5, 'observed', 'nh_scan_cancel')`,
-          [TENANT, AGENT, runId, CHECK_ID, TARGET_A],
         );
       });
 
@@ -287,11 +279,9 @@ describe('postgres validation scans (service adapters over a live database)', ()
       });
       const jobs = await withTenantContext(pool, TENANT, async (client) => {
         const probe = await client.query(`SELECT status FROM probe_jobs WHERE id = 'pjob_scan_cancel'`);
-        const agent = await client.query(`SELECT id, status FROM agent_jobs WHERE tenant_id = $1 ORDER BY id`, [TENANT]);
-        return { probe: probe.rows[0].status, agent: agent.rows };
+        return { probe: probe.rows[0].status };
       });
       assert.equal(jobs.probe, 'cancelled');
-      assert.deepEqual(jobs.agent, [{ id: 'ajob_scan_cancel', status: 'cancelled' }, { id: 'ajob_scan_done', status: 'observed' }]);
 
       const runAudit = (await readAudits(pool, 'test_run.cancelled'))[0];
       assert.equal(runAudit.metadata_json.source, 'scan');
@@ -299,7 +289,6 @@ describe('postgres validation scans (service adapters over a live database)', ()
       assert.equal(runAudit.metadata_json.cancelled_by, CTX.userId);
       assert.equal(runAudit.metadata_json.cancelled_by_role, CTX.role);
       assert.deepEqual(runAudit.metadata_json.cancelled_probe_job_ids, ['pjob_scan_cancel']);
-      assert.deepEqual(runAudit.metadata_json.cancelled_agent_job_ids, ['ajob_scan_cancel']);
       const scanAudit = (await readAudits(pool, 'validation_scan.cancelled'))[0];
       assert.equal(scanAudit.metadata_json.active_test_run_id, runId);
       assert.equal(scanAudit.metadata_json.cancelled_steps, 1);

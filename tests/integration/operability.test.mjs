@@ -45,7 +45,7 @@ describe('API rate limiting', () => {
   after(() => rateServer.close());
 
   it('returns 429 on third API request from the same client with Retry-After', async () => {
-    const path = '/v1/environments';
+    const path = '/v1/target-groups';
     const headers = demoHeaders('viewer');
     assert.equal((await request(rateBaseUrl, 'GET', path, { headers })).status, 200);
     assert.equal((await request(rateBaseUrl, 'GET', path, { headers })).status, 200);
@@ -57,7 +57,7 @@ describe('API rate limiting', () => {
   });
 
   it('GET /health stays 200 after API limit is exceeded', async () => {
-    const path = '/v1/environments';
+    const path = '/v1/target-groups';
     const headers = demoHeaders('viewer');
     await request(rateBaseUrl, 'GET', path, { headers });
     await request(rateBaseUrl, 'GET', path, { headers });
@@ -90,7 +90,7 @@ describe('control-plane operability', () => {
   });
 
   it('returns 400 invalid_json for malformed JSON body', async () => {
-    const res = await request(baseUrl, 'POST', '/v1/environments', {
+    const res = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers: demoHeaders('admin'),
       rawBody: '{not-json',
     });
@@ -99,7 +99,7 @@ describe('control-plane operability', () => {
   });
 
   it('returns 413 payload_too_large for oversized JSON body', async () => {
-    const res = await request(baseUrl, 'POST', '/v1/environments', {
+    const res = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers: demoHeaders('admin'),
       rawBody: `{"name":"${'x'.repeat(200)}"}`,
     });

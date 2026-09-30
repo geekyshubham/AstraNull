@@ -128,9 +128,6 @@ describe('dev store migration', () => {
     assert.deepEqual(after.userCredentials, []);
     assert.deepEqual(after.userPasswordInvites, []);
     assert.deepEqual(after.encryptedSecrets, []);
-    assert.deepEqual(after.agentUpdateReleases, []);
-    assert.deepEqual(after.agentUpdateStatuses, []);
-    assert.deepEqual(after.agentUpdateTrustKeys, []);
     assert.deepEqual(after.wafAssets, []);
     assert.deepEqual(after.wafProducts, []);
     assert.deepEqual(after.wafFingerprints, []);

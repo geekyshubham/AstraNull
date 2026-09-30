@@ -22,10 +22,6 @@ export function generateTokenSecret() {
   return `ast_${randomBytes(24).toString('base64url')}`;
 }
 
-export function generateAgentCredential() {
-  return `agc_${randomBytes(24).toString('base64url')}`;
-}
-
 export function safeEqualHex(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   try {

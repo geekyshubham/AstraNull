@@ -5,11 +5,9 @@ import { createCoreCatalogRepository } from '../../src/persistence/postgres/core
 import { createOwnershipVerificationRepository } from '../../src/persistence/postgres/ownershipVerificationRepository.mjs';
 import { createPostgresOwnershipVerificationServices } from '../../src/persistence/postgres/ownershipVerificationServiceAdapters.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
-import { createPostgresProbeJobServices } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createValidationEvidenceRepository } from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
 import {
-  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
   createPostgresValidationServices,
 } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
 import {
@@ -30,6 +28,9 @@ const SIGNED_WORKER = {
   probeWorkerSecret: 'ownership-target-binding-secret-for-tests',
 };
 
+// ADR-0008 (outside-in only): the agent-observed ownership challenge is gone. Ownership proof
+// reaches `dns_verified` through the DNS challenge, and a legacy `verified` ownership record can
+// still be confirmed to `user_confirmed`. This seed models the post-DNS state directly.
 async function seed(client) {
   await client.query(
     `INSERT INTO tenants (id, name) VALUES ($1, 'ownership target binding')`,
@@ -42,44 +43,47 @@ async function seed(client) {
   await client.query(
     `INSERT INTO target_groups (
        id, tenant_id, environment_id, name, ownership_status, validation_mode
-     ) VALUES ($1, $2, $3, 'protected origins', 'unverified', 'agent_assisted')`,
+     ) VALUES ($1, $2, $3, 'protected origins', 'unverified', 'external_only')`,
     [IDS.group, IDS.tenant, IDS.environment],
   );
   await client.query(
     `INSERT INTO targets (
        id, tenant_id, target_group_id, kind, value, normalized_value, created_at
-     ) VALUES ($1, $2, $3, 'fqdn', 'owned.example', 'owned.example', now())`,
+     ) VALUES ($1, $2, $3, 'fqdn', 'owned.example', 'owned.example', now() - interval '1 hour')`,
     [IDS.targetA, IDS.tenant, IDS.group],
   );
+  // DNS-proven ownership for targetA (the live path after the agent challenge was removed).
   await client.query(
-    `INSERT INTO agents (
-       id, tenant_id, target_group_id, status, last_token_validation_status
-     ) VALUES ('agt_ownership', $1, $2, 'online', 'valid')`,
+    `INSERT INTO target_verifications (
+       id, tenant_id, target_id, state, source_kind, source_ref,
+       transitioned_at, transitioned_by, audit_entry_id
+     ) VALUES ($1, $2, $3, 'dns_verified', 'dns_txt', $4::jsonb, now() - interval '1 minute', 'system', $5)`,
+    [
+      'tv_ownership_a_dns', IDS.tenant, IDS.targetA,
+      JSON.stringify({ dns_challenge_id: 'dns_ownership_a' }), 'audit_ownership_a_dns',
+    ],
+  );
+  await client.query(
+    `UPDATE target_groups SET ownership_status = 'dns_verified'
+     WHERE tenant_id = $1 AND id = $2`,
     [IDS.tenant, IDS.group],
   );
-}
-
-function agentControl() {
-  const methods = Object.fromEntries(
-    VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS.map((method) => [method, async () => null]),
+  // A legacy verified ownership_verifications row bound to targetA, created before the target's
+  // replacement window, so confirmOwnership can elevate it to user_confirmed.
+  await client.query(
+    `INSERT INTO ownership_verifications (
+       id, tenant_id, target_group_id, declared_fqdn, status,
+       challenge_nonce_hash, probe_observed, verified_at, created_at, created_by
+     ) VALUES (
+       'own_ownership_a', $1, $2, 'owned.example', 'verified',
+       'sha256:legacy', TRUE, now() - interval '30 minutes', now() - interval '45 minutes', $3
+     )`,
+    [IDS.tenant, IDS.group, CTX.userId],
   );
-  const agent = {
-    id: 'agt_ownership',
-    tenant_id: IDS.tenant,
-    target_group_id: IDS.group,
-    status: 'online',
-    capabilities: ['heartbeat', 'canary', 'packet'],
-    last_token_validation_status: 'valid',
-    probe_endpoint: { declared_fqdn: 'owned.example' },
-  };
-  methods.getAgentById = async (_ctx, id) => (id === agent.id ? agent : null);
-  methods.listAgents = async () => [agent];
-  methods.createAgentJob = async (_ctx, record) => ({ ...record });
-  return { methods, agent };
 }
 
-describe('postgres target-bound live-egress ownership', () => {
-  it('binds ownership and every signed destination to the exact target', { timeout: 120_000 }, async (t) => {
+describe('postgres target-bound live-egress ownership (outside-in)', () => {
+  it('binds every signed destination to the exact target and confirms only proven targets', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {
       t.skip(availability.reason);
@@ -92,171 +96,22 @@ describe('postgres target-bound live-egress ownership', () => {
       const audit = createAuditRepository(pool);
       const ownershipVerifications = createOwnershipVerificationRepository(pool);
       const probeJobs = createProbeJobRepository(pool);
-      const { methods: agents, agent } = agentControl();
       const ownership = createPostgresOwnershipVerificationServices({
         repositories: { ownershipVerifications },
-        agentControl: agents,
         probeJobs,
         audit,
       });
 
-      const challenge = await ownership.createOwnershipChallenge(CTX, {
+      // ADR-0008: the agent-observed challenge/verify-setup/signal endpoints fail closed.
+      const removedChallenge = await ownership.createOwnershipChallenge(CTX, {
         target_group_id: IDS.group,
-        agent_id: agent.id,
       }, SIGNED_WORKER);
-      assert.equal(challenge.error, undefined);
-      assert.ok(challenge.verification.probe_job_id);
-      const challengeBinding = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT t.created_at AS target_created_at, ov.created_at AS challenge_created_at,
-                  t.created_at <= ov.created_at AS eligible
-           FROM targets t
-           JOIN ownership_verifications ov
-             ON ov.tenant_id = t.tenant_id AND ov.target_group_id = t.target_group_id
-           WHERE t.tenant_id = $1 AND t.id = $2 AND ov.id = $3`,
-          [IDS.tenant, IDS.targetA, challenge.verification.id],
-        );
-        return rows[0];
+      assert.equal(removedChallenge.error, 'ownership_agent_flow_removed');
+      assert.equal(removedChallenge.status, 410);
+      const removedSignal = await ownership.recordOwnershipSignal(CTX, 'own_ownership_a', {
+        source: 'probe', nonce_hash: 'sha256:legacy',
       });
-      assert.equal(challengeBinding?.eligible, true, JSON.stringify(challengeBinding));
-      const nonceHash = challenge.verification.challenge_nonce_hash;
-
-      await assert.rejects(
-        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
-          `UPDATE ownership_verifications
-           SET probe_job_id = 'pjob_wrong'
-           WHERE tenant_id = $1 AND id = $2`,
-          [IDS.tenant, challenge.verification.id],
-        )),
-        (error) => {
-          assert.equal(error.code, '23503');
-          assert.equal(error.constraint, 'fk_ownership_verifications_probe_job_tenant');
-          return true;
-        },
-      );
-      await assert.rejects(
-        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
-          `UPDATE probe_jobs
-           SET check_id = 'origin.direct_bypass.safe'
-           WHERE tenant_id = $1 AND id = $2`,
-          [IDS.tenant, challenge.verification.probe_job_id],
-        )),
-        (error) => {
-          assert.equal(error.code, '23514');
-          assert.equal(error.constraint, 'probe_jobs_ownership_challenge_binding');
-          return true;
-        },
-      );
-      await assert.rejects(
-        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
-          `DELETE FROM probe_jobs WHERE tenant_id = $1 AND id = $2`,
-          [IDS.tenant, challenge.verification.probe_job_id],
-        )),
-        (error) => {
-          assert.equal(error.code, '23503');
-          assert.equal(error.constraint, 'fk_ownership_verifications_probe_job_tenant');
-          return true;
-        },
-      );
-
-      // Model a pre-hardening malformed historical row by bypassing triggers only in this
-      // ephemeral database. Repository reads must still fail closed even for such durable data.
-      const adminClient = await pool.connect();
-      try {
-        await adminClient.query(`SET session_replication_role = 'replica'`);
-        await adminClient.query(
-          `INSERT INTO probe_jobs (
-             id, tenant_id, test_run_id, target_id, check_id, status, nonce_hash,
-             target_descriptor_json, ownership_verification_id
-           ) VALUES (
-             'pjob_malformed_history', $1, $2, 'agt_ownership', 'ownership.challenge',
-             'completed', $3, '{"kind":"fqdn","value":"owned.example"}'::jsonb, NULL
-           )`,
-          [IDS.tenant, challenge.verification.id, nonceHash],
-        );
-      } finally {
-        try {
-          await adminClient.query(`SET session_replication_role = 'origin'`);
-        } finally {
-          adminClient.release();
-        }
-      }
-      assert.equal(await probeJobs.getJobById(CTX, 'pjob_malformed_history'), null);
-      await pool.query(`DELETE FROM probe_jobs WHERE id = 'pjob_malformed_history'`);
-
-      await ownership.recordOwnershipSignal(CTX, challenge.verification.id, {
-        source: 'probe',
-        nonce_hash: nonceHash,
-        probe_job_id: challenge.verification.probe_job_id,
-      });
-      const completed = await ownership.recordOwnershipSignal(CTX, challenge.verification.id, {
-        source: 'agent',
-        nonce_hash: nonceHash,
-      });
-      assert.equal(completed.error, undefined, JSON.stringify(completed));
-      assert.equal(completed.verification.status, 'verified');
-      assert.equal(completed.target_id, IDS.targetA);
-      assert.equal(completed.target_verification.target_id, IDS.targetA);
-      assert.equal(completed.target_verification.state, 'agent_verified');
-
-      await withTenantContext(pool, IDS.tenant, (client) => client.query(
-        `UPDATE probe_jobs
-         SET status = 'completed', completed_at = now()
-         WHERE tenant_id = $1 AND id = $2`,
-        [IDS.tenant, challenge.verification.probe_job_id],
-      ));
-      const ownershipProbeResults = createPostgresProbeJobServices({
-        probeJobs,
-        validationEvidence: createValidationEvidenceRepository(pool),
-        audit,
-        killSwitch: { isKillSwitchActiveForTenant: async () => false },
-      }, {
-        ownershipVerification: ownership,
-      });
-      const workerCtx = {
-        tenantId: IDS.tenant,
-        workerId: 'pw_ownership_retry',
-        role: 'probe_worker',
-      };
-      const retryJob = await probeJobs.getJobById(CTX, challenge.verification.probe_job_id);
-      const resolverAttempts = retryJob.constraints.min_destination_resolver_attempts ?? 0;
-      const probeRequests = Math.min(1, retryJob.constraints.max_probe_requests ?? 1);
-      const totalOperations = probeRequests + resolverAttempts;
-      const retryBody = {
-        external_result: 'connected',
-        safety_attestation: {
-          requests_sent: totalOperations,
-          probe_requests_sent: probeRequests,
-          destination_resolver_attempts: resolverAttempts,
-          total_operations: totalOperations,
-          duration_ms: 10,
-        },
-      };
-      const firstCompletedRetry = await ownershipProbeResults.ingestProbeResult(
-        workerCtx,
-        challenge.verification.probe_job_id,
-        retryBody,
-      );
-      const secondCompletedRetry = await ownershipProbeResults.ingestProbeResult(
-        workerCtx,
-        challenge.verification.probe_job_id,
-        retryBody,
-      );
-      assert.equal(firstCompletedRetry.reconciled, true, JSON.stringify(firstCompletedRetry));
-      assert.equal(secondCompletedRetry.reconciled, true, JSON.stringify(secondCompletedRetry));
-      const retryAuditCount = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT COUNT(*)::int AS count
-           FROM audit_logs
-           WHERE tenant_id = $1
-             AND action = 'probe_job.result_reconciled'
-             AND resource_type = 'probe_job'
-             AND resource_id = $2`,
-          [IDS.tenant, challenge.verification.probe_job_id],
-        );
-        return rows[0].count;
-      });
-      assert.equal(retryAuditCount, 1);
+      assert.equal(removedSignal.error, 'ownership_agent_flow_removed');
 
       const coreCatalog = createCoreCatalogRepository(pool, { auditRepository: audit });
       const victim = await coreCatalog.addTarget(
@@ -267,13 +122,15 @@ describe('postgres target-bound live-egress ownership', () => {
       );
       assert.equal(victim.error, undefined);
 
-      const confirmed = await ownership.confirmOwnership(CTX, challenge.verification.id);
-      assert.equal(confirmed.error, undefined);
+      // confirmOwnership elevates the legacy verified record's target to user_confirmed.
+      const confirmed = await ownership.confirmOwnership(CTX, 'own_ownership_a');
+      assert.equal(confirmed.error, undefined, JSON.stringify(confirmed));
       assert.equal(confirmed.target_id, IDS.targetA);
       assert.equal(confirmed.target_verification.target_id, IDS.targetA);
       assert.equal(confirmed.target_verification.state, 'user_confirmed');
+      assert.equal('agent_id' in confirmed.target_verification.source_ref, false);
       assert.equal(confirmed.ownership_status, 'unverified');
-      const repeated = await ownership.confirmOwnership(CTX, challenge.verification.id);
+      const repeated = await ownership.confirmOwnership(CTX, 'own_ownership_a');
       assert.equal(repeated.error, undefined);
       assert.equal(repeated.target_verification.id, confirmed.target_verification.id);
       assert.equal(repeated.verification.confirmed_at, confirmed.verification.confirmed_at);
@@ -308,14 +165,6 @@ describe('postgres target-bound live-egress ownership', () => {
         'target_verification.user_confirmed': 1,
       });
 
-      const summary = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT ownership_status FROM target_groups WHERE tenant_id = $1 AND id = $2`,
-          [IDS.tenant, IDS.group],
-        );
-        return rows[0]?.ownership_status;
-      });
-      assert.equal(summary, 'unverified');
       assert.equal(
         (await ownershipVerifications.getCurrentTargetVerification(
           CTX,
@@ -334,7 +183,6 @@ describe('postgres target-bound live-egress ownership', () => {
         validationEvidence,
         audit,
         coreCatalog,
-        agentControl: agents,
         probeJobs,
         killSwitch: { isKillSwitchActiveForTenant: async () => false },
         ownershipVerifications,
@@ -376,12 +224,6 @@ describe('postgres target-bound live-egress ownership', () => {
           `SELECT COUNT(*)::int AS count FROM test_runs WHERE tenant_id = $1`,
           [IDS.tenant],
         );
-        const jobs = await client.query(
-          `SELECT COUNT(*)::int AS count
-           FROM probe_jobs
-           WHERE tenant_id = $1 AND ownership_verification_id IS NULL`,
-          [IDS.tenant],
-        );
         const audits = await client.query(
           `SELECT metadata_json
            FROM audit_logs
@@ -391,12 +233,10 @@ describe('postgres target-bound live-egress ownership', () => {
         );
         return {
           runs: runs.rows[0].count,
-          jobs: jobs.rows[0].count,
           audits: audits.rows,
         };
       });
       assert.equal(afterRetargetDenials.runs, 0);
-      assert.equal(afterRetargetDenials.jobs, 0);
       assert.equal(afterRetargetDenials.audits.length, 2);
       assert.equal(JSON.stringify(afterRetargetDenials.audits).includes('198.51.100.200'), false);
       assert.equal(JSON.stringify(afterRetargetDenials.audits).includes('198.51.100.201'), false);
@@ -544,110 +384,6 @@ describe('postgres target-bound live-egress ownership', () => {
 
       const cancelled = await testRuns.cancelTestRun(CTX, allowed.run.id);
       assert.equal(cancelled.run.status, 'cancelled');
-      await withTenantContext(pool, IDS.tenant, async (client) => {
-        await client.query(
-          `INSERT INTO test_policies (
-             id, tenant_id, target_group_id, target_id, check_id, cadence,
-             state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
-           ) VALUES (
-             'policy_archive_target_a', $1, $2, $3, 'dns.authoritative_response.safe',
-             'daily', 'active', TRUE, now(), 'archive-lease', 'runner', now() + interval '5 minutes'
-           )`,
-          [IDS.tenant, IDS.group, IDS.targetA],
-        );
-      });
-      const challengeCreatedMs = Date.parse(challenge.verification.created_at);
-      const deleted = await coreCatalog.deleteTarget(CTX, IDS.group, IDS.targetA, {
-        now: new Date(challengeCreatedMs + 30_000).toISOString(),
-      });
-      assert.equal(deleted.deleted, true);
-      assert.equal(deleted.paused_policy_count, 1);
-      const archivedPolicy = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
-           FROM test_policies WHERE tenant_id = $1 AND id = 'policy_archive_target_a'`,
-          [IDS.tenant],
-        );
-        return rows[0];
-      });
-      assert.deepEqual(archivedPolicy, {
-        state: 'paused',
-        enabled: false,
-        next_run_at: null,
-        lease_token: null,
-        lease_owner: null,
-        lease_expires_at: null,
-      });
-      const replacement = await coreCatalog.addTarget(
-        CTX,
-        IDS.group,
-        { kind: 'fqdn', value: 'owned.example' },
-        {
-          id: 'tgt_ownership_a_replacement',
-          now: new Date(challengeCreatedMs + 60_000).toISOString(),
-        },
-      );
-      assert.equal(replacement.error, undefined);
-
-      const staleConfirmation = await ownership.confirmOwnership(
-        CTX,
-        challenge.verification.id,
-      );
-      assert.deepEqual(staleConfirmation, {
-        error: 'ownership_target_not_active',
-        status: 409,
-      });
-      assert.equal(
-        await ownershipVerifications.getCurrentTargetVerification(
-          CTX,
-          IDS.group,
-          replacement.id,
-        ),
-        null,
-      );
-      const replacementSummary = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT ownership_status FROM target_groups WHERE tenant_id = $1 AND id = $2`,
-          [IDS.tenant, IDS.group],
-        );
-        return rows[0]?.ownership_status;
-      });
-      assert.equal(replacementSummary, 'unverified');
-
-      await withTenantContext(pool, IDS.tenant, async (client) => {
-        await client.query(
-          `INSERT INTO test_policies (
-             id, tenant_id, target_group_id, target_id, check_id, cadence,
-             state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
-           ) VALUES (
-             'policy_archive_group', $1, $2, $3, 'waf.fingerprint.safe',
-             'weekly', 'active', TRUE, now(), 'group-lease', 'runner', now() + interval '5 minutes'
-           )`,
-          [IDS.tenant, IDS.group, replacement.id],
-        );
-      });
-      const archivedGroup = await coreCatalog.archiveTargetGroup(CTX, IDS.group, {
-        now: new Date(challengeCreatedMs + 90_000).toISOString(),
-      });
-      assert.equal(archivedGroup.archived, true);
-      assert.equal(archivedGroup.paused_policy_count, 2);
-      const groupPolicies = await withTenantContext(pool, IDS.tenant, async (client) => {
-        const { rows } = await client.query(
-          `SELECT id, state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
-           FROM test_policies
-           WHERE tenant_id = $1 AND target_group_id = $2
-           ORDER BY id`,
-          [IDS.tenant, IDS.group],
-        );
-        return rows;
-      });
-      assert.ok(groupPolicies.length >= 2);
-      assert.ok(groupPolicies.every((policy) => policy.state === 'paused'
-        && policy.enabled === false
-        && policy.next_run_at === null
-        && policy.lease_token === null
-        && policy.lease_owner === null
-        && policy.lease_expires_at === null));
     }, availability.env ?? process.env);
   });
 });

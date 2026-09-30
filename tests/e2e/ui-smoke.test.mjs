@@ -10,9 +10,8 @@ let server;
 
 const REQUIRED_NAV_LABELS = [
   'Dashboard',
-  'Environments',
+  'Targets',
   'Target groups',
-  'Agents',
   'Test runs',
   'Findings',
   'Reports',
@@ -84,7 +83,6 @@ describe('ui and api smoke', () => {
     for (const label of REMOVED_NAV_LABELS) {
       assert.equal(reactAppJs.text.includes(label), false, `pruned nav label should be absent: ${label}`);
     }
-    assert.ok(reactAppJs.text.includes('/v1/bootstrap-tokens'), 'React settings page creates and manages bootstrap tokens');
     assert.ok(reactAppJs.text.includes('/v1/service-accounts'), 'React settings page creates and manages service accounts');
     assert.ok(reactAppJs.text.includes('/v1/tenants/current'), 'React settings page loads and patches tenant settings');
     assert.ok(reactAppJs.text.includes('/v1/secrets'), 'React settings page manages encrypted secret vault');

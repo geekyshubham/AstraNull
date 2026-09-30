@@ -29,7 +29,6 @@ export function getPublicSiteConfig(runtimeConfig) {
       no_default_cloud_access: true,
       no_ip_inventory_discovery: true,
       no_self_service_high_scale_attack_tooling: true,
-      outbound_only_agents: true,
       soc_gated_high_scale: true,
     },
   };

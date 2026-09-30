@@ -83,11 +83,7 @@ describe('target groups API CRUD', () => {
     assert.equal(state.status, 200);
     assert.equal(state.json.target_groups, 1);
     assert.match(state.json.readiness.factors[0].detail, /1 target group/);
-    assert.equal(
-      state.json.readiness.factors.find((factor) => factor.key === 'agent_placement')
-        .placement_diagnostics.total_groups,
-      1,
-    );
+    assert.equal(state.json.readiness.factors.some((factor) => factor.key === 'agent_placement'), false);
 
     const run = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: engineer,

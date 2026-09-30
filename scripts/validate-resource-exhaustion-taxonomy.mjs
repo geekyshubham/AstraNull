@@ -371,7 +371,7 @@ export function validateResourceExhaustionTaxonomy({
   // Must reference exactly the out-of-scope ids, once each, with a family-correct
   // detection_mode/dependency. It is NOT a registry claimant (no duplicate claims).
   const monitorExpectedByReason = {
-    requires_l2_adjacency: { detection_mode: 'agent_local_telemetry', dependency: 'on_network_agent_required' },
+    requires_l2_adjacency: { detection_mode: 'integration_telemetry', dependency: 'customer_local_telemetry_required' },
     requires_routing_peer_session: { detection_mode: 'integration_telemetry', dependency: 'routing_session_feed_required' },
     requires_rf_proximity: { detection_mode: 'integration_telemetry', dependency: 'wireless_sensor_required' },
     requires_mobile_core_interface: { detection_mode: 'integration_telemetry', dependency: 'mobile_core_tap_required' },
@@ -382,7 +382,7 @@ export function validateResourceExhaustionTaxonomy({
   for (const entry of MONITOR_ONLY_VECTORS) {
     if (entry.monitor_only !== true) errors.push(`${entry.id}: monitor-only vector must set monitor_only:true`);
     if (entry.evidence_tier !== 'E5') errors.push(`${entry.id}: monitor-only vector evidence_tier must be E5`);
-    if (!['agent_local_telemetry', 'integration_telemetry'].includes(entry.detection_mode)) {
+    if (!['integration_telemetry'].includes(entry.detection_mode)) {
       errors.push(`${entry.id}: invalid monitor-only detection_mode ${entry.detection_mode}`);
     }
     if (!entry.signal_source || !entry.dependency || !entry.notes) {

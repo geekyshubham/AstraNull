@@ -186,7 +186,6 @@ describe('validation scans API', () => {
       body: { check_id: 'origin.leak_scan.safe', target_group_id: 'tg_1', target_id: 'tgt_1' },
     });
     assert.equal(started.status, 201);
-    getStore().agentJobs.push({ id: 'job_direct', tenant_id: 'ten_demo', agent_id: 'agt_1', test_run_id: started.json.run.id, status: 'pending' });
     const cancelled = await request(baseUrl, 'POST', `/v1/test-runs/${started.json.run.id}/cancel`, {
       headers: engineer,
       body: { reason: 'maintenance window' },
@@ -194,11 +193,9 @@ describe('validation scans API', () => {
     assert.equal(cancelled.status, 200);
     assert.equal(cancelled.json.status, 'cancelled');
     assert.equal(cancelled.json.summary.cancellation.reason, 'maintenance window');
-    assert.equal(getStore().agentJobs[0].status, 'cancelled');
     const entry = getStore().auditLog.find((row) => row.action === 'test_run.cancelled');
     assert.equal(entry.metadata.reason, 'maintenance window');
     assert.equal(entry.metadata.cancelled_by_role, 'engineer');
-    assert.deepEqual(entry.metadata.cancelled_agent_job_ids, ['job_direct']);
 
     const bare = await request(baseUrl, 'POST', `/v1/test-runs/${started.json.run.id}/cancel`, { headers: engineer });
     assert.equal(bare.status, 409);

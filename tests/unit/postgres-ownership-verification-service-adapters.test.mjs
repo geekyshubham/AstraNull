@@ -38,7 +38,7 @@ function dbRow(overrides = {}) {
     id: 'own_1',
     tenant_id: CTX.tenantId,
     target_group_id: 'tg_1',
-    agent_id: 'agt_1',
+    agent_id: null,
     declared_fqdn: 'app.example.com',
     status: 'challenge_sent',
     challenge_nonce_hash: 'nonce_hash_1',
@@ -141,59 +141,7 @@ function buildServices(pool, audit = { appendAuditEvent: async () => ({ id: 'aud
   });
 }
 
-function onlineAgent(overrides = {}) {
-  return {
-    id: 'agt_1',
-    target_group_id: 'tg_1',
-    status: 'online',
-    last_token_validation_status: 'valid',
-    probe_endpoint: { declared_fqdn: 'app.example.com' },
-    ...overrides,
-  };
-}
-
-function ownershipSetupPoolHandler(overrides = {}) {
-  return (text) => {
-    if (/FROM target_groups/i.test(text)) {
-      return {
-        rows: [
-          {
-            id: 'tg_1',
-            tenant_id: CTX.tenantId,
-            validation_mode: 'agent_assisted',
-            ownership_status: 'unverified',
-            dns_ownership: null,
-            archived_at: null,
-          },
-        ],
-      };
-    }
-    if (/FROM targets/i.test(text) && /kind = 'fqdn'/i.test(text)) {
-      return { rows: [{ value: 'app.example.com' }] };
-    }
-    return overrides.fallback?.(text) ?? { rows: [] };
-  };
-}
-
-function buildServicesWithAgent(pool, agent) {
-  const ownershipVerifications = createOwnershipVerificationRepository(pool);
-  return createPostgresOwnershipVerificationServices({
-    repositories: { ownershipVerifications },
-    agentControl: { getAgentById: async () => agent },
-    audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
-  });
-}
-
-function assertSelectOnlyDataQueries(client) {
-  for (const q of dataQueries(client)) {
-    const t = q.text.trim();
-    assert.match(t, /^SELECT/i, `expected SELECT only, got: ${t.slice(0, 120)}`);
-    assert.doesNotMatch(t, /INSERT INTO ownership_verifications/i);
-    assert.doesNotMatch(t, /^UPDATE\b/i);
-  }
-}
-
-describe('postgres ownership verification service adapters', () => {
+describe('postgres ownership verification service adapters (outside-in)', () => {
   it('listOwnershipVerifications queries with tenant_id predicate', async () => {
     const pool = createRecordingPool((text) => {
       if (/FROM ownership_verifications/i.test(text)) {
@@ -212,7 +160,7 @@ describe('postgres ownership verification service adapters', () => {
   });
 
   it('getOwnershipVerification filters by id and tenant_id', async () => {
-    const pool = createRecordingPool((text, params) => {
+    const pool = createRecordingPool((text) => {
       if (/FROM ownership_verifications/i.test(text) && /WHERE id = \$1 AND tenant_id = \$2/.test(text)) {
         return { rows: [dbRow()] };
       }
@@ -228,224 +176,39 @@ describe('postgres ownership verification service adapters', () => {
     assert.deepEqual(getQuery.params, ['own_1', CTX.tenantId]);
   });
 
-  it('atomically completes against the exact active target and writes target-bound evidence', async () => {
-    const auditCalls = [];
-    const verifiedAt = '2026-06-01T12:05:00.000Z';
-    const pool = createRecordingPool((text, params) => {
-      if (/FROM ownership_verifications/i.test(text) && /challenge_nonce_hash/.test(text)) {
-        return { rows: [dbRow({ probe_observed: true, agent_observed: false })] };
-      }
-      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
-        return { rows: [{
-          id: 'tgt_1', tenant_id: CTX.tenantId, target_group_id: 'tg_1',
-          kind: 'fqdn', value: 'app.example.com', normalized_value: 'app.example.com',
-        }] };
-      }
-      if (/FROM target_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
-        return { rows: [] };
-      }
-      if (/INSERT INTO target_verifications/i.test(text)) {
-        return { rows: [{
-          id: params[0], tenant_id: params[1], target_id: params[2],
-          state: 'agent_verified', source_kind: 'agent_observation',
-          source_ref: JSON.parse(params[3]), transitioned_at: new Date(params[4]),
-          transitioned_by: params[5], audit_entry_id: params[6],
-        }] };
-      }
-      if (/UPDATE ownership_verifications/i.test(text) && /status = 'verified'/i.test(text)) {
-        return { rows: [dbRow({
-          probe_observed: true,
-          agent_observed: true,
-          status: 'verified',
-          verified_at: verifiedAt,
-        })] };
-      }
-      if (/SELECT t\.id AS target_id/i.test(text)) {
-        return { rows: [{ target_id: 'tgt_1', state: 'agent_verified' }] };
-      }
-      if (/UPDATE target_groups/i.test(text) && /ownership_status/.test(text)) {
-        return { rows: [] };
-      }
-      return { rows: [] };
-    });
-    const audit = {
-      async appendAuditEvent(entry, options) {
-        auditCalls.push({ entry, options });
-        return { id: `audit_${auditCalls.length}` };
-      },
-    };
-    const services = buildServices(pool, audit);
+  // ADR-0008: the agent-observed challenge flow is removed. These endpoints fail closed.
+  it('createOwnershipChallenge fails closed without touching the store', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const services = buildServices(pool);
+    const result = await services.createOwnershipChallenge(CTX, { target_group_id: 'tg_1' }, {});
+    assert.equal(result.error, 'ownership_agent_flow_removed');
+    assert.equal(result.status, 410);
+    assert.equal(dataQueries(pool.client).length, 0);
+  });
 
-    const result = await services.recordOwnershipSignalByNonce(
+  it('verifyOwnershipSetup fails closed', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const services = buildServices(pool);
+    const result = await services.verifyOwnershipSetup(CTX, { target_group_id: 'tg_1' });
+    assert.equal(result.ready, false);
+    assert.equal(result.error, 'ownership_agent_flow_removed');
+    assert.equal(result.status, 410);
+    assert.equal(dataQueries(pool.client).length, 0);
+  });
+
+  it('recordOwnershipSignal and recordOwnershipSignalByNonce fail closed', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const services = buildServices(pool);
+    const bySignal = await services.recordOwnershipSignal(CTX, 'own_1', {
+      source: 'probe', nonce_hash: 'n',
+    });
+    assert.equal(bySignal.error, 'ownership_agent_flow_removed');
+    const byNonce = await services.recordOwnershipSignalByNonce(
       { tenantId: CTX.tenantId },
-      { source: 'agent', nonce_hash: 'nonce_hash_1' },
+      { source: 'probe', nonce_hash: 'n' },
     );
-
-    assert.equal(result.verification.status, 'verified');
-    assert.equal(result.target_id, 'tgt_1');
-    assert.equal(result.target_verification.target_id, 'tgt_1');
-    assert.equal(result.target_verification.state, 'agent_verified');
-    assert.equal(result.ownership_status, 'agent_verified');
-    const queries = dataQueries(pool.client);
-    const targetInsert = queries.find((q) => /INSERT INTO target_verifications/i.test(q.text));
-    assert.ok(targetInsert);
-    assert.equal(targetInsert.params[2], 'tgt_1');
-    assert.deepEqual(JSON.parse(targetInsert.params[3]), {
-      ownership_verification_id: 'own_1',
-      agent_id: 'agt_1',
-      declared_fqdn: 'app.example.com',
-    });
-    const groupUpdate = queries.find((q) => /UPDATE target_groups/i.test(q.text));
-    assert.deepEqual(groupUpdate.params, [CTX.tenantId, 'tg_1', 'agent_verified']);
-    assert.deepEqual(auditCalls.map(({ entry }) => entry.action), [
-      'target_verification.agent_verified',
-      'ownership_verification.agent_verified',
-    ]);
-    assert.ok(auditCalls.every(({ options }) => options.client === pool.client));
-    assert.equal(pool.client.queries[0].text, 'BEGIN');
-    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
-  });
-
-  it('recordOwnershipSignal selects the exact verification ID even when nonce is nonunique', async () => {
-    const exact = dbRow({
-      id: 'own_exact',
-      probe_observed: false,
-      probe_job_id: 'pjob_exact',
-    });
-    const competing = dbRow({ id: 'own_competing', probe_observed: false });
-    const pool = createRecordingPool((text, params) => {
-      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
-        assert.match(text, /WHERE tenant_id = \$1 AND id = \$2/);
-        assert.doesNotMatch(text, /challenge_nonce_hash = \$2/);
-        assert.deepEqual(params, [CTX.tenantId, exact.id]);
-        return { rows: [exact] };
-      }
-      if (/UPDATE ownership_verifications/i.test(text) && /probe_observed = \$3/.test(text)) {
-        return { rows: [{ ...exact, probe_observed: true }] };
-      }
-      return { rows: [] };
-    });
-    const services = buildServices(pool);
-
-    const result = await services.recordOwnershipSignal(CTX, exact.id, {
-      source: 'probe',
-      nonce_hash: competing.challenge_nonce_hash,
-      probe_job_id: exact.probe_job_id,
-    });
-
-    assert.equal(result.verification.id, exact.id);
-    assert.equal(result.verification.probe_observed, true);
-  });
-
-  for (const [label, probeJobId] of [
-    ['missing', undefined],
-    ['different', 'pjob_other'],
-  ]) {
-    it(`rejects a probe signal with a ${label} reciprocal probe job binding before writes`, async () => {
-      const record = dbRow({ probe_observed: false, probe_job_id: 'pjob_exact' });
-      let updateCalls = 0;
-      const pool = createRecordingPool((text) => {
-        if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
-          return { rows: [record] };
-        }
-        if (/UPDATE ownership_verifications/i.test(text)) updateCalls += 1;
-        return { rows: [] };
-      });
-      const services = buildServices(pool);
-
-      const result = await services.recordOwnershipSignal(CTX, record.id, {
-        source: 'probe',
-        nonce_hash: record.challenge_nonce_hash,
-        ...(probeJobId === undefined ? {} : { probe_job_id: probeJobId }),
-      });
-
-      assert.deepEqual(result, {
-        error: 'ownership_probe_job_binding_mismatch',
-        status: 409,
-      });
-      assert.equal(updateCalls, 0);
-      assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
-    });
-  }
-
-  it('rejects a malformed reciprocal probe binding before completed-status handling', async () => {
-    const record = dbRow({
-      status: 'verified',
-      verified_at: new Date('2026-06-01T12:00:00.000Z'),
-      probe_observed: true,
-      probe_job_id: 'pjob_exact',
-    });
-    let updateCalls = 0;
-    const pool = createRecordingPool((text) => {
-      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
-        return { rows: [record] };
-      }
-      if (/UPDATE ownership_verifications/i.test(text)) updateCalls += 1;
-      return { rows: [] };
-    });
-    const services = buildServices(pool);
-
-    const result = await services.recordOwnershipSignal(CTX, record.id, {
-      source: 'probe',
-      nonce_hash: record.challenge_nonce_hash,
-      probe_job_id: 'pjob_other',
-    });
-
-    assert.deepEqual(result, {
-      error: 'ownership_probe_job_binding_mismatch',
-      status: 409,
-    });
-    assert.equal(updateCalls, 0);
-    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
-  });
-
-  it('keeps agent-origin ownership signals unchanged without a probe job ID', async () => {
-    const record = dbRow({ probe_observed: false, agent_observed: false, probe_job_id: 'pjob_exact' });
-    const pool = createRecordingPool((text) => {
-      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
-        return { rows: [record] };
-      }
-      if (/UPDATE ownership_verifications/i.test(text) && /agent_observed = \$4/.test(text)) {
-        return { rows: [{ ...record, agent_observed: true }] };
-      }
-      return { rows: [] };
-    });
-    const services = buildServices(pool);
-
-    const result = await services.recordOwnershipSignal(CTX, record.id, {
-      source: 'agent',
-      nonce_hash: record.challenge_nonce_hash,
-    });
-
-    assert.equal(result.verification.agent_observed, true);
-  });
-
-  it('rolls back challenge completion when target evidence cannot be inserted', async () => {
-    const pool = createRecordingPool((text) => {
-      if (/FROM ownership_verifications/i.test(text) && /WHERE tenant_id = \$1 AND id = \$2/.test(text)) {
-        return { rows: [dbRow({ probe_observed: true, agent_observed: false })] };
-      }
-      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
-        return { rows: [{
-          id: 'tgt_1', tenant_id: CTX.tenantId, target_group_id: 'tg_1',
-          kind: 'fqdn', value: 'app.example.com', normalized_value: 'app.example.com',
-        }] };
-      }
-      if (/FROM target_verifications/i.test(text) && /FOR UPDATE/i.test(text)) return { rows: [] };
-      if (/INSERT INTO target_verifications/i.test(text)) throw new Error('target evidence failed');
-      return { rows: [] };
-    });
-    const services = buildServices(pool);
-
-    await assert.rejects(
-      services.recordOwnershipSignal(CTX, 'own_1', {
-        source: 'agent', nonce_hash: 'nonce_hash_1',
-      }),
-      /target evidence failed/,
-    );
-
-    assert.equal(pool.client.queries.at(-1).text, 'ROLLBACK');
-    assert.equal(pool.client.queries.some((query) => query.text === 'COMMIT'), false);
+    assert.equal(byNonce.error, 'ownership_agent_flow_removed');
+    assert.equal(dataQueries(pool.client).length, 0);
   });
 
   it('reads current ownership proof by tenant, group, and target', async () => {
@@ -471,6 +234,8 @@ describe('postgres ownership verification service adapters', () => {
     assert.match(query.text, /tg\.tenant_id = \$1 AND tg\.id = \$2 AND t\.id = \$3/);
     assert.match(query.text, /t\.deleted_at IS NULL/);
     assert.match(query.text, /WHEN 'user_confirmed' THEN 4/);
+    // Legacy agent_verified rank is no longer part of the ordering (fails closed).
+    assert.doesNotMatch(query.text, /WHEN 'agent_verified'/);
   });
 
   it('keeps current provider proof valid after a degraded failed poll retains last_success', async () => {
@@ -487,10 +252,7 @@ describe('postgres ownership verification service adapters', () => {
     assert.equal(current.state, 'provider_verified');
     const query = dataQueries(pool.client).find((entry) => /JOIN LATERAL/i.test(entry.text));
     assert.match(query.text, /connector_feature\.enabled AS proof_connector_feature_enabled/);
-    assert.match(query.text, /connector_feature\.revision AS proof_connector_feature_revision/);
     assert.match(query.text, /LEFT JOIN tenant_connector_features connector_feature/);
-    assert.match(query.text, /ownership_connector\.status AS proof_connector_status/);
-    assert.match(query.text, /ownership_connector\.secret_id AS proof_connector_secret_id/);
     assert.match(query.text, /candidate_snapshot\.evidence_source = 'provider_api'/);
     assert.match(query.text, /candidate_snapshot\.snapshot_kind = 'dns_zone'/);
     assert.match(query.text, /candidate_snapshot\.observed_at = ownership_connector\.last_success_at/);
@@ -532,152 +294,22 @@ describe('postgres ownership verification service adapters', () => {
     });
   }
 
-  it('verifyOwnershipSetup returns ready without INSERT or UPDATE', async () => {
-    const pool = createRecordingPool(ownershipSetupPoolHandler());
-    const services = buildServicesWithAgent(pool, onlineAgent());
-    const result = await services.verifyOwnershipSetup(CTX, {
-      target_group_id: 'tg_1',
-      agent_id: 'agt_1',
-    });
-
-    assert.equal(result.dry_run, true);
-    assert.equal(result.ready, true);
-    assert.equal(result.target_group_id, 'tg_1');
-    assert.equal(result.agent_id, 'agt_1');
-    assert.equal(result.declared_fqdn, 'app.example.com');
-    assert.deepEqual(result.checks, {
-      agent_online: true,
-      agent_bound: true,
-      token_valid: true,
-      fqdn_declared: true,
-    });
-    assertSelectOnlyDataQueries(pool.client);
-  });
-
-  it('verifyOwnershipSetup returns agent_not_online when agent is offline', async () => {
-    const pool = createRecordingPool(ownershipSetupPoolHandler());
-    const services = buildServicesWithAgent(pool, onlineAgent({ status: 'offline' }));
-    const result = await services.verifyOwnershipSetup(CTX, {
-      target_group_id: 'tg_1',
-      agent_id: 'agt_1',
-    });
-
-    assert.equal(result.dry_run, true);
-    assert.equal(result.ready, false);
-    assert.equal(result.error, 'agent_not_online');
-    assert.equal(result.status, 409);
-    assertSelectOnlyDataQueries(pool.client);
-  });
-
-  it('creates signed ownership verification and probe job in one transaction', async () => {
-    const pool = createRecordingPool((text, params) => {
-      if (/FROM target_groups/i.test(text)) {
-        return { rows: [{
-          id: 'tg_1', tenant_id: CTX.tenantId, validation_mode: 'agent_assisted',
-          ownership_status: 'unverified', dns_ownership: null, archived_at: null,
-        }] };
-      }
-      if (/FROM targets/i.test(text) && /kind = 'fqdn'/i.test(text)) {
-        return { rows: [{ value: 'app.example.com' }] };
-      }
-      if (/INSERT INTO ownership_verifications/i.test(text)) {
-        assert.match(text, /CURRENT_TIMESTAMP/);
-        return { rows: [dbRow({
-          id: params[0],
-          challenge_nonce_hash: params[6],
-          probe_job_id: params[12],
-          created_at: new Date(),
-        })] };
-      }
-      return { rows: [] };
-    });
-    let probeInsert;
-    const ownershipVerifications = createOwnershipVerificationRepository(pool);
-    const services = createPostgresOwnershipVerificationServices({
-      repositories: { ownershipVerifications },
-      agentControl: { getAgentById: async () => onlineAgent() },
-      probeJobs: {
-        async createProbeJob(ctx, job, options) {
-          probeInsert = { ctx, job, options };
-          return job;
-        },
-      },
-      audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
-    });
-
-    const result = await services.createOwnershipChallenge(CTX, {
-      target_group_id: 'tg_1',
-      agent_id: 'agt_1',
-    }, {
-      probeMode: 'signed-worker',
-      probeWorkerSecret: 'probe-worker-secret-at-least-32-chars',
-    });
-
-    assert.ok(result.verification.probe_job_id);
-    assert.equal(probeInsert.options.client, pool.client);
-    assert.equal(probeInsert.job.ownership_verification_id, result.verification.id);
-    assert.equal(probeInsert.job.test_run_id, result.verification.id);
-    assert.equal(probeInsert.job.target_id, 'agt_1');
-    assert.equal(pool.client.queries[0].text, 'BEGIN');
-    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
-  });
-
-  it('rolls back signed ownership verification when probe job insertion fails', async () => {
-    const pool = createRecordingPool((text, params) => {
-      if (/FROM target_groups/i.test(text)) {
-        return { rows: [{ id: 'tg_1', tenant_id: CTX.tenantId, archived_at: null }] };
-      }
-      if (/FROM targets/i.test(text) && /kind = 'fqdn'/i.test(text)) {
-        return { rows: [{ value: 'app.example.com' }] };
-      }
-      if (/INSERT INTO ownership_verifications/i.test(text)) {
-        return { rows: [dbRow({ id: params[0], challenge_nonce_hash: params[6] })] };
-      }
-      return { rows: [] };
-    });
-    const ownershipVerifications = createOwnershipVerificationRepository(pool);
-    const services = createPostgresOwnershipVerificationServices({
-      repositories: { ownershipVerifications },
-      agentControl: { getAgentById: async () => onlineAgent() },
-      probeJobs: { createProbeJob: async () => { throw new Error('probe insert failed'); } },
-      audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
-    });
-
-    await assert.rejects(
-      services.createOwnershipChallenge(CTX, {
-        target_group_id: 'tg_1',
-        agent_id: 'agt_1',
-      }, {
-        probeMode: 'signed-worker',
-        probeWorkerSecret: 'probe-worker-secret-at-least-32-chars',
-      }),
-      /probe insert failed/,
-    );
-    assert.equal(pool.client.queries.at(-1).text, 'ROLLBACK');
-    const lastBegin = pool.client.queries.findLastIndex((query) => query.text === 'BEGIN');
-    assert.equal(
-      pool.client.queries.slice(lastBegin + 1).some((query) => query.text === 'COMMIT'),
-      false,
-    );
-  });
-
-  it('atomically confirms only A, keeps unverified B in the summary, and is idempotent', async () => {
+  it('atomically confirms only A from a verified record, keeps unverified B, and is idempotent', async () => {
     const auditCalls = [];
     let ownership = dbRow({
       status: 'verified',
-      agent_observed: true,
       verified_at: '2026-06-01T12:05:00.000Z',
     });
     let current = {
-      id: 'tv_agent',
+      id: 'tv_dns',
       tenant_id: CTX.tenantId,
       target_id: 'tgt_1',
-      state: 'agent_verified',
-      source_kind: 'agent_observation',
-      source_ref: { ownership_verification_id: 'own_1' },
+      state: 'dns_verified',
+      source_kind: 'dns_txt',
+      source_ref: { dns_challenge_id: 'dns_1' },
       transitioned_at: new Date('2026-06-01T12:05:00.000Z'),
       transitioned_by: 'system',
-      audit_entry_id: 'audit_agent',
+      audit_entry_id: 'audit_dns',
     };
     const pool = createRecordingPool((text, params) => {
       if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
@@ -734,9 +366,9 @@ describe('postgres ownership verification service adapters', () => {
     assert.equal(first.target_id, 'tgt_1');
     assert.equal(first.target_verification.state, 'user_confirmed');
     assert.equal(first.target_verification.source_kind, 'user_attestation');
+    // No agent_id in the user-confirmed source_ref (ADR-0008).
     assert.deepEqual(first.target_verification.source_ref, {
       ownership_verification_id: 'own_1',
-      agent_id: 'agt_1',
       declared_fqdn: 'app.example.com',
       confirmed_by_user_id: CTX.userId,
     });
@@ -755,11 +387,6 @@ describe('postgres ownership verification service adapters', () => {
     const groupUpdates = queries.filter((query) => /UPDATE target_groups/i.test(query.text));
     assert.equal(groupUpdates.length, 2);
     assert.ok(groupUpdates.every((query) => query.params[2] === 'unverified'));
-    const bindingQueries = queries.filter(
-      (query) => /FROM target_groups tg/i.test(query.text) && /JOIN targets t/i.test(query.text),
-    );
-    assert.equal(bindingQueries.length, 2);
-    assert.ok(bindingQueries.every((query) => /t\.created_at <= \$4::timestamptz/.test(query.text)));
     assert.deepEqual(auditCalls.map(({ entry }) => entry.action), [
       'target_verification.user_confirmed',
       'ownership_verification.user_confirmed',
@@ -775,12 +402,10 @@ describe('postgres ownership verification service adapters', () => {
       if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
         return { rows: [dbRow({
           status: 'verified',
-          agent_observed: true,
           verified_at: '2026-06-01T12:05:00.000Z',
         })] };
       }
       if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
-        // A same-FQDN replacement is newer than the challenge and therefore excluded by SQL.
         return { rows: [] };
       }
       return { rows: [] };

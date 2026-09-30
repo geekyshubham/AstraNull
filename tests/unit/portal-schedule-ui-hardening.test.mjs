@@ -29,15 +29,10 @@ describe('portal schedule UI hardening', () => {
     assert.match(targetGroup, /choose another check or add a compatible target/);
   });
 
-  it('defaults to external-only and labels agent assistance only from an explicit mode', () => {
-    assert.match(targetGroup, /getString\(entity, \['validation_mode'\], 'external_only'\)/);
-    assert.match(details, /getString\(entity, \['validation_mode'\], 'external_only'\)/);
-    assert.match(details, /explicitRunValidationMode === 'agent_assisted'[\s\S]*Agent-assisted verdict/);
-    assert.match(details, /Correlation mode is not recorded yet\. Pending or incomplete evidence is not labeled agent-assisted/);
-    assert.match(details, /External-only is the default:[\s\S]*without an agent/);
-    assert.match(surfaces, /observation agents are optional for external readiness validation/);
-    assert.match(surfaces, /origin validation must correlate an outside probe with an observation from inside the protected path/);
-    assert.doesNotMatch(surfaces, /Readiness still requires correlated probe and agent evidence/);
+  it('treats every group as external-only and never labels agent assistance', () => {
+    for (const source of [targetGroup, details, surfaces]) {
+      assert.doesNotMatch(source, /agent_assisted|Agent-assisted verdict/);
+    }
   });
 
   it('contains TargetGroupPicker Escape inside the popup and restores trigger focus', () => {

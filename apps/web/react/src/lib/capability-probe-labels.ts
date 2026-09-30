@@ -109,19 +109,16 @@ const OUTSIDE_IN_POSTURE_STATUS_LABELS: Record<string, string> = {
 };
 
 export const DOM_XSS_VALIDATION_LABELS: Record<string, string> = {
-  agent_required: 'Agent observation required',
   reflection_observed: 'DOM XSS reflection observed',
-  agent_corroborated_blocked: 'Agent corroborated block',
   marker_reached_origin: 'Marker reached origin',
-  agent_observed_no_reflection: 'Agent observed, no reflection',
 };
 
 const OUTSIDE_IN_POSTURE_EXPLANATIONS: Record<string, string> = {
-  Protected: 'Safe attack markers were blocked at the edge and your agent confirmed enforcement.',
+  Protected: 'Safe attack markers were blocked at the edge by external probe evidence.',
   'Edge protected · not internally validated':
-    'Bounded probes observed edge blocking, but no matching agent or origin observation confirms internal enforcement.',
+    'Bounded external probes observed edge blocking. Verdicts are external-only confidence.',
   'Detected, not validated':
-    'A WAF was detected from the outside, but agent corroboration is still needed to confirm protection.',
+    'A WAF was detected from the outside; external probe evidence is still limited.',
   Underprotected: 'Safe attack markers were not consistently blocked by the edge WAF.',
   'Bypass Risk': 'Traffic may reach origin without WAF protection—review bypass paths immediately.',
   Unprotected: 'No WAF signals were detected on this asset from the outside-in scan.',
@@ -150,7 +147,7 @@ export function outsideInPostureExplanation(postureLabel: string) {
   const normalized = normalizeOutsideInPostureLabel(postureLabel);
   return (
     OUTSIDE_IN_POSTURE_EXPLANATIONS[normalized]
-    ?? 'Review outside-in WAF scan evidence and confirm enforcement with your agent.'
+    ?? 'Review outside-in WAF scan evidence to confirm enforcement.'
   );
 }
 

@@ -69,7 +69,7 @@ describe('tabs accessibility pairing', () => {
         }
       }
     }
-    assert.ok(checked >= 10, `expected to find the portal's Tabs usages, found ${checked}`);
+    assert.ok(checked >= 8, `expected to find the portal's Tabs usages, found ${checked}`);
     assert.deepEqual(problems, []);
   });
 

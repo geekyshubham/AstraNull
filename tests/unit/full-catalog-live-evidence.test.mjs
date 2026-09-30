@@ -160,7 +160,6 @@ describe('full-catalog live evidence generator', () => {
     assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 194);
     assert.deepEqual(MATRIX.summary.dispositions, {
       safe_runnable: 404,
-      agent_required: 0,
       additional_input_required: 10,
       target_incompatible: 0,
       soc_gated: 258,

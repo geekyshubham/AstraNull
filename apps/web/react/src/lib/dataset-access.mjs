@@ -9,7 +9,6 @@ export const CUSTOMER_DATASET_PERMISSIONS = Object.freeze({
   notifications: 'notification:read',
   connectors: 'waf:connector_read',
   secrets: 'secret:read',
-  bootstrapTokens: 'bootstrap_token:read',
   serviceAccounts: 'service_account:read',
 });
 

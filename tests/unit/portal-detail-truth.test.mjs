@@ -44,27 +44,6 @@ describe('portal detail truth labels', () => {
     }
   });
 
-  it('labels agent runs from authoritative event provenance rather than target-group membership', () => {
-    assert.match(source, /selectAgentRunEventCandidates\(data\.runs\)/);
-    assert.match(source, /for \(const runId of agentRunCandidateIds\) \{[\s\S]*?void requestJson\(/);
-    assert.match(source, /`\/v1\/test-runs\/\$\{encodeURIComponent\(runId\)\}\/events`/);
-    assert.match(source, /selectAgentRecentRuns\(/);
-    assert.match(source, /selectAgentAttributedRuns\(/);
-    assert.match(source, /runs=\{exactAgentRuns\}/);
-    assert.doesNotMatch(source, /<AgentPlacementPanel[\s\S]*?runs=\{data\.runs\}/);
-    assert.match(source, /agentRunEvents\[selectedRunId\] \?\? \{ items: \[\] \}/);
-    assert.doesNotMatch(source, /runAgentAttribution\(run, data\.evidence, entityId\)/);
-    assert.match(source, /Selected agent/);
-    assert.match(source, /Not attributed/);
-    assert.match(source, /Attribution unavailable/);
-    assert.match(source, /Checking provenance/);
-    assert.match(source, /Current target-group membership grants visibility only/);
-    assert.match(source, /authoritative run-events endpoint contains an exact authenticated agent observation/);
-    assert.doesNotMatch(source, /explicit run binding|explicitly bound run|No agent-bound runs yet/i);
-    assert.match(source, /label: 'Run outcome'/);
-    assert.doesNotMatch(source, /label: 'Agrees with probe'/);
-  });
-
   it('omits unsupported agent aliases from global and current-group run tables', () => {
     const globalRunColumns = sourceBetween(
       functionalSurfaces,

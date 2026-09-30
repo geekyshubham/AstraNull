@@ -143,7 +143,7 @@ describe('production readiness e2e flow', () => {
     assert.equal(report.production_ready, true);
     assert.equal(report.evidence_attestation_complete, true);
     assert.equal(report.checklist_gates_open, false);
-    assert.equal(report.required_evidence_kinds.counts.present, 31);
+    assert.equal(report.required_evidence_kinds.counts.present, 26);
   });
 
   it('gap audit stays false when deferred checklist markers remain open', () => {

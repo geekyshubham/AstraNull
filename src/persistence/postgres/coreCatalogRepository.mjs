@@ -1,6 +1,7 @@
 import {
   normalizeTargetInput,
   targetDedupeKey,
+  targetTagsFromRecord,
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
@@ -87,7 +88,6 @@ function mapTargetGroupRow(row) {
   return {
     id: row.id,
     tenant_id: row.tenant_id,
-    environment_id: row.environment_id,
     name: row.name,
     description: row.description ?? '',
     expected_behavior_default: row.expected_behavior_default ?? undefined,
@@ -246,6 +246,7 @@ function mapTargetRow(row) {
   };
   const metadata = asObject(row.metadata_json);
   if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
+  mapped.tags = targetTagsFromRecord(mapped);
   return mapped;
 }
 
@@ -290,9 +291,8 @@ function mapTargetInventoryRow(row) {
   return {
     ...mapped,
     target_group_name: row.target_group_name,
-    environment_id: row.environment_id ?? null,
-    environment_name: row.environment_name ?? null,
     expected_behavior: row.expected_behavior ?? row.expected_behavior_default ?? null,
+    tags: targetTagsFromRecord(mapped),
     verification_state: verificationState,
     verification: {
       state: verificationState,
@@ -400,99 +400,6 @@ export function createCoreCatalogRepository(pool, options = {}) {
           [ctx.tenantId, 'archived'],
         );
         return rows.map(mapEnvironmentRow);
-      });
-    },
-
-    async createEnvironment(ctx, body, options = {}) {
-      const id = options.id ?? newId('env');
-      const now = options.now ?? new Date().toISOString();
-      const name = body.name ?? 'Environment';
-      const description = body.description ?? '';
-      const privacySettings = normalizePrivacySettings(body.privacy_settings);
-      const settingsJson = {
-        description,
-        created_by: ctx.userId,
-      };
-
-      return withCatalogMutation(pool, ctx, async (client) => {
-        const { rows } = await client.query(
-          `INSERT INTO environments (id, tenant_id, name, status, privacy_settings, settings_json, created_at)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::timestamptz)
-           RETURNING id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at`,
-          [id, ctx.tenantId, name, 'active', JSON.stringify(privacySettings), JSON.stringify(settingsJson), now],
-        );
-        const environmentRow = rows[0] ?? null;
-        if (!environmentRow) return null;
-        await appendMutationAudit(auditRepository, client, ctx, {
-          action: 'environment.created',
-          resource_type: 'environment',
-          resource_id: environmentRow.id,
-        }, now);
-        return mapEnvironmentRow(environmentRow);
-      });
-    },
-
-    async patchEnvironment(ctx, id, body, options = {}) {
-      const now = options.now ?? new Date().toISOString();
-
-      return withCatalogMutation(pool, ctx, async (client) => {
-        const existing = await client.query(
-          `SELECT id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at
-           FROM environments
-           WHERE id = $1 AND tenant_id = $2`,
-          [id, ctx.tenantId],
-        );
-        if (!existing.rows[0]) return null;
-
-        const current = existing.rows[0];
-        const settings = { ...asObject(current.settings_json) };
-        const sets = [];
-        const params = [];
-        let n = 1;
-
-        if (body.name) {
-          sets.push(`name = $${n++}`);
-          params.push(body.name);
-        }
-        if (body.description !== undefined) {
-          settings.description = body.description;
-        }
-        if (body.status) {
-          sets.push(`status = $${n++}`);
-          params.push(body.status);
-        }
-        if (body.privacy_settings) {
-          const merged = normalizePrivacySettings({
-            ...asObject(current.privacy_settings),
-            ...body.privacy_settings,
-          });
-          sets.push(`privacy_settings = $${n++}::jsonb`);
-          params.push(JSON.stringify(merged));
-        }
-
-        settings.updated_at = now;
-        sets.push(`settings_json = $${n++}::jsonb`);
-        params.push(JSON.stringify(settings));
-
-        params.push(id, ctx.tenantId);
-        const idParam = n++;
-        const tenantParam = n++;
-
-        const { rows } = await client.query(
-          `UPDATE environments
-           SET ${sets.join(', ')}
-           WHERE id = $${idParam} AND tenant_id = $${tenantParam}
-           RETURNING id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at`,
-          params,
-        );
-        const environmentRow = rows[0] ?? null;
-        if (!environmentRow) return null;
-        await appendMutationAudit(auditRepository, client, ctx, {
-          action: body.status === 'archived' ? 'environment.archived' : 'environment.updated',
-          resource_type: 'environment',
-          resource_id: environmentRow.id,
-        }, now);
-        return mapEnvironmentRow(environmentRow);
       });
     },
 
@@ -708,37 +615,27 @@ export function createCoreCatalogRepository(pool, options = {}) {
     async createTargetGroup(ctx, body = {}, options = {}) {
       const id = options.id ?? newId('tg');
       const now = options.now ?? new Date().toISOString();
-      const rawEnvironmentId = typeof body.environment_id === 'string' ? body.environment_id.trim() : body.environment_id;
+      const settings = body.settings_json && typeof body.settings_json === 'object' ? { ...body.settings_json } : null;
       const record = {
-        environment_id: rawEnvironmentId || 'env_demo',
+        // ADR-0008: environments are gone; groups no longer belong to one. Write NULL.
         name: String(body.name ?? 'New target group').trim() || 'New target group',
         description: String(body.description ?? ''),
         expected_behavior_default: body.expected_behavior_default ?? null,
         timezone: String(body.timezone ?? 'UTC').trim() || 'UTC',
         safe_test_windows: Array.isArray(body.safe_test_windows) ? body.safe_test_windows : [],
         safety_policy: normalizeSafetyPolicy(body.safety_policy),
-        validation_mode: body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only',
+        validation_mode: 'external_only',
+        settings_json: settings,
       };
 
       return withCatalogMutation(pool, ctx, async (client) => {
-        const envCheck = await client.query(
-          `SELECT id FROM environments WHERE tenant_id = $1 AND id = $2`,
-          [ctx.tenantId, record.environment_id],
-        );
-        if (!envCheck.rows[0]) {
-          return {
-            error: 'invalid_environment',
-            status: 400,
-            message: `Environment "${record.environment_id}" does not exist for this tenant. Create the environment first, then declare the target group.`,
-            field: 'environment_id',
-          };
-        }
+        // Tenant-wide uniqueness now that groups are no longer scoped to an environment.
         const duplicate = await client.query(
           `SELECT id FROM target_groups
-           WHERE tenant_id = $1 AND environment_id = $2 AND lower(name) = lower($3)
+           WHERE tenant_id = $1 AND lower(name) = lower($2)
              AND deleted_at IS NULL AND archived_at IS NULL
            LIMIT 1`,
-          [ctx.tenantId, record.environment_id, record.name],
+          [ctx.tenantId, record.name],
         );
         if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
 
@@ -746,24 +643,25 @@ export function createCoreCatalogRepository(pool, options = {}) {
           const { rows } = await client.query(
             `INSERT INTO target_groups (
                id, tenant_id, environment_id, name, description, expected_behavior_default,
-               timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
+               timezone, safe_test_windows, safety_policy, settings_json, validation_mode, ownership_status,
                dns_ownership, created_at
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, 'unverified', NULL, $11::timestamptz)
+             VALUES ($1, $2, NULL, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, 'unverified', NULL, $11::timestamptz)
              RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
                        timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
                        dns_ownership, created_at`,
             [
-              id, ctx.tenantId, record.environment_id, record.name, record.description,
+              id, ctx.tenantId, record.name, record.description,
               record.expected_behavior_default, record.timezone, JSON.stringify(record.safe_test_windows),
-              JSON.stringify(record.safety_policy), record.validation_mode, now,
+              JSON.stringify(record.safety_policy), record.settings_json ? JSON.stringify(record.settings_json) : null,
+              record.validation_mode, now,
             ],
           );
           await appendMutationAudit(auditRepository, client, ctx, {
             action: 'target_group.created',
             resource_type: 'target_group',
             resource_id: id,
-            metadata: { changed_fields: ['environment_id', 'name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
+            metadata: { changed_fields: ['name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
           }, now);
           return mapTargetGroupRow(rows[0]);
         } catch (error) {
@@ -823,7 +721,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
             resource_id: id,
             metadata: {
               target_group_id: groupId,
-              changed_fields: ['kind', 'value', 'expected_behavior', ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
+              changed_fields: ['kind', 'value', 'expected_behavior', ...(normalized.tags.length ? ['tags'] : []), ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
               dropped_untrusted_fields: normalized.dropped_fields,
             },
           }, now);
@@ -915,17 +813,13 @@ export function createCoreCatalogRepository(pool, options = {}) {
         }
 
         const nextName = body.name === undefined ? current.name : String(body.name).trim() || current.name;
-        const nextEnvironmentId = body.environment_id === undefined
-          ? current.environment_id
-          : String(body.environment_id ?? '').trim() || null;
-        if (nextName !== current.name || nextEnvironmentId !== current.environment_id) {
+        if (nextName !== current.name) {
           const duplicate = await client.query(
             `SELECT id FROM target_groups
-             WHERE tenant_id = $1 AND COALESCE(environment_id, '') = COALESCE($2, '')
-               AND lower(name) = lower($3)
-               AND id <> $4 AND deleted_at IS NULL AND archived_at IS NULL
+             WHERE tenant_id = $1 AND lower(name) = lower($2)
+               AND id <> $3 AND deleted_at IS NULL AND archived_at IS NULL
              LIMIT 1`,
-            [ctx.tenantId, nextEnvironmentId, nextName, id],
+            [ctx.tenantId, nextName, id],
           );
           if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
         }
@@ -941,11 +835,10 @@ export function createCoreCatalogRepository(pool, options = {}) {
         };
         if (body.name !== undefined) add('name', nextName);
         if (body.description !== undefined) add('description', String(body.description ?? ''));
-        if (body.environment_id !== undefined) add('environment_id', nextEnvironmentId);
         if (body.timezone !== undefined) add('timezone', String(body.timezone).trim() || 'UTC');
         if (body.safe_test_windows !== undefined) add('safe_test_windows', JSON.stringify(body.safe_test_windows), '::jsonb');
         if (body.safety_policy !== undefined) add('safety_policy', JSON.stringify(normalizeSafetyPolicy(body.safety_policy)), '::jsonb');
-        if (body.validation_mode !== undefined) add('validation_mode', body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only');
+        if (body.validation_mode !== undefined) add('validation_mode', 'external_only');
         if (sets.length === 0) return mapTargetGroupRow(current);
 
         params.push(id, ctx.tenantId);
@@ -1095,7 +988,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
           add('value', normalized.value);
           add('normalized_value', normalized.normalized_value);
         }
-        if (body.metadata !== undefined || body.metadata_json !== undefined) add('metadata_json', JSON.stringify(normalized.metadata), '::jsonb');
+        // Tags live inside metadata_json; normalizeTargetInput already merged the resolved tag
+        // list into normalized.metadata, so persist it whenever metadata OR tags were touched.
+        if (body.metadata !== undefined || body.metadata_json !== undefined || body.tags !== undefined) {
+          sets.push(`metadata_json = $${n++}::jsonb`);
+          params.push(JSON.stringify(normalized.metadata));
+          if (body.tags !== undefined) changedFields.push('tags');
+          if (body.metadata !== undefined || body.metadata_json !== undefined) changedFields.push('metadata');
+        }
         if (body.expected_behavior !== undefined) add('expected_behavior', body.expected_behavior ?? null);
         if (sets.length === 0) return mapTargetRow(current);
 
@@ -1125,11 +1025,128 @@ export function createCoreCatalogRepository(pool, options = {}) {
       });
     },
 
+    /**
+     * Direct target creation (ADR-0008 `POST /v1/targets`). Omitted `target_group_id` resolves
+     * (and lazily creates) the tenant default group inside the same advisory-locked transaction.
+     */
+    async createTargetDirect(ctx, body = {}, options = {}) {
+      const now = options.now ?? new Date().toISOString();
+      let normalized;
+      try {
+        normalized = normalizeTargetInput(body);
+      } catch (error) {
+        return targetValidationResponse(error);
+      }
+      const explicitGroupId = typeof body.target_group_id === 'string' && body.target_group_id.trim()
+        ? body.target_group_id.trim()
+        : null;
+
+      return withCatalogMutation(pool, ctx, async (client) => {
+        let groupId = explicitGroupId;
+        if (groupId) {
+          const groupResult = await client.query(
+            `SELECT id FROM target_groups
+             WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+            [groupId, ctx.tenantId],
+          );
+          if (!groupResult.rows[0]) return { error: 'target_group_not_found', status: 404 };
+        } else {
+          const existing = await client.query(
+            `SELECT id FROM target_groups
+             WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+               AND settings_json->>'default_scope' = 'true'
+             ORDER BY created_at
+             LIMIT 1`,
+            [ctx.tenantId],
+          );
+          if (existing.rows[0]) {
+            groupId = existing.rows[0].id;
+          } else {
+            groupId = options.defaultGroupId ?? newId('tg');
+            const expectedBehaviorDefault = body.expected_behavior ?? 'block_at_edge';
+            await client.query(
+              `INSERT INTO target_groups (
+                 id, tenant_id, environment_id, name, description, expected_behavior_default,
+                 timezone, safe_test_windows, safety_policy, settings_json, validation_mode,
+                 ownership_status, dns_ownership, created_at
+               )
+               VALUES ($1, $2, NULL, 'Default', $3, $4, 'UTC', '[]'::jsonb, $5::jsonb,
+                       '{"default_scope": true}'::jsonb, 'external_only', 'unverified', NULL, $6::timestamptz)`,
+              [groupId, ctx.tenantId, 'Default target group for directly declared targets.',
+                expectedBehaviorDefault, JSON.stringify(normalizeSafetyPolicy(undefined)), now],
+            );
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target_group.created', resource_type: 'target_group', resource_id: groupId,
+              metadata: { changed_fields: ['name', 'validation_mode', 'settings_json'], default_scope: true },
+            }, now);
+          }
+        }
+
+        const duplicate = await client.query(
+          `SELECT id FROM targets
+           WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
+             AND normalized_value = $4 AND deleted_at IS NULL
+           LIMIT 1`,
+          [ctx.tenantId, groupId, normalized.kind, normalized.normalized_value],
+        );
+        if (duplicate.rows[0]) return { error: 'target_exists', status: 409, existing_id: duplicate.rows[0].id };
+
+        const id = options.id ?? newId('target');
+        try {
+          const { rows } = await client.query(
+            `INSERT INTO targets (
+               id, tenant_id, target_group_id, kind, value, normalized_value,
+               expected_behavior, metadata_json, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+             RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
+                       expected_behavior, metadata_json, created_at`,
+            [id, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
+              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), now],
+          );
+          await client.query(
+            `UPDATE target_groups SET ownership_status = 'unverified'
+             WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+            [ctx.tenantId, groupId],
+          );
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target.added', resource_type: 'target', resource_id: id,
+            metadata: {
+              target_group_id: groupId,
+              changed_fields: ['kind', 'value', 'expected_behavior', ...(normalized.tags.length ? ['tags'] : []), ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
+              dropped_untrusted_fields: normalized.dropped_fields,
+            },
+          }, now);
+          return mapTargetRow(rows[0]);
+        } catch (error) {
+          if (error?.code === '23505') return { error: 'target_exists', status: 409 };
+          throw error;
+        }
+      });
+    },
+
+    /** Direct target patch by id (ADR-0008 `PATCH /v1/targets/:id`), delegating to patchTarget. */
+    async patchTargetById(ctx, targetId, body = {}, options = {}) {
+      const groupRow = await withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT target_group_id FROM targets
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+          [targetId, ctx.tenantId],
+        );
+        return rows[0] ?? null;
+      });
+      if (!groupRow) return { error: 'not_found', status: 404 };
+      const patchBody = {
+        ...(body.tags !== undefined ? { tags: body.tags } : {}),
+        ...(body.expected_behavior !== undefined ? { expected_behavior: body.expected_behavior } : {}),
+      };
+      return this.patchTarget(ctx, groupRow.target_group_id, targetId, patchBody, options);
+    },
+
     async restoreTargetGroup(ctx, groupId, options = {}) {
       const now = options.now ?? new Date().toISOString();
       return withCatalogMutation(pool, ctx, async (client) => {
         const { rows } = await client.query(
-          `SELECT id, environment_id, name
+          `SELECT id, name
            FROM target_groups
            WHERE id = $1 AND tenant_id = $2
              AND (deleted_at IS NOT NULL OR archived_at IS NOT NULL)
@@ -1140,10 +1157,10 @@ export function createCoreCatalogRepository(pool, options = {}) {
         if (!group) return { error: 'not_found', status: 404 };
         const duplicate = await client.query(
           `SELECT id FROM target_groups
-           WHERE tenant_id = $1 AND environment_id = $2 AND lower(name) = lower($3)
-             AND id <> $4 AND deleted_at IS NULL AND archived_at IS NULL
+           WHERE tenant_id = $1 AND lower(name) = lower($2)
+             AND id <> $3 AND deleted_at IS NULL AND archived_at IS NULL
            LIMIT 1`,
-          [ctx.tenantId, group.environment_id, group.name, groupId],
+          [ctx.tenantId, group.name, groupId],
         );
         if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
 

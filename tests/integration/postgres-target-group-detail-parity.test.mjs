@@ -283,7 +283,7 @@ describe('postgres getTargetGroup detail parity', () => {
         LEAN_GROUP_LOOKUP,
       );
       assert.equal(lean.id, IDS.signedGroup);
-      assert.equal(lean.environment_id, IDS.environmentA);
+      assert.equal(lean.environment_id, undefined);
       assert.equal(lean.validation_mode, detail.validation_mode);
       assert.equal(lean.ownership_status, detail.ownership_status);
       assert.deepEqual(lean.targets.map((target) => target.id), ['tgt_tgdet_1', 'tgt_tgdet_2']);

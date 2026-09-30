@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildPortalDemoStore, PORTAL_DEMO_IDS } from '../fixtures/portal-demo/seed.mjs';
 import { rebaseDemoStoreTimestamps } from '../../scripts/seed-dev-portal-demo.mjs';
-import { validateManifest, verifyDetachedManifestSignature } from '../../src/lib/agentUpdates.mjs';
-import { listAgentUpdateReleases } from '../../src/services/agentUpdates.mjs';
 import { transitionHighScale } from '../../src/services/highScale.mjs';
 import { resetStoreForTests } from '../../src/store.mjs';
 
@@ -18,7 +16,6 @@ describe('portal demo seed fixture', () => {
     assert.ok(store.environments.filter((row) => row.tenant_id === tenantId).length >= 2);
     assert.ok(store.targetGroups.filter((row) => row.tenant_id === tenantId).length >= 1);
     assert.ok(store.targets.filter((row) => row.tenant_id === tenantId).length >= 5);
-    assert.ok(store.agents.filter((row) => row.tenant_id === tenantId).length >= 1);
     assert.ok(store.testRuns.filter((row) => row.tenant_id === tenantId).length >= 3);
     assert.ok(store.findings.filter((row) => row.tenant_id === tenantId).length >= 2);
     assert.ok(store.reports.filter((row) => row.tenant_id === tenantId).length >= 2);
@@ -30,7 +27,6 @@ describe('portal demo seed fixture', () => {
     assert.ok(store.highScaleRequests.filter((row) => row.tenant_id === tenantId).length >= 3);
     assert.ok(store.productionReleaseEvidence.filter((row) => row.tenant_id === tenantId).length >= 2);
     assert.ok(store.wafConnectors.filter((row) => row.tenant_id === tenantId).length >= 1);
-    assert.ok(store.bootstrapTokens.filter((row) => row.tenant_id === tenantId).length >= 1);
     assert.ok(store.reports.some((row) => row.id === PORTAL_DEMO_IDS.reportId));
   });
 
@@ -61,19 +57,6 @@ describe('portal demo seed fixture', () => {
       assert.equal(record.target_id, run.target_id);
       assert.equal(record.check_id, run.check_id);
     }
-  });
-
-  it('seeds a signed agent update release whose signer is an active trust key', () => {
-    const store = buildPortalDemoStore();
-    resetStoreForTests(store);
-    const [release] = store.agentUpdateReleases;
-    assert.equal(validateManifest(release.manifest, release.version), null);
-    assert.equal(verifyDetachedManifestSignature(release.manifest, release.signature), null);
-
-    const items = listAgentUpdateReleases({ tenantId: PORTAL_DEMO_IDS.tenantId });
-    assert.equal(items.length, 1);
-    const trustKey = store.agentUpdateTrustKeys.find((key) => key.status === 'active');
-    assert.equal(items[0].signing_fingerprint_sha256, trustKey.fingerprint_sha256);
   });
 
   it('lets SOC schedule the approved demo request inside its governed window', () => {

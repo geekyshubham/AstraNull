@@ -25,7 +25,6 @@
 | [Pages and Tabs](ux/01-pages-and-tabs.md) | Full page map and tab details. |
 | [Dashboard](ux/02-dashboard.md) | Dashboard layout and data. |
 | [Target Groups Page](ux/03-target-groups-page.md) | Target group UX. |
-| [Agents Page](ux/04-agents-page.md) | Agent install, fleet, placement, health. |
 | [Checks Library](ux/05-checks-library-page.md) | Check catalog UX. |
 | [Test Runs](ux/06-test-runs-page.md) | Timeline/evidence UX. |
 | [Findings](ux/07-findings-page.md) | Triage/remediation UX. |
@@ -40,7 +39,6 @@
 | Doc | Purpose |
 |---|---|
 | [Customer Onboarding](flows/01-customer-onboarding.md) | End-to-end customer setup. |
-| [Agent Registration](flows/02-agent-registration.md) | Bootstrap token and outbound control. |
 | [Safe Check Execution](flows/03-safe-check-execution.md) | Safe validation lifecycle. |
 | [High-Scale Request and Approval](flows/04-high-scale-request-and-approval.md) | Customer request and SOC gating. |
 | [SOC Operations](flows/05-soc-operations.md) | SOC run operation. |
@@ -54,7 +52,7 @@
 | [Backend Architecture](backend/01-backend-architecture.md) | Services, storage, invariants. |
 | [Test Orchestration](backend/02-test-orchestration.md) | Planner, jobs, lifecycle. |
 | [API Design](backend/03-api-design.md) | API endpoints and token flow. |
-| [Control Plane](backend/04-control-plane.md) | Agent/probe job control. |
+| [Control Plane](backend/04-control-plane.md) | Probe job control. |
 | [Test Strategy](backend/05-test-strategy.md) | QA and CI strategy. |
 | [Events and Queues](backend/06-events-and-queues.md) | Event topics and envelope. |
 | [Notifications](backend/07-notifications.md) | Email/Slack/Teams/webhooks. |
@@ -68,19 +66,6 @@
 | [WAF Product Catalog Pipeline](backend/15-waf-product-catalog-pipeline.md) | Catalog seed, version, and regression fixture pipeline. |
 | [Multi-Vendor CVE Playbook](detection/17-multi-vendor-cve-mitigation-playbook.md) | Grouped CVE mitigation across WAF vendors. |
 | [WAF Posture OpenAPI](api/waf-posture-openapi.json) | Machine-readable OpenAPI 3.1 draft for WAF/orchestrator routes (`npm run api:waf:openapi:check`). |
-
-## Agent
-
-| Doc | Purpose |
-|---|---|
-| [Agent Architecture](agent/01-agent-architecture.md) | Modules and runtime design. |
-| [Installation and Packaging](agent/02-installation-and-packaging.md) | Linux/Docker/Helm packaging. |
-| [API Key and Token Lifecycle](agent/03-api-key-and-token-lifecycle.md) | Bootstrap and identity lifecycle. |
-| [Detection Modes](agent/04-detection-modes.md) | Packet, canary, log, mirror modes. |
-| [Kubernetes Agent](agent/05-kubernetes-agent.md) | Helm, DaemonSet, canary, sidecar. |
-| [Placement Guide](agent/06-placement-guide.md) | AWS/GCP/Azure/on-prem placement. |
-| [Agent Lifecycle](agent/07-agent-lifecycle.md) | Upgrade, revoke, health. |
-| [WAF Agent/Probe Updates](agent/08-waf-agent-probe-updates.md) | Optional probe and agent changes for WAF validation. |
 
 ## Detection
 

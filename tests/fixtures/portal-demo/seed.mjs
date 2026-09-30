@@ -2,7 +2,7 @@
  * Full local portal demo fixture — every customer/staff route has list + detail data.
  * Built on portal-baseline, remapped to ten_demo (default dev-headers session).
  */
-import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { CHECK_CATALOG } from '../../../src/contracts/checks.mjs';
 import { validateProductionReleaseEvidence } from '../../../src/contracts/productionReleaseEvidence.mjs';
 import {
@@ -10,11 +10,6 @@ import {
   buildDefaultSubscription,
 } from '../../../src/contracts/subscriptions.mjs';
 import { buildAuditRecord } from '../../../src/audit.mjs';
-import {
-  buildSignableManifestPayload,
-  fingerprintPublicKeyDerBase64,
-  stableStringify,
-} from '../../../src/lib/agentUpdates.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../../src/lib/highScalePolicy.mjs';
 import { computeScopeHashFromTargets } from '../../../src/lib/scopeHash.mjs';
 import { seedWafProductsIfEmpty } from '../../../src/lib/wafProductCatalog.mjs';
@@ -44,50 +39,6 @@ export const PORTAL_DEMO_IDS = Object.freeze({
 
 const FROZEN = PORTAL_DEMO_IDS.frozenAt;
 const IDS = PORTAL_DEMO_IDS;
-
-const DEMO_UPDATE_SIGNING_SEED = createHash('sha256').update('astranull-portal-demo-agent-update-key').digest();
-const ED25519_PKCS8_SEED_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
-
-function buildDemoAgentUpdateRelease() {
-  const version = '0.2.0-demo';
-  const artifactName = `astranull-agent-${version}.tar.gz`;
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([ED25519_PKCS8_SEED_PREFIX, DEMO_UPDATE_SIGNING_SEED]),
-    format: 'der',
-    type: 'pkcs8',
-  });
-  const publicKeyDerBase64 = createPublicKey(privateKey).export({ type: 'spki', format: 'der' }).toString('base64');
-  const manifest = {
-    package: 'astranull-agent',
-    version,
-    created_at: FROZEN,
-    artifact: {
-      name: artifactName,
-      sha256: createHash('sha256').update(`portal-demo:${artifactName}`).digest('hex'),
-      size: 8192,
-    },
-    files: [],
-    signing: { signed: true, algorithm: 'ed25519', public_key_der_base64: publicKeyDerBase64 },
-  };
-  const signature = sign(
-    null,
-    Buffer.from(stableStringify(buildSignableManifestPayload(manifest)), 'utf8'),
-    privateKey,
-  ).toString('base64');
-  const base = `https://downloads.demo.astranull.invalid/agent/${version}`;
-  return {
-    version,
-    manifest,
-    signature,
-    publicKeyDerBase64,
-    fingerprint: fingerprintPublicKeyDerBase64(publicKeyDerBase64),
-    distribution: {
-      manifest_url: `${base}/manifest.json`,
-      signature_url: `${base}/manifest.json.sig`,
-      artifact_url: `${base}/${artifactName}`,
-    },
-  };
-}
 
 const DEMO_HIGH_SCALE_WINDOW_DAYS = 30;
 
@@ -674,39 +625,6 @@ function enrichPortalDemoStore(store) {
       status: 'open',
       owner_group: 'edge-sre',
       created_at: FROZEN,
-    },
-  ];
-
-  const demoRelease = buildDemoAgentUpdateRelease();
-  store.agentUpdateReleases = [
-    {
-      id: 'aurel_demo_1',
-      tenant_id: ids.tenantId,
-      version: demoRelease.version,
-      channel: 'stable',
-      manifest: demoRelease.manifest,
-      signature: demoRelease.signature,
-      distribution: demoRelease.distribution,
-      rollout: { percentage: 25 },
-      rollback: null,
-      state: 'active',
-      created_at: FROZEN,
-      created_by: 'usr_admin',
-      rollback_requested_at: null,
-    },
-  ];
-
-  store.agentUpdateTrustKeys = [
-    {
-      id: 'autk_demo_1',
-      tenant_id: ids.tenantId,
-      name: 'Demo signing key',
-      public_key_der_base64: demoRelease.publicKeyDerBase64,
-      fingerprint_sha256: demoRelease.fingerprint,
-      status: 'active',
-      created_at: FROZEN,
-      created_by: 'usr_admin',
-      revoked_at: null,
     },
   ];
 

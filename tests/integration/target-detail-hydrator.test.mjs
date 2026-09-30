@@ -31,8 +31,8 @@ describe('target detail hydrator (FT-TD-01..07)', () => {
     assert.equal(res.json.target.value, 'checkout.acme.com');
     assert.equal(res.json.target.kind, 'fqdn');
     assert.equal(res.json.target.expected_behavior, 'cloud_baseline');
-    assert.equal(res.json.verification.state, 'agent_verified');
-    assert.equal(res.json.verification.source_kind, 'agent_observation');
+    assert.equal(res.json.verification.state, 'dns_verified');
+    assert.equal(res.json.verification.source_kind, 'dns_txt');
     assert.equal(res.json.counts.findings_open, 1);
     assert.equal(res.json.counts.findings_closed, 1);
     assert.equal(res.json.counts.runs_total, 1);
@@ -46,10 +46,10 @@ describe('target detail hydrator (FT-TD-01..07)', () => {
       headers: ownerHeaders(),
     });
     const history = res.json.verification.history;
-    assert.ok(history.length >= 3);
+    assert.ok(history.length >= 2);
     assert.equal(history[0].state, 'pending');
     assert.equal(history[0].source_ref, undefined);
-    assert.equal(history.at(-1).state, 'agent_verified');
+    assert.equal(history.at(-1).state, 'dns_verified');
   });
 
   it('FT-TD-03 waf_posture null for IP target without asset', async () => {

@@ -60,45 +60,75 @@ describe('Route-level hydration truthfulness', () => {
   });
 });
 
+const INTEGRATIONS_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/pages/integrations-page.tsx', import.meta.url),
+  'utf8',
+);
+const INTEGRATIONS_STYLES_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/pages/integrations-page-styles.ts', import.meta.url),
+  'utf8',
+);
+const PROVIDER_LOGOS_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/components/integrations/provider-logos.tsx', import.meta.url),
+  'utf8',
+);
+
 describe('Integrations portal annotations', () => {
-  const integrations = section('type DnsProviderDirectoryEntry', 'export function SupportPage');
+  const integrations = INTEGRATIONS_SOURCE;
 
   it('offers implemented connect, credential-free manual, and single-domain paths', () => {
     for (const label of ['Connect read-only', 'Manual metadata', 'Single domain']) {
       assert.match(integrations, new RegExp(`>${label}<`));
     }
-    assert.match(integrations, /title="Add provider"/);
     assert.match(integrations, /supportsCredentialPolling/);
     assert.match(integrations, /AstraNull does not contact the provider/);
     assert.match(integrations, /Opening a provider never grants AstraNull cloud access/);
     assert.doesNotMatch(integrations, /api\.cloudflare\.com|route53\.amazonaws\.com|management\.azure\.com/);
   });
 
-  it('creates real declared scope and persists truthful single-domain provenance', () => {
-    assert.match(integrations, /validateDeclaredHostname/);
-    assert.match(integrations, /requestJson\(config, session, '\/v1\/target-groups', \{/);
-    assert.match(integrations, /\/v1\/target-groups\/\$\{encodeURIComponent\(groupId\)\}\/targets/);
-    assert.match(integrations, /kind: 'fqdn'/);
-    assert.match(integrations, /source: 'manual'/);
-    assert.match(integrations, /source_app: 'AstraNull portal'/);
-    assert.match(integrations, /declaration_path: 'integrations_single_domain'/);
-    assert.match(integrations, /provider_access: 'none'/);
-    assert.match(integrations, /Ownership remains unverified/);
-    assert.match(integrations, /Domain declaration progress/);
+  it('renders accurate provider brand logos, not emoji or guessed marks', () => {
+    // Provider directory uses the dedicated ProviderLogo component.
+    assert.match(integrations, /import \{ ProviderLogo, type ProviderLogoId \} from '\.\.\/components\/integrations\/provider-logos'/);
+    assert.match(integrations, /<ProviderLogo provider=\{provider\.logo\}/);
+    // Simple Icons (CC0) attribution must be present in the logo source.
+    assert.match(PROVIDER_LOGOS_SOURCE, /Simple Icons/);
+    assert.match(PROVIDER_LOGOS_SOURCE, /CC0/);
+    // Marks render in currentColor so token CSS controls color; no emoji.
+    assert.match(PROVIDER_LOGOS_SOURCE, /fill="currentColor"/);
+    assert.doesNotMatch(PROVIDER_LOGOS_SOURCE, /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
   });
 
-  it('renders list failures before connector or target-group empty states', () => {
+  it('declares single domains via POST /v1/targets without environments (ADR-0008)', () => {
+    assert.match(integrations, /validateDeclaredHostname/);
+    assert.match(integrations, /requestJson\(config, session, '\/v1\/targets', \{/);
+    assert.match(integrations, /kind: 'fqdn'/);
+    assert.match(integrations, /target_group_id: groupId/);
+    assert.match(integrations, /Ownership remains unverified/);
+    // Environments are gone: no environment fetch, picker, or /v1/environments call.
+    assert.doesNotMatch(integrations, /\/v1\/environments/);
+    assert.doesNotMatch(integrations, /environment_id/);
+    // The single-domain path no longer creates a target group as a prerequisite.
+    assert.doesNotMatch(integrations, /'\/v1\/target-groups',/);
+  });
+
+  it('keeps the single-domain path usable when connectors are disabled', () => {
+    assert.match(integrations, /const connectorsEnabled = featureFlags\?\.connectors === true/);
+    assert.match(integrations, /connector add-on is not enabled/i);
+    // Add domain action is gated on target write, not on connectors being enabled.
+    assert.match(integrations, /canWriteIntegrationTargets \? \(/);
+  });
+
+  it('renders list failures before connector empty states', () => {
     assert.match(integrations, /const connectorsLoadError = data\.loadErrors\.connectors/);
     assert.match(integrations, /const targetGroupsLoadError = data\.loadErrors\.targetGroups/);
     assert.match(integrations, /loadError=\{connectorsLoadError\}/);
     assert.match(integrations, /onRetry=\{\(\) => void onRefresh\(\)\}/);
-    assert.match(integrations, /Could not refresh target groups/);
   });
 
   it('uses scoped design tokens rather than raw color literals', () => {
-    assert.doesNotMatch(integrations, /#[0-9a-f]{3,8}\b/i);
-    assert.match(integrations, /var\(--accent\)/);
-    assert.match(integrations, /var\(--border-soft\)/);
+    assert.doesNotMatch(INTEGRATIONS_STYLES_SOURCE, /#[0-9a-f]{3,8}\b/i);
+    assert.match(INTEGRATIONS_STYLES_SOURCE, /var\(--accent\)/);
+    assert.match(INTEGRATIONS_STYLES_SOURCE, /var\(--border-soft\)/);
   });
 });
 

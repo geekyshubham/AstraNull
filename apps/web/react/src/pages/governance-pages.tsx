@@ -57,22 +57,16 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
 
 const NOTIFICATION_TRIGGERS = [
   'finding.high_severity',
-  'agent.offline',
   'safe_test.completed',
   'high_scale.state_change',
-  'report.ready',
-  'bootstrap_token.created',
-  'bootstrap_token.revoked'
+  'report.ready'
 ] as const;
 
 const NOTIFICATION_TRIGGER_LABELS: Record<(typeof NOTIFICATION_TRIGGERS)[number], string> = {
   'finding.high_severity': 'High-severity finding',
-  'agent.offline': 'Agent offline',
   'safe_test.completed': 'Safe test completed',
   'high_scale.state_change': 'High-scale state change',
-  'report.ready': 'Report ready',
-  'bootstrap_token.created': 'Bootstrap token created',
-  'bootstrap_token.revoked': 'Bootstrap token revoked'
+  'report.ready': 'Report ready'
 };
 
 function humanizeNotificationTrigger(trigger: string) {

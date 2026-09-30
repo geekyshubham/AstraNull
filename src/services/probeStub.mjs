@@ -115,7 +115,6 @@ export function simulateProbeResult(check, target, overrideProfile) {
       waf_fingerprint_detected: blocked,
       posture_label: blocked ? 'Detected, not validated' : 'Underprotected',
       posture_status: blocked ? 'unknown' : 'underprotected',
-      agent_corroboration_required: true,
       evasion_bypass_suspected: false,
       marker_probes: [
         { family: 'sqli_marker', variant: 'plain', blocked, allowed: !blocked },
@@ -133,7 +132,7 @@ export function simulateProbeResult(check, target, overrideProfile) {
       scan_plan: ['baseline', 'combined_marker', 'sqli_marker', 'content_type_confusion'],
       generic_waf_reasons: blocked ? ['status_code_drift'] : [],
       probe_validation_passed: blocked,
-      dom_xss_validation: 'agent_required',
+      dom_xss_validation: 'external_only',
       note: 'Simulated outside-in WAF scanner.',
     });
   } else if (probeProfileKind === 'dnssec_posture') {

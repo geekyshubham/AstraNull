@@ -1,7 +1,8 @@
 import { isFindingOpen } from './finding-lifecycle.mjs';
 import type { DataItem, PortalData } from './types';
 
-function getString(item: DataItem, keys: string[], fallback = '') {
+function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
+  if (!item) return fallback;
   for (const key of keys) {
     const value = item[key];
     if (value !== undefined && value !== null && value !== '') return String(value);
@@ -9,12 +10,17 @@ function getString(item: DataItem, keys: string[], fallback = '') {
   return fallback;
 }
 
-export function countActiveTargetGroups(targetGroups: DataItem[]) {
-  return targetGroups.filter((group) => group.archived_at == null).length;
+function getNumber(item: DataItem | null | undefined, keys: string[]): number | null {
+  if (!item) return null;
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
-export function countAgentsOnline(agents: DataItem[]) {
-  return agents.filter((agent) => getString(agent, ['status']) === 'online').length;
+export function countActiveTargetGroups(targetGroups: DataItem[]) {
+  return targetGroups.filter((group) => group.archived_at == null).length;
 }
 
 export function countOpenFindings(findings: DataItem[]) {
@@ -27,7 +33,6 @@ export function countHighScaleRequests(highScale: DataItem[]) {
 
 export type DashboardMetrics = {
   targetGroups: number;
-  agentsOnline: number;
   openFindings: number;
   highScaleRequests: number;
 };
@@ -36,7 +41,6 @@ export type DashboardMetrics = {
 export function resolveDashboardMetrics(data: PortalData): DashboardMetrics {
   return {
     targetGroups: data.state?.target_groups ?? countActiveTargetGroups(data.targetGroups),
-    agentsOnline: data.state?.agents_online ?? countAgentsOnline(data.agents),
     openFindings: data.state?.open_findings ?? countOpenFindings(data.findings),
     highScaleRequests: data.state?.high_scale_requests ?? countHighScaleRequests(data.highScale)
   };
@@ -46,4 +50,291 @@ export function resolveRecentRuns(data: PortalData, limit = 5) {
   const fromState = Array.isArray(data.state?.recent_runs) ? data.state.recent_runs : null;
   const source = fromState ?? data.runs;
   return [...source].slice(-limit).reverse();
+}
+
+/* ---------- Outside-in derivations (targets-first, no agents/environments) ---------- */
+
+const VERIFIED_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed', 'verified']);
+const PASS_VERDICTS = new Set(['pass', 'passed', 'protected', 'success', 'ok', 'allowed_as_expected']);
+const GAP_VERDICTS = new Set(['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'edge_exposed', 'unprotected']);
+const PENDING_VERDICTS = new Set(['', 'pending', 'planned', 'running', 'collecting']);
+
+export type EvidenceStatus = 'pass' | 'review' | 'gap' | 'none';
+
+/** Verification state string for a target, tolerant of nested `verification.state` or flat fields. */
+export function targetVerificationState(target: DataItem): string {
+  const nested = target.verification;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const state = getString(nested as DataItem, ['state']);
+    if (state) return state.toLowerCase();
+  }
+  return getString(target, ['verification_state'], 'unverified').toLowerCase();
+}
+
+export function isTargetVerified(target: DataItem): boolean {
+  return VERIFIED_STATES.has(targetVerificationState(target));
+}
+
+/** Free-form tags declared on a target (ADR-0008 top-level `tags: string[]`), deduped and lowercased. */
+export function targetTags(target: DataItem): string[] {
+  const raw = target.tags;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const tag = String(entry ?? '').trim().toLowerCase();
+    if (tag && !out.includes(tag)) out.push(tag);
+  }
+  return out;
+}
+
+function runVerdictString(run: DataItem): string {
+  const raw = run.verdict;
+  if (typeof raw === 'string') return raw.trim().toLowerCase();
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return getString(raw as DataItem, ['verdict', 'status', 'result']).trim().toLowerCase();
+  }
+  return getString(run, ['verdict']).trim().toLowerCase();
+}
+
+export function classifyVerdict(verdict: string): EvidenceStatus {
+  const key = verdict.trim().toLowerCase();
+  if (PENDING_VERDICTS.has(key)) return 'none';
+  if (PASS_VERDICTS.has(key)) return 'pass';
+  if (GAP_VERDICTS.has(key)) return 'gap';
+  return 'review';
+}
+
+function runTimestamp(run: DataItem): string {
+  return String(run.completed_at ?? run.started_at ?? run.created_at ?? run.updated_at ?? '');
+}
+
+function evidenceBacked(run: DataItem): boolean {
+  const verdict = runVerdictString(run);
+  if (PENDING_VERDICTS.has(verdict)) return false;
+  const status = getString(run, ['status']).toLowerCase();
+  if (['completed', 'verdicted', 'finalized'].includes(status)) return true;
+  const count = getNumber(run, ['evidence_count']);
+  const nested = run.verdict && typeof run.verdict === 'object' && !Array.isArray(run.verdict) ? (run.verdict as DataItem) : null;
+  const ids = Array.isArray(run.evidence_ids) ? run.evidence_ids : Array.isArray(nested?.evidence_ids) ? (nested!.evidence_ids as unknown[]) : [];
+  return (count !== null && count > 0) || ids.length > 0 || getString(run, ['evidence_id']) !== '';
+}
+
+export type TargetPostureRow = {
+  id: string;
+  value: string;
+  kind: string;
+  groupId: string;
+  groupName: string;
+  tags: string[];
+  verified: boolean;
+  verificationState: string;
+  verdict: string;
+  verdictStatus: EvidenceStatus;
+  /** Open findings recorded against this exact target. */
+  openFindings: number;
+  lastValidatedAt: string;
+};
+
+/**
+ * One row per declared target with its latest evidence-backed verdict.
+ * Runs are matched by `target_id`; group runs (no target_id) fall back per group.
+ */
+export function buildTargetPostureRows(data: PortalData, limit?: number): TargetPostureRow[] {
+  const latestByTarget = new Map<string, DataItem>();
+  const latestByGroup = new Map<string, DataItem>();
+  for (const run of data.runs) {
+    if (!evidenceBacked(run)) continue;
+    const targetId = getString(run, ['target_id']);
+    const groupId = getString(run, ['target_group_id']);
+    const stamp = runTimestamp(run);
+    if (targetId) {
+      const prev = latestByTarget.get(targetId);
+      if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByTarget.set(targetId, run);
+    }
+    if (groupId) {
+      const prev = latestByGroup.get(groupId);
+      if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByGroup.set(groupId, run);
+    }
+  }
+
+  const openFindingsByTarget = new Map<string, number>();
+  for (const finding of data.findings) {
+    const targetId = getString(finding, ['target_id']);
+    if (!targetId || !isFindingOpen(finding)) continue;
+    openFindingsByTarget.set(targetId, (openFindingsByTarget.get(targetId) ?? 0) + 1);
+  }
+
+  const rows = data.targets.map((target) => {
+    const id = getString(target, ['id', 'target_id']);
+    const openFindings = openFindingsByTarget.get(id) ?? 0;
+    const groupId = getString(target, ['target_group_id']);
+    const run = latestByTarget.get(id) ?? latestByGroup.get(groupId) ?? null;
+    const verdict = run ? runVerdictString(run) : '';
+    return {
+      id,
+      value: getString(target, ['value', 'hostname', 'name'], '—'),
+      kind: getString(target, ['kind'], 'fqdn').toLowerCase(),
+      groupId,
+      groupName: getString(target, ['target_group_name', 'target_group_id'], ''),
+      tags: targetTags(target),
+      verified: isTargetVerified(target),
+      verificationState: targetVerificationState(target),
+      verdict,
+      // A passing run does not settle a target that still has open findings.
+      verdictStatus: classifyVerdict(verdict) === 'pass' && openFindings > 0 ? 'review' : classifyVerdict(verdict),
+      openFindings,
+      lastValidatedAt: getString(target, ['last_validated_at', 'last_validation_at'])
+    } satisfies TargetPostureRow;
+  });
+
+  // Worst posture first (gaps), then review, then unproven, then pass — the fixes-first ordering.
+  const order: Record<EvidenceStatus, number> = { gap: 0, review: 1, none: 2, pass: 3 };
+  rows.sort((left, right) => {
+    if (order[left.verdictStatus] !== order[right.verdictStatus]) return order[left.verdictStatus] - order[right.verdictStatus];
+    return left.value.localeCompare(right.value);
+  });
+  return typeof limit === 'number' ? rows.slice(0, limit) : rows;
+}
+
+const STAGE_HEADLINE: Record<EvidenceStatus, string> = {
+  pass: 'Origin not reachable directly',
+  gap: 'Origin reachable directly',
+  review: 'Needs review',
+  none: 'Not tested live'
+};
+
+/** Worst measured stage wins; unmeasured stages never make the path look safer. */
+export function overallDefenseStatus(stages: DefensePathStage[]): EvidenceStatus {
+  const measured = stages.filter((stage) => !stage.unavailable && stage.status !== 'none');
+  if (measured.length === 0) return 'none';
+  if (measured.some((stage) => stage.status === 'gap')) return 'gap';
+  if (measured.some((stage) => stage.status === 'review') || measured.length < stages.length) return 'review';
+  return 'pass';
+}
+
+export type DefensePathStage = {
+  key: 'internet' | 'edge' | 'waf' | 'origin';
+  label: string;
+  status: EvidenceStatus;
+  headline: string;
+  detail: string;
+  /** True when the underlying dataset failed to load, so the stage reads "unavailable" not "not measured". */
+  unavailable: boolean;
+};
+
+/**
+ * The four outside-in stages traffic crosses: Internet → Edge/CDN → WAF → Origin.
+ * Each stage's status comes only from loaded data; missing evidence is `none`
+ * ("not measured"), a load failure is `unavailable`. No value is invented.
+ */
+export function buildDefensePath(data: PortalData): DefensePathStage[] {
+  const targets = data.targets;
+  const verifiedCount = targets.filter(isTargetVerified).length;
+  const targetsUnavailable = Boolean(data.loadErrors.targets);
+  const internet: DefensePathStage = {
+    key: 'internet',
+    label: 'Internet',
+    status: targetsUnavailable ? 'none' : targets.length === 0 ? 'none' : verifiedCount === targets.length ? 'pass' : verifiedCount > 0 ? 'review' : 'gap',
+    headline: targetsUnavailable ? 'Data unavailable' : `${verifiedCount}/${targets.length} verified`,
+    detail: 'Declared targets with proven ownership are the entry point every probe uses.',
+    unavailable: targetsUnavailable
+  };
+
+  const waf = data.wafCoverageSummary;
+  const wafUnavailable = Boolean(data.loadErrors.wafCoverageSummary);
+  const wafProtected = getNumber(waf, ['protected']);
+  const wafEdge = getNumber(waf, ['edge_protected']);
+  const wafUnder = getNumber(waf, ['underprotected']);
+  const wafCoveragePct = getNumber(waf, ['coverage_pct']);
+  const byVendor = waf?.by_vendor;
+  const vendors = byVendor && typeof byVendor === 'object' && !Array.isArray(byVendor)
+    ? Object.keys(byVendor as Record<string, unknown>).filter((name) => name && name.toLowerCase() !== 'generic')
+    : [];
+
+  const edge: DefensePathStage = {
+    key: 'edge',
+    label: 'Edge / CDN',
+    status: wafUnavailable ? 'none' : vendors.length > 0 ? 'review' : 'none',
+    headline: wafUnavailable ? 'Data unavailable' : vendors.length > 0 ? `${vendors.length} provider${vendors.length === 1 ? '' : 's'} reported` : 'No provider metadata',
+    detail: 'Reported edge/CDN providers are declaration context, not proof traffic was blocked.',
+    unavailable: wafUnavailable
+  };
+
+  let wafStatus: EvidenceStatus = 'none';
+  let wafHeadline = 'Not measured';
+  if (wafUnavailable) {
+    wafHeadline = 'Data unavailable';
+  } else if (wafProtected !== null && wafProtected > 0) {
+    wafStatus = wafUnder && wafUnder > 0 ? 'review' : 'pass';
+    wafHeadline = `${wafProtected} fully validated`;
+  } else if (wafEdge !== null && wafEdge > 0) {
+    wafStatus = 'review';
+    wafHeadline = `${wafEdge} blocked at edge only`;
+  } else if (wafUnder !== null && wafUnder > 0) {
+    wafStatus = 'gap';
+    wafHeadline = 'Protection needs work';
+  } else if (waf) {
+    wafStatus = 'review';
+    wafHeadline = 'Not enough evidence';
+  }
+  const wafStage: DefensePathStage = {
+    key: 'waf',
+    label: 'WAF',
+    status: wafStatus,
+    headline: wafHeadline,
+    detail: wafCoveragePct === null ? 'Fully validated share not reported.' : `${Math.round(wafCoveragePct)}% of declared WAF assets fully validated.`,
+    unavailable: wafUnavailable
+  };
+
+  const runsUnavailable = Boolean(data.loadErrors.runs);
+  const originRun = [...data.runs]
+    .filter(evidenceBacked)
+    .filter((run) => {
+      const checkId = getString(run, ['check_id']).toLowerCase();
+      const check = data.checks.find((item) => getString(item, ['check_id', 'id']) === getString(run, ['check_id']));
+      return checkId.includes('origin') || getString(check ?? {}, ['vector_family']).toLowerCase() === 'origin';
+    })
+    .sort((left, right) => runTimestamp(right).localeCompare(runTimestamp(left)))[0] ?? null;
+  const originVerdict = originRun ? runVerdictString(originRun) : '';
+  // An open origin-family finding outranks an older passing run: the gap is still unresolved.
+  const openOriginFindings = data.loadErrors.findings ? 0 : data.findings.filter((finding) => {
+    if (!isFindingOpen(finding)) return false;
+    const checkId = getString(finding, ['check_id']).toLowerCase();
+    const title = getString(finding, ['title']).toLowerCase();
+    return checkId.startsWith('origin.') || title.includes('origin');
+  }).length;
+  const originStatus: EvidenceStatus = runsUnavailable
+    ? 'none'
+    : openOriginFindings > 0 ? 'gap' : classifyVerdict(originVerdict);
+  const origin: DefensePathStage = {
+    key: 'origin',
+    label: 'Origin',
+    status: originStatus,
+    headline: runsUnavailable
+      ? 'Data unavailable'
+      : openOriginFindings > 0
+        ? `${openOriginFindings} open origin ${openOriginFindings === 1 ? 'finding' : 'findings'}`
+        : originRun ? STAGE_HEADLINE[classifyVerdict(originVerdict)] : 'Not tested live',
+    detail: openOriginFindings > 0
+      ? 'Direct-origin traffic was reachable in recorded evidence and the finding is still open.'
+      : originRun ? 'Latest evidence-backed direct-origin check.' : 'Run a bounded direct-origin check before drawing a conclusion.',
+    unavailable: runsUnavailable
+  };
+
+  return [internet, edge, wafStage, origin];
+}
+
+/** Open findings bucketed into critical (S1), high (S2), and other (S3/S4). */
+export function findingSeverityBuckets(findings: DataItem[]): { critical: number; high: number; other: number; total: number } {
+  let critical = 0;
+  let high = 0;
+  let other = 0;
+  for (const finding of findings) {
+    if (!isFindingOpen(finding)) continue;
+    const severity = getString(finding, ['severity']).toLowerCase();
+    if (['s1', 'critical'].includes(severity)) critical += 1;
+    else if (['s2', 'high'].includes(severity)) high += 1;
+    else other += 1;
+  }
+  return { critical, high, other, total: critical + high + other };
 }

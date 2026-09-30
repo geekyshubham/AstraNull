@@ -411,12 +411,6 @@ export async function runLocalStagingE2eScenarios(baseUrl) {
   const headers = await buildEngineerHeaders(baseUrl, authMode);
   const validation = await runLocalStagingValidationLoopSmoke(baseUrl, headers);
 
-  scenarios.push(scenarioResult(
-    'signed_agent_registration',
-    ['bootstrap_token_created', 'agent_registered', 'agent_heartbeat'],
-    'Outbound agent bootstrap registration with addressed credential issuance; internal local-staging evidence only.',
-  ));
-
   const probeMode = ready.json?.probe_mode ?? ready.json?.probeMode ?? null;
   if (validation.checks.includes('signed_probe_worker_processed')) {
     scenarios.push(scenarioResult(
@@ -437,13 +431,13 @@ export async function runLocalStagingE2eScenarios(baseUrl) {
   scenarios.push(scenarioResult(
     'safe_validation_loop',
     validation.checks,
-    'Local Postgres staging safe validation loop with agent observation and verdict publication; internal local-staging evidence only.',
+    'Local Postgres staging external-only safe validation loop with verdict publication; internal local-staging evidence only.',
   ));
 
   scenarios.push(scenarioResult(
     'verdict_explanation',
-    ['verdict_readback', 'evidence_events_readback', `placement=${validation.placement_confidence ?? 'unknown'}`],
-    'Verdict explanation fields including placement confidence and correlated probe/agent evidence events.',
+    ['verdict_readback', 'evidence_events_readback'],
+    'Verdict explanation fields including external-only confidence and correlated probe evidence events.',
   ));
 
   scenarios.push(scenarioResult(

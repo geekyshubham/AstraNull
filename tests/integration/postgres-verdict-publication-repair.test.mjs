@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createAgentControlRepository } from '../../src/persistence/postgres/agentControlRepository.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
@@ -177,7 +176,6 @@ function buildServices(pool) {
       validationEvidence: createValidationEvidenceRepository(pool),
       audit: createAuditRepository(pool),
       coreCatalog,
-      agentControl: createAgentControlRepository(pool),
       probeJobs: createProbeJobRepository(pool),
       killSwitch: createKillSwitchRepository(pool),
     }),

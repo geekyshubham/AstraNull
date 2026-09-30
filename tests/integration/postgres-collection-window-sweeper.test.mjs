@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
-import { createAgentControlRepository } from '../../src/persistence/postgres/agentControlRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
@@ -39,7 +38,6 @@ function buildValidationServices(pool) {
     validationEvidence: createValidationEvidenceRepository(pool),
     audit: createAuditRepository(pool),
     coreCatalog: createCoreCatalogRepository(pool),
-    agentControl: createAgentControlRepository(pool),
     probeJobs: createProbeJobRepository(pool),
     killSwitch: createKillSwitchRepository(pool),
   });
@@ -179,20 +177,17 @@ describe('postgres collection-window sweeper (expired collecting runs)', () => {
 
       // A verdict was written without any client call.
       assert.equal(state.verdicts.length, 1);
-      // No agent is bound, so correlation yields an evidence-honest inconclusive verdict.
-      assert.equal(state.verdicts[0].verdict, 'inconclusive');
+      // External probe evidence only (ADR-0008): connected against must_block_before_origin is edge_exposed.
+      assert.equal(state.verdicts[0].verdict, 'edge_exposed');
 
-      // The bounded-window closure is recorded as evidence.
-      assert.equal(state.noObservationEvents.length, 1);
-      assert.equal(
-        state.noObservationEvents[0].metadata_json.reason,
-        'bounded_observation_window_elapsed',
-      );
+      // No agent, so no agent_no_observation evidence is written.
+      assert.equal(state.noObservationEvents.length, 0);
 
-      // Exactly one verdict audit event, matching the stored verdict.
+      // Exactly one verdict audit event, matching the stored verdict. edge_exposed carries a
+      // finding, so it publishes as verdict.published (ADR-0008: external probe evidence only).
       assert.equal(state.verdictAudits.length, 1);
-      assert.equal(state.verdictAudits[0].action, 'verdict.finalized_no_observation');
-      assert.equal(state.verdictAudits[0].metadata_json.verdict, 'inconclusive');
+      assert.equal(state.verdictAudits[0].action, 'verdict.published');
+      assert.equal(state.verdictAudits[0].metadata_json.verdict, 'edge_exposed');
 
       // The run left the active statuses, so the slot is free.
       assert.equal(state.run.status, 'verdicted');
@@ -244,7 +239,7 @@ describe('postgres collection-window sweeper (expired collecting runs)', () => {
       // The side effects ran exactly once, for the verdict that was actually stored.
       assert.equal(state.verdictAudits.length, 1);
       assert.equal(state.verdictAudits[0].metadata_json.verdict, state.verdicts[0].verdict);
-      assert.equal(state.noObservationEvents.length, 1);
+      assert.equal(state.noObservationEvents.length, 0);
       assert.equal(state.run.status, 'verdicted');
     });
   });

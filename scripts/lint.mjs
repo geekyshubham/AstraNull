@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = process.cwd();
-const SCAN_DIRS = ['src', 'apps/web', 'agents/linux', 'tests', 'scripts', 'workers'];
+const SCAN_DIRS = ['src', 'apps/web', 'tests', 'scripts', 'workers'];
 
 function walk(dir, files = []) {
   for (const name of readdirSync(dir)) {

@@ -11,7 +11,6 @@ import { buildCustodyManifest } from '../../lib/custody.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { redactObject } from '../../lib/redact.mjs';
 import {
-  STATE_AGENT_CONTROL_REPOSITORY_METHODS,
   STATE_CORE_CATALOG_REPOSITORY_METHODS,
   STATE_HIGH_SCALE_REPOSITORY_METHODS,
   STATE_KILL_SWITCH_REPOSITORY_METHODS,
@@ -58,7 +57,6 @@ function repositoryHasMethods(repo, methods) {
 function hasReportReadinessStateDependencies(repositories) {
   return (
     repositoryHasMethods(repositories?.coreCatalog, STATE_CORE_CATALOG_REPOSITORY_METHODS)
-    && repositoryHasMethods(repositories?.agentControl, STATE_AGENT_CONTROL_REPOSITORY_METHODS)
     && repositoryHasMethods(
       repositories?.validationEvidence,
       STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS,

@@ -35,7 +35,6 @@ export const EXPECTED_CATALOG_ROWS = 721;
 export const EXPECTED_SAFE_CHECK_RESULTS = 194;
 export const EXPECTED_DISPOSITIONS = Object.freeze({
   safe_runnable: 404,
-  agent_required: 0,
   additional_input_required: 10,
   target_incompatible: 0,
   soc_gated: 258,
@@ -46,12 +45,10 @@ export const EXPECTED_DISPOSITIONS = Object.freeze({
 const EXPECTED_PROFILE = Object.freeze({
   target_kind: 'fqdn',
   validation_mode: 'external_only',
-  agent: 'none',
 });
 
 const EVALUATION_STATUS_BY_DISPOSITION = Object.freeze({
   safe_runnable: 'evaluated_bounded',
-  agent_required: 'agent_required_not_executed',
   additional_input_required: 'additional_input_required',
   target_incompatible: 'target_incompatible_not_executed',
   soc_gated: 'soc_gated_not_executed',
@@ -479,7 +476,6 @@ export function validateFullCatalogLiveEvidence(artifact) {
   validateSourceFiles(artifact.inputs);
   requireCanonicalTimestamp(artifact.generated_at, 'artifact.generated_at');
   invariant(artifact.target?.validation_mode === 'external_only', 'artifact target must be external_only');
-  invariant(artifact.target?.agent_bound === false, 'artifact target must not be agent-bound');
   invariant(Array.isArray(artifact.rows) && artifact.rows.length === EXPECTED_CATALOG_ROWS, 'artifact must contain exactly 721 rows');
   invariant(Array.isArray(artifact.check_results) && artifact.check_results.length === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must contain exactly 194 check results');
 
@@ -605,7 +601,6 @@ export function buildFullCatalogLiveEvidence({
       target_group_id: options.targetGroupId,
       target_kind: 'fqdn',
       validation_mode: 'external_only',
-      agent_bound: false,
       ownership_state: options.ownershipState,
       eligibility: options.eligibility,
     },

@@ -25,7 +25,7 @@ function ownerHeaders() {
 }
 
 describe('verification ladder (FT-VL-01..05)', () => {
-  it('FT-VL-01 ladder returns server-computed counts 5/5, 3/5, 2/5, 0/5', async () => {
+  it('FT-VL-01 ladder returns server-computed counts (declared 5, dns_verified 3, user_confirmed 0)', async () => {
     const res = await request(
       baseUrl,
       'GET',
@@ -37,11 +37,12 @@ describe('verification ladder (FT-VL-01..05)', () => {
     assert.equal(byId.declared.count, 5);
     assert.equal(byId.declared.total, 5);
     assert.equal(byId.dns_verified.count, 3);
-    assert.equal(byId.agent_verified.count, 2);
+    // ADR-0008: there is no agent_verified ladder step any more.
+    assert.equal(byId.agent_verified, undefined);
     assert.equal(byId.user_confirmed.count, 0);
   });
 
-  it('FT-VL-02 confirm elevates agent_verified target with active LOA', async () => {
+  it('FT-VL-02 confirm elevates a dns_verified target with active LOA', async () => {
     const res = await request(
       baseUrl,
       'POST',
@@ -84,7 +85,7 @@ describe('verification ladder (FT-VL-01..05)', () => {
     const res = await request(
       baseUrl,
       'POST',
-      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/targets/tgt_checkout_3:confirm`,
+      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/targets/tgt_checkout_4:confirm`,
       { headers: ownerHeaders(), body: { signer: 'usr_owner' } },
     );
     assert.equal(res.status, 409);

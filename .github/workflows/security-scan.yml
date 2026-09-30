@@ -44,13 +44,12 @@ jobs:
           trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL \
             --exit-code 1 --no-progress .
 
-      - name: Shipped image scans (AWS control plane, Kubernetes worker, agent)
+      - name: Shipped image scans (AWS control plane, Kubernetes worker)
         run: |
           set -euo pipefail
           docker build -f ops/aws/Dockerfile -t astranull-scan-aws:${GITHUB_SHA} .
           docker build -f ops/kubernetes/Dockerfile.worker -t astranull-scan-worker:${GITHUB_SHA} .
-          docker build -t astranull-scan-agent:${GITHUB_SHA} agents/linux
-          for image in aws worker agent; do
+          for image in aws worker; do
             trivy image --scanners vuln,secret --severity HIGH,CRITICAL \
               --exit-code 1 --no-progress "astranull-scan-${image}:${GITHUB_SHA}"
           done

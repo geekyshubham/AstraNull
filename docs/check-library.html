@@ -113,8 +113,7 @@
           <li><strong>Declare</strong> target group + target (FQDN/IP/URL).</li>
           <li><strong>Start test run</strong> — planner picks check, creates signed probe job(s).</li>
           <li><strong>Probe worker</strong> executes a bounded probe (<code>probe_profile</code>) against the declared target only, or records <code>not_run</code> with zero I/O for an E1 <code>metadata_marker</code>.</li>
-          <li><strong>Agent</strong> (if deployed &amp; required) uploads metadata observation when local signal matches.</li>
-          <li><strong>Correlation</strong> compares <code>external_result</code> + observation vs the check&apos;s <code>default_expected_behavior</code> → verdict + finding.</li>
+          <li><strong>Correlation</strong> compares <code>external_result</code> vs the check&apos;s <code>default_expected_behavior</code> → verdict + finding (external probe evidence only).</li>
         </ol>
       </div>
     </section>
@@ -123,7 +122,7 @@
       <table class="glossary">
         <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
         <tbody>
-          <tr><td><strong>Probe worker</strong></td><td>AstraNull-signed outside process that runs bounded network probes against customer-declared targets (not in your app process).</td></tr><tr><td><strong>Agent</strong></td><td>Customer-deployed outbound observer (heartbeat, packet, mirror, log-tail, or canary). Correlates inside traffic with outside probes — not required for every check.</td></tr><tr><td><strong>default_expected_behavior</strong></td><td>Per-check pass criteria from the catalog (e.g. must_block_before_origin). Verdict correlation uses this, not customer-declared target fields.</td></tr><tr><td><strong>probe_profile.kind</strong></td><td>The bounded probe technique used (HTTP HEAD, TCP connect, DNS lookup, etc.).</td></tr><tr><td><strong>Evidence tier</strong></td><td>E1 is declaration-only, E2 is transport/observation-only, E3 is a bounded semantic-safe result, and E4 is SOC-governed.</td></tr><tr><td><strong>external_result</strong></td><td>Probe outcome: blocked, timeout, connected, error, or not_run. Error/not_run and signed execution timeouts cannot establish readiness.</td></tr><tr><td><strong>agent_observation</strong></td><td>Metadata that the agent saw matching probe traffic at the observation point.</td></tr><tr><td><strong>metadata_marker</strong></td><td>E1 declaration-only record. It performs zero network I/O and always remains inconclusive until customer evidence or a SOC-governed test exists.</td></tr><tr><td><strong>soc_gated</strong></td><td>Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.</td></tr><tr><td><strong>nonce_hash</strong></td><td>Correlation token linking probe job to agent observation without sending raw payloads.</td></tr><tr><td><strong>direct_origin_ip</strong></td><td>Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.</td></tr>
+          <tr><td><strong>Probe worker</strong></td><td>AstraNull-signed outside process that runs bounded network probes against customer-declared targets (not in your app process).</td></tr><tr><td><strong>default_expected_behavior</strong></td><td>Per-check pass criteria from the catalog (e.g. must_block_before_origin). Verdict correlation uses this, not customer-declared target fields.</td></tr><tr><td><strong>probe_profile.kind</strong></td><td>The bounded probe technique used (HTTP HEAD, TCP connect, DNS lookup, etc.).</td></tr><tr><td><strong>Evidence tier</strong></td><td>E1 is declaration-only, E2 is transport/observation-only, E3 is a bounded semantic-safe result, and E4 is SOC-governed.</td></tr><tr><td><strong>external_result</strong></td><td>Probe outcome: blocked, timeout, connected, error, or not_run. Error/not_run and signed execution timeouts cannot establish readiness.</td></tr><tr><td><strong>metadata_marker</strong></td><td>E1 declaration-only record. It performs zero network I/O and always remains inconclusive until customer evidence or a SOC-governed test exists.</td></tr><tr><td><strong>soc_gated</strong></td><td>Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.</td></tr><tr><td><strong>nonce_hash</strong></td><td>Correlation token linking a probe job to its bounded external result without sending raw payloads.</td></tr><tr><td><strong>direct_origin_ip</strong></td><td>Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.</td></tr>
         </tbody>
       </table>
       <h3 style="margin-top:1.5rem">Expected behavior values</h3>
@@ -159,9 +158,9 @@
       <p class="desc">Bounded direct-origin reachability validation without flood traffic; signed-worker mode uses one direct-IP Host/SNI HEAD probe.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Correlate one bounded direct-origin Host/SNI probe with agent observation; signed-worker mode requires the verified target itself to be an IP or IP-literal URL.</dd>
+        <dd>Evaluate one bounded direct-origin Host/SNI probe (external probe evidence only); signed-worker mode requires the verified target itself to be an IP or IP-literal URL.</dd>
         <dt>How we detect</dt>
-        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>host_sni_bypass</code></dd>
         <dt>Evidence tier</dt>
@@ -172,14 +171,12 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip, url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_origin_target</li><li>literal_ip_target_for_signed_worker</li><li>agent_on_origin_path</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_origin_target</li><li>literal_ip_target_for_signed_worker</li></ul></details>
     </article>
     <article class="check" id="origin.direct_bypass.safe">
       <header>
@@ -190,9 +187,9 @@
       <p class="desc">Bounded direct-origin probe validates whether a declared direct path would reach an observation point; simulation mode remains metadata-only.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Correlate one bounded direct-origin Host/SNI probe with agent path observation; signed-worker mode requires the verified target itself to be an IP or IP-literal URL.</dd>
+        <dd>Evaluate one bounded direct-origin Host/SNI probe path (external probe evidence only); signed-worker mode requires the verified target itself to be an IP or IP-literal URL.</dd>
         <dt>How we detect</dt>
-        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>host_sni_bypass</code></dd>
         <dt>Evidence tier</dt>
@@ -203,14 +200,12 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip, url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_origin_target</li><li>literal_ip_target_for_signed_worker</li><li>agent_on_origin_path</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_origin_target</li><li>literal_ip_target_for_signed_worker</li></ul></details>
     </article>
     <article class="check" id="origin.host_sni_bypass.safe">
       <header>
@@ -223,7 +218,7 @@
         <dt>What we detect</dt>
         <dd>One bounded direct-IP HEAD probe with declared Host/SNI must not reach origin when protection is effective.</dd>
         <dt>How we detect</dt>
-        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>host_sni_bypass</code></dd>
         <dt>Evidence tier</dt>
@@ -234,10 +229,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -254,7 +247,7 @@
         <dt>What we detect</dt>
         <dd>Leaked origin IPs, stale subdomains, IPv6-only DNS paths that bypass CDN.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide). Max 15 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide). Max 15 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>origin_leak_scan</code></dd>
         <dt>Evidence tier</dt>
@@ -265,10 +258,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -285,7 +276,7 @@
         <dt>What we detect</dt>
         <dd>Observed fixed-label address divergence or DNS paths that do not match the edge raise a bounded CDN-bypass finding; no signal means only that this capped scan found no leak.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide). Max 15 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide). Max 15 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>origin_leak_scan</code></dd>
         <dt>Evidence tier</dt>
@@ -296,10 +287,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -327,8 +316,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -362,8 +349,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -393,10 +378,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>ip, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -424,14 +407,12 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>ip, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_forbidden_udp_port</li><li>agent_packet_or_mirror_mode</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_forbidden_udp_port</li></ul></details>
     </article>
     <article class="check" id="l3.basic_deny_rule.safe">
       <header>
@@ -439,10 +420,10 @@
         <code class="check-id">l3.basic_deny_rule.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">One bounded TCP connect to the declared deny-rule target, correlated with agent observation, shows whether the network firewall deny rule actually drops the traffic.</p>
+      <p class="desc">One bounded TCP connect to the declared deny-rule target shows whether the network firewall deny rule actually drops the traffic (external probe evidence only).</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>One bounded TCP connect plus agent observation confirms deny rule enforcement.</dd>
+        <dd>One bounded TCP connect observes deny rule enforcement (external probe evidence only).</dd>
         <dt>How we detect</dt>
         <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -455,10 +436,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>ip, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -486,10 +465,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>ip, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -501,10 +478,10 @@
         <code class="check-id">l3.icmp_flood.readiness</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">ICMP rate-limiting and filtering readiness posture from declared policy plus agent packet observation (no ICMP traffic generation). Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</p>
+      <p class="desc">ICMP rate-limiting and filtering readiness posture from declared policy and external probe evidence (no ICMP traffic generation). Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Declared ICMP rate-limit/filter policy correlated with agent packet observations; unbounded ICMP acceptance creates a readiness finding. Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</dd>
+        <dd>Declared ICMP rate-limit/filter policy evaluated against external probe evidence; unbounded ICMP acceptance creates a readiness finding. Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</dd>
         <dt>How we detect</dt>
         <dd>E1 declared only. No live network I/O and no live-test verdict; customer-provided control evidence or a SOC-governed test is required.</dd>
         <dt>Probe kind</dt>
@@ -517,14 +494,12 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>icmp_filtering_policy_declaration</li><li>agent_packet_or_mirror_mode</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>icmp_filtering_policy_declaration</li></ul></details>
     </article>
     <article class="check" id="l3.gre_esp_flood.readiness">
       <header>
@@ -548,10 +523,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -579,10 +552,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -610,10 +581,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -641,10 +610,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -672,10 +639,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -687,7 +652,7 @@
         <code class="check-id">l3.ack_flood.readiness</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Stateful ACK handling and PPS budget readiness posture from declared policy plus agent observation (no packet-rate generation). Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</p>
+      <p class="desc">Stateful ACK handling and PPS budget readiness posture from declared policy and external probe evidence (no packet-rate generation). Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</p>
       <dl>
         <dt>What we detect</dt>
         <dd>Declared stateful ACK-handling policy and PPS budget must be present; absent policy raises a readiness finding. Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.</dd>
@@ -703,10 +668,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -734,10 +697,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -765,10 +726,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -796,10 +755,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -827,10 +784,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -858,10 +813,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, mirror, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -889,10 +842,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -920,10 +871,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -951,10 +900,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -982,10 +929,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1013,10 +958,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1044,10 +987,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1075,10 +1016,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1110,10 +1049,8 @@
         <dd><code>must_reach_canary</code></dd>
         <dt>Targets</dt>
         <dd>url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1145,8 +1082,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1176,8 +1111,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1207,8 +1140,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1238,8 +1169,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -1269,8 +1198,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1300,8 +1227,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -1331,8 +1256,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1362,10 +1285,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1393,10 +1314,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1424,8 +1343,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1455,8 +1372,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1486,10 +1401,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1517,8 +1430,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, provider_telemetry</dd>
         <dt>Stop conditions</dt>
@@ -1548,8 +1459,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1579,8 +1488,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1610,10 +1517,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1641,8 +1546,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1672,8 +1575,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, dns</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1707,8 +1608,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1727,7 +1626,7 @@
         <dt>What we detect</dt>
         <dd>HEAD probe with declared harmless marker should be blocked or challenged when WAF rule is active.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_enforcement_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -1738,10 +1637,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1753,12 +1650,12 @@
         <code class="check-id">waf.origin_bypass.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Customer-approved direct-origin path metadata with agent observation — no volumetric traffic.</p>
+      <p class="desc">Customer-approved direct-origin path metadata (external probe evidence only) — no volumetric traffic.</p>
       <dl>
         <dt>What we detect</dt>
         <dd>Single bounded HEAD on approved direct path must not reach origin when edge WAF is effective.</dd>
         <dt>How we detect</dt>
-        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>host_sni_bypass</code></dd>
         <dt>Evidence tier</dt>
@@ -1769,14 +1666,12 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip, url</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_direct_origin_target</li><li>literal_ip_target_for_signed_worker</li><li>agent_on_origin_path</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_direct_origin_target</li><li>literal_ip_target_for_signed_worker</li></ul></details>
     </article>
     <article class="check" id="waf.low_rate_limit.safe">
       <header>
@@ -1789,7 +1684,7 @@
         <dt>What we detect</dt>
         <dd>Up to five spaced HEAD probes observe rate-limit or challenge signals without load generation.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -1800,10 +1695,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1820,7 +1713,7 @@
         <dt>What we detect</dt>
         <dd>Marker request reaching origin with HTTP 200 indicates monitor-only WAF leak.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_enforcement_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -1831,10 +1724,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -1862,8 +1753,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1893,8 +1782,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1924,8 +1811,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1955,8 +1840,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1986,8 +1869,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2017,8 +1898,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2048,8 +1927,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2079,8 +1956,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2110,8 +1985,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2141,8 +2014,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2172,8 +2043,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2203,8 +2072,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2234,8 +2101,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2265,8 +2130,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>none</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -2285,7 +2148,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Unicode normalization mismatch variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2296,10 +2159,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2316,7 +2177,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Unicode homoglyph / confusable substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2327,10 +2188,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2347,7 +2206,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Invalid / overlong UTF-8 handling discrepancy variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2358,10 +2217,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2378,7 +2235,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Alternate declared character set variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2389,10 +2246,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2409,7 +2264,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTML entity encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2420,10 +2275,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2440,7 +2293,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the JavaScript string / Unicode escapes variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2451,10 +2304,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2471,7 +2322,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the JSON Unicode escape encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2482,10 +2333,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2502,7 +2351,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the CSS escape encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2513,10 +2362,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2533,7 +2380,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Base64 / textual wrapping variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2544,10 +2391,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2564,7 +2409,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Hex / octal / numeric representation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2575,10 +2420,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2595,7 +2438,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Whitespace substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2606,10 +2449,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2626,7 +2467,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Operator / function substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2637,10 +2478,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2657,7 +2496,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Logical invariant / tautology mutation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2668,10 +2507,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2688,7 +2525,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Number / literal shuffling variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2699,10 +2536,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2719,7 +2554,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Null-byte / control-character insertion variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2730,10 +2565,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2750,7 +2583,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Matrix / path-parameter ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2761,10 +2594,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2781,7 +2612,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Trailing dot / slash / suffix ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2792,10 +2623,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2812,7 +2641,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Alternative IP-address representation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2823,10 +2652,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2843,7 +2670,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTTP parameter pollution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2854,10 +2681,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2874,7 +2699,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Duplicate JSON key ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2885,10 +2710,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2905,7 +2728,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Duplicate / conflicting HTTP header ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2916,10 +2739,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2936,7 +2757,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Content-Length vs Transfer-Encoding ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2947,10 +2768,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2967,7 +2786,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Transfer-coding obfuscation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -2978,10 +2797,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -2998,7 +2815,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTTP/2-to-HTTP/1 framing differential variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3009,10 +2826,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3029,7 +2844,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Line-ending / request-splitting discrepancy variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3040,10 +2855,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3060,7 +2873,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Chunk-extension / trailer ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3071,10 +2884,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3091,7 +2902,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Compressed request-body evasion variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3102,10 +2913,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3122,7 +2931,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Nested content encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3133,10 +2942,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3153,7 +2960,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Binary / protobuf opacity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3164,10 +2971,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3184,7 +2989,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Type confusion / scalar-object switching variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3195,10 +3000,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3215,7 +3018,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Deep nesting / sparse-index abuse variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3226,10 +3029,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3246,7 +3047,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Parameter-location move variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3257,10 +3058,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3277,7 +3076,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTTP method override variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3288,10 +3087,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3308,7 +3105,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTTP version switch variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3319,10 +3116,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3339,7 +3134,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the WebSocket upgrade / post-upgrade opacity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3350,10 +3145,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3370,7 +3163,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Benign padding / anomaly-score dilution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3381,10 +3174,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3401,7 +3192,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Polyglot / multi-parser content variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3412,10 +3203,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3432,7 +3221,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the HTTP/3-to-HTTP/1.1 translation differential variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3443,10 +3232,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3463,7 +3250,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the QPACK / HPACK normalization gap variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3474,10 +3261,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3494,7 +3279,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the Multipart per-part charset coverage gap variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3505,10 +3290,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3525,7 +3308,7 @@
         <dt>What we detect</dt>
         <dd>Baseline inert marker should be blocked; if the XML attribute-value inspection bypass variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_evasion_marker_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3536,10 +3319,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3556,7 +3337,7 @@
         <dt>What we detect</dt>
         <dd>If the marker placed past an inspection limit passes while an in-limit marker is blocked, an inspection-limit / fail-open gap is suspected.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline. Max 6 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline. Max 6 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_inspection_limit_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3567,10 +3348,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3598,10 +3377,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3629,10 +3406,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3660,10 +3435,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3691,10 +3464,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3722,10 +3493,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3753,10 +3522,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3784,10 +3551,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3815,10 +3580,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3846,10 +3609,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3877,10 +3638,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>agent_observation</dd>
+        <dd>customer_declaration</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3901,7 +3660,7 @@
         <dt>What we detect</dt>
         <dd>HEAD probe with harmless marker should be blocked or challenged when WAF rule is active.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Harmless marker request; blocked/challenged = WAF enforcing. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>waf_enforcement_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -3912,10 +3671,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -3943,8 +3700,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -3974,8 +3729,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -3994,7 +3747,7 @@
         <dt>What we detect</dt>
         <dd>Up to five spaced HEAD probes observe rate-limit signals without load generation.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4005,10 +3758,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4025,7 +3776,7 @@
         <dt>What we detect</dt>
         <dd>Cache abuse probe observes deception, sensitive caching, and cache-key weakness signals.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Bounded cache-bust HEAD sequence. Max 3 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Bounded cache-bust HEAD sequence. Max 3 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>cache_abuse_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -4036,10 +3787,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4067,10 +3816,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4087,7 +3834,7 @@
         <dt>What we detect</dt>
         <dd>Rapid HEAD sequence correlates rate-limit or challenge headers without credential stuffing.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4098,10 +3845,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4129,8 +3874,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4149,7 +3892,7 @@
         <dt>What we detect</dt>
         <dd>Up to five spaced HEAD probes read quota/rate-limit headers without exhausting customer quotas.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4160,10 +3903,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4191,8 +3932,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4211,7 +3950,7 @@
         <dt>What we detect</dt>
         <dd>Cookie-less scripted client should trigger challenge or block when bot controls are active.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Cookie-less client; expects bot challenge or block. Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Cookie-less client; expects bot challenge or block. Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>bot_challenge_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -4222,10 +3961,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4253,8 +3990,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4284,8 +4019,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4315,10 +4048,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4335,7 +4066,7 @@
         <dt>What we detect</dt>
         <dd>Bounded low-rate sequence observes throttle/challenge behavior consistent with declared RPS limits.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4346,10 +4077,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4377,10 +4106,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4408,8 +4135,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4439,10 +4164,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4470,8 +4193,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4501,8 +4222,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4532,8 +4251,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4563,10 +4280,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4594,8 +4309,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4614,7 +4327,7 @@
         <dt>What we detect</dt>
         <dd>Bounded sequence observes throttle behavior consistent with declared search-rate limits.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4625,10 +4338,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4645,7 +4356,7 @@
         <dt>What we detect</dt>
         <dd>Bounded sequence observes queue/throttle behavior consistent with declared export-job limits.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4656,10 +4367,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4687,10 +4396,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4707,7 +4414,7 @@
         <dt>What we detect</dt>
         <dd>Bounded sequence observes throttle/lockout behavior consistent with declared token-endpoint limits; no credentials transmitted.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4718,10 +4425,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4749,8 +4454,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4780,8 +4483,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4800,7 +4501,7 @@
         <dt>What we detect</dt>
         <dd>Bounded sequence observes throttle/verification behavior consistent with declared signup limits.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Up to 5 spaced HEAD requests to observe 429/challenge. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Evidence tier</dt>
@@ -4811,10 +4512,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4842,8 +4541,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4873,10 +4570,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4904,10 +4599,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -4935,8 +4628,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4966,8 +4657,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -4997,8 +4686,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5028,8 +4715,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5059,8 +4744,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5090,8 +4773,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5121,8 +4802,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5152,8 +4831,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5183,8 +4860,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5214,8 +4889,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5245,8 +4918,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5276,8 +4947,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5307,8 +4976,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5338,8 +5005,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5369,8 +5034,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5400,8 +5063,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5431,8 +5092,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5466,8 +5125,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5497,8 +5154,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5528,8 +5183,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5559,8 +5212,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5590,10 +5241,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -5621,10 +5270,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -5652,8 +5299,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5683,8 +5328,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5718,8 +5361,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5749,8 +5390,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5780,8 +5419,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5811,8 +5448,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5842,8 +5477,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, health_signal</dd>
         <dt>Stop conditions</dt>
@@ -5873,10 +5506,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -5904,10 +5535,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -5935,8 +5564,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -5966,10 +5593,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -5990,7 +5615,7 @@
         <dt>What we detect</dt>
         <dd>An unexpected UDP discovery-response size class from the declared host raises a reflector-exposure finding; customer hosts must not run open responders.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6001,10 +5626,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6021,7 +5644,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected SNMP response metadata from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6032,10 +5655,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6052,7 +5673,7 @@
         <dt>What we detect</dt>
         <dd>Any legacy responder answer (CHARGEN, QOTD, Echo class) from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6063,10 +5684,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6083,7 +5702,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected local-discovery answers from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6094,10 +5713,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6114,7 +5731,7 @@
         <dt>What we detect</dt>
         <dd>An open portmapper/rpcbind (or unexpected legacy routing service such as RIPv1) on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6125,10 +5742,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6145,7 +5760,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected session-protocol responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6156,10 +5771,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6187,10 +5800,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6218,10 +5829,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6238,7 +5847,7 @@
         <dt>What we detect</dt>
         <dd>An open SQL Browser responder on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6249,10 +5858,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6269,7 +5876,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected CI discovery responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6280,10 +5887,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6300,7 +5905,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected CoAP responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6311,10 +5916,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6331,7 +5934,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected legacy discovery/management answers from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6342,10 +5945,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6362,7 +5963,7 @@
         <dt>What we detect</dt>
         <dd>An unrestricted STUN/TURN responder on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6373,10 +5974,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6393,7 +5992,7 @@
         <dt>What we detect</dt>
         <dd>An Internet-reachable BMC responder raises a critical reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6404,10 +6003,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6435,10 +6032,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6455,7 +6050,7 @@
         <dt>What we detect</dt>
         <dd>Unexpected VPN handshake metadata from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6466,10 +6061,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6486,7 +6079,7 @@
         <dt>What we detect</dt>
         <dd>An unexpected amplifying SLP response from the declared host raises a reflector-exposure finding; Internet-facing hosts must not run open SLP.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6497,10 +6090,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6517,7 +6108,7 @@
         <dt>What we detect</dt>
         <dd>Any tp240dvr response on an Internet-facing host raises a reflector-exposure finding (CVE-2022-26143 class); the driver test port must not be exposed.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6528,10 +6119,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6548,7 +6137,7 @@
         <dt>What we detect</dt>
         <dd>An unexpected L2TP control-response from the declared host raises a reflector-exposure finding; Internet-facing L2TP control ports must be filtered.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6559,10 +6148,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6579,7 +6166,7 @@
         <dt>What we detect</dt>
         <dd>A NAT-PMP response on an Internet-facing (WAN) interface raises a reflector-exposure finding; NAT-PMP must be answered only on the LAN side.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6590,10 +6177,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6610,7 +6195,7 @@
         <dt>What we detect</dt>
         <dd>An IPP attribute response on an Internet-facing host raises a reflector-exposure finding (CVE-2024-47176 class); CUPS/IPP must not be reachable from the Internet.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6621,10 +6206,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6645,7 +6228,7 @@
         <dt>What we detect</dt>
         <dd>Declared NTP restriction policy must disable legacy modes on Internet-facing hosts; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6656,10 +6239,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6676,7 +6257,7 @@
         <dt>What we detect</dt>
         <dd>Anonymous LDAP on Internet-facing hosts must be disabled per declared policy; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6687,10 +6268,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6707,7 +6286,7 @@
         <dt>What we detect</dt>
         <dd>An open cache-service port on an Internet-facing host raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E3: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -6718,10 +6297,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>packet, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6749,10 +6326,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6780,8 +6355,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -6811,10 +6384,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -6846,8 +6417,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -6877,8 +6446,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -6908,8 +6475,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -6939,8 +6504,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -6970,8 +6533,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7001,8 +6562,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7036,10 +6595,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -7067,10 +6624,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -7098,8 +6653,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, ip</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7129,8 +6682,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7160,10 +6711,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -7191,10 +6740,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -7222,8 +6769,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>url, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7257,8 +6802,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>canary, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7288,8 +6831,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>canary, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, runbook_version_audit, contact_ack_evidence</dd>
         <dt>Stop conditions</dt>
@@ -7319,8 +6860,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>canary, fqdn</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result, stop_event_audit</dd>
         <dt>Stop conditions</dt>
@@ -7350,8 +6889,6 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -7381,10 +6918,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd>fqdn, url</dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>probe_result, agent_observation</dd>
+        <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
@@ -7417,8 +6952,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, provider_telemetry, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
@@ -7448,8 +6981,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, provider_telemetry, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
@@ -7479,8 +7010,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, runbook_version_audit, contact_ack_evidence</dd>
         <dt>Stop conditions</dt>
@@ -7510,8 +7039,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, stop_event_audit, adapter_confirmation</dd>
         <dt>Stop conditions</dt>
@@ -7541,8 +7068,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>provider_telemetry, approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
@@ -7572,8 +7097,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, provider_telemetry, soc_runbook_ack, coordination_audit</dd>
         <dt>Stop conditions</dt>
@@ -7603,8 +7126,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, health_signal, post_test_report, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
@@ -7634,8 +7155,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, provider_telemetry, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
@@ -7654,7 +7173,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated SQL injection offensive probe suite against declared WAF assets — not customer self-service.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7665,10 +7184,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7685,7 +7202,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated XSS offensive probe suite — customer request only; SOC executes.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7696,10 +7213,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7716,7 +7231,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated RCE/command-execution offensive probe suite.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7727,10 +7242,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7747,7 +7260,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated path traversal offensive probe suite.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7758,10 +7271,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7778,7 +7289,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated OS command injection offensive probe suite.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7789,10 +7300,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7809,7 +7318,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated LDAP injection offensive probe suite.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7820,10 +7329,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7840,7 +7347,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated server-side template injection offensive probe suite.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7851,10 +7358,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7871,7 +7376,7 @@
         <dt>What we detect</dt>
         <dd>SOC-gated multi-vector offensive bundle for approved staging windows.</dd>
         <dt>How we detect</dt>
-        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Evidence tier</dt>
@@ -7882,10 +7387,8 @@
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>canary, heartbeat</dd>
         <dt>Evidence required</dt>
-        <dd>approval_artifact, agent_observation, soc_runbook_ack</dd>
+        <dd>approval_artifact, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>
         <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
       </dl>
@@ -7913,8 +7416,6 @@
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
         <dd></dd>
-        <dt>Agent modes</dt>
-        <dd>heartbeat</dd>
         <dt>Evidence required</dt>
         <dd>approval_artifact, provider_telemetry, soc_runbook_ack</dd>
         <dt>Stop conditions</dt>

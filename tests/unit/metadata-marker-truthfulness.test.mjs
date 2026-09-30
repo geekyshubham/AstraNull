@@ -2,7 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { validateProbeResultBody } from '../../src/lib/probeResultValidation.mjs';
-import { correlateExternalOnlyVerdict, correlateVerdict } from '../../src/services/correlation.mjs';
+import { correlateExternalOnlyVerdict } from '../../src/services/correlation.mjs';
 import { computeReadiness } from '../../src/services/readiness.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
@@ -47,17 +47,6 @@ describe('metadata-only probe truthfulness', () => {
     });
     assert.equal(validated.ok, true);
     assert.equal(validated.externalResult, 'not_run');
-
-    const correlated = correlateVerdict({
-      externalResult: 'not_run',
-      agentObserved: false,
-      expectedBehavior: 'must_block_before_origin',
-      agentOnline: true,
-      agentBound: true,
-      probeKind: 'metadata_marker',
-    });
-    assert.equal(correlated.verdict, 'inconclusive');
-    assert.equal(correlated.createsFinding, false);
 
     const externalOnly = correlateExternalOnlyVerdict({
       externalResult: 'not_run',

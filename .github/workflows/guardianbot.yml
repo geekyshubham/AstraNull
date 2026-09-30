@@ -59,7 +59,6 @@ jobs:
           ASTRANULL_AUTH_MODE=oidc-jwt
           ASTRANULL_PROBE_MODE=signed-worker
           ASTRANULL_HIGH_SCALE_ADAPTER_MODE=disabled
-          ASTRANULL_AGENT_IDENTITY_MODE=bearer
       migration-command: "node scripts/migrate-postgres.mjs"
       smoke-command: "node --check src/index.mjs && node --check scripts/railway-staging-start.mjs"
       push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

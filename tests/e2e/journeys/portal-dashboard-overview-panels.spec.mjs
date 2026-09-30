@@ -104,7 +104,8 @@ test.describe('portal dashboard overview panels', () => {
     for (const factor of factors) {
       const row = rows.filter({ hasText: factor.label });
       await expect(row, `one row for factor ${factor.key}`).toHaveCount(1);
-      await expect(row.locator('.lg-pct')).toHaveText(String(factor.score));
+      // Score renders as `${score}/${scale}` in the compact factor row.
+      await expect(row.locator('.factor-score')).toContainText(String(factor.score));
       await expect(row).toContainText(plainInlineText(factor.detail));
     }
   });
@@ -159,12 +160,11 @@ test.describe('portal dashboard overview panels', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', baseUrl);
 
-    const coverage = page.locator('.kpi-cell').filter({ hasText: 'Coverage' });
-    await expect(coverage.locator('.kpi-delta')).toHaveText('10,000 target groups');
-    const findings = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
-    await expect(findings.locator('.kpi-value')).toHaveText('33,334');
+    // Targets-first KPI: declared targets come from the loaded inventory (5,000), grouped.
+    const declared = page.locator('.dashboard-kpi').filter({ hasText: 'Declared targets' });
+    await expect(declared.locator('.dashboard-kpi-value')).toContainText('5,000');
+    // The dashboard must never invent a "10,000 targets" or "5,000 targets" sentence from group counts.
     await expect(page.getByText('10,000 targets', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('5,000 targets', { exact: true })).toHaveCount(0);
 
     await gotoPortalRoute(page, 'targets', baseUrl);
     const targetSummary = page.getByLabel('Target inventory summary');

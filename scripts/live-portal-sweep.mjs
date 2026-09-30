@@ -11,11 +11,11 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const SESSION_KEY = 'astranull.portal.session.v1';
 const DEFAULT_ROLES = ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'];
 const EXPECTED_ROUTE_IDS = [
-  'dashboard', 'environments', 'target-groups', 'targets', 'agents', 'checks',
+  'dashboard', 'targets', 'target-groups', 'checks',
   'test-policies', 'runs', 'findings', 'reports', 'integrations', 'notifications',
   'audit', 'release-evidence', 'settings', 'support', 'subscription', 'admin',
-  'internal-soc', 'environment-detail', 'check-detail', 'policy-detail',
-  'target-group-detail', 'target-detail', 'agent-detail', 'run-detail',
+  'internal-soc', 'check-detail', 'policy-detail',
+  'target-group-detail', 'target-detail', 'run-detail',
   'scan-detail', 'finding-detail', 'evidence-detail', 'report-detail',
   'tenant-detail', 'queue-detail',
 ];
@@ -46,8 +46,7 @@ const FRIENDLY_ACCESS_RE = /not available for the .+ role|role does not include 
 const FRIENDLY_CONNECTOR_DISABLED_RE = /connector[^\n]{0,100}(?:disabled|not enabled|turned off|unavailable)|(?:disabled|not enabled|turned off)[^\n]{0,100}connector/i;
 const FRIENDLY_DISCOVERY_DISABLED_RE = /discovery[^\n]{0,100}(?:disabled|not enabled|turned off|unavailable)|(?:disabled|not enabled|turned off)[^\n]{0,100}discovery/i;
 const MUTATING_CONTROL_RULES = [
-  { re: /^Declare environment$/i, permission: 'environment:write', routes: ['environments'] },
-  { re: /^(?:Add single domain|Add declared domain|Create group & add domain)$/i, permission: 'target_group:write' },
+  { re: /^(?:Add target|Add single domain|Add declared domain|Create group & add domain)$/i, permission: 'target_group:write' },
   { re: /^(?:Create schedule|New schedule|Set weekly cadence|Pause|Resume|Archive)$/i, permission: 'test_policy:write', routes: ['test-policies'] },
   { re: /^Generate & export$/i, permission: 'report:create', routes: ['reports'] },
   { re: /^(?:Request SOC-gated run|New request|Attach letter|Submit for SOC review)$/i, permission: 'high_scale:request', routes: ['runs'] },
@@ -56,16 +55,12 @@ const MUTATING_CONTROL_RULES = [
   { re: /^(?:Open target group & sign LOA|Review DNS status|Issue DNS challenge|Issue new challenge|Check now|Verify)$/i, permission: 'target_group:write', routes: ['target-group-detail'] },
   { re: /^(?:Run selected check|Run test|Detect edge|Run placement test)$/i, permission: 'test_run:start' },
   { re: /(?:create|add|remove|delete|archive|restore|edit) (?:target|target group)|import (?:target|inventory)/i, permission: 'target_group:write' },
-  { re: /(?:create|add|edit|save) environment/i, permission: 'environment:write' },
   { re: /(?:create|save|edit|archive) (?:test )?polic|save schedule/i, permission: 'test_policy:write' },
   { re: /(?:start|run|launch) (?:safe |bounded )?(?:test|run|check)|finalize run|cancel run/i, permission: 'test_run:start' },
   { re: /(?:assign|update|close) finding|accept risk|mark delivered/i, permission: 'finding:write' },
   { re: /(?:create|generate) report/i, permission: 'report:create' },
   { re: /(?:create|add|save|toggle|enable|disable) notification|process retries|redrive/i, permission: 'notification:write' },
   { re: /(?:create|request|schedule) high.scale/i, permission: 'high_scale:request' },
-  { re: /revoke agent/i, permission: 'agent:revoke' },
-  { re: /(?:create|add) bootstrap token/i, permission: 'bootstrap_token:create' },
-  { re: /revoke bootstrap token/i, permission: 'bootstrap_token:revoke' },
   { re: /create service account/i, permission: 'service_account:create' },
   { re: /(?:revoke|rotate) service account/i, permission: 'service_account:revoke' },
   { re: /(?:create|add|save) secret/i, permission: 'secret:write' },
@@ -229,15 +224,15 @@ function requireRecords(kind, records) {
 
 async function discoverFixtures(baseUrl, ownerToken, detailLimit, redact) {
   const endpoints = {
-    environments: '/v1/environments', targetGroups: '/v1/target-groups', targets: '/v1/targets',
-    agents: '/v1/agents', checks: '/v1/checks', policies: '/v1/test-policies', runs: '/v1/test-runs?limit=100',
+    targetGroups: '/v1/target-groups', targets: '/v1/targets',
+    checks: '/v1/checks', policies: '/v1/test-policies', runs: '/v1/test-runs?limit=100',
     scans: '/v1/validation-scans?limit=50', findings: '/v1/findings', evidence: '/v1/evidence',
     reports: '/v1/reports', highScale: '/v1/high-scale-requests',
   };
   const values = Object.fromEntries(await Promise.all(Object.entries(endpoints).map(async ([key, endpoint]) => [
     key, items(await safeGet(baseUrl, ownerToken, endpoint, redact)),
   ])));
-  for (const kind of ['environments', 'targetGroups', 'targets', 'agents', 'checks', 'runs', 'findings', 'evidence', 'reports']) {
+  for (const kind of ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence', 'reports']) {
     requireRecords(kind, values[kind]);
   }
 
@@ -260,7 +255,6 @@ async function discoverFixtures(baseUrl, ownerToken, detailLimit, redact) {
   };
 
   return {
-    environment: first(values.environments, ['id', 'environment_id']),
     check: first(values.checks, ['check_id', 'id']),
     policy: values.policies.length ? first(values.policies) : null,
     targetGroups: REQUIRED_TARGET_GROUP_IDS.map((id) => {
@@ -271,7 +265,7 @@ async function discoverFixtures(baseUrl, ownerToken, detailLimit, redact) {
       const item = byId(values.targets, id);
       return { id, label: labelOf(item, id), item };
     }),
-    agents: take(values.agents), runs: take(values.runs),
+    runs: take(values.runs),
     scans: take([
       ...values.scans.filter((entry) => ['completed', 'cancelled', 'canceled', 'failed', 'aborted'].includes(String(entry?.status ?? '').toLowerCase())),
       ...values.scans.filter((entry) => !['completed', 'cancelled', 'canceled', 'failed', 'aborted'].includes(String(entry?.status ?? '').toLowerCase())),
@@ -294,7 +288,7 @@ function caseName(route, entity) {
 
 function routeCases(fixtures) {
   const basic = [
-    'dashboard', 'environments', 'target-groups', 'targets', 'agents', 'checks', 'test-policies',
+    'dashboard', 'targets', 'target-groups', 'checks', 'test-policies',
     'runs', 'findings', 'reports', 'integrations', 'notifications', 'audit', 'release-evidence',
     'settings', 'support', 'subscription', 'admin', 'internal-soc',
   ].map((route) => ({ route, name: route, hash: route, expectedToken: '' }));
@@ -309,13 +303,11 @@ function routeCases(fixtures) {
   const pushUnavailable = (route) => detail.push({
     route, name: `${route}-no-production-record`, hash: route, expectedToken: '', fixtureUnavailable: true,
   });
-  push('environment-detail', fixtures.environment);
   push('check-detail', fixtures.check);
   if (fixtures.policy) push('policy-detail', fixtures.policy);
   else pushUnavailable('policy-detail');
   fixtures.targetGroups.forEach((entry) => push('target-group-detail', entry));
   fixtures.targets.forEach((entry) => push('target-detail', entry));
-  fixtures.agents.forEach((entry) => push('agent-detail', entry));
   fixtures.runs.forEach((entry) => push('run-detail', entry));
   if (fixtures.scans.length) fixtures.scans.forEach((entry) => push('scan-detail', entry));
   else pushUnavailable('scan-detail');

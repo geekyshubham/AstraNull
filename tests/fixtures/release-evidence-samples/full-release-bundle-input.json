@@ -4,7 +4,7 @@
       "kind": "third_party_security_review",
       "evidence": {
         "reviewer_org": "Independent Security Review Co",
-        "scope_summary": "Production API, UI, SOC workflow, agent control, and release process.",
+        "scope_summary": "Production API, UI, SOC workflow, and release process.",
         "review_report_uri": "evidence://security-review/report",
         "findings_status": "all-critical-high-remediated",
         "remediation_tracker_uri": "evidence://security-review/remediation-tracker",
@@ -75,278 +75,6 @@
           }
         ],
         "evidence_uri": "evidence://edge/protection-matrix"
-      }
-    },
-    {
-      "kind": "agent_sbom_provenance",
-      "evidence": {
-        "created_at": "2026-07-02T00:00:00.000Z",
-        "package_format": "container",
-        "package": {
-          "name": "astranull-agent",
-          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "size": 1024
-        },
-        "sbom": {
-          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "size": 2048,
-          "summary": {
-            "sbom_format": "cyclonedx",
-            "component_count": 12
-          }
-        },
-        "provenance": {
-          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-          "size": 1024,
-          "summary": {
-            "subject_count": 1,
-            "materials_count": 3
-          }
-        },
-        "evidence_uri": "evidence://agent/sbom-provenance"
-      }
-    },
-    {
-      "kind": "agent_install_matrix",
-      "evidence": {
-        "created_at": "2026-07-02T00:00:00.000Z",
-        "matrix_id": "agent-install-2026-07-02",
-        "overall_status": "passed",
-        "required_formats": [
-          "generic",
-          "deb",
-          "rpm",
-          "container",
-          "kubernetes"
-        ],
-        "required_checks": [
-          "install",
-          "heartbeat",
-          "job_poll",
-          "upgrade_rollback",
-          "revoke",
-          "uninstall",
-          "no_inbound_port",
-          "signature_verify"
-        ],
-        "coverage_gaps": {
-          "missing_formats": [],
-          "failed_checks": [],
-          "formats_covered": [
-            "generic",
-            "deb",
-            "rpm",
-            "container",
-            "kubernetes"
-          ]
-        },
-        "rows": [
-          {
-            "format": "generic",
-            "environment": "staging",
-            "status": "passed",
-            "checks": {
-              "install": "passed",
-              "heartbeat": "passed",
-              "job_poll": "passed",
-              "upgrade_rollback": "passed",
-              "revoke": "passed",
-              "uninstall": "passed",
-              "no_inbound_port": "passed",
-              "signature_verify": "passed"
-            },
-            "failed_checks": [],
-            "check_details": {
-              "no_inbound_port": {
-                "status": "passed",
-                "inbound_listener_count": 0
-              },
-              "signature_verify": {
-                "status": "passed",
-                "signing_format": "tarball",
-                "trust_anchor_reference": "trust://agent-signing/generic"
-              }
-            }
-          },
-          {
-            "format": "deb",
-            "environment": "staging",
-            "status": "passed",
-            "checks": {
-              "install": "passed",
-              "heartbeat": "passed",
-              "job_poll": "passed",
-              "upgrade_rollback": "passed",
-              "revoke": "passed",
-              "uninstall": "passed",
-              "no_inbound_port": "passed",
-              "signature_verify": "passed"
-            },
-            "failed_checks": [],
-            "check_details": {
-              "no_inbound_port": {
-                "status": "passed",
-                "inbound_listener_count": 0
-              },
-              "signature_verify": {
-                "status": "passed",
-                "signing_format": "deb",
-                "trust_anchor_reference": "trust://agent-signing/deb"
-              }
-            }
-          },
-          {
-            "format": "rpm",
-            "environment": "staging",
-            "status": "passed",
-            "checks": {
-              "install": "passed",
-              "heartbeat": "passed",
-              "job_poll": "passed",
-              "upgrade_rollback": "passed",
-              "revoke": "passed",
-              "uninstall": "passed",
-              "no_inbound_port": "passed",
-              "signature_verify": "passed"
-            },
-            "failed_checks": [],
-            "check_details": {
-              "no_inbound_port": {
-                "status": "passed",
-                "inbound_listener_count": 0
-              },
-              "signature_verify": {
-                "status": "passed",
-                "signing_format": "rpm",
-                "trust_anchor_reference": "trust://agent-signing/rpm"
-              }
-            }
-          },
-          {
-            "format": "container",
-            "environment": "staging",
-            "runtime": "docker",
-            "status": "passed",
-            "checks": {
-              "install": "passed",
-              "heartbeat": "passed",
-              "job_poll": "passed",
-              "upgrade_rollback": "passed",
-              "revoke": "passed",
-              "uninstall": "passed",
-              "no_inbound_port": "passed",
-              "signature_verify": "passed"
-            },
-            "failed_checks": [],
-            "check_details": {
-              "no_inbound_port": {
-                "status": "passed",
-                "inbound_listener_count": 0
-              },
-              "signature_verify": {
-                "status": "passed",
-                "signing_format": "container",
-                "trust_anchor_reference": "trust://agent-signing/container"
-              }
-            }
-          },
-          {
-            "format": "kubernetes",
-            "environment": "staging",
-            "runtime": "kubernetes",
-            "deployment_mode": "daemonset",
-            "status": "passed",
-            "checks": {
-              "install": "passed",
-              "heartbeat": "passed",
-              "job_poll": "passed",
-              "upgrade_rollback": "passed",
-              "revoke": "passed",
-              "uninstall": "passed",
-              "no_inbound_port": "passed",
-              "signature_verify": "passed"
-            },
-            "failed_checks": [],
-            "check_details": {
-              "no_inbound_port": {
-                "status": "passed",
-                "inbound_listener_count": 0
-              },
-              "signature_verify": {
-                "status": "passed",
-                "signing_format": "kubernetes",
-                "trust_anchor_reference": "trust://agent-signing/kubernetes"
-              }
-            }
-          }
-        ],
-        "evidence_uri": "evidence://agent/install-matrix"
-      }
-    },
-    {
-      "kind": "agent_mtls_gateway",
-      "evidence": {
-        "schema_version": 1,
-        "artifact_type": "agent_mtls_gateway_evidence",
-        "created_at": "2026-07-02T00:00:00.000Z",
-        "validation": {
-          "ok": true,
-          "missing_fields": [],
-          "forbidden_fields": [],
-          "invalid_fingerprint_headers": []
-        },
-        "release_id": "rel-agent-mtls-2026-07-02",
-        "environment": "staging",
-        "gateway_summary": {
-          "gateway_reference": "gateway://staging/agent-control",
-          "proxy_type": "nginx-ingress",
-          "tls_termination_point": "edge_gateway"
-        },
-        "staging_proof_summary": {
-          "staging_agent_reference": "agent://staging/prod-origin-01",
-          "registration_evidence_uri": "evidence://agent/staging-registration-2026-07-02",
-          "heartbeat_evidence_uri": "evidence://agent/staging-heartbeat-2026-07-02",
-          "fingerprint_match_confirmed": true
-        },
-        "rotation_revocation_summary": {
-          "drill_reference": "drill://agent/client-cert-rotation-revocation-2026-07-02",
-          "rotation_tested": true,
-          "revocation_tested": true
-        },
-        "security_signoff": {
-          "owner": "security-lead",
-          "role": "security-owner",
-          "signed_at": "2026-07-02T11:30:00.000Z",
-          "signoff_reference": "signoff://security/agent-mtls-gateway"
-        },
-        "evidence_uri": "evidence://agent/mtls-gateway"
-      }
-    },
-    {
-      "kind": "agent_trust_key_ceremony",
-      "evidence": {
-        "schema_version": 1,
-        "artifact_type": "agent_trust_key_ceremony_evidence",
-        "created_at": "2026-07-02T00:00:00.000Z",
-        "validation": {
-          "ok": true,
-          "missing_fields": [],
-          "forbidden_fields": [],
-          "missing_signoff": false
-        },
-        "ceremony_summary": {
-          "drill_id": "agent-trust-key-2026-07-02",
-          "environment": "staging",
-          "tenant_id": "ten_demo",
-          "signing_key_method": "generate",
-          "active_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "custody_uri_count": 2
-        },
-        "custody_uris": [
-          "custody://security/agent-trust-key-ceremony/2026-07-02",
-          "custody://security/agent-trust-key-rotation/2026-07-02"
-        ],
-        "evidence_uri": "evidence://agent/trust-key-ceremony"
       }
     },
     {
@@ -524,18 +252,186 @@
       "evidence": {
         "created_at": "2026-07-02T00:00:00.000Z",
         "runs": [
-          { "page": "dashboard", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "dashboard", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "test_runs", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "test_runs", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "soc_console", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "soc_console", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "high_scale_request", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "high_scale_request", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "reports_export_custody_preview", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "reports_export_custody_preview", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "findings", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
-          { "page": "findings", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" }
+          {
+            "page": "dashboard",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "dashboard",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "test_runs",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "test_runs",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "soc_console",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "soc_console",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "high_scale_request",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "high_scale_request",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "reports_export_custody_preview",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "reports_export_custody_preview",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "findings",
+            "viewport": "desktop",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          },
+          {
+            "page": "findings",
+            "viewport": "mobile",
+            "browser": "chromium",
+            "axe_status": "pass",
+            "keyboard_status": "pass",
+            "screen_reader_status": "pass",
+            "issues": {
+              "critical": 0,
+              "serious": 0,
+              "moderate": 0,
+              "minor": 0
+            },
+            "captured_at": "2026-07-02T00:00:00.000Z"
+          }
         ],
         "evidence_uri": "evidence://ux/accessibility-matrix"
       }
@@ -944,36 +840,6 @@
           "signed_at": "2026-07-02T00:00:00.000Z"
         },
         "evidence_uri": "evidence://soc/authorization-custody"
-      }
-    },
-    {
-      "kind": "placement_confidence_staging",
-      "evidence": {
-        "schema_version": 1,
-        "artifact_type": "placement_confidence_staging_evidence",
-        "created_at": "2026-07-02T00:00:00.000Z",
-        "release_id": "rel-2026-07-02",
-        "environment": "staging",
-        "scenarios": [
-          {
-            "scenario_id": "probe-agent-correlation",
-            "status": "passed",
-            "correlation_score": "high",
-            "evidence_uri": "evidence://placement/probe-agent-correlation"
-          }
-        ],
-        "evidence_correlation_summary": {
-          "probe_evidence_count": 12,
-          "agent_evidence_count": 8,
-          "correlated_pairs": 8,
-          "gaps": []
-        },
-        "signoff": {
-          "owner": "detection-lead",
-          "signed_at": "2026-07-02T00:00:00.000Z",
-          "signoff_reference": "signoff://detection/placement-confidence"
-        },
-        "evidence_uri": "evidence://detection/placement-confidence-staging"
       }
     },
     {

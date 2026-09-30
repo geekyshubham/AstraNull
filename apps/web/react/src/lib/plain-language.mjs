@@ -127,8 +127,6 @@ const VERDICT_LABELS = Object.freeze({
   manual_review: 'Needs review',
   partial: 'Only partly verified',
   // Pill-length labels; the full meaning lives in VERDICT_DESCRIPTIONS.
-  misplaced: 'Agent did not see the test',
-  misplaced_agent: 'Agent did not see the test',
   edge_protected: 'Blocked at the edge',
   unknown: 'No conclusion yet',
 });
@@ -137,10 +135,8 @@ const VERDICT_DESCRIPTIONS = Object.freeze({
   protected: 'The tested traffic was stopped before it reached the protected server.',
   bypassable: 'The safe test marker reached the protected environment through a bypass path.',
   penetrated: 'Evidence confirms that the safe test traffic reached the protected server.',
-  inconclusive: 'The available probe and internal observations cannot prove an outcome.',
-  misplaced: 'The agent or canary could not observe the declared protected path reliably.',
-  misplaced_agent: 'The agent or canary could not observe the declared protected path reliably.',
-  edge_protected: 'The edge blocked the test traffic; no inside agent confirmed it, so this is external evidence only.',
+  inconclusive: 'The available external probe evidence cannot prove an outcome.',
+  edge_protected: 'The edge blocked the test traffic. Verdicts are external-only confidence.',
 });
 
 export function plainVerdictLabel(value) {
@@ -200,12 +196,11 @@ const VERIFICATION_LABELS = Object.freeze({
   pending: 'Verification in progress',
   dns_pending: 'Domain verification in progress',
   checking: 'Checking ownership',
-  awaiting_heartbeat: 'Waiting for inside observation',
-  pending_agent: 'Waiting for inside observation',
   dns_verified: 'Domain ownership verified',
   provider_verified: 'Provider account verified',
-  agent_verified: 'Observed from inside',
   user_confirmed: 'Owner confirmed',
+  // ADR-0008: legacy agent-based proof no longer authorizes probes; the server ranks it unverified.
+  agent_verified: 'Re-verify ownership',
   verified: 'Ownership verified',
 });
 

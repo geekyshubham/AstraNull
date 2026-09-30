@@ -156,28 +156,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     summary: 'Readiness score, vectors, target coverage, recent evidence, and governance summary.'
   },
   {
-    id: 'environments',
-    label: 'Environments',
-    route: '/app#environments',
-    routeId: 'environments',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/page-components.tsx',
-    status: 'React implemented',
-    summary: 'Declared environment IDs with validation evidence, findings, and coverage.'
-  },
-  {
-    id: 'environment-detail',
-    label: 'Environment Detail',
-    route: '/app#environment-detail?id=:id',
-    routeId: 'environment-detail',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/detail-pages.tsx',
-    status: 'React implemented',
-    summary: 'Target groups, agents, validation history, and findings for one declared environment.'
-  },
-  {
     id: 'target-groups',
     label: 'Target Groups',
     route: '/app#target-groups',
@@ -208,7 +186,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'scope',
     source: 'pages/target-group-detail-view.tsx',
     status: 'React implemented',
-    summary: 'Per-service scope, ownership, agents, checks, runs, findings, and settings.'
+    summary: 'Per-service scope, ownership, checks, runs, findings, and settings.'
   },
   {
     id: 'target-detail',
@@ -220,28 +198,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     source: 'pages/target-detail-view.tsx',
     status: 'React implemented',
     summary: 'Per-target ownership, validation, findings, and optional WAF posture evidence.'
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    route: '/app#agents',
-    routeId: 'agents',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/functional-surfaces.tsx',
-    status: 'React implemented',
-    summary: 'Outbound-only fleet, bootstrap-token handling, signed release artifacts, and operations.'
-  },
-  {
-    id: 'agent-detail',
-    label: 'Agent Detail',
-    route: '/app#agent-detail?id=:id',
-    routeId: 'agent-detail',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/detail-pages.tsx',
-    status: 'React implemented',
-    summary: 'One agent identity, heartbeat, placement, explicitly attributed runs, and audit events.'
   },
   {
     id: 'checks',
@@ -505,16 +461,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     source: 'workers/probe-worker.mjs',
     status: 'Operator workflow',
     summary: 'Leased probe worker hidden from customer UI by design.'
-  },
-  {
-    id: 'linux-agent',
-    label: 'Linux Agent Package',
-    route: 'agents/linux/*',
-    audience: 'Operator',
-    group: 'operator',
-    source: 'agents/linux',
-    status: 'Operator workflow',
-    summary: 'Outbound-only agent package, service, container, Helm, update, and verification workflows.'
   }
 ];
 
@@ -527,24 +473,14 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'overview', label: 'Overview', summary: 'Declared target groups with readiness and owner context.', evidence: 'Customer-provided scope declaration.' },
     { id: 'targets', label: 'Targets', summary: 'Manual, CSV, or automation-imported targets only.', evidence: 'Declared targets and explicit expected behavior.' },
     { id: 'expected-behavior', label: 'Expected Behavior', summary: 'Expected paths, health signals, and protective baseline.', evidence: 'Customer declaration and observed checks.' },
-    { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to declared scope.', evidence: 'Agent heartbeat and placement confidence.' },
     { id: 'checks', label: 'Checks', summary: 'Check bindings and coverage.', evidence: 'Check catalog and policy bindings.' },
     { id: 'runs', label: 'Runs', summary: 'Recent validation activity.', evidence: 'Run timeline and verdicts.' },
     { id: 'findings', label: 'Findings', summary: 'Open and closed gaps for this group.', evidence: 'Finding custody references.' },
     { id: 'settings', label: 'Settings', summary: 'Archive, owners, windows, and safety policy.', evidence: 'Audited tenant action.' }
   ],
-  agents: [
-    { id: 'install', label: 'Install', summary: 'Bootstrap-token install commands for Linux, Docker, and Kubernetes.', evidence: 'One-time token issuance and install proof.' },
-    { id: 'fleet', label: 'Fleet', summary: 'Online, stale, and versioned agent inventory.', evidence: 'Outbound heartbeat and agent records.' },
-    { id: 'health', label: 'Health', summary: 'Heartbeat freshness, gateway trust, and diagnostic state.', evidence: 'Agent health and mTLS gateway evidence.' },
-    { id: 'placement', label: 'Placement', summary: 'Confidence that the agent observes the right traffic path.', evidence: 'Canary and placement diagnostics.' },
-    { id: 'capabilities', label: 'Capabilities', summary: 'Supported observation and metadata signals.', evidence: 'Agent capability report.' },
-    { id: 'logs', label: 'Logs', summary: 'Audit-safe operational log summaries.', evidence: 'Metadata-only event references.' },
-    { id: 'upgrades', label: 'Upgrades', summary: 'Version rollout, rollback, and package provenance.', evidence: 'SBOM and release evidence.' }
-  ],
   checks: [
     { id: 'recommended', label: 'Recommended', summary: 'Starter checks based on declared service context.', evidence: 'Check catalog safety class and target bindings.' },
-    { id: 'origin-bypass', label: 'Origin Bypass', summary: 'Bounded origin protection checks.', evidence: 'Probe metadata and agent observation.' },
+    { id: 'origin-bypass', label: 'Origin Bypass', summary: 'Bounded origin protection checks.', evidence: 'Probe metadata.' },
     { id: 'l3l4', label: 'L3/L4', summary: 'TCP and reachability validation families.', evidence: 'Probe results.' },
     { id: 'dns', label: 'DNS', summary: 'Resolver and delegation readiness checks.', evidence: 'DNS lookup metadata.' },
     { id: 'l7api', label: 'Application layer', summary: 'Safe application path and interface posture checks.', evidence: 'HEAD/marker observations without sensitive content.' },
@@ -564,7 +500,6 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'summary', label: 'Summary', summary: 'Current verdict, target group, check family, and guardrail state.', evidence: 'Run record and policy snapshot.' },
     { id: 'timeline', label: 'Timeline', summary: 'Ordered run lifecycle from scheduling through final verdict.', evidence: 'Run events and audit entries.' },
     { id: 'probe-results', label: 'Probe Results', summary: 'Outside observations from probes.', evidence: 'Probe result records.' },
-    { id: 'agent-observations', label: 'Agent Observations', summary: 'Inside observations from outbound-only canaries.', evidence: 'Agent observation records.' },
     { id: 'correlation', label: 'Correlation', summary: 'Truth table explaining why the verdict was assigned.', evidence: 'Observed facts and correlation logic.' },
     { id: 'evidence', label: 'Evidence', summary: 'Custody-ready artifacts generated by the run.', evidence: 'Evidence ledger references.' },
     { id: 'events', label: 'Raw Events', summary: 'Sanitized event envelope review for support and audit.', evidence: 'Redacted event metadata.' }
@@ -599,9 +534,9 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'exports', label: 'Exports', summary: 'Auditor-friendly export and report links.', evidence: 'Custody export references.' }
   ],
   settings: [
-    { id: 'organization', label: 'Organization', summary: 'Tenant profile, environments, support owner, and residency.', evidence: 'Tenant record.' },
+    { id: 'organization', label: 'Organization', summary: 'Tenant profile, support owner, and residency.', evidence: 'Tenant record.' },
     { id: 'users-roles', label: 'Users & Roles', summary: 'User access and permission model.', evidence: 'Role contracts and audit.' },
-    { id: 'api-keys', label: 'Automation keys', summary: 'Service accounts, bootstrap tokens, revoke, and rotate.', evidence: 'Token and service-account records.' },
+    { id: 'api-keys', label: 'Automation keys', summary: 'Service accounts, revoke, and rotate.', evidence: 'Service-account records.' },
     { id: 'sso', label: 'SSO/SAML', summary: 'Enterprise OIDC/JWKS posture with production-safe defaults.', evidence: 'Auth configuration.' },
     { id: 'notifications', label: 'Notifications', summary: 'Default routing and provider links.', evidence: 'Notification rule records.' },
     { id: 'integrations', label: 'Integrations', summary: 'Optional connectors and remediation delivery.', evidence: 'Connector and secret metadata.' },
@@ -627,7 +562,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
 export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   'target-detail': [
     { id: 'overview', label: 'Overview', summary: 'Per-target verification, WAF posture, and counts.', evidence: 'Recorded target details.' },
-    { id: 'ownership', label: 'Ownership', summary: 'Verification ladder and DNS/agent state.', evidence: 'target_verifications rows.' },
+    { id: 'ownership', label: 'Ownership', summary: 'Verification ladder and DNS state.', evidence: 'target_verifications rows.' },
     { id: 'findings', label: 'Findings', summary: 'Open and closed findings on this target.', evidence: 'findings filtered by target_id.' }
   ],
   'finding-detail': [
@@ -644,14 +579,7 @@ export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'overview', label: 'Overview', summary: 'Readiness, runs, and declaration metadata for this service.', evidence: 'Recorded target-group details.' },
     { id: 'scope', label: 'Scope & behavior', summary: 'Declared targets and expected protection behavior.', evidence: 'Customer-provided scope declaration.' },
     { id: 'validation', label: 'Validation', summary: 'Policies, runs, and findings for this group.', evidence: 'Run and finding records.' },
-    { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to this group.', evidence: 'Agent heartbeat records.' },
     { id: 'settings', label: 'Settings', summary: 'Archive, owners, and safety policy.', evidence: 'Audited tenant action.' }
-  ],
-  'agent-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Status, binding, and capabilities for one agent.', evidence: 'Agent record and heartbeat.' },
-    { id: 'health', label: 'Health', summary: 'Heartbeat freshness and diagnostic state.', evidence: 'Agent health metadata.' },
-    { id: 'placement', label: 'Placement', summary: 'Target-group placement confidence.', evidence: 'Placement review records.' },
-    { id: 'audit', label: 'Audit', summary: 'Metadata-only lifecycle events for this agent.', evidence: 'Tenant audit trail.' }
   ],
   'run-detail': PAGE_TAB_SETS.runs,
   'tenant-detail': [
@@ -682,7 +610,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     title: 'Declared Scope And Onboarding',
     summary: 'Core onboarding keeps target scope customer-declared and evidence-backed.',
     items: [
-      { name: 'Tenant and environment management', surface: 'Environments, Settings', status: 'Partial', relationship: 'Environments scope target groups and run history.' },
+      { name: 'Tenant and tag management', surface: 'Settings, Targets', status: 'Partial', relationship: 'Tags express membership that scopes target groups and run history.' },
       { name: 'Target groups and declared targets', surface: 'Target Groups, Target Detail', status: 'Visible', relationship: 'The declared target group is the unit of validation.' },
       { name: 'Expected behavior model', surface: 'Target Groups', status: 'Visible', relationship: 'Expected paths and health signals support verdict interpretation.' },
       { name: 'CSV or automation import for declared scope', surface: 'Target groups and automation', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
@@ -691,14 +619,10 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     ]
   },
   {
-    id: 'agent-probe',
-    title: 'Outbound Agents And Probe Fleet',
-    summary: 'Inside/outside observations stay traceable.',
+    id: 'probe-fleet',
+    title: 'Outside-In Probe Fleet',
+    summary: 'External observations stay bounded and traceable; nothing is installed in the customer network.',
     items: [
-      { name: 'Outbound-only agent install', surface: 'Agents, Onboarding', status: 'Visible', relationship: 'Agent calls AstraNull over outbound HTTPS and needs no inbound management port.' },
-      { name: 'Agent heartbeat and placement', surface: 'Agents, Agent Detail', status: 'Visible', relationship: 'Heartbeat plus placement canary increases confidence.' },
-      { name: 'Agent package, Helm, Docker, systemd', surface: 'Linux Agent Package', status: 'Operator-only', relationship: 'Supports customer operators outside the portal.' },
-      { name: 'Agent revoke, update, rollback, trust keys', surface: 'Agents, Release Evidence', status: 'Partial', relationship: 'Lifecycle operations are governed through APIs and evidence.' },
       { name: 'Probe profiles', surface: 'Checks, Runs', status: 'Partial', relationship: 'Bounded HTTP HEAD, DNS, TCP, and marker probes support verdicts.' },
       { name: 'Internal probe worker jobs', surface: 'Probe Worker', status: 'By design hidden', relationship: 'Leased worker implementation is not exposed as customer controls.' }
     ]
@@ -713,7 +637,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, target group, and schedule windows.' },
       { name: 'Run detail visualizations', surface: 'Test Runs, Run Detail', status: 'Visible', relationship: 'Timeline, probe results, observations, correlation, evidence, and events.' },
       { name: 'Correlation engine and verdict logic', surface: 'Runs, Evidence, Dashboard', status: 'Partial', relationship: 'Verdicts link to observed facts instead of assumptions.' },
-      { name: 'Readiness scoring', surface: 'Dashboard, Reports', status: 'Visible', relationship: 'Aggregates coverage, findings, freshness, placement, and SOC readiness.' },
+      { name: 'Readiness scoring', surface: 'Dashboard, Reports', status: 'Visible', relationship: 'Aggregates coverage, findings, freshness, and SOC readiness.' },
       { name: 'Findings triage', surface: 'Findings', status: 'Visible', relationship: 'Open, grouped, accepted-risk, closed, SLA, export, assign, close, and retest views.' }
     ]
   },
@@ -821,8 +745,8 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
 export const RELATIONSHIP_FLOWS: RelationshipFlow[] = [
   {
     title: 'Declared Scope To First Verdict',
-    steps: ['Environment', 'Target group', 'Expected behavior', 'Outbound agent', 'Check', 'Run correlation', 'Evidence vault'],
-    outcome: 'A readiness verdict backed by customer declaration, probe result, agent observation, and custody reference.'
+    steps: ['Target', 'Target group', 'Expected behavior', 'External probe', 'Check', 'Run correlation', 'Evidence vault'],
+    outcome: 'A readiness verdict backed by customer declaration, external probe result, and custody reference.'
   },
   {
     title: 'Finding To Closure',

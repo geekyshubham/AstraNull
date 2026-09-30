@@ -17,35 +17,13 @@ import { buildDetailHref, getRouteEntityId, getRouteTenantId } from '../lib/rout
 import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { formatDate, formatDurationSeconds, formatSeverityLabel, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
-import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
-import { AgentHeartbeatPanel } from '../components/agents/agent-heartbeat-panel';
-import { AgentPlacementPanel } from '../components/agents/agent-placement-panel';
+import { hasEvidenceBackedVerdict } from '../lib/run-verdict';
 import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
 import { ConfirmModal, formatMutationSuccessMessage, useConfirmModal } from '../lib/crud-ui';
-import { ONBOARDING_PLACEMENT_TEST_CHECK_ID } from '../lib/onboarding';
-import {
-  HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE,
-  resolveAgentRunAttributionStatus,
-  runAgentAttribution,
-  selectAgentAttributedRuns,
-  selectAgentRecentRuns,
-  selectAgentRunEventCandidates,
-} from '../lib/agent-run-attribution.mjs';
 import { RunTimelineViz, TrafficPathPanel, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
 import {
-  isAuthenticatedAgentObservationEvent,
-  isInternalControlPlaneNoObservationEvent,
   isSignedProbeEvidenceEvent,
 } from '../lib/verdict-explanation';
-import {
-  agentHeartbeatFreshness,
-  filterAgentAuditEntries,
-  formatAgentCapabilities,
-  formatAgentHealth,
-  formatAgentPlacement,
-  formatPlacementStatus,
-  placementStatusHint,
-} from '../lib/agent-helpers';
 import { findingSlaDueAt, findingStatus, isFindingOpen, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
 import {
   authorizationArtifactPurpose,
@@ -115,42 +93,6 @@ function getNestedItem(item: DataItem | null | undefined, path: string[]) {
   return current && typeof current === 'object' && !Array.isArray(current) ? current as DataItem : null;
 }
 
-function isExternalOnlyVerdictSignal(entity: DataItem | null | undefined) {
-  if (!entity) return false;
-  const topConfidence = getString(entity, ['confidence'], '');
-  const topHint = getString(entity, ['strengthen_hint'], '');
-  const topPlacement = getString(entity, ['placement'], '');
-  const verdictConfidence = getNestedString(entity, ['verdict', 'confidence'], '');
-  const verdictHint = getNestedString(entity, ['verdict', 'strengthen_hint'], '');
-  const verdictPlacement = getNestedString(entity, ['verdict', 'placement'], '');
-  return (
-    topConfidence === 'external_only'
-    || topHint === 'deploy_agent'
-    || topPlacement === 'unverified'
-    || verdictConfidence === 'external_only'
-    || verdictHint === 'deploy_agent'
-    || verdictPlacement === 'unverified'
-  );
-}
-
-function ownershipStatusBadgeTone(status: string): BadgeProps['tone'] {
-  const key = normalizeStatusKey(status);
-  if (key === 'user_confirmed' || key === 'agent_verified' || key === 'dns_verified') return 'success';
-  if (key === 'unverified') return 'warn';
-  return 'muted';
-}
-
-function validationModeBadgeTone(mode: string): BadgeProps['tone'] {
-  return normalizeStatusKey(mode) === 'agent_assisted' ? 'info' : 'muted';
-}
-
-function probeEndpointStatusBadgeTone(status: string): BadgeProps['tone'] {
-  const normalized = normalizeStatusKey(status);
-  if (normalized === 'reported') return 'success';
-  if (normalized === 'rejected') return 'danger';
-  return 'muted';
-}
-
 type ReportExportPreview = {
   reportId: string;
   format: string;
@@ -168,8 +110,6 @@ function formatFactorLabel(value: string) {
 
 const SIGNAL_TYPE_LABELS: Record<string, string> = {
   probe_result: 'Probe result',
-  agent_observation: 'Agent observation',
-  agent_no_observation: 'Agent no observation',
   verdict_published: 'Verdict published',
   run_started: 'Run started',
   run_cancelled: 'Run cancelled'
@@ -331,21 +271,6 @@ function findingStatusBadgeTone(status: string): StatusBadgeTone {
   return 'info';
 }
 
-function agentStatusBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (key === 'active' || key === 'online') return 'success';
-  if (key === 'revoked' || key === 'disabled') return 'danger';
-  if (key === 'degraded' || key === 'stale') return 'warn';
-  return 'muted';
-}
-
-function placementStatusBadgeTone(status: string): StatusBadgeTone {
-  if (status === 'proven') return 'success';
-  if (status === 'needs_baseline') return 'warn';
-  if (status === 'missing_agent' || status === 'misplaced_risk') return 'danger';
-  return 'muted';
-}
-
 function discoveryEntityStateBadgeTone(state: string): StatusBadgeTone {
   const key = normalizeStatusKey(state);
   if (['approved', 'active', 'entity', 'imported'].includes(key)) return 'success';
@@ -461,7 +386,6 @@ function DetailKvSkeletonRows({ rows = DETAIL_SKELETON_KV_ROWS }: { rows?: numbe
 
 const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }>> = {
   'run-detail': { label: 'Test runs', href: '#runs' },
-  'agent-detail': { label: 'Agents', href: '#agents' },
   'target-group-detail': { label: 'Target groups', href: '#target-groups' },
   'target-detail': { label: 'Target groups', href: '#target-groups' },
   'report-detail': { label: 'Reports', href: '#reports' },
@@ -473,7 +397,6 @@ const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }
 
 const DETAIL_LINK_ROUTES: RouteId[] = [
   'run-detail',
-  'agent-detail',
   'target-group-detail',
   'target-detail',
   'tenant-detail',
@@ -493,7 +416,6 @@ function detailEntityTitle(route: RouteId, entity: DataItem, entityId: string, c
     return getString(entity, ['objective', 'reason', 'id'], entityId);
   }
   if (route === 'target-detail') return getString(entity, ['value', 'id'], entityId);
-  if (route === 'agent-detail') return getString(entity, ['hostname', 'name'], entityId);
   if (route === 'target-group-detail') return getString(entity, ['name'], entityId);
   if (route === 'report-detail') return getString(entity, ['title'], entityId);
   if (route === 'tenant-detail') {
@@ -734,43 +656,6 @@ function DetailStatusBanners({
   );
 }
 
-function AgentProbeEndpointKvSection({
-  hasDetails,
-  status,
-  error,
-  fqdn,
-  ip
-}: {
-  hasDetails: boolean;
-  status: string;
-  error: string;
-  fqdn: string;
-  ip: string;
-}) {
-  if (!hasDetails) return null;
-  return (
-    <>
-      <div>
-        <span>Probe endpoint status</span>
-        {status ? (
-          <Badge tone={probeEndpointStatusBadgeTone(status)}>{formatFactorLabel(status)}</Badge>
-        ) : (
-          <strong>—</strong>
-        )}
-      </div>
-      {error ? (
-        <DetailKvMonoField label="Probe endpoint error" value={error} />
-      ) : null}
-      {fqdn && fqdn !== '—' ? (
-        <DetailKvMonoField label="Declared FQDN" value={fqdn} />
-      ) : null}
-      {ip && ip !== '—' ? (
-        <DetailKvMonoField label="Declared IP" value={ip} />
-      ) : null}
-    </>
-  );
-}
-
 function useEntityDetail<T extends DataItem>(
   enabled: boolean,
   config: PortalConfig,
@@ -965,17 +850,7 @@ function RunDetailView({
   const runEventEvidenceLoading = runEventState.status === 'loading';
   const runEventEvidenceUnavailable = runEventState.status === 'error';
   const probeEvents = runEvents.filter(isSignedProbeEvidenceEvent);
-  const authenticatedAgentEvents = runEvents.filter(isAuthenticatedAgentObservationEvent);
-  const noObservationEvents = runEvents.filter(isInternalControlPlaneNoObservationEvent);
-  const agentEvents = runEvents.filter((event) => (
-    isAuthenticatedAgentObservationEvent(event)
-    || isInternalControlPlaneNoObservationEvent(event)
-  ));
-  const trustedEvidenceEvents = runEvents.filter((event) => (
-    isSignedProbeEvidenceEvent(event)
-    || isAuthenticatedAgentObservationEvent(event)
-    || isInternalControlPlaneNoObservationEvent(event)
-  ));
+  const trustedEvidenceEvents = probeEvents;
   const relatedEvidence = data.evidence.filter((item) => getString(item, ['test_run_id'], '') === entityId);
   const relatedFindings = data.findings.filter((finding) => getString(finding, ['test_run_id'], '') === entityId);
   const status = getString(entity, ['status'], '');
@@ -1030,21 +905,10 @@ function RunDetailView({
   const primaryFinding = relatedFindings[0] ?? null;
   const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
   const runNonceHash = getNestedString(entity, ['correlation', 'nonce_hash'], '');
-  const placementSupportingEvents = runNonceHash
-    ? authenticatedAgentEvents.filter((event) => getString(event, ['nonce_hash'], '') === runNonceHash)
-    : authenticatedAgentEvents;
-  const placementLevel = runEventEvidenceLoading
-    ? 'checking'
-    : runEventEvidenceUnavailable
-      ? 'unavailable'
-      : placementSupportingEvents.length > 0
-        ? getNestedString(verdict ?? {}, ['placement_confidence', 'level'], 'supported')
-        : noObservationEvents.length > 0 ? 'limited' : 'unproven';
-  const correlatingAgentId = getString(placementSupportingEvents[0] ?? {}, ['agent_id'], '');
   const tabOptions = [
     { id: 'summary', label: 'Summary' },
     { id: 'timeline', label: 'Timeline' },
-    { id: 'probe-agent', label: 'Probe & agent' },
+    { id: 'probe', label: 'Probe evidence' },
     { id: 'evidence', label: 'Evidence' },
     { id: 'raw-events', label: 'Raw events' }
   ];
@@ -1052,7 +916,7 @@ function RunDetailView({
     { key: 'signal', label: 'Signal', render: (event) => humanizeSignalType(getString(event, ['signal_type'], 'event')) },
     { key: 'producer', label: 'Source type', render: (event) => plainCodeLabel(getString(event, ['producer_kind'], ''), 'Untrusted or legacy') },
     { key: 'source', label: 'Source', render: (event) => getString(event, ['source'], '—') },
-    { key: 'reference', label: 'Reference', render: (event) => <span className="mono small mono-hash">{getString(event, ['check_id', 'agent_id', 'target_id'], '—')}</span> },
+    { key: 'reference', label: 'Reference', render: (event) => <span className="mono small mono-hash">{getString(event, ['check_id', 'target_id'], '—')}</span> },
     { key: 'recorded', label: 'Recorded', render: (event) => formatDate(event.timestamp ?? event.created_at) },
     { key: 'event_id', label: 'Event id', render: (event) => <span className="mono small mono-hash">{getString(event, ['id'], '—')}</span> }
   ];
@@ -1092,7 +956,7 @@ function RunDetailView({
       {runEventEvidenceUnavailable ? (
         <div className="form-banner error" role="alert">
           <strong>{runEventState.error || 'Run event evidence unavailable.'}</strong>{' '}
-          Probe, agent, and correlation evidence cannot be evaluated until the run-events endpoint recovers.
+          Probe and correlation evidence cannot be evaluated until the run-events endpoint recovers.
         </div>
       ) : null}
       {!loading ? (
@@ -1100,7 +964,7 @@ function RunDetailView({
           <div className="metric-grid four">
             <MetricCard label="Target group" value={groupName} sub="Declared scope under test" icon={Target} tone="info" />
             <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={getString(entity, ['vector_family'], 'check')} icon={FileCheck2} tone="muted" />
-            <MetricCard label="Verdict" value={verdictDisplay} sub={`placement ${placementLevel}`} icon={ShieldCheck} tone={verdictValue ? verdictBadgeTone(verdictValue) : 'muted'} />
+            <MetricCard label="Verdict" value={verdictDisplay} sub="External-only confidence" icon={ShieldCheck} tone={verdictValue ? verdictBadgeTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections"
@@ -1113,7 +977,7 @@ function RunDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Verdict summary</CardTitle>
-                    <CardDescription>Stored outcome plus only the trusted probe and internal-observation events loaded for this run.</CardDescription>
+                    <CardDescription>Stored outcome plus only the trusted signed probe events loaded for this run.</CardDescription>
                   </CardHeader>
                   <CardContent className="stack-tight">
                     {runEventEvidenceLoading ? (
@@ -1125,7 +989,6 @@ function RunDetailView({
                     )}
                     <div className="kv-list">
                       <div><span>Stored verdict</span>{verdictValue ? <VerdictBadge value={verdictValue} tone={verdictBadgeTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
-                      <div><span>Placement support</span><strong>{formatStatusLabel(placementLevel)}</strong></div>
                       <div><span>Trusted events</span><strong>{runEventEvidenceLoading || runEventEvidenceUnavailable ? '—' : trustedEvidenceEvents.length}</strong></div>
                     </div>
                   </CardContent>
@@ -1155,11 +1018,7 @@ function RunDetailView({
                 <CardHeader>
                   <CardTitle>Correlation matrix</CardTitle>
                   <CardDescription>
-                    {explicitRunValidationMode === 'external_only' || isExternalOnlyVerdictSignal(entity)
-                      ? 'External-only is the default: probe evidence supports edge observations without an agent; internal or origin impact remains unproven without a matching authenticated agent observation.'
-                      : explicitRunValidationMode === 'agent_assisted'
-                        ? 'Agent-assisted verdict: correlate exact-run probe and authenticated agent observations without inferring missing internal evidence.'
-                        : 'Correlation mode is not recorded yet. Pending or incomplete evidence is not labeled agent-assisted. External probe results can support edge observations, while internal or origin impact requires a matching authenticated agent observation.'}
+                    External-only validation: signed outside probe evidence supports edge observations for this run. Verdicts report external-only confidence.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1183,7 +1042,7 @@ function RunDetailView({
               <CardHeader>
                 <CardTitle>Timeline</CardTitle>
                 <CardDescription>
-                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <span title={runPolicyId}> · scheduled policy</span> : null}{correlatingAgentId ? <> · agent <code>{correlatingAgentId}</code></> : null}.
+                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <span title={runPolicyId}> · scheduled policy</span> : null}.
                 </CardDescription>
               </CardHeader>
               <CardContent className="stack-tight">
@@ -1199,8 +1058,8 @@ function RunDetailView({
             </Card></div>
           ) : null}
 
-          {tab === 'probe-agent' ? (
-            <div role="tabpanel" id="run-detail-sections-panel-probe-agent" aria-labelledby="run-detail-sections-tab-probe-agent" className="tab-panel"><div className="dash-grid">
+          {tab === 'probe' ? (
+            <div role="tabpanel" id="run-detail-sections-panel-probe" aria-labelledby="run-detail-sections-tab-probe" className="tab-panel"><div className="dash-grid">
               <Card>
                 <CardHeader>
                   <CardTitle>Probe result</CardTitle>
@@ -1215,43 +1074,6 @@ function RunDetailView({
                     <EmptyState icon={Activity} title="No signed probe results recorded." body="A valid empty event log does not establish an outside observation." />
                   ) : (
                     <CapabilityProbeResultsPanel events={probeEvents} />
-                  )}
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Agent observation</CardTitle>
-                  <CardDescription>Exact authenticated observations or trusted control-plane no-observation events for this run.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {runEventEvidenceLoading ? (
-                    <DetailLoadingPlaceholder label="Loading run event evidence…" variant="compact" />
-                  ) : runEventEvidenceUnavailable ? (
-                    <p className="muted">Agent event evidence unavailable.</p>
-                  ) : agentEvents.length === 0 ? (
-                    <EmptyState icon={Bot} title="No trusted internal observation recorded." body="External validation remains usable; this run does not prove internal or origin impact." />
-                  ) : (
-                    <div className="kv-list">
-                      {authenticatedAgentEvents.map((event, index) => (
-                        <div key={getString(event, ['id'], `agent-${index}`)}>
-                          <span>{humanizeSignalType(getString(event, ['signal_type']))}</span>
-                          <strong>
-                            <DetailEntityLink route="agent-detail" id={getString(event, ['agent_id'], '')} label={getString(event, ['agent_id'], getString(event, ['source'], 'agent'))} />
-                            {' · '}{formatDate(event.timestamp ?? event.created_at)}
-                            {getString(event, ['id'], '') ? <> · <code className="mono small mono-hash">{getString(event, ['id'], '')}</code></> : null}
-                          </strong>
-                        </div>
-                      ))}
-                      {noObservationEvents.map((event, index) => (
-                        <div key={getString(event, ['id'], `no-observation-${index}`)}>
-                          <span>{humanizeSignalType(getString(event, ['signal_type']))}</span>
-                          <strong>
-                            Internal control plane · {formatDate(event.timestamp ?? event.created_at)}
-                            {getString(event, ['id'], '') ? <> · <code className="mono small mono-hash">{getString(event, ['id'], '')}</code></> : null}
-                          </strong>
-                        </div>
-                      ))}
-                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -1321,7 +1143,7 @@ function RunDetailView({
             <div role="tabpanel" id="run-detail-sections-panel-raw-events" aria-labelledby="run-detail-sections-tab-raw-events" className="tab-panel"><Card>
               <CardHeader>
                 <CardTitle>Raw events</CardTitle>
-                <CardDescription>Read-only event records for this run. Only signed probes, authenticated agents, and internal control-plane events contribute to the proof panels.</CardDescription>
+                <CardDescription>Read-only event records for this run. Only signed probe events contribute to the proof panels.</CardDescription>
               </CardHeader>
               <CardContent>
                 {runEventEvidenceLoading ? (
@@ -1407,9 +1229,7 @@ function TenantDetailView({
     (item) => getString(item, ['tenant_id'], '') === entityId
   );
   const lifecycleState = getString(account, ['lifecycle_state'], 'active');
-  // KPIs sourced from real records only: agents from the loaded tenant-scoped agent list, MRR from
-  // the subscription/account billing payload when present (graceful — no fabricated dollar figure).
-  const tenantAgents = data.agents.filter((item) => getString(item, ['tenant_id'], '') === entityId);
+  // MRR sourced from the subscription/account billing payload when present (graceful — no fabricated dollar figure).
   const mrrValue = getString(subscription, ['mrr', 'monthly_recurring_revenue', 'amount'], '')
     || getString(account, ['mrr', 'monthly_recurring_revenue'], '');
 
@@ -1558,11 +1378,10 @@ function TenantDetailView({
       <DetailStatusBanners loadError={loadError} error={error} message={message} mode="combined" />
       {!loading ? (
         <>
-          <div className="metric-grid four">
+          <div className="metric-grid three">
             <MetricCard label="Lifecycle" value={formatStatusLabel(lifecycleState, 'active')} sub="Staff account state" icon={ShieldCheck} tone={lifecycleState === 'active' ? 'success' : 'warn'} />
             <MetricCard label="Plan" value={getString(subscription, ['plan_id'], '—')} sub={formatStatusLabel(getString(subscription, ['status'], 'not recorded'))} icon={FileText} tone="muted" />
             <MetricCard label="Users" value={users.length} sub="Tenant-scoped identities" icon={Users} tone="info" />
-            <MetricCard label="Agents" value={tenantAgents.length} sub="Outbound observers in tenant scope" icon={Bot} tone={tenantAgents.length > 0 ? 'success' : 'muted'} />
           </div>
           <Tabs
             value={tab}
@@ -1732,461 +1551,6 @@ function TenantDetailView({
   );
 }
 
-
-function AgentDetailView({
-  entity,
-  entityId,
-  data,
-  config,
-  session,
-  onRefresh,
-  loading,
-  loadError
-}: {
-  entity: DataItem;
-  entityId: string;
-  data: PortalData;
-  config: PortalConfig;
-  session: Session;
-  onRefresh: () => Promise<void>;
-  loading: boolean;
-  loadError: string;
-}) {
-  const [tab, setTab] = useState('overview');
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
-  const [placementReviews, setPlacementReviews] = useState<DataItem | null>(null);
-  const [auxLoading, setAuxLoading] = useState(false);
-  const [agentRunEvents, setAgentRunEvents] = useState<Record<string, DataItem>>({});
-  const [agentRunEventStatus, setAgentRunEventStatus] = useState<Record<string, 'loading' | 'loaded' | 'error'>>({});
-  const tabOptions = routeTabs('agent-detail').map((item) => ({ id: item.id, label: item.label }));
-  const targetGroupId = getString(entity, ['target_group_id'], '');
-  const probeEndpoint = getNestedItem(entity, ['probe_endpoint']);
-  const probeEndpointStatus = getString(entity, ['probe_endpoint_status'], '');
-  const probeEndpointError = getString(entity, ['probe_endpoint_error'], '');
-  const declaredProbeFqdn = probeEndpoint ? getNestedString(probeEndpoint, ['declared_fqdn'], '') : '';
-  const declaredProbeIp = probeEndpoint ? getNestedString(probeEndpoint, ['declared_ip'], '') : '';
-  const hasProbeEndpointDetails = Boolean(probeEndpointStatus || probeEndpointError || probeEndpoint);
-  const placementReview = Array.isArray(placementReviews?.reviews)
-    ? (placementReviews.reviews as DataItem[]).find((review) => getString(review, ['target_group_id'], '') === targetGroupId)
-    : null;
-  const agentLogs = filterAgentAuditEntries(data.audit, entityId);
-  const canReadAudit = canReadDataset(session, 'audit');
-  const canRevokeAgent = sessionHasPermission(session, 'agent:revoke');
-  const canRunPlacement = sessionHasPermission(session, 'test_run:start');
-  const agentAuditColumns: TableColumn<DataItem>[] = [
-    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
-    { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'])}` },
-    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role'], 'system') },
-    { key: 'when', label: 'Recorded', render: (item) => formatDate(item.created_at ?? item.timestamp) }
-  ];
-  // Fetch authoritative event envelopes for a bounded run window before deciding which
-  // runs survive agent/group filtering and the smaller display cap.
-  const agentRunCandidates = useMemo(
-    () => selectAgentRunEventCandidates(data.runs),
-    [data.runs]
-  );
-  const agentRunCandidateIds = useMemo(
-    () => agentRunCandidates.map((run) => getString(run, ['id'], '')).filter(Boolean),
-    [agentRunCandidates]
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    if (agentRunCandidateIds.length === 0) {
-      setAgentRunEvents({});
-      setAgentRunEventStatus({});
-      return undefined;
-    }
-
-    setAgentRunEvents({});
-    setAgentRunEventStatus(Object.fromEntries(agentRunCandidateIds.map((runId) => [runId, 'loading'])));
-    for (const runId of agentRunCandidateIds) {
-      void requestJson(
-        config,
-        session,
-        `/v1/test-runs/${encodeURIComponent(runId)}/events`
-      )
-        .then((payload) => {
-          if (cancelled) return;
-          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid run-events response.');
-          const items = (payload as { items?: unknown }).items;
-          if (!Array.isArray(items) || !items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
-            throw new Error('Invalid run-events response.');
-          }
-          if ((items as DataItem[]).some((item) => {
-            const eventRunId = getString(item, ['test_run_id'], '');
-            return eventRunId !== '' && eventRunId !== runId;
-          })) {
-            throw new Error('Run-events response contained cross-run records.');
-          }
-          const envelope = { ...(payload as DataItem), items: items as DataItem[] };
-          setAgentRunEvents((current) => ({ ...current, [runId]: envelope }));
-          setAgentRunEventStatus((current) => ({ ...current, [runId]: 'loaded' }));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setAgentRunEventStatus((current) => ({ ...current, [runId]: 'error' }));
-        });
-    }
-
-    return () => { cancelled = true; };
-  }, [agentRunCandidateIds, config, session]);
-
-  const agentRunAttributionStatus = useMemo(
-    () => resolveAgentRunAttributionStatus(agentRunCandidates, agentRunEventStatus),
-    [agentRunCandidates, agentRunEventStatus]
-  );
-
-  // Target-group membership keeps a run visible but never attributes it to this agent. Exact
-  // endpoint event provenance can retain a historical run after either current binding changes.
-  const agentRecentRuns = useMemo(
-    () => selectAgentRecentRuns(
-      agentRunCandidates,
-      agentRunEvents,
-      entityId,
-      targetGroupId
-    ),
-    [agentRunCandidates, agentRunEvents, entityId, targetGroupId]
-  );
-  const exactAgentRuns = useMemo(
-    () => selectAgentAttributedRuns(
-      agentRunCandidates,
-      agentRunEvents,
-      entityId
-    ),
-    [agentRunCandidates, agentRunEvents, entityId]
-  );
-
-  const recentRunColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (run) => <span className="mono small">{getString(run, ['id'], '—')}</span> },
-    { key: 'check', label: 'Check', render: (run) => checkDisplayName(data.checks, getString(run, ['check_id'], '')) },
-    {
-      key: 'attribution',
-      label: 'Attribution',
-      render: (run) => {
-        const selectedRunId = getString(run, ['id'], '');
-        const attribution = runAgentAttribution(
-          run,
-          agentRunEvents[selectedRunId] ?? { items: [] },
-          entityId
-        );
-        if (attribution.attributed) return <Badge tone="success">Selected agent</Badge>;
-        if (agentRunEventStatus[selectedRunId] === 'error') return <Badge tone="warn">Attribution unavailable</Badge>;
-        if (agentRunEventStatus[selectedRunId] !== 'loaded') return <Badge tone="info">Checking provenance</Badge>;
-        return <Badge tone="muted">Not attributed</Badge>;
-      }
-    },
-    {
-      key: 'status',
-      label: 'Lifecycle',
-      render: (run) => {
-        const value = getString(run, ['status'], 'pending');
-        return <StatusBadge value={value} tone={runStatusBadgeTone(value)} fallback="pending" />;
-      }
-    },
-    {
-      key: 'verdict',
-      label: 'Run outcome',
-      render: (run) => {
-        const value = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
-        return value
-          ? <VerdictBadge value={value} tone={verdictBadgeTone(value)} />
-          : <span className="muted">No result yet</span>;
-      }
-    },
-    { key: 'sealed', label: 'Sealed', render: (run) => <span className="muted">{formatDate(run.updated_at ?? run.created_at)}</span> }
-  ];
-  // Placement evidence record built from the real agent entity; empty rows are omitted so no placeholder data is shown.
-  const placementEvidenceBlock = evidenceCodeBlock([
-    ['agent_id', entityId],
-    ['hostname', getString(entity, ['hostname', 'name'], '')],
-    ['environment', getString(entity, ['environment_id'], '')],
-    ['placement_kind', formatAgentPlacement(entity)]
-  ]);
-
-  useEffect(() => {
-    if (tab !== 'placement') return undefined;
-    let cancelled = false;
-    setAuxLoading(true);
-    const query = targetGroupId ? `/v1/placement/reviews?target_group_id=${encodeURIComponent(targetGroupId)}` : '/v1/placement/reviews';
-    requestJson(config, session, query)
-      .then((payload) => { if (!cancelled) setPlacementReviews(payload as DataItem); })
-      .catch(() => { if (!cancelled) setPlacementReviews(null); })
-      .finally(() => { if (!cancelled) setAuxLoading(false); });
-    return () => { cancelled = true; };
-  }, [tab, config, session, targetGroupId]);
-
-  async function revokeAgent() {
-    if (!canRevokeAgent || !entityId || getString(entity, ['status']) === 'revoked') return;
-    setBusy(`revoke-${entityId}`);
-    setError('');
-    setMessage('');
-    try {
-      const result = await requestJson(config, session, `/v1/agents/${encodeURIComponent(entityId)}/revoke`, { method: 'POST' });
-      setMessage(formatMutationSuccessMessage('Agent revoked.', result));
-      setRevokeConfirmOpen(false);
-      await onRefresh();
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Agent revoke failed.'));
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function runPlacementTest() {
-    if (!canRunPlacement) return;
-    if (!targetGroupId) {
-      setError('Bind this agent to a target group before running a placement test.');
-      return;
-    }
-    setBusy(`placement-${entityId}`);
-    setError('');
-    setMessage('');
-    try {
-      const detail = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(targetGroupId)}`) as DataItem;
-      const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
-      const targetId = getString(targets[0] ?? {}, ['id'], '');
-      if (!targetId) {
-        setError('Add at least one target to the bound group before running placement test.');
-        return;
-      }
-      const result = await requestJson(config, session, '/v1/test-runs', {
-        method: 'POST',
-        body: {
-          target_group_id: targetGroupId,
-          target_id: targetId,
-          check_id: ONBOARDING_PLACEMENT_TEST_CHECK_ID
-        }
-      });
-      setMessage(formatMutationSuccessMessage('Placement test started.', result));
-      await onRefresh();
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Placement test failed.'));
-    } finally {
-      setBusy('');
-    }
-  }
-
-  return (
-    <div className="content">
-      <DetailPageHeader
-        route="agent-detail"
-        entityId={entityId}
-        title={detailEntityTitle('agent-detail', entity, entityId)}
-        eyebrow="Outbound observer"
-        actions={<AnchorButton size="sm" variant="secondary" href="#agents">Tenant agent settings</AnchorButton>}
-      />
-      <PageContextSummary>
-        <StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /> ·{' '}
-        {formatAgentCapabilities(entity)} · <code>{entityId}</code>
-      </PageContextSummary>
-      {loading ? <DetailLoadingPlaceholder label="Loading agent detail…" /> : null}
-      <DetailStatusBanners loadError={loadError} error={error} message={message} />
-      {!loading ? (
-      <>
-      <div className="metric-grid four">
-        <MetricCard label="Heartbeat" value={agentHeartbeatFreshness(entity)} sub={formatDate(entity.last_heartbeat_at)} icon={Bot} tone="info" />
-        <MetricCard label="Version" value={getString(entity, ['version'], 'unknown')} sub={getString(entity, ['environment_id'], 'tenant scope')} icon={ShieldCheck} tone="muted" />
-        <MetricCard label="Placement" value={formatAgentPlacement(entity)} sub={targetGroupId ? `bound · ${targetGroupId}` : 'no group assignment'} icon={Target} tone={targetGroupId ? 'success' : 'warn'} />
-        <MetricCard label="Status" value={formatAgentHealth(entity)} sub="From last heartbeat" icon={Activity} tone={getString(entity, ['status']) === 'online' ? 'success' : getString(entity, ['status']) === 'revoked' ? 'danger' : 'muted'} />
-      </div>
-      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Agent detail sections"
-            getTabId={(id) => `agent-detail-sections-tab-${id}`}
-            getPanelId={(id) => `agent-detail-sections-panel-${id}`} />
-      {tab === 'overview' ? (
-        <div role="tabpanel" id="agent-detail-sections-panel-overview" aria-labelledby="agent-detail-sections-tab-overview" className="tab-panel"><>
-        <AgentHeartbeatPanel
-          agent={entity}
-          agentId={entityId}
-          audit={data.audit}
-          auditRestricted={!canReadAudit}
-          onRefresh={onRefresh}
-          refreshing={busy !== ''}
-        />
-        <AgentPlacementPanel
-          agent={entity}
-          agentId={entityId}
-          targetGroupId={targetGroupId}
-          runs={exactAgentRuns}
-          attributionStatus={agentRunAttributionStatus}
-          placementReview={placementReview ?? null}
-          onRunPlacement={() => void runPlacementTest()}
-          canRun={canRunPlacement}
-          running={busy === `placement-${entityId}`}
-          busy={busy !== ''}
-        />
-        <div className="dash-grid">
-          <Card>
-            <CardHeader>
-              <CardTitle>Placement evidence</CardTitle>
-              <CardDescription>Recorded placement metadata. Outbound-only transport is a product contract, not proof of network placement.</CardDescription>
-            </CardHeader>
-            <CardContent className="stack-tight">
-              <div className="kv-list">
-                <div><span>Environment</span><strong>{getString(entity, ['environment_id'], 'tenant scope')}</strong></div>
-                <div><span>Transport contract</span><strong>outbound-only control channel</strong></div>
-                <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
-              </div>
-              {placementEvidenceBlock ? (
-                <DetailCodeBlock label="Placement evidence record">{placementEvidenceBlock}</DetailCodeBlock>
-              ) : (
-                <EmptyState icon={ShieldCheck} title="No placement evidence yet." body="Placement evidence appears after the agent registers with declared environment metadata." />
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Recent runs</CardTitle>
-                <CardDescription>Current target-group membership grants visibility only. A run is attributed to this agent only when its authoritative run-events endpoint contains an exact authenticated agent observation.</CardDescription>
-              </div>
-              <AnchorButton size="sm" variant="ghost" href="#runs">View runs</AnchorButton>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={recentRunColumns}
-                items={agentRecentRuns}
-                getRowId={(run) => getString(run, ['id'], '')}
-                getRowProps={(run) => detailRowNavProps('run-detail', getString(run, ['id'], ''))}
-                loadError={agentRunAttributionStatus === 'unavailable'
-                  ? `${HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE}. One or more authoritative run-event endpoints failed; unknown runs are not associated with this agent.`
-                  : null}
-                empty={agentRunAttributionStatus === 'loading'
-                  ? <DetailLoadingPlaceholder label="Checking historical run attribution…" variant="compact" />
-                  : <EmptyState icon={Activity} title={targetGroupId ? 'No recent runs yet.' : 'No attributed runs yet.'} body={targetGroupId ? 'Runs on the current target group appear here after checks execute and are labeled Not attributed unless exact authenticated event provenance identifies this agent.' : 'Historical runs appear here only when exact authenticated event provenance identifies this agent, even if its current target-group assignment has changed.'} actionLabel="Open test runs" actionHref="#runs" />}
-              />
-            </CardContent>
-          </Card>
-        </div>
-        <div className="split">
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent status</CardTitle>
-              <CardDescription>Health, placement, and binding for this outbound observer.</CardDescription>
-            </CardHeader>
-            <CardContent className="kv-list">
-              <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
-              <div><span>Capabilities</span><strong>{formatAgentCapabilities(entity)}</strong></div>
-              <div><span>Target group</span>{targetGroupId ? <DetailEntityLink route="target-group-detail" id={targetGroupId} /> : <strong>unbound</strong>}</div>
-              <div><span>Hostname</span><strong>{getString(entity, ['hostname', 'name'])}</strong></div>
-              <div><span>Environment</span><strong>{getString(entity, ['environment_id'], 'tenant scope')}</strong></div>
-              <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at)}</strong></div>
-              <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
-              <DetailKvMonoField label="Gateway fingerprint" value={getString(entity, ['fingerprint'], 'not registered')} />
-              <AgentProbeEndpointKvSection
-                hasDetails={hasProbeEndpointDetails}
-                status={probeEndpointStatus}
-                error={probeEndpointError}
-                fqdn={declaredProbeFqdn}
-                ip={declaredProbeIp}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Lifecycle</CardTitle>
-              <CardDescription>Revoke stops heartbeat until re-registered with a new bootstrap token from the fleet page.</CardDescription>
-            </CardHeader>
-            <CardContent className="stack-tight">
-              <div className="kv-list">
-                <div><span>Installed</span><strong>{formatDate(entity.installed_at ?? entity.registered_at ?? entity.created_at)}</strong></div>
-                <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at)}</strong></div>
-                <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /></div>
-              </div>
-              <div className="row-actions">
-                {getString(entity, ['status']) === 'revoked' ? (
-                  <p className="muted">This agent is revoked. Issue a new bootstrap token on <AnchorButton size="sm" variant="ghost" href="#agents">Agents</AnchorButton> to re-register.</p>
-                ) : canRevokeAgent ? (
-                  <Button size="sm" variant="danger" loading={busy === `revoke-${entityId}`} disabled={busy !== ''} onClick={() => setRevokeConfirmOpen(true)}>Revoke agent</Button>
-                ) : <p className="muted">Agent revocation is read-only for your role.</p>}
-                <AnchorButton size="sm" variant="secondary" href="#agents">Open fleet install &amp; upgrades</AnchorButton>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-        <ConfirmModal
-          open={canRevokeAgent && revokeConfirmOpen}
-          title={`Revoke agent ${entityId}`}
-          description={<p>Are you sure? Revoked agents stop reporting until re-registered with a new bootstrap token.</p>}
-          confirmLabel="Revoke agent"
-          busy={busy === `revoke-${entityId}`}
-          onCancel={() => setRevokeConfirmOpen(false)}
-          onConfirm={() => void revokeAgent()}
-        />
-        </></div>
-      ) : null}
-      {tab === 'health' ? (
-        <div role="tabpanel" id="agent-detail-sections-panel-health" aria-labelledby="agent-detail-sections-tab-health" className="tab-panel"><Card>
-          <CardHeader>
-            <CardTitle>Health signals</CardTitle>
-            <CardDescription>Heartbeat freshness derived from agent record timestamps.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Heartbeat freshness</span><strong>{agentHeartbeatFreshness(entity)}</strong></div>
-            <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at)}</strong></div>
-            <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /></div>
-            <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
-            <AgentProbeEndpointKvSection
-              hasDetails={hasProbeEndpointDetails}
-              status={probeEndpointStatus}
-              error={probeEndpointError}
-              fqdn={declaredProbeFqdn}
-              ip={declaredProbeIp}
-            />
-          </CardContent>
-        </Card></div>
-      ) : null}
-      {tab === 'placement' ? (
-        <div role="tabpanel" id="agent-detail-sections-panel-placement" aria-labelledby="agent-detail-sections-tab-placement" className="tab-panel"><Card>
-          <CardHeader>
-            <CardTitle>Placement review</CardTitle>
-            <CardDescription>Target-group placement confidence from placement reviews.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            {auxLoading ? <DetailLoadingPlaceholder label="Loading placement review…" variant="compact" /> : null}
-            <div><span>Target group</span>{targetGroupId ? <DetailEntityLink route="target-group-detail" id={targetGroupId} /> : <strong>unbound</strong>}</div>
-            <div>
-              <span>Placement status</span>
-              <span title={placementStatusHint(getString(placementReview, ['status'], '')) || undefined}>
-                <StatusBadge
-                  value={formatPlacementStatus(getString(placementReview, ['status'], 'unknown'))}
-                  tone={placementStatusBadgeTone(getString(placementReview, ['status'], 'unknown'))}
-                  fallback="unknown"
-                />
-              </span>
-            </div>
-            <div><span>Observation mode</span><strong>{getString(placementReview, ['observation_mode'], '—')}</strong></div>
-            <div><span>Summary</span><strong>{getString(placementReview, ['summary'], getNestedString(placementReviews, ['summary', 'summary'], 'Awaiting baseline traffic evidence.'))}</strong></div>
-          </CardContent>
-        </Card></div>
-      ) : null}
-      {tab === 'audit' ? (
-        <div role="tabpanel" id="agent-detail-sections-panel-audit" aria-labelledby="agent-detail-sections-tab-audit" className="tab-panel"><Card>
-          <CardHeader>
-            <CardTitle>Audit trail</CardTitle>
-            <CardDescription>Metadata-only lifecycle events for this agent.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {canReadAudit ? (
-              <DataTable
-                columns={agentAuditColumns}
-                items={agentLogs}
-                loadError={data.loadErrors.audit}
-                onRetry={() => void onRefresh()}
-                empty={<EmptyState icon={ClipboardList} title="No audit events for this agent yet." body="Registration, heartbeat, revoke, and update actions appear after lifecycle activity." />}
-              />
-            ) : <RoleRestrictedNotice title="The audit trail is not available for your role." />}
-          </CardContent>
-        </Card></div>
-      ) : null}
-      </>
-      ) : null}
-    </div>
-  );
-}
 
 function EvidenceDetailView({
   data,
@@ -3246,7 +2610,7 @@ function detailRowNavProps(route: RouteId, id: string): Omit<HTMLAttributes<HTML
   };
 }
 
-/** Verdict/outcome badge tone shared by the environment/check/policy detail surfaces. */
+/** Verdict/outcome badge tone shared by the check/policy detail surfaces. */
 function outcomeBadgeTone(value: string): StatusBadgeTone {
   const key = normalizeStatusKey(value);
   if (['pass', 'passed', 'success', 'ok', 'covered'].includes(key)) return 'success';
@@ -3327,9 +2691,9 @@ function catalogValueList(value: unknown): string[] {
   return [...new Set(values)];
 }
 
-const GENERIC_CHECK_REMEDIATION = 'Review edge protection and agent placement for this vector.';
-const GENERIC_CHECK_EXPLANATION = 'The bounded probe result is correlated with any required agent observation.';
-const GENERIC_CHECK_VERDICT_LOGIC = 'Verdict when probe external_result and agent observation align with the check default_expected_behavior.';
+const GENERIC_CHECK_REMEDIATION = 'Review edge protection for this vector.';
+const GENERIC_CHECK_EXPLANATION = 'The verdict follows the bounded external probe result.';
+const GENERIC_CHECK_VERDICT_LOGIC = 'Verdict when probe external_result aligns with the check default_expected_behavior.';
 
 function executionSpecificCheckCopy(kind: 'remediation' | 'explanation' | 'verdict', execution: CheckExecutionSemantics) {
   if (execution.kind === 'Request only') {
@@ -3344,11 +2708,11 @@ function executionSpecificCheckCopy(kind: 'remediation' | 'explanation' | 'verdi
   }
   if (execution.kind === 'Operations self-check') {
     if (kind === 'remediation') return 'Review the failed readiness prerequisite and update the corresponding operating control.';
-    if (kind === 'explanation') return 'This is an operations-readiness self-check, not a live outside-probe and agent-correlation assertion.';
+    if (kind === 'explanation') return 'This is an operations-readiness self-check, not a live outside-probe assertion.';
     return 'The verdict follows the recorded self-check result and the catalog expected-behavior key.';
   }
-  if (kind === 'remediation') return 'Review the recorded run evidence and declared target behavior before changing protection or agent placement.';
-  if (kind === 'explanation') return 'The verdict uses the evidence types declared for this bounded probe. Agent correlation applies only when this check requires agent evidence.';
+  if (kind === 'remediation') return 'Review the recorded run evidence and declared target behavior before changing protection.';
+  if (kind === 'explanation') return 'The verdict uses the evidence types declared for this bounded external probe.';
   return 'Compare the bounded probe evidence recorded for this check with its catalog expected-behavior key.';
 }
 
@@ -3407,233 +2771,6 @@ function formatPolicySafeWindow(policy: DataItem) {
     }
   }
   return getString(policy, ['safe_window', 'window'], '—');
-}
-
-function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: PortalData }) {
-  if (!entityId) {
-    return (
-      <div className="content">
-        <DetailPageIntro route="environment-detail" eyebrow="Declared scope" />
-        <EmptyState
-          icon={Network}
-          title="No environment selected."
-          body="Open an environment from the list with ?id= or use the Detail link on #environments."
-          actionLabel="Open environments"
-          actionHref="#environments"
-        />
-      </div>
-    );
-  }
-
-  const rows = buildEnvironmentReadinessRows({
-    environments: data.environments,
-    targetGroups: data.targetGroups,
-    runs: data.runs,
-    findings: data.findings,
-    evidence: data.evidence
-  });
-  const row = rows.find((item) => item.id === entityId) ?? null;
-
-  if (!row) {
-    return (
-      <div className="content">
-        <DetailPageIntro route="environment-detail" eyebrow="Declared scope" />
-        <EmptyState
-          icon={Network}
-          title="Environment not found."
-          body="This environment is not present in the authoritative environment list."
-          actionLabel="Open environments"
-          actionHref="#environments"
-        />
-      </div>
-    );
-  }
-
-  const groups = row.groups;
-  const groupIds = new Set(groups.map((group) => getString(group, ['id'], '')).filter(Boolean));
-  const envAgents = data.agents.filter((agent) => getString(agent, ['environment_id'], '') === entityId);
-  const relatedRuns = [...data.runs]
-    .filter((run) => groupIds.has(getString(run, ['target_group_id'], '')))
-    .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')));
-  const relatedFindings = data.findings.filter((finding) => groupIds.has(getString(finding, ['target_group_id'], '')));
-  const displayName = row.name;
-  const targetCount = groups.reduce((sum, group) => sum + getNestedNumber(group, ['target_count']), 0);
-  const timezone = row.timezone;
-
-  const status = row.state === 'covered'
-    ? { label: 'Validated', tone: 'success' as StatusBadgeTone }
-    : row.state === 'partial evidence'
-      ? { label: 'Review', tone: 'warn' as StatusBadgeTone }
-      : { label: 'Needs evidence', tone: 'muted' as StatusBadgeTone };
-
-  const groupColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Group', render: (item) => <code className="mono-hash">{getString(item, ['id'])}</code> },
-    { key: 'name', label: 'Name', render: (item) => getString(item, ['name', 'display_name']) },
-    { key: 'targets', label: 'Targets', render: (item) => <span className="tabular-nums">{getNestedNumber(item, ['target_count'])}</span> },
-    {
-      key: 'verdict',
-      label: 'Last verdict',
-      render: (item) => {
-        const outcome = latestGroupVerdict(data.runs, data.evidence, getString(item, ['id'], ''));
-        return outcome
-          ? <VerdictBadge value={outcome.verdict} tone={outcomeBadgeTone(outcome.verdict)} />
-          : <span className="muted">No result yet</span>;
-      }
-    }
-  ];
-
-  const agentColumns: TableColumn<DataItem>[] = [
-    { key: 'agent', label: 'Agent', render: (item) => <code>{getString(item, ['hostname', 'name', 'id'])}</code> },
-    { key: 'heartbeat', label: 'Heartbeat', render: (item) => <span className="muted">{formatDate(item.last_heartbeat_at)}</span> },
-    { key: 'status', label: 'Status', render: (item) => <StatusBadge value={getString(item, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(item, ['status'], 'unknown'))} fallback="unknown" /> }
-  ];
-
-  const runColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (item) => <code className="mono-hash">{getString(item, ['id'], '—')}</code> },
-    { key: 'group', label: 'Target group', render: (item) => {
-      const groupId = getString(item, ['target_group_id'], '');
-      const group = groups.find((candidate) => getString(candidate, ['id'], '') === groupId);
-      return groupId ? <DetailEntityLink route="target-group-detail" id={groupId} label={getString(group ?? {}, ['name'], groupId)} /> : '—';
-    } },
-    { key: 'check', label: 'Check', render: (item) => checkDisplayName(data.checks, getString(item, ['check_id'], '')) },
-    { key: 'lifecycle', label: 'Lifecycle', render: (item) => <StatusBadge value={getString(item, ['status'], 'pending')} tone={runStatusBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" /> },
-    { key: 'outcome', label: 'Verdict', render: (item) => {
-      const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
-      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
-    } },
-    { key: 'recorded', label: 'Recorded', render: (item) => formatDate(item.updated_at ?? item.created_at) }
-  ];
-
-  const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'finding', label: 'Finding', render: (item) => plainFindingTitle(item, data.targets, data.checks) },
-    { key: 'severity', label: 'Severity', render: (item) => {
-      const severity = getString(item, ['severity'], 'unknown');
-      return <StatusBadge value={formatSeverityLabel(severity)} tone={findingSeverityBadgeTone(severity)} fallback="unknown" />;
-    } },
-    { key: 'status', label: 'Status', render: (item) => <StatusBadge value={findingStatus(item)} tone={findingStatusBadgeTone(findingStatus(item))} fallback="open" /> },
-    { key: 'group', label: 'Target group', render: (item) => {
-      const groupId = getString(item, ['target_group_id'], '');
-      return groupId ? <DetailEntityLink route="target-group-detail" id={groupId} /> : '—';
-    } }
-  ];
-
-  return (
-    <div className="content">
-      <DetailPageHeader
-        route="environment-detail"
-        eyebrow="Declared scope"
-        entityId={entityId}
-        title={displayName}
-        actions={(
-          <>
-            <AnchorButton size="sm" variant="secondary" href="#environments">Environments</AnchorButton>
-            <AnchorButton size="sm" variant="default" href="#runs">Run validation</AnchorButton>
-          </>
-        )}
-      />
-      <PageContextSummary>
-        <StatusBadge value={status.label} tone={status.tone} /> · lifecycle {formatStatusLabel(row.lifecycleStatus)} · timezone {timezone} · <code>{entityId}</code>
-      </PageContextSummary>
-      <div className="metric-grid four">
-        <MetricCard label="Target groups" value={row.groupCount} sub={`${targetCount} declared targets`} icon={Target} tone="info" />
-        <MetricCard label="Agents" value={envAgents.length} sub="Optional internal/origin observers" icon={Bot} tone={envAgents.length > 0 ? 'success' : 'muted'} />
-        <MetricCard label="Open findings" value={row.openFindings} sub="Unresolved across this scope" icon={TriangleAlert} tone={row.openFindings > 0 ? 'danger' : 'muted'} />
-        <MetricCard label="Coverage" value={`${row.coverage}%`} sub={status.label} icon={ShieldCheck} tone={status.tone === 'warn' ? 'warn' : status.tone === 'success' ? 'success' : 'muted'} />
-      </div>
-      <div className="dash-grid">
-        <Card>
-          <CardHeader>
-            <CardTitle>Environment record</CardTitle>
-            <CardDescription>Authoritative environment fields joined to the target groups declared in this environment.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <DetailKvMonoField label="Environment ID" value={entityId} />
-            <div><span>Display name</span><strong>{displayName}</strong></div>
-            <div><span>Lifecycle status</span><strong>{formatStatusLabel(row.lifecycleStatus)}</strong></div>
-            <div><span>Timezone</span><strong>{timezone}</strong></div>
-            <div><span>Target groups</span><strong>{row.groupCount}</strong></div>
-            <div><span>Declared targets</span><strong>{targetCount}</strong></div>
-            <div><span>Coverage</span><strong>{row.coverage}%</strong></div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Validation posture</CardTitle>
-            <CardDescription>Authoritative readiness state from evidence-backed runs and findings, with optional agent context shown separately.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Current posture</span><StatusBadge value={status.label} tone={status.tone} /></div>
-            <div><span>Recent runs</span><strong>{relatedRuns.length}</strong></div>
-            <div><span>Open findings</span><strong>{row.openFindings}</strong></div>
-            <div><span>Internal observation option</span><strong>{envAgents.length > 0 ? `${envAgents.length} agent records` : 'No agent record; external validation remains available'}</strong></div>
-            <div><span>Latest evidence-backed validation</span><strong>{row.latestEvidenceAt ? formatDate(row.latestEvidenceAt) : 'not recorded'}</strong></div>
-          </CardContent>
-        </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Target groups</CardTitle>
-          <CardDescription>Declared services assigned to this environment.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={groupColumns}
-            items={groups}
-            getRowId={(item) => getString(item, ['id'], '')}
-            getRowProps={(item) => detailRowNavProps('target-group-detail', getString(item, ['id'], ''))}
-            empty={<EmptyState icon={Target} title="No target groups declared." body="No target group record identifies this environment." />}
-          />
-        </CardContent>
-      </Card>
-      <div className="dash-grid">
-        <Card>
-          <CardHeader>
-            <CardTitle>Agents</CardTitle>
-            <CardDescription>Outbound observers assigned to this environment.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={agentColumns}
-              items={envAgents}
-              getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => detailRowNavProps('agent-detail', getString(item, ['id'], ''))}
-              empty={<EmptyState icon={Bot} title="No agent records in this environment." body="External validation remains available; internal or origin evidence is not implied." actionLabel="Explore optional agents" actionHref="#agents" />}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Findings</CardTitle>
-            <CardDescription>Finding records linked to target groups in this environment.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={findingColumns}
-              items={relatedFindings}
-              getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => detailRowNavProps('finding-detail', getString(item, ['id'], ''))}
-              empty={<EmptyState icon={TriangleAlert} title="No linked findings." body="No loaded finding identifies a target group in this environment." />}
-            />
-          </CardContent>
-        </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Validation history</CardTitle>
-          <CardDescription>Recent run records across this environment, ordered by their returned timestamps.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={runColumns}
-            items={relatedRuns.slice(0, 12)}
-            getRowId={(item) => getString(item, ['id'], '')}
-            getRowProps={(item) => detailRowNavProps('run-detail', getString(item, ['id'], ''))}
-            empty={<EmptyState icon={Activity} title="No run history." body="No loaded run identifies a target group in this environment." actionLabel="Open test runs" actionHref="#runs" />}
-          />
-        </CardContent>
-      </Card>
-    </div>
-  );
 }
 
 function CheckDetailPage({
@@ -3777,7 +2914,6 @@ function CheckDetailPage({
     : recordedExplanation;
   const expectedBehavior = getString(check, ['default_expected_behavior'], '');
   const supportedTargets = toList(check.supported_targets);
-  const agentModes = toList(check.required_agent_modes);
   const prerequisites = toList(check.prerequisites);
   const customerSetup = toList(check.required_customer_setup);
   const evidenceRequired = toList(check.evidence_required);
@@ -3870,7 +3006,7 @@ function CheckDetailPage({
         <Card>
           <CardHeader>
             <CardTitle>Detection logic and verdict path</CardTitle>
-            <CardDescription>Catalog-recorded evidence and verdict rules for this check. Agent correlation is stated only when the check declares it.</CardDescription>
+            <CardDescription>Catalog-recorded evidence and verdict rules for this check.</CardDescription>
           </CardHeader>
           <CardContent className="stack">
             {verdictLogic ? (
@@ -3912,7 +3048,7 @@ function CheckDetailPage({
           ))}
         </CardContent>
       </Card>
-      {supportedTargets.length || agentModes.length || prerequisites.length || customerSetup.length ? (
+      {supportedTargets.length || prerequisites.length || customerSetup.length ? (
         <Card>
           <CardHeader>
             <CardTitle>Requirements &amp; scope</CardTitle>
@@ -3923,12 +3059,6 @@ function CheckDetailPage({
               <div>
                 <p className="check-fact-label">Supported targets</p>
                 <div className="row-actions">{supportedTargets.map((target) => <Badge key={target} tone="muted">{target}</Badge>)}</div>
-              </div>
-            ) : null}
-            {agentModes.length ? (
-              <div>
-                <p className="check-fact-label">Required agent modes</p>
-                <div className="row-actions">{agentModes.map((mode) => <Badge key={mode} tone="muted">{humanize(mode)}</Badge>)}</div>
               </div>
             ) : null}
             {customerSetup.length ? (
@@ -4313,7 +3443,6 @@ export function DetailRoutePage({
       : { entityId, status: 'loading', items: [], error: '' };
 
   const targetGroupFallback = data.targetGroups.find((item) => getString(item, ['id'], '') === entityId) ?? null;
-  const agentFallback = data.agents.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const runFallback = data.runs.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const tenantFallback = data.internalTenants.find((item) => getString(item, ['tenant_id', 'id'], '') === entityId) ?? null;
   const findingFallback = data.findings.find((item) => getString(item, ['id'], '') === entityId) ?? null;
@@ -4361,18 +3490,6 @@ export function DetailRoutePage({
   const refreshWithEntity = useCallback(async () => {
     await Promise.all([onRefresh(), activeEntityReload ? activeEntityReload() : Promise.resolve()]);
   }, [onRefresh, activeEntityReload]);
-  // Agent detail is sourced by id from the real GET /v1/agents tenant list: the backend exposes
-  // GET /v1/agents plus /v1/agents/:id/{revoke,heartbeat,jobs,observations,update} but no single
-  // GET /v1/agents/:id document route, so a list-backed lookup returns the real agent record by id
-  // without a fabricated endpoint that would 404 (postgres_route_not_wired) in Postgres mode.
-  const agentDetail = useListBackedDetail(
-    route === 'agent-detail' && Boolean(entityId),
-    config,
-    session,
-    '/v1/agents',
-    entityId,
-    agentFallback
-  );
   const queueTenantId = useMemo(
     () => getRouteTenantId(session.tenant_id ?? '') || undefined,
     [route, entityId, session.tenant_id]
@@ -4392,8 +3509,7 @@ export function DetailRoutePage({
   const detailState =
     route === 'target-group-detail' ? targetGroupDetail
       : route === 'run-detail' ? runDetail
-        : route === 'agent-detail' ? agentDetail
-          : { detail: null as DataItem | null, error: '', loading: false };
+        : { detail: null as DataItem | null, error: '', loading: false };
 
   const entity =
     route === 'tenant-detail' ? tenantFallback
@@ -4523,11 +3639,7 @@ export function DetailRoutePage({
         </div>
       );
     }
-    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} onRefresh={onRefresh} />;
-  }
-
-  if (route === 'environment-detail') {
-    return <EnvironmentDetailPage entityId={entityId} data={data} />;
+    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} targetGroups={data.targetGroups} onRefresh={onRefresh} />;
   }
 
   if (route === 'check-detail') {
@@ -4671,14 +3783,6 @@ export function DetailRoutePage({
         actionHref: '#runs',
         icon: Activity
       },
-      'agent-detail': {
-        eyebrow: 'Outbound agent',
-        title: 'No agent selected.',
-        body: 'Open an agent from the list with ?id= or use the Detail link on #agents.',
-        actionLabel: 'Open agents',
-        actionHref: '#agents',
-        icon: Bot
-      },
       'finding-detail': {
         eyebrow: 'Evidence-backed finding',
         title: 'No finding selected.',
@@ -4731,7 +3835,6 @@ export function DetailRoutePage({
   if (!entity) {
     const listHrefByRoute: Partial<Record<RouteId, { actionLabel: string; actionHref: string }>> = {
       'run-detail': { actionLabel: 'Open test runs', actionHref: '#runs' },
-      'agent-detail': { actionLabel: 'Open agents', actionHref: '#agents' },
     };
     const listLink = listHrefByRoute[route];
     return (
@@ -4760,37 +3863,6 @@ export function DetailRoutePage({
         runEventState={visibleRunEventState}
         loading={detailState.loading}
         loadError={detailState.error}
-      />
-    );
-  }
-
-  if (route === 'agent-detail') {
-    if (!entity && agentDetail.loading) {
-      return (
-        <div className="content">
-          <DetailPageIntro route={route} eyebrow="Outbound observer" />
-          <DetailLoadingPlaceholder label="Loading agent detail…" />
-        </div>
-      );
-    }
-    if (!entity) {
-      return (
-        <div className="content">
-          <DetailPageIntro route={route} eyebrow="Outbound observer" />
-          <EmptyState icon={Bot} title="Agent not found." body={agentDetail.error || 'The requested agent is missing or outside this tenant scope.'} actionLabel="Open agents" actionHref="#agents" />
-        </div>
-      );
-    }
-    return (
-      <AgentDetailView
-        entity={entity}
-        entityId={entityId}
-        data={data}
-        config={config}
-        session={session}
-        onRefresh={onRefresh}
-        loading={agentDetail.loading}
-        loadError={agentDetail.error}
       />
     );
   }

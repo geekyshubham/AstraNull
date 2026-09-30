@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
+import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 import { getStore } from '../../src/store.mjs';
-import { createBootstrapToken } from '../../src/services/tokens.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/services/highScale.mjs';
 import { sha256Hex } from '../../src/lib/authorizationArtifactLedger.mjs';
 import {
@@ -45,57 +44,7 @@ async function uploadAndAcceptArtifacts(hsId, socHeaders) {
 let baseUrl;
 let server;
 
-/**
- * Registers an agent, and on any unexpected status reports enough to identify WHO answered.
- *
- * A run once failed 20 assertions in this file with 404 from POST /v1/agents/register. That
- * status is unreachable for this route in the current code, established by reading it rather
- * than by assumption:
- *
- *  - The route guard (`path === '/v1/agents/register' && method === 'POST'`) sits directly in
- *    `handleApi`, ungated, and no predicate ahead of it matches this path — checked across every
- *    `===`, `startsWith`, `.match` and `.test` literal before it.
- *  - No `block*` gate 404s it (only the waf/connector/discovery gates emit 404, and they emit
- *    their own distinct bodies; the postgres gates answer 503).
- *  - `src/services/agents.mjs` contains no 404 at all, so registerAgent yields 201/400/401.
- *  - A POST under /v1 cannot reach the dispatcher's plain-text 404: that branch is outside the
- *    /v1 block, which always returns first.
- *
- * So a 404 here means the request was answered by something that is not this server's
- * `handleApi`. The useful discriminator is NOT the body — all three dispatcher catch-alls emit a
- * byte-identical `{"error":"not_found"}` — but the response headers: every writer in
- * `src/lib/http.mjs` stamps `securityHeaders()`, so a reply missing them did not come from us.
- *
- * Unreproduced across 20+ consecutive lane runs and several full suites, including 12 runs with
- * the server instrumented to log the responding source line. Rather than leave that ghost
- * uninstrumented, capture the evidence on the spot: the next occurrence should say whether it
- * was our process, and on which port.
- */
-async function registerAgent(targetGroupId = 'tg_1') {
-  const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-  const { secret } = createBootstrapToken(ctx, { target_group_id: targetGroupId, max_registrations: 5 });
-  const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-    headers: demoHeaders('engineer'),
-    body: { bootstrap_token: secret, hostname: 'hardening-host', capabilities: ['canary', 'heartbeat'] },
-  });
-  if (reg.status !== 201) {
-    const ours = /default-src 'self'/.test(reg.headers['content-security-policy'] ?? '')
-      && reg.headers['x-content-type-options'] === 'nosniff';
-    assert.fail(
-      `agent register expected 201, got ${reg.status} from ${baseUrl}\n`
-      + `  answered by this server: ${ours ? 'yes (security headers present)' : 'NO — some other listener replied'}\n`
-      + `  body: ${reg.text.slice(0, 300)}\n`
-      + `  listening: ${server?.listening === true}, address: ${JSON.stringify(server?.address() ?? null)}`,
-    );
-  }
-  return { agentId: reg.json.agent.id, credential: reg.json.agent_credential };
-}
-
-// Await 'listening' rather than reading address() synchronously. Note the original theory for the
-// 404 above — an unawaited bind handing back a stale/foreign ephemeral port — was measured and
-// disproven: Node binds synchronously inside listen() (address() was valid 300/300 times, and a
-// fetch completed before 'listening' fired), and port reuse across processes did not occur in 400
-// attempts. Awaiting is still the correct shape, but do not read it as the fix.
+// Await 'listening' rather than reading address() synchronously.
 before(async () => {
   freshStore();
   server = createServer();
@@ -110,102 +59,8 @@ before(async () => {
 after(() => server.close());
 
 describe('hardening acceptance gaps', () => {
-  it('rejects missing/invalid agent credential and audits denial', async () => {
-    const { agentId } = await registerAgent();
-    const engineerOnly = demoHeaders('engineer');
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: engineerOnly,
-      body: { version: '0.1.0' },
-    });
-    assert.equal(hb.status, 401);
-
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, { headers: engineerOnly });
-    assert.equal(jobs.status, 401);
-
-    const badCred = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders('agc_invalid'),
-    });
-    assert.equal(badCred.status, 401);
-
-    assert.ok(getStore().auditLog.some((a) => a.action === 'agent.auth_denied'));
-  });
-
-  it('allows heartbeat, job poll, ack, and observation with registered credential', async () => {
+  it('finalizes blocked TCP liveness evidence as inconclusive from external evidence only', async () => {
     const h = demoHeaders('engineer');
-    const { agentId, credential } = await registerAgent();
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(credential),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(hb.status, 200);
-
-    const run = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: h,
-      body: {
-        check_id: 'origin.direct_bypass.safe',
-        target_group_id: 'tg_1',
-        target_id: 'tgt_1',
-      },
-    });
-    assert.equal(run.status, 201);
-    const runId = run.json.run.id;
-    const nonce_hash = run.json.run.correlation.nonce_hash;
-
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders(credential),
-    });
-    assert.equal(jobs.status, 200);
-    assert.ok(jobs.json.jobs.length >= 1);
-
-    const ack = await request(baseUrl, 'POST', `/v1/agents/${agentId}/jobs/${jobs.json.jobs[0].id}/ack`, {
-      headers: agentHeaders(credential),
-    });
-    assert.equal(ack.status, 200);
-
-    const obs = await request(baseUrl, 'POST', `/v1/agents/${agentId}/observations`, {
-      headers: agentHeaders(credential),
-      body: {
-        agent_job_id: jobs.json.jobs[0].id,
-        test_run_id: runId,
-        target_id: 'tgt_1',
-        nonce_hash,
-      },
-    });
-    assert.equal(obs.status, 201);
-  });
-
-  it('rejects observation without agent_job_id and audits rejection', async () => {
-    const { agentId, credential } = await registerAgent();
-    const h = demoHeaders('engineer');
-    const run = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: h,
-      body: {
-        check_id: 'origin.direct_bypass.safe',
-        target_group_id: 'tg_1',
-        target_id: 'tgt_1',
-      },
-    });
-    const runId = run.json.run.id;
-    const res = await request(baseUrl, 'POST', `/v1/agents/${agentId}/observations`, {
-      headers: agentHeaders(credential),
-      body: { test_run_id: runId, target_id: 'tgt_1', nonce_hash: run.json.run.correlation.nonce_hash },
-    });
-    assert.equal(res.status, 400);
-    assert.equal(res.json.error, 'missing_agent_job_id');
-    assert.ok(getStore().auditLog.some((a) => a.action === 'observation.rejected'));
-    const cancelled = await request(baseUrl, 'POST', `/v1/test-runs/${runId}/cancel`, { headers: h });
-    assert.equal(cancelled.status, 200);
-  });
-
-  it('finalizes blocked TCP liveness evidence as inconclusive with no observation', async () => {
-    const h = demoHeaders('engineer');
-    const { agentId, credential } = await registerAgent();
-    await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(credential),
-      body: { version: '0.1.0' },
-    });
 
     const run = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: h,
@@ -227,8 +82,7 @@ describe('hardening acceptance gaps', () => {
     assert.match(finalized.json.verdict.explanation, /transport or liveness metadata only/i);
 
     const events = await request(baseUrl, 'GET', `/v1/test-runs/${runId}/events`, { headers: h });
-    assert.ok(events.json.items.some((e) => e.signal_type === 'agent_no_observation'));
-    assert.ok(getStore().auditLog.some((a) => a.action === 'verdict.finalized_no_observation'));
+    assert.equal(events.json.items.some((e) => String(e.signal_type).startsWith('agent_')), false);
   });
 
   it('rejects high-scale start outside window and allows start inside window via governed dry-run adapter', async () => {
@@ -277,30 +131,6 @@ describe('hardening acceptance gaps', () => {
         (a) => a.action === 'high_scale.adapter_stub_started' && a.metadata?.note?.includes('dry-run'),
       ),
     );
-  });
-
-  it('stores salted bootstrap tokens and redacts secrets on list', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret, token } = createBootstrapToken(ctx, { target_group_id: 'tg_1' });
-    assert.ok(token.token_salt);
-    assert.ok(token.token_hash);
-
-    const listed = await request(baseUrl, 'GET', '/v1/bootstrap-tokens', { headers: demoHeaders('admin') });
-    const item = listed.json.items.find((t) => t.id === token.id);
-    assert.equal(item.token_hash, undefined);
-    assert.equal(item.token_salt, undefined);
-    assert.equal(item.secret, undefined);
-
-    const replay = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'salt-replay' },
-    });
-    assert.equal(replay.status, 201);
-    const replay2 = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'salt-replay-2' },
-    });
-    assert.equal(replay2.status, 401);
   });
 
   it('stores production-shaped high-scale intake and rejects missing or invalid fields', async () => {
@@ -539,7 +369,7 @@ describe('hardening acceptance gaps', () => {
 
     const approvedOnly = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/telemetry`, {
       headers: soc,
-      body: { category: 'agent_health' },
+      body: { category: 'service_health' },
     });
     assert.equal(approvedOnly.status, 409);
     assert.equal(approvedOnly.json.error, 'telemetry_not_active');
@@ -747,31 +577,6 @@ describe('hardening acceptance gaps', () => {
           a.metadata?.metrics === undefined,
       ),
     );
-  });
-
-  it('returns metadata-only placement reviews per target group', async () => {
-    const admin = demoHeaders('admin');
-    const all = await request(baseUrl, 'GET', '/v1/placement/reviews', { headers: admin });
-    assert.equal(all.status, 200);
-    assert.ok(Array.isArray(all.json.reviews));
-    assert.ok(all.json.summary);
-    assert.match(all.json.summary.summary, /Placement diagnostics:/);
-    assert.equal(all.json.reviews.some((row) => row.target_group_id === 'tg_1'), true);
-
-    const filtered = await request(baseUrl, 'GET', '/v1/placement/reviews?target_group_id=tg_1', {
-      headers: admin,
-    });
-    assert.equal(filtered.status, 200);
-    assert.equal(filtered.json.target_group_id, 'tg_1');
-    assert.equal(filtered.json.reviews.length, 1);
-    assert.equal(filtered.json.reviews[0].target_group_id, 'tg_1');
-    assert.ok(Array.isArray(filtered.json.reviews[0].warnings));
-
-    const missing = await request(baseUrl, 'GET', '/v1/placement/reviews?target_group_id=tg_missing', {
-      headers: admin,
-    });
-    assert.equal(missing.status, 404);
-    assert.equal(missing.json.error, 'not_found');
   });
 
   it('legacy artifact set without SOC-009 proof types blocks SOC approve with structured requirements', async () => {

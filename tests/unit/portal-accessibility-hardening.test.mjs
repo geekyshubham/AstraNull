@@ -30,18 +30,13 @@ describe('portal accessibility hardening', () => {
     assert.match(shell, /expanded={sidebarOpen} controls="portal-navigation"/);
   });
 
-  it('uses valid nested definition lists for agent bootstrap facts', () => {
-    const agents = read('apps/web/react/src/pages/functional-surfaces.tsx');
-    assert.match(agents, /<div className="agents-bootstrap-facts"[\s\S]*?<dl>[\s\S]*?<dt>Registration limit<\/dt>[\s\S]*?<\/dl>/m);
-    assert.match(agents, /<div className="agents-summary-grid"[\s\S]*?<dl>[\s\S]*?<dt>Registered<\/dt>[\s\S]*?<\/dl>/m);
-    assert.doesNotMatch(agents, /<dl className="agents-(?:bootstrap-facts|summary-grid)"[\s\S]*?<div>/m);
-  });
-
   it('wraps long target custody metadata and preserves coarse-pointer target width', () => {
     const target = read('apps/web/react/src/pages/target-detail-view.tsx');
+    const targetCss = read('apps/web/react/src/pages/target-detail-view.css');
     const css = read('apps/web/react/src/styles.css');
-    assert.match(target, /\.target-check-choice \{[^}]*min-width: 44px;[^}]*min-height: 44px;/);
-    assert.match(target, /\.kv-meta \{[^}]*overflow-wrap: anywhere;[^}]*word-break: break-word;[^}]*white-space: normal;/);
+    assert.match(targetCss, /\.td-check-choice \{[^}]*min-width: 44px;[^}]*min-height: 44px;/);
+    assert.match(targetCss, /\.td-dns-val \{[^}]*overflow-wrap: anywhere;[^}]*word-break: break-word;/);
+    assert.match(target, /import '\.\/target-detail-view\.css'/);
     const targetGroup = read('apps/web/react/src/pages/target-group-detail-view.tsx');
     assert.match(targetGroup, /\.tg-detail-view \.check-choice \{[^}]*min-width: 44px;[^}]*min-height: 44px;/);
     assert.match(css, /\.sidebar-foot \.field\.sidebar-role \.select-display \{\s*min-height: 44px;/m);
@@ -53,19 +48,14 @@ describe('portal accessibility hardening', () => {
     const finding = read('apps/web/react/src/pages/finding-detail-view.tsx');
     const proof = read('apps/web/react/src/components/runs/run-proof-panels.tsx');
     const heatmap = read('apps/web/react/src/components/charts/vector-heatmap.tsx');
-    const install = read('apps/web/react/src/components/agents/agent-install-matrix.tsx');
     const landing = read('apps/web/react/src/pages/public-pages.tsx');
     const css = read('apps/web/react/src/styles.css');
 
-    assert.match(target, /className="table-wrap" tabIndex=\{0\} role="region" aria-label="Ownership and eligibility, scrollable"/);
-    assert.match(target, /className="codeblock" tabIndex=\{0\} role="region" aria-label="WAF posture technical details"/);
+    assert.match(target, /className="table-wrap" tabIndex=\{0\} role="region" aria-label="Target facts, scrollable"/);
     assert.match(finding, /className="code" tabIndex=\{0\} role="region" aria-label="Finding custody chain YAML"/);
     assert.match(proof, /className="truth-table-viz" tabIndex=\{0\} role="region" aria-labelledby="truth-table-heading"/);
     assert.match(heatmap, /className="heatmap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="Vector coverage summary matrix, scrollable"/m);
     assert.doesNotMatch(heatmap, /HEATMAP_CELL_STYLE|style=\{HEATMAP_CELL_STYLE/);
-    // The scrollable command block is a tab panel, so it is named by its tab (aria-labelledby).
-    assert.match(install, /className="codeblock"[\s\S]*role="tabpanel"[\s\S]*aria-labelledby=\{installTabId\(tab\)\}[\s\S]*tabIndex=\{0\}/m);
-    assert.match(install, /getTabId=\{installTabId\}/);
     assert.match(landing, /className="public-compare table-wrap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="AstraNull capability comparison, scrollable"/m);
     assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.public-compare \{\s*overflow-x: auto;/m);
     assert.match(css, /pre\.verdict-explanation-value[\s\S]*overflow: visible/);

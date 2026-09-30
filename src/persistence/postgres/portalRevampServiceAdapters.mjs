@@ -90,21 +90,19 @@ const EMPTY_COVERAGE_SUMMARY = Object.freeze({
 const LADDER_STEP_IDS = Object.freeze([
   'declared',
   'dns_verified',
-  'agent_verified',
   'user_confirmed',
 ]);
 
 const LADDER_LABELS = Object.freeze({
   declared: 'Declared',
   dns_verified: 'DNS verified',
-  agent_verified: 'Agent verified',
   user_confirmed: 'User confirmed',
 });
 
 const DNS_TIMEOUT_MS = 4000;
 const VERIFY_RATE_LIMIT = 6;
 const VERIFY_RATE_WINDOW_MS = 60_000;
-const LOA_SCOPE_STATES = new Set(['agent_verified', 'user_confirmed']);
+const LOA_SCOPE_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed']);
 
 /** @type {Map<string, { windowStart: number, count: number }>} */
 const verifyRateBuckets = new Map();

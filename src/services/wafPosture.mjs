@@ -222,19 +222,9 @@ function probeEventsForRun(ctx, testRunId) {
   );
 }
 
-function agentObservationsForRun(ctx, testRunId) {
-  return getStore().events.filter(
-    (e) =>
-      e.tenant_id === ctx.tenantId
-      && e.test_run_id === testRunId
-      && e.signal_type === 'agent_observation',
-  );
-}
-
 function deriveWafSignalsFromBoundRun(ctx, testRunId) {
   return deriveWafSignalsFromBoundEvents({
     probes: probeEventsForRun(ctx, testRunId),
-    agents: agentObservationsForRun(ctx, testRunId),
   });
 }
 
@@ -1397,18 +1387,16 @@ export function finalizeWafValidation(ctx, id, body = {}) {
     let edgeProtected = false;
     let validationFailed = parseBooleanField(body, 'validation_failed', 'validationFailed', false);
     // Origin impact is authoritative only when derived below from a bound terminal run and
-    // nonce-matched authenticated agent evidence. Client booleans are informational.
+    // its external origin-bypass/lockdown probe evidence. Client booleans are informational.
     let originBypassConfirmed = false;
     let sourceExternal = Boolean(body.source_external);
-    let sourceAgent = Boolean(body.source_agent);
     const connectorMode = body.connector_mode ?? body.connectorMode ?? null;
 
     let corroboration;
     if (usedBoundRunDerivation) {
       const probes = probeEventsForRun(ctx, run.test_run_id);
-      const agents = agentObservationsForRun(ctx, run.test_run_id);
-      corroboration = buildWafEvidenceCorroboration({ probes, agents });
-      const derived = deriveWafSignalsFromBoundEvents({ probes, agents });
+      corroboration = buildWafEvidenceCorroboration({ probes });
+      const derived = deriveWafSignalsFromBoundEvents({ probes });
       normalizedScenarios = derived.scenarioResults.map((entry) => normalizeScenarioResultInput(entry));
       wafDetected = derived.wafDetected;
       validationPassed = derived.validationPassed;
@@ -1416,7 +1404,6 @@ export function finalizeWafValidation(ctx, id, body = {}) {
       validationFailed = derived.validationFailed;
       originBypassConfirmed = derived.originBypassConfirmed;
       sourceExternal = derived.source_external;
-      sourceAgent = derived.source_agent;
     }
 
     if (!corroboration) {
@@ -1474,7 +1461,6 @@ export function finalizeWafValidation(ctx, id, body = {}) {
         source_mix_json: {
           validation: true,
           external: sourceExternal,
-          agent: sourceAgent,
           connector: Boolean(body.source_connector),
         },
         created_at: now,

@@ -122,16 +122,6 @@ describe('staff SOC cross-tenant high-scale queue', () => {
   });
 });
 
-describe('agent update list resilience', () => {
-  it('returns 200 and skips a malformed stored release', async () => {
-    getStore().agentUpdateReleases.push({ id: 'aurel_bad', tenant_id: 'ten_demo', version: '0.0.1', status: 'published' });
-    const res = await request(baseUrl, 'GET', '/v1/agent-updates', { headers: demoHeaders('admin') });
-    assert.equal(res.status, 200);
-    const items = res.json.items ?? res.json;
-    assert.equal(items.some((item) => item.id === 'aurel_bad'), false);
-  });
-});
-
 describe('customer target CSV import', () => {
   it('imports a multipart file field with a header row and audits the import', async () => {
     const beforeCount = groupTargets().length;

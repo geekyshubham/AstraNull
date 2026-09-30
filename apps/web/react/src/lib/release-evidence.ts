@@ -7,10 +7,6 @@ export const PRODUCTION_RELEASE_EVIDENCE_KINDS = [
   'operator_runbook_exercise',
   'oidc_prod_auth_preflight',
   'edge_protection',
-  'agent_sbom_provenance',
-  'agent_install_matrix',
-  'agent_mtls_gateway',
-  'agent_trust_key_ceremony',
   'governed_adapter',
   'provider_approval',
   'kill_switch_drill',
@@ -31,7 +27,6 @@ export const PRODUCTION_RELEASE_EVIDENCE_KINDS = [
   'staging_e2e_matrix',
   'compliance_legal_signoff',
   'authorization_custody',
-  'placement_confidence_staging',
   'gateway_load_abuse'
 ] as const;
 

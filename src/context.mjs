@@ -94,17 +94,6 @@ export function isProbeWorkerRoute(pathname, method) {
   return false;
 }
 
-export function isAgentBootstrapOrCredentialRoute(pathname, method) {
-  if (method === 'POST' && pathname === '/v1/agents/register') return true;
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/heartbeat$/.test(pathname)) return true;
-  if (method === 'GET' && /^\/v1\/agents\/[^/]+\/jobs$/.test(pathname)) return true;
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/jobs\/[^/]+\/ack$/.test(pathname)) return true;
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/observations$/.test(pathname)) return true;
-  if (method === 'GET' && /^\/v1\/agents\/[^/]+\/update$/.test(pathname)) return true;
-  if (method === 'POST' && /^\/v1\/agents\/[^/]+\/update-status$/.test(pathname)) return true;
-  return false;
-}
-
 function bearerSessionToken(headers) {
   const auth = headers.authorization;
   if (!auth || typeof auth !== 'string') return null;
@@ -114,7 +103,7 @@ function bearerSessionToken(headers) {
 
 /**
  * Resolve human API auth for /v1 and /internal routes (not health/metrics/static).
- * Agent bootstrap/credential routes skip human session requirements.
+ * The probe-worker route uses signed worker auth instead of human sessions.
  */
 export async function resolveHumanApiAuth(headers, pathname, method, runtimeConfig, options = {}) {
   const serviceAccountsSvc = options.services?.serviceAccounts;
@@ -122,10 +111,6 @@ export async function resolveHumanApiAuth(headers, pathname, method, runtimeConf
     serviceAccountsSvc?.authenticateServiceAccountBearer ?? authenticateServiceAccountBearer;
   const auditServiceAccountAuthFailureFn =
     serviceAccountsSvc?.auditServiceAccountAuthFailure ?? auditServiceAccountAuthFailure;
-
-  if (isAgentBootstrapOrCredentialRoute(pathname, method)) {
-    return { ok: true, ctx: null, skipped: true };
-  }
 
   if (isProbeWorkerRoute(pathname, method)) {
     const auth = authenticateProbeWorker(

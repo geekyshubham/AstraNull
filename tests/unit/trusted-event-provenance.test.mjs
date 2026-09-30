@@ -21,10 +21,6 @@ describe('trusted event producer provenance', () => {
       producer_kind: EVENT_PRODUCER_KINDS.SIGNED_PROBE,
     }), true);
     assert.equal(isTrustedProducerEvent({
-      signal_type: 'agent_observation',
-      producer_kind: EVENT_PRODUCER_KINDS.AUTHENTICATED_AGENT,
-    }), true);
-    assert.equal(isTrustedProducerEvent({
       signal_type: 'ownership_observation',
       producer_kind: EVENT_PRODUCER_KINDS.LEGACY_UNTRUSTED,
     }), false);
@@ -32,14 +28,12 @@ describe('trusted event producer provenance', () => {
       signal_type: 'ownership_observation',
       producer_kind: EVENT_PRODUCER_KINDS.SIGNED_PROBE,
     }), true);
+    // ADR-0008: agents are removed, so ownership observations are no longer trusted from
+    // any authenticated agent — only from signed probes.
     assert.equal(isTrustedProducerEvent({
-      signal_type: 'agent_no_observation',
-      producer_kind: EVENT_PRODUCER_KINDS.AUTHENTICATED_AGENT,
+      signal_type: 'ownership_observation',
+      producer_kind: 'authenticated_agent',
     }), false);
-    assert.equal(isTrustedProducerEvent({
-      signal_type: 'agent_no_observation',
-      producer_kind: EVENT_PRODUCER_KINDS.INTERNAL_CONTROL_PLANE,
-    }), true);
   });
 
   it('does not derive WAF detection or protection from pre-upgrade forged signals', () => {
@@ -51,20 +45,12 @@ describe('trusted event producer provenance', () => {
         nonce_hash: 'nonce_1',
         metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
       }],
-      agents: [{
-        id: 'evt_legacy_agent',
-        signal_type: 'agent_observation',
-        producer_kind: 'legacy_untrusted',
-        nonce_hash: 'nonce_1',
-        metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
-      }],
     });
 
     assert.equal(derived.wafDetected, false);
     assert.equal(derived.validationPassed, false);
     assert.equal(derived.edgeProtected, false);
     assert.equal(derived.source_external, false);
-    assert.equal(derived.source_agent, false);
     assert.deepEqual(derived.scenarioResults, []);
   });
 });

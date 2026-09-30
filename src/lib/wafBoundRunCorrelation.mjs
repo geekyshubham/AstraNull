@@ -28,32 +28,32 @@ function hasWafFingerprintHint(metadata) {
   );
 }
 
-function isWafMarkerAgentMetadata(metadata) {
-  const md = metadata ?? {};
-  if (md.waf_marker === true || md.waf_validation_marker === true) return true;
-  if (typeof md.marker_type === 'string' && md.marker_type.trim()) return true;
-  if (md.scenario_family === 'marker') return true;
-  if (md.canary_observation === true && (md.waf_marker === true || md.waf_validation_marker === true)) {
-    return true;
-  }
-  return false;
+/**
+ * Outside-in only (ADR-0008): origin lockdown is proven by an external origin-bypass probe that
+ * could not reach the direct origin, not by an internal agent. The scanner records this on the
+ * probe metadata as `origin_lockdown_confirmed`.
+ */
+function probeConfirmsOriginLockdown(metadata) {
+  return (metadata ?? {}).origin_lockdown_confirmed === true;
 }
 
 /**
- * Derive WAF validation signals from metadata-only probe/agent events correlated by nonce_hash.
+ * Derive WAF validation signals from metadata-only probe events correlated by nonce_hash.
  *
- * @param {{ probes: Array<{ id: string, nonce_hash?: string|null, metadata?: object }>, agents: Array<{ nonce_hash?: string|null, metadata?: object }> }} input
+ * "Edge protected" comes from an external edge block on a fingerprinted WAF. Full "protected"
+ * additionally requires external origin-lockdown evidence in the same bound run (an origin-bypass
+ * probe that did not reach the direct origin). No agent/internal corroboration is used.
+ *
+ * @param {{ probes: Array<{ id: string, nonce_hash?: string|null, metadata?: object }> }} input
  */
-export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
+export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
   const trustedProbes = probes.filter(isTrustedProducerEvent);
-  const trustedAgents = agents.filter(isTrustedProducerEvent);
-  const agentsByNonce = new Map();
-  for (const agentEvent of trustedAgents) {
-    if (!agentEvent.nonce_hash) continue;
-    const bucket = agentsByNonce.get(agentEvent.nonce_hash) ?? [];
-    bucket.push(agentEvent);
-    agentsByNonce.set(agentEvent.nonce_hash, bucket);
-  }
+
+  // Origin lockdown is a run-level external signal: any trusted probe in the bound run whose
+  // origin-bypass leg found the origin unreachable proves the origin is not directly exposed.
+  const originLockdownConfirmed = trustedProbes.some(
+    (probe) => probeConfirmsOriginLockdown(probe.metadata),
+  );
 
   let wafDetected = false;
   let anyPass = false;
@@ -73,8 +73,6 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
     hasExternalProbeEvidence = true;
 
     const nonce = probe.nonce_hash ?? null;
-    const matchingAgents = nonce ? (agentsByNonce.get(nonce) ?? []) : [];
-    const wafMarkerAgents = matchingAgents.filter((a) => isWafMarkerAgentMetadata(a.metadata));
 
     let passed = null;
     let observed_action = 'inconclusive';
@@ -82,68 +80,31 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
       validationFailed = true;
       passed = false;
       observed_action = 'allow';
-      const trustedOriginObservation = wafMarkerAgents.some((agent) => {
-        const observed = normalizeExternalResult(agent.metadata?.observed_action);
-        return ['allow', 'allowed', 'reached_origin', 'delivered'].includes(observed)
-          || agent.metadata?.reached_origin === true
-          || agent.metadata?.origin_reached === true;
-      });
-      if ((external === 'reached_origin' || external === 'delivered')
-        && trustedOriginObservation) {
+      // Origin bypass is confirmed by the external probe itself reaching the origin.
+      if ((external === 'reached_origin' || external === 'delivered' || external === 'connected')
+        && probe.metadata?.origin_bypass_confirmed === true) {
         originBypassConfirmed = true;
       }
     } else if (EXTERNAL_WAF_PASS.has(external)) {
       wafDetected = true;
-      const markerLeak = wafMarkerAgents.some((agent) => {
-        const observed = normalizeExternalResult(agent.metadata?.observed_action);
-        return ['allow', 'allowed', 'reached_origin', 'delivered'].includes(observed)
-          || agent.metadata?.reached_origin === true
-          || agent.metadata?.origin_reached === true
-          || !(
-            ['block', 'blocked', 'not_reached_origin'].includes(observed)
-            || agent.metadata?.waf_blocked === true
-            || agent.metadata?.reached_origin === false
-            || agent.metadata?.origin_reached === false
-          );
-      });
-      const agentConfirmedBlock = wafMarkerAgents.some((agent) => {
-        const observed = normalizeExternalResult(agent.metadata?.observed_action);
-        return ['block', 'blocked', 'not_reached_origin'].includes(observed)
-          || agent.metadata?.waf_blocked === true
-          || agent.metadata?.reached_origin === false
-          || agent.metadata?.origin_reached === false;
-      });
-      if (markerLeak) {
-        validationFailed = true;
-        passed = false;
-        observed_action = 'allow';
-      } else if (nonce && hasWafFingerprintHint(probe.metadata)) {
+      if (nonce && hasWafFingerprintHint(probe.metadata)) {
         anyEdgePass = true;
         passed = true;
         observed_action = 'block';
-        if (agentConfirmedBlock) anyPass = true;
+        // Full "protected" requires external origin-lockdown evidence in the same run.
+        if (originLockdownConfirmed) anyPass = true;
       } else {
         passed = null;
         observed_action = 'inconclusive';
       }
     }
 
-    const agentObservedBlock = wafMarkerAgents.some((agent) => {
-      const observed = normalizeExternalResult(agent.metadata?.observed_action);
-      return observed === 'block'
-        || observed === 'blocked'
-        || observed === 'not_reached_origin'
-        || agent.metadata?.waf_blocked === true
-        || agent.metadata?.reached_origin === false
-        || agent.metadata?.origin_reached === false;
-    });
-
     const evidence_summary = {
       request_id: probe.id,
       nonce_hash: nonce ?? undefined,
       marker_result: external,
       blocked: EXTERNAL_WAF_PASS.has(external),
-      observed_at_agent: agentObservedBlock || wafMarkerAgents.length > 0,
+      origin_lockdown_confirmed: probeConfirmsOriginLockdown(probe.metadata),
       test_run_id: probe.metadata?.test_run_id ?? undefined,
       probe_job_id: probe.metadata?.probe_job_id ?? probe.id,
     };
@@ -167,9 +128,9 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
     edgeProtected,
     validationFailed,
     originBypassConfirmed,
+    originLockdownConfirmed,
     scenarioResults,
     source_external: hasExternalProbeEvidence,
-    source_agent: trustedAgents.length > 0,
   };
 }
 

@@ -212,7 +212,7 @@ describe('bundled staging OIDC', () => {
     );
   });
 
-  it('allows bearer agent identity for hosted-staging in production NODE_ENV', () => {
+  it('ignores the legacy bearer agent identity env var for hosted-staging in production NODE_ENV', () => {
     const config = loadRuntimeConfig({
       NODE_ENV: 'production',
       ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
@@ -228,7 +228,6 @@ describe('bundled staging OIDC', () => {
       ASTRANULL_SECRET_ENCRYPTION_KEY: TEST_SECRET_ENCRYPTION_KEY,
     });
     assert.equal(config.deploymentProfile, 'hosted-staging');
-    assert.equal(config.agentIdentityMode, 'bearer');
     assert.equal(config.authMode, 'oidc-jwt');
   });
 

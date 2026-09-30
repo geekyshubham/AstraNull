@@ -11,7 +11,7 @@ const TARGET_GROUP_SOURCE = readFileSync(
   'utf8',
 );
 const policyStart = SOURCE.indexOf('export function PolicyPage(');
-const policyEnd = SOURCE.indexOf('export function IntegrationPage(', policyStart);
+const policyEnd = SOURCE.indexOf('export function SupportPage(', policyStart);
 const POLICY_SOURCE = SOURCE.slice(policyStart, policyEnd);
 const TARGET_GROUP_SCHEDULE_SOURCE = TARGET_GROUP_SOURCE.match(
   /<form className="product-form schedule-builder"[\s\S]*?<\/form>/,

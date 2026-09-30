@@ -45,7 +45,7 @@ export function evidenceCapabilityCopy(capability) {
     },
     monitor_only: {
       label: 'Monitor only',
-      detail: 'This vector needs passive agent, telemetry, or integration evidence; no active outside-in result is claimed.',
+      detail: 'This vector needs passive telemetry or integration evidence; no active outside-in result is claimed.',
       tone: 'muted',
     },
   }[text(capability)] ?? {
@@ -70,7 +70,7 @@ export function vectorTargetAvailability(vector, checks, target) {
     return {
       id: 'monitor_only',
       label: 'Monitor only',
-      detail: 'No active outside-in check is launched. Use agent or integrated telemetry guidance.',
+      detail: 'No active outside-in check is launched. Use integrated telemetry guidance.',
       tone: 'muted',
       runnableChecks: [],
     };

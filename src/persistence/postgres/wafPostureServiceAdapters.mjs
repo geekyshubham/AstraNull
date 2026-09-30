@@ -578,17 +578,11 @@ async function listPostgresCveSourcesForReport(cveRepo, ctx, assetIds) {
 }
 
 async function deriveWafSignalsFromBoundRun(validationEvidence, ctx, testRunId) {
-  const [probes, agents] = await Promise.all([
-    validationEvidence.listRunEvents(ctx, testRunId, {
-      signalType: 'probe_result',
-      limit: WAF_BOUND_RUN_EVENTS_LIMIT,
-    }),
-    validationEvidence.listRunEvents(ctx, testRunId, {
-      signalType: 'agent_observation',
-      limit: WAF_BOUND_RUN_EVENTS_LIMIT,
-    }),
-  ]);
-  return deriveWafSignalsFromBoundEvents({ probes, agents });
+  const probes = await validationEvidence.listRunEvents(ctx, testRunId, {
+    signalType: 'probe_result',
+    limit: WAF_BOUND_RUN_EVENTS_LIMIT,
+  });
+  return deriveWafSignalsFromBoundEvents({ probes });
 }
 
 async function validateWafTestRunBinding(
@@ -1517,26 +1511,19 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         let edgeProtected = false;
         let validationFailed = parseBooleanField(body, 'validation_failed', 'validationFailed', false);
         // Origin impact is authoritative only when derived below from a bound terminal run and
-        // nonce-matched authenticated agent evidence. Client booleans are informational.
+        // its external origin-bypass/lockdown probe evidence. Client booleans are informational.
         let originBypassConfirmed = false;
         let sourceExternal = Boolean(body.source_external);
-        let sourceAgent = Boolean(body.source_agent);
         const connectorMode = body.connector_mode ?? body.connectorMode ?? null;
 
         let corroboration;
         if (usedBoundRunDerivation) {
-          const [probes, agents] = await Promise.all([
-            validationEvidence.listRunEvents(ctx, run.test_run_id, {
-              signalType: 'probe_result',
-              limit: WAF_BOUND_RUN_EVENTS_LIMIT,
-            }),
-            validationEvidence.listRunEvents(ctx, run.test_run_id, {
-              signalType: 'agent_observation',
-              limit: WAF_BOUND_RUN_EVENTS_LIMIT,
-            }),
-          ]);
-          corroboration = buildWafEvidenceCorroboration({ probes, agents });
-          const derived = deriveWafSignalsFromBoundEvents({ probes, agents });
+          const probes = await validationEvidence.listRunEvents(ctx, run.test_run_id, {
+            signalType: 'probe_result',
+            limit: WAF_BOUND_RUN_EVENTS_LIMIT,
+          });
+          corroboration = buildWafEvidenceCorroboration({ probes });
+          const derived = deriveWafSignalsFromBoundEvents({ probes });
           normalizedScenarios = derived.scenarioResults.map((entry) =>
             normalizeScenarioResultInput(entry),
           );
@@ -1546,7 +1533,6 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           validationFailed = derived.validationFailed;
           originBypassConfirmed = derived.originBypassConfirmed;
           sourceExternal = derived.source_external;
-          sourceAgent = derived.source_agent;
         }
 
         if (!corroboration) {
@@ -1608,7 +1594,6 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
             source_mix_json: {
               validation: true,
               external: sourceExternal,
-              agent: sourceAgent,
               connector: Boolean(body.source_connector),
             },
             created_at: now,

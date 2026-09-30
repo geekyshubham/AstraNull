@@ -16,12 +16,10 @@ import { createAuditRepository } from './auditRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
 import { createPasswordAuthRepository } from './passwordAuthRepository.mjs';
 import { createPasswordRecoveryDelivery } from './passwordRecoveryDelivery.mjs';
-import { createAgentControlRepository } from './agentControlRepository.mjs';
 import { createValidationEvidenceRepository } from './validationEvidenceRepository.mjs';
 import { createReportRepository } from './reportRepository.mjs';
 import { createSecretVaultRepository } from './secretVaultRepository.mjs';
 import { createNotificationRepository } from './notificationRepository.mjs';
-import { createAgentUpdateRepository } from './agentUpdateRepository.mjs';
 import { createProbeJobRepository } from './probeJobRepository.mjs';
 import { createKillSwitchRepository } from './killSwitchRepository.mjs';
 import { createOwnershipVerificationRepository } from './ownershipVerificationRepository.mjs';
@@ -44,7 +42,6 @@ import { createPostgresWafOffensiveServices } from './wafOffensiveServiceAdapter
 import { createWafOrchestratorRepository } from './wafOrchestratorRepository.mjs';
 import { createInternalManagementRepository } from './internalManagementRepository.mjs';
 import {
-  createPostgresAgentServices,
   createPostgresAuthServices,
   createPostgresPasswordAuthServices,
   createPostgresCatalogServices,
@@ -52,9 +49,7 @@ import {
   createPostgresValidationServices,
   createPostgresReportServices,
   createPostgresNotificationServices,
-  createPostgresAgentUpdateServices,
   createPostgresStateServices,
-  createPostgresPlacementServices,
   createPostgresProbeJobServices,
   createPostgresHighScaleServices,
   createPostgresProductionReleaseEvidenceServices,
@@ -87,12 +82,10 @@ export const POSTGRES_RUNTIME_REPOSITORY_KEYS = Object.freeze([
   'audit',
   'authTokens',
   'passwordAuth',
-  'agentControl',
   'validationEvidence',
   'reports',
   'secretVault',
   'notifications',
-  'agentUpdates',
   'probeJobs',
   'killSwitch',
   'ownershipVerifications',
@@ -135,12 +128,10 @@ const DEFAULT_REPOSITORY_FACTORIES = {
   audit: createAuditRepository,
   authTokens: createAuthTokenRepository,
   passwordAuth: createPasswordAuthRepository,
-  agentControl: createAgentControlRepository,
   validationEvidence: createValidationEvidenceRepository,
   reports: createReportRepository,
   secretVault: createSecretVaultRepository,
   notifications: createNotificationRepository,
-  agentUpdates: createAgentUpdateRepository,
   probeJobs: createProbeJobRepository,
   killSwitch: createKillSwitchRepository,
   ownershipVerifications: createOwnershipVerificationRepository,
@@ -171,7 +162,6 @@ const DEFAULT_REPOSITORY_FACTORIES = {
  *   runMigrations?: typeof runMigrations,
  *   repositoryFactories?: Partial<typeof DEFAULT_REPOSITORY_FACTORIES>,
  *   authServiceOptions?: Parameters<typeof createPostgresAuthServices>[1],
- *   agentServiceOptions?: Omit<Parameters<typeof createPostgresAgentServices>[1], 'tokens'>,
  *   wafPostureServiceOptions?: Record<string, unknown>,
  *   wafDriftServiceOptions?: Record<string, unknown>,
  * }} [options]
@@ -260,10 +250,6 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const catalogServices = createPostgresCatalogServices(repositories);
     const authServices = createPostgresAuthServices(repositories, options.authServiceOptions);
     const passwordAuthServices = createPostgresPasswordAuthServices(repositories);
-    const agentServices = createPostgresAgentServices(repositories, {
-      ...options.agentServiceOptions,
-      tokens: authServices.tokens,
-    });
     const validationServices = createPostgresValidationServices(repositories);
     const validationScanServices = createPostgresValidationScanServices(
       {
@@ -285,12 +271,9 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     });
     const reportServices = createPostgresReportServices(repositories);
     const notificationServices = createPostgresNotificationServices(repositories);
-    const agentUpdateServices = createPostgresAgentUpdateServices(repositories);
     const stateServices = createPostgresStateServices(repositories);
-    const placementServices = createPostgresPlacementServices(repositories);
     const ownershipVerificationBase = createPostgresOwnershipVerificationServices({
       repositories,
-      agentControl: repositories.agentControl,
       probeJobs: repositories.probeJobs,
       audit: repositories.audit,
     });
@@ -373,14 +356,11 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         env,
         ...(options.passwordRecoveryDeliveryOptions ?? {}),
       }),
-      ...agentServices,
       ...validationServices,
       ...reportServices,
       secretVault,
       notifications: notificationServices,
-      agentUpdates: agentUpdateServices,
       state: stateServices,
-      placement: placementServices,
       probeJobs: probeJobServices,
       highScale: highScaleServices,
       testPolicies: {

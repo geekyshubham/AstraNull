@@ -11,15 +11,6 @@ function seededStore() {
 }
 
 describe('seed:dev-demo freshness', () => {
-  it('gives the online agent a recent heartbeat and a version', () => {
-    const agent = seededStore().agents.find((row) => row.id === PORTAL_DEMO_IDS.agentId);
-    assert.equal(agent.status, 'online');
-    assert.ok(agent.version, 'seeded agent must report a version');
-
-    const ageMs = NOW.getTime() - Date.parse(agent.last_heartbeat_at);
-    assert.ok(ageMs >= 0 && ageMs <= 30_000, `heartbeat age was ${ageMs}ms`);
-  });
-
   it('starts the running run minutes ago, not weeks ago', () => {
     const running = seededStore().testRuns.find((row) => row.status === 'running');
     const ageMs = NOW.getTime() - Date.parse(running.started_at);

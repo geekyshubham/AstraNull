@@ -28,15 +28,12 @@ import {
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
-import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
 import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import {
   correlateExternalOnlyVerdict,
   correlateOpsReadinessVerdict,
-  correlateVerdict,
   probeEventHasProbeIo,
-  withinCorrelationWindow,
 } from '../../services/correlation.mjs';
 import {
   buildOpsReadinessData,
@@ -75,15 +72,6 @@ export const VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
 
 /** @type {readonly string[]} */
 export const VALIDATION_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['getTargetGroup']);
-
-/** @type {readonly string[]} */
-export const VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze([
-  'listAgents',
-  'createAgentJob',
-  'getAgentById',
-  'getAgentJobById',
-  'markAgentJobObserved',
-]);
 
 /** @type {readonly string[]} */
 export const VALIDATION_PROBE_JOB_REPOSITORY_METHODS = Object.freeze(['createProbeJob']);
@@ -245,52 +233,6 @@ function findProbeEvent(run, events) {
   );
 }
 
-function findMatchingObservation(run, events) {
-  const probeEvent = findProbeEvent(run, events);
-  const windowMs = run.correlation?.window_ms ?? 120_000;
-  const nonce = run.correlation?.nonce_hash;
-  const obsEvents = events.filter(
-    (e) => e.test_run_id === run.id
-      && e.signal_type === 'agent_observation'
-      && isTrustedProducerEvent(e),
-  );
-  return obsEvents.find(
-    (e) =>
-      e.nonce_hash === nonce &&
-      withinCorrelationWindow(probeEvent?.timestamp, e.timestamp, windowMs),
-  );
-}
-
-function hasMatchingObservation(run, events) {
-  return Boolean(findMatchingObservation(run, events));
-}
-
-function findObservationForAgentJob(run, events, job, agentId) {
-  const candidates = events.filter(
-    (event) => event.test_run_id === run.id
-      && event.signal_type === 'agent_observation'
-      && isTrustedProducerEvent(event)
-      && event.agent_id === agentId
-      && event.nonce_hash === job.nonce_hash
-      && event.target_id === job.target_id
-      && event.check_id === job.check_id,
-  );
-  const exact = candidates.find((event) => event.metadata?.agent_job_id === job.id);
-  if (exact) return exact;
-  const legacy = candidates.filter((event) => event.metadata?.agent_job_id == null);
-  return legacy.length === 1 ? legacy[0] : null;
-}
-
-function boundOnlineAgentForRun(agents, run) {
-  return (
-    agents.find(
-      (a) =>
-        a.status === 'online' &&
-        (a.target_group_id === run.target_group_id || !a.target_group_id),
-    ) ?? null
-  );
-}
-
 function collectionDeadlineMs(check) {
   const seconds = check?.safety_constraints?.max_duration_seconds ?? 120;
   return seconds * 1000;
@@ -305,7 +247,6 @@ export const POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS = Object.freeze([
   'startTestRun',
   'finalizeTestRun',
   'cancelTestRun',
-  'ingestObservation',
   'maybeFinalizeRunAfterProbeIngest',
   'registerRunTerminalHook',
   'notifyRunTerminal',
@@ -357,11 +298,6 @@ function assertValidationServiceDependencies(repositories) {
     'coreCatalog',
     VALIDATION_CORE_CATALOG_REPOSITORY_METHODS,
   );
-  assertRepositoryMethods(
-    repositories?.agentControl,
-    'agentControl',
-    VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
-  );
   assertRepositoryMethods(repositories?.probeJobs, 'probeJobs', VALIDATION_PROBE_JOB_REPOSITORY_METHODS);
   assertRepositoryMethods(
     repositories?.killSwitch,
@@ -382,7 +318,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
   const validationEvidence = repositories.validationEvidence;
   const audit = repositories.audit;
   const coreCatalog = repositories.coreCatalog;
-  const agentControl = repositories.agentControl;
   const probeJobs = repositories.probeJobs;
   const killSwitch = repositories.killSwitch;
   const productionReleaseEvidence = repositories.productionReleaseEvidence;
@@ -493,32 +428,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
         client: options.client,
         auditLockHeld: options.auditLockHeld,
         idempotency: options.idempotency,
-      },
-    );
-  }
-
-  async function appendObservationAuditOnce(
-    ctx,
-    action,
-    runId,
-    agentId,
-    agentJobId,
-    options = {},
-  ) {
-    return appendAudit(
-      ctx,
-      action,
-      'test_run',
-      runId,
-      { agent_id: agentId, agent_job_id: agentJobId },
-      {
-        client: options.client,
-        idempotency: {
-          actions: ['observation.ingested', 'observation.recovered'],
-          resourceType: 'test_run',
-          resourceId: runId,
-          metadata: { agent_job_id: agentJobId },
-        },
       },
     );
   }
@@ -737,21 +646,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
     return { group, target, policy: binding.policy };
   }
 
-  async function rejectObservation(ctx, tenantId, agentId, reason, error, status, resourceId, extra = {}, options = {}) {
-    await appendAudit(
-      { tenantId, userId: ctx?.userId ?? 'agent', role: ctx?.role ?? 'agent' },
-      'observation.rejected',
-      'test_run',
-      resourceId ?? null,
-      { agent_id: agentId, reason, ...extra },
-      options,
-    );
-    return { error, status };
-  }
-
   async function denyEventCapForRun(ctx, run, metadata = {}, options = {}) {
     return denySafeStart(
-      { tenantId: run.tenant_id, userId: ctx?.userId ?? 'agent', role: ctx?.role ?? 'agent' },
+      { tenantId: run.tenant_id, userId: ctx?.userId ?? 'system', role: ctx?.role ?? 'system' },
       'test_run.event_cap_denied',
       run.id,
       { check_id: run.check_id, ...metadata },
@@ -911,18 +808,13 @@ export function createPostgresValidationServices(repositories, options = {}) {
         if (repairedRun) run = repairedRun;
       }
 
-      const events = await validationEvidence.listRunEvents(publicationCtx, run.id, {
-        limit: 1000,
-        client,
-      });
       const opsReadiness = isOpsReadinessProbeKind(getCheckById(run.check_id));
       const findingPublication = opsReadiness
         ? null
         : await lockedFindingPublication(publicationCtx, verdict, run, client);
       const placement = verdict.placement_confidence ?? {};
       const finalizedWithoutObservation = !opsReadiness
-        && !FINDING_VERDICT_SEVERITY[verdict.verdict]
-        && events.some((event) => event.signal_type === 'agent_no_observation');
+        && !FINDING_VERDICT_SEVERITY[verdict.verdict];
 
       await appendAudit(
         publicationCtx,
@@ -1018,12 +910,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
     });
 
     const evidenceIds = events.map((e) => e.id);
-    const placementStore = { agents: [], testRuns: [run] };
-    const placement_confidence = computePlacementConfidence(placementStore, run, {
-      agentObserved: false,
-      finalizedWithoutObservation: true,
-      agent: null,
-    });
 
     const nowIso = nowFn().toISOString();
     const verdictRecord = {
@@ -1033,7 +919,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       check_id: run.check_id,
       verdict: result.verdict,
       confidence: result.confidence,
-      placement_confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
       created_at: nowIso,
@@ -1051,7 +936,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     return repairVerdictPublication(ctx, verdict, run, options);
   }
 
-  async function finalizeVerdictIfReady(ctx, run, agents, options = {}) {
+  async function finalizeVerdictIfReady(ctx, run, options = {}) {
     const repositoryOptions = options.client ? { client: options.client } : {};
     const events = await validationEvidence.listRunEvents(ctx, run.id, {
       limit: 1000,
@@ -1071,59 +956,23 @@ export function createPostgresValidationServices(repositories, options = {}) {
     }
     if (!hasExternalProbeEvidence(run, events)) return null;
 
-    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id, {
-      ...LEAN_GROUP_LOOKUP,
-      ...repositoryOptions,
-    });
-    const externalOnly = group?.validation_mode === 'external_only';
-
     const probeEvent = findProbeEvent(run, events);
-    const matchingObs = findMatchingObservation(run, events);
-    const agentObserved =
-      options.agentObserved !== undefined ? options.agentObserved : Boolean(matchingObs);
 
     if (
-      !externalOnly
-      && !options.finalizedWithoutObservation
-      && !matchingObs
+      !options.finalizedWithoutObservation
       && !isCollectionWindowExpired(run, nowFn().getTime())
     ) {
       return null;
     }
 
-    const agent =
-      options.agent
-      ?? boundOnlineAgentForRun(agents, run)
-      ?? (matchingObs?.agent_id
-        ? agents.find((candidate) => candidate.id === matchingObs.agent_id) ?? null
-        : null);
-
     const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
     const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
     const probeKind = check?.probe_profile?.kind ?? null;
     const probeIoObserved = probeEventHasProbeIo(probeEvent);
-    const result = externalOnly
-      ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved })
-      : correlateVerdict({
-        externalResult,
-        agentObserved,
-        expectedBehavior,
-        agentOnline: agent?.status === 'online',
-        agentBound: Boolean(
-          agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
-        ),
-        probeKind,
-        probeIoObserved,
-      });
+    // ADR-0008: verdicts are produced from external probe evidence only.
+    const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved });
 
     const evidenceIds = events.map((event) => event.id);
-    const placementStore = { agents, testRuns: [run] };
-    const placement_confidence = computePlacementConfidence(placementStore, run, {
-      matchingObservation: matchingObs ?? null,
-      agentObserved,
-      finalizedWithoutObservation: Boolean(options.finalizedWithoutObservation),
-      agent: agent ?? null,
-    });
 
     const nowIso = nowFn().toISOString();
     const verdictRecord = {
@@ -1133,7 +982,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       check_id: run.check_id,
       verdict: result.verdict,
       confidence: result.confidence,
-      placement_confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
       created_at: nowIso,
@@ -1151,7 +999,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     return repairVerdictPublication(ctx, verdict, run, options);
   }
 
-  async function finalizeNoObservation(ctx, run, agents, options = {}) {
+  async function finalizeNoObservation(ctx, run, options = {}) {
     const repositoryOptions = options.client ? { client: options.client } : {};
     const events = await validationEvidence.listRunEvents(ctx, run.id, {
       limit: 1000,
@@ -1163,7 +1011,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         'test_run.event_cap_denied',
         'test_run',
         run.id,
-        { phase: 'agent_no_observation' },
+        { phase: 'collection_window_elapsed' },
         {
           ...repositoryOptions,
           auditLockHeld: options.auditLockHeld === true,
@@ -1171,32 +1019,13 @@ export function createPostgresValidationServices(repositories, options = {}) {
       );
       return null;
     }
-    const nowIso = nowFn().toISOString();
-    await validationEvidence.appendEvent(ctx, {
-      id: newId('event'),
-      tenant_id: run.tenant_id,
-      test_run_id: run.id,
-      target_id: run.target_id,
-      check_id: run.check_id,
-      source: 'system',
-      signal_type: 'agent_no_observation',
-      producer_kind: 'internal_control_plane',
-      timestamp: nowIso,
-      metadata: {
-        reason: 'bounded_observation_window_elapsed',
-        collection_deadline_at: run.collection_deadline_at,
-      },
-    }, repositoryOptions);
-    const boundAgent = boundOnlineAgentForRun(agents, run);
-    return finalizeVerdictIfReady(ctx, run, agents, {
+    return finalizeVerdictIfReady(ctx, run, {
       ...options,
-      agentObserved: false,
       finalizedWithoutObservation: true,
-      agent: boundAgent,
     });
   }
 
-  async function maybeFinalizeCollectingRun(ctx, run, agents, options = {}) {
+  async function maybeFinalizeCollectingRun(ctx, run, options = {}) {
     const force = options.force === true;
     const repositoryOptions = options.client ? { client: options.client } : {};
     if (!run || run.status !== 'collecting') return null;
@@ -1206,53 +1035,19 @@ export function createPostgresValidationServices(repositories, options = {}) {
       repositoryOptions,
     );
     if (existingVerdict) {
-      return finalizeVerdictIfReady(ctx, run, agents, options);
+      return finalizeVerdictIfReady(ctx, run, options);
     }
     const events = await validationEvidence.listRunEvents(ctx, run.id, {
       limit: 1000,
       ...repositoryOptions,
     });
     if (!hasExternalProbeEvidence(run, events)) return null;
-    if (hasMatchingObservation(run, events)) {
-      return finalizeVerdictIfReady(ctx, run, agents, { ...options, agentObserved: true });
-    }
-    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, {
-      ...LEAN_GROUP_LOOKUP,
-      ...repositoryOptions,
+    // ADR-0008: external probe evidence is the sole finalization source. A forced finalize
+    // (explicit finalize or the collection-window sweep) publishes without waiting for the window.
+    return finalizeVerdictIfReady(ctx, run, {
+      ...options,
+      finalizedWithoutObservation: options.finalizedWithoutObservation === true || force,
     });
-    if (collectingGroup?.validation_mode === 'external_only') {
-      return finalizeVerdictIfReady(ctx, run, agents, { ...options, agentObserved: false });
-    }
-    if (!force && !isCollectionWindowExpired(run, nowFn().getTime())) return null;
-    return finalizeNoObservation(ctx, run, agents, options);
-  }
-
-  async function completeObservationIngest(runCtx, run, agent, obsEvent, runEvents) {
-    const eventsAfter = runEvents.some((event) => event.id === obsEvent.id)
-      ? runEvents
-      : [...runEvents, obsEvent];
-    if (!['running', 'collecting'].includes(run.status)) {
-      const agents = await agentControl.listAgents(runCtx);
-      const verdict = await finalizeVerdictIfReady(runCtx, run, agents, { agent });
-      const updatedRun = await validationEvidence.getTestRun(runCtx, run.id);
-      return {
-        observation: obsEvent,
-        run: { ...(updatedRun ?? run), verdict: verdict ?? null },
-      };
-    }
-    if (run.awaiting_external_probe && !hasExternalProbeEvidence(run, eventsAfter)) {
-      return { observation: obsEvent, run: { ...run, verdict: null } };
-    }
-
-    const agents = await agentControl.listAgents(runCtx);
-    const verdict =
-      (await finalizeVerdictIfReady(runCtx, run, agents, { agent }))
-      ?? (await validationEvidence.getVerdictForRun(runCtx, run.id));
-    const updatedRun = await validationEvidence.getTestRun(runCtx, run.id);
-    return {
-      observation: obsEvent,
-      run: { ...(updatedRun ?? run), verdict: verdict ?? null },
-    };
   }
 
   const testRuns = {
@@ -1342,8 +1137,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       };
       if (runs.length === 0) return summary;
 
-      const agents = await agentControl.listAgents(ctx);
-
       for (const staleRun of runs) {
         try {
           const { acquired, result } = await audit.withTenantAuditLock(
@@ -1360,7 +1153,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
                   { client },
                 );
                 if (!fresh) return null;
-                const verdict = await maybeFinalizeCollectingRun(ctx, fresh, agents, {
+                const verdict = await maybeFinalizeCollectingRun(ctx, fresh, {
                   force: true,
                   client,
                   auditLockHeld: true,
@@ -1570,9 +1363,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         }
       }
 
-      const agents = await agentControl.listAgents(ctx);
-      const onlineAgents = agents.filter((a) => a.status === 'online');
-      const missingPrereqs = evaluateCheckPrerequisites(check, { onlineAgents });
+      const missingPrereqs = evaluateCheckPrerequisites(check, { onlineAgents: [] });
       if (missingPrereqs.length) {
         return {
           error: 'prerequisites_not_met',
@@ -1834,30 +1625,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
         }
       }
 
-      const boundAgents = isOpsReadinessProbeKind(check)
-        ? []
-        : onlineAgents.filter(
-          (a) => a.target_group_id === targetGroupId || !a.target_group_id,
-        );
-      for (const agent of boundAgents) {
-        await agentControl.createAgentJob({
-          id: newId('job'),
-          tenant_id: ctx.tenantId,
-          agent_id: agent.id,
-          test_run_id: runId,
-          check_id: check.check_id,
-          target_id: target.id,
-          nonce_hash: probe.nonce_hash,
-          nonce_for_agent: probe.nonce,
-          type: 'observe_window',
-          status: 'pending',
-          created_at: now.toISOString(),
-        });
-      }
-
       incMetric('test_runs_started_total');
 
-      const result = { run, jobs_dispatched: boundAgents.length };
+      const result = { run, jobs_dispatched: 0 };
       if (probeEvent) result.probe_event = probeEvent;
       if (probeJob) {
         result.probe_job = {
@@ -1882,8 +1652,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       if (!force && !isCollectionWindowExpired(run, nowFn().getTime())) {
         return { error: 'observation_window_active', status: 409 };
       }
-      const agents = await agentControl.listAgents(ctx);
-      const verdict = await maybeFinalizeCollectingRun(ctx, run, agents, { force: true });
+      const verdict = await maybeFinalizeCollectingRun(ctx, run, { force: true });
       if (!verdict) {
         return { error: 'cannot_finalize', status: 409 };
       }
@@ -1918,343 +1687,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
         target_group_id: run.target_group_id,
         scan_id: scanId,
         cancelled_probe_job_ids: cancellation.cancelled_jobs.map((job) => job.id),
-        cancelled_agent_job_ids: cancellation.cancelled_agent_job_ids
-          ?? (cancellation.cancelled_agent_jobs ?? []).map((job) => job.id),
       });
       await notifyRunTerminal(run, { reason: 'cancelled', source });
       return { run };
-    },
-    async ingestObservation(ctx, agentId, body) {
-      const agent = await agentControl.getAgentById(
-        { tenantId: ctx.tenantId, userId: ctx.userId, role: ctx.role },
-        agentId,
-      );
-      if (!agent) return { error: 'agent_not_found', status: 404 };
-
-      const runCtx = { tenantId: agent.tenant_id, userId: ctx.userId, role: ctx.role };
-      const run = await validationEvidence.getTestRun(runCtx, body.test_run_id);
-      if (!run) return { error: 'run_not_found', status: 404 };
-
-      if (body.tenant_id && body.tenant_id !== agent.tenant_id) {
-        await appendAudit(runCtx, 'observation.tenant_rejected', 'agent', agentId, {
-          attempted_tenant: body.tenant_id,
-        });
-        return { error: 'cross_tenant_injection', status: 403 };
-      }
-
-      if (observationBodyContainsRawFields(body)) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'raw_packet_fields',
-          'raw_packet_rejected',
-          400,
-          run.id,
-        );
-      }
-
-      const agentJobId = body.agent_job_id ?? body.job_id;
-      if (!agentJobId) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'missing_agent_job_id',
-          'missing_agent_job_id',
-          400,
-          run.id,
-        );
-      }
-
-      const job = await agentControl.getAgentJobById({
-        tenantId: run.tenant_id,
-        agentId,
-        jobId: agentJobId,
-      });
-      if (!job) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'agent_job_not_found',
-          'agent_job_not_found',
-          404,
-          run.id,
-          { agent_job_id: agentJobId },
-        );
-      }
-
-      const targetId = body.target_id ?? run.target_id;
-      const jobMismatch =
-        job.agent_id !== agentId ||
-        job.tenant_id !== run.tenant_id ||
-        job.test_run_id !== run.id ||
-        job.nonce_hash !== body.nonce_hash ||
-        job.target_id !== targetId ||
-        job.check_id !== run.check_id;
-
-      if (jobMismatch) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'agent_job_mismatch',
-          'agent_job_mismatch',
-          403,
-          run.id,
-          { agent_job_id: agentJobId },
-        );
-      }
-
-      if (!['running', 'collecting'].includes(run.status) && job.status !== 'observed') {
-        await appendAudit(runCtx, 'observation.rejected_inactive_run', 'test_run', run.id, {
-          status: run.status,
-          agent_id: agentId,
-        });
-        return { error: 'run_not_collecting', status: 409 };
-      }
-
-      if (job.status === 'pending') {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'agent_job_not_acked',
-          'agent_job_not_acked',
-          409,
-          run.id,
-          { agent_job_id: agentJobId },
-        );
-      }
-
-      // Observed rows also enter the audit-first transaction below: a historical crash may
-      // have persisted the observation event without its audit record.
-
-      if (!['acked', 'observed'].includes(job.status)) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'agent_job_not_open',
-          'agent_job_not_open',
-          409,
-          run.id,
-          { agent_job_id: agentJobId, status: job.status },
-        );
-      }
-
-      const mutation = await audit.withTenantAuditLock(
-        run.tenant_id,
-        async ({ client: auditClient }) => validationEvidence.withRunMutationLock(
-          runCtx,
-          run.id,
-          async (client) => {
-            if (await killSwitch.isKillSwitchActiveForTenant(runCtx, { client })) {
-              return rejectObservation(
-                ctx,
-                run.tenant_id,
-                agentId,
-                'kill_switch_active',
-                'kill_switch_active',
-                423,
-                run.id,
-                { agent_job_id: agentJobId },
-                { client },
-              );
-            }
-            const freshRun = await validationEvidence.getTestRun(runCtx, run.id, { client });
-            if (!freshRun) {
-              return { error: 'run_not_found', status: 404 };
-            }
-            const freshJob = await agentControl.getAgentJobById(
-              {
-                tenantId: freshRun.tenant_id,
-                agentId,
-                jobId: agentJobId,
-              },
-              { client },
-            );
-            const freshJobMismatch = !freshJob
-              || freshJob.agent_id !== agentId
-              || freshJob.tenant_id !== freshRun.tenant_id
-              || freshJob.test_run_id !== freshRun.id
-              || freshJob.nonce_hash !== body.nonce_hash
-              || freshJob.nonce_hash !== freshRun.correlation?.nonce_hash
-              || freshJob.target_id !== targetId
-              || freshJob.target_id !== freshRun.target_id
-              || freshJob.check_id !== freshRun.check_id;
-            if (freshJobMismatch) {
-              return rejectObservation(
-                ctx,
-                freshRun.tenant_id,
-                agentId,
-                'agent_job_mismatch',
-                'agent_job_mismatch',
-                403,
-                freshRun.id,
-                { agent_job_id: agentJobId },
-                { client },
-              );
-            }
-            if (!['acked', 'observed'].includes(freshJob.status)) {
-              return rejectObservation(
-                ctx,
-                freshRun.tenant_id,
-                agentId,
-                'agent_job_not_open',
-                'agent_job_not_open',
-                409,
-                freshRun.id,
-                { agent_job_id: agentJobId, status: freshJob.status },
-                { client },
-              );
-            }
-
-            const priorEvents = await validationEvidence.listRunEvents(
-              runCtx,
-              freshRun.id,
-              { limit: 1000, client },
-            );
-            const persistedObservation = findObservationForAgentJob(
-              freshRun,
-              priorEvents,
-              freshJob,
-              agentId,
-            );
-            if (persistedObservation) {
-              const recovered = persistedObservation.metadata?.recovered_from_legacy_observed_job
-                === true;
-              await appendObservationAuditOnce(
-                runCtx,
-                recovered ? 'observation.recovered' : 'observation.ingested',
-                freshRun.id,
-                agentId,
-                agentJobId,
-                { client },
-              );
-              return {
-                freshRun,
-                obsEvent: persistedObservation,
-                completionEvents: priorEvents,
-              };
-            }
-            if (!['running', 'collecting'].includes(freshRun.status)) {
-              await appendAudit(
-                runCtx,
-                'observation.rejected_inactive_run',
-                'test_run',
-                freshRun.id,
-                { status: freshRun.status, agent_id: agentId },
-                { client },
-              );
-              return { error: 'run_not_collecting', status: 409 };
-            }
-            if (wouldExceedEventCap(freshRun, priorEvents.length, 1)) {
-              return denyEventCapForRun(
-                ctx,
-                freshRun,
-                { agent_id: agentId, phase: 'agent_observation' },
-                { client },
-              );
-            }
-
-            const nowIso = nowFn().toISOString();
-            const recoveringLegacyJob = freshJob.status === 'observed';
-            let observationTimestamp = nowIso;
-            if (recoveringLegacyJob) {
-              const observedAtMs = new Date(freshJob.observed_at ?? '').getTime();
-              if (!Number.isFinite(observedAtMs)) {
-                return rejectObservation(
-                  ctx,
-                  freshRun.tenant_id,
-                  agentId,
-                  'legacy_observation_timestamp_missing',
-                  'legacy_observation_timestamp_missing',
-                  409,
-                  freshRun.id,
-                  { agent_job_id: agentJobId },
-                  { client },
-                );
-              }
-              observationTimestamp = new Date(observedAtMs).toISOString();
-            }
-            if (!recoveringLegacyJob) {
-              const observedJob = await agentControl.markAgentJobObserved(
-                { tenantId: freshRun.tenant_id, agentId, jobId: agentJobId },
-                nowIso,
-                { client },
-              );
-              if (!observedJob) {
-                return rejectObservation(
-                  ctx,
-                  freshRun.tenant_id,
-                  agentId,
-                  'agent_job_not_open',
-                  'agent_job_not_open',
-                  409,
-                  freshRun.id,
-                  { agent_job_id: agentJobId, status: freshJob.status },
-                  { client },
-                );
-              }
-            }
-
-            const obsEvent = await validationEvidence.appendEvent(runCtx, {
-              id: newId('event'),
-              tenant_id: freshRun.tenant_id,
-              test_run_id: freshRun.id,
-              target_id: targetId,
-              check_id: freshRun.check_id,
-              agent_id: agentId,
-              source: 'agent',
-              signal_type: 'agent_observation',
-              producer_kind: 'authenticated_agent',
-              timestamp: observationTimestamp,
-              nonce_hash: body.nonce_hash,
-              metadata: redactObject(recoveringLegacyJob
-                ? {
-                    agent_job_id: agentJobId,
-                    recovered_from_legacy_observed_job: true,
-                  }
-                : {
-                    ...(body.metadata && typeof body.metadata === 'object'
-                      && !Array.isArray(body.metadata) ? body.metadata : {}),
-                    agent_job_id: agentJobId,
-                  }),
-            }, { client });
-
-            await appendObservationAuditOnce(
-              runCtx,
-              recoveringLegacyJob ? 'observation.recovered' : 'observation.ingested',
-              freshRun.id,
-              agentId,
-              agentJobId,
-              { client },
-            );
-            return {
-              freshRun,
-              obsEvent,
-              completionEvents: [...priorEvents, obsEvent],
-            };
-          },
-          { client: auditClient },
-        ),
-      );
-      if (!mutation.acquired) return { error: 'run_mutation_in_progress', status: 409 };
-      if (mutation.result?.error) return mutation.result;
-      const { freshRun, obsEvent, completionEvents } = mutation.result;
-      const completion = await completeObservationIngest(
-        runCtx,
-        freshRun,
-        agent,
-        obsEvent,
-        completionEvents,
-      );
-      if (completion?.run?.verdict && completion.run.status === 'verdicted') {
-        await notifyRunTerminal(completion.run, { reason: 'verdicted' });
-      }
-      return completion;
     },
     async maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
       if (typeof ctxOrRunId === 'string' || ctxOrRunId == null) return null;
@@ -2281,26 +1716,13 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
     if (!hasExternalProbeEvidence(run, events)) return null;
 
-    const agents = await agentControl.listAgents(ctx);
-    if (hasMatchingObservation(run, events)) {
-      return finalizeVerdictIfReady(ctx, run, agents);
-    }
-    const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
-    if (ingestGroup?.validation_mode === 'external_only') {
-      if (run.status === 'running') {
-        await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
-        run.status = 'collecting';
-      }
-      return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
-    }
-    if (isCollectionWindowExpired(run, nowFn().getTime())) {
-      return maybeFinalizeCollectingRun(ctx, run, agents);
-    }
+    // ADR-0008: external probe evidence is the sole finalization source. The run enters
+    // 'collecting'; the collection-window sweeper (or an explicit finalize) publishes the verdict.
     if (run.status === 'running') {
       await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
       run.status = 'collecting';
     }
-    return null;
+    return finalizeVerdictIfReady(ctx, run, { finalizedWithoutObservation: false });
   }
 
   const evidence = {

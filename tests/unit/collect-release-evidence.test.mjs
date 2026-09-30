@@ -238,7 +238,6 @@ describe('collect release evidence orchestrator', () => {
 
     for (const scenarioId of [
       'oidc_login',
-      'signed_agent_registration',
       'signed_probe_worker',
       'safe_validation_loop',
       'verdict_explanation',

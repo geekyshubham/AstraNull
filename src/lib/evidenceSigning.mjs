@@ -13,8 +13,14 @@ import {
   CUSTODY_SCHEMA_VERSION,
   sha256CanonicalJson,
 } from './custody.mjs';
-import { BASE64_DER_RE, fingerprintPublicKeyDerBase64 } from './agentUpdates.mjs';
 import { resolveDeploymentProfile } from './deploymentProfile.mjs';
+
+const BASE64_DER_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function fingerprintPublicKeyDerBase64(trimmedKeyB64) {
+  return createHash('sha256').update(Buffer.from(trimmedKeyB64, 'base64')).digest('hex');
+}
+
 
 export const EVIDENCE_SIGNING_SCHEMA_VERSION = 'astranull.evidence_signing.v1';
 export const EVIDENCE_SIGNING_ALGORITHMS = Object.freeze(['ed25519', 'hmac-sha256']);

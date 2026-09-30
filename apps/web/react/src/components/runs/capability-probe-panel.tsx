@@ -136,8 +136,6 @@ function outsideInWafScanRows(meta: DataItem): EvidenceRow[] {
     },
     { label: 'Vendor candidates', value: formatVendorCandidates(meta) },
     { label: 'Probe validation', value: formatBool(meta.probe_validation_passed) },
-    { label: 'Agent corroboration required', value: formatBool(meta.agent_corroboration_required) },
-    { label: 'Agent corroborated', value: formatBool(meta.agent_corroborated) },
     { label: 'Evasion bypass', value: formatBool(meta.evasion_bypass_suspected) },
     { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
     {

@@ -69,17 +69,6 @@ export const STAGING_READINESS_PENDING_CONTRACT_REQUIREMENTS = Object.freeze({
     'legal_signoff',
     'evidence_uri',
   ]),
-  placement_confidence_staging: Object.freeze([
-    'schema_version',
-    'artifact_type',
-    'created_at',
-    'release_id',
-    'environment',
-    'scenarios',
-    'evidence_correlation_summary',
-    'signoff',
-    'evidence_uri',
-  ]),
   gateway_load_abuse: Object.freeze([
     'schema_version',
     'artifact_type',
@@ -101,7 +90,6 @@ const HIGH_SCALE_GA_EXTRA_KINDS = Object.freeze([
   'provider_approval',
   'kill_switch_drill',
   'authorization_custody',
-  'placement_confidence_staging',
   'gateway_load_abuse',
 ]);
 

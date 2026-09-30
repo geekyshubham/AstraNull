@@ -17,8 +17,6 @@ const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 /** The frozen fixture instant is replayed as this far in the past, so demo activity reads as recent. */
 const DEMO_ANCHOR_AGE_MS = 2 * 60 * 60 * 1000;
 const RUNNING_RUN_AGE_MS = 7 * 60 * 1000;
-const AGENT_HEARTBEAT_AGE_MS = 18 * 1000;
-const DEMO_AGENT_VERSION = '0.2.0';
 
 /**
  * Collections whose timestamps are shifted onto seed time.
@@ -30,8 +28,6 @@ const DEMO_AGENT_VERSION = '0.2.0';
  * added here on purpose rather than swept in by default.
  */
 const REBASED_COLLECTIONS = Object.freeze([
-  'agents',
-  'agentJobs',
   'probeJobs',
   'testRuns',
   'events',
@@ -76,7 +72,7 @@ function shiftIsoInstants(value, deltaMs) {
 
 /**
  * Replays the frozen demo fixture at seed time: the dev portal should not open on a
- * "running" run that started 53 days ago next to an agent that is Online with no heartbeat.
+ * "running" run that started 53 days ago.
  * @param {Record<string, unknown>} store
  * @param {Date} [now]
  */
@@ -86,16 +82,6 @@ export function rebaseDemoStoreTimestamps(store, now = new Date()) {
   for (const collection of REBASED_COLLECTIONS) {
     if (!Array.isArray(store[collection])) continue;
     store[collection] = shiftIsoInstants(store[collection], deltaMs);
-  }
-
-  const agent = store.agents?.find((row) => row.id === PORTAL_DEMO_IDS.agentId);
-  if (agent) {
-    const heartbeatAt = new Date(now.getTime() - AGENT_HEARTBEAT_AGE_MS).toISOString();
-    agent.status = 'online';
-    agent.version = DEMO_AGENT_VERSION;
-    agent.last_heartbeat_at = heartbeatAt;
-    agent.last_token_validation_at = heartbeatAt;
-    agent.last_token_validation_status = 'valid';
   }
 
   const runningRun = store.testRuns?.find((row) => row.status === 'running');
@@ -128,11 +114,9 @@ Session defaults (dev-headers):
 Detail deep-links (append to /app#...):
   target-group-detail?id=${PORTAL_DEMO_IDS.targetGroupId}
   target-detail?id=${PORTAL_DEMO_IDS.targetId}
-  agent-detail?id=${PORTAL_DEMO_IDS.agentId}
   run-detail?id=${PORTAL_DEMO_IDS.runId}
   finding-detail?id=${PORTAL_DEMO_IDS.findingId}
   report-detail?id=${PORTAL_DEMO_IDS.reportId}
-  environment-detail?id=${PORTAL_DEMO_IDS.environmentId}
   check-detail?id=origin.direct_bypass.safe
   policy-detail?id=${PORTAL_DEMO_IDS.policyId}
   evidence-detail?id=${PORTAL_DEMO_IDS.evidenceId}
@@ -151,10 +135,8 @@ Detail deep-links (append to /app#...):
 
   const counts = {
     tenants: store.tenants.length,
-    environments: store.environments.length,
     target_groups: store.targetGroups.length,
     targets: store.targets.length,
-    agents: store.agents.length,
     runs: store.testRuns.length,
     findings: store.findings.length,
     reports: store.reports.length,

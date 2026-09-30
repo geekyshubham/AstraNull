@@ -59,13 +59,19 @@ describe('ownership policy', () => {
       state: 'dns_verified',
       source: 'target',
     });
-    for (const state of ['agent_verified', 'user_confirmed']) {
+    for (const state of ['provider_verified', 'user_confirmed']) {
       assert.equal(ownershipProofFromStates({ targetState: state }).verified, true);
     }
   });
 
+  it('fails a legacy agent_verified state closed (ADR-0008) — needs DNS/HTTP proof again', () => {
+    const proof = ownershipProofFromStates({ targetState: 'agent_verified' });
+    assert.equal(proof.verified, false);
+    assert.equal(VERIFICATION_RANK.agent_verified, undefined);
+  });
+
   it('never treats a group summary as authorization', () => {
-    for (const state of ['dns_verified', 'agent_verified', 'user_confirmed']) {
+    for (const state of ['dns_verified', 'provider_verified', 'user_confirmed']) {
       assert.deepEqual(ownershipProofFromStates({ groupState: state }), {
         verified: false,
         state: 'unverified',
@@ -87,12 +93,17 @@ describe('ownership policy', () => {
 
   it('computes an honest weakest-target group summary', () => {
     assert.equal(
-      ownershipSummaryFromTargetStates(['agent_verified', 'unverified']),
+      ownershipSummaryFromTargetStates(['dns_verified', 'unverified']),
       'unverified',
     );
     assert.equal(
-      ownershipSummaryFromTargetStates(['agent_verified', 'dns_verified']),
+      ownershipSummaryFromTargetStates(['user_confirmed', 'dns_verified']),
       'dns_verified',
+    );
+    // A legacy agent_verified state is unknown to the rank map and folds to unverified.
+    assert.equal(
+      ownershipSummaryFromTargetStates(['agent_verified', 'dns_verified']),
+      'unverified',
     );
     assert.equal(ownershipSummaryFromTargetStates(['user_confirmed']), 'user_confirmed');
   });
@@ -100,7 +111,8 @@ describe('ownership policy', () => {
   it('pins the threshold at dns_verified so the ladder cannot silently loosen', () => {
     assert.equal(MIN_PROOF_RANK, VERIFICATION_RANK.dns_verified);
     assert.ok(VERIFICATION_RANK.pending < MIN_PROOF_RANK);
-    assert.ok(VERIFICATION_RANK.agent_verified > MIN_PROOF_RANK);
+    // agent_verified is intentionally absent from the rank map (fails closed at rank 0).
+    assert.equal(VERIFICATION_RANK.agent_verified, undefined);
   });
 });
 
@@ -164,8 +176,8 @@ describe('ownership gate before live probe dispatch', () => {
   it('denies newly added victim B while verified target A remains allowed', () => {
     freshStore();
     seedOnlineAgent();
-    setGroupOwnership('agent_verified');
-    seedTargetVerification('agent_verified', 'tgt_1');
+    setGroupOwnership('dns_verified');
+    seedTargetVerification('dns_verified', 'tgt_1');
 
     const victim = addTarget(ctx, 'tg_1', { kind: 'fqdn', value: 'victim.example' });
     assert.equal(victim.error, undefined);

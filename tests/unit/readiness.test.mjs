@@ -1,14 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  computePlacementDiagnostics,
-  publicPlacementDiagnosticsPayload,
-  summarizePlacementDiagnostics,
-} from '../../src/services/placement.mjs';
-import {
   computeReadiness,
   RECENT_EVIDENCE_WINDOW_DAYS,
-  WEIGHT_AGENT_PLACEMENT,
   WEIGHT_EVIDENCE_FRESHNESS,
   WEIGHT_SOC_GOVERNANCE,
   WEIGHT_VERDICTS,
@@ -114,10 +108,10 @@ describe('readiness scoring', () => {
     resetStoreForTests(boostedStore);
 
     const boosted = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(boosted.score, 90);
+    assert.equal(boosted.score, 100);
     assert.equal(factor(boosted, 'soc_readiness').score, WEIGHT_SOC_GOVERNANCE);
     assert.match(factor(boosted, 'soc_readiness').detail, /hsr_demo_approved: authorization pack accepted/);
-    assert.equal(factor(boosted, 'coverage').score, 40);
+    assert.equal(factor(boosted, 'coverage').score, 44);
     assert.equal(factor(boosted, 'verdicts').score, WEIGHT_VERDICTS);
     assert.equal(factor(boosted, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
     assert.match(factor(boosted, 'evidence_freshness').detail, /1 run\(s\), 1 target group\(s\)/);
@@ -150,7 +144,7 @@ describe('readiness scoring', () => {
 
     resetStoreForTests(penalizedStore);
     const penalized = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(penalized.score, 65);
+    assert.equal(penalized.score, 72);
     assert.equal(factor(penalized, 'verdicts').score, 0);
     assert.equal(factor(penalized, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
   });
@@ -397,7 +391,7 @@ describe('readiness scoring', () => {
 
     const r = computeReadiness('ten_demo');
     assert.equal(factor(r, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-    assert.equal(factor(r, 'coverage').score, 40);
+    assert.equal(factor(r, 'coverage').score, 44);
     assert.match(factor(r, 'coverage').detail, /1 of 1 target group/);
   });
 
@@ -434,7 +428,7 @@ describe('readiness scoring', () => {
     });
 
     const readiness = computeReadiness('ten_demo');
-    assert.equal(factor(readiness, 'coverage').score, 40);
+    assert.equal(factor(readiness, 'coverage').score, 44);
     assert.equal(factor(readiness, 'verdicts').score, WEIGHT_VERDICTS);
     assert.equal(factor(readiness, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
   });
@@ -640,169 +634,6 @@ describe('readiness scoring', () => {
     assert.match(factor(r, 'verdicts').detail, /2 open finding/);
     assert.match(factor(r, 'verdicts').detail, /1 recent/);
   });
-
-  it('placement diagnostics: no bound agent returns missing_agent', () => {
-    freshStore();
-    const d = computePlacementDiagnostics('ten_demo');
-    assert.equal(d.groups.length, 1);
-    assert.equal(d.groups[0].status, 'missing_agent');
-    assert.ok(d.groups[0].warnings.includes('no_bound_agent'));
-  });
-
-  it('placement diagnostics: online unbound agent does not prove target group', () => {
-    freshStore();
-    getStore().agents.push({
-      id: 'agent_unbound',
-      tenant_id: 'ten_demo',
-      name: 'unbound',
-      status: 'online',
-      target_group_id: null,
-      created_at: new Date().toISOString(),
-    });
-    const d = computePlacementDiagnostics('ten_demo');
-    assert.equal(d.groups[0].status, 'missing_agent');
-    assert.ok(d.groups[0].warnings.includes('unbound_agent_only'));
-    assert.deepEqual(d.groups[0].online_bound_agent_ids, []);
-  });
-
-  it('placement diagnostics: online bound agent without observations returns needs_baseline', () => {
-    freshStore();
-    getStore().agents.push({
-      id: 'agent_bound',
-      tenant_id: 'ten_demo',
-      name: 'bound',
-      status: 'online',
-      target_group_id: 'tg_1',
-      created_at: new Date().toISOString(),
-    });
-    const d = computePlacementDiagnostics('ten_demo');
-    assert.equal(d.groups[0].status, 'needs_baseline');
-    assert.ok(d.groups[0].warnings.includes('no_recent_observation'));
-  });
-
-  it('placement diagnostics: recent agent observation for group returns proven', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.agents.push({
-      id: 'agent_bound',
-      tenant_id: 'ten_demo',
-      name: 'bound',
-      status: 'online',
-      target_group_id: 'tg_1',
-      created_at: now,
-    });
-    store.testRuns.push({
-      id: 'run_place',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_obs',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_place',
-      signal_type: 'agent_observation',
-      agent_id: 'agent_bound',
-      timestamp: now,
-    });
-    const d = computePlacementDiagnostics('ten_demo');
-    assert.equal(d.groups[0].status, 'proven');
-    assert.equal(d.groups[0].recent_observation_count, 1);
-  });
-
-  it('publicPlacementDiagnosticsPayload includes per-group metadata for UI', () => {
-    freshStore();
-    getStore().agents.push({
-      id: 'agent_bound',
-      tenant_id: 'ten_demo',
-      name: 'bound',
-      status: 'online',
-      target_group_id: 'tg_1',
-      created_at: new Date().toISOString(),
-    });
-    const diagnostics = computePlacementDiagnostics('ten_demo');
-    const payload = publicPlacementDiagnosticsPayload(diagnostics);
-    assert.equal(payload.groups.length, 1);
-    assert.equal(payload.groups[0].target_group_id, 'tg_1');
-    assert.equal(payload.groups[0].status, 'needs_baseline');
-    assert.ok(Array.isArray(payload.groups[0].warnings));
-  });
-
-  it('readiness agent_placement factor includes placement diagnostics summary', () => {
-    freshStore();
-    getStore().agents.push({
-      id: 'agent_bound',
-      tenant_id: 'ten_demo',
-      name: 'bound',
-      status: 'online',
-      target_group_id: 'tg_1',
-      created_at: new Date().toISOString(),
-    });
-    const r = computeReadiness('ten_demo');
-    const placement = factor(r, 'agent_placement');
-    assert.ok(placement.placement_diagnostics);
-    assert.match(placement.detail, /Placement diagnostics:/);
-    assert.match(placement.detail, /need baseline/);
-    const summary = summarizePlacementDiagnostics(computePlacementDiagnostics('ten_demo'));
-    assert.equal(placement.placement_diagnostics.needs_baseline, summary.needs_baseline);
-    assert.ok(Array.isArray(placement.placement_diagnostics.groups));
-    assert.equal(placement.placement_diagnostics.groups[0].status, 'needs_baseline');
-  });
-
-  it('readiness does not over-award placement for unbound online agents only', () => {
-    freshStore();
-    getStore().agents.push({
-      id: 'agent_unbound',
-      tenant_id: 'ten_demo',
-      name: 'unbound',
-      status: 'online',
-      target_group_id: null,
-      created_at: new Date().toISOString(),
-    });
-    const r = computeReadiness('ten_demo');
-    const placement = factor(r, 'agent_placement');
-    assert.equal(placement.score, 0);
-    assert.match(placement.detail, /Unbound online agents do not prove placement/);
-  });
-
-  it('readiness awards full placement weight when group is proven', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.agents.push({
-      id: 'agent_bound',
-      tenant_id: 'ten_demo',
-      name: 'bound',
-      status: 'online',
-      target_group_id: 'tg_1',
-      created_at: now,
-    });
-    store.testRuns.push({
-      id: 'run_proven',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_proven',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_proven',
-      signal_type: 'agent_observation',
-      agent_id: 'agent_bound',
-      timestamp: now,
-    });
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'agent_placement').score, WEIGHT_AGENT_PLACEMENT);
-    assert.match(factor(r, 'agent_placement').detail, /1 proven/);
-  });
-
   it('stale-only verdicts do not earn full verdict factor credit', () => {
     freshStore();
     const store = getStore();

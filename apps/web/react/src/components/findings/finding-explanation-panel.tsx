@@ -176,7 +176,7 @@ export function FindingExplanationPanel({
     return (
       <section className="verdict-explanation verdict-explanation--pending">
         <h3>Linked evidence unavailable</h3>
-        <p className="muted">This finding does not identify an originating test run, so probe and agent evidence cannot be attributed.</p>
+        <p className="muted">This finding does not identify an originating test run, so external probe evidence cannot be attributed.</p>
         {getString(finding, ['notes'], '') ? (
           <div className="verdict-explanation-grid">
             <ExplanationField label="Finding note — not linked run evidence" value={getString(finding, ['notes'])} fullWidth />

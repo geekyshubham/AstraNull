@@ -42,7 +42,7 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
     const headers = demoHeaders('engineer');
     const group = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers,
-      body: { name: 'Target lifecycle', environment_id: 'env_demo' },
+      body: { name: 'Target lifecycle' },
     });
     assert.equal(group.status, 201);
     const groupId = group.json.id;
@@ -78,8 +78,9 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
       body: { kind: 'fqdn', value: 'eligible.lifecycle.example.test' },
     });
     assert.equal(eligible.status, 201);
+    // A legacy agent-observed row (ADR-0008) is not proof of control and stays out of LOA scope.
     getStore().targetVerifications.push({
-      id: 'tv_lifecycle_agent', tenant_id: 'ten_demo', target_id: eligible.json.id,
+      id: 'tv_lifecycle_legacy_agent', tenant_id: 'ten_demo', target_id: eligible.json.id,
       state: 'agent_verified', transitioned_at: new Date().toISOString(),
     });
 
@@ -95,9 +96,9 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
       },
     });
     assert.equal(loaBefore.status, 201);
-    assert.ok(loaBefore.json.loa.scope_snapshot.targets.includes(eligible.json.id));
+    assert.ok(loaBefore.json.loa.scope_snapshot.targets.includes(targetId));
     assert.ok(
-      loaBefore.json.loa.scope_snapshot.excluded.some((row) => row.target_id === targetId),
+      loaBefore.json.loa.scope_snapshot.excluded.some((row) => row.target_id === eligible.json.id),
     );
 
     const deleted = await request(baseUrl, 'DELETE', `/v1/target-groups/${groupId}/targets/${targetId}`, {

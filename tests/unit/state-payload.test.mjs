@@ -93,7 +93,6 @@ describe('state payload builder (dev-json ↔ Postgres parity)', () => {
     assert.equal(rollup.readiness.score, 97);
     assert.equal(payload.readiness.score, 0);
     assert.equal(payload.target_groups, 42);
-    assert.equal(payload.agents_online, 3);
     assert.deepEqual(payload.recent_runs, [{ id: 'run_1' }]);
     assert.equal(payload.open_findings, 9);
     assert.equal(payload.high_scale_requests, 2);

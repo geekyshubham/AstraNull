@@ -4,7 +4,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { createAgentControlRepository } from '../../src/persistence/postgres/agentControlRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createHighScaleRepository } from '../../src/persistence/postgres/highScaleRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
@@ -126,7 +125,6 @@ async function explainHydratorQuery(client, sql, params) {
 function buildPostgresHydratorServices(pool) {
   const repositories = {
     coreCatalog: createCoreCatalogRepository(pool),
-    agentControl: createAgentControlRepository(pool),
     validationEvidence: createValidationEvidenceRepository(pool),
     highScale: createHighScaleRepository(pool),
     killSwitch: createKillSwitchRepository(pool),

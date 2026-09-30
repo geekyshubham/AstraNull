@@ -74,7 +74,7 @@ function mappedFailureMeaning(catalogRow, claim, checks, evidenceTier) {
     return `No customer-runnable check establishes ${catalogRow.canonical_name}. Only authorized SOC-governed evidence can support a vector outcome; supplemental declaration or transport evidence is not an exposure result.${boundarySuffix}`;
   }
   if (evidenceTier === 'E5') {
-    return `No active outside-in result is produced for ${catalogRow.canonical_name}; coverage depends on passive agent or integrated monitoring evidence.${boundarySuffix}`;
+    return `No active outside-in result is produced for ${catalogRow.canonical_name}; coverage depends on customer-supplied or integrated monitoring evidence.${boundarySuffix}`;
   }
 
   const verdictLogic = sortStrings(

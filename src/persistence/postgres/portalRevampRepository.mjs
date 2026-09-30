@@ -510,7 +510,7 @@ export function createPortalRevampRepository(pool) {
           [ctx.tenantId, groupId],
         );
         const total = targets.length;
-        const counts = { declared: total, dns_verified: 0, agent_verified: 0, user_confirmed: 0, total };
+        const counts = { declared: total, dns_verified: 0, user_confirmed: 0, total };
         if (!total) return counts;
 
         const { rows } = await client.query(
@@ -642,7 +642,7 @@ export function createPortalRevampRepository(pool) {
           [ctx.tenantId, input.target_id],
         );
         const current = currentResult.rows[0] ?? null;
-        if (!current || !['agent_verified', 'user_confirmed'].includes(current.state)) {
+        if (!current || !['dns_verified', 'provider_verified', 'user_confirmed'].includes(current.state)) {
           return { error: 'verify_prereq_not_met', status: 409 };
         }
 
@@ -826,11 +826,6 @@ export function createPortalRevampRepository(pool) {
         const target = targetRes.rows[0];
         if (!target) return null;
 
-        const targetMeta =
-          target.metadata_json && typeof target.metadata_json === 'object'
-            ? target.metadata_json
-            : {};
-
         // Page size is clamped server-side; a client-supplied findings_limit can never
         // widen the read beyond FINDINGS_PAGE_MAX.
         const requestedFindingsLimit = Number(query.findings_limit);
@@ -990,23 +985,6 @@ export function createPortalRevampRepository(pool) {
           [ctx.tenantId, targetId],
         );
         bump();
-        const agentBinding = await client.query(
-          `SELECT id, created_at, metadata_json
-           FROM agents
-           WHERE tenant_id = $1 AND target_group_id = $2
-             AND (
-               ($3::text IS NOT NULL AND $3 <> '' AND id = $3)
-               OR COALESCE(metadata_json->>'bound_target_id', '') = $4
-             )
-           ORDER BY created_at DESC LIMIT 1`,
-          [
-            ctx.tenantId,
-            target.target_group_id,
-            targetMeta.agent_id ?? null,
-            targetId,
-          ],
-        );
-        bump();
         const wafSnapshot = await client.query(
           `SELECT ps.status, ps.reason_codes, ps.created_at
            FROM waf_posture_snapshots ps
@@ -1063,7 +1041,6 @@ export function createPortalRevampRepository(pool) {
               })
             : null;
 
-        const agentRow = agentBinding.rows[0] ?? null;
         const snapshotRow = wafSnapshot.rows[0] ?? null;
         const assetRow = wafAsset.rows[0] ?? null;
         const connectorRow = wafConnector.rows[0] ?? null;
@@ -1109,12 +1086,6 @@ export function createPortalRevampRepository(pool) {
             kind: target.kind,
             value: target.value,
             expected_behavior: target.expected_behavior ?? 'cloud_baseline',
-            agent_binding: agentRow
-              ? {
-                  agent_id: agentRow.id,
-                  bound_at: toIso(agentRow.created_at),
-                }
-              : null,
             created_at: toIso(target.created_at),
             eligibility: latest?.state && latest.state !== 'unverified' ? 'eligible' : 'not_eligible',
             eligibility_reason: latest?.state && latest.state !== 'unverified' ? null : 'verification_required',

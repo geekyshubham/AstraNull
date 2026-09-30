@@ -11,12 +11,10 @@ import {
   signProbeWorkerRequest,
   verifyProbeJobSignature,
 } from '../../src/services/probeCoordinator.mjs';
-import { createOwnershipChallenge } from '../../src/services/ownershipVerification.mjs';
 import { computeReadiness } from '../../src/services/readiness.mjs';
 import {
   cancelTestRun,
   finalizeTestRun,
-  ingestObservation,
   maybeFinalizeRunAfterProbeIngest,
   startTestRun,
 } from '../../src/services/testRuns.mjs';
@@ -44,22 +42,17 @@ function completeActiveRuns() {
   }
 }
 
+// ADR-0008: agents are removed. This helper now only seeds DNS-verified ownership and the
+// target shape the probe tests exercise — there is no agent fleet.
 function seedAgent() {
   const store = getStore();
-  store.agents.push({
-    id: 'ag_probe',
-    tenant_id: 'ten_demo',
-    status: 'online',
-    capabilities: ['canary', 'packet', 'heartbeat'],
-    target_group_id: 'tg_1',
-  });
   if (!Array.isArray(store.targetVerifications)) store.targetVerifications = [];
   store.targetVerifications.push({
     id: 'tv_probe_tgt_1',
     tenant_id: 'ten_demo',
     target_id: 'tgt_1',
-    state: 'agent_verified',
-    source_kind: 'agent_observation',
+    state: 'dns_verified',
+    source_kind: 'dns_token',
     source_ref: { ownership_verification_id: 'ov_probe' },
     transitioned_at: new Date().toISOString(),
     transitioned_by: 'system',
@@ -70,14 +63,6 @@ function seedAgent() {
     target.value = 'https://198.51.100.7/';
     target.metadata = { protected_host: 'origin.test' };
   }
-}
-
-function ackedJobForAgent(agentId, runId) {
-  const job = getStore().agentJobs.find((j) => j.agent_id === agentId && j.test_run_id === runId);
-  assert.ok(job, 'expected agent job for run');
-  job.status = 'acked';
-  job.acked_at = new Date().toISOString();
-  return job;
 }
 
 function runtimeSignedWorker() {
@@ -651,78 +636,6 @@ describe('signed probe coordinator', () => {
     assert.equal(dup.error, 'probe_already_ingested');
   });
 
-  it('observation before signed-worker probe result does not publish a verdict', () => {
-    freshStore();
-    seedAgent();
-    const started = startTestRun(
-      ctx,
-      {
-        check_id: 'origin.direct_bypass.safe',
-        target_group_id: 'tg_1',
-        target_id: 'tgt_1',
-      },
-      runtimeSignedWorker(),
-    );
-    assert.equal(started.run.awaiting_external_probe, true);
-    const agentCtx = { tenantId: 'ten_demo', userId: 'agent', role: 'agent' };
-    const job = ackedJobForAgent('ag_probe', started.run.id);
-    const obs = ingestObservation(agentCtx, 'ag_probe', {
-      agent_job_id: job.id,
-      test_run_id: started.run.id,
-      target_id: 'tgt_1',
-      nonce_hash: started.run.correlation.nonce_hash,
-    });
-    assert.equal(obs.error, undefined);
-    const run = getStore().testRuns.find((r) => r.id === started.run.id);
-    assert.equal(run.status, 'running');
-    assert.equal(run.awaiting_external_probe, true);
-    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), false);
-    assert.ok(getStore().events.some((e) => e.signal_type === 'agent_observation'));
-  });
-
-  it('finalizes with verdict when probe result follows a matching observation', () => {
-    freshStore();
-    seedAgent();
-    const started = startTestRun(
-      ctx,
-      {
-        check_id: 'origin.direct_bypass.safe',
-        target_group_id: 'tg_1',
-        target_id: 'tgt_1',
-      },
-      runtimeSignedWorker(),
-    );
-    const agentCtx = { tenantId: 'ten_demo', userId: 'agent', role: 'agent' };
-    const agentJob = ackedJobForAgent('ag_probe', started.run.id);
-    ingestObservation(agentCtx, 'ag_probe', {
-      agent_job_id: agentJob.id,
-      test_run_id: started.run.id,
-      target_id: 'tgt_1',
-      nonce_hash: started.run.correlation.nonce_hash,
-      metadata: { observed: true },
-    });
-    const job = getStore().probeJobs[0];
-    const out = ingestProbeResult(
-      { workerId: 'worker-a' },
-      job.id,
-      probeResultBody(job, 'connected'),
-      runtimeSignedWorker(),
-    );
-    assert.equal(out.error, undefined);
-    const verdict = maybeFinalizeRunAfterProbeIngest(out.run_id);
-    assert.ok(verdict);
-    const run = getStore().testRuns.find((r) => r.id === started.run.id);
-    assert.equal(run.status, 'verdicted');
-    assert.ok(getStore().events.some((e) => e.signal_type === 'probe_result'));
-    assert.ok(getStore().events.some((e) => e.signal_type === 'agent_observation'));
-    const storedVerdict = getStore().verdicts.find((v) => v.test_run_id === started.run.id);
-    assert.ok(storedVerdict?.placement_confidence);
-    assert.equal(storedVerdict.placement_confidence.status, 'observed_this_run');
-    assert.equal(storedVerdict.placement_confidence.agent_id, 'ag_probe');
-    assert.equal(storedVerdict.placement_confidence.level, 'Medium');
-    assert.equal(storedVerdict.placement_confidence.observation_mode, 'unknown');
-  });
-
   it('finalizes external_only runs immediately after valid probe evidence with tenant scoping', () => {
     freshStore();
     seedAgent();
@@ -753,11 +666,17 @@ describe('signed probe coordinator', () => {
     );
     assert.equal(run.status, 'collecting');
 
-    const verdict = maybeFinalizeRunAfterProbeIngest(ctx, out.run_id);
+    // ADR-0008: verdicts derive from external probe evidence only; the run finalizes when the
+    // collection window elapses or on force. It never waits for an agent observation.
+    // Correct-tenant ingest hook clears awaiting_external_probe but the future window keeps it collecting.
+    assert.equal(maybeFinalizeRunAfterProbeIngest(ctx, out.run_id), null);
+    assert.equal(run.awaiting_external_probe, false);
+    const finalized = finalizeTestRun(ctx, run.id, { force: true });
+    assert.equal(finalized.error, undefined);
+    const verdict = finalized.verdict;
     assert.ok(verdict);
     assert.equal(verdict.confidence, 'external_only');
     assert.equal(run.status, 'verdicted');
-    assert.equal(run.awaiting_external_probe, false);
     assert.equal(
       getStore().events.some((e) => e.test_run_id === run.id && e.signal_type === 'agent_no_observation'),
       false,
@@ -799,7 +718,9 @@ describe('signed probe coordinator', () => {
     );
     assert.equal(probeEvent.metadata.profile_kind, 'dns_wire_query');
     assert.equal(probeEvent.metadata.probe_kind, undefined);
-    const verdict = maybeFinalizeRunAfterProbeIngest(ctx, ingested.run_id);
+    maybeFinalizeRunAfterProbeIngest(ctx, ingested.run_id);
+    const finalized = finalizeTestRun(ctx, started.run.id, { force: true });
+    const verdict = finalized.verdict;
 
     assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(store.findings.some((finding) => finding.test_run_id === started.run.id), false);
@@ -807,37 +728,6 @@ describe('signed probe coordinator', () => {
     for (const key of ['coverage', 'verdicts', 'evidence_freshness']) {
       assert.equal(readiness.factors.find((factor) => factor.key === key).score, 0, key);
     }
-  });
-
-  it('keeps agent_assisted run collecting when probe result arrives without observation and window is active', () => {
-    freshStore();
-    seedAgent();
-    const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
-    group.validation_mode = 'agent_assisted';
-    const started = startTestRun(
-      ctx,
-      {
-        check_id: 'origin.direct_bypass.safe',
-        target_group_id: 'tg_1',
-        target_id: 'tgt_1',
-      },
-      runtimeSignedWorker(),
-    );
-    const run = getStore().testRuns.find((r) => r.id === started.run.id);
-    run.collection_deadline_at = new Date(Date.now() + 60_000).toISOString();
-
-    const job = getStore().probeJobs[0];
-    const out = ingestProbeResult(
-      { workerId: 'worker-a' },
-      job.id,
-      probeResultBody(job, 'blocked'),
-      runtimeSignedWorker(),
-    );
-    maybeFinalizeRunAfterProbeIngest(ctx, out.run_id);
-
-    assert.equal(run.status, 'collecting');
-    assert.equal(run.awaiting_external_probe, false);
-    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), false);
   });
 
   it('force finalization after probe evidence still publishes no-observation verdict', () => {
@@ -867,9 +757,12 @@ describe('signed probe coordinator', () => {
     assert.equal(finalized.error, undefined);
     assert.equal(finalized.run.status, 'verdicted');
     assert.ok(finalized.verdict);
-    assert.ok(getStore().events.some((e) => e.signal_type === 'agent_no_observation'));
-    assert.equal(finalized.verdict.placement_confidence.level, 'Low');
-    assert.equal(finalized.verdict.placement_confidence.status, 'not_observed_this_run');
+    assert.equal(finalized.verdict.confidence, 'external_only');
+    // ADR-0008: no agent, so no agent_no_observation event is written.
+    assert.equal(
+      getStore().events.some((e) => e.signal_type === 'agent_no_observation'),
+      false,
+    );
   });
 
   it('ingestProbeResult updates run correlation for unit path', () => {
@@ -1479,60 +1372,5 @@ describe('ready endpoint probe metadata', () => {
     assert.equal(res.json.probe_worker_secret_configured, true);
     assert.equal(res.json.probe_worker_secret, undefined);
     assert.equal(res.json.ASTRANULL_PROBE_WORKER_SECRET, undefined);
-  });
-});
-
-describe('ownership challenge probe jobs', () => {
-  const ownershipCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'owner' };
-  const workerCtx = { workerId: 'worker-own', role: 'probe_worker', tenantId: 'ten_demo' };
-
-  afterEach(() => {
-    freshStore();
-  });
-
-  it('dispatches signed ownership job and records probe signal on ingest', () => {
-    freshStore();
-    const store = getStore();
-    if (!Array.isArray(store.ownershipVerifications)) {
-      store.ownershipVerifications = [];
-    }
-    store.agents.push({
-      id: 'agent_1',
-      tenant_id: 'ten_demo',
-      name: 'canary',
-      status: 'online',
-      target_group_id: 'tg_1',
-      probe_endpoint: { declared_fqdn: 'origin.test' },
-      last_token_validation_status: 'valid',
-    });
-
-    const runtimeConfig = runtimeSignedWorker();
-    const created = createOwnershipChallenge(
-      ownershipCtx,
-      { target_group_id: 'tg_1', agent_id: 'agent_1' },
-      runtimeConfig,
-    );
-    assert.equal(created.error, undefined);
-
-    const verification = created.verification;
-    const job = getStore().probeJobs.find(
-      (j) => j.ownership_verification_id === verification.id,
-    );
-    assert.ok(job);
-    assert.equal(job.check_id, 'ownership.challenge');
-    assert.equal(job.probe_profile.kind, 'ownership_challenge');
-    assert.equal(job.nonce_hash, verification.challenge_nonce_hash);
-
-    const body = {
-      external_result: 'connected',
-      safety_attestation: compliantSafetyAttestation(job),
-    };
-    const ingested = ingestProbeResult(workerCtx, job.id, body, runtimeConfig);
-    assert.equal(ingested.error, undefined);
-    assert.equal(ingested.ownership_verification_id, verification.id);
-
-    const updated = getStore().ownershipVerifications.find((v) => v.id === verification.id);
-    assert.equal(updated.probe_observed, true);
-    assert.equal(updated.status, 'challenge_sent');
   });
 });

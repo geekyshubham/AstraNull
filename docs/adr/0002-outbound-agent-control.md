@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Superseded by ADR-0008 (2026-09-30). AstraNull is now outside-in only: the agent, its
+control plane, and outbound-agent control are removed. Verdicts are produced from external
+probe evidence only. See [ADR-0008](0008-outside-in-only-targets-first.md).
 
 ## Context
 

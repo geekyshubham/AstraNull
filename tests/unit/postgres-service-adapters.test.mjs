@@ -9,17 +9,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
-  AGENT_CONTROL_REPOSITORY_METHODS,
   AUTH_TOKEN_REPOSITORY_METHODS,
   CORE_CATALOG_SERVICE_METHODS,
   CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS,
   CORE_CATALOG_TENANT_SERVICE_METHODS,
-  POSTGRES_AGENT_AUTH_SERVICE_METHODS,
-  POSTGRES_AGENT_SERVICE_METHODS,
   POSTGRES_AUTH_TOKEN_SERVICE_METHODS,
   POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS,
   SERVICE_ACCOUNT_REPOSITORY_METHODS,
-  createPostgresAgentServices,
   createPostgresAuthServices,
   createPostgresCatalogServices,
   createPostgresValidationServices,
@@ -31,7 +27,6 @@ import {
   SECRET_VAULT_REPOSITORY_METHODS,
   VALIDATION_AUDIT_REPOSITORY_METHODS,
   VALIDATION_EVIDENCE_REPOSITORY_METHODS,
-  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
   createPostgresSecretVaultServices,
   POSTGRES_REPORT_SERVICE_METHODS,
   REPORT_AUDIT_REPOSITORY_METHODS,
@@ -41,9 +36,6 @@ import {
   NOTIFICATION_REPOSITORY_METHODS,
   POSTGRES_NOTIFICATION_SERVICE_METHODS,
   createPostgresNotificationServices,
-  AGENT_UPDATE_REPOSITORY_METHODS,
-  POSTGRES_AGENT_UPDATE_SERVICE_METHODS,
-  createPostgresAgentUpdateServices,
   PROBE_JOB_REPOSITORY_METHODS,
   POSTGRES_PROBE_JOB_SERVICE_METHODS,
   createPostgresProbeJobServices,
@@ -73,7 +65,6 @@ import { CHECK_CATALOG, customerSelectableChecks } from '../../src/contracts/che
 import { withCheckSection } from '../../src/contracts/validationScanManagement.mjs';
 import { createAddressedSecret } from '../../src/lib/addressedSecrets.mjs';
 import { generateSalt, hashSecretWithSalt } from '../../src/lib/crypto.mjs';
-import { buildAgentPackage } from '../../scripts/package-agent.mjs';
 import { PRODUCTION_RELEASE_EVIDENCE_COMPLETE } from '../fixtures/productionReleaseEvidenceComplete.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -85,10 +76,6 @@ const ADAPTER_SOURCE = readFileSync(
 );
 const AUTH_ADAPTER_SOURCE = readFileSync(
   path.join(ROOT, 'src/persistence/postgres/authServiceAdapters.mjs'),
-  'utf8',
-);
-const AGENT_ADAPTER_SOURCE = readFileSync(
-  path.join(ROOT, 'src/persistence/postgres/agentServiceAdapters.mjs'),
   'utf8',
 );
 const VALIDATION_ADAPTER_SOURCE = readFileSync(
@@ -105,10 +92,6 @@ const REPORT_ADAPTER_SOURCE = readFileSync(
 );
 const NOTIFICATION_ADAPTER_SOURCE = readFileSync(
   path.join(ROOT, 'src/persistence/postgres/notificationServiceAdapters.mjs'),
-  'utf8',
-);
-const AGENT_UPDATE_ADAPTER_SOURCE = readFileSync(
-  path.join(ROOT, 'src/persistence/postgres/agentUpdateServiceAdapters.mjs'),
   'utf8',
 );
 const PROBE_JOB_ADAPTER_SOURCE = readFileSync(
@@ -182,8 +165,6 @@ describe('postgres catalog service adapters', () => {
       'getCurrentTenant',
       'patchCurrentTenant',
       'listEnvironments',
-      'createEnvironment',
-      'patchEnvironment',
     ]);
     assert.deepEqual(CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS, [
       'listTargets',
@@ -195,6 +176,8 @@ describe('postgres catalog service adapters', () => {
       'archiveTargetGroup',
       'patchTarget',
       'deleteTarget',
+      'createTargetDirect',
+      'patchTargetById',
     ]);
     assert.equal(CORE_CATALOG_SERVICE_METHODS.length, 14);
   });
@@ -228,8 +211,6 @@ describe('postgres catalog service adapters', () => {
     await tenants.getCurrentTenant(ctx);
     await tenants.patchCurrentTenant(ctx, { name: 'T' });
     await tenants.listEnvironments(ctx);
-    await tenants.createEnvironment(ctx, { name: 'E' });
-    await tenants.patchEnvironment(ctx, 'env_1', { name: 'E2' });
 
     await targetGroups.listTargets(ctx);
     await targetGroups.listTargetGroups(ctx);
@@ -240,28 +221,38 @@ describe('postgres catalog service adapters', () => {
     await targetGroups.archiveTargetGroup(ctx, 'tg_1');
     await targetGroups.patchTarget(ctx, 'tg_1', 'tgt_1', { value: 'y.example' });
     await targetGroups.deleteTarget(ctx, 'tg_1', 'tgt_1');
+    await targetGroups.createTargetDirect(ctx, { kind: 'fqdn', value: 'z.example' });
+    await targetGroups.patchTargetById(ctx, 'tgt_1', { tags: ['prod'] });
 
     assert.equal(calls.length, CORE_CATALOG_SERVICE_METHODS.length);
     assert.deepEqual(calls[0], { method: 'getCurrentTenant', args: [ctx] });
     assert.deepEqual(calls[1], { method: 'patchCurrentTenant', args: [ctx, { name: 'T' }] });
-    assert.deepEqual(calls[4], { method: 'patchEnvironment', args: [ctx, 'env_1', { name: 'E2' }] });
-    assert.deepEqual(calls[5], { method: 'listTargets', args: [ctx] });
-    assert.deepEqual(calls[9], {
+    assert.deepEqual(calls[2], { method: 'listEnvironments', args: [ctx] });
+    assert.deepEqual(calls[3], { method: 'listTargets', args: [ctx] });
+    assert.deepEqual(calls[7], {
       method: 'addTarget',
       args: [ctx, 'tg_1', { kind: 'hostname', value: 'x.example' }],
     });
-    assert.deepEqual(calls[10], {
+    assert.deepEqual(calls[8], {
       method: 'patchTargetGroup',
       args: [ctx, 'tg_1', { name: 'G2' }],
     });
-    assert.deepEqual(calls[11], { method: 'archiveTargetGroup', args: [ctx, 'tg_1'] });
-    assert.deepEqual(calls[12], {
+    assert.deepEqual(calls[9], { method: 'archiveTargetGroup', args: [ctx, 'tg_1'] });
+    assert.deepEqual(calls[10], {
       method: 'patchTarget',
       args: [ctx, 'tg_1', 'tgt_1', { value: 'y.example' }],
     });
-    assert.deepEqual(calls[13], {
+    assert.deepEqual(calls[11], {
       method: 'deleteTarget',
       args: [ctx, 'tg_1', 'tgt_1'],
+    });
+    assert.deepEqual(calls[12], {
+      method: 'createTargetDirect',
+      args: [ctx, { kind: 'fqdn', value: 'z.example' }],
+    });
+    assert.deepEqual(calls[13], {
+      method: 'patchTargetById',
+      args: [ctx, 'tgt_1', { tags: ['prod'] }],
     });
 
     const pending = tenants.listEnvironments(ctx);
@@ -291,18 +282,14 @@ describe('postgres retention service adapters', () => {
 
 describe('postgres auth service adapters', () => {
   it('exposes stable auth service method lists', () => {
-    assert.equal(POSTGRES_AUTH_TOKEN_SERVICE_METHODS.length, 4);
+    assert.equal(POSTGRES_AUTH_TOKEN_SERVICE_METHODS.length, 0);
     assert.equal(POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS.length, 6);
-    assert.equal(AUTH_TOKEN_REPOSITORY_METHODS.length, 5);
+    assert.equal(AUTH_TOKEN_REPOSITORY_METHODS.length, 0);
     assert.equal(SERVICE_ACCOUNT_REPOSITORY_METHODS.length, 7);
   });
 
   it('fails early when authTokens or audit.appendAuditEvent is missing', () => {
     assert.throws(() => createPostgresAuthServices({}), /requires repositories\.authTokens/);
-    assert.throws(
-      () => createPostgresAuthServices({ authTokens: {}, audit: {} }),
-      /requires authTokens\.createBootstrapToken/,
-    );
     const { repositories } = createRecordingAuthRepositories();
     delete repositories.audit.appendAuditEvent;
     assert.throws(
@@ -318,120 +305,6 @@ describe('postgres auth service adapters', () => {
       () => createPostgresAuthServices(repositories),
       /requires authTokens\.createServiceAccount\(\)/,
     );
-  });
-
-  it('create/list/revoke bootstrap token redacts secrets and audits lifecycle', async () => {
-    const stored = [];
-    const { repositories, auditEvents } = createRecordingAuthRepositories({
-      createBootstrapToken: async (_ctx, record) => {
-        stored.push(record);
-        return record;
-      },
-      listBootstrapTokens: async () => stored,
-      revokeBootstrapToken: async (_ctx, id, revokedAt) => {
-        const row = stored.find((t) => t.id === id);
-        if (!row) return null;
-        row.revoked_at = revokedAt;
-        return row;
-      },
-    });
-    const { tokens } = createPostgresAuthServices(repositories, {
-      now: () => FIXED_NOW,
-      newId: () => 'token_fixed',
-    });
-    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
-
-    const created = await tokens.createBootstrapToken(ctx, { name: 'T1' });
-    assert.equal(created.secret.startsWith('ast_'), true);
-    assert.equal(created.token.id, 'token_fixed');
-    assert.ok(created.token.token_hash);
-    assert.equal(auditEvents.at(-1)?.action, 'bootstrap_token.created');
-
-    const listed = await tokens.listBootstrapTokens(ctx);
-    assert.equal(listed.length, 1);
-    assert.equal(listed[0].token_hash, undefined);
-    assert.equal(listed[0].token_salt, undefined);
-    assert.equal(listed[0].secret, undefined);
-
-    const revoked = await tokens.revokeBootstrapToken(ctx, 'token_fixed');
-    assert.equal(revoked.revoked_at, FIXED_NOW.toISOString());
-    assert.equal(auditEvents.at(-1)?.action, 'bootstrap_token.revoked');
-  });
-
-  it('normalizes bootstrap prebind FQDN and preserves only the dev packaging allowlist', async () => {
-    const stored = [];
-    const { repositories } = createRecordingAuthRepositories({
-      createBootstrapToken: async (_ctx, record) => {
-        stored.push(record);
-        return record;
-      },
-    });
-    const { tokens } = createPostgresAuthServices(repositories, {
-      now: () => FIXED_NOW,
-      newId: () => `token_${stored.length + 1}`,
-    });
-    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
-    const cases = [
-      ['image', 'image'],
-      ['standalone', 'standalone'],
-      ['helm', 'helm'],
-      ['docker', null],
-      ['HELM', null],
-      ['', null],
-      [undefined, null],
-    ];
-
-    for (const [deploymentPackaging, expectedPackaging] of cases) {
-      const created = await tokens.createBootstrapToken(ctx, {
-        prebind_fqdn: '  Probe.Edge.Example.COM  ',
-        deployment_packaging: deploymentPackaging,
-      });
-      assert.equal(created.token.prebind_fqdn, 'probe.edge.example.com');
-      assert.equal(created.token.deployment_packaging, expectedPackaging);
-    }
-
-    assert.equal(stored.length, cases.length);
-    assert.ok(stored.every((record) => record.prebind_fqdn === 'probe.edge.example.com'));
-  });
-
-  it('addressed bootstrap consume uses atomic registration and audits used', async () => {
-    const tokenId = 'token_consume';
-    const tenantId = 'ten_demo';
-    const secret = createAddressedSecret('ast_', tenantId, tokenId);
-    const tokenSalt = generateSalt();
-    const tokenHash = hashSecretWithSalt(secret, tokenSalt);
-    const baseToken = {
-      id: tokenId,
-      tenant_id: tenantId,
-      name: 'Install',
-      token_salt: tokenSalt,
-      token_hash: tokenHash,
-      max_registrations: 2,
-      registrations_used: 0,
-      expires_at: '2099-01-01T00:00:00.000Z',
-      revoked_at: null,
-    };
-    let consumeCalled = false;
-    const { repositories, auditEvents, authTokenCalls } = createRecordingAuthRepositories({
-      findBootstrapTokenByAddressedHint: async () => baseToken,
-      consumeBootstrapTokenRegistration: async (key, usedAt) => {
-        consumeCalled = true;
-        assert.deepEqual(key, { tenantId, id: tokenId });
-        assert.equal(usedAt, FIXED_NOW.toISOString());
-        return { ...baseToken, registrations_used: 1 };
-      },
-    });
-    const { tokens } = createPostgresAuthServices(repositories, { now: () => FIXED_NOW });
-
-    const result = await tokens.consumeBootstrapToken(secret, { hostname: 'host-1' });
-    assert.equal(result.token?.registrations_used, 1);
-    assert.equal(consumeCalled, true);
-    assert.equal(
-      authTokenCalls.some((c) => c.method === 'consumeBootstrapTokenRegistration'),
-      true,
-    );
-    assert.equal(auditEvents.at(-1)?.action, 'bootstrap_token.used');
-    assert.deepEqual(auditEvents.at(-1)?.metadata, { hostname: 'host-1' });
   });
 
   it('service account create/list/revoke/rotate redacts, audits, and blocks revoked rotation', async () => {
@@ -544,525 +417,6 @@ describe('postgres auth service adapters', () => {
       assert.equal(/\bservices\/tokens\b/.test(source), false);
       assert.equal(/\bservices\/serviceAccounts\b/.test(source), false);
     }
-  });
-});
-
-function createRecordingAgentRepositories(overrides = {}) {
-  const auditEvents = [];
-  const auditCalls = [];
-  const agentControlCalls = [];
-
-  const agentControl = {};
-  for (const method of AGENT_CONTROL_REPOSITORY_METHODS) {
-    agentControl[method] = async (...args) => {
-      agentControlCalls.push({ method, args });
-      return overrides[method]?.(...args);
-    };
-  }
-
-  const transactionClient = { kind: 'agent-audit-test-client' };
-  const audit = {
-    appendAuditEvent: async (...args) => {
-      const [entry, options = {}] = args;
-      auditCalls.push(args);
-      if (overrides.appendAuditEvent) return overrides.appendAuditEvent(...args);
-      const idempotency = options.idempotency;
-      if (idempotency) {
-        const actions = idempotency.actions ?? [entry.action];
-        const existing = auditEvents.find((event) =>
-          actions.includes(event.action)
-            && event.resource_type === idempotency.resourceType
-            && event.resource_id === idempotency.resourceId);
-        if (existing) return existing;
-      }
-      auditEvents.push(entry);
-      return entry;
-    },
-    withTenantAuditLock: async (_tenantId, callback) => callback({
-      client: transactionClient,
-      prior: null,
-    }),
-  };
-
-  const repositories = { agentControl, audit };
-  if (overrides.authTokens) {
-    repositories.authTokens = overrides.authTokens;
-  }
-  if (overrides.coreCatalog) {
-    repositories.coreCatalog = overrides.coreCatalog;
-  }
-
-  return {
-    repositories,
-    auditEvents,
-    auditCalls,
-    agentControlCalls,
-    transactionClient,
-  };
-}
-
-describe('postgres agent service adapters', () => {
-  it('exposes stable agent service method lists', () => {
-    assert.equal(POSTGRES_AGENT_SERVICE_METHODS.length, 6);
-    assert.equal(POSTGRES_AGENT_AUTH_SERVICE_METHODS.length, 1);
-    assert.equal(AGENT_CONTROL_REPOSITORY_METHODS.length, 8);
-  });
-
-  it('fails early when agentControl, audit, or tokens.consumeBootstrapToken is missing', () => {
-    assert.throws(() => createPostgresAgentServices({}), /requires repositories\.agentControl/);
-    const { repositories } = createRecordingAgentRepositories();
-    delete repositories.agentControl.createAgent;
-    assert.throws(
-      () => createPostgresAgentServices(repositories, { tokens: {} }),
-      /requires agentControl\.createAgent\(\)/,
-    );
-    const { repositories: auditRepos } = createRecordingAgentRepositories();
-    delete auditRepos.audit.appendAuditEvent;
-    assert.throws(
-      () =>
-        createPostgresAgentServices(auditRepos, {
-          tokens: { consumeBootstrapToken: async () => ({}) },
-        }),
-      /requires audit\.appendAuditEvent/,
-    );
-    const { repositories: tokenRepos } = createRecordingAgentRepositories();
-    assert.throws(
-      () => createPostgresAgentServices(tokenRepos, {}),
-      /requires tokens\.consumeBootstrapToken/,
-    );
-  });
-
-  it('registerAgent consumes bootstrap token, stores hash/salt only, redacts, and audits without secret', async () => {
-    const tenantId = 'ten_demo';
-    const tokenId = 'token_reg';
-    const bootstrapSecret = createAddressedSecret('ast_', tenantId, tokenId);
-    let createdRecord;
-    const { repositories, auditEvents } = createRecordingAgentRepositories({
-      createAgent: async (_record) => {
-        createdRecord = _record;
-        return { ..._record, status: 'online' };
-      },
-    });
-    const tokens = {
-      consumeBootstrapToken: async (secret, meta, hint) => {
-        assert.equal(secret, bootstrapSecret);
-        assert.deepEqual(meta, { hostname: 'host-1', fingerprint: 'fp-1' });
-        assert.equal(hint, tenantId);
-        return {
-          token: {
-            id: tokenId,
-            tenant_id: tenantId,
-            target_group_id: 'tg_1',
-            environment_id: 'env_1',
-          },
-        };
-      },
-    };
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens,
-      now: () => FIXED_NOW,
-      newId: () => 'agent_fixed',
-    });
-
-    const result = await agents.registerAgent(
-      {
-        bootstrap_token: bootstrapSecret,
-        hostname: 'host-1',
-        fingerprint: 'fp-1',
-        name: 'A1',
-      },
-      tenantId,
-    );
-    assert.equal(result.agent.id, 'agent_fixed');
-    assert.equal(result.agent.credential_hash, undefined);
-    assert.equal(result.agent.credential_salt, undefined);
-    assert.equal(result.agent_credential.startsWith('agc_'), true);
-    assert.ok(createdRecord.credential_hash);
-    assert.ok(createdRecord.credential_salt);
-    assert.notEqual(createdRecord.credential_hash, createdRecord.credential_salt);
-
-    assert.equal(auditEvents.length, 1);
-    assert.equal(auditEvents[0].action, 'agent.registered');
-    assert.equal(JSON.stringify(auditEvents).includes(result.agent_credential), false);
-  });
-
-  it('registerAgent returns missing_token and maps consume errors to 401', async () => {
-    const { repositories } = createRecordingAgentRepositories();
-    const tokens = {
-      consumeBootstrapToken: async () => ({ error: 'invalid_token' }),
-    };
-    const { agents } = createPostgresAgentServices(repositories, { tokens });
-
-    const missing = await agents.registerAgent({ hostname: 'h' }, 'ten_demo');
-    assert.deepEqual(missing, { error: 'missing_token', status: 400 });
-
-    const invalid = await agents.registerAgent(
-      { bootstrap_token: 'ast_x', hostname: 'h' },
-      'ten_demo',
-    );
-    assert.deepEqual(invalid, { error: 'invalid_token', status: 401 });
-  });
-
-  it('listAgents revokeAgent heartbeatAgent pollJobs and ackJob forward args and redact agents', async () => {
-    const agent = {
-      id: 'agent_1',
-      tenant_id: 'ten_demo',
-      credential_hash: 'h',
-      credential_salt: 's',
-    };
-    const job = { id: 'job_1', status: 'acked' };
-    const { repositories, agentControlCalls, auditEvents } = createRecordingAgentRepositories({
-      listAgents: async () => [agent],
-      revokeAgent: async () => ({ ...agent, status: 'revoked' }),
-      updateAgentHeartbeat: async () => ({ ...agent, version: '1.0' }),
-      listPendingAgentJobs: async () => [job],
-      ackAgentJob: async () => ({ job, transitioned: true }),
-    });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-    const ctx = { tenantId: 'ten_demo' };
-
-    const listed = await agents.listAgents(ctx);
-    assert.equal(listed[0].credential_hash, undefined);
-
-    const revoked = await agents.revokeAgent({ ...ctx, userId: 'usr_admin', role: 'admin' }, agent.id);
-    assert.equal(revoked.agent.status, 'revoked');
-    assert.equal(revoked.agent.credential_hash, undefined);
-
-    const heartbeat = await agents.heartbeatAgent(agent, { version: '1.0' });
-    assert.equal(heartbeat.agent.version, '1.0');
-    assert.equal(heartbeat.agent.credential_hash, undefined);
-
-    const polled = await agents.pollJobs(agent, 25_000);
-    assert.deepEqual(polled, { jobs: [job] });
-
-    const acked = await agents.ackJob(agent, 'job_1');
-    assert.deepEqual(acked, job);
-    assert.equal(auditEvents.filter((e) => e.action === 'agent.job_acked').length, 1);
-    assert.equal(auditEvents.filter((e) => e.action === 'agent.revoked').length, 1);
-
-    assert.deepEqual(agentControlCalls[0], { method: 'listAgents', args: [ctx] });
-    assert.equal(agentControlCalls[1].method, 'revokeAgent');
-    assert.equal(agentControlCalls[2].method, 'updateAgentHeartbeat');
-    assert.deepEqual(agentControlCalls[3].args[0], { tenantId: 'ten_demo', agentId: 'agent_1' });
-    assert.equal(agentControlCalls[4].method, 'ackAgentJob');
-  });
-
-  it('ackJob audits the transition once and returns acked or observed rows on replay', async () => {
-    const agent = { id: 'agent_1', tenant_id: 'ten_demo' };
-    const acked = {
-      id: 'job_1',
-      status: 'acked',
-      acked_at: FIXED_NOW.toISOString(),
-    };
-    const observed = {
-      ...acked,
-      status: 'observed',
-      observed_at: '2026-06-01T12:00:30.000Z',
-    };
-    const results = [
-      { job: acked, transitioned: true },
-      { job: acked, transitioned: false },
-      { job: observed, transitioned: false },
-    ];
-    const {
-      repositories,
-      auditEvents,
-      auditCalls,
-      agentControlCalls,
-      transactionClient,
-    } = createRecordingAgentRepositories({
-      ackAgentJob: async () => results.shift(),
-    });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-
-    assert.deepEqual(await agents.ackJob(agent, 'job_1'), acked);
-    assert.deepEqual(await agents.ackJob(agent, 'job_1'), acked);
-    assert.deepEqual(await agents.ackJob(agent, 'job_1'), observed);
-    assert.equal(auditEvents.filter((event) => event.action === 'agent.job_acked').length, 1);
-    assert.equal(agentControlCalls.length, 3);
-    assert.ok(agentControlCalls.every((call) => call.args[2].client === transactionClient));
-    assert.equal(auditCalls.length, 3);
-    assert.ok(auditCalls.every((call) => call[1].client === transactionClient));
-    assert.ok(auditCalls.every((call) =>
-      call[1].idempotency.resourceType === 'agent_job'
-        && call[1].idempotency.resourceId === 'job_1'));
-  });
-
-  it('ackJob repairs a missing ACK audit for an already observed row', async () => {
-    const observed = {
-      id: 'job_repair',
-      status: 'observed',
-      acked_at: FIXED_NOW.toISOString(),
-      observed_at: '2026-06-01T12:00:30.000Z',
-    };
-    const { repositories, auditEvents, auditCalls, transactionClient } =
-      createRecordingAgentRepositories({
-        ackAgentJob: async () => ({ job: observed, transitioned: false }),
-      });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-
-    assert.deepEqual(await agents.ackJob(
-      { id: 'agent_1', tenant_id: 'ten_demo' },
-      observed.id,
-    ), observed);
-    assert.equal(auditEvents.length, 1);
-    assert.equal(auditEvents[0].action, 'agent.job_acked');
-    assert.equal(auditEvents[0].resource_id, observed.id);
-    assert.equal(auditCalls[0][1].client, transactionClient);
-
-    await agents.ackJob({ id: 'agent_1', tenant_id: 'ten_demo' }, observed.id);
-    assert.equal(auditEvents.length, 1, 'audit repair is idempotent on later replay');
-  });
-
-  it('ackJob rejects when its in-transaction audit append fails', async () => {
-    const agent = { id: 'agent_1', tenant_id: 'ten_demo' };
-    let transitionClient;
-    let auditClient;
-    const { repositories, transactionClient } = createRecordingAgentRepositories({
-      ackAgentJob: async (_scope, _ackedAt, options) => {
-        transitionClient = options.client;
-        return { job: { id: 'job_1', status: 'acked' }, transitioned: true };
-      },
-      appendAuditEvent: async (_entry, options) => {
-        auditClient = options.client;
-        throw new Error('audit write failed');
-      },
-    });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-
-    await assert.rejects(() => agents.ackJob(agent, 'job_1'), /audit write failed/);
-    assert.equal(transitionClient, transactionClient);
-    assert.equal(auditClient, transactionClient);
-  });
-
-  it('heartbeatAgent rejects probe_endpoint when declared_fqdn is not in target group', async () => {
-    const matchingFqdn = 'api.shop.example.com';
-    const agent = {
-      id: 'agent_bind',
-      tenant_id: 'ten_demo',
-      bootstrap_token_id: 'token_prebind',
-      target_group_id: 'tg_shop',
-      credential_hash: 'h',
-      credential_salt: 's',
-    };
-    const probeEndpoint = {
-      declared_fqdn: matchingFqdn,
-      discovered_public_ip: '203.0.113.55',
-      listen_port: 18080,
-      path_prefix: '/astranull-canary',
-      discovered_via: 'dns_resolve',
-    };
-    let heartbeatFields;
-    const { repositories } = createRecordingAgentRepositories({
-      updateAgentHeartbeat: async (_scope, fields) => {
-        heartbeatFields = fields;
-        return { ...agent, ...fields };
-      },
-      authTokens: {
-        getBootstrapTokenById: async (ctx, id) => {
-          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
-          assert.equal(id, 'token_prebind');
-          return { id, prebind_fqdn: matchingFqdn };
-        },
-      },
-      coreCatalog: {
-        getTargetGroup: async (ctx, id) => {
-          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
-          assert.equal(id, 'tg_shop');
-          return {
-            id,
-            targets: [{ kind: 'fqdn', value: 'cdn.example.com' }],
-          };
-        },
-      },
-    });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-
-    const result = await agents.heartbeatAgent(agent, { probe_endpoint: probeEndpoint });
-
-    assert.equal(result.probe_endpoint_accepted, false);
-    assert.equal(heartbeatFields.probe_endpoint_status, 'rejected');
-    assert.equal(heartbeatFields.probe_endpoint_error, 'target_group_mismatch');
-    assert.equal(heartbeatFields.probe_endpoint, undefined);
-  });
-
-  it('heartbeatAgent accepts probe_endpoint when declared_fqdn matches prebind and target group', async () => {
-    const matchingFqdn = 'api.shop.example.com';
-    const agent = {
-      id: 'agent_bind_ok',
-      tenant_id: 'ten_demo',
-      bootstrap_token_id: 'token_prebind',
-      target_group_id: 'tg_shop',
-      credential_hash: 'h',
-      credential_salt: 's',
-    };
-    const probeEndpoint = {
-      declared_fqdn: matchingFqdn,
-      discovered_public_ip: '203.0.113.55',
-      listen_port: 18080,
-      path_prefix: '/astranull-canary',
-      discovered_via: 'dns_resolve',
-    };
-    let heartbeatFields;
-    const { repositories, auditEvents } = createRecordingAgentRepositories({
-      updateAgentHeartbeat: async (_scope, fields) => {
-        heartbeatFields = fields;
-        return { ...agent, ...fields };
-      },
-      authTokens: {
-        getBootstrapTokenById: async (ctx, id) => {
-          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
-          assert.equal(id, 'token_prebind');
-          return { id, prebind_fqdn: matchingFqdn };
-        },
-      },
-      coreCatalog: {
-        getTargetGroup: async (ctx, id) => {
-          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
-          assert.equal(id, 'tg_shop');
-          return {
-            id,
-            targets: [{ kind: 'fqdn', value: matchingFqdn }],
-          };
-        },
-      },
-    });
-    const { agents } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-      now: () => FIXED_NOW,
-    });
-
-    const result = await agents.heartbeatAgent(agent, { probe_endpoint: probeEndpoint });
-
-    assert.equal(result.probe_endpoint_accepted, true);
-    assert.equal(heartbeatFields.probe_endpoint_status, 'reported');
-    assert.equal(heartbeatFields.probe_endpoint_error, null);
-    assert.equal(heartbeatFields.probe_endpoint.declared_fqdn, matchingFqdn);
-    assert.equal(heartbeatFields.last_token_validation_status, 'valid');
-    const heartbeatAudit = auditEvents.find((e) => e.action === 'agent.heartbeat');
-    assert.equal(heartbeatAudit.metadata.probe_endpoint_accepted, true);
-    assert.equal(heartbeatAudit.metadata.token_valid, true);
-  });
-
-  it('requireAgentAuth accepts valid addressed credential and audits invalid only when row exists', async () => {
-    const tenantId = 'ten_demo';
-    const agentId = 'agent_auth';
-    const credential = createAddressedSecret('agc_', tenantId, agentId);
-    const salt = generateSalt();
-    const storedAgent = {
-      id: agentId,
-      tenant_id: tenantId,
-      fingerprint: 'AA:BB:CC',
-      credential_salt: salt,
-      credential_hash: hashSecretWithSalt(credential, salt),
-    };
-    const { repositories, auditEvents } = createRecordingAgentRepositories({
-      findAgentByAddressedHint: async ({ tenantId: t, id }) => {
-        if (t === tenantId && id === agentId) return storedAgent;
-        if (t === tenantId && id === 'agent_other') return { id: 'agent_other', tenant_id: tenantId };
-        return null;
-      },
-    });
-    const { agentAuth } = createPostgresAgentServices(repositories, {
-      tokens: { consumeBootstrapToken: async () => ({}) },
-    });
-
-    const ok = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${credential}` },
-      agentId,
-    );
-    assert.equal(ok.agent.id, agentId);
-    assert.equal(ok.credential, credential);
-
-    const missing = await agentAuth.requireAgentAuth({}, agentId);
-    assert.deepEqual(missing, { error: 'unauthorized', status: 401 });
-    assert.equal(auditEvents.length, 0);
-
-    const legacy = await agentAuth.requireAgentAuth(
-      { authorization: 'Bearer agc_legacyopaque123456789012345678901234' },
-      agentId,
-    );
-    assert.equal(legacy.status, 401);
-    assert.equal(auditEvents.length, 0);
-
-    const tampered = `${credential}x`;
-    const bad = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${tampered}` },
-      agentId,
-    );
-    assert.equal(bad.status, 401);
-    assert.equal(auditEvents.length, 1);
-    assert.equal(auditEvents[0].action, 'agent.auth_denied');
-    assert.equal(JSON.stringify(auditEvents[0]).includes(tampered), false);
-
-    auditEvents.length = 0;
-    const routeMismatch = createAddressedSecret('agc_', tenantId, 'agent_other');
-    const mismatch = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${routeMismatch}` },
-      agentId,
-    );
-    assert.equal(mismatch.status, 401);
-    assert.equal(auditEvents.length, 1);
-
-    auditEvents.length = 0;
-    const ghost = createAddressedSecret('agc_', tenantId, 'agent_missing');
-    const noRow = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${ghost}` },
-      'agent_missing',
-    );
-    assert.equal(noRow.status, 401);
-    assert.equal(auditEvents.length, 0);
-
-    const mtlsOk = await agentAuth.requireAgentAuth(
-      {
-        authorization: `Bearer ${credential}`,
-        'x-client-cert-fingerprint': 'sha256:aabbcc',
-      },
-      agentId,
-      { agentIdentityMode: 'gateway-mtls' },
-    );
-    assert.equal(mtlsOk.agent.id, agentId);
-
-    const mtlsMissing = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${credential}` },
-      agentId,
-      { agentIdentityMode: 'gateway-mtls' },
-    );
-    assert.equal(mtlsMissing.status, 401);
-    assert.equal(auditEvents.at(-1).metadata.reason, 'strong_identity_missing');
-
-    auditEvents.length = 0;
-    storedAgent.status = 'revoked';
-    const revoked = await agentAuth.requireAgentAuth(
-      { authorization: `Bearer ${credential}` },
-      agentId,
-    );
-    assert.equal(revoked.status, 401);
-    assert.equal(auditEvents.length, 1);
-    assert.equal(auditEvents[0].metadata.reason, 'revoked');
-    assert.equal(JSON.stringify(auditEvents[0]).includes(credential), false);
-  });
-
-  it('does not reference dev-json memory store or server modules in agent adapter source', () => {
-    assert.equal(/\bgetStore\b/.test(AGENT_ADAPTER_SOURCE), false);
-    assert.equal(/\bpersistStore\b/.test(AGENT_ADAPTER_SOURCE), false);
-    assert.equal(/\bcreateServer\b/.test(AGENT_ADAPTER_SOURCE), false);
-    assert.equal(/\bservices\/agents\b/.test(AGENT_ADAPTER_SOURCE), false);
   });
 });
 
@@ -1185,15 +539,6 @@ function createRecordingValidationRepositories(overrides = {}) {
       return overrides.getTargetGroup?.(...args);
     },
   };
-  const agentControl = {};
-  for (const method of VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS) {
-    agentControl[method] = async (...args) => {
-      validationCalls.push({ method: `agentControl.${method}`, args });
-      if (overrides[method]) return overrides[method](...args);
-      if (method === 'listAgents') return [];
-      return undefined;
-    };
-  }
   const probeJobs = {
     getProbeJobByTestRun: async (...args) => {
       validationCalls.push({ method: 'getProbeJobByTestRun', args });
@@ -1215,7 +560,6 @@ function createRecordingValidationRepositories(overrides = {}) {
     validationEvidence,
     audit,
     coreCatalog,
-    agentControl,
     probeJobs,
     killSwitch,
   };
@@ -1232,7 +576,7 @@ function createRecordingValidationRepositories(overrides = {}) {
         if (overrides.getCurrentTargetVerification) {
           return overrides.getCurrentTargetVerification(...args);
         }
-        return { target_id: args[2], state: 'agent_verified' };
+        return { target_id: args[2], state: 'dns_verified' };
       },
     };
   }
@@ -1243,7 +587,6 @@ function createRecordingValidationRepositories(overrides = {}) {
 function assertNoRunProbeOrAgentSideEffects(validationCalls) {
   assert.equal(validationCalls.some((c) => c.method === 'createTestRun'), false);
   assert.equal(validationCalls.some((c) => c.method === 'createProbeJob'), false);
-  assert.equal(validationCalls.some((c) => c.method === 'agentControl.createAgentJob'), false);
 }
 
 function baseStartTargetGroup(overrides = {}) {
@@ -1300,7 +643,7 @@ describe('postgres validation service adapters', () => {
       'getFinding',
       'patchFinding',
     ]);
-    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 11);
+    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 10);
     assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('registerRunTerminalHook'));
   });
 
@@ -1420,421 +763,9 @@ describe('postgres validation service adapters', () => {
     };
   }
 
-  it('ingestObservation before external probe commits job, event, and audit through one client', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun({
-      status: 'running',
-      probe_external_result: null,
-      awaiting_external_probe: true,
-    });
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_1',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: 'run_1',
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_1',
-      status: 'acked',
-    };
-    const transactionClient = { id: 'observation-transaction-client' };
-    let verdictWrites = 0;
-    let transactionalRunRead = false;
-    let transactionalJobRead = false;
-    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
-      transactionClient,
-      isKillSwitchActiveForTenant: async (_ctx, options) => {
-        assert.equal(options.client, transactionClient);
-        return false;
-      },
-      getAgentById: async () => agent,
-      getTestRun: async (_ctx, _id, options) => {
-        if (options?.client) {
-          assert.equal(options.client, transactionClient);
-          transactionalRunRead = true;
-        }
-        return run;
-      },
-      getAgentJobById: async (_key, options) => {
-        if (options?.client) {
-          assert.equal(options.client, transactionClient);
-          transactionalJobRead = true;
-        }
-        return job;
-      },
-      listRunEvents: async (_ctx, _id, options) => {
-        assert.equal(options.client, transactionClient);
-        return [];
-      },
-      appendEvent: async (_ctx, event, options) => {
-        assert.equal(options.client, transactionClient);
-        return event;
-      },
-      markAgentJobObserved: async (_key, _observedAt, options) => {
-        assert.equal(options.client, transactionClient);
-        return { ...job, status: 'observed' };
-      },
-      withRunMutationLock: async (_ctx, _runId, callback, options) => {
-        assert.equal(options.client, transactionClient);
-        return {
-          acquired: true,
-          result: await callback(transactionClient),
-        };
-      },
-    });
-    repositories.validationEvidence.createVerdictIfAbsent = async () => {
-      verdictWrites += 1;
-      return {};
-    };
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: 'run_1',
-      agent_job_id: 'job_1',
-      nonce_hash: 'nh_1',
-      metadata: { mode: 'canary' },
-    });
-    assert.equal(result.run.verdict, null);
-    assert.equal(verdictWrites, 0);
-    assert.equal(transactionalRunRead, true);
-    assert.equal(transactionalJobRead, true);
-    const observationAudit = auditEvents.find((event) => event.entry.action === 'observation.ingested');
-    assert.equal(observationAudit.options.client, transactionClient);
-    const auditLockIdx = validationCalls.findIndex(
-      (call) => call.method === 'audit.withTenantAuditLock',
-    );
-    const runLockIdx = validationCalls.findIndex(
-      (call) => call.method === 'withRunMutationLock',
-    );
-    const killSwitchIdx = validationCalls.findIndex(
-      (call) => call.method === 'killSwitch.isKillSwitchActiveForTenant',
-    );
-    assert.ok(auditLockIdx >= 0 && auditLockIdx < runLockIdx && runLockIdx < killSwitchIdx);
-    const markIdx = validationCalls.findIndex((c) => c.method === 'agentControl.markAgentJobObserved');
-    const appendIdx = validationCalls.findIndex((c) => c.method === 'appendEvent');
-    assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
-  });
-
-  it('kill switch blocks agent observation and verdict insertion inside the run mutation lock', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun();
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_1', tenant_id: 'ten_demo', agent_id: 'ag_1', test_run_id: 'run_1',
-      check_id: run.check_id, target_id: 'tgt_1', nonce_hash: 'nh_1', status: 'acked',
-    };
-    let eventWrites = 0;
-    let verdictWrites = 0;
-    let killSwitchClient;
-    const {
-      repositories,
-      auditEvents,
-      validationCalls,
-      transactionClient,
-    } = createRecordingValidationRepositories({
-      getAgentById: async () => agent,
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => job,
-      isKillSwitchActiveForTenant: async (_ctx, options) => {
-        killSwitchClient = options.client;
-        return true;
-      },
-      appendEvent: async () => { eventWrites += 1; return {}; },
-      createVerdictIfAbsent: async () => { verdictWrites += 1; return {}; },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1', metadata: { mode: 'canary' },
-    });
-
-    assert.deepEqual(result, { error: 'kill_switch_active', status: 423 });
-    assert.equal(eventWrites, 0);
-    assert.equal(verdictWrites, 0);
-    assert.equal(killSwitchClient, transactionClient);
-    assert.equal(validationCalls.some((call) => call.method === 'agentControl.markAgentJobObserved'), false);
-    assert.ok(auditEvents.some(
-      (event) => event.entry.action === 'observation.rejected' && event.entry.metadata.reason === 'kill_switch_active',
-    ));
-  });
-
-  it('ingestObservation after probe evidence publishes bypassable verdict and upserts finding', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun();
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_1',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: 'run_1',
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_1',
-      status: 'acked',
-    };
-    const probeEvent = {
-      id: 'evt_probe',
-      test_run_id: 'run_1',
-      signal_type: 'probe_result',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'connected' },
-    };
-    const target = {
-      id: 'tgt_1',
-      value: '203.0.113.1',
-      expected_behavior: 'must_block_before_origin',
-    };
-    let upsertFinding = 0;
-    let runEvents = [probeEvent];
-    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
-      getAgentById: async () => agent,
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => job,
-      listRunEvents: async () => runEvents,
-      appendEvent: async (c, e) => {
-        const obs = {
-          ...e,
-          id: 'evt_obs',
-          signal_type: 'agent_observation',
-          timestamp: FIXED_NOW.toISOString(),
-        };
-        runEvents = [...runEvents, obs];
-        return obs;
-      },
-      markAgentJobObserved: async () => ({ ...job, status: 'observed' }),
-      getTargetGroup: async () => ({ id: 'tg_1', targets: [target] }),
-      listAgents: async () => [agent],
-      getVerdictForRun: async () => null,
-      createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
-      updateTestRun: async (c, id, patch) => ({ ...run, ...patch }),
-      findOpenFinding: async () => null,
-      upsertOpenFindingFromVerdict: async () => {
-        upsertFinding += 1;
-        return { id: 'find_1' };
-      },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: 'run_1',
-      agent_job_id: 'job_1',
-      nonce_hash: 'nh_1',
-      metadata: { mode: 'canary' },
-    });
-    assert.equal(result.run.verdict.verdict, 'bypassable');
-    assert.equal(upsertFinding, 1);
-    assert.ok(auditEvents.some((a) => a.entry.action === 'verdict.published'));
-    assert.ok(validationCalls.some((c) => c.method === 'agentControl.markAgentJobObserved'));
-    const markIdx = validationCalls.findIndex((c) => c.method === 'agentControl.markAgentJobObserved');
-    const appendIdx = validationCalls.findIndex((c) => c.method === 'appendEvent');
-    assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
-  });
-
-  it('same confirmed observation retry resumes finalization without duplicate event or audit', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun();
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_1',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: 'run_1',
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_1',
-      status: 'acked',
-    };
-    const probeEvent = {
-      id: 'evt_probe',
-      test_run_id: 'run_1',
-      target_id: 'tgt_1',
-      check_id: run.check_id,
-      signal_type: 'probe_result',
-      producer_kind: 'signed_probe',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'connected' },
-    };
-    const target = {
-      id: 'tgt_1',
-      value: '203.0.113.1',
-      expected_behavior: 'must_block_before_origin',
-    };
-    let jobStatus = 'acked';
-    let eventWrites = 0;
-    let markWrites = 0;
-    let verdictAttempts = 0;
-    let storedVerdict = null;
-    const persistedEvents = [probeEvent];
-    const { repositories, auditEvents } = createRecordingValidationRepositories({
-      getAgentById: async () => agent,
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => ({ ...job, status: jobStatus }),
-      listRunEvents: async () => persistedEvents.map((event) => ({ ...event })),
-      appendEvent: async (_scope, event) => {
-        eventWrites += 1;
-        const stored = { ...event, id: 'evt_obs' };
-        persistedEvents.push(stored);
-        return stored;
-      },
-      markAgentJobObserved: async () => {
-        markWrites += 1;
-        jobStatus = 'observed';
-        return { ...job, status: jobStatus };
-      },
-      getTargetGroup: async () => ({ id: 'tg_1', targets: [target] }),
-      listAgents: async () => [agent],
-      getVerdictForRun: async () => storedVerdict,
-      createVerdictIfAbsent: async (_scope, record) => {
-        verdictAttempts += 1;
-        if (verdictAttempts === 1) throw new Error('injected finalization failure');
-        storedVerdict = { ...record, id: 'ver_1' };
-        return storedVerdict;
-      },
-      findOpenFinding: async () => null,
-      upsertOpenFindingFromVerdict: async () => ({ id: 'find_1' }),
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const body = {
-      test_run_id: 'run_1',
-      agent_job_id: 'job_1',
-      nonce_hash: 'nh_1',
-      metadata: { mode: 'canary' },
-    };
-
-    await assert.rejects(
-      () => testRuns.ingestObservation(ctx, 'ag_1', body),
-      /injected finalization failure/,
-    );
-    assert.equal(jobStatus, 'observed', 'the confirmed observation transaction committed');
-    assert.equal(eventWrites, 1);
-    assert.equal(markWrites, 1);
-    assert.equal(
-      auditEvents.filter((event) => event.entry.action === 'observation.ingested').length,
-      1,
-    );
-
-    const retried = await testRuns.ingestObservation(ctx, 'ag_1', body);
-    assert.equal(retried.run.verdict.verdict, 'bypassable');
-    assert.equal(verdictAttempts, 2);
-    assert.equal(eventWrites, 1, 'retry reuses the durable observation event');
-    assert.equal(markWrites, 1, 'retry does not transition the observed job again');
-    assert.equal(
-      auditEvents.filter((event) => event.entry.action === 'observation.ingested').length,
-      1,
-      'retry does not duplicate the ingestion audit',
-    );
-    assert.equal(
-      auditEvents.some((event) => event.entry.action === 'observation.rejected'),
-      false,
-    );
-  });
-
-  it('repairs a missing audit for a durable observed-job replay after run finalization exactly once', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun({
-      status: 'verdicted',
-      completed_at: FIXED_NOW.toISOString(),
-      awaiting_external_probe: false,
-      probe_external_result: null,
-    });
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_observed',
-      tenant_id: run.tenant_id,
-      agent_id: agent.id,
-      test_run_id: run.id,
-      check_id: run.check_id,
-      target_id: run.target_id,
-      nonce_hash: run.correlation.nonce_hash,
-      status: 'observed',
-      observed_at: FIXED_NOW.toISOString(),
-    };
-    const observation = {
-      id: 'evt_observed',
-      test_run_id: run.id,
-      target_id: run.target_id,
-      check_id: run.check_id,
-      agent_id: agent.id,
-      signal_type: 'agent_observation',
-      producer_kind: 'authenticated_agent',
-      nonce_hash: run.correlation.nonce_hash,
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { agent_job_id: job.id },
-    };
-    let eventWrites = 0;
-    let markWrites = 0;
-    const {
-      repositories,
-      auditEvents,
-      transactionClient,
-      validationCalls,
-    } = createRecordingValidationRepositories({
-      getAgentById: async () => agent,
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => ({ ...job }),
-      listRunEvents: async () => [{ ...observation }],
-      getVerdictForRun: async () => ({
-        id: 'verdict_terminal',
-        tenant_id: run.tenant_id,
-        test_run_id: run.id,
-        target_id: run.target_id,
-        check_id: run.check_id,
-        verdict: 'protected',
-        confidence: 'high',
-        placement_confidence: { level: 'high', status: 'confirmed' },
-        explanation: 'Immutable terminal verdict.',
-        evidence_ids: [observation.id],
-      }),
-      appendEvent: async () => { eventWrites += 1; },
-      markAgentJobObserved: async () => { markWrites += 1; },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const body = {
-      test_run_id: run.id,
-      agent_job_id: job.id,
-      nonce_hash: job.nonce_hash,
-      target_id: job.target_id,
-    };
-
-    const first = await testRuns.ingestObservation(ctx, agent.id, body);
-    const second = await testRuns.ingestObservation(ctx, agent.id, body);
-
-    assert.equal(first.observation.id, observation.id);
-    assert.equal(second.observation.id, observation.id);
-    assert.equal(eventWrites, 0);
-    assert.equal(markWrites, 0);
-    assert.equal(
-      validationCalls.some(({ method }) => method === 'agentControl.listAgents'),
-      true,
-      'terminal replay must enter incumbent-verdict side-effect repair',
-    );
-    assert.equal(
-      validationCalls.some(({ method }) => [
-        'createVerdictIfAbsent',
-        'upsertOpenFindingFromVerdict',
-      ].includes(method)),
-      false,
-    );
-    assert.equal(
-      auditEvents.filter(({ entry }) => entry.action === 'verdict.published').length,
-      1,
-      'terminal replay repairs the immutable verdict audit exactly once',
-    );
-    const repaired = auditEvents.filter(
-      ({ entry }) => entry.action === 'observation.ingested',
-    );
-    assert.equal(repaired.length, 1);
-    assert.equal(repaired[0].options.client, transactionClient);
-    assert.deepEqual(repaired[0].options.idempotency.metadata, {
-      agent_job_id: job.id,
-    });
-  });
-
   it('sweeper recovers a durable observation after an injected finalization failure', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'system', role: 'system' };
     const run = collectingRun({ collection_deadline_at: '2000-01-01T00:00:00.000Z' });
-    const agent = baseOnlineAgent({ id: 'ag_1' });
     const probeEvent = {
       id: 'evt_probe',
       test_run_id: run.id,
@@ -1845,18 +776,6 @@ describe('postgres validation service adapters', () => {
       nonce_hash: 'nh_1',
       timestamp: FIXED_NOW.toISOString(),
       metadata: { external_result: 'connected' },
-    };
-    const observation = {
-      id: 'evt_obs',
-      test_run_id: run.id,
-      target_id: run.target_id,
-      check_id: run.check_id,
-      agent_id: agent.id,
-      signal_type: 'agent_observation',
-      producer_kind: 'authenticated_agent',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { agent_job_id: 'job_1' },
     };
     let verdictAttempts = 0;
     let storedVerdict = null;
@@ -1868,13 +787,12 @@ describe('postgres validation service adapters', () => {
       transactionClient,
     } = createRecordingValidationRepositories({
       getTestRun: async () => ({ ...run }),
-      listRunEvents: async () => [probeEvent, observation],
+      listRunEvents: async () => [probeEvent],
       updateTestRun: async (_scope, _id, patch) => ({ ...run, ...patch }),
       appendEvent: async () => {
         appendedEvents += 1;
-        throw new Error('matching observation recovery must not append no-observation evidence');
+        throw new Error('external-only finalization must not append observation evidence');
       },
-      listAgents: async () => [agent],
       getTargetGroup: async () => ({
         id: run.target_group_id,
         targets: [{
@@ -1920,7 +838,7 @@ describe('postgres validation service adapters', () => {
     const summary = await testRuns.sweepExpiredCollectingRuns(ctx);
 
     assert.equal(summary.finalized, 1);
-    assert.deepEqual(summary.finalized_runs, [{ run_id: run.id, verdict: 'bypassable' }]);
+    assert.deepEqual(summary.finalized_runs, [{ run_id: run.id, verdict: 'edge_exposed' }]);
     assert.equal(verdictAttempts, 2);
     assert.equal(appendedEvents, 0);
     assert.equal(
@@ -1980,7 +898,7 @@ describe('postgres validation service adapters', () => {
     const run = collectingRun({
       check_id: 'dns.authoritative_response.safe',
       probe_external_result: 'connected',
-      collection_deadline_at: '2099-01-01T00:00:00.000Z',
+      collection_deadline_at: '2000-01-01T00:00:00.000Z',
     });
     const probeEvent = {
       id: 'evt_probe',
@@ -2025,12 +943,9 @@ describe('postgres validation service adapters', () => {
     assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(verdict.confidence, 'external_only');
     assert.equal(upsertFinding, 0);
-    // Published as a real verdict, NOT a no-observation finalization.
-    assert.ok(auditEvents.some((a) => a.entry.action === 'verdict.published'));
-    assert.equal(
-      auditEvents.some((a) => a.entry.action === 'verdict.finalized_no_observation'),
-      false,
-    );
+    // An inconclusive verdict has no finding severity, so it publishes as a
+    // no-observation finalization (ADR-0008: external probe evidence only).
+    assert.ok(auditEvents.some((a) => a.entry.action === 'verdict.finalized_no_observation'));
     // No spurious agent_no_observation event is written for external-only runs.
     assert.equal(
       validationCalls.some(
@@ -2038,414 +953,6 @@ describe('postgres validation service adapters', () => {
       ),
       false,
     );
-  });
-
-  it('agent_assisted run with no agent still finalizes inconclusive (no external-only finding)', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'probe_worker', role: 'probe_worker' };
-    const run = collectingRun({
-      check_id: 'dns.authoritative_response.safe',
-      probe_external_result: 'connected',
-      collection_deadline_at: '2000-01-01T00:00:00.000Z',
-    });
-    const probeEvent = {
-      id: 'evt_probe',
-      test_run_id: 'run_1',
-      signal_type: 'probe_result',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'connected' },
-    };
-    let upsertFinding = 0;
-    const { repositories } = createRecordingValidationRepositories({
-      getTestRun: async () => ({ ...run }),
-      listRunEvents: async () => [probeEvent],
-      updateTestRun: async (c, id, patch) => ({ ...run, ...patch }),
-      appendEvent: async (c, e) => e,
-      getTargetGroup: async () => ({
-        id: 'tg_1',
-        tenant_id: 'ten_demo',
-        validation_mode: 'agent_assisted',
-        targets: [{ id: 'tgt_1', kind: 'fqdn', value: 'astranull.site' }],
-      }),
-      listAgents: async () => [],
-      getVerdictForRun: async () => null,
-      createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
-      findOpenFinding: async () => null,
-      upsertOpenFindingFromVerdict: async () => {
-        upsertFinding += 1;
-        return { id: 'find_1' };
-      },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-
-    const verdict = await testRuns.maybeFinalizeRunAfterProbeIngest(ctx, 'run_1');
-    assert.equal(verdict.verdict, 'inconclusive');
-    assert.equal(upsertFinding, 0);
-  });
-
-  it('ingestObservation rejects when markAgentJobObserved returns null despite acked job read', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun();
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const job = {
-      id: 'job_1',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: 'run_1',
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_1',
-      status: 'acked',
-    };
-    const probeEvent = {
-      id: 'evt_probe',
-      test_run_id: 'run_1',
-      signal_type: 'probe_result',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'connected' },
-    };
-    let appendCount = 0;
-    let verdictWrites = 0;
-    let upsertFinding = 0;
-    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
-      getAgentById: async () => agent,
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => job,
-      listRunEvents: async () => [probeEvent],
-      appendEvent: async () => {
-        appendCount += 1;
-        return { id: 'evt_obs' };
-      },
-      markAgentJobObserved: async () => null,
-      createVerdictIfAbsent: async () => {
-        verdictWrites += 1;
-        return {};
-      },
-      upsertOpenFindingFromVerdict: async () => {
-        upsertFinding += 1;
-        return { id: 'find_1' };
-      },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: 'run_1',
-      agent_job_id: 'job_1',
-      nonce_hash: 'nh_1',
-      metadata: { mode: 'canary' },
-    });
-    assert.deepEqual(result, { error: 'agent_job_not_open', status: 409 });
-    assert.equal(appendCount, 0);
-    assert.equal(verdictWrites, 0);
-    assert.equal(upsertFinding, 0);
-    assert.ok(auditEvents.some((a) => a.entry.action === 'observation.rejected'));
-    assert.equal(
-      auditEvents.some((a) => a.entry.action === 'observation.ingested'),
-      false,
-    );
-    assert.ok(validationCalls.some((c) => c.method === 'agentControl.markAgentJobObserved'));
-    assert.equal(validationCalls.some((c) => c.method === 'appendEvent'), false);
-  });
-
-  it('ingestObservation rejects unsafe or invalid payloads without side effects', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun({ status: 'verdicted' });
-    const agent = baseOnlineAgent({ id: 'ag_1' });
-    const ackedJob = {
-      id: 'job_1',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: 'run_1',
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_1',
-      status: 'acked',
-    };
-    const cases = [
-      {
-        name: 'raw_packet',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1', raw_packet: 'x' },
-        error: 'raw_packet_rejected',
-        status: 400,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'camel_raw_packet',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1', rawPacket: 'x' },
-        error: 'raw_packet_rejected',
-        status: 400,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'kebab_request_body',
-        body: {
-          test_run_id: 'run_1',
-          agent_job_id: 'job_1',
-          nonce_hash: 'nh_1',
-          metadata: { 'request-body': 'raw' },
-        },
-        error: 'raw_packet_rejected',
-        status: 400,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'compact_request_headers',
-        body: {
-          test_run_id: 'run_1',
-          agent_job_id: 'job_1',
-          nonce_hash: 'nh_1',
-          metadata: { requestheaders: { authorization: 'secret' } },
-        },
-        error: 'raw_packet_rejected',
-        status: 400,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'missing_job',
-        body: { test_run_id: 'run_1', nonce_hash: 'nh_1' },
-        error: 'missing_agent_job_id',
-        status: 400,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'pending_job',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1' },
-        error: 'agent_job_not_acked',
-        status: 409,
-        job: { ...ackedJob, status: 'pending' },
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'job_mismatch',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'wrong' },
-        error: 'agent_job_mismatch',
-        status: 403,
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'observed_missing_timestamp',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1' },
-        error: 'legacy_observation_timestamp_missing',
-        status: 409,
-        job: { ...ackedJob, status: 'observed', observed_at: null },
-        audit: 'observation.rejected',
-      },
-      {
-        name: 'inactive_run',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1' },
-        error: 'run_not_collecting',
-        status: 409,
-        run: collectingRun({ status: 'verdicted' }),
-        audit: 'observation.rejected_inactive_run',
-      },
-      {
-        name: 'cross_tenant',
-        body: {
-          test_run_id: 'run_1',
-          agent_job_id: 'job_1',
-          nonce_hash: 'nh_1',
-          tenant_id: 'ten_other',
-        },
-        error: 'cross_tenant_injection',
-        status: 403,
-        audit: 'observation.tenant_rejected',
-      },
-      {
-        name: 'event_cap',
-        body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1' },
-        error: 'event_cap_exceeded',
-        status: 429,
-        run: collectingRun({ safety_constraints: { max_events: 1 } }),
-        events: [{ id: 'evt_0' }],
-        audit: 'test_run.event_cap_denied',
-      },
-    ];
-
-    for (const tc of cases) {
-      let appendCount = 0;
-      const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
-        getAgentById: async () => agent,
-        getTestRun: async () => tc.run ?? collectingRun({ status: 'collecting' }),
-        getAgentJobById: async () => tc.job ?? ackedJob,
-        listRunEvents: async () => tc.events ?? [],
-        appendEvent: async () => {
-          appendCount += 1;
-          return { id: 'evt_x' };
-        },
-        createVerdictIfAbsent: async () => {
-          throw new Error('unexpected verdict write');
-        },
-      });
-      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-      const result = await testRuns.ingestObservation(ctx, 'ag_1', tc.body);
-      assert.equal(result.error, tc.error, tc.name);
-      assert.equal(result.status, tc.status, tc.name);
-      assert.ok(auditEvents.some((a) => a.entry.action === tc.audit), tc.name);
-      assert.equal(appendCount, 0, tc.name);
-      assert.equal(
-        validationCalls.some((c) => c.method === 'agentControl.markAgentJobObserved'),
-        false,
-        tc.name,
-      );
-    }
-  });
-
-  it('repairs a legacy observed agent job that has no durable observation event', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun({
-      status: 'collecting',
-      awaiting_external_probe: true,
-      correlation: { nonce_hash: 'nh_legacy', window_ms: 120000 },
-    });
-    const job = {
-      id: 'job_legacy_observed',
-      tenant_id: 'ten_demo',
-      agent_id: 'ag_1',
-      test_run_id: run.id,
-      check_id: run.check_id,
-      target_id: 'tgt_1',
-      nonce_hash: 'nh_legacy',
-      status: 'observed',
-      observed_at: '2026-06-01T11:57:00.000Z',
-    };
-    let markCalls = 0;
-    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
-      getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
-      getTestRun: async () => run,
-      getAgentJobById: async () => job,
-      listRunEvents: async () => [],
-      markAgentJobObserved: async () => {
-        markCalls += 1;
-        return null;
-      },
-      appendEvent: async (_ctx, event) => ({ ...event, id: 'evt_recovered' }),
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: run.id,
-      agent_job_id: job.id,
-      nonce_hash: job.nonce_hash,
-      target_id: job.target_id,
-      metadata: { observation: 'healthy' },
-    });
-
-    assert.equal(result.error, undefined);
-    assert.equal(result.observation.id, 'evt_recovered');
-    assert.equal(result.observation.signal_type, 'agent_observation');
-    assert.equal(result.observation.producer_kind, 'authenticated_agent');
-    assert.equal(result.observation.agent_id, 'ag_1');
-    assert.equal(result.observation.timestamp, job.observed_at);
-    assert.equal(result.observation.metadata.agent_job_id, job.id);
-    assert.equal(result.observation.metadata.recovered_from_legacy_observed_job, true);
-    assert.equal(result.observation.metadata.observation, undefined);
-    assert.equal(markCalls, 0, 'already-observed legacy row must not transition again');
-    assert.ok(auditEvents.some((call) => call.entry.action === 'observation.recovered'));
-    assert.ok(validationCalls.some((call) => call.method === 'appendEvent'));
-  });
-
-  it('does not reconstruct a missing legacy observation after run finalization', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const run = collectingRun({
-      status: 'verdicted',
-      completed_at: FIXED_NOW.toISOString(),
-      awaiting_external_probe: false,
-      correlation: { nonce_hash: 'nh_legacy', window_ms: 120000 },
-    });
-    const job = {
-      id: 'job_legacy_observed',
-      tenant_id: run.tenant_id,
-      agent_id: 'ag_1',
-      test_run_id: run.id,
-      check_id: run.check_id,
-      target_id: run.target_id,
-      nonce_hash: run.correlation.nonce_hash,
-      status: 'observed',
-      observed_at: '2026-06-01T11:57:00.000Z',
-    };
-    let eventWrites = 0;
-    const { repositories, auditEvents, transactionClient } = createRecordingValidationRepositories({
-      getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
-      getTestRun: async () => ({ ...run }),
-      getAgentJobById: async () => ({ ...job }),
-      listRunEvents: async () => [],
-      appendEvent: async () => { eventWrites += 1; },
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-
-    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-      test_run_id: run.id,
-      agent_job_id: job.id,
-      nonce_hash: job.nonce_hash,
-      target_id: job.target_id,
-    });
-
-    assert.deepEqual(result, { error: 'run_not_collecting', status: 409 });
-    assert.equal(eventWrites, 0);
-    const rejection = auditEvents.find(
-      ({ entry }) => entry.action === 'observation.rejected_inactive_run',
-    );
-    assert.ok(rejection);
-    assert.equal(rejection.options.client, transactionClient);
-  });
-
-  it('rejects legacy observed repair when durable job fields do not match the fresh run', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
-    const baseRun = collectingRun({ status: 'collecting', awaiting_external_probe: true });
-    const baseJob = {
-      id: 'job_legacy_observed',
-      tenant_id: baseRun.tenant_id,
-      agent_id: 'ag_1',
-      test_run_id: baseRun.id,
-      check_id: baseRun.check_id,
-      target_id: baseRun.target_id,
-      nonce_hash: baseRun.correlation.nonce_hash,
-      status: 'observed',
-      observed_at: '2026-06-01T11:57:00.000Z',
-    };
-    const cases = [
-      {
-        name: 'nonce',
-        fresh: { correlation: { ...baseRun.correlation, nonce_hash: 'nh_fresh_other' } },
-      },
-      { name: 'target', fresh: { target_id: 'tgt_fresh_other' } },
-      { name: 'check', fresh: { check_id: 'origin.other_check.safe' } },
-    ];
-
-    for (const tc of cases) {
-      let runReads = 0;
-      let eventWrites = 0;
-      const freshRun = {
-        ...baseRun,
-        ...tc.fresh,
-        correlation: tc.fresh.correlation ?? { ...baseRun.correlation },
-      };
-      const { repositories, auditEvents } = createRecordingValidationRepositories({
-        getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
-        getTestRun: async () => (++runReads === 1 ? { ...baseRun } : freshRun),
-        getAgentJobById: async () => ({ ...baseJob }),
-        listRunEvents: async () => [],
-        appendEvent: async () => { eventWrites += 1; },
-      });
-      const { testRuns } = createPostgresValidationServices(repositories, {
-        now: () => FIXED_NOW,
-      });
-
-      const result = await testRuns.ingestObservation(ctx, 'ag_1', {
-        test_run_id: baseRun.id,
-        agent_job_id: baseJob.id,
-        nonce_hash: baseJob.nonce_hash,
-        target_id: baseJob.target_id,
-      });
-
-      assert.equal(result.error, 'agent_job_mismatch', tc.name);
-      assert.equal(result.status, 403, tc.name);
-      assert.equal(eventWrites, 0, tc.name);
-      assert.ok(auditEvents.some(
-        ({ entry }) => entry.action === 'observation.rejected'
-          && entry.metadata.reason === 'agent_job_mismatch',
-      ), tc.name);
-    }
   });
 
   it('finalizeTestRun enforces collecting/probe/window gates and forced no-observation verdict', async () => {
@@ -2513,57 +1020,10 @@ describe('postgres validation service adapters', () => {
     runEvents = [probeEvent];
     repositories.validationEvidence.listRunEvents = async () => [...runEvents];
     const forced = await testRuns.finalizeTestRun(ctx, 'run_1', { force: true });
-    assert.equal(forced.verdict.verdict, 'protected');
+    assert.equal(forced.verdict.verdict, 'edge_protected');
     assert.ok(
       auditEvents.some((a) => a.entry.action === 'verdict.finalized_no_observation'),
     );
-  });
-
-  it('maybeFinalizeRunAfterProbeIngest with tenant ctx clears awaiting flag and finalizes when observation exists', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'probe_worker', role: 'probe_worker' };
-    const run = collectingRun({
-      status: 'running',
-      awaiting_external_probe: true,
-      probe_external_result: 'connected',
-    });
-    const agent = baseOnlineAgent();
-    const obs = {
-      id: 'evt_obs',
-      test_run_id: 'run_1',
-      signal_type: 'agent_observation',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      agent_id: 'ag_1',
-    };
-    const probeEvent = {
-      id: 'evt_probe',
-      test_run_id: 'run_1',
-      signal_type: 'probe_result',
-      nonce_hash: 'nh_1',
-      timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'connected' },
-    };
-    const updates = [];
-    const { repositories } = createRecordingValidationRepositories({
-      getTestRun: async () => ({ ...run }),
-      listRunEvents: async () => [probeEvent, obs],
-      updateTestRun: async (c, id, patch) => {
-        updates.push(patch);
-        return { ...run, ...patch };
-      },
-      listAgents: async () => [agent],
-      getTargetGroup: async () => ({
-        id: 'tg_1',
-        targets: [{ id: 'tgt_1', value: '203.0.113.1', expected_behavior: 'must_block_before_origin' }],
-      }),
-      getVerdictForRun: async () => null,
-      createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
-    });
-    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
-    const verdict = await testRuns.maybeFinalizeRunAfterProbeIngest(ctx, 'run_1');
-    assert.equal(verdict.verdict, 'bypassable');
-    assert.ok(updates.some((p) => p.awaiting_external_probe === false));
-    assert.equal(await testRuns.maybeFinalizeRunAfterProbeIngest('run_only'), null);
   });
 
   it('startTestRun creates run, simulation probe event, and agent jobs in postgres mode', async () => {
@@ -2584,14 +1044,6 @@ describe('postgres validation service adapters', () => {
     let createdRun;
     const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
       getTargetGroup: async (c, id) => (c === ctx && id === 'tg_1' ? group : null),
-      listAgents: async () => [
-        {
-          id: 'ag_1',
-          status: 'online',
-          capabilities: ['canary', 'heartbeat'],
-          target_group_id: 'tg_1',
-        },
-      ],
       createTestRun: async (c, record) => {
         createdRun = record;
         return { ...record, awaiting_external_probe: false };
@@ -2608,14 +1060,13 @@ describe('postgres validation service adapters', () => {
       target_id: 'tgt_1',
     });
     assert.equal(result.run.status, 'collecting');
-    assert.equal(result.jobs_dispatched, 1);
+    assert.equal(result.jobs_dispatched, 0);
     assert.ok(result.probe_event);
     const inlineProbeWrite = validationCalls.find(
       (call) => call.method === 'appendEvent' && call.args[1]?.signal_type === 'probe_result',
     );
     assert.equal(inlineProbeWrite.args[1].producer_kind, 'internal_simulation');
     assert.ok(validationCalls.some((c) => c.method === 'createTestRun'));
-    assert.ok(validationCalls.some((c) => c.method === 'agentControl.createAgentJob'));
     assert.ok(auditEvents.some((a) => a.entry.action === 'test_run.started'));
   });
 
@@ -2729,7 +1180,7 @@ describe('postgres validation service adapters', () => {
     assert.equal(result.run.status, 'running');
     assert.equal(result.run.awaiting_external_probe, true);
     assert.equal(result.run.correlation.nonce_hash, probeJobRecord.nonce_hash);
-    assert.equal(result.jobs_dispatched, 1);
+    assert.equal(result.jobs_dispatched, 0);
     assert.ok(result.probe_job);
     assert.equal(result.probe_job.id, probeJobRecord.id);
     assert.equal(result.probe_job.nonce_hash, probeJobRecord.nonce_hash);
@@ -2738,7 +1189,6 @@ describe('postgres validation service adapters', () => {
     assert.ok(probeJobRecord.nonce);
     assert.equal(JSON.stringify(result).includes(probeJobRecord.nonce), false);
     assert.ok(validationCalls.some((c) => c.method === 'createProbeJob'));
-    assert.ok(validationCalls.some((c) => c.method === 'agentControl.createAgentJob'));
     assert.equal(
       validationCalls.filter((c) => c.method === 'appendEvent').length,
       0,
@@ -3409,23 +1859,6 @@ describe('postgres validation service adapters', () => {
     assert.deepEqual(intervalDenied, { error: 'safe_min_interval_active', status: 429 });
     assertNoRunProbeOrAgentSideEffects(minInterval.validationCalls);
 
-    const prereq = createRecordingValidationRepositories({
-      getTargetGroup: async () => baseStartTargetGroup({
-        targets: [{ id: 'tgt_1', kind: 'url', value: 'https://app.example.test/' }],
-      }),
-      listAgents: async () => [baseOnlineAgent({ capabilities: ['heartbeat'] })],
-    });
-    const prereqDenied = await createPostgresValidationServices(prereq.repositories, {
-      now: () => FIXED_NOW,
-    }).testRuns.startTestRun(ctx, {
-      check_id: 'path.protected_canary.safe',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-    });
-    assert.equal(prereqDenied.error, 'prerequisites_not_met');
-    assert.equal(prereqDenied.status, 409);
-    assertNoRunProbeOrAgentSideEffects(prereq.validationCalls);
-
     const missingGroup = createRecordingValidationRepositories({
       getTargetGroup: async () => null,
     });
@@ -3646,7 +2079,7 @@ describe('postgres validation service adapters', () => {
       const { repositories, validationCalls } = createRecordingValidationRepositories({
         getTargetGroup: async () => group,
         getCurrentTargetVerification: async (c, groupId, targetId) =>
-          targetId === 'tgt_a' ? { target_id: 'tgt_a', state: 'agent_verified' } : null,
+          targetId === 'tgt_a' ? { target_id: 'tgt_a', state: 'dns_verified' } : null,
         listAgents: async () => [baseOnlineAgent()],
         createTestRun: async (c, record) => ({ ...record }),
         updateTestRun: async (c, id, patch) => ({ id, ...patch }),
@@ -3894,7 +2327,6 @@ describe('postgres validation service adapters', () => {
     assert.equal(/\bservices\/safeTestPolicy\b/.test(VALIDATION_ADAPTER_SOURCE), false);
     assert.equal(/\bservices\/findings\b/.test(VALIDATION_ADAPTER_SOURCE), false);
     assert.equal(/\bservices\/placement\b/.test(VALIDATION_ADAPTER_SOURCE), false);
-    assert.ok(/\blib\/placementConfidence\b/.test(VALIDATION_ADAPTER_SOURCE));
     assert.equal(/\bseedIfEmpty\b/.test(VALIDATION_ADAPTER_SOURCE), false);
     assert.equal(/\bcreateServer\b/.test(VALIDATION_ADAPTER_SOURCE), false);
     assert.equal(/\bservices\/events\b/.test(VALIDATION_ADAPTER_SOURCE), false);
@@ -4236,7 +2668,7 @@ describe('postgres report service adapters', () => {
     assert.ok(reportCalls.some((c) => c.method === 'createReport'));
   });
 
-  it('createReport uses state readiness when coreCatalog, agentControl, and state validation deps exist', async () => {
+  it('createReport uses state readiness when coreCatalog and state validation deps exist', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
     const recentTs = '2026-06-10T10:00:00.000Z';
     const runs = [
@@ -4267,11 +2699,6 @@ describe('postgres report service adapters', () => {
       },
     });
     repositories.coreCatalog = { listTargetGroups: async () => [{ id: 'tg_1', tenant_id: 'ten_demo' }] };
-    repositories.agentControl = {
-      listAgents: async () => [
-        { id: 'agt_1', tenant_id: 'ten_demo', status: 'online', target_group_id: 'tg_1' },
-      ],
-    };
     repositories.highScale = {
       listHighScaleRequests: async () => [],
     };
@@ -4497,10 +2924,10 @@ describe('postgres notification service adapters', () => {
     const created = await notifications.createNotificationRule(ctx, {
       channel: 'webhook',
       destination: 'https://hooks.example.invalid/secret-path',
-      triggers: ['finding.high_severity', 'agent.offline'],
+      triggers: ['finding.high_severity', 'report.ready'],
     });
     assert.equal(created.id, 'nrule_test');
-    assert.deepEqual(created.triggers, ['finding.high_severity', 'agent.offline']);
+    assert.deepEqual(created.triggers, ['finding.high_severity', 'report.ready']);
     assert.equal(auditEvents.length, 1);
     assert.equal(auditEvents[0].action, 'notification.rule_created');
     assert.equal(JSON.stringify(auditEvents[0]).includes('secret-path'), false);
@@ -4711,241 +3138,6 @@ function createRecordingAgentUpdateRepositories(overrides = {}) {
     getAgentVersion: () => agentVersion,
   };
 }
-
-describe('postgres agent update service adapters', () => {
-  it('exposes stable repository and service method lists', () => {
-    assert.deepEqual(AGENT_UPDATE_REPOSITORY_METHODS, [
-      'createTrustKey',
-      'listTrustKeys',
-      'getTrustKeyById',
-      'getActiveTrustKeyByFingerprint',
-      'revokeTrustKey',
-      'createRelease',
-      'listReleases',
-      'getReleaseById',
-      'updateReleaseRollbackRequested',
-      'appendStatus',
-      'getLatestStatusForAgentRelease',
-      'updateAgentVersion',
-    ]);
-    assert.deepEqual(POSTGRES_AGENT_UPDATE_SERVICE_METHODS, [
-      'createAgentUpdateTrustKey',
-      'listAgentUpdateTrustKeys',
-      'revokeAgentUpdateTrustKey',
-      'createAgentUpdateRelease',
-      'listAgentUpdateReleases',
-      'requestAgentUpdateRollback',
-      'pollAgentUpdate',
-      'recordAgentUpdateStatus',
-    ]);
-  });
-
-  it('fails early when agentUpdates or audit repository is missing', () => {
-    assert.throws(
-      () => createPostgresAgentUpdateServices({}),
-      /requires repositories\.agentUpdates/,
-    );
-    const { repositories } = createRecordingAgentUpdateRepositories();
-    delete repositories.agentUpdates.listTrustKeys;
-    assert.throws(
-      () => createPostgresAgentUpdateServices(repositories),
-      /requires agentUpdates\.listTrustKeys/,
-    );
-  });
-
-  it('does not reference dev-json memory store or dev agentUpdates service in adapter source', () => {
-    assert.equal(/\bgetStore\b/.test(AGENT_UPDATE_ADAPTER_SOURCE), false);
-    assert.equal(/\bpersistStore\b/.test(AGENT_UPDATE_ADAPTER_SOURCE), false);
-    assert.equal(/\bservices\/agentUpdates\b/.test(AGENT_UPDATE_ADAPTER_SOURCE), false);
-    assert.equal(/from ['"]\.\.\/\.\.\/audit/.test(AGENT_UPDATE_ADAPTER_SOURCE), false);
-    assert.equal(/from ['"]\.\.\/audit/.test(AGENT_UPDATE_ADAPTER_SOURCE), false);
-  });
-
-  it('adds trust keys, lists, revokes with redacted audit metadata', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    const pubB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-    const { repositories, auditEvents } = createRecordingAgentUpdateRepositories();
-    const svc = createPostgresAgentUpdateServices(repositories, {
-      now: () => FIXED_NOW,
-      newId: () => 'aup_key_test',
-    });
-
-    const created = await svc.createAgentUpdateTrustKey(ctx, {
-      name: 'release signing',
-      public_key_der_base64: pubB64,
-    });
-    assert.equal(created.trust_key.id, 'aup_key_test');
-    assert.equal(created.trust_key.fingerprint_sha256.length, 64);
-    assert.equal(auditEvents.length, 1);
-    assert.equal(auditEvents[0].action, 'agent_update.trust_key_added');
-    assert.equal(JSON.stringify(auditEvents[0]).includes(pubB64), false);
-
-    const items = await svc.listAgentUpdateTrustKeys(ctx);
-    assert.equal(items.length, 1);
-
-    const revoked = await svc.revokeAgentUpdateTrustKey(ctx, 'aup_key_test');
-    assert.equal(revoked.trust_key.status, 'revoked');
-    assert.equal(auditEvents[1].action, 'agent_update.trust_key_revoked');
-    assert.equal(privateKey.asymmetricKeyType, 'ed25519');
-  });
-
-  it('requires active trust key for release creation and audits without distribution material', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
-    const signingPrivateKeyBase64 = generateKeyPairSync('ed25519').privateKey
-      .export({ type: 'pkcs8', format: 'der' })
-      .toString('base64');
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aup-pg-adapt-'));
-    const pkg = buildAgentPackage({
-      repoRoot: ROOT,
-      outputDir: tmp,
-      version: '2.0.0',
-      createdAt: FIXED_NOW.toISOString(),
-      signingPrivateKeyBase64,
-    });
-    const dist = {
-      manifest_url: 'https://cdn.example.com/2.0.0/manifest.json',
-      signature_url: 'https://cdn.example.com/2.0.0/manifest.json.sig',
-      artifact_url: `https://cdn.example.com/2.0.0/${pkg.manifest.artifact.name}`,
-    };
-    const { repositories, auditEvents } = createRecordingAgentUpdateRepositories();
-    const svc = createPostgresAgentUpdateServices(repositories, {
-      now: () => FIXED_NOW,
-      newId: (prefix) => (prefix === 'agentUpdateRelease' ? 'aup_rel_test' : 'aup_x'),
-    });
-
-    const noKey = await svc.createAgentUpdateRelease(ctx, {
-      version: '2.0.0',
-      manifest: pkg.manifest,
-      signature: pkg.signatureBase64,
-      distribution: dist,
-      rollout: { percentage: 100 },
-    });
-    assert.equal(noKey.error, 'untrusted_signing_key');
-
-    await svc.createAgentUpdateTrustKey(ctx, {
-      public_key_der_base64: pkg.manifest.signing.public_key_der_base64,
-    });
-    const created = await svc.createAgentUpdateRelease(ctx, {
-      version: '2.0.0',
-      manifest: pkg.manifest,
-      signature: pkg.signatureBase64,
-      distribution: dist,
-      rollout: { percentage: 100 },
-    });
-    assert.equal(created.release.id, 'aup_rel_test');
-    const releaseAudit = auditEvents.find((a) => a.action === 'agent_update.release_created');
-    assert.ok(releaseAudit);
-    const auditJson = JSON.stringify(releaseAudit);
-    assert.equal(auditJson.includes('cdn.example.com'), false);
-    assert.equal(auditJson.includes(pkg.signatureBase64), false);
-    assert.equal(auditJson.includes(pkg.manifest.signing.public_key_der_base64), false);
-  });
-
-  it('poll returns upgrade and rollback decisions; status recording updates agent version', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
-    const agent = {
-      id: 'agt_poll',
-      tenant_id: 'ten_demo',
-      environment_id: 'env_demo',
-      target_group_id: 'tg_1',
-      version: '1.0.0',
-    };
-    const { repositories, auditEvents, releases, statuses } = createRecordingAgentUpdateRepositories();
-    const svc = createPostgresAgentUpdateServices(repositories, {
-      now: () => FIXED_NOW,
-      newId: (prefix) => `${prefix}_id`,
-    });
-
-    releases.set('aup_rel_up', {
-      id: 'aup_rel_up',
-      tenant_id: 'ten_demo',
-      version: '2.0.0',
-      channel: 'stable',
-      state: 'active',
-      manifest: { package: 'astranull-agent', version: '2.0.0' },
-      signature: 'c2ln',
-      distribution: {
-        manifest_url: 'https://cdn.example.com/m.json',
-        signature_url: 'https://cdn.example.com/m.sig',
-        artifact_url: 'https://cdn.example.com/a.tar.gz',
-      },
-      rollout: { percentage: 100 },
-      rollback: null,
-      created_at: FIXED_NOW.toISOString(),
-    });
-
-    const upgradePoll = await svc.pollAgentUpdate(agent);
-    assert.equal(upgradePoll.update.action, 'upgrade');
-    assert.equal(upgradePoll.update.version, '2.0.0');
-    assert.ok(upgradePoll.update.download.manifest_url);
-
-    releases.set('aup_rel_rb', {
-      id: 'aup_rel_rb',
-      tenant_id: 'ten_demo',
-      version: '2.0.0',
-      channel: 'stable',
-      state: 'rollback_requested',
-      manifest: { package: 'astranull-agent', version: '2.0.0' },
-      signature: 'c2ln',
-      distribution: {
-        manifest_url: 'https://cdn.example.com/m.json',
-        signature_url: 'https://cdn.example.com/m.sig',
-        artifact_url: 'https://cdn.example.com/a.tar.gz',
-      },
-      rollout: { percentage: 100 },
-      rollback: {
-        version: '1.0.0',
-        manifest: { package: 'astranull-agent', version: '1.0.0' },
-        signature: 'cm9s',
-        distribution: {
-          manifest_url: 'https://cdn.example.com/rm.json',
-          signature_url: 'https://cdn.example.com/rm.sig',
-          artifact_url: 'https://cdn.example.com/r.tar.gz',
-        },
-      },
-      created_at: FIXED_NOW.toISOString(),
-    });
-    statuses.push({
-      agent_id: agent.id,
-      release_id: 'aup_rel_rb',
-      status: 'applied',
-      recorded_at: FIXED_NOW.toISOString(),
-    });
-    agent.version = '2.0.0';
-
-    const rollbackPoll = await svc.pollAgentUpdate(agent);
-    assert.equal(rollbackPoll.update.action, 'rollback');
-    assert.equal(rollbackPoll.update.version, '1.0.0');
-
-    releases.set('aup_rel_status', {
-      id: 'aup_rel_status',
-      tenant_id: 'ten_demo',
-      version: '2.0.0',
-      channel: 'stable',
-      state: 'active',
-      manifest: { package: 'astranull-agent', version: '2.0.0' },
-      signature: 'c2ln',
-      distribution: {
-        manifest_url: 'https://cdn.example.com/m.json',
-        signature_url: 'https://cdn.example.com/m.sig',
-        artifact_url: 'https://cdn.example.com/a.tar.gz',
-      },
-      rollout: { percentage: 100 },
-      rollback: null,
-      created_at: FIXED_NOW.toISOString(),
-    });
-    const statusRes = await svc.recordAgentUpdateStatus(agent, {
-      release_id: 'aup_rel_status',
-      status: 'applied',
-      installed_version: '2.0.0',
-      action: 'upgrade',
-    });
-    assert.equal(statusRes.status.status, 'applied');
-    assert.ok(auditEvents.some((a) => a.action === 'agent_update.status_recorded'));
-    assert.equal(agent.version, '2.0.0');
-  });
-});
 
 describe('postgres probe job service adapters', () => {
   it('exposes stable repository and service method lists', () => {
@@ -6113,18 +4305,12 @@ describe('postgres WAF posture service adapters', () => {
             return [{
               id: 'evt_probe_1',
               nonce_hash: nonceHash,
+              // The bounded marker probe got through a detected WAF: external leakage.
               metadata: {
-                external_result: 'blocked',
+                external_result: 'allowed',
                 waf_fingerprint_detected: true,
                 waf_product_hint: 'cloudflare',
               },
-            }];
-          }
-          if (options.signalType === 'agent_observation') {
-            return [{
-              id: 'evt_agent_1',
-              nonce_hash: nonceHash,
-              metadata: { waf_marker: true, marker_type: 'header' },
             }];
           }
           return [];
@@ -6158,7 +4344,6 @@ describe('postgres WAF posture service adapters', () => {
       validation_failed: false,
       origin_bypass_confirmed: true,
       source_external: false,
-      source_agent: false,
       scenario_results: [{
         scenario_family: 'marker',
         expected_action: 'block',
@@ -6179,19 +4364,19 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_failed, true);
     assert.equal(finalizeCall.args[1].run_updates.summary_json.origin_bypass_confirmed, false);
     assert.equal(finalizeCall.args[1].snapshot.source_mix_json.external, true);
-    assert.equal(finalizeCall.args[1].snapshot.source_mix_json.agent, true);
+    assert.equal('agent' in finalizeCall.args[1].snapshot.source_mix_json, false);
     const scenario = finalizeCall.args[1].scenarios[0];
     assert.equal(scenario.observed_action, 'allow');
     assert.equal(scenario.passed, false);
     assert.equal(scenario.evidence_summary_json.nonce_hash, nonceHash);
-    assert.equal(scenario.evidence_summary_json.observed_at_agent, true);
+    assert.equal(scenario.evidence_summary_json.marker_result, 'allowed');
 
-    assert.equal(evidenceCalls.filter((c) => c.method === 'listRunEvents').length, 2);
+    assert.ok(evidenceCalls.filter((c) => c.method === 'listRunEvents').length >= 1);
     assert.equal(evidenceCalls[0].args[0].tenantId, 'ten_demo');
     assert.equal(repoCalls.some((c) => c.method === 'upsertWafPostureFinding'), true);
   });
 
-  it('derives edge-protected posture from a bound blocked probe without agent corroboration', async () => {
+  it('derives edge-protected posture from a bound blocked probe without origin-lockdown evidence', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     const nonceHash = 'sha256:blocked_only_nonce';
     const { fixed, repositories, repoCalls, run } = wafFinalizeFixture({
@@ -6238,13 +4423,12 @@ describe('postgres WAF posture service adapters', () => {
     const result = await svc.finalizeWafValidation(ctx, run.id, {
       validation_passed: true,
       validation_failed: false,
-      source_agent: true,
     });
     assert.equal(result.posture.status, 'edge_protected');
     const finalizeCall = repoCalls.find((c) => c.method === 'finalizeWafValidationBundle');
     assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_passed, false);
     assert.equal(finalizeCall.args[1].run_updates.summary_json.edge_protected, true);
-    assert.equal(finalizeCall.args[1].snapshot.source_mix_json.agent, false);
+    assert.equal('agent' in finalizeCall.args[1].snapshot.source_mix_json, false);
     assert.equal(finalizeCall.args[1].scenarios[0].passed, true);
     assert.equal(repoCalls.some((c) => c.method === 'upsertWafPostureFinding'), false);
   });
@@ -6362,10 +4546,8 @@ describe('postgres WAF posture service adapters', () => {
           ? {
               listRunEvents: async (_ctx, _runId, options = {}) => {
                 if (options.signalType === 'probe_result') {
-                  return [{ id: 'evt_fixture_probe', nonce_hash: markerLeakNonce, metadata: { external_result: 'blocked' } }];
-                }
-                if (options.signalType === 'agent_observation') {
-                  return [{ id: 'evt_fixture_agent', nonce_hash: markerLeakNonce, metadata: { waf_marker: true } }];
+                  // Marker leakage is now an external probe that got through a detected WAF.
+                  return [{ id: 'evt_fixture_probe', nonce_hash: markerLeakNonce, metadata: { external_result: 'allowed', waf_fingerprint_detected: true } }];
                 }
                 return [];
               },
@@ -6532,14 +4714,7 @@ describe('postgres WAF posture service adapters', () => {
                     return [{
                       id: 'evt_drift_probe',
                       nonce_hash: 'sha256:fixture_drift',
-                      metadata: { external_result: 'blocked' },
-                    }];
-                  }
-                  if (options.signalType === 'agent_observation') {
-                    return [{
-                      id: 'evt_drift_agent',
-                      nonce_hash: 'sha256:fixture_drift',
-                      metadata: { waf_marker: true },
+                      metadata: { external_result: 'allowed', waf_fingerprint_detected: true },
                     }];
                   }
                   return [];
@@ -6591,10 +4766,15 @@ describe('postgres WAF posture service adapters', () => {
         waf_product_hint: 'cloudflare',
       },
     };
+    // A marker probe that got through the detected WAF: external leakage evidence.
     const markerLeak = {
-      id: 'evt_edge_transition_agent',
+      id: 'evt_edge_transition_leak',
       nonce_hash: nonceHash,
-      metadata: { waf_marker: true, observed_action: 'reached_origin' },
+      metadata: {
+        external_result: 'allowed',
+        waf_fingerprint_detected: true,
+        waf_product_hint: 'cloudflare',
+      },
     };
 
     for (const transition of [
@@ -6611,8 +4791,8 @@ describe('postgres WAF posture service adapters', () => {
         from: 'edge_protected',
         to: 'underprotected',
         expectedDriftType: 'marker_failed',
-        probes: [blockedProbe],
-        agents: [markerLeak],
+        probes: [markerLeak],
+        agents: [],
         reasonCodes: ['marker_rule_not_blocking'],
         findingId: 'fnd_waf_1',
       },

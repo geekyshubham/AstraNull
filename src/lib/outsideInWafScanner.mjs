@@ -2,7 +2,9 @@
  * Outside-in WAF scanner — bounded metadata-only edge validation.
  * Detects WAF presence, fingerprints vendor/product, validates benign class markers
  * (including safe evasion variants), content-type confusion, optional origin bypass,
- * and emits a posture summary. Protected requires agent corroboration by default.
+ * and emits a posture summary. Outside-in only (ADR-0008): "protected" is derived from
+ * external evidence — an edge block plus an origin-lockdown result (direct-origin probe
+ * shows the origin is not reachable) — never from an internal agent.
  */
 
 import { createHash } from 'node:crypto';
@@ -461,9 +463,10 @@ function detectEvasionBypass(markerResults) {
 
 /**
  * @param {object} input
- * @param {boolean} [input.agentCorroborated=false]
- * @param {boolean} [input.requireAgentForProtected=true]
- * @param {string} [input.domXssValidation='agent_required']
+ * @param {boolean} [input.originLockdownConfirmed=false] — origin-bypass probe ran and the
+ *   direct origin was NOT reachable (origin lockdown). This is the external corroboration the
+ *   full "protected" tier requires; without it a passing edge scan stays "edge_protected".
+ * @param {string} [input.domXssValidation='external_only']
  * @param {object|null} [input.edgeSignature=null] — classifyEdgeFingerprint() result.
  */
 export function buildOutsideInPostureReport({
@@ -473,10 +476,9 @@ export function buildOutsideInPostureReport({
   originBypassConfirmed = false,
   wafRequired = true,
   vendorClassification = null,
-  agentCorroborated = false,
-  requireAgentForProtected = true,
+  originLockdownConfirmed = false,
   evasionBypassSuspected = false,
-  domXssValidation = 'agent_required',
+  domXssValidation = 'external_only',
   edgeSignature = null,
   coverageComplete,
   probeErrorsPresent = false,
@@ -496,10 +498,11 @@ export function buildOutsideInPostureReport({
     && !probeInconclusive;
   const validationFailed = markerResults.length > 0 && (anyMarkerAllowed || evasionBypassSuspected);
 
-  let validationPassed = probeValidationPassed && !evasionBypassSuspected;
-  if (requireAgentForProtected && validationPassed && !agentCorroborated) {
-    validationPassed = false;
-  }
+  // Outside-in only (ADR-0008): the edge scan proves "edge_protected". Full "protected"
+  // additionally requires external origin-lockdown evidence (origin not reachable), replacing
+  // the old internal agent confirmation.
+  const edgeValidationPassed = probeValidationPassed && !evasionBypassSuspected;
+  const validationPassed = edgeValidationPassed && originLockdownConfirmed;
 
   const effectiveWafDetected = wafDetected || genericWafDetected
     || Boolean(vendorClassification?.best)
@@ -519,7 +522,7 @@ export function buildOutsideInPostureReport({
   if (evasionBypassSuspected && !reason_codes.includes('scenario_category_failed')) {
     reason_codes.push('scenario_category_failed');
   }
-  if (probeValidationPassed && requireAgentForProtected && !agentCorroborated
+  if (edgeValidationPassed && !originLockdownConfirmed
     && !reason_codes.includes('insufficient_validation_evidence')) {
     reason_codes.push('insufficient_validation_evidence');
   }
@@ -539,11 +542,11 @@ export function buildOutsideInPostureReport({
   } else if (probeInconclusive) {
     posture_label = 'Inconclusive';
     posture_status = 'inconclusive';
-  } else if (validationPassed && agentCorroborated) {
+  } else if (validationPassed) {
     posture_label = 'Protected';
     posture_status = 'protected';
-  } else if (probeValidationPassed && effectiveWafDetected && !agentCorroborated) {
-    posture_label = 'Edge protected · not internally validated';
+  } else if (edgeValidationPassed && effectiveWafDetected) {
+    posture_label = 'Edge protected · origin lockdown unverified';
     posture_status = 'edge_protected';
   } else if (posture.status === 'unprotected') {
     posture_label = 'Unprotected';
@@ -590,8 +593,8 @@ export function buildOutsideInPostureReport({
     validation_passed: validationPassed,
     validation_failed: validationFailed,
     probe_validation_passed: probeValidationPassed,
-    agent_corroborated: agentCorroborated,
-    agent_corroboration_required: requireAgentForProtected,
+    edge_validation_passed: edgeValidationPassed,
+    origin_lockdown_confirmed: originLockdownConfirmed,
     evasion_bypass_suspected: evasionBypassSuspected,
     dom_xss_validation: domXssValidation,
     origin_bypass_confirmed: originBypassConfirmed,
@@ -971,8 +974,6 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
  *   timeoutMs?: number,
  *   wafRequired?: boolean,
  *   customerVendorHint?: string,
- *   agentCorroborated?: boolean,
- *   requireAgentForProtected?: boolean,
  *   domXssValidation?: string,
  *   followRedirects?: boolean,
  *   collectNetworkHints?: boolean,
@@ -1334,8 +1335,8 @@ export async function runOutsideInWafScan(options = {}) {
     // prove that responder is the protected application rather than an unrelated listener,
     // load balancer, or default page. Require the direct-origin server header to match the
     // edge baseline's as corroboration; without it this stays a network-reachability signal.
-    // See docs/security/local-security-review.md — origin_bypass verdict_logic also requires
-    // agent_observation correlation before this becomes an application-bypass finding.
+    // Outside-in only (ADR-0008): an application-bypass finding rests on this external
+    // server-header match, not on any internal agent observation.
     const originServerHeader = !error ? headerValue(res, 'server') : null;
     const baselineServerHeader = baseline?.server_header ?? null;
     applicationSignatureMatch = Boolean(
@@ -1344,10 +1345,9 @@ export async function runOutsideInWafScan(options = {}) {
     networkIngressConfirmed = directOriginReachable
       && originBypassStatus >= 200 && originBypassStatus < 400;
     originBypassConfirmed = networkIngressConfirmed && applicationSignatureMatch;
-    if (error) {
-      const errorClass = error.name ?? error.code ?? 'origin_probe_failed';
-      if (!transportErrorClasses.includes(errorClass)) transportErrorClasses.push(errorClass);
-    }
+    // An origin-bypass connection failure means the direct origin did not answer — this is the
+    // expected origin-lockdown signal, NOT an edge-probe transport failure. Keep it out of
+    // transportErrorClasses so it never taints edge-marker coverage/inconclusiveness (ADR-0008).
     phaseLog.push({
       phase: 'origin_bypass',
       status_code: originBypassStatus,
@@ -1411,6 +1411,10 @@ export async function runOutsideInWafScan(options = {}) {
   const coverageComplete = phasesDropped.length === 0
     && transportErrorClasses.length === 0
     && plan.every((entry) => phasesExecuted.includes(entry.phase));
+  // Outside-in origin-lockdown evidence: the origin-bypass probe ran against the direct
+  // origin IP and the origin did not answer (locked down). This external result — not an
+  // internal agent — is what elevates a passing edge scan to full "protected" (ADR-0008).
+  const originLockdownConfirmed = originBypassAttempted && !directOriginReachable;
   const posture = buildOutsideInPostureReport({
     wafDetected,
     genericWafDetected: generic.detected,
@@ -1418,10 +1422,9 @@ export async function runOutsideInWafScan(options = {}) {
     originBypassConfirmed,
     wafRequired: options.wafRequired !== false,
     vendorClassification,
-    agentCorroborated: options.agentCorroborated === true,
-    requireAgentForProtected: options.requireAgentForProtected !== false,
+    originLockdownConfirmed,
     evasionBypassSuspected,
-    domXssValidation: options.domXssValidation ?? 'agent_required',
+    domXssValidation: options.domXssValidation ?? 'external_only',
     edgeSignature,
     coverageComplete,
     probeErrorsPresent: transportErrorClasses.length > 0,

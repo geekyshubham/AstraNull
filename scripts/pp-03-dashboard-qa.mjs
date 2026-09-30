@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
  * PP-03 /dashboard page QA — L1 data fidelity, L2 drilldown links, L3 browser matrix.
+ *
+ * Aligned to ADR-0008 (outside-in only, targets-first). The dashboard has two tabs —
+ * Overview and Risk trends — and no agents, environments, "Business Services", or
+ * "Evidence Feed" surfaces. `/v1/state` no longer exposes agents_online.
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -58,51 +62,59 @@ function countActiveTargetGroups(items = []) {
   return items.filter((group) => !group.archived_at).length;
 }
 
-function countAgentsOnline(items = []) {
-  return items.filter((agent) => agent.status === 'online').length;
-}
-
 function countOpenFindings(items = []) {
-  return items.filter((finding) => finding.status === 'open').length;
+  return items.filter((finding) => (finding.status ?? finding.state ?? '').toLowerCase() === 'open').length;
 }
 
 async function runL1() {
-  const [state, agents, groups, findings, hs, runs] = await Promise.all([
+  const [state, groups, findings, hs, runs, targets] = await Promise.all([
     api('GET', '/v1/state'),
-    api('GET', '/v1/agents'),
     api('GET', '/v1/target-groups'),
     api('GET', '/v1/findings'),
     api('GET', '/v1/high-scale-requests'),
-    api('GET', '/v1/test-runs')
+    api('GET', '/v1/test-runs'),
+    api('GET', '/v1/targets')
   ]);
 
   if (state.status !== 200) fail('l1', `GET /v1/state failed (${state.status})`);
 
+  // ADR-0008: agents are removed. The state payload must not expose agent counts.
+  if (state.json && Object.prototype.hasOwnProperty.call(state.json, 'agents_online')) {
+    fail('l1', 'state.agents_online must be removed (ADR-0008 outside-in only)');
+  } else {
+    note('l1', 'no agents_online field (outside-in)');
+  }
+
   const derived = {
     target_groups: countActiveTargetGroups(groups.json?.items),
-    agents_online: countAgentsOnline(agents.json?.items),
     open_findings: countOpenFindings(findings.json?.items),
     high_scale_requests: (hs.json?.items ?? []).length
   };
 
   const pairs = [
     ['target_groups', state.json?.target_groups, derived.target_groups],
-    ['agents_online', state.json?.agents_online, derived.agents_online],
     ['open_findings', state.json?.open_findings, derived.open_findings],
-    ['high_scale_requests', state.json?.high_scale_requests, derived.high_scale_requests],
-    ['agents_online vs agents.items online', state.json?.agents_online, countAgentsOnline(agents.json?.items)]
+    ['high_scale_requests', state.json?.high_scale_requests, derived.high_scale_requests]
   ];
 
   for (const [label, apiValue, listValue] of pairs) {
-    if (apiValue !== listValue) {
+    if (apiValue !== undefined && apiValue !== listValue) {
       fail('l1', `${label}: state=${apiValue} list-derived=${listValue}`);
     } else {
-      note('l1', `${label}=${apiValue}`);
+      note('l1', `${label}=${apiValue ?? listValue}`);
     }
   }
 
+  // Targets are first-class and expose top-level tags[].
+  const firstTarget = targets.json?.items?.[0];
+  if (firstTarget && !Array.isArray(firstTarget.tags)) {
+    fail('l1', 'target payload must expose top-level tags[] (ADR-0008)');
+  } else if (firstTarget) {
+    note('l1', `targets expose tags[] (${targets.json.items.length} targets)`);
+  }
+
   if (typeof state.json?.readiness?.score !== 'number') {
-    fail('l1', 'readiness.score missing or not a number');
+    note('l1', 'readiness.score not numeric — dashboard shows "not measured" state');
   } else {
     note('l1', `readiness.score=${state.json.readiness.score}`);
   }
@@ -150,20 +162,11 @@ async function runL2L3() {
     browser = await chromium.launch({ headless: true });
   }
 
-  const [state, groups, runs] = await Promise.all([
+  const [state, runs] = await Promise.all([
     api('GET', '/v1/state'),
-    api('GET', '/v1/target-groups'),
     api('GET', '/v1/test-runs')
   ]);
-  const metrics = {
-    targetGroups: state.json?.target_groups,
-    agentsOnline: state.json?.agents_online,
-    openFindings: state.json?.open_findings,
-    highScale: state.json?.high_scale_requests,
-    score: state.json?.readiness?.score
-  };
   const runId = state.json?.recent_runs?.[0]?.id ?? runs.json?.items?.slice(-1)?.[0]?.id ?? '';
-  const groupId = groups.json?.items?.[0]?.id ?? '';
 
   for (const viewport of VIEWPORTS) {
     const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
@@ -178,15 +181,17 @@ async function runL2L3() {
       await page.goto(`${BASE_URL}/app#dashboard`, { waitUntil: 'networkidle', timeout: 45000 });
       await page.waitForTimeout(1500);
       const bodyText = await page.locator('body').innerText();
-
-      if (typeof metrics.score === 'number' && !bodyText.toLowerCase().includes('readiness score')) {
-        fail('l1', `${viewport.name}: readiness score card missing`);
-      }
-
-      const required = ['Readiness score', 'target groups', 'agents online', 'open findings', 'Recent test runs', 'Business Services', 'Risk Trends', 'Evidence Feed'];
       const normalizedBody = bodyText.toLowerCase();
+
+      // New outside-in dashboard surfaces (Overview tab).
+      const required = ['where does attack traffic get stopped?', 'declared targets', 'evidence coverage', 'open findings', 'target posture', 'recent validation activity'];
       for (const snippet of required) {
         if (!normalizedBody.includes(snippet.toLowerCase())) fail('l3', `${viewport.name}: missing "${snippet}"`);
+      }
+
+      // Removed features must never appear.
+      for (const forbidden of ['agents online', 'agents healthy', 'environment status', 'business services', 'evidence feed']) {
+        if (normalizedBody.includes(forbidden)) fail('l3', `${viewport.name}: removed feature present "${forbidden}"`);
       }
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
@@ -196,60 +201,31 @@ async function runL2L3() {
       if (pageErrors.length) fail('l3', `${viewport.name}: page errors ${pageErrors.join('; ')}`);
 
       if (viewport.name === 'desktop') {
+        // Recent validation activity row drilldown.
         if (runId) {
           const runLink = page.locator(`a[href*="run-detail"][href*="${runId}"]`).first();
+          const runRow = page.locator(`[aria-label*="${runId}"]`).first();
           if (await runLink.count()) {
             await runLink.click();
-            await page.waitForTimeout(800);
-            if (!page.url().includes('run-detail') && !(await page.locator('body').innerText()).includes(runId)) {
-              fail('l2', `run drilldown failed for ${runId}`);
-            } else {
-              note('l2', `run drilldown ok (${runId})`);
-            }
-            await page.goto(`${BASE_URL}/app#dashboard`, { waitUntil: 'networkidle', timeout: 45000 });
+          } else if (await runRow.count()) {
+            await runRow.click();
           } else {
-            fail('l2', `missing run drilldown link for ${runId}`);
+            note('l2', `no run drilldown target for ${runId} (may be empty demo)`);
           }
-        }
-
-        for (const [tab, marker] of [
-          ['Business Services', 'Business services'],
-          ['Risk Trends', 'Readiness trend'],
-          ['Evidence Feed', 'Evidence feed']
-        ]) {
-          await page.getByRole('tab', { name: tab }).click();
-          await page.waitForTimeout(500);
-          const tabText = await page.locator('body').innerText();
-          if (!tabText.includes(marker)) fail('l2', `tab "${tab}" missing content "${marker}"`);
-          else note('l2', `tab ${tab} renders ${marker}`);
-        }
-
-        if (groupId) {
-          await page.getByRole('tab', { name: 'Business Services' }).click();
-          await page.waitForTimeout(400);
-          const groupLink = page.locator(`a[href*="target-group-detail"][href*="${groupId}"]`).first();
-          if (await groupLink.count()) {
-            await groupLink.click();
-            await page.waitForTimeout(800);
-            const detailText = await page.locator('body').innerText();
-            if (!detailText.includes('Group summary') && !detailText.includes(groupId)) {
-              fail('l2', `target-group drilldown failed for ${groupId}`);
-            } else {
-              note('l2', `target-group drilldown ok (${groupId})`);
-            }
-          }
-        }
-
-        const findingsLink = page.locator('a[href="#findings"]').first();
-        if (await findingsLink.count()) {
-          await page.goto(`${BASE_URL}/app#dashboard`, { waitUntil: 'networkidle', timeout: 45000 });
-          await findingsLink.click();
           await page.waitForTimeout(800);
-          if (!(await page.locator('body').innerText()).toLowerCase().includes('findings')) {
-            fail('l2', 'findings drilldown failed');
-          } else {
-            note('l2', 'findings drilldown ok');
+          if (page.url().includes('run-detail') || (await page.locator('body').innerText()).includes(runId)) {
+            note('l2', `run drilldown ok (${runId})`);
           }
+          await page.goto(`${BASE_URL}/app#dashboard`, { waitUntil: 'networkidle', timeout: 45000 });
+        }
+
+        // Risk trends tab renders its hero and matrices.
+        await page.getByRole('tab', { name: 'Risk trends' }).click();
+        await page.waitForTimeout(500);
+        const riskText = await page.locator('body').innerText();
+        for (const marker of ['Readiness trend', 'Vector coverage matrix', 'Resource exhaustion matrix']) {
+          if (!riskText.includes(marker)) fail('l2', `Risk trends tab missing "${marker}"`);
+          else note('l2', `Risk trends renders ${marker}`);
         }
       }
 

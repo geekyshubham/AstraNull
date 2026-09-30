@@ -76,13 +76,12 @@ describe('portal dataset access policy', () => {
     assert.deepEqual(readableRouteDatasets({ role: 'viewer' }, 'reports'), ['reports']);
     assert.deepEqual(readableRouteDatasets({ role: 'engineer' }, 'reports'), ['reports']);
     assert.ok(readableRouteDatasets({ role: 'auditor' }, 'reports').includes('audit'));
-    assert.ok(!readableRouteDatasets({ role: 'viewer' }, 'agent-detail').includes('audit'));
-    assert.ok(!PORTAL_ROUTE_DATASETS.agents.includes('releaseEvidence'));
+    assert.ok(!readableRouteDatasets({ role: 'viewer' }, 'finding-detail').includes('audit'));
     assert.deepEqual(readableRouteDatasets({ role: 'soc' }, 'integrations'), ['targetGroups']);
     assert.deepEqual(readableRouteDatasets({ role: 'engineer' }, 'integrations'), ['connectors', 'targetGroups']);
-    assert.deepEqual(readableRouteDatasets({ role: 'engineer' }, 'settings'), ['targetGroups', 'agents', 'evidence', 'bootstrapTokens']);
-    assert.deepEqual(readableRouteDatasets({ role: 'viewer' }, 'settings'), ['targetGroups', 'agents', 'evidence']);
     assert.deepEqual(readableRouteDatasets({ role: 'auditor' }, 'settings'), PORTAL_ROUTE_DATASETS.settings);
+    assert.ok(readableRouteDatasets({ role: 'engineer' }, 'settings').includes('targetGroups'));
+    assert.ok(readableRouteDatasets({ role: 'engineer' }, 'settings').includes('evidence'));
     assert.ok(!readableRouteDatasets({ role: 'viewer' }, 'target-group-detail').includes('connectors'));
     assert.ok(!readableRouteDatasets({ role: 'soc' }, 'target-group-detail').includes('connectors'));
   });

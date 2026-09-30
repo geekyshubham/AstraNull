@@ -38,7 +38,7 @@ function verificationHistory(targetId, finalState) {
       audit_entry_id: `aud_${targetId}_pending`,
     },
   ];
-  if (finalState === 'dns_verified' || finalState === 'agent_verified') {
+  if (finalState === 'dns_verified') {
     base.push({
       id: `tv_${targetId}_dns`,
       tenant_id: PORTAL_BASELINE_IDS.tenantId,
@@ -51,34 +51,17 @@ function verificationHistory(targetId, finalState) {
       audit_entry_id: `aud_${targetId}_dns`,
     });
   }
-  if (finalState === 'agent_verified') {
-    base.push({
-      id: `tv_${targetId}_agent`,
-      tenant_id: PORTAL_BASELINE_IDS.tenantId,
-      target_id: targetId,
-      state: 'agent_verified',
-      source_kind: 'agent_observation',
-      source_ref: {
-        agent_id: PORTAL_BASELINE_IDS.agentId,
-        observation_id: `obs_${targetId}`,
-        correlated_at: FROZEN,
-      },
-      transitioned_at: FROZEN,
-      transitioned_by: 'system',
-      audit_entry_id: `aud_${targetId}_agent`,
-    });
-  }
   return base;
 }
 
 export function buildPortalBaselineStore() {
   const ids = PORTAL_BASELINE_IDS;
   const checkoutTargets = [
-    { id: 'tgt_checkout_1', value: 'checkout.acme.com', state: 'agent_verified' },
-    { id: 'tgt_checkout_2', value: 'pay.acme.com', state: 'agent_verified' },
+    { id: 'tgt_checkout_1', value: 'checkout.acme.com', state: 'dns_verified' },
+    { id: 'tgt_checkout_2', value: 'pay.acme.com', state: 'dns_verified' },
     { id: 'tgt_checkout_3', value: 'api.acme.com', state: 'dns_verified' },
-    { id: 'tgt_checkout_4', value: 'cdn.acme.com', state: 'dns_verified' },
-    { id: 'tgt_checkout_5', value: 'static.acme.com', state: 'dns_verified' },
+    { id: 'tgt_checkout_4', value: 'cdn.acme.com', state: 'pending' },
+    { id: 'tgt_checkout_5', value: 'static.acme.com', state: 'pending' },
   ];
 
   const loaScope = {

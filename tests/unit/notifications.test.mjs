@@ -74,23 +74,23 @@ describe('notifications', () => {
     freshStore();
     createNotificationRule(demoCtx, {
       channel: 'in_app',
-      triggers: ['agent.offline'],
+      triggers: ['report.ready'],
     });
     createNotificationRule(demoCtx, {
       channel: 'webhook',
       destination: 'https://hooks.example.invalid/ast_abcdefghijklmnop',
-      triggers: ['agent.offline'],
+      triggers: ['report.ready'],
     });
     createNotificationRule(demoCtx, {
       channel: 'email',
       destination: 'alerts@customer.example',
-      triggers: ['agent.offline'],
+      triggers: ['report.ready'],
     });
 
     const event = await emitNotification(demoCtx, {
-      trigger: 'agent.offline',
-      subject: 'Agent down ast_abcdefghijklmnop',
-      metadata: { token: 'ast_abcdefghijklmnop', agent_id: 'ag_1' },
+      trigger: 'report.ready',
+      subject: 'Report ready ast_abcdefghijklmnop',
+      metadata: { token: 'ast_abcdefghijklmnop' },
     });
 
     assert.equal(event.metadata.token, '[REDACTED]');

@@ -98,7 +98,7 @@ describe('portal revamp API provenance (node e2e)', () => {
     );
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.json?.steps));
-    assert.ok(res.json.steps.length >= 4);
+    assert.ok(res.json.steps.length >= 3);
     const declared = res.json.steps.find((step) => step.id === 'declared');
     assert.ok(declared);
     assert.equal(declared.total, 5);

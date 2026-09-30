@@ -42,7 +42,6 @@ export async function getState(ctx) {
     computed: {
       readiness: computeReadiness(tenantId),
       target_groups: activeTargetGroupsForTenant(tenantId).length,
-      agents_online: store.agents.filter((a) => a.tenant_id === tenantId && a.status === 'online').length,
       recent_runs: recentRuns,
       open_findings: store.findings.filter(
         (f) => f.tenant_id === tenantId && (f.status === 'open' || f.state === 'open'),

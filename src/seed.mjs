@@ -64,23 +64,6 @@ function ensureDemoDetailFixtures(store) {
   const targetId = target?.id ?? DEMO_TARGET_ID;
   const now = new Date().toISOString();
 
-  if (!store.agents.some((agent) => agent.tenant_id === DEMO_TENANT_ID)) {
-    store.agents.push({
-      id: 'agent_demo',
-      tenant_id: DEMO_TENANT_ID,
-      name: 'demo-agent',
-      hostname: 'demo-host.astranull.local',
-      target_group_id: targetGroup.id,
-      environment_id: targetGroup.environment_id ?? DEMO_ENV_ID,
-      status: 'online',
-      capabilities: ['heartbeat', 'canary'],
-      last_heartbeat_at: now,
-      created_at: now,
-      updated_at: now,
-      version: '0.1.0-demo',
-    });
-  }
-
   if (!store.testRuns.some((run) => run.tenant_id === DEMO_TENANT_ID)) {
     const runId = 'run_demo';
     store.testRuns.push({
@@ -118,7 +101,6 @@ function ensureDemoDetailFixtures(store) {
       created_at: now,
       conclusion: 'Protection observed before origin in demo seed.',
       external_result: { summary: 'Outside probe saw edge block behavior.' },
-      internal_result: { summary: 'Agent did not observe origin penetration.' },
     });
   }
 }

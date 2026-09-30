@@ -1,26 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { validateProbeEndpoint } from '../../src/lib/probeEndpoint.mjs';
-import { heartbeatAgent } from '../../src/services/agents.mjs';
 import { freshStore } from '../helpers/reset.mjs';
-import { getStore } from '../../src/store.mjs';
 
 afterEach(() => {
   freshStore();
 });
-
-function seedAgent({ id = 'agent_test', tenantId = 'ten_demo' } = {}) {
-  const agent = {
-    id,
-    tenant_id: tenantId,
-    name: 'test-agent',
-    hostname: 'host',
-    fingerprint: 'AA:BB:CC',
-    status: 'online',
-  };
-  getStore().agents.push(agent);
-  return agent;
-}
 
 const validEndpoint = {
   declared_fqdn: 'API.Shop.Example.COM',
@@ -128,49 +113,5 @@ describe('validateProbeEndpoint', () => {
       { allowPrivate: true },
     );
     assert.equal(metadata.ok, false);
-  });
-});
-
-describe('heartbeatAgent probe_endpoint', () => {
-  it('accepts valid probe_endpoint on heartbeat', () => {
-    freshStore();
-    const agent = seedAgent();
-    const result = heartbeatAgent(agent, {
-      version: '9.9.9',
-      probe_endpoint: validEndpoint,
-    });
-
-    assert.equal(result.probe_endpoint_accepted, true);
-    assert.equal(agent.probe_endpoint_status, 'reported');
-    assert.equal(agent.probe_endpoint.declared_fqdn, 'api.shop.example.com');
-    assert.equal(agent.last_token_validation_status, 'valid');
-    assert.ok(agent.last_token_validation_at);
-    assert.equal(result.agent.id, agent.id);
-
-    const heartbeatAudit = getStore().auditLog.find((a) => a.action === 'agent.heartbeat');
-    assert.equal(heartbeatAudit.metadata.token_valid, true);
-    assert.equal(heartbeatAudit.metadata.probe_endpoint_accepted, true);
-  });
-
-  it('rejects invalid probe_endpoint but heartbeat still succeeds', () => {
-    freshStore();
-    const agent = seedAgent();
-    agent.probe_endpoint = {
-      declared_fqdn: 'kept.example.com',
-      discovered_public_ip: '203.0.113.10',
-    };
-    agent.probe_endpoint_status = 'reported';
-
-    const result = heartbeatAgent(agent, {
-      version: '1.0.0',
-      probe_endpoint: { declared_ip: '127.0.0.1' },
-    });
-
-    assert.equal(result.probe_endpoint_accepted, false);
-    assert.equal(agent.probe_endpoint_status, 'rejected');
-    assert.equal(agent.probe_endpoint_error, 'invalid_probe_endpoint');
-    assert.equal(agent.probe_endpoint.declared_fqdn, 'kept.example.com');
-    assert.ok(result.agent);
-    assert.equal(result.agent.id, agent.id);
   });
 });

@@ -10,6 +10,9 @@ export const TARGET_KINDS = Object.freeze(['fqdn', 'ip', 'url', 'tcp', 'dns_zone
 const TARGET_KIND_SET = new Set(TARGET_KINDS);
 
 const RESERVED_METADATA_KEYS = new Set([
+  // `tags` is a first-class target field, not free-form metadata: reserving the key stops a
+  // client metadata blob from spoofing or erasing the trusted tag list.
+  'tags',
   'ownership',
   'ownership_status',
   'dns_ownership',
@@ -52,6 +55,56 @@ export class TargetValidationError extends Error {
   toResponse() {
     return { error: this.code, status: this.status, field: this.field, message: this.message };
   }
+}
+
+export const MAX_TARGET_TAGS = 16;
+const TARGET_TAG_PATTERN = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
+
+/**
+ * Normalize free-form target tags per ADR-0008: trim, lowercase, dedupe, cap at 16, and
+ * validate each against `^[a-z0-9][a-z0-9:_.-]{0,47}$`. Throws `invalid_target_tags` on bad input.
+ *
+ * @param {unknown} input tags array (or null/undefined for "no tags")
+ * @returns {string[]} normalized, deduplicated tag list
+ */
+export function normalizeTargetTags(input) {
+  if (input == null) return [];
+  if (!Array.isArray(input)) {
+    throw new TargetValidationError('tags', 'Target tags must be provided as an array of strings.', 'invalid_target_tags');
+  }
+  const seen = new Set();
+  const tags = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      throw new TargetValidationError('tags', 'Each target tag must be a string.', 'invalid_target_tags');
+    }
+    const tag = String(raw).trim().toLowerCase();
+    if (!tag) continue;
+    if (!TARGET_TAG_PATTERN.test(tag)) {
+      throw new TargetValidationError('tags', `Invalid target tag "${tag}": tags must match ${TARGET_TAG_PATTERN}.`, 'invalid_target_tags');
+    }
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    tags.push(tag);
+  }
+  if (tags.length > MAX_TARGET_TAGS) {
+    throw new TargetValidationError('tags', `At most ${MAX_TARGET_TAGS} tags are allowed per target.`, 'invalid_target_tags');
+  }
+  return tags;
+}
+
+/** Read the stored tag list off a target record (metadata is the source of truth). */
+export function targetTagsFromRecord(record) {
+  if (!record) return [];
+  const metadata = record.metadata ?? record.metadata_json;
+  const stored = metadata && typeof metadata === 'object' ? metadata.tags : undefined;
+  if (Array.isArray(stored)) {
+    return stored.filter((tag) => typeof tag === 'string');
+  }
+  if (Array.isArray(record.tags)) {
+    return record.tags.filter((tag) => typeof tag === 'string');
+  }
+  return [];
 }
 
 export function normalizeTargetKind(input) {
@@ -171,11 +224,23 @@ export function normalizeTargetInput(input, { current = null } = {}) {
   const sanitized = source.metadata !== undefined || source.metadata_json !== undefined
     ? sanitizeClientTargetMetadata(source.metadata ?? source.metadata_json)
     : { metadata: current?.metadata ?? current?.metadata_json ?? {}, dropped_fields: [] };
+  // Tags are a first-class field. When the caller supplies `tags`, normalize them; otherwise
+  // preserve whatever the current record already carries so a metadata-only patch never
+  // silently erases the tag list.
+  const tags = source.tags !== undefined
+    ? normalizeTargetTags(source.tags)
+    : targetTagsFromRecord(current);
+  // Re-attach tags to the persisted metadata (sanitization strips the reserved `tags` key so a
+  // client blob cannot spoof them). Drop the key entirely when there are no tags.
+  const metadata = { ...sanitized.metadata };
+  delete metadata.tags;
+  if (tags.length > 0) metadata.tags = tags;
   return {
     kind,
     value,
     normalized_value: value,
-    metadata: sanitized.metadata,
+    metadata,
+    tags,
     dropped_fields: sanitized.dropped_fields,
   };
 }

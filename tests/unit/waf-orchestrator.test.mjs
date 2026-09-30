@@ -55,9 +55,9 @@ function seedStore() {
         name: 'TG',
         expected_behavior_default: 'must_block_before_origin',
         // WAF plan/retest execution delegates to startTestRun in signed-worker mode, which
-        // is real egress and therefore subject to the ownership gate. These tests cover
-        // delegation mechanics, so the fixture models a tenant that has proven ownership.
-        ownership_status: 'agent_verified',
+        // is real egress and therefore subject to the ownership gate. ADR-0008 removed the
+        // agent challenge, so the fixture models a tenant that proved ownership via DNS.
+        ownership_status: 'dns_verified',
       },
     ],
     targets: [
@@ -75,9 +75,9 @@ function seedStore() {
         id: 'tv_waf_tgt_1',
         tenant_id: 'ten_demo',
         target_id: 'tgt_1',
-        state: 'agent_verified',
-        source_kind: 'agent_observation',
-        source_ref: { ownership_verification_id: 'ov_waf' },
+        state: 'dns_verified',
+        source_kind: 'dns_txt',
+        source_ref: { dns_challenge_id: 'dns_waf' },
         transitioned_at: new Date().toISOString(),
         transitioned_by: 'system',
       },

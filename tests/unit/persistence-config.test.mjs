@@ -6,7 +6,6 @@ import {
   loadProbeDispatchConfig,
   loadRuntimeConfig,
   probeDispatchReady,
-  resolveAgentIdentityMode,
   resolveProbeDispatchConfig,
   resolveHighScaleAdapterMode,
   resolvePersistenceMode,
@@ -84,7 +83,6 @@ describe('production persistence fail-closed', () => {
     assert.equal(cfg.persistenceMode, 'postgres');
     assert.equal(cfg.databaseUrlConfigured, true);
     assert.equal(cfg.highScaleAdapterMode, 'governed-adapter');
-    assert.equal(cfg.agentIdentityMode, 'gateway-mtls');
 
     process.env.NODE_ENV = 'test';
     process.env.ASTRANULL_NO_PERSIST = '1';
@@ -169,12 +167,10 @@ describe('production persistence fail-closed', () => {
     delete process.env.ASTRANULL_HIGH_SCALE_ADAPTER_MODE;
     assert.equal(resolveProbeMode(), 'signed-worker');
     assert.equal(resolveHighScaleAdapterMode(), 'governed-adapter');
-    assert.equal(resolveAgentIdentityMode(), 'gateway-mtls');
 
     process.env.NODE_ENV = 'test';
     assert.equal(resolveProbeMode(), 'simulation');
     assert.equal(resolveHighScaleAdapterMode(), 'dry-run');
-    assert.equal(resolveAgentIdentityMode(), 'bearer');
   });
 
   it('requires signed probe worker credentials for production default probes', () => {
@@ -280,17 +276,19 @@ describe('production persistence fail-closed', () => {
     assert.equal('connectorJobPrivateKey' in cfg, false);
     assert.equal('connectorJobPublicKey' in cfg, false);
   });
-  it('rejects bearer-only agent identity in production', () => {
-    process.env.NODE_ENV = 'test';
-    process.env.ASTRANULL_AGENT_IDENTITY_MODE = 'bearer';
-    assert.equal(resolveAgentIdentityMode(), 'bearer');
-
-    process.env.ASTRANULL_AGENT_IDENTITY_MODE = 'bogus';
-    assert.throws(() => resolveAgentIdentityMode(), /Invalid ASTRANULL_AGENT_IDENTITY_MODE/);
-
+  it('ignores the legacy ASTRANULL_AGENT_IDENTITY_MODE env var without failing startup', () => {
+    // ADR-0008: agents are removed. Production .env files may still carry the legacy
+    // ASTRANULL_AGENT_IDENTITY_MODE=bearer var; config must ignore it and not reject startup.
     process.env.NODE_ENV = 'production';
+    setProductionOidcEnv();
+    process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
+    process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
+    process.env.ASTRANULL_DATABASE_URL = TEST_DATABASE_URL;
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
     process.env.ASTRANULL_AGENT_IDENTITY_MODE = 'bearer';
-    assert.throws(() => resolveAgentIdentityMode(), /bearer is not permitted/);
+    const cfg = loadRuntimeConfig();
+    assert.equal(cfg.persistenceMode, 'postgres');
+    assert.equal('agentIdentityMode' in cfg, false);
   });
 });
 

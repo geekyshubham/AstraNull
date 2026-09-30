@@ -123,24 +123,6 @@ describe('createServer service injection — tenant and target-group routes', ()
     assert.equal(call.ctx.tenantId, 'ten_demo');
   });
 
-  it('GET and POST /v1/environments use injected tenant service', async () => {
-    const readHeaders = demoHeaders('viewer');
-    const listRes = await request(baseUrl, 'GET', '/v1/environments', { headers: readHeaders });
-    assert.equal(listRes.status, 200);
-    assert.deepEqual(listRes.json.items, [{ id: 'env_fake', name: 'Fake Env' }]);
-    assert.ok(tenantCalls.some((c) => c.fn === 'listEnvironments'));
-
-    const writeHeaders = demoHeaders('admin');
-    const createRes = await request(baseUrl, 'POST', '/v1/environments', {
-      headers: writeHeaders,
-      body: { name: 'Staging' },
-    });
-    assert.equal(createRes.status, 201);
-    assert.equal(createRes.json.name, 'Staging');
-    const createCall = tenantCalls.find((c) => c.fn === 'createEnvironment' && c.body.name === 'Staging');
-    assert.ok(createCall);
-  });
-
   it('target-group list/create/detail/add-target routes use injected target-group service', async () => {
     const readHeaders = demoHeaders('viewer');
     const listRes = await request(baseUrl, 'GET', '/v1/target-groups', { headers: readHeaders });
@@ -197,7 +179,7 @@ describe('createServer service injection — not_found from fakes', () => {
     assert.equal((await request(baseUrl, 'GET', '/v1/tenants/current', { headers })).status, 404);
     assert.equal((await request(baseUrl, 'PATCH', '/v1/tenants/current', { headers, body: { name: 'x' } })).status, 404);
     assert.equal(
-      (await request(baseUrl, 'PATCH', '/v1/environments/env_missing', { headers, body: { name: 'x' } })).status,
+      (await request(baseUrl, 'PATCH', '/v1/targets/tgt_missing', { headers, body: { tags: ['x'] } })).status,
       404,
     );
     assert.equal((await request(baseUrl, 'GET', '/v1/target-groups/tg_missing', { headers })).status, 404);
@@ -213,36 +195,6 @@ describe('createServer service injection — not_found from fakes', () => {
   });
 });
 
-const FAKE_AGENT = { id: 'agt_fake', tenant_id: 'ten_demo', status: 'online' };
-
-function makeFakeTokens(handlers = {}) {
-  const calls = [];
-  const tokens = {
-    async createBootstrapToken(ctx, body) {
-      calls.push({ fn: 'createBootstrapToken', ctx, body });
-      if (handlers.createBootstrapToken) return handlers.createBootstrapToken(ctx, body);
-      return {
-        token: {
-          id: 'bt_fake',
-          name: body.name,
-          token_hash: 'hash',
-          token_salt: 'salt',
-        },
-        secret: 'ast_fake_secret',
-      };
-    },
-    async listBootstrapTokens(ctx) {
-      calls.push({ fn: 'listBootstrapTokens', ctx });
-      return handlers.listBootstrapTokens?.(ctx) ?? [{ id: 'bt_fake', name: 'Install' }];
-    },
-    async revokeBootstrapToken(ctx, id) {
-      calls.push({ fn: 'revokeBootstrapToken', ctx, id });
-      if (handlers.revokeBootstrapToken) return handlers.revokeBootstrapToken(ctx, id);
-      return { id, status: 'revoked' };
-    },
-  };
-  return { tokens, calls };
-}
 
 function makeFakeServiceAccounts(handlers = {}) {
   const calls = [];
@@ -295,110 +247,25 @@ function makeFakeServiceAccounts(handlers = {}) {
   return { serviceAccounts, calls };
 }
 
-function makeFakeAgents(handlers = {}) {
-  const calls = [];
-  const agents = {
-    async registerAgent(body, tenantId) {
-      calls.push({ fn: 'registerAgent', body, tenantId });
-      if (handlers.registerAgent) return handlers.registerAgent(body, tenantId);
-      return { agent: { id: 'agt_new', tenant_id: 'ten_demo' }, credential: 'agc_new' };
-    },
-    async listAgents(ctx) {
-      calls.push({ fn: 'listAgents', ctx });
-      return handlers.listAgents?.(ctx) ?? [FAKE_AGENT];
-    },
-    async revokeAgent(ctx, id) {
-      calls.push({ fn: 'revokeAgent', ctx, id });
-      if (handlers.revokeAgent) return handlers.revokeAgent(ctx, id);
-      return { agent: { ...FAKE_AGENT, id, status: 'revoked' } };
-    },
-    async heartbeatAgent(agent, body) {
-      calls.push({ fn: 'heartbeatAgent', agent, body });
-      return handlers.heartbeatAgent?.(agent, body) ?? { agent };
-    },
-    async pollJobs(agent, timeoutMs) {
-      calls.push({ fn: 'pollJobs', agent, timeoutMs });
-      return handlers.pollJobs?.(agent, timeoutMs) ?? { jobs: [{ id: 'job_fake' }] };
-    },
-    async ackJob(agent, jobId) {
-      calls.push({ fn: 'ackJob', agent, jobId });
-      if (handlers.ackJob) return handlers.ackJob(agent, jobId);
-      return { id: jobId, status: 'acked' };
-    },
-  };
-  return { agents, calls };
-}
-
-function makeFakeAgentAuth(handlers = {}) {
-  const calls = [];
-  const agentAuth = {
-    async requireAgentAuth(headers, agentId) {
-      calls.push({ fn: 'requireAgentAuth', agentId, headers });
-      if (handlers.requireAgentAuth) return handlers.requireAgentAuth(headers, agentId);
-      if (agentId === FAKE_AGENT.id) {
-        return { agent: FAKE_AGENT, credential: 'agc_injected' };
-      }
-      return { error: 'unauthorized', status: 401 };
-    },
-  };
-  return { agentAuth, calls };
-}
-
-describe('createServer service injection — tokens, service accounts, agents', () => {
+describe('createServer service injection — service accounts', () => {
   let baseUrl;
   let server;
-  let tokenCalls;
   let saCalls;
-  let agentCalls;
-  let agentAuthCalls;
 
   before(() => {
     freshStore();
     const fakeTenants = makeFakeTenants();
     const fakeTargetGroups = makeFakeTargetGroups();
-    const fakeTokens = makeFakeTokens();
     const fakeServiceAccounts = makeFakeServiceAccounts();
-    const fakeAgents = makeFakeAgents();
-    const fakeAgentAuth = makeFakeAgentAuth();
-    tokenCalls = fakeTokens.calls;
     saCalls = fakeServiceAccounts.calls;
-    agentCalls = fakeAgents.calls;
-    agentAuthCalls = fakeAgentAuth.calls;
     ({ server, baseUrl } = listenServer({
       tenants: fakeTenants.tenants,
       targetGroups: fakeTargetGroups.targetGroups,
-      tokens: fakeTokens.tokens,
       serviceAccounts: fakeServiceAccounts.serviceAccounts,
-      agents: fakeAgents.agents,
-      agentAuth: fakeAgentAuth.agentAuth,
     }));
   });
 
   after(() => server.close());
-
-  it('bootstrap-token routes use injected tokens service and redact hash/salt', async () => {
-    const headers = demoHeaders('admin');
-    const createRes = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', {
-      headers,
-      body: { name: 'edge-install', max_registrations: 2 },
-    });
-    assert.equal(createRes.status, 201);
-    assert.equal(createRes.json.secret, 'ast_fake_secret');
-    assert.equal(createRes.json.token_hash, undefined);
-    assert.equal(createRes.json.token_salt, undefined);
-    const createCall = tokenCalls.find((c) => c.fn === 'createBootstrapToken');
-    assert.equal(createCall.body.name, 'edge-install');
-    assert.equal(createCall.ctx.tenantId, 'ten_demo');
-
-    const listRes = await request(baseUrl, 'GET', '/v1/bootstrap-tokens', { headers: demoHeaders('admin') });
-    assert.equal(listRes.status, 200);
-    assert.deepEqual(listRes.json.items, [{ id: 'bt_fake', name: 'Install' }]);
-
-    const revokeRes = await request(baseUrl, 'POST', '/v1/bootstrap-tokens/bt_9/revoke', { headers });
-    assert.equal(revokeRes.status, 200);
-    assert.equal(revokeRes.json.id, 'bt_9');
-    assert.ok(tokenCalls.some((c) => c.fn === 'revokeBootstrapToken' && c.id === 'bt_9'));
-  });
 
   it('service-account management routes use injected serviceAccounts and redact hash/salt', async () => {
     const headers = demoHeaders('admin');
@@ -439,52 +306,6 @@ describe('createServer service injection — tokens, service accounts, agents', 
     assert.equal(badRes.status, 401);
     assert.ok(saCalls.some((c) => c.fn === 'auditServiceAccountAuthFailure' && c.token === 'svc_injected_bad'));
   });
-
-  it('agent register/list and credential routes use injected agents and agentAuth', async () => {
-    const regRes = await request(baseUrl, 'POST', '/v1/agents/register', {
-      body: { bootstrap_token: 'ast_x', hostname: 'host-a' },
-    });
-    assert.equal(regRes.status, 201);
-    assert.equal(regRes.json.agent.id, 'agt_new');
-    const regCall = agentCalls.find((c) => c.fn === 'registerAgent');
-    assert.equal(regCall.body.hostname, 'host-a');
-
-    const listRes = await request(baseUrl, 'GET', '/v1/agents', { headers: demoHeaders('viewer') });
-    assert.equal(listRes.status, 200);
-    assert.deepEqual(listRes.json.items, [FAKE_AGENT]);
-
-    const revokeRes = await request(baseUrl, 'POST', `/v1/agents/${FAKE_AGENT.id}/revoke`, {
-      headers: demoHeaders('admin'),
-    });
-    assert.equal(revokeRes.status, 200);
-    assert.equal(revokeRes.json.agent.status, 'revoked');
-    assert.ok(agentCalls.some((c) => c.fn === 'revokeAgent' && c.id === FAKE_AGENT.id));
-
-    const hbRes = await request(baseUrl, 'POST', `/v1/agents/${FAKE_AGENT.id}/heartbeat`, {
-      headers: { Authorization: 'Bearer agc_injected' },
-      body: { version: '1.0.0' },
-    });
-    assert.equal(hbRes.status, 200);
-    assert.ok(agentAuthCalls.some((c) => c.fn === 'requireAgentAuth' && c.agentId === FAKE_AGENT.id));
-    const hbCall = agentCalls.find((c) => c.fn === 'heartbeatAgent');
-    assert.equal(hbCall.agent.id, FAKE_AGENT.id);
-    assert.equal(hbCall.body.version, '1.0.0');
-
-    const jobsRes = await request(baseUrl, 'GET', `/v1/agents/${FAKE_AGENT.id}/jobs`, {
-      headers: { Authorization: 'Bearer agc_injected' },
-    });
-    assert.equal(jobsRes.status, 200);
-    assert.deepEqual(jobsRes.json.jobs, [{ id: 'job_fake' }]);
-    const pollCall = agentCalls.find((c) => c.fn === 'pollJobs');
-    assert.equal(pollCall.timeoutMs, 3000);
-
-    const ackRes = await request(baseUrl, 'POST', `/v1/agents/${FAKE_AGENT.id}/jobs/job_1/ack`, {
-      headers: { Authorization: 'Bearer agc_injected' },
-    });
-    assert.equal(ackRes.status, 200);
-    assert.equal(ackRes.json.job.id, 'job_1');
-    assert.ok(agentCalls.some((c) => c.fn === 'ackJob' && c.jobId === 'job_1'));
-  });
 });
 
 function makeFakeValidationServices(handlers = {}) {
@@ -519,10 +340,6 @@ function makeFakeValidationServices(handlers = {}) {
     async cancelTestRun(ctx, id) {
       calls.push({ group: 'testRuns', fn: 'cancelTestRun', ctx, id });
       return handlers.cancelTestRun?.(ctx, id) ?? { run: { id, status: 'cancelled' } };
-    },
-    async ingestObservation(ctx, agentId, body) {
-      calls.push({ group: 'testRuns', fn: 'ingestObservation', ctx, agentId, body });
-      return handlers.ingestObservation?.(ctx, agentId, body) ?? { event_id: 'evt_obs' };
     },
     async maybeFinalizeRunAfterProbeIngest(runId) {
       calls.push({ group: 'testRuns', fn: 'maybeFinalizeRunAfterProbeIngest', runId });

@@ -41,14 +41,14 @@ describe('alpha platform slice', () => {
     const h = demoHeaders('admin');
     const tenant = await request(baseUrl, 'GET', '/v1/tenants/current', { headers: h });
     assert.equal(tenant.status, 200);
-    const envs = await request(baseUrl, 'GET', '/v1/environments', { headers: h });
-    assert.ok(envs.json.items.length >= 1);
-    const created = await request(baseUrl, 'POST', '/v1/environments', {
+    // ADR-0008: environments are gone. Direct target creation lands in the tenant default group.
+    const created = await request(baseUrl, 'POST', '/v1/targets', {
       headers: h,
-      body: { name: 'Staging' },
+      body: { kind: 'fqdn', value: 'alpha.example.com', tags: ['env:staging'] },
     });
     assert.equal(created.status, 201);
-    assert.ok(getStore().auditLog.some((a) => a.action === 'environment.created'));
+    assert.deepEqual(created.json.tags, ['env:staging']);
+    assert.ok(getStore().auditLog.some((a) => a.action === 'target.added'));
   });
 
   it('event ingestion idempotency and cross-tenant rejection', async () => {

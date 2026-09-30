@@ -187,7 +187,7 @@ describe('postgres subscription service adapter', () => {
     assert.deepEqual(summary.usage, {
       users: 2,
       target_groups: 3,
-      agents: 1,
+      agents: 0,
       safe_runs_started_last_hour: 2,
       open_findings: 2,
       pending_high_scale_requests: 1,
@@ -214,7 +214,7 @@ describe('postgres subscription service adapter', () => {
     // Tenant scoping: detail keyed by tenantId, repo reads receive tenant ctx.
     const detailCall = calls.find((c) => c.method === 'getTenantDetail');
     assert.deepEqual(detailCall.args, [tenantId]);
-    for (const method of ['listTargetGroups', 'listAgents', 'listTestRuns', 'listFindings', 'listHighScaleRequests']) {
+    for (const method of ['listTargetGroups', 'listTestRuns', 'listFindings', 'listHighScaleRequests']) {
       const call = calls.find((c) => c.method === method);
       assert.equal(call.args[0].tenantId, tenantId);
     }

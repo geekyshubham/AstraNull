@@ -2,25 +2,6 @@
  * Complete metadata-only production release evidence samples for every contract kind.
  * Used by bundle and contract unit tests; not for API submission without operator signoff.
  */
-const AGENT_INSTALL_MATRIX_FORMATS = Object.freeze([
-  'generic',
-  'deb',
-  'rpm',
-  'container',
-  'kubernetes',
-]);
-
-const AGENT_INSTALL_MATRIX_CHECKS = Object.freeze([
-  'install',
-  'heartbeat',
-  'job_poll',
-  'upgrade_rollback',
-  'revoke',
-  'uninstall',
-  'no_inbound_port',
-  'signature_verify',
-]);
-
 const UI_ACCESSIBILITY_PAGES = Object.freeze([
   'dashboard',
   'test_runs',
@@ -43,47 +24,6 @@ function uiAccessibilityRuns() {
       captured_at: '2026-07-02T00:00:00.000Z',
     }))
   ));
-}
-
-function agentInstallCheckDetail(format, checkName) {
-  const detail = {
-    status: 'passed',
-    observed_at: '2026-07-02T00:00:00.000Z',
-  };
-  if (checkName === 'heartbeat') detail.heartbeat_count = 3;
-  if (checkName === 'job_poll') detail.job_poll_count = 2;
-  if (checkName === 'no_inbound_port') detail.inbound_listener_count = 0;
-  if (checkName === 'signature_verify') {
-    detail.signing_format = format === 'generic' ? 'tarball' : format;
-    detail.trust_anchor_reference = `trust://agent-signing/${format}`;
-  }
-  return detail;
-}
-
-function agentInstallMatrixRow(format) {
-  const runtimeFields = {};
-  if (format === 'container') {
-    runtimeFields.runtime = 'docker';
-    runtimeFields.image_reference_redacted = 'registry.example/astranull-agent:rel-2026-07-02';
-  }
-  if (format === 'kubernetes') {
-    runtimeFields.runtime = 'kubernetes';
-    runtimeFields.deployment_mode = 'daemonset';
-    runtimeFields.namespace_redacted = 'astranull-agents';
-    runtimeFields.helm_release_redacted = 'astranull-agent';
-  }
-  return {
-    format,
-    environment: 'staging',
-    distro: ['deb', 'rpm', 'generic'].includes(format) ? 'linux' : null,
-    ...runtimeFields,
-    status: 'passed',
-    checks: Object.fromEntries(AGENT_INSTALL_MATRIX_CHECKS.map((check) => [check, 'passed'])),
-    failed_checks: [],
-    check_details: Object.fromEntries(
-      AGENT_INSTALL_MATRIX_CHECKS.map((check) => [check, agentInstallCheckDetail(format, check)]),
-    ),
-  };
 }
 
 export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
@@ -133,88 +73,6 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
     signoff_at: '2026-07-02T00:00:00.000Z',
     controls: [{ control_id: 'tls_termination', evidence_uri: 'evidence://edge/tls' }],
     evidence_uri: 'evidence://edge/protection-matrix',
-  },
-  agent_sbom_provenance: {
-    created_at: '2026-07-02T00:00:00.000Z',
-    package_format: 'container',
-    package: { name: 'astranull-agent', sha256: 'a'.repeat(64), size: 1024 },
-    sbom: {
-      sha256: 'b'.repeat(64),
-      size: 2048,
-      summary: { sbom_format: 'cyclonedx', component_count: 12 },
-    },
-    provenance: {
-      sha256: 'c'.repeat(64),
-      size: 1024,
-      summary: { subject_count: 1, materials_count: 3 },
-    },
-    evidence_uri: 'evidence://agent/sbom-provenance',
-  },
-  agent_install_matrix: {
-    schema_version: 1,
-    artifact_type: 'agent_install_matrix_evidence',
-    created_at: '2026-07-02T00:00:00.000Z',
-    matrix_id: 'agent-install-2026-07-02',
-    overall_status: 'passed',
-    required_formats: [...AGENT_INSTALL_MATRIX_FORMATS],
-    required_checks: [...AGENT_INSTALL_MATRIX_CHECKS],
-    coverage_gaps: {
-      missing_formats: [],
-      failed_checks: [],
-      formats_covered: [...AGENT_INSTALL_MATRIX_FORMATS],
-    },
-    rows: AGENT_INSTALL_MATRIX_FORMATS.map((format) => agentInstallMatrixRow(format)),
-    evidence_uri: 'evidence://agent/install-matrix',
-  },
-  agent_mtls_gateway: {
-    schema_version: 1,
-    artifact_type: 'agent_mtls_gateway_evidence',
-    created_at: '2026-07-02T00:00:00.000Z',
-    validation: { ok: true, missing_fields: [], forbidden_fields: [], invalid_fingerprint_headers: [] },
-    release_id: 'rel-agent-mtls-2026-07-02',
-    environment: 'staging',
-    gateway_summary: {
-      gateway_reference: 'gateway://staging/agent-control',
-      proxy_type: 'nginx-ingress',
-      tls_termination_point: 'edge_gateway',
-    },
-    staging_proof_summary: {
-      staging_agent_reference: 'agent://staging/prod-origin-01',
-      registration_evidence_uri: 'evidence://agent/staging-registration-2026-07-02',
-      heartbeat_evidence_uri: 'evidence://agent/staging-heartbeat-2026-07-02',
-      fingerprint_match_confirmed: true,
-    },
-    rotation_revocation_summary: {
-      drill_reference: 'drill://agent/client-cert-rotation-revocation-2026-07-02',
-      rotation_tested: true,
-      revocation_tested: true,
-    },
-    security_signoff: {
-      owner: 'security-lead',
-      role: 'security-owner',
-      signed_at: '2026-07-02T11:30:00.000Z',
-      signoff_reference: 'signoff://security/agent-mtls-gateway',
-    },
-    evidence_uri: 'evidence://agent/mtls-gateway',
-  },
-  agent_trust_key_ceremony: {
-    schema_version: 1,
-    artifact_type: 'agent_trust_key_ceremony_evidence',
-    created_at: '2026-07-02T00:00:00.000Z',
-    validation: { ok: true, missing_fields: [], forbidden_fields: [], missing_signoff: false },
-    ceremony_summary: {
-      drill_id: 'agent-trust-key-2026-07-02',
-      environment: 'staging',
-      tenant_id: 'ten_demo',
-      signing_key_method: 'generate',
-      active_fingerprint_sha256: 'a'.repeat(64),
-      custody_uri_count: 2,
-    },
-    custody_uris: [
-      'custody://security/agent-trust-key-ceremony/2026-07-02',
-      'custody://security/agent-trust-key-rotation/2026-07-02',
-    ],
-    evidence_uri: 'evidence://agent/trust-key-ceremony',
   },
   governed_adapter: {
     adapter_id: 'adapter-partner-01',
@@ -561,33 +419,6 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
     },
     evidence_uri: 'evidence://soc/authorization-custody',
   },
-  placement_confidence_staging: {
-    schema_version: 1,
-    artifact_type: 'placement_confidence_staging_evidence',
-    created_at: '2026-07-02T00:00:00.000Z',
-    release_id: 'rel-2026-07-02',
-    environment: 'staging',
-    scenarios: [
-      {
-        scenario_id: 'probe-agent-correlation',
-        status: 'passed',
-        correlation_score: 'high',
-        evidence_uri: 'evidence://placement/probe-agent-correlation',
-      },
-    ],
-    evidence_correlation_summary: {
-      probe_evidence_count: 12,
-      agent_evidence_count: 8,
-      correlated_pairs: 8,
-      gaps: [],
-    },
-    signoff: {
-      owner: 'detection-lead',
-      signed_at: '2026-07-02T00:00:00.000Z',
-      signoff_reference: 'signoff://detection/placement-confidence',
-    },
-    evidence_uri: 'evidence://detection/placement-confidence-staging',
-  },
   gateway_load_abuse: {
     schema_version: 1,
     artifact_type: 'gateway_load_abuse_evidence',
@@ -640,7 +471,6 @@ export const NEW_PRODUCTION_RELEASE_EVIDENCE_KINDS = Object.freeze([
   'staging_e2e_matrix',
   'compliance_legal_signoff',
   'authorization_custody',
-  'placement_confidence_staging',
   'gateway_load_abuse',
 ]);
 

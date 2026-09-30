@@ -103,36 +103,25 @@ function createCatalogMutationPool() {
     privacy_settings: {},
     created_at: FIXED_NOW,
   };
-  const environmentRow = {
-    id: 'env_1',
-    tenant_id: CTX.tenantId,
-    name: 'Environment',
-    status: 'active',
-    privacy_settings: {},
-    settings_json: {},
-    created_at: FIXED_NOW,
-  };
 
   return createRecordingPool((text, params) => {
     if (text.includes('FROM tenants')) return { rows: [tenantRow] };
     if (text.startsWith('UPDATE tenants')) return { rows: [tenantRow] };
-    if (text.startsWith('INSERT INTO environments')) {
+    if (text.startsWith('SELECT id FROM target_groups')) return { rows: [] };
+    if (text.startsWith('INSERT INTO target_groups')) {
       return {
         rows: [{
-          ...environmentRow,
           id: params[0],
+          tenant_id: params[1],
+          environment_id: null,
           name: params[2],
-          privacy_settings: JSON.parse(params[4]),
-          settings_json: JSON.parse(params[5]),
-        }],
-      };
-    }
-    if (text.includes('FROM environments')) return { rows: [environmentRow] };
-    if (text.startsWith('UPDATE environments')) {
-      return {
-        rows: [{
-          ...environmentRow,
-          status: params.includes('archived') ? 'archived' : 'active',
+          description: params[3],
+          expected_behavior_default: params[4],
+          timezone: params[5],
+          safe_test_windows: JSON.parse(params[6]),
+          safety_policy: JSON.parse(params[7]),
+          validation_mode: params[9],
+          created_at: params[10],
         }],
       };
     }
@@ -151,36 +140,15 @@ function catalogMutations() {
       run: (repo) => repo.patchCurrentTenant(CTX, { name: 'New' }, { now: FIXED_NOW }),
     },
     {
-      name: 'createEnvironment',
-      action: 'environment.created',
-      resourceType: 'environment',
-      resourceId: 'env_new',
-      sql: 'INSERT INTO environments',
-      run: (repo) => repo.createEnvironment(
+      name: 'createTargetGroup',
+      action: 'target_group.created',
+      resourceType: 'target_group',
+      resourceId: 'tg_new',
+      sql: 'INSERT INTO target_groups',
+      run: (repo) => repo.createTargetGroup(
         CTX,
-        { name: 'New' },
-        { id: 'env_new', now: FIXED_NOW },
-      ),
-    },
-    {
-      name: 'patchEnvironment',
-      action: 'environment.updated',
-      resourceType: 'environment',
-      resourceId: 'env_1',
-      sql: 'UPDATE environments',
-      run: (repo) => repo.patchEnvironment(CTX, 'env_1', { name: 'New' }, { now: FIXED_NOW }),
-    },
-    {
-      name: 'archiveEnvironment',
-      action: 'environment.archived',
-      resourceType: 'environment',
-      resourceId: 'env_1',
-      sql: 'UPDATE environments',
-      run: (repo) => repo.patchEnvironment(
-        CTX,
-        'env_1',
-        { status: 'archived' },
-        { now: FIXED_NOW },
+        { name: 'New Group' },
+        { id: 'tg_new', now: FIXED_NOW },
       ),
     },
   ];
@@ -455,106 +423,6 @@ describe('postgres core catalog repository', () => {
     assertUsesTenantPredicate(q.text, q.params, CTX.tenantId);
     assert.match(q.text, /status <> \$\d+/);
     assert.equal(q.params.includes('archived'), true);
-  });
-
-  it('createEnvironment inserts with tenant_id param and maps settings_json', async () => {
-    const pool = createRecordingPool((text, params) => {
-      if (text.startsWith('INSERT INTO environments')) {
-        assertUsesTenantPredicate(text, params, CTX.tenantId);
-        assertNoInterpolatedValue(text, 'My Env');
-        return {
-          rows: [
-            {
-              id: params[0],
-              tenant_id: params[1],
-              name: params[2],
-              status: 'active',
-              privacy_settings: JSON.parse(params[4]),
-              settings_json: JSON.parse(params[5]),
-              created_at: params[6],
-            },
-          ],
-        };
-      }
-      return { rows: [] };
-    });
-    const repo = createTestRepository(pool);
-    const env = await repo.createEnvironment(
-      CTX,
-      { name: 'My Env', description: 'line', privacy_settings: { metadata_retention_days: 30 } },
-      { id: 'env_test', now: FIXED_NOW },
-    );
-    assert.equal(env.id, 'env_test');
-    assert.equal(env.description, 'line');
-    assert.equal(env.created_by, CTX.userId);
-    assertTenantWrapped(pool.client, CTX.tenantId);
-  });
-
-  it('patchEnvironment returns null when not found', async () => {
-    const pool = createRecordingPool((text) => {
-      if (text.includes('FROM environments')) return { rows: [] };
-      return { rows: [] };
-    });
-    const repo = createTestRepository(pool, {
-      async appendAuditEvent() {
-        assert.fail('missing environment must not be audited');
-      },
-    });
-    assert.equal(await repo.patchEnvironment(CTX, 'env_missing', { name: 'x' }), null);
-    assertTenantWrapped(pool.client, CTX.tenantId);
-    const selects = dataQueries(pool.client).filter((q) => q.text.includes('SELECT'));
-    assert.equal(selects.length, 1);
-    assertUsesTenantPredicate(selects[0].text, selects[0].params, CTX.tenantId);
-    assertNoInterpolatedValue(selects[0].text, 'env_missing');
-    assert.ok(selects[0].params.includes('env_missing'));
-  });
-
-  it('patchEnvironment updates with tenant predicate', async () => {
-    const pool = createRecordingPool((text, params) => {
-      if (text.includes('FROM environments')) {
-        return {
-          rows: [
-            {
-              id: 'env_1',
-              tenant_id: 'ten_demo',
-              name: 'Old',
-              status: 'active',
-              privacy_settings: {},
-              settings_json: { description: '' },
-              created_at: FIXED_NOW,
-            },
-          ],
-        };
-      }
-      if (text.startsWith('UPDATE environments')) {
-        assertUsesTenantPredicate(text, params, CTX.tenantId);
-        assertNoInterpolatedValue(text, 'env_1');
-        return {
-          rows: [
-            {
-              id: 'env_1',
-              tenant_id: 'ten_demo',
-              name: 'New',
-              status: 'active',
-              privacy_settings: {},
-              settings_json: { description: 'd', updated_at: FIXED_NOW },
-              created_at: FIXED_NOW,
-            },
-          ],
-        };
-      }
-      return { rows: [] };
-    });
-    const repo = createTestRepository(pool);
-    const env = await repo.patchEnvironment(
-      CTX,
-      'env_1',
-      { name: 'New', description: 'd' },
-      { now: FIXED_NOW },
-    );
-    assert.equal(env.name, 'New');
-    assert.equal(env.updated_at, FIXED_NOW);
-    assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
   it('audits catalog mutations on one transaction and rolls back when audit fails', async () => {
@@ -981,7 +849,7 @@ describe('postgres core catalog repository', () => {
 
     // Everything the internal callers actually read is still present.
     assert.equal(group.id, 'tg_1');
-    assert.equal(group.environment_id, 'env_1');
+    assert.equal(group.environment_id, undefined);
     assert.equal(group.validation_mode, 'external_only');
     assert.equal(group.ownership_status, 'dns_verified');
     assert.deepEqual(group.targets.map((t) => t.id), ['tgt_1']);
@@ -1052,28 +920,32 @@ describe('postgres core catalog repository', () => {
     });
   });
 
-  it('createTargetGroup inserts tenant-scoped row with normalized policy', async () => {
+  it('createTargetGroup inserts tenant-scoped row with normalized policy and NULL environment', async () => {
     const pool = createRecordingPool((text, params) => {
-      if (text.startsWith('SELECT id FROM environments')) {
+      if (text.startsWith('SELECT id FROM target_groups')) {
         assertUsesTenantPredicate(text, params, CTX.tenantId);
-        return { rows: [{ id: params[1] }] };
+        return { rows: [] };
       }
       if (text.startsWith('INSERT INTO target_groups')) {
         assertUsesTenantPredicate(text, params, CTX.tenantId);
         assertNoInterpolatedValue(text, 'tg_new');
+        assert.match(text, /environment_id/);
+        // environment_id is a literal NULL in the INSERT, never a bound param.
+        assert.equal(params.includes('env_demo'), false);
         return {
           rows: [
             {
               id: params[0],
               tenant_id: params[1],
-              environment_id: params[2],
-              name: params[3],
-              description: params[4],
-              expected_behavior_default: params[5],
-              timezone: params[6],
-              safe_test_windows: JSON.parse(params[7]),
-              safety_policy: JSON.parse(params[8]),
-              created_at: params[9],
+              environment_id: null,
+              name: params[2],
+              description: params[3],
+              expected_behavior_default: params[4],
+              timezone: params[5],
+              safe_test_windows: JSON.parse(params[6]),
+              safety_policy: JSON.parse(params[7]),
+              validation_mode: params[9],
+              created_at: params[10],
             },
           ],
         };
@@ -1087,34 +959,36 @@ describe('postgres core catalog repository', () => {
       { id: 'tg_new', now: FIXED_NOW },
     );
     assert.equal(group.id, 'tg_new');
+    assert.equal(group.environment_id, undefined);
+    assert.equal(group.validation_mode, 'external_only');
     assert.equal(group.safety_policy.max_runs_per_hour, 10);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
-  it('patchTargetGroup rechecks dedupe when only environment changes, including a null scope', async () => {
+  it('patchTargetGroup rechecks dedupe tenant-wide when the name changes', async () => {
     let duplicateChecked = false;
     const pool = createRecordingPool((text, params) => {
       if (text.includes('SELECT id, tenant_id, environment_id, name')) {
         return {
           rows: [{
-            id: 'tg_1', tenant_id: CTX.tenantId, environment_id: 'env_old', name: 'Origin',
+            id: 'tg_1', tenant_id: CTX.tenantId, environment_id: null, name: 'Origin',
             safe_test_windows: [], safety_policy: {}, created_at: FIXED_NOW,
           }],
         };
       }
-      if (text.includes("COALESCE(environment_id, '') = COALESCE($2, '')")) {
+      if (text.includes('lower(name) = lower($2)')) {
         duplicateChecked = true;
-        assert.deepEqual(params, [CTX.tenantId, null, 'Origin', 'tg_1']);
+        assert.deepEqual(params, [CTX.tenantId, 'Renamed', 'tg_1']);
         return { rows: [{ id: 'tg_duplicate' }] };
       }
       if (text.includes('UPDATE target_groups')) {
-        throw new Error('duplicate environment-only move must not update');
+        throw new Error('duplicate name must not update');
       }
       return { rows: [] };
     });
     const repo = createTestRepository(pool);
 
-    const result = await repo.patchTargetGroup(CTX, 'tg_1', { environment_id: null });
+    const result = await repo.patchTargetGroup(CTX, 'tg_1', { name: 'Renamed' });
 
     assert.deepEqual(result, {
       error: 'target_group_exists', status: 409, existing_id: 'tg_duplicate',
@@ -1123,27 +997,55 @@ describe('postgres core catalog repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
-  it('createTargetGroup returns invalid_environment error when environment is missing for tenant', async () => {
-    const pool = createRecordingPool((text) => {
-      if (text.startsWith('SELECT id FROM environments')) {
+  it('createTargetDirect lands a target in the tenant default group, creating it on demand', async () => {
+    let insertedGroupId = null;
+    const pool = createRecordingPool((text, params) => {
+      // No explicit group id → look up the default_scope group (none yet).
+      if (/SELECT id FROM target_groups[\s\S]*default_scope/.test(text)) return { rows: [] };
+      if (text.startsWith('INSERT INTO target_groups')) {
+        insertedGroupId = params[0];
+        assert.match(text, /default_scope/);
+        assert.match(text, /'external_only'/);
         return { rows: [] };
       }
-      if (text.startsWith('INSERT INTO target_groups')) {
-        throw new Error('INSERT should not run when environment is missing');
+      if (text.startsWith('SELECT id FROM targets')) return { rows: [] };
+      if (text.startsWith('INSERT INTO targets')) {
+        return {
+          rows: [{
+            id: params[0], tenant_id: params[1], target_group_id: params[2],
+            kind: params[3], value: params[4], normalized_value: params[5],
+            expected_behavior: params[6], metadata_json: JSON.parse(params[7]), created_at: params[8],
+          }],
+        };
       }
+      if (text.startsWith('UPDATE target_groups')) return { rows: [] };
       return { rows: [] };
     });
     const repo = createTestRepository(pool);
-    const result = await repo.createTargetGroup(
+    const target = await repo.createTargetDirect(
       CTX,
-      { name: 'Origin', environment_id: 'prod' },
-      { id: 'tg_new', now: FIXED_NOW },
+      { kind: 'fqdn', value: 'direct.example.com', tags: ['env:prod'] },
+      { id: 'tgt_new', defaultGroupId: 'tg_default', now: FIXED_NOW },
     );
-    assert.equal(result.error, 'invalid_environment');
-    assert.equal(result.status, 400);
-    assert.equal(result.field, 'environment_id');
-    assert.match(result.message, /prod/);
+    assert.equal(target.id, 'tgt_new');
+    assert.equal(target.target_group_id, 'tg_default');
+    assert.equal(insertedGroupId, 'tg_default');
+    assert.deepEqual(target.tags, ['env:prod']);
     assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('createTargetDirect 404s an unknown explicit group', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/SELECT id FROM target_groups/.test(text)) return { rows: [] };
+      return { rows: [] };
+    });
+    const repo = createTestRepository(pool);
+    const result = await repo.createTargetDirect(
+      CTX,
+      { kind: 'fqdn', value: 'x.example.com', target_group_id: 'tg_missing' },
+      { now: FIXED_NOW },
+    );
+    assert.deepEqual(result, { error: 'target_group_not_found', status: 404 });
   });
 
   it('addTarget returns null when group missing', async () => {

@@ -13,7 +13,20 @@ import {
 } from './capabilityProbes.mjs';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
-import { stableStringify } from './agentUpdates.mjs';
+
+function stableStringify(value) {
+  if (value === undefined) {
+    return 'null';
+  }
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => (v === undefined ? 'null' : stableStringify(v))).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort().filter((k) => value[k] !== undefined);
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
 
 const DEFAULT_MAX_REQUESTS = 1;
 const DEFAULT_TIMEOUT_CAP_MS = 5000;

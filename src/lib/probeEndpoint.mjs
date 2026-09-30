@@ -312,12 +312,6 @@ export function validateProbeEndpoint(endpoint, options = {}) {
     normalized.discovered_public_ip = endpoint.discovered_public_ip;
   }
 
-  if (endpoint.agent_local_ip !== undefined && endpoint.agent_local_ip !== null) {
-    const literalError = validateIpLiteral(endpoint.agent_local_ip, 'agent_local_ip');
-    if (literalError) return literalError;
-    normalized.agent_local_ip = endpoint.agent_local_ip;
-  }
-
   if (endpoint.listen_port !== undefined && endpoint.listen_port !== null) {
     const portError = validateListenPort(endpoint.listen_port);
     if (portError) return portError;
@@ -366,7 +360,7 @@ export function checkProbeEndpointBinding(
       return {
         ok: false,
         error: 'target_group_mismatch',
-        message: 'declared_fqdn is not listed in the agent target group',
+        message: 'declared_fqdn is not listed in the target group',
       };
     }
   } else if (Array.isArray(targetGroupFqdns) && targetGroupFqdns.length > 0) {
@@ -375,7 +369,7 @@ export function checkProbeEndpointBinding(
       return {
         ok: false,
         error: 'target_group_mismatch',
-        message: 'declared_fqdn is not listed in the agent target group',
+        message: 'declared_fqdn is not listed in the target group',
       };
     }
   }

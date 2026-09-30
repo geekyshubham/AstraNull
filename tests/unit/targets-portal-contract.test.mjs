@@ -6,11 +6,13 @@ const PAGES = new URL('../../apps/web/react/src/pages/', import.meta.url);
 const readPage = (name) => readFileSync(new URL(name, PAGES), 'utf8');
 
 describe('Targets portal contract', () => {
-  it('renders the required inventory fields and safe add/remove behavior', () => {
+  it('renders the required inventory fields and safe add/edit/remove behavior', () => {
     const source = readPage('targets-page.tsx');
 
     for (const label of [
       'Target',
+      'Kind',
+      'Tags',
       'Target group',
       'Verification',
       'Test eligibility',
@@ -19,13 +21,20 @@ describe('Targets portal contract', () => {
     ]) {
       assert.match(source, new RegExp(`label: '${label}'`));
     }
-    assert.match(source, /\/v1\/target-groups\/\$\{encodeURIComponent\(groupId\)\}\/targets/);
-    assert.match(source, /method: 'POST'/);
-    assert.match(source, /source_app: 'AstraNull portal'/);
+    // ADR-0008: direct target creation via POST /v1/targets with top-level tags + optional group.
+    assert.match(source, /requestJson\(config, session, '\/v1\/targets', \{ method: 'POST', body \}\)/);
+    assert.match(source, /body\.target_group_id = groupId/);
+    // Per-target tag edit via PATCH /v1/targets/:id (kind/value immutable).
+    assert.match(source, /\/v1\/targets\/\$\{encodeURIComponent\(editTargetId\)\}/);
+    assert.match(source, /method: 'PATCH'/);
     assert.match(source, /method: 'DELETE'/);
     assert.match(source, /Existing evidence is retained/);
-    assert.match(source, /Declared inventory is not automatic discovery/);
-    assert.match(source, /ownership evidence and safety policy/);
+    // The "not automatic discovery" callout is removed in the revamp.
+    assert.doesNotMatch(source, /Declared inventory is not automatic discovery/);
+    // Tag input enforces the ADR tag rule inline.
+    assert.match(source, /\^\[a-z0-9\]\[a-z0-9:_\.-\]\{0,47\}\$/);
+    assert.match(source, /Add target/);
+    assert.doesNotMatch(source, /Add single domain/);
   });
 
   it('uses explicit Open target links instead of focusable or clickable native rows', () => {
@@ -56,17 +65,11 @@ describe('Targets portal contract', () => {
   });
 
   it('keeps integration domain intake and requested DNS providers visible', () => {
-    const source = readPage('page-components.tsx');
+    const source = readPage('integrations-page.tsx');
 
     for (const provider of ['GoDaddy', 'Namecheap', 'Hetzner DNS']) {
       assert.match(source, new RegExp(`label: '${provider}'`));
     }
-    assert.match(source, /\+ Add single domain/);
-    assert.match(source, /handleAddSingleDomain/);
-    assert.match(source, /\/v1\/target-groups\/\$\{encodeURIComponent\(groupId\)\}\/targets/);
-    assert.match(source, /requestJson\(config, session, '\/v1\/target-groups', \{/);
-    assert.match(source, /source_app: 'AstraNull portal'/);
-    assert.match(source, /provider_access: 'none'/);
-    assert.match(source, /kind: 'fqdn'/);
+    assert.match(source, /No IP-discovery service is contacted/);
   });
 });

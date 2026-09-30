@@ -16,8 +16,7 @@ import {
   validateRequestedScopes,
 } from '../../src/services/serviceAccounts.mjs';
 import { getStore, migrateDevStore } from '../../src/store.mjs';
-import { createBootstrapToken } from '../../src/services/tokens.mjs';
-import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
+import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 const TEST_SECRET = 'unit-session-secret-32chars-minimum';
@@ -311,33 +310,6 @@ describe('service account HTTP auth', () => {
       headers: { Authorization: `Bearer ${svcSecret}` },
     });
     assert.equal(tg.status, 401);
-  });
-
-  it('service token cannot authenticate agent heartbeat', async () => {
-    const adminCtx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret: bootstrap } = createBootstrapToken(adminCtx, { target_group_id: 'tg_1' });
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      body: { bootstrap_token: bootstrap, hostname: 'svc-agent-test' },
-    });
-    assert.equal(reg.status, 201);
-    const agentId = reg.json.agent.id;
-
-    const { secret: svcSecret } = createServiceAccount(adminCtx, {
-      role: 'admin',
-      scopes: ['*'],
-    });
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(svcSecret),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(hb.status, 401);
-
-    const hbOk = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(reg.json.agent_credential),
-      body: { version: '0.1.0' },
-    });
-    assert.equal(hbOk.status, 200);
   });
 
   it('POST and GET service-accounts responses omit secret_hash and secret_salt', async () => {

@@ -31,24 +31,17 @@ function hasWafFingerprintHint(metadata) {
   );
 }
 
-function isWafMarkerAgentMetadata(metadata) {
-  const md = metadata ?? {};
-  if (md.waf_marker === true || md.waf_validation_marker === true) return true;
-  if (typeof md.marker_type === 'string' && md.marker_type.trim()) return true;
-  if (md.scenario_family === 'marker') return true;
-  if (md.canary_observation === true && (md.waf_marker === true || md.waf_validation_marker === true)) {
-    return true;
-  }
-  return false;
-}
-
 /**
- * @param {{ probes?: object[], agents?: object[] }} input
+ * Outside-in only (ADR-0008): full "protected" is corroborated by external origin-lockdown
+ * evidence — an origin-bypass probe that did not reach the direct origin — recorded on the
+ * probe metadata as `origin_lockdown_confirmed`, not by any internal agent observation.
+ *
+ * @param {{ probes?: object[] }} input
  */
-export function buildWafEvidenceCorroboration({ probes = [], agents = [] } = {}) {
+export function buildWafEvidenceCorroboration({ probes = [] } = {}) {
   const probesById = new Map();
   const probesByNonce = new Map();
-  const agentsByNonce = new Map();
+  let originLockdownConfirmed = false;
 
   for (const probe of probes) {
     if (!isTrustedProducerEvent(probe)) continue;
@@ -60,17 +53,12 @@ export function buildWafEvidenceCorroboration({ probes = [], agents = [] } = {})
       bucket.push(probe);
       probesByNonce.set(probe.nonce_hash, bucket);
     }
+    if (probe?.metadata?.origin_lockdown_confirmed === true) {
+      originLockdownConfirmed = true;
+    }
   }
 
-  for (const agent of agents) {
-    if (!isTrustedProducerEvent(agent)) continue;
-    if (!agent?.nonce_hash) continue;
-    const bucket = agentsByNonce.get(agent.nonce_hash) ?? [];
-    bucket.push(agent);
-    agentsByNonce.set(agent.nonce_hash, bucket);
-  }
-
-  return { probesById, probesByNonce, agentsByNonce };
+  return { probesById, probesByNonce, originLockdownConfirmed };
 }
 
 function matchingVerifiedExternalProbePass(scenario, corroboration) {
@@ -98,42 +86,14 @@ function matchingVerifiedExternalProbePass(scenario, corroboration) {
   });
 }
 
-function agentConfirmsEdgeBlock(agent) {
-  const metadata = agent?.metadata ?? {};
-  const observed = normalizeExternalResult(metadata.observed_action);
-  return observed === 'block'
-    || observed === 'blocked'
-    || observed === 'not_reached_origin'
-    || metadata.waf_blocked === true
-    || metadata.reached_origin === false
-    || metadata.origin_reached === false;
-}
-
-function agentShowsMarkerLeak(agent) {
-  const metadata = agent?.metadata ?? {};
-  const observed = normalizeExternalResult(metadata.observed_action);
-  return observed === 'allow'
-    || observed === 'allowed'
-    || observed === 'reached_origin'
-    || observed === 'delivered'
-    || metadata.reached_origin === true
-    || metadata.origin_reached === true
-    || !agentConfirmsEdgeBlock(agent);
-}
-
 /**
- * Full protected means the bound external block is corroborated by a matching internal/origin
- * observation. External-only evidence is handled by corroborateEdgeProtectedScenarioEvidence.
+ * Full protected means the bound external edge block is corroborated by external origin-lockdown
+ * evidence in the same run (origin not reachable). External edge-only evidence is handled by
+ * corroborateEdgeProtectedScenarioEvidence.
  */
 export function corroborateProtectedScenarioEvidence(scenario, corroboration) {
   if (!matchingVerifiedExternalProbePass(scenario, corroboration)) return false;
-  const evidence = scenario.evidence_summary_json ?? scenario.evidence_summary ?? {};
-  const nonceHash = String(evidence.nonce_hash).trim();
-  const wafMarkerAgents = (corroboration.agentsByNonce.get(nonceHash) ?? [])
-    .filter((agent) => isWafMarkerAgentMetadata(agent.metadata));
-  if (wafMarkerAgents.length === 0) return false;
-  if (wafMarkerAgents.some((agent) => agentShowsMarkerLeak(agent))) return false;
-  return wafMarkerAgents.some((agent) => agentConfirmsEdgeBlock(agent));
+  return corroboration.originLockdownConfirmed === true;
 }
 
 export function corroborateEdgeProtectedScenarioEvidence(scenario, corroboration) {
@@ -180,7 +140,8 @@ export function protectedFinalizeEvidenceRequired({
 }
 
 /**
- * Remove client-asserted agent observation flags; corroboration derives these from stored events.
+ * Remove client-asserted origin/agent observation flags; corroboration derives these from
+ * stored external probe events only.
  *
  * @param {Record<string, unknown>} evidenceSummary
  */
@@ -188,7 +149,8 @@ export function stripClientAssertedAgentEvidence(evidenceSummary = {}) {
   if (!evidenceSummary || typeof evidenceSummary !== 'object' || Array.isArray(evidenceSummary)) {
     return evidenceSummary;
   }
-  const { observed_at_agent: _ignored, ...rest } = evidenceSummary;
+  const { observed_at_agent: _ignoredAgent, origin_lockdown_confirmed: _ignoredLockdown, ...rest } =
+    evidenceSummary;
   return rest;
 }
 
@@ -209,7 +171,6 @@ export function buildCorroborationFromEvents(events, testRunId) {
 
   return buildWafEvidenceCorroboration({
     probes: scoped.filter((event) => event.signal_type === 'probe_result'),
-    agents: scoped.filter((event) => event.signal_type === 'agent_observation'),
   });
 }
 
@@ -224,23 +185,16 @@ export async function buildCorroborationFromValidationEvidence(
   testRunId,
 ) {
   if (!testRunId || typeof validationEvidence?.listRunEvents !== 'function') {
-    return buildWafEvidenceCorroboration({ probes: [], agents: [] });
+    return buildWafEvidenceCorroboration({ probes: [] });
   }
 
-  const [probes, agents] = await Promise.all([
-    validationEvidence.listRunEvents(ctx, testRunId, {
-      signalType: 'probe_result',
-      limit: FINALIZE_CORROBORATION_EVENT_LIMIT,
-    }),
-    validationEvidence.listRunEvents(ctx, testRunId, {
-      signalType: 'agent_observation',
-      limit: FINALIZE_CORROBORATION_EVENT_LIMIT,
-    }),
-  ]);
+  const probes = await validationEvidence.listRunEvents(ctx, testRunId, {
+    signalType: 'probe_result',
+    limit: FINALIZE_CORROBORATION_EVENT_LIMIT,
+  });
 
-  const events = [
-    ...(Array.isArray(probes) ? probes : []),
-    ...(Array.isArray(agents) ? agents : []),
-  ];
-  return buildCorroborationFromEvents(events, testRunId);
+  return buildCorroborationFromEvents(
+    Array.isArray(probes) ? probes : [],
+    testRunId,
+  );
 }

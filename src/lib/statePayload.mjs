@@ -80,7 +80,6 @@ export function resolveHighScaleStatus({ rollup, computed }) {
  *   computed: {
  *     readiness: unknown,
  *     target_groups: number,
- *     agents_online: number,
  *     recent_runs: unknown[],
  *     open_findings: number,
  *     high_scale_requests: number,
@@ -111,7 +110,6 @@ export function buildGetStatePayload({
     // Readiness rollups have no scoring/input version; current recomputation is authoritative.
     readiness: computed.readiness,
     target_groups: Number(rollup?.target_groups ?? computed.target_groups),
-    agents_online: Number(rollup?.agents_online ?? computed.agents_online),
     recent_runs: Array.isArray(rollup?.recent_runs) ? rollup.recent_runs : computed.recent_runs,
     open_findings: Number(rollup?.open_findings ?? computed.open_findings),
     high_scale_requests: requestCount,

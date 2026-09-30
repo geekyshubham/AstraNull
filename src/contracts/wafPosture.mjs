@@ -92,7 +92,7 @@ export const CONTROL_BYPASS_CLASSES = Object.freeze([
     id: 'direct_origin_reachability',
     label: 'Direct origin reachability',
     description: 'Declared WAF/CDN protection does not block traffic before origin.',
-    detection_method: 'Origin-bypass safe check + agent observation',
+    detection_method: 'Origin-bypass safe check (external origin-lockdown evidence)',
     reason_codes: ['origin_bypass_confirmed'],
   },
   {
@@ -260,7 +260,7 @@ const EVIDENCE_SUMMARY_ALLOWLIST = new Set([
   'challenged',
   'allowed',
   'timed_out',
-  'observed_at_agent',
+  'origin_lockdown_confirmed',
   'header_names',
   'header_name_hashes',
   'block_page_fingerprint_hash',

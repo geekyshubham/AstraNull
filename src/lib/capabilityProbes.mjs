@@ -25,10 +25,6 @@ import {
 } from './probeRequestBudget.mjs';
 import { runDnsTcpAxfrQuery } from './dnsTcpAxfrSession.mjs';
 import {
-  enrichOutsideInWafProbeMetadata,
-  resolveDomXssValidation,
-} from './outsideInWafAgentEvidence.mjs';
-import {
   BENIGN_CLASS_MARKERS,
   OUTSIDE_IN_SCAN_DEFAULT_BUDGET,
   readBoundedResponseBody,
@@ -893,8 +889,8 @@ export async function probeHostSniBypass(job, deps = {}) {
       network_reachable: bypassed,
       application_bypass_confirmed: applicationBypassConfirmed,
       // Deprecated alias retained for existing consumers; now reflects the network-ingress
-      // signal only. Application-level access requires application_bypass_confirmed or
-      // corroborating agent_observation evidence per this check's verdict_logic.
+      // signal only. Application-level access requires application_bypass_confirmed
+      // external probe evidence per this check's verdict_logic.
       bypass_signal: bypassed,
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',
@@ -1811,9 +1807,6 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     ? await resolveCnameChain(primaryHost, primaryDeps, cnameHopBudget)
     : { chain: [], lookups: 0 };
   const budget = totalBudget - cnameResult.lookups;
-  const agentObservations = Array.isArray(deps.agentObservations) ? deps.agentObservations : [];
-  const nonceHash = job.nonce_hash ?? null;
-  const domXssValidation = resolveDomXssValidation({ agents: agentObservations, nonceHash });
   const rawFetch = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, primaryDeps));
   const deadlineFetch = async (input, init = {}) => {
     const { res, error } = await boundedFetch(input, {
@@ -1838,10 +1831,6 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     collectNetworkHints: false,
     wafRequired: job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
-    agentCorroborated: job.probe_profile?.agent_corroborated === true
-      || job.target?.metadata?.agent_corroborated === true,
-    requireAgentForProtected: job.probe_profile?.require_agent_for_protected !== false,
-    domXssValidation,
     fetchFn: deadlineFetch,
     originBypassFn: directIp && hostname
       ? async ({ directIp: ip, hostname: host }) => {
@@ -1882,15 +1871,12 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     ? scan.external_result
     : scan.error_class ? 'error' : 'not_run';
 
-  const enrichedScan = enrichOutsideInWafProbeMetadata(
-    withKind(job, kind, {
-      duration_ms: durationMs,
-      scenario_family: 'fingerprint',
-      ...scan,
-      dns_cname_lookups: cnameResult.lookups,
-    }),
-    { agents: agentObservations, nonceHash },
-  );
+  const enrichedScan = withKind(job, kind, {
+    duration_ms: durationMs,
+    scenario_family: 'fingerprint',
+    ...scan,
+    dns_cname_lookups: cnameResult.lookups,
+  });
 
   return {
     external_result: external,

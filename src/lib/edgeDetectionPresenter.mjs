@@ -139,7 +139,9 @@ function effectivenessPresentation(raw, wafStatus) {
 
 function protectionPresentation(raw, effectiveness, wafStatus) {
   const value = asRecord(raw);
-  const agentCorroborated = value?.agent_corroborated === true;
+  // Outside-in only (ADR-0008): full "protected" rests on external origin-lockdown evidence
+  // (origin not reachable), not on an internal agent.
+  const originLockdownConfirmed = value?.origin_lockdown_confirmed === true;
   const allowedStatuses = new Set([
     'protected',
     'edge_protected',
@@ -157,20 +159,20 @@ function protectionPresentation(raw, effectiveness, wafStatus) {
       status = 'underprotected';
     } else if (effectiveness.status !== 'effective_for_tested_probes') {
       status = 'inconclusive';
-    } else if (status === 'protected' && !agentCorroborated) {
+    } else if (status === 'protected' && !originLockdownConfirmed) {
       status = 'edge_protected';
     }
   }
   const labels = {
-    protected: 'Protected with origin corroboration',
-    edge_protected: 'Effective at the edge; origin not corroborated',
+    protected: 'Protected · edge block and origin lockdown',
+    edge_protected: 'Effective at the edge; origin lockdown not verified',
     underprotected: 'Underprotected',
     unprotected: 'Unprotected',
     detected_only: 'WAF detected; effectiveness not established',
     inconclusive: 'Inconclusive',
   };
   const tiers = {
-    protected: 'external_and_origin_corroborated',
+    protected: 'external_edge_and_origin_lockdown',
     edge_protected: 'external_probe_only',
     underprotected: 'external_probe_gap',
     unprotected: 'absence_or_gap_observed',
@@ -181,7 +183,7 @@ function protectionPresentation(raw, effectiveness, wafStatus) {
     status,
     label: labels[status],
     evidence_tier: tiers[status],
-    agent_corroborated: agentCorroborated,
+    origin_lockdown_confirmed: originLockdownConfirmed,
   };
 }
 

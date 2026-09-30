@@ -127,7 +127,7 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
       { headers: ownerHeaders(), body: {
         signer_name: 'A', signer_title: 'B', signer_email: 'a@b.com', attested: true,
         emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
-        scope_ack: ['tgt_checkout_3'],
+        scope_ack: ['tgt_checkout_4'],
       } },
     );
     assert.equal(ineligibleOnly.status, 400);
@@ -140,12 +140,12 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
       { headers: ownerHeaders(), body: {
         signer_name: 'A', signer_title: 'B', signer_email: 'a@b.com', attested: true,
         emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
-        scope_ack: ['tgt_checkout_1', 'tgt_checkout_2', 'tgt_checkout_3'],
+        scope_ack: ['tgt_checkout_1', 'tgt_checkout_2', 'tgt_checkout_4'],
       } },
     );
     assert.equal(res.status, 201);
     assert.ok(res.json.loa.scope_snapshot.targets.includes('tgt_checkout_1'));
-    assert.ok(res.json.loa.scope_snapshot.excluded.some((row) => row.target_id === 'tgt_checkout_3'));
+    assert.ok(res.json.loa.scope_snapshot.excluded.some((row) => row.target_id === 'tgt_checkout_4'));
   });
 
   it('rejects foreign scope acknowledgements and ignores a caller-provided scope snapshot', async () => {

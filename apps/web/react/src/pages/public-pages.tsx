@@ -341,7 +341,7 @@ const LANDING_BOUNDARIES: readonly LandingEvidenceItem[] = [
   {
     label: 'Access',
     title: 'No infrastructure keys by default.',
-    body: 'The no-access-first path requires no customer cloud credentials. Optional agents connect outbound and add corroborating origin evidence.',
+    body: 'The no-access-first path requires no customer cloud credentials. Validation runs from the outside in.',
     icon: LockKeyhole
   },
   {
@@ -362,7 +362,7 @@ const LANDING_PROOF: readonly LandingEvidenceItem[] = [
   {
     label: '01 · Declaration',
     title: 'Record the expected path.',
-    body: 'The target, environment, ownership state, and expected protected behavior establish what the validation is allowed to test.',
+    body: 'The target, its tags, ownership state, and expected protected behavior establish what the validation is allowed to test.',
     icon: FileCheck2
   },
   {
@@ -372,9 +372,9 @@ const LANDING_PROOF: readonly LandingEvidenceItem[] = [
     icon: ShieldCheck
   },
   {
-    label: '03 · Corroboration',
-    title: 'Add origin evidence when available.',
-    body: 'An optional outbound-only agent can report what the protected environment observed. If no agent is present, that absence stays explicit.',
+    label: '03 · External evidence',
+    title: 'Evidence from external probes.',
+    body: 'Bounded external probes record what happened at the edge. Verdicts report external-only confidence — no internal agents are required.',
     icon: UserRound
   },
   {
@@ -388,7 +388,7 @@ const LANDING_PROOF: readonly LandingEvidenceItem[] = [
 const LANDING_COMPARE = [
   ['Scope source', 'Customer-declared targets', 'Operator-defined test target', 'Provider resource inventory'],
   ['Cloud credentials', 'Not required by default', 'Depends on the test setup', 'Required for the provider account'],
-  ['Internal corroboration', 'Optional outbound-only agent', 'Not inherent', 'Provider telemetry'],
+  ['Evidence origin', 'External probe evidence (external-only)', 'Not inherent', 'Provider telemetry'],
   ['High-scale control', 'SOC approval and governed execution', 'Operator-owned', 'Provider-specific'],
   ['Evidence model', 'Correlated evidence and custody references', 'Tool-specific run output', 'Provider metrics and logs']
 ];
@@ -797,7 +797,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
             <p className="auth-lead">
               {isDevHeaders
                 ? 'Local developer validation uses tenant headers to preview RBAC without a password.'
-                : 'Return to declared targets, agent observations, validation evidence, and governed high-scale requests in one tenant-scoped workspace.'}
+                : 'Return to declared targets, validation evidence, and governed high-scale requests in one tenant-scoped workspace.'}
             </p>
             <AuthAsidePoints
               items={[

@@ -5,11 +5,12 @@ import {
 import { isCurrentProviderDnsOwnershipProof } from '../../lib/connectorProviders/domainInventory.mjs';
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
+// Outside-in only (ADR-0008): agent_id / agent_observed are no longer written. The columns
+// remain on the dormant table until a follow-up drop migration, so they are still selected
+// (defaulting to null/false) but never set by this repository.
 const VERIFICATION_COLUMNS = `id, tenant_id, target_group_id, agent_id, declared_fqdn, status,
   challenge_nonce_hash, probe_observed, agent_observed, verified_at, confirmed_by_user_id,
   confirmed_at, probe_job_id, created_at, created_by`;
-
-const OPEN_STATUSES = ['challenge_sent', 'verified'];
 
 function toIso(value) {
   if (value == null) return value;
@@ -90,7 +91,6 @@ async function lockCurrentTargetVerification(client, tenantId, targetId) {
      ORDER BY transitioned_at DESC,
               CASE state
                 WHEN 'user_confirmed' THEN 4
-                WHEN 'agent_verified' THEN 3
                 WHEN 'dns_verified' THEN 2
                 WHEN 'provider_verified' THEN 2
                 WHEN 'pending' THEN 1
@@ -114,7 +114,6 @@ async function recomputeTargetGroupOwnershipSummary(client, tenantId, targetGrou
               ORDER BY tv.transitioned_at DESC,
                        CASE tv.state
                          WHEN 'user_confirmed' THEN 4
-                         WHEN 'agent_verified' THEN 3
                          WHEN 'dns_verified' THEN 2
                 WHEN 'provider_verified' THEN 2
                          WHEN 'pending' THEN 1
@@ -183,33 +182,6 @@ export function createOwnershipVerificationRepository(pool) {
         insertVerificationRow(client, ctx, record));
     },
 
-    async insertVerificationWithProbeJob(ctx, record, probeJob, probeJobsRepo) {
-      if (typeof probeJobsRepo?.createProbeJob !== 'function') {
-        throw new Error('Atomic ownership challenge creation requires probeJobs.createProbeJob().');
-      }
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const verification = await insertVerificationRow(client, ctx, {
-          ...record,
-          probe_job_id: probeJob.id,
-        });
-        const job = await probeJobsRepo.createProbeJob(ctx, probeJob, { client });
-        return { verification, job };
-      });
-    },
-
-    async setVerificationProbeJobId(ctx, id, probeJobId) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const { rows } = await client.query(
-          `UPDATE ownership_verifications
-           SET probe_job_id = $3
-           WHERE tenant_id = $1 AND id = $2
-           RETURNING ${VERIFICATION_COLUMNS}`,
-          [ctx.tenantId, id, probeJobId],
-        );
-        return mapOwnershipVerificationRow(rows[0] ?? null);
-      });
-    },
-
     async findById(ctx, id) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
@@ -217,20 +189,6 @@ export function createOwnershipVerificationRepository(pool) {
            FROM ownership_verifications
            WHERE id = $1 AND tenant_id = $2`,
           [id, ctx.tenantId],
-        );
-        return mapOwnershipVerificationRow(rows[0] ?? null);
-      });
-    },
-
-    async findOpenByNonceHash(ctx, nonceHash) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const { rows } = await client.query(
-          `SELECT ${VERIFICATION_COLUMNS}
-           FROM ownership_verifications
-           WHERE tenant_id = $1
-             AND challenge_nonce_hash = $2
-             AND status = ANY($3::text[])`,
-          [ctx.tenantId, nonceHash, OPEN_STATUSES],
         );
         return mapOwnershipVerificationRow(rows[0] ?? null);
       });
@@ -246,159 +204,6 @@ export function createOwnershipVerificationRepository(pool) {
           [ctx.tenantId],
         );
         return rows.map(mapOwnershipVerificationRow);
-      });
-    },
-
-    async recordOwnershipSignalAtomic(ctx, input, auditRepo, options = {}) {
-      if (typeof auditRepo?.appendAuditEvent !== 'function') {
-        throw new Error('Postgres ownership completion requires audit.appendAuditEvent().');
-      }
-      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
-        let selected;
-        if (input.verification_id) {
-          selected = await client.query(
-            `SELECT ${VERIFICATION_COLUMNS}
-             FROM ownership_verifications
-             WHERE tenant_id = $1 AND id = $2
-             FOR UPDATE`,
-            [ctx.tenantId, input.verification_id],
-          );
-        } else {
-          selected = await client.query(
-            `SELECT ${VERIFICATION_COLUMNS}
-             FROM ownership_verifications
-             WHERE tenant_id = $1
-               AND challenge_nonce_hash = $2
-               AND status = ANY($3::text[])
-             ORDER BY created_at DESC
-             LIMIT 1
-             FOR UPDATE`,
-            [ctx.tenantId, input.nonce_hash, OPEN_STATUSES],
-          );
-        }
-
-        const record = mapOwnershipVerificationRow(selected.rows[0] ?? null);
-        if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-        if (input.nonce_hash !== record.challenge_nonce_hash) {
-          return { error: 'nonce_mismatch', status: 400 };
-        }
-        if (input.source !== 'probe' && input.source !== 'agent') {
-          return { error: 'invalid_source', status: 400 };
-        }
-        if (
-          input.source === 'probe'
-          && (
-            typeof input.probe_job_id !== 'string'
-            || input.probe_job_id === ''
-            || record.probe_job_id !== input.probe_job_id
-          )
-        ) {
-          return { error: 'ownership_probe_job_binding_mismatch', status: 409 };
-        }
-        if (!OPEN_STATUSES.includes(record.status)) {
-          return { error: 'ownership_verification_not_open', status: 409 };
-        }
-
-        const probeObserved = record.probe_observed || input.source === 'probe';
-        const agentObserved = record.agent_observed || input.source === 'agent';
-        const completesChallenge =
-          probeObserved && agentObserved && record.status === 'challenge_sent';
-
-        if (!completesChallenge) {
-          const { rows } = await client.query(
-            `UPDATE ownership_verifications
-             SET probe_observed = $3, agent_observed = $4
-             WHERE tenant_id = $1 AND id = $2
-             RETURNING ${VERIFICATION_COLUMNS}`,
-            [ctx.tenantId, record.id, probeObserved, agentObserved],
-          );
-          return { verification: mapOwnershipVerificationRow(rows[0] ?? null) };
-        }
-
-        const observedAt = new Date(input.observed_at);
-        if (!Number.isFinite(observedAt.getTime())) {
-          throw new Error('Ownership signal has an invalid observed_at timestamp.');
-        }
-        const target = await lockActiveTargetBoundToChallenge(
-          client,
-          ctx.tenantId,
-          record,
-        );
-        if (!target) return { error: 'ownership_target_not_active', status: 409 };
-
-        const current = await lockCurrentTargetVerification(client, ctx.tenantId, target.id);
-        let targetVerification = current;
-        if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.agent_verified) {
-          const targetAudit = await auditRepo.appendAuditEvent({
-            tenant_id: ctx.tenantId,
-            actor_user_id: ctx.userId ?? null,
-            actor_role: ctx.role ?? 'system',
-            action: 'target_verification.agent_verified',
-            resource_type: 'target_verification',
-            resource_id: input.target_verification_id,
-            metadata: {
-              target_id: target.id,
-              target_group_id: record.target_group_id,
-              ownership_verification_id: record.id,
-              agent_id: record.agent_id,
-            },
-          }, { client, now: observedAt });
-          const inserted = await client.query(
-            `INSERT INTO target_verifications (
-               id, tenant_id, target_id, state, source_kind, source_ref,
-               transitioned_at, transitioned_by, audit_entry_id
-             ) VALUES ($1,$2,$3,'agent_verified','agent_observation',$4::jsonb,$5::timestamptz,$6,$7)
-             RETURNING id, tenant_id, target_id, state, source_kind, source_ref,
-                       transitioned_at, transitioned_by, audit_entry_id`,
-            [
-              input.target_verification_id,
-              ctx.tenantId,
-              target.id,
-              JSON.stringify({
-                ownership_verification_id: record.id,
-                agent_id: record.agent_id,
-                declared_fqdn: record.declared_fqdn,
-              }),
-              observedAt.toISOString(),
-              input.transitioned_by,
-              targetAudit.id,
-            ],
-          );
-          targetVerification = mapTargetVerificationRow(inserted.rows[0]);
-        }
-
-        await auditRepo.appendAuditEvent({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId ?? null,
-          actor_role: ctx.role ?? 'system',
-          action: 'ownership_verification.agent_verified',
-          resource_type: 'ownership_verification',
-          resource_id: record.id,
-          metadata: { target_group_id: record.target_group_id, target_id: target.id },
-        }, { client, now: observedAt });
-
-        const updated = await client.query(
-          `UPDATE ownership_verifications
-           SET probe_observed = $3, agent_observed = $4,
-               status = 'verified', verified_at = $5::timestamptz
-           WHERE tenant_id = $1 AND id = $2 AND status = 'challenge_sent'
-           RETURNING ${VERIFICATION_COLUMNS}`,
-          [ctx.tenantId, record.id, probeObserved, agentObserved, observedAt.toISOString()],
-        );
-        if (!updated.rows[0]) throw new Error('Ownership verification completion CAS failed.');
-
-        const ownershipStatus = await recomputeTargetGroupOwnershipSummary(
-          client,
-          ctx.tenantId,
-          record.target_group_id,
-        );
-
-        return {
-          verification: mapOwnershipVerificationRow(updated.rows[0]),
-          target_id: target.id,
-          target_verification: targetVerification,
-          ownership_status: ownershipStatus,
-        };
       });
     },
 
@@ -460,7 +265,6 @@ export function createOwnershipVerificationRepository(pool) {
               target.id,
               JSON.stringify({
                 ownership_verification_id: record.id,
-                agent_id: record.agent_id,
                 declared_fqdn: record.declared_fqdn,
                 confirmed_by_user_id: input.confirmed_by_user_id,
               }),
@@ -511,29 +315,6 @@ export function createOwnershipVerificationRepository(pool) {
           target_verification: targetVerification,
           ownership_status: ownershipStatus,
         };
-      });
-    },
-
-    async updateVerificationSignals(ctx, id, patch) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const { rows } = await client.query(
-          `UPDATE ownership_verifications
-           SET probe_observed = COALESCE($3, probe_observed),
-               agent_observed = COALESCE($4, agent_observed),
-               status = COALESCE($5, status),
-               verified_at = COALESCE($6::timestamptz, verified_at)
-           WHERE tenant_id = $1 AND id = $2
-           RETURNING ${VERIFICATION_COLUMNS}`,
-          [
-            ctx.tenantId,
-            id,
-            patch.probe_observed ?? null,
-            patch.agent_observed ?? null,
-            patch.status ?? null,
-            patch.verified_at ?? null,
-          ],
-        );
-        return mapOwnershipVerificationRow(rows[0] ?? null);
       });
     },
 
@@ -613,7 +394,6 @@ export function createOwnershipVerificationRepository(pool) {
              ORDER BY candidate.transitioned_at DESC,
                       CASE candidate.state
                         WHEN 'user_confirmed' THEN 4
-                        WHEN 'agent_verified' THEN 3
                         WHEN 'dns_verified' THEN 2
                         WHEN 'provider_verified' THEN 2
                         WHEN 'pending' THEN 1

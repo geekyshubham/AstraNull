@@ -1,5 +1,4 @@
 import { audit } from '../audit.mjs';
-import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { isCurrentProviderDnsOwnershipProof } from '../lib/connectorProviders/domainInventory.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { newId } from '../lib/ids.mjs';
@@ -9,10 +8,12 @@ import {
   ownershipSummaryFromTargetStates,
 } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { createOwnershipChallengeJob } from './probeCoordinator.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
 
-const OPEN_STATUSES = new Set(['challenge_sent', 'verified']);
+// Outside-in only (ADR-0008): there is no agent. The old agent-observation ownership
+// challenge (probe nonce + agent observation -> `agent_verified`) is removed. Ownership
+// proof now comes from the DNS TXT challenge in dnsOwnership.mjs (`dns_verified`) or a
+// provider connector (`provider_verified`), then optional `user_confirmed` attestation.
 
 function findTargetGroup(ctx, targetGroupId) {
   return getStore().targetGroups.find(
@@ -20,30 +21,9 @@ function findTargetGroup(ctx, targetGroupId) {
   ) ?? null;
 }
 
-function findActiveFqdnTarget(ctx, targetGroupId, declaredFqdn) {
-  const normalized = String(declaredFqdn ?? '').trim().toLowerCase();
-  return getStore().targets.find(
-    (target) =>
-      target.tenant_id === ctx.tenantId
-      && target.target_group_id === targetGroupId
-      && target.kind === 'fqdn'
-      && !target.deleted_at
-      && String(target.normalized_value ?? target.value).trim().toLowerCase() === normalized,
-  ) ?? null;
-}
-
 function findVerification(ctx, id) {
   return getStore().ownershipVerifications.find(
     (v) => v.id === id && v.tenant_id === ctx.tenantId,
-  ) ?? null;
-}
-
-function findOpenVerificationByNonce(tenantId, nonce_hash) {
-  return getStore().ownershipVerifications.find(
-    (v) =>
-      v.tenant_id === tenantId
-      && v.challenge_nonce_hash === nonce_hash
-      && OPEN_STATUSES.has(v.status),
   ) ?? null;
 }
 
@@ -86,8 +66,8 @@ function activeTargetBoundToVerification(ctx, record) {
   const value = String(target.normalized_value ?? target.value).trim().toLowerCase();
   if (value !== String(record.declared_fqdn ?? '').trim().toLowerCase()) return null;
 
-  // Current challenges carry the exact target id. Retain the creation-time guard used by
-  // PostgreSQL as defense in depth against a hand-edited dev store reusing that identity.
+  // Retain the creation-time guard used by PostgreSQL as defense in depth against a
+  // hand-edited dev store reusing that identity.
   const targetCreatedAt = Date.parse(String(target.created_at ?? ''));
   const challengeCreatedAt = Date.parse(String(record.created_at ?? ''));
   if (
@@ -100,342 +80,31 @@ function activeTargetBoundToVerification(ctx, record) {
   return target;
 }
 
-function applyOwnershipSignal(ctx, record, { source, nonce_hash }) {
-  if (!OPEN_STATUSES.has(record.status)) {
-    return { error: 'ownership_verification_not_open', status: 409 };
-  }
-  if (nonce_hash !== record.challenge_nonce_hash) {
-    return { error: 'nonce_mismatch', status: 400 };
-  }
-  if (source !== 'probe' && source !== 'agent') {
-    return { error: 'invalid_source', status: 400 };
-  }
+// ADR-0008: the agent-observation ownership challenge is gone. These endpoints stay
+// wired for API stability but fail closed — callers must use the DNS ownership challenge
+// (`/v1/target-groups/:id/dns-ownership*`) to reach `dns_verified`.
+const AGENT_FLOW_REMOVED = Object.freeze({
+  error: 'ownership_agent_flow_removed',
+  status: 410,
+  message:
+    'Agent-observed ownership verification was removed (outside-in only). '
+    + 'Prove ownership with the DNS TXT challenge instead.',
+});
 
-  const probeObserved = record.probe_observed || source === 'probe';
-  const agentObserved = record.agent_observed || source === 'agent';
-  const completesChallenge =
-    probeObserved && agentObserved && record.status === 'challenge_sent';
-
-  let target = null;
-  if (completesChallenge) {
-    target = activeTargetBoundToVerification(ctx, record);
-    if (!target) return { error: 'ownership_target_not_active', status: 409 };
-  }
-
-  record.probe_observed = probeObserved;
-  record.agent_observed = agentObserved;
-
-  if (completesChallenge) {
-    const now = new Date().toISOString();
-    const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
-    if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.agent_verified) {
-      const auditEntry = audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId ?? null,
-        actor_role: ctx.role ?? 'system',
-        action: 'target_verification.agent_verified',
-        resource_type: 'target',
-        resource_id: target.id,
-        metadata: {
-          target_group_id: record.target_group_id,
-          ownership_verification_id: record.id,
-          agent_id: record.agent_id,
-        },
-      });
-      if (!getStore().targetVerifications) getStore().targetVerifications = [];
-      getStore().targetVerifications.push({
-        id: newId('tv'),
-        tenant_id: ctx.tenantId,
-        target_id: target.id,
-        state: 'agent_verified',
-        source_kind: 'agent_observation',
-        source_ref: {
-          ownership_verification_id: record.id,
-          agent_id: record.agent_id,
-          declared_fqdn: record.declared_fqdn,
-        },
-        transitioned_at: now,
-        transitioned_by: ctx.userId ?? 'system',
-        audit_entry_id: auditEntry.id,
-      });
-      target.verify_state = 'agent_verified';
-    }
-
-    record.status = 'verified';
-    record.verified_at = now;
-    const group = findTargetGroup(ctx, record.target_group_id);
-    if (group) refreshGroupOwnershipSummary(ctx, group);
-    auditVerification(ctx, record.id, 'ownership_verification.agent_verified');
-  }
-
-  persistStore();
-  return { verification: record };
+export function verifyOwnershipSetup() {
+  return { dry_run: true, ready: false, ...AGENT_FLOW_REMOVED };
 }
 
-function validateOwnershipChallengeInputs(ctx, body) {
-  const targetGroupId = body.target_group_id;
-  const agentId = body.agent_id;
-
-  const group = findTargetGroup(ctx, targetGroupId);
-  if (!group) return { error: 'target_group_not_found', status: 404 };
-
-  const agent = getStore().agents.find(
-    (a) => a.id === agentId && a.tenant_id === ctx.tenantId,
-  );
-  if (!agent) return { error: 'agent_not_found', status: 404 };
-
-  if (agent.target_group_id !== group.id) {
-    return { error: 'agent_not_bound_to_target_group', status: 400 };
-  }
-  if (agent.status !== 'online') {
-    return { error: 'agent_not_online', status: 409 };
-  }
-  if (agent.last_token_validation_status === 'invalid') {
-    return { error: 'agent_token_invalid', status: 409 };
-  }
-
-  const declaredFqdnRaw = agent.probe_endpoint?.declared_fqdn ?? null;
-  if (!declaredFqdnRaw) {
-    return { error: 'agent_probe_endpoint_missing', status: 409 };
-  }
-  const declaredFqdn = String(declaredFqdnRaw).trim().toLowerCase();
-  const target = findActiveFqdnTarget(ctx, group.id, declaredFqdn);
-  if (!target) {
-    return { error: 'declared_fqdn_not_in_target_group', status: 400 };
-  }
-
-  return { group, agent, targetGroupId, agentId, declaredFqdn, targetId: target.id };
+export function createOwnershipChallenge() {
+  return { ...AGENT_FLOW_REMOVED };
 }
 
-/**
- * Non-production agent-verification simulation gate.
- *
- * Mirrors the DNS ownership simulation in dnsOwnership.mjs: when
- * ASTRANULL_AGENT_VERIFY_SIMULATE=1 (or the shared ASTRANULL_DNS_SIMULATE=1) and
- * NODE_ENV is not production, the agent-observation flow can be demonstrated in
- * dev/CI without the full probe-nonce + agent-observation correlation dance.
- * Hard-gated off in production (mirrors ASTRANULL_PROBE_MODE and the dnsOwnership
- * sim), so the real, evidence-based path is the only one that ever runs live.
- */
-function agentVerifySimulationEnabled() {
-  if (process.env.NODE_ENV === 'production') return false;
-  return (
-    process.env.ASTRANULL_AGENT_VERIFY_SIMULATE === '1'
-    || process.env.ASTRANULL_DNS_SIMULATE === '1'
-  );
+export function recordOwnershipSignal() {
+  return { ...AGENT_FLOW_REMOVED };
 }
 
-function findOnlineBoundAgent(ctx, groupId) {
-  return getStore().agents.find(
-    (a) =>
-      a.tenant_id === ctx.tenantId
-      && a.target_group_id === groupId
-      && a.status === 'online',
-  ) ?? null;
-}
-
-/**
- * Dev/CI-only agent-observation simulation. When an online agent is bound to the
- * target group, transitions its declared target(s) to `agent_verified` by
- * appending an `agent_observation` targetVerification (canonical shape shared with
- * the DNS `dns_txt` path) and updating `target.verify_state`. This makes the
- * verification ladder reach `agent_verified` and unblocks LOA + user_confirmed
- * without requiring a signed probe endpoint on the demo agent.
- *
- * Returns null when the simulation does not apply (missing group, or no online
- * agent bound to the group) so the caller falls through to the real,
- * evidence-based error. Never runs in production (guarded by the caller).
- *
- * @param {import('../context.mjs').TenantScope} ctx
- * @param {{ target_group_id?: string, target_id?: string }} body
- */
-function simulateAgentVerification(ctx, body) {
-  const group = findTargetGroup(ctx, body?.target_group_id);
-  if (!group) return null;
-
-  const agent = findOnlineBoundAgent(ctx, group.id);
-  if (!agent) return null;
-
-  const declaredFqdn = String(agent.probe_endpoint?.declared_fqdn ?? '').trim().toLowerCase();
-  const target = body?.target_id
-    ? getStore().targets.find(
-        (candidate) =>
-          candidate.id === body.target_id
-          && candidate.tenant_id === ctx.tenantId
-          && candidate.target_group_id === group.id
-          && !candidate.deleted_at,
-      )
-    : findActiveFqdnTarget(ctx, group.id, declaredFqdn);
-  if (!target) {
-    return {
-      dry_run: false,
-      simulated: true,
-      ready: false,
-      error: body?.target_id ? 'target_not_found' : 'target_binding_required',
-      status: body?.target_id ? 404 : 409,
-    };
-  }
-  if (declaredFqdn && String(target.normalized_value ?? target.value).trim().toLowerCase() !== declaredFqdn) {
-    return { dry_run: false, simulated: true, ready: false, error: 'declared_fqdn_not_in_target_group', status: 400 };
-  }
-  const targets = [target];
-
-  if (!getStore().targetVerifications) getStore().targetVerifications = [];
-  const now = new Date().toISOString();
-  const results = [];
-  for (const target of targets) {
-    const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
-    const currentState = current?.state ?? target.verify_state ?? 'unverified';
-    // Idempotent, and never downgrade an already-stronger state.
-    if (currentState === 'agent_verified' || currentState === 'user_confirmed') {
-      results.push({ target_id: target.id, state: currentState, changed: false });
-      continue;
-    }
-    const auditEntry = audit({
-      tenant_id: ctx.tenantId,
-      actor_user_id: ctx.userId ?? null,
-      actor_role: ctx.role ?? 'system',
-      action: 'target_verification.agent_verified',
-      resource_type: 'target',
-      resource_id: target.id,
-      metadata: { target_group_id: group.id, agent_id: agent.id, simulated: true },
-    });
-    const verification = {
-      id: newId('tv'),
-      tenant_id: ctx.tenantId,
-      target_id: target.id,
-      state: 'agent_verified',
-      source_kind: 'agent_observation',
-      source_ref: {
-        agent_id: agent.id,
-        observation_id: newId('obs'),
-        correlated_at: now,
-        simulated: true,
-      },
-      transitioned_at: now,
-      transitioned_by: ctx.userId ?? 'system',
-      audit_entry_id: auditEntry.id,
-    };
-    getStore().targetVerifications.push(verification);
-    target.verify_state = 'agent_verified';
-    results.push({
-      target_id: target.id,
-      state: 'agent_verified',
-      changed: true,
-      audit_entry_id: auditEntry.id,
-    });
-  }
-
-  refreshGroupOwnershipSummary(ctx, group);
-  persistStore();
-
-  return {
-    dry_run: false,
-    simulated: true,
-    ready: true,
-    target_group_id: group.id,
-    agent_id: agent.id,
-    targets: results,
-  };
-}
-
-export function verifyOwnershipSetup(ctx, body, _runtimeConfig) {
-  const validated = validateOwnershipChallengeInputs(ctx, body);
-  if (validated.error) {
-    // Dev/CI-only: when the real setup validation fails (e.g. the demo agent has
-    // no signed probe_endpoint yet) but an online agent is bound to the group,
-    // simulate the agent observation so the flow reaches agent_verified. Hard-gated
-    // off in production; the real evidence-based dry-run below is unchanged.
-    if (agentVerifySimulationEnabled()) {
-      const simulated = simulateAgentVerification(ctx, body);
-      if (simulated) return simulated;
-    }
-    return {
-      dry_run: true,
-      ready: false,
-      error: validated.error,
-      status: validated.status,
-    };
-  }
-
-  const { targetGroupId, agentId, declaredFqdn } = validated;
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId ?? null,
-    actor_role: ctx.role ?? 'system',
-    action: 'ownership_verification.setup_verified',
-    resource_type: 'ownership_verification',
-    resource_id: targetGroupId,
-  });
-
-  return {
-    dry_run: true,
-    ready: true,
-    target_group_id: targetGroupId,
-    agent_id: agentId,
-    declared_fqdn: declaredFqdn,
-    checks: {
-      agent_online: true,
-      agent_bound: true,
-      token_valid: true,
-      fqdn_declared: true,
-    },
-  };
-}
-
-export function createOwnershipChallenge(ctx, body, runtimeConfig) {
-  const validated = validateOwnershipChallengeInputs(ctx, body);
-  if (validated.error) {
-    return { error: validated.error, status: validated.status };
-  }
-
-  const { group, targetGroupId, agentId, declaredFqdn, targetId } = validated;
-
-  const nonce = generateNonce();
-  const challenge_nonce_hash = hashNonce(nonce);
-  const id = newId('own');
-  const now = new Date().toISOString();
-  const record = {
-    id,
-    tenant_id: ctx.tenantId,
-    target_group_id: targetGroupId,
-    target_id: targetId,
-    agent_id: agentId,
-    declared_fqdn: declaredFqdn,
-    status: 'challenge_sent',
-    challenge_nonce_hash,
-    probe_observed: false,
-    agent_observed: false,
-    verified_at: null,
-    confirmed_by_user_id: null,
-    confirmed_at: null,
-    created_at: now,
-    created_by: ctx.userId,
-  };
-  getStore().ownershipVerifications.push(record);
-  auditVerification(ctx, id, 'ownership_verification.challenge_created');
-
-  if (runtimeConfig?.probeMode === 'signed-worker' && runtimeConfig.probeWorkerSecret) {
-    const job = createOwnershipChallengeJob(ctx, { verification: record }, runtimeConfig);
-    if (job) {
-      record.probe_job_id = job.id;
-    }
-  }
-
-  persistStore();
-  return { verification: record, nonce };
-}
-
-export function recordOwnershipSignal(ctx, id, { source, nonce_hash }) {
-  const record = findVerification(ctx, id);
-  if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-  return applyOwnershipSignal(ctx, record, { source, nonce_hash });
-}
-
-export function recordOwnershipSignalByNonce({ tenantId }, { source, nonce_hash }) {
-  const record = findOpenVerificationByNonce(tenantId, nonce_hash);
-  if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-  return applyOwnershipSignal({ tenantId }, record, { source, nonce_hash });
+export function recordOwnershipSignalByNonce() {
+  return { ...AGENT_FLOW_REMOVED };
 }
 
 export function confirmOwnership(ctx, id) {
@@ -478,7 +147,6 @@ export function confirmOwnership(ctx, id) {
       source_kind: 'user_attestation',
       source_ref: {
         ownership_verification_id: record.id,
-        agent_id: record.agent_id,
         declared_fqdn: record.declared_fqdn,
         confirmed_by_user_id: actorUserId,
       },
@@ -518,21 +186,21 @@ export function getOwnershipVerification(ctx, id) {
   return findVerification(ctx, id);
 }
 
+// Ladder without the agent rung (ADR-0008): declared -> dns_verified -> user_confirmed.
 const LADDER_STEP_IDS = Object.freeze([
   'declared',
   'dns_verified',
-  'agent_verified',
   'user_confirmed',
 ]);
 
 const LADDER_LABELS = Object.freeze({
   declared: 'Declared',
   dns_verified: 'DNS verified',
-  agent_verified: 'Agent verified',
   user_confirmed: 'User confirmed',
 });
 
-const VERIFY_PREREQ_STATES = new Set(['agent_verified', 'user_confirmed']);
+// user_confirmed now requires DNS/provider proof (dns_verified) — the agent rung is gone.
+const VERIFY_PREREQ_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed']);
 
 function latestVerificationByTarget(ctx, targetIds) {
   return effectiveTargetVerifications(getStore(), ctx.tenantId, targetIds);

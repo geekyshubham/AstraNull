@@ -84,7 +84,6 @@ describe('release gate closeout evidence validation', () => {
         'third_party_security_review',
         'compliance_legal_signoff',
         'ui_accessibility_matrix',
-        'placement_confidence_staging',
       ]).map((record) => ({ ...record, status: 'accepted' })),
     );
     assert.equal(partial.inventoryComplete, false);

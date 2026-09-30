@@ -2,16 +2,15 @@
 
 **AstraNull** is a no-access-first DDoS readiness validation platform.
 
-It validates whether enterprise environments are ready for DDoS scenarios by combining:
+It validates whether enterprise targets are ready for DDoS scenarios by combining:
 
 - externally originated validation probes,
-- optional customer-installed internal agents or canaries for origin evidence,
-- target groups declared by the customer,
+- targets (with tags) and target groups declared by the customer,
 - SOC-approved high-scale simulation workflows,
 - evidence-backed readiness scoring,
 - operational UX for engineering, security, SOC, and executives.
 
-AstraNull does **not** depend on customer cloud credentials in the default mode. It does **not** perform IP inventory discovery in the core product. Customers define target groups manually or through supported read-only DNS integrations, prove exact-target ownership, and run bounded external validation by default. Optional AstraNull Agents add corroborating internal/origin evidence without becoming an onboarding or execution prerequisite.
+AstraNull does **not** depend on customer cloud credentials in the default mode. It does **not** perform IP inventory discovery in the core product, and per [ADR-0008](docs/adr/0008-outside-in-only-targets-first.md) it is **outside-in only** — there are no internal agents and no environments. Customers declare targets/target groups manually or through supported read-only DNS integrations, prove exact-target ownership, and run bounded external validation. Verdicts are produced from external probe evidence only (`external_only` confidence).
 
 ## Product promise
 
@@ -26,9 +25,9 @@ Evidence-backed verdicts, readiness scoring, and SOC-gated high-scale workflows 
 | Product name | AstraNull |
 | Discovery model | No automatic IP inventory discovery in core scope |
 | Access model | No customer cloud/API access required by default |
-| Agent model | Optional evidence enhancer; outbound-only control channel, no inbound management firewall rule required |
+| Agent model | None — outside-in only per [ADR-0008](docs/adr/0008-outside-in-only-targets-first.md); no internal agents or agent control plane |
 | High-scale tests | SOC-gated only; customer requests, SOC validates authorization and executes/coordinates |
-| Detection model | Correlate external probe events with internal agent observations and health signals |
+| Detection model | Verdicts from external probe events only (`external_only` confidence) |
 | First killer use case | Direct-origin bypass and protected-path validation |
 | Optional WAF posture add-on | Feature-flagged WAF coverage, drift, CVE mitigation, remediation workflow, connector enrichment, and approval-gated candidate discovery; off by default and not required for core validation |
 
@@ -41,7 +40,6 @@ AstraNull is built toward **production deployment**, not a disposable demo. Impl
 | Identity and access | Backend + Security | OIDC/SSO (or enterprise IdP), MFA policy, service accounts; **header-based tenant/role auth is developer validation only** and is a release blocker for production |
 | Data plane | Backend + DB | PostgreSQL provisioned from `db/migrations/` (the only executed source of truth — `db/schema.sql` is a validated contract document, **not** a build script), tenant RLS or equivalent, encryption at rest for secrets, backup/restore tested |
 | Safe probes | Detection + Backend | Signed probe jobs, bounded rates, external probe workers — not in-process simulation stubs alone |
-| Agent supply chain | Agent engineering | Signed deb/rpm/tarball/container artifacts, verified install paths, staged update/rollback |
 | High-scale execution | SOC | Governed execution adapters only; legal authorization pack, provider approvals, kill switch validated end-to-end — **no raw attack tooling or unmanaged traffic generators** |
 | Observability and ops | Backend + Security | Metrics, alerting, audit retention, DR runbook, on-call playbook |
 | Quality | QA | `make verify` plus staging matrix; no `[x]` in `PROGRESS.md` for production-only work without checklist evidence |
@@ -52,7 +50,7 @@ AstraNull is built toward **production deployment**, not a disposable demo. Impl
 
 > **Security audit 2026-08-01:** a code-level audit confirmed 52 defects (5 critical, 10 high) after adversarial verification, including a git-committed OIDC signing key serving as the deployment's auth trust root on a public repo, no ownership gate before live outbound probes, and an SSRF classifier that was dead code on every egress path. Most are fixed. The signing key has been **rotated**: the fixture is untracked, gitignored, and excluded from images, the published key is refused at startup by fingerprint, and startup fails closed without one — deployments must now supply `ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON`. The **ownership gate** is now enforced on both runtimes: dispatching a probe to an external worker requires ownership proven to at least `dns_verified`, so a tenant can no longer aim live traffic at a third party. The database CA, remaining secret rotation, and the lockfile commit are still operator actions. The `[x]` marks in [`docs/release-checklist.md`](docs/release-checklist.md) predate this audit and should not be trusted until re-verified — see the audit section at the top of that file.
 
-Current **implementation status** (honest): a Node.js vertical slice runs locally for developer validation, and Postgres mode now initializes a fail-closed runtime with migrated catalog/auth/agent/validation services: safe test-run start/cancel, signed probe-job dispatch, probe-worker lease/result ingestion, agent observation ingestion (exact-once job transition before evidence write), probe/agent correlation, automatic and forced finalization, verdict and finding publication, metadata-only event ingestion with raw packet/payload/header rejection, notification management, evidence/finding reads, report/finding exports, encrypted secret vault, dashboard state summaries, guarded high-scale/SOC workflows, tenant kill switch, and audit-log reads. The **safe validation loop** (start -> probe -> observation -> finalization -> verdict -> finding) and SOC-gated high-scale route family are wired through Postgres service adapters. The optional WAF add-on orchestrator uses Postgres safe continuation (multi-item work queue capped by `max_concurrent`; at most one new signed-worker `startTestRun` per execute/runner tick; `continuation_required` until `delegated_jobs` complete; plan `completed` and retest `delegated` mean all jobs delegated—not final WAF posture closure; retest `complete` closes from `getTestRun` verdict evidence bound to `delegated_jobs` metadata and atomically persists retest/drift/`waf.retest.completed` via `completeRetestWithDriftAndAudit` in developer validation)—not production-complete for staging/live execution evidence, concurrent execute idempotency, provider workers, or security/observability signoff. The whole product is **not** production-complete. **Production release blockers** remain live/staging Postgres acceptance and a DB-backed integration lane, tenant unit-of-work/concurrency isolation under load, production probe-worker fleet evidence and multi-region operations, certified governed high-scale execution/provider telemetry adapters, outbound notification providers, signed agent packages/fleet rollout evidence, and enterprise auth rollout plus compliance/report custody hardening where already tracked. See [`PROGRESS.md`](PROGRESS.md), [`docs/security/local-security-review.md`](docs/security/local-security-review.md), and the enterprise gap backlog in [`docs/product/08-enterprise-production-gap-backlog.md`](docs/product/08-enterprise-production-gap-backlog.md).
+Current **implementation status** (honest): a Node.js vertical slice runs locally for developer validation, and Postgres mode now initializes a fail-closed runtime with migrated catalog/auth/validation services: safe test-run start/cancel, signed probe-job dispatch, probe-worker lease/result ingestion, probe correlation, automatic and forced finalization, verdict and finding publication, metadata-only event ingestion with raw packet/payload/header rejection, notification management, evidence/finding reads, report/finding exports, encrypted secret vault, dashboard state summaries, guarded high-scale/SOC workflows, tenant kill switch, and audit-log reads. The **safe validation loop** (start -> probe -> finalization -> verdict -> finding) and SOC-gated high-scale route family are wired through Postgres service adapters. The optional WAF add-on orchestrator uses Postgres safe continuation (multi-item work queue capped by `max_concurrent`; at most one new signed-worker `startTestRun` per execute/runner tick; `continuation_required` until `delegated_jobs` complete; plan `completed` and retest `delegated` mean all jobs delegated—not final WAF posture closure; retest `complete` closes from `getTestRun` verdict evidence bound to `delegated_jobs` metadata and atomically persists retest/drift/`waf.retest.completed` via `completeRetestWithDriftAndAudit` in developer validation)—not production-complete for staging/live execution evidence, concurrent execute idempotency, provider workers, or security/observability signoff. The whole product is **not** production-complete. **Production release blockers** remain live/staging Postgres acceptance and a DB-backed integration lane, tenant unit-of-work/concurrency isolation under load, production probe-worker fleet evidence and multi-region operations, certified governed high-scale execution/provider telemetry adapters, outbound notification providers, and enterprise auth rollout plus compliance/report custody hardening where already tracked. See [`PROGRESS.md`](PROGRESS.md), [`docs/security/local-security-review.md`](docs/security/local-security-review.md), and the enterprise gap backlog in [`docs/product/08-enterprise-production-gap-backlog.md`](docs/product/08-enterprise-production-gap-backlog.md).
 
 ## Repository map
 
@@ -62,9 +60,8 @@ Current **implementation status** (honest): a Node.js vertical slice runs locall
 | `PROGRESS.md` | Granular implementation tracker with links to docs |
 | `docs/product/` | Platform, scope, personas, data model, roadmap |
 | `docs/ux/` | Pages, tabs, UX, visualizations, dashboard design |
-| `docs/flows/` | User, SOC, agent, and execution flows |
+| `docs/flows/` | User, SOC, and execution flows |
 | `docs/backend/` | Backend architecture, APIs, schemas, queues, orchestration |
-| `docs/agent/` | Agent architecture, install, placement, packaging, detection modes |
 | `docs/detection/` | Vector catalog, check library, correlation engine, scoring |
 | `docs/soc/` | High-scale approval, SOC console, runbooks, evidence requirements |
 | `docs/security/` | Security, privacy, compliance, safe testing guardrails |
@@ -84,19 +81,18 @@ Current **implementation status** (honest): a Node.js vertical slice runs locall
 
 Use this mode **only** for local development, CI, and pre-staging verification — not as the production target architecture.
 
-- Declared target groups, environments, tenant privacy settings, bootstrap tokens (secret shown once), outbound agent process for validation, safe vector catalog (developer validation and CI may use bounded in-process probe simulation; production defaults to signed-worker mode, refuses explicit `ASTRANULL_PROBE_MODE=simulation`, and the reference worker CLI exists — **production release blocker:** staged probe-worker fleet evidence), correlation/verdicts/findings, evidence vault, event ingestion with idempotency, report JSON/Markdown/HTML export (redacted) with SHA-256 digest **custody** manifests (`json-key-sorted-v1` canonicalization; developer validation only — not KMS-signed immutable storage), finding export custody on JSON payloads, notification delivery records (metadata until external providers are configured), `/metrics` + `/v1/observability`, and SOC-gated high-scale workflow with authorization pack artifacts, scope hash, governed adapter boundary (dry-run until partner adapters are integrated), and live notes.
+- Declared targets (with tags) and target groups, tenant privacy settings, safe vector catalog (developer validation and CI may use bounded in-process probe simulation; production defaults to signed-worker mode, refuses explicit `ASTRANULL_PROBE_MODE=simulation`, and the reference worker CLI exists — **production release blocker:** staged probe-worker fleet evidence), correlation/verdicts/findings, evidence vault, event ingestion with idempotency, report JSON/Markdown/HTML export (redacted) with SHA-256 digest **custody** manifests (`json-key-sorted-v1` canonicalization; developer validation only — not KMS-signed immutable storage), finding export custody on JSON payloads, notification delivery records (metadata until external providers are configured), `/metrics` + `/v1/observability`, and SOC-gated high-scale workflow with authorization pack artifacts, scope hash, governed adapter boundary (dry-run until partner adapters are integrated), and live notes.
 - **No** live unmanaged DDoS traffic, amplification, cloud credential access, or IP inventory discovery.
 
 ### API surface (selected)
 
 | Area | Endpoints |
 |---|---|
-| Tenant / env | `GET/PATCH /v1/tenants/current`, `GET/POST /v1/environments`, `PATCH /v1/environments/:id` |
+| Tenant | `GET/PATCH /v1/tenants/current` |
 | Events / evidence | `POST /v1/events`, `GET /v1/evidence`, `GET /v1/evidence/:id` |
 | Reports | `GET /v1/reports/:id/export?format=json\|markdown\|html`, `POST /v1/findings/:id/export` |
 | High-scale | `POST/GET /v1/high-scale-requests/:id/artifacts`, SOC `.../artifacts/:id/review`, `.../notes`, `.../adapter-status` |
 | Notifications | `GET/POST /v1/notifications` |
-| Agent updates | `POST/GET /v1/agent-updates` (requires `distribution` URLs), `GET /v1/agents/:id/update` (`download` payload), `POST /v1/agents/:id/update-status`; trust keys `POST/GET /v1/agent-update-trust-keys` |
 | Observability | `GET /metrics`, `GET /v1/observability` |
 
 ### Run (developer validation)
@@ -108,14 +104,6 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000). **Local developer validation** uses header auth (`x-tenant-id`, `x-user-id`, `x-role` in the sidebar) when `ASTRANULL_AUTH_MODE=dev-headers` (default outside production), or `signed-session` with `ASTRANULL_SESSION_SECRET` for tests and operator flows. **Production** defaults to built-in **`oidc-jwt`** (RS256 JWT verified against your IdP JWKS); startup refuses `dev-headers` and `signed-session` when `NODE_ENV=production`. Configure `ASTRANULL_OIDC_ISSUER`, `ASTRANULL_OIDC_AUDIENCE`, and `ASTRANULL_OIDC_JWKS_URL` (HTTPS in production; JWKS fetch uses a bounded timeout and does not follow redirects). Optional claim and JWKS tuning: `ASTRANULL_OIDC_TENANT_CLAIM`, `ASTRANULL_OIDC_ROLE_CLAIM`, `ASTRANULL_OIDC_USER_CLAIM`, `ASTRANULL_OIDC_JWKS_CACHE_TTL_MS`, `ASTRANULL_OIDC_JWKS_FETCH_TIMEOUT_MS` — see [`docs/api.md`](docs/api.md) and [`docs/release-checklist.md`](docs/release-checklist.md).
 
-Optional validation agent (after creating a bootstrap token in Settings):
-
-```bash
-ASTRANULL_BOOTSTRAP_TOKEN='<secret>' node agents/linux/astranull-agent.mjs --api http://localhost:3000 --once
-```
-
-Packaged Linux agents default agent identity to `/var/lib/astranull/identity.json` (`0700` dir / `0600` file). Override with `--identity` or `ASTRANULL_AGENT_IDENTITY`. A dev checkout may use `.data/agent-identity.json` only when explicitly overridden (delete that file to re-register locally).
-
 ### Test
 
 ```bash
@@ -124,17 +112,17 @@ make verify
 
 Individual targets: `make lint`, `make test-unit`, `make test-integration`, `make test-e2e-first-slice`, `make safety-check`.
 
-Production-readiness evidence CLIs (metadata validation unless noted): `npm run container:evidence` (release kind `control_plane_container_release`), `npm run kms:vault:evidence`, `npm run release:staging-e2e:evidence -- --input evidence.json`, `npm run release:compliance-legal:evidence`, `npm run soc:authorization-custody:evidence`, `npm run placement:staging:evidence`, `npm run gateway:load-abuse:evidence`, `npm run release:gap-audit`, and rehearsal-only `npm run release:sample-evidence`. See [`docs/operator-local-runbook.md`](docs/operator-local-runbook.md).
+Production-readiness evidence CLIs (metadata validation unless noted): `npm run container:evidence` (release kind `control_plane_container_release`), `npm run kms:vault:evidence`, `npm run release:staging-e2e:evidence -- --input evidence.json`, `npm run release:compliance-legal:evidence`, `npm run soc:authorization-custody:evidence`, `npm run gateway:load-abuse:evidence`, `npm run release:gap-audit`, and rehearsal-only `npm run release:sample-evidence`. See [`docs/operator-local-runbook.md`](docs/operator-local-runbook.md).
 
-Latest local-staging verification (2026-07-04): `npm test` green; `npm run staging:local:attest` produces 31/31 accepted release-evidence kinds and contract-valid `staging_e2e_matrix` (`overall_status=passed`). Three signals stay separate: (1) **profile inventory** — `production_ready: true` on staging attestation means required kinds for the evaluated profile are accepted and contract-valid (use `--profile full|safe-validation-ga|high-scale-ga`); (2) **repo gap audit** — `production_ready: true` on gap audit additionally requires documented checklist/release-plan rows closed from a submittable evidence manifest (dry-run collector output is non-submittable); (3) **customer production launch** — `customer_production_ready: true` on gap audit requires `npm run release:external-verify` to pass all five `live_external` domains (enterprise IdP/MFA, KMS/HSM custody, notification credentials, artifact-pinned deploy/rollback, retained security/legal/SOC artifacts). Per-tenant wiring remains operational onboarding beyond repo inventory. Internal SOC metadata evidence from the local Docker Compose stack is not customer-facing hosted production promotion.
+Latest local-staging verification (2026-07-04): `npm test` green; `npm run staging:local:attest` produces 26/26 accepted release-evidence kinds and contract-valid `staging_e2e_matrix` (`overall_status=passed`). Three signals stay separate: (1) **profile inventory** — `production_ready: true` on staging attestation means required kinds for the evaluated profile are accepted and contract-valid (use `--profile full|safe-validation-ga|high-scale-ga`); (2) **repo gap audit** — `production_ready: true` on gap audit additionally requires documented checklist/release-plan rows closed from a submittable evidence manifest (dry-run collector output is non-submittable); (3) **customer production launch** — `customer_production_ready: true` on gap audit requires `npm run release:external-verify` to pass all five `live_external` domains (enterprise IdP/MFA, KMS/HSM custody, notification credentials, artifact-pinned deploy/rollback, retained security/legal/SOC artifacts). Per-tenant wiring remains operational onboarding beyond repo inventory. Internal SOC metadata evidence from the local Docker Compose stack is not customer-facing hosted production promotion.
 
-Developer validation persists to `.data/astranull-dev.json` when `ASTRANULL_PERSISTENCE_MODE=dev-json` (default outside production) or uses in-memory store when `ASTRANULL_NO_PERSIST=1`. **Production** defaults to `postgres`, refuses to start without `ASTRANULL_DATABASE_URL`, blocks `memory`/`dev-json` when `NODE_ENV=production`, and now initializes `createPostgresRuntime()` at startup through `src/startup.mjs`. The server injects migrated Postgres services for tenant/catalog, bootstrap/service-account auth, agent control/auth, agent update lifecycle, validation reads, safe test-run start/cancel and signed probe dispatch, event ingestion, notification management, evidence reads, finding updates, encrypted secret vault, report/finding custody exports, dashboard state/readiness summaries (`runtime.services.state`, including repository-backed high-scale and kill-switch fields), probe worker lease/result ingestion (`runtime.services.probeJobs` with signed `x-probe-tenant-id` in Postgres mode), guarded high-scale/SOC workflows (`runtime.services.highScale`), metadata retention enforcement (`runtime.services.retention`), audit-log reads, and Postgres-backed RBAC denial auditing. In Postgres mode, routes return `postgres_route_not_wired` only when a required injected service for that route is missing or the handler is not yet Postgres-backed; they do not silently use the dev JSON store. Remaining production work is live/staging Postgres acceptance, tenant unit-of-work/concurrency hardening under load, certified governed high-scale execution/provider telemetry adapters, and fleet/provider production evidence.
+Developer validation persists to `.data/astranull-dev.json` when `ASTRANULL_PERSISTENCE_MODE=dev-json` (default outside production) or uses in-memory store when `ASTRANULL_NO_PERSIST=1`. **Production** defaults to `postgres`, refuses to start without `ASTRANULL_DATABASE_URL`, blocks `memory`/`dev-json` when `NODE_ENV=production`, and now initializes `createPostgresRuntime()` at startup through `src/startup.mjs`. The server injects migrated Postgres services for tenant/catalog, service-account auth, validation reads, safe test-run start/cancel and signed probe dispatch, event ingestion, notification management, evidence reads, finding updates, encrypted secret vault, report/finding custody exports, dashboard state/readiness summaries (`runtime.services.state`, including repository-backed high-scale and kill-switch fields), probe worker lease/result ingestion (`runtime.services.probeJobs` with signed `x-probe-tenant-id` in Postgres mode), guarded high-scale/SOC workflows (`runtime.services.highScale`), metadata retention enforcement (`runtime.services.retention`), audit-log reads, and Postgres-backed RBAC denial auditing. In Postgres mode, routes return `postgres_route_not_wired` only when a required injected service for that route is missing or the handler is not yet Postgres-backed; they do not silently use the dev JSON store. Remaining production work is live/staging Postgres acceptance, tenant unit-of-work/concurrency hardening under load, certified governed high-scale execution/provider telemetry adapters, and fleet/provider production evidence.
 
 ## Start here
 
 1. Read [`docs/product/01-platform-overview.md`](docs/product/01-platform-overview.md).
 2. Read [`docs/product/02-scope-and-principles.md`](docs/product/02-scope-and-principles.md).
-3. Read [`docs/agent/01-agent-architecture.md`](docs/agent/01-agent-architecture.md).
+3. Read [`docs/adr/0008-outside-in-only-targets-first.md`](docs/adr/0008-outside-in-only-targets-first.md) — the outside-in-only scope contract.
 4. Read [`docs/detection/01-vector-catalog.md`](docs/detection/01-vector-catalog.md).
 5. Use [`PROGRESS.md`](PROGRESS.md) as the build tracker.
 6. Before any release claim, walk [`docs/release-checklist.md`](docs/release-checklist.md).

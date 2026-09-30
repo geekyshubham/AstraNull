@@ -328,12 +328,12 @@ describe('resource-exhaustion taxonomy', () => {
     for (const entry of MONITOR_ONLY_VECTORS) {
       assert.equal(entry.monitor_only, true, entry.id);
       assert.equal(entry.evidence_tier, 'E5', entry.id);
-      assert.ok(['agent_local_telemetry', 'integration_telemetry'].includes(entry.detection_mode), entry.id);
+      assert.ok(['integration_telemetry'].includes(entry.detection_mode), entry.id);
       assert.ok(entry.signal_source && entry.dependency && entry.notes, entry.id);
     }
   });
 
-  it('breaks monitor-only coverage down as 21 agent-local L2 + 6/9/5 integration families', () => {
+  it('breaks monitor-only coverage down as 21 local-telemetry L2 + 6/9/5 integration families', () => {
     const byDetectionMode = {};
     const byDependency = {};
     for (const entry of MONITOR_ONLY_VECTORS) {
@@ -342,29 +342,24 @@ describe('resource-exhaustion taxonomy', () => {
       byDependency[entry.dependency] = (byDependency[entry.dependency] ?? 0) + n;
     }
     assert.deepEqual(byDetectionMode, {
-      agent_local_telemetry: 21,
-      integration_telemetry: 20,
+      integration_telemetry: 41,
     });
     assert.deepEqual(byDependency, {
-      on_network_agent_required: 21,
+      customer_local_telemetry_required: 21,
       routing_session_feed_required: 6,
       wireless_sensor_required: 9,
       mobile_core_tap_required: 5,
     });
 
     const dependencyByReason = {
-      requires_l2_adjacency: 'on_network_agent_required',
+      requires_l2_adjacency: 'customer_local_telemetry_required',
       requires_routing_peer_session: 'routing_session_feed_required',
       requires_rf_proximity: 'wireless_sensor_required',
       requires_mobile_core_interface: 'mobile_core_tap_required',
     };
     for (const entry of MONITOR_ONLY_VECTORS) {
       assert.equal(entry.dependency, dependencyByReason[entry.reason], entry.id);
-      assert.equal(
-        entry.detection_mode,
-        entry.reason === 'requires_l2_adjacency' ? 'agent_local_telemetry' : 'integration_telemetry',
-        entry.id,
-      );
+      assert.equal(entry.detection_mode, 'integration_telemetry', entry.id);
     }
   });
 
@@ -376,8 +371,7 @@ describe('resource-exhaustion taxonomy', () => {
     assert.equal(result.monitor_only.out_of_scope_ids, 41);
     assert.deepEqual(result.monitor_only.uncovered_ids, []);
     assert.deepEqual(result.monitor_only.by_detection_mode, {
-      agent_local_telemetry: 21,
-      integration_telemetry: 20,
+      integration_telemetry: 41,
     });
     const duplicateClaimErrors = result.errors.filter((error) => error.includes('duplicate registry claims'));
     assert.equal(duplicateClaimErrors.length, 0, duplicateClaimErrors.join('; '));

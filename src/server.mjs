@@ -2,7 +2,6 @@ import http from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isConnectorsEnabledForTenant, loadRuntimeConfig } from './config.mjs';
 import { getBundledStagingJwksDocument, isBundledStagingOidcEnabled } from './lib/bundledStagingOidc.mjs';
-import { requireAgentAuth } from './lib/agentAuth.mjs';
 import { resolveHumanApiAuth } from './context.mjs';
 import {
   isInternalAdminApiRoute,
@@ -44,8 +43,6 @@ import {
 import { requirePermission } from './rbac.mjs';
 import { seedIfEmpty } from './seed.mjs';
 import { getStore } from './store.mjs';
-import * as agents from './services/agents.mjs';
-import * as agentUpdates from './services/agentUpdates.mjs';
 import * as highScale from './services/highScale.mjs';
 import * as reports from './services/reports.mjs';
 import * as targetGroups from './services/targetGroups.mjs';
@@ -58,11 +55,9 @@ import * as testPolicies from './services/testPolicies.mjs';
 import * as testRuns from './services/testRuns.mjs';
 import * as validationScans from './services/validationScans.mjs';
 import * as vectorLibrary from './services/vectorLibrary.mjs';
-import * as tokens from './services/tokens.mjs';
 import * as serviceAccounts from './services/serviceAccounts.mjs';
 import * as secretVault from './services/secretVault.mjs';
 import * as state from './services/state.mjs';
-import * as placement from './services/placement.mjs';
 import * as findings from './services/findings.mjs';
 import * as tenants from './services/tenants.mjs';
 import * as events from './services/events.mjs';
@@ -107,15 +102,11 @@ import {
 import { createFixedWindowRateLimiter, deriveClientKey } from './lib/rateLimit.mjs';
 import * as adapterStub from './services/executionAdapterStub.mjs';
 import {
-  isAgentUpdateRoute,
   isNotificationManagementRoute,
   isHighScaleRoute,
-  isPlacementRoute,
   isPortalRevampRoute,
   portalRevampServicesWired,
-  requiredAgentUpdateServiceMethods,
   requiredHighScaleServiceMethods,
-  requiredPlacementServiceMethods,
 } from './lib/postgresRouteGuard.mjs';
 
 function defaultServiceDeps() {
@@ -126,10 +117,7 @@ function defaultServiceDeps() {
     dnsOwnership,
     testPolicies,
     subscriptions,
-    tokens,
     serviceAccounts,
-    agents,
-    agentAuth: { requireAgentAuth },
     testRuns,
     validationScans,
     vectors: vectorLibrary,
@@ -158,14 +146,12 @@ function defaultServiceDeps() {
     cvePipeline,
     externalDiscovery,
     supplyChainRisk,
-    placement,
   };
 }
 
 function buildServiceDeps(runtimeConfig, injectedServices) {
   if (runtimeConfig.persistenceMode === 'postgres') {
     return {
-      agentAuth: { requireAgentAuth },
       vectors: vectorLibrary,
       custodyVerification,
       evidenceSnapshotSigning,
@@ -466,30 +452,6 @@ function blockPostgresStateRoute(runtimeConfig, serviceDeps, path, method, res) 
   return true;
 }
 
-function blockPostgresPlacementRoute(runtimeConfig, serviceDeps, path, method, res) {
-  if (runtimeConfig.persistenceMode !== 'postgres') return false;
-  if (!isPlacementRoute(path, method)) return false;
-  const required = requiredPlacementServiceMethods(path, method);
-  const svc = serviceDeps.placement;
-  if (required.every((name) => typeof svc?.[name] === 'function')) {
-    return false;
-  }
-  respondPostgresRouteNotWired(res);
-  return true;
-}
-
-function blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res) {
-  if (runtimeConfig.persistenceMode !== 'postgres') return false;
-  if (!isAgentUpdateRoute(path, method)) return false;
-  const required = requiredAgentUpdateServiceMethods(path, method);
-  const svc = serviceDeps.agentUpdates;
-  if (required.every((name) => typeof svc?.[name] === 'function')) {
-    return false;
-  }
-  respondPostgresRouteNotWired(res);
-  return true;
-}
-
 function blockPostgresPortalRevampRoute(runtimeConfig, serviceDeps, path, method, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
   if (!isPortalRevampRoute(path, method)) return false;
@@ -568,13 +530,6 @@ function resolveProbeJobsService(runtimeConfig, serviceDeps) {
     return serviceDeps.probeJobs;
   }
   return probeCoordinator;
-}
-
-function resolveAgentUpdateService(runtimeConfig, serviceDeps) {
-  if (runtimeConfig.persistenceMode === 'postgres') {
-    return serviceDeps.agentUpdates;
-  }
-  return agentUpdates;
 }
 
 /** Readiness verdicts are reused for this long before another DB check runs. */
@@ -1297,11 +1252,11 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   // In Postgres mode `buildServiceDeps` deliberately withholds the dev-JSON defaults so a
   // route can never silently read the developer store. That makes an unwired service a
   // `TypeError` on first property access, which surfaced as an unhandled 500 instead of the
-  // documented `postgres_route_not_wired`. Gate the tenant/environment family explicitly.
+  // documented `postgres_route_not_wired`. Gate the tenant family explicitly.
   if (
     runtimeConfig.persistenceMode === 'postgres'
     && !serviceDeps.tenants
-    && (path === '/v1/tenants/current' || path === '/v1/environments' || path.startsWith('/v1/environments/'))
+    && path === '/v1/tenants/current'
   ) {
     return respondPostgresRouteNotWired(res);
   }
@@ -1338,26 +1293,6 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const t = await serviceDeps.tenants.patchCurrentTenant(ctx, body);
     if (!t) return json(res, 404, { error: 'not_found' });
     return json(res, 200, t);
-  }
-  if (method === 'GET' && path === '/v1/environments') {
-    const gate = requirePermission(ctx, 'environment:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, { items: await serviceDeps.tenants.listEnvironments(ctx) });
-  }
-  if (method === 'POST' && path === '/v1/environments') {
-    const gate = requirePermission(ctx, 'environment:write');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    return json(res, 201, await serviceDeps.tenants.createEnvironment(ctx, body));
-  }
-  const envMatch = path.match(/^\/v1\/environments\/([^/]+)$/);
-  if (envMatch && method === 'PATCH') {
-    const gate = requirePermission(ctx, 'environment:write');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const env = await serviceDeps.tenants.patchEnvironment(ctx, envMatch[1], body);
-    if (!env) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, env);
   }
 
   if (method === 'POST' && path === '/v1/events') {
@@ -2285,22 +2220,6 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, payload);
   }
 
-  if (method === 'GET' && path === '/v1/placement/reviews') {
-    const gate = requirePermission(ctx, 'target_group:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresPlacementRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const listReviewsFn =
-      runtimeConfig.persistenceMode === 'postgres'
-        ? serviceDeps.placement.listPlacementReviews
-        : placement.listPlacementReviews;
-    const targetGroupId = url.searchParams.get('target_group_id');
-    const result = await Promise.resolve(
-      listReviewsFn(ctx, { target_group_id: targetGroupId }),
-    );
-    if (result?.error) return json(res, result.status ?? 404, result);
-    return json(res, 200, result);
-  }
-
   if (path === '/v1/targets' && method === 'GET') {
     const gate = requirePermission(ctx, 'target_group:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2325,6 +2244,31 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       envelope = targetGroups.listTargetsEnvelope(ctx);
     }
     return json(res, 200, envelope);
+  }
+
+  if (path === '/v1/targets' && method === 'POST') {
+    const gate = requirePermission(ctx, 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const createFn = serviceDeps.targetGroups?.createTargetDirect
+      ?? (runtimeConfig.persistenceMode === 'postgres' ? null : targetGroups.createTargetDirect);
+    if (typeof createFn !== 'function') return respondPostgresRouteNotWired(res);
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const created = await createFn(ctx, body);
+    if (created && created.error) return json(res, created.status ?? 400, created);
+    return json(res, 201, created);
+  }
+  const targetByIdMatch = path.match(/^\/v1\/targets\/([^/]+)$/);
+  if (targetByIdMatch && method === 'PATCH') {
+    const gate = requirePermission(ctx, 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const patchFn = serviceDeps.targetGroups?.patchTargetById
+      ?? (runtimeConfig.persistenceMode === 'postgres' ? null : targetGroups.patchTargetById);
+    if (typeof patchFn !== 'function') return respondPostgresRouteNotWired(res);
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const patched = await patchFn(ctx, targetByIdMatch[1], body);
+    if (!patched) return json(res, 404, { error: 'not_found' });
+    if (patched.error) return json(res, patched.status ?? 400, patched);
+    return json(res, 200, patched);
   }
 
   if (path === '/v1/target-groups' && method === 'GET') {
@@ -2663,28 +2607,6 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     }
   }
 
-  if (path === '/v1/bootstrap-tokens' && method === 'POST') {
-    const gate = requirePermission(ctx, 'bootstrap_token:create');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const { token, secret } = await serviceDeps.tokens.createBootstrapToken(ctx, body);
-    const { token_hash, token_salt, ...meta } = token;
-    return json(res, 201, { ...meta, secret });
-  }
-  if (path === '/v1/bootstrap-tokens' && method === 'GET') {
-    const gate = requirePermission(ctx, 'bootstrap_token:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, { items: await serviceDeps.tokens.listBootstrapTokens(ctx) });
-  }
-  const revokeTok = path.match(/^\/v1\/bootstrap-tokens\/([^/]+)\/revoke$/);
-  if (revokeTok && method === 'POST') {
-    const gate = requirePermission(ctx, 'bootstrap_token:revoke');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    const t = await serviceDeps.tokens.revokeBootstrapToken(ctx, revokeTok[1]);
-    if (!t) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, t);
-  }
-
   if (path === '/v1/service-accounts' && method === 'POST') {
     const gate = requirePermission(ctx, 'service_account:create');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2802,134 +2724,6 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (result.error) {
       return json(res, result.status ?? 400, { error: result.error, message: result.message });
     }
-    return json(res, 200, result);
-  }
-
-  if (path === '/v1/agents/register' && method === 'POST') {
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const tenantId =
-      runtimeConfig.authMode === 'dev-headers' ? ctx.tenantId : null;
-    const result = await serviceDeps.agents.registerAgent(body, tenantId);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
-    return json(res, 201, result);
-  }
-  if (path === '/v1/agents' && method === 'GET') {
-    const gate = requirePermission(ctx, 'agent:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, { items: await serviceDeps.agents.listAgents(ctx) });
-  }
-  const agentRevokeMatch = path.match(/^\/v1\/agents\/([^/]+)\/revoke$/);
-  if (agentRevokeMatch && method === 'POST') {
-    const gate = requirePermission(ctx, 'agent:revoke');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    const result = await serviceDeps.agents.revokeAgent(ctx, agentRevokeMatch[1]);
-    if (!result) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, result);
-  }
-  const hbMatch = path.match(/^\/v1\/agents\/([^/]+)\/heartbeat$/);
-  if (hbMatch && method === 'POST') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, hbMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.agents.heartbeatAgent(auth.agent, body);
-    return json(res, 200, result);
-  }
-  const jobsMatch = path.match(/^\/v1\/agents\/([^/]+)\/jobs$/);
-  if (jobsMatch && method === 'GET') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, jobsMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    const poll = await serviceDeps.agents.pollJobs(auth.agent, 3000);
-    return json(res, 200, { jobs: poll.jobs });
-  }
-  const ackMatch = path.match(/^\/v1\/agents\/([^/]+)\/jobs\/([^/]+)\/ack$/);
-  if (ackMatch && method === 'POST') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, ackMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    const job = await serviceDeps.agents.ackJob(auth.agent, ackMatch[2]);
-    if (!job) return json(res, 404, { error: 'not_found' });
-    return json(res, 200, { job });
-  }
-  const obsMatch = path.match(/^\/v1\/agents\/([^/]+)\/observations$/);
-  if (obsMatch && method === 'POST') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, obsMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const agentCtx = {
-      ...ctx,
-      tenantId: auth.agent.tenant_id,
-      userId: 'agent',
-      role: 'agent',
-    };
-    const result = await serviceDeps.testRuns.ingestObservation(agentCtx, auth.agent.id, body);
-    if (result.error) return json(res, result.status, { error: result.error });
-    return json(res, 201, result);
-  }
-  const agentUpdateSvc = resolveAgentUpdateService(runtimeConfig, serviceDeps);
-  const agentUpdatePollMatch = path.match(/^\/v1\/agents\/([^/]+)\/update$/);
-  if (agentUpdatePollMatch && method === 'GET') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, agentUpdatePollMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    return json(res, 200, await agentUpdateSvc.pollAgentUpdate(auth.agent));
-  }
-  const agentUpdateStatusMatch = path.match(/^\/v1\/agents\/([^/]+)\/update-status$/);
-  if (agentUpdateStatusMatch && method === 'POST') {
-    const auth = await serviceDeps.agentAuth.requireAgentAuth(req.headers, agentUpdateStatusMatch[1], runtimeConfig);
-    if (auth.error) return json(res, auth.status, { error: auth.error });
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await agentUpdateSvc.recordAgentUpdateStatus(auth.agent, body);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
-    return json(res, 201, result);
-  }
-
-  if (path === '/v1/agent-update-trust-keys' && method === 'POST') {
-    const gate = requirePermission(ctx, 'agent_update:write');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await agentUpdateSvc.createAgentUpdateTrustKey(ctx, body);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
-    return json(res, 201, result);
-  }
-  if (path === '/v1/agent-update-trust-keys' && method === 'GET') {
-    const gate = requirePermission(ctx, 'agent_update:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    return json(res, 200, { items: await agentUpdateSvc.listAgentUpdateTrustKeys(ctx) });
-  }
-  const agentUpdateTrustKeyRevokeMatch = path.match(/^\/v1\/agent-update-trust-keys\/([^/]+)\/revoke$/);
-  if (agentUpdateTrustKeyRevokeMatch && method === 'POST') {
-    const gate = requirePermission(ctx, 'agent_update:write');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const result = await agentUpdateSvc.revokeAgentUpdateTrustKey(ctx, agentUpdateTrustKeyRevokeMatch[1]);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
-    return json(res, 200, result);
-  }
-
-  if (path === '/v1/agent-updates' && method === 'POST') {
-    const gate = requirePermission(ctx, 'agent_update:write');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await agentUpdateSvc.createAgentUpdateRelease(ctx, body);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
-    return json(res, 201, result);
-  }
-  if (path === '/v1/agent-updates' && method === 'GET') {
-    const gate = requirePermission(ctx, 'agent_update:read');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    return json(res, 200, { items: await agentUpdateSvc.listAgentUpdateReleases(ctx) });
-  }
-  const agentUpdateRollbackMatch = path.match(/^\/v1\/agent-updates\/([^/]+)\/rollback$/);
-  if (agentUpdateRollbackMatch && method === 'POST') {
-    const gate = requirePermission(ctx, 'agent_update:rollback');
-    if (!gate.ok) return json(res, gate.status, gate.body);
-    if (blockPostgresAgentUpdateRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    const result = await agentUpdateSvc.requestAgentUpdateRollback(ctx, agentUpdateRollbackMatch[1]);
-    if (result.error) return json(res, result.status ?? 400, { error: result.error });
     return json(res, 200, result);
   }
 

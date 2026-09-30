@@ -4,13 +4,10 @@ import path from 'node:path';
 import { EDGE_PROTECTION_REQUIRED_CONTROLS } from '../../src/contracts/edgeProtectionBaseline.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/lib/highScalePolicy.mjs';
 import { REQUIRED_NOTIFICATION_CHANNELS } from '../notification-provider-config-evidence.mjs';
-import { AGENT_INSTALL_MATRIX_FORMATS } from '../agent-install-matrix-evidence.mjs';
-import { ALLOWED_FINGERPRINT_HEADER_NAMES } from '../agent-mtls-gateway-evidence.mjs';
 import {
   GATEWAY_LOAD_ABUSE_ABUSE_CONTROL_IDS,
   GATEWAY_LOAD_ABUSE_RATE_LIMIT_CONTROL_IDS,
 } from '../gateway-load-abuse-evidence.mjs';
-import { PLACEMENT_CONFIDENCE_STAGING_REQUIRED_SCENARIOS } from '../placement-confidence-staging-evidence.mjs';
 import {
   PROBE_FLEET_MATRIX_REGIONS,
   PROBE_FLEET_REQUIRED_PROBE_PROFILES,
@@ -26,21 +23,6 @@ import { PRODUCTION_RELEASE_EVIDENCE_COMPLETE } from '../../tests/fixtures/produ
 
 const DIGEST_A = 'a'.repeat(64);
 const DIGEST_B = 'b'.repeat(64);
-
-const MINIMAL_SBOM = {
-  bomFormat: 'CycloneDX',
-  specVersion: '1.4',
-  serialNumber: 'urn:uuid:11111111-1111-4111-8111-111111111111',
-  components: [{ type: 'application', name: 'astranull-agent', version: '1.0.0' }],
-};
-
-const MINIMAL_PROVENANCE = {
-  _type: 'https://in-toto.io/Statement/v1',
-  subject: [{ name: 'astranull-agent', digest: { sha256: 'abc' } }],
-  materials: [{ uri: 'git+https://example/astranull@main' }],
-  predicateType: 'https://slsa.dev/provenance/v1',
-  predicate: { builder: { id: 'local-builder' } },
-};
 
 function clone(value) {
   return structuredClone(value);
@@ -233,90 +215,6 @@ function buildSnapshotBatch() {
   };
 }
 
-function agentInstallRow(format) {
-  const checkPassed = (extra = {}) => ({
-    status: 'passed',
-    observed_at: '2026-07-03T00:00:00.000Z',
-    ...extra,
-  });
-  const signingFormat = format === 'generic' ? 'tarball' : format;
-  const trustAnchorByFormat = {
-    generic: 'ed25519://tenant/agent-update-trust-key',
-    deb: 'gpg://astranull/agent-package-signing',
-    rpm: 'gpg://astranull/agent-package-signing',
-    container: 'cosign://astranull/agent-release-signer',
-    kubernetes: 'cosign://astranull/agent-release-signer',
-  };
-  const row = {
-    format,
-    environment: 'staging-sim',
-    agent_id_redacted: 'ag_…01',
-    checks: {
-      install: checkPassed(),
-      heartbeat: checkPassed({ heartbeat_count: 2 }),
-      job_poll: checkPassed({ job_poll_count: 1 }),
-      upgrade_rollback: checkPassed(),
-      revoke: checkPassed(),
-      uninstall: checkPassed(),
-      no_inbound_port: checkPassed({ inbound_listener_count: 0 }),
-      signature_verify: checkPassed({
-        signing_format: signingFormat,
-        trust_anchor_reference: trustAnchorByFormat[format],
-      }),
-    },
-  };
-  if (format === 'container') {
-    row.runtime = 'docker';
-    row.image_reference_redacted = 'registry.example/astranull-agent@sha256:…01';
-  }
-  if (format === 'kubernetes') {
-    row.runtime = 'kubernetes';
-    row.deployment_mode = 'daemonset';
-    row.namespace_redacted = 'astranull-…';
-  }
-  return row;
-}
-
-function placementScenario(scenarioId) {
-  const defaults = {
-    strong_agent_observation: {
-      status: 'passed',
-      confidence_label: 'High',
-      target_group_reference: 'tg://staging-sim/edge-primary',
-      run_reference: 'run://staging-sim/strong-agent-01',
-      verdict_reference: 'verdict://staging-sim/strong-agent-01',
-    },
-    misplaced_agent_detection: {
-      status: 'passed',
-      confidence_label: 'Invalid',
-      target_group_reference: 'tg://staging-sim/misplaced-edge',
-      run_reference: 'run://staging-sim/misplaced-agent-01',
-      verdict_reference: 'verdict://staging-sim/misplaced-agent-01',
-    },
-    external_only_inconclusive: {
-      status: 'passed',
-      confidence_label: 'Low',
-      target_group_reference: 'tg://staging-sim/external-only',
-      run_reference: 'run://staging-sim/external-only-01',
-      verdict_reference: 'verdict://staging-sim/external-only-01',
-    },
-    canary_path_observation: {
-      status: 'passed',
-      confidence_label: 'High',
-      target_group_reference: 'tg://staging-sim/canary-path',
-      run_reference: 'run://staging-sim/canary-path-01',
-      verdict_reference: 'verdict://staging-sim/canary-path-01',
-    },
-  }[scenarioId];
-  return {
-    scenario_id: scenarioId,
-    evidence_uri: `evidence://placement/${scenarioId}`,
-    owner: 'detection-lead',
-    completed_at: '2026-07-03T00:00:00.000Z',
-    ...defaults,
-  };
-}
-
 function authorizationArtifactEntry(artifactType, index) {
   return {
     artifact_type: artifactType,
@@ -350,23 +248,6 @@ function probeFleetControls(observedAt = '2026-07-03T00:00:00.000Z') {
       allowed_destination_count: 2,
     },
     abuse_monitoring: { status: 'passed', observed_at: observedAt, alerts_enabled: true },
-  };
-}
-
-function writeAgentSbomFixtureFiles(scratchDir) {
-  mkdirSync(scratchDir, { recursive: true });
-  const pkgPath = path.join(scratchDir, 'agent-package.tar.gz');
-  const sbomPath = path.join(scratchDir, 'sbom.json');
-  const provenancePath = path.join(scratchDir, 'provenance.json');
-  const pkgBytes = Buffer.from('astranull-agent-package-staging-sim');
-  writeFileSync(pkgPath, pkgBytes);
-  writeFileSync(sbomPath, `${JSON.stringify(MINIMAL_SBOM, null, 2)}\n`);
-  writeFileSync(provenancePath, `${JSON.stringify(MINIMAL_PROVENANCE, null, 2)}\n`);
-  return {
-    package: pkgPath,
-    sbom: sbomPath,
-    provenance: provenancePath,
-    packageSha256: createHash('sha256').update(pkgBytes).digest('hex'),
   };
 }
 
@@ -480,7 +361,7 @@ export function buildCollectorScriptInput(kind, context = {}) {
           incident_tabletop: {
             tabletop_id: 'tabletop_2026_07_03_soc_escalation',
             conducted_at: createdAt,
-            scenario_reference: 'scenario://drills/agent-mass-offline-s2',
+            scenario_reference: 'scenario://drills/probe-fleet-degraded-s2',
             owner: 'incident-commander',
             evidence_uri: 'evidence://support/tabletop/2026-07-03',
           },
@@ -642,28 +523,6 @@ export function buildCollectorScriptInput(kind, context = {}) {
       };
     }
 
-    case 'agent_install_matrix':
-      return {
-        input: {
-          matrix_id: `agent-install-${releaseId}`,
-          rows: AGENT_INSTALL_MATRIX_FORMATS.map((format) => agentInstallRow(format)),
-        },
-        extraArgs: ['--matrix-id', `agent-install-${releaseId}`],
-      };
-
-    case 'agent_sbom_provenance': {
-      const files = writeAgentSbomFixtureFiles(path.join(scratchDir, 'agent-sbom'));
-      return {
-        input: null,
-        extraArgs: [
-          '--package', files.package,
-          '--sbom', files.sbom,
-          '--provenance', files.provenance,
-          '--format', 'tar',
-        ],
-      };
-    }
-
     case 'postgres_concurrency':
       return {
         input: {
@@ -704,118 +563,6 @@ export function buildCollectorScriptInput(kind, context = {}) {
     case 'oidc_prod_auth_preflight':
     case 'vector_safety_policy':
       return { input: null };
-
-    case 'agent_mtls_gateway':
-      return {
-        input: {
-          release_id: releaseId,
-          environment: 'staging',
-          gateway_proxy: {
-            gateway_reference: 'gateway://staging-sim/agent-control',
-            proxy_type: 'nginx-ingress',
-            tls_termination_point: 'edge_gateway',
-            validated_at: createdAt,
-          },
-          client_certificate_issuance: {
-            issuer_reference: 'pki://corp/agent-client-ca',
-            issuance_runbook_reference: 'runbook://agent/client-cert-issuance',
-            validated_at: createdAt,
-          },
-          fingerprint_forwarding: {
-            allowed_header_names: [...ALLOWED_FINGERPRINT_HEADER_NAMES],
-            gateway_sets_fingerprint_header: true,
-            strips_untrusted_client_headers: true,
-            control_reference: 'config://gateway/agent-mtls-fingerprint-forwarding',
-            validated_at: createdAt,
-          },
-          header_spoofing_protection: {
-            rejects_untrusted_fingerprint_headers: true,
-            trusted_proxy_hop_policy: 'single_trusted_hop_strips_client_supplied_fingerprint',
-            control_reference: 'config://gateway/agent-mtls-spoofing-controls',
-            validated_at: createdAt,
-          },
-          agent_registration_heartbeat_proof: {
-            staging_agent_reference: 'agent://staging-sim/prod-origin-01',
-            registration_evidence_uri: 'evidence://agent/staging-sim-registration',
-            heartbeat_evidence_uri: 'evidence://agent/staging-sim-heartbeat',
-            fingerprint_match_confirmed: true,
-            validated_at: createdAt,
-          },
-          rotation_revocation_drill: {
-            drill_reference: 'drill://agent/client-cert-rotation-revocation-staging-sim',
-            rotation_tested: true,
-            revocation_tested: true,
-            validated_at: createdAt,
-          },
-          security_signoff: {
-            owner: 'security-lead',
-            role: 'security-owner',
-            signed_at: createdAt,
-            signoff_reference: 'signoff://security/agent-mtls-gateway',
-          },
-        },
-      };
-
-    case 'agent_trust_key_ceremony':
-      return {
-        input: {
-          drill_id: 'agent_trust_key_drill_2026_07_03',
-          environment: 'staging',
-          tenant_id: 'ten_staging_sim',
-          started_at: createdAt,
-          completed_at: createdAt,
-          signing_key_ceremony: {
-            method: 'generate',
-            signing_key_reference: 'keyref://hsm/agent-update-signing/v1',
-            custody_uri: 'custody://security/agent-signing-key/v1',
-          },
-          active_trust_key_registration: {
-            trust_key_id: 'autk_0123456789abcdef',
-            name: 'staging-sim-agent-update-signing',
-            fingerprint_sha256: DIGEST_A,
-            registration_reference: 'evidence://agent/trust-key/register-001',
-          },
-          staged_release_binding: {
-            release_id: 'aurel_0123456789abcdef',
-            signing_fingerprint_sha256: DIGEST_A,
-            rollout_percentage: 25,
-            binding_verified: true,
-            binding_reference: 'evidence://agent/release/staged-binding-001',
-          },
-          trust_key_rotation: {
-            previous_trust_key_id: 'autk_aaaaaaaaaaaaaaaa',
-            new_trust_key_id: 'autk_bbbbbbbbbbbbbbbb',
-            previous_fingerprint_sha256: DIGEST_B,
-            new_fingerprint_sha256: DIGEST_A,
-            rotation_reference: 'evidence://agent/trust-key/rotation-001',
-          },
-          trust_key_revocation: {
-            revoked_trust_key_id: 'autk_bbbbbbbbbbbbbbbb',
-            fingerprint_sha256: DIGEST_B,
-            revocation_reference: 'evidence://agent/trust-key/revoke-001',
-          },
-          rollback_trust_behavior: {
-            scenario: 'revoked_signing_key_release_rejected',
-            untrusted_signing_key_observed: true,
-            behavior_reference: 'evidence://agent/trust-key/rollback-trust-001',
-            verified_at: createdAt,
-          },
-          custody_uris: ['custody://security/agent-trust-key-ceremony/2026-07-03'],
-          operator_signoff: {
-            operator: 'release-admin',
-            role: 'agent-update-operator',
-            signed_at: createdAt,
-            signoff_reference: 'signoff://ops/agent-trust-key-drill',
-          },
-          security_signoff: {
-            operator: 'security-lead',
-            role: 'security-owner',
-            signed_at: createdAt,
-            signoff_reference: 'signoff://security/agent-trust-key-drill',
-          },
-          audit_event_ids: ['audit_trust_key_1', 'audit_trust_key_2'],
-        },
-      };
 
     case 'provider_approval':
       return {
@@ -1028,29 +775,6 @@ export function buildCollectorScriptInput(kind, context = {}) {
           },
           artifact_custody: REQUIRED_ARTIFACT_TYPES.map((type, index) => authorizationArtifactEntry(type, index)),
           evidence_uri: 'evidence://soc/authorization-custody',
-        },
-        extraArgs: ['--release-id', releaseId],
-      };
-
-    case 'placement_confidence_staging':
-      return {
-        input: {
-          release_id: releaseId,
-          environment: 'staging',
-          created_at: createdAt,
-          evidence_uri: 'evidence://detection/placement-confidence-staging-sim',
-          signoff: {
-            owner: 'detection-lead',
-            signed_at: createdAt,
-            signoff_reference: 'signoff://detection/placement-confidence',
-          },
-          evidence_correlation_summary: {
-            probe_evidence_count: 12,
-            agent_evidence_count: 9,
-            correlated_pairs: 7,
-            gaps: [],
-          },
-          scenarios: PLACEMENT_CONFIDENCE_STAGING_REQUIRED_SCENARIOS.map((scenarioId) => placementScenario(scenarioId)),
         },
         extraArgs: ['--release-id', releaseId],
       };

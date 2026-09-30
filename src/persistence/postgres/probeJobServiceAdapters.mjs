@@ -1,7 +1,6 @@
 import { newId } from '../../lib/ids.mjs';
 import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
-import { enrichOutsideInWafProbeMetadata } from '../../lib/outsideInWafAgentEvidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 import { WAF_EDGE_DETECTION_CHECK_ID } from '../../lib/edgeDetection.mjs';
@@ -769,24 +768,6 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
               },
               job.check_id,
             );
-
-            if (job.probe_profile?.kind === 'outside_in_waf_scan') {
-              const agentObservations = await validationEvidence.listRunEvents(
-                evidenceCtx,
-                run.id,
-                {
-                  signalType: 'agent_observation',
-                  limit: 500,
-                  client,
-                },
-              );
-              probeMetadata = enrichOutsideInWafProbeMetadata(probeMetadata, {
-                agents: Array.isArray(agentObservations)
-                  ? agentObservations.filter(isTrustedProducerEvent)
-                  : [],
-                nonceHash: job.nonce_hash,
-              });
-            }
 
             const probeEvent = await validationEvidence.appendProbeResultEventIdempotent(
               evidenceCtx,

@@ -85,7 +85,6 @@ describe('outside-in WAF scanner', () => {
     const check = getCheckById('waf.fingerprint.safe');
     assert.equal(check.probe_profile.kind, 'outside_in_waf_scan');
     assert.equal(check.probe_profile.max_requests, 16);
-    assert.equal(check.probe_profile.require_agent_for_protected, true);
     assert.equal(check.probe_profile.follow_redirects, false);
   });
 
@@ -325,7 +324,7 @@ describe('outside-in WAF scanner', () => {
     }
   });
 
-  it('fingerprints Cloudflare but requires agent for Protected label', async () => {
+  it('fingerprints Cloudflare but stays edge_protected without origin-lockdown evidence', async () => {
     const baseUrl = 'https://shop.example.test/';
     const outcome = await runOutsideInWafScan({
       url: baseUrl,
@@ -351,7 +350,7 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.waf_detected, true);
     assert.equal(outcome.detected_vendor, 'cloudflare');
-    assert.equal(outcome.posture_label, 'Edge protected · not internally validated');
+    assert.equal(outcome.posture_label, 'Edge protected · origin lockdown unverified');
     assert.equal(outcome.posture_status, 'edge_protected');
     assert.equal(outcome.probe_validation_passed, true);
     assert.equal(outcome.validation_passed, false);
@@ -359,13 +358,14 @@ describe('outside-in WAF scanner', () => {
     assert.ok(outcome.marker_probes.some((probe) => probe.family === 'sqli_encoded_marker'));
   });
 
-  it('reports Protected only when agent corroboration is present', async () => {
+  it('reports Protected only when external origin-lockdown evidence is present', async () => {
     const baseUrl = 'https://shop.example.test/';
     const outcome = await runOutsideInWafScan({
       url: baseUrl,
       budget: 13,
       timeoutMs: 1000,
-      agentCorroborated: true,
+      directIp: '198.51.100.7',
+      hostname: 'shop.example.test',
       fetchFn: async (url, init) => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         if (!isBaseline) {
@@ -373,10 +373,13 @@ describe('outside-in WAF scanner', () => {
         }
         return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
       },
+      // Origin lockdown: the direct-origin probe cannot reach the origin (connection refused).
+      originBypassFn: async () => ({ res: null, error: new Error('ECONNREFUSED') }),
     });
     assert.equal(outcome.posture_label, 'Protected');
     assert.equal(outcome.validation_passed, true);
-    assert.equal(outcome.agent_corroborated, true);
+    assert.equal(outcome.origin_lockdown_confirmed, true);
+    assert.equal(outcome.direct_origin_reachable, false);
     assert.equal(outcome.coverage_complete, true);
   });
 
@@ -396,7 +399,7 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.coverage_complete, false);
     assert.ok(outcome.phases_dropped.includes('no_user_agent'));
-    assert.equal(outcome.posture_label, 'Edge protected · not internally validated');
+    assert.equal(outcome.posture_label, 'Edge protected · origin lockdown unverified');
     assert.deepEqual(outcome.class_posture, {
       sqli: 'protected',
       xss: 'protected',
@@ -410,7 +413,6 @@ describe('outside-in WAF scanner', () => {
       url: baseUrl,
       budget: 3,
       timeoutMs: 1000,
-      agentCorroborated: true,
       fetchFn: async (url, init) => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         return isBaseline
@@ -498,7 +500,6 @@ describe('outside-in WAF scanner', () => {
       url: 'https://monitor-only.example.test/',
       budget: 8,
       timeoutMs: 1000,
-      agentCorroborated: true,
       fetchFn: async () => mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' }),
     });
 
@@ -688,10 +689,10 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.metadata.probe_validation_passed, false);
   });
 
-  it('probeOutsideInWafScan applies bound agent corroboration after scan', async () => {
+  it('probeOutsideInWafScan reports edge_protected from external evidence with no origin lockdown', async () => {
     const outcome = await probeOutsideInWafScan({
       check_id: 'waf.fingerprint.safe',
-      nonce_hash: 'sha256:agent-proof',
+      nonce_hash: 'sha256:edge-proof',
       constraints: { max_requests: 13, timeout_ms: 1000 },
       probe_profile: { kind: 'outside_in_waf_scan', max_requests: 13 },
       target: { kind: 'url', value: 'https://edge.example.test/' },
@@ -699,10 +700,6 @@ describe('outside-in WAF scanner', () => {
       resolve4Fn: async () => ['203.0.113.10'],
       resolve6Fn: async () => [],
       tlsConnect: rejectedTlsSocket,
-      agentObservations: [{
-        nonce_hash: 'sha256:agent-proof',
-        metadata: { waf_marker: true, observed_action: 'block', waf_blocked: true },
-      }],
       fetchFn: async (url, init) => {
         const isBaseline = url === 'https://edge.example.test/' && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         if (!isBaseline) {
@@ -712,14 +709,14 @@ describe('outside-in WAF scanner', () => {
       },
     });
 
-    assert.equal(outcome.metadata.agent_corroborated, true);
-    assert.equal(outcome.metadata.posture_label, 'Protected');
+    assert.equal(outcome.metadata.origin_lockdown_confirmed, false);
+    assert.equal(outcome.metadata.posture_label, 'Edge protected · origin lockdown unverified');
   });
 
-  it('probeOutsideInWafScan preserves incomplete optional coverage after agent corroboration', async () => {
+  it('probeOutsideInWafScan preserves incomplete optional coverage with external-only evidence', async () => {
     const outcome = await probeOutsideInWafScan({
       check_id: 'waf.fingerprint.safe',
-      nonce_hash: 'sha256:agent-proof',
+      nonce_hash: 'sha256:edge-proof',
       constraints: { max_requests: 6, timeout_ms: 1000 },
       probe_profile: { kind: 'outside_in_waf_scan', max_requests: 6 },
       target: { kind: 'url', value: 'https://edge.example.test/' },
@@ -727,10 +724,6 @@ describe('outside-in WAF scanner', () => {
       resolve4Fn: async () => ['203.0.113.10'],
       resolve6Fn: async () => [],
       tlsConnect: rejectedTlsSocket,
-      agentObservations: [{
-        nonce_hash: 'sha256:agent-proof',
-        metadata: { waf_marker: true, observed_action: 'block', waf_blocked: true },
-      }],
       fetchFn: async (url, init) => {
         const isBaseline = url === 'https://edge.example.test/' && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         return isBaseline
@@ -739,8 +732,8 @@ describe('outside-in WAF scanner', () => {
       },
     });
 
-    assert.equal(outcome.metadata.agent_corroborated, true);
-    assert.equal(outcome.metadata.posture_label, 'Protected');
+    assert.equal(outcome.metadata.origin_lockdown_confirmed, false);
+    assert.equal(outcome.metadata.posture_label, 'Edge protected · origin lockdown unverified');
     assert.equal(outcome.metadata.coverage_complete, false);
     assert.ok(outcome.metadata.phases_dropped.includes('no_user_agent'));
   });
@@ -769,7 +762,6 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.metadata.waf_fingerprint_detected, true);
     assert.ok(outcome.requests_sent >= 5);
     assert.ok(outcome.metadata.waf_fingerprint_catalog_version);
-    assert.equal(outcome.metadata.agent_corroboration_required, true);
   });
 
   it('executeCapabilityProbe routes outside_in_waf_scan kind', async () => {

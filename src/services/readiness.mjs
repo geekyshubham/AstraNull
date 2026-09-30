@@ -1,12 +1,6 @@
 import { getStore } from '../store.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from './highScale.mjs';
 import { runVerdictSupportsReadiness } from '../lib/readinessVerdicts.mjs';
-import {
-  computePlacementDiagnostics,
-  placementScoreFromDiagnostics,
-  publicPlacementDiagnosticsPayload,
-  summarizePlacementDiagnostics,
-} from './placement.mjs';
 import { activeTargetGroupsForTenant } from './targetGroups.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 
@@ -14,11 +8,14 @@ import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 export const RECENT_EVIDENCE_WINDOW_DAYS = 30;
 export const RECENT_EVIDENCE_WINDOW_MS = RECENT_EVIDENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-export const WEIGHT_COVERAGE = 40;
-export const WEIGHT_AGENT_PLACEMENT = 25;
-export const WEIGHT_VERDICTS = 25;
-export const WEIGHT_EVIDENCE_FRESHNESS = 15;
-export const WEIGHT_SOC_GOVERNANCE = 10;
+// ADR-0008 removed the "Agent placement & health" factor (was weight 25). Its weight is
+// redistributed proportionally across the four remaining factors so the score still totals 100:
+// original non-agent weights summed to 90 (coverage 40, verdicts 25, freshness 15, soc 10);
+// each is scaled by 100/90 and rounded to keep an integer sum of 100 (44 + 28 + 17 + 11 = 100).
+export const WEIGHT_COVERAGE = 44;
+export const WEIGHT_VERDICTS = 28;
+export const WEIGHT_EVIDENCE_FRESHNESS = 17;
+export const WEIGHT_SOC_GOVERNANCE = 11;
 
 const RUN_EVIDENCE_TIMESTAMP_FIELDS = [
   'verdict_at',
@@ -186,15 +183,6 @@ function distinctSocApprovalCount(req) {
   return new Set((req.soc_approvals ?? []).map((a) => a.user_id)).size;
 }
 
-function hasAgentObservationEvidence(store, tenantId) {
-  return store.events.some(
-    (e) =>
-      e.tenant_id === tenantId &&
-      isTrustedProducerEvent(e) &&
-      (e.signal_type === 'agent_observation' || e.signal_type === 'agent_no_observation'),
-  );
-}
-
 function killSwitchEvidenceForTenant(store, tenantId) {
   const ks = store.socKillSwitch ?? {};
   const ksTenant = ks.tenant_id ?? null;
@@ -302,8 +290,6 @@ export function computeReadiness(tenantId) {
   // Recompute from authoritative tenant state; store.readiness remains an output cache only.
   const nowMs = Date.now();
   const groups = activeTargetGroupsForTenant(tenantId);
-  const agents = store.agents.filter((a) => a.tenant_id === tenantId && a.status !== 'revoked');
-  const onlineAgents = agents.filter((a) => a.status === 'online');
   const runs = store.testRuns.filter((r) => r.tenant_id === tenantId);
   const findings = store.findings.filter((f) => f.tenant_id === tenantId && f.status === 'open');
   const verdicts = runs
@@ -358,58 +344,8 @@ export function computeReadiness(tenantId) {
     key: 'coverage',
     label: 'Validation coverage',
     score: coverageScore,
+    weight: WEIGHT_COVERAGE,
     detail: coverageDetail,
-  });
-
-  const pathObservation = hasAgentObservationEvidence(store, tenantId);
-  const placementDiagnostics = computePlacementDiagnostics(tenantId, nowMs);
-  const placementSummary = summarizePlacementDiagnostics(placementDiagnostics);
-  let placementScore = 0;
-  let placementDetail;
-  if (!agents.length) {
-    placementDetail = 'No agents registered; internal path observation cannot be evidenced.';
-    if (totalGroups > 0) {
-      placementDetail += ` ${placementSummary.summary}`;
-    }
-  } else if (!onlineAgents.length) {
-    placementScore = 0;
-    placementDetail = `0 online of ${agents.length} registered agent(s); agents are not reporting healthy.`;
-    if (!pathObservation) {
-      placementDetail += ' No agent observation evidence recorded yet.';
-    }
-    if (totalGroups > 0) {
-      placementDetail += ` ${placementSummary.summary}`;
-    }
-  } else if (totalGroups > 0) {
-    const diagScore = placementScoreFromDiagnostics(placementDiagnostics, WEIGHT_AGENT_PLACEMENT);
-    placementScore = diagScore ?? 0;
-    placementDetail = `${onlineAgents.length} online of ${agents.length} registered agent(s). ${placementSummary.summary}`;
-    if (placementSummary.unbound_online_agent_count > 0 && placementSummary.proven === 0) {
-      placementDetail +=
-        ' Unbound online agents do not prove placement for declared target groups.';
-    } else if (!pathObservation && placementSummary.proven === 0) {
-      placementDetail +=
-        ' Online agents registered; path coverage is not yet proven by agent observation evidence.';
-    }
-  } else {
-    placementScore = Math.round(
-      Math.min(WEIGHT_AGENT_PLACEMENT, (onlineAgents.length / agents.length) * WEIGHT_AGENT_PLACEMENT),
-    );
-    placementDetail = `${onlineAgents.length} online of ${agents.length} registered agent(s).`;
-    if (pathObservation) {
-      placementDetail += ' Agent observation evidence exists for validation runs.';
-    } else {
-      placementDetail +=
-        ' Online agents registered; path coverage is not yet proven by agent observation evidence.';
-    }
-  }
-
-  factors.push({
-    key: 'agent_placement',
-    label: 'Agent placement & health',
-    score: placementScore,
-    detail: placementDetail,
-    placement_diagnostics: publicPlacementDiagnosticsPayload(placementDiagnostics),
   });
 
   const recentVerdicts = verdicts.filter((v) => isRecentTimestamp(v.created_at, nowMs));
@@ -440,6 +376,7 @@ export function computeReadiness(tenantId) {
     key: 'verdicts',
     label: 'Open findings impact',
     score: Math.round(verdictScore),
+    weight: WEIGHT_VERDICTS,
     detail: verdictDetail,
   });
 
@@ -460,6 +397,7 @@ export function computeReadiness(tenantId) {
     key: 'evidence_freshness',
     label: 'Evidence freshness',
     score: freshnessScore,
+    weight: WEIGHT_EVIDENCE_FRESHNESS,
     detail: freshnessDetail,
   });
 
@@ -468,6 +406,7 @@ export function computeReadiness(tenantId) {
     key: 'soc_readiness',
     label: 'SOC governance posture',
     score: soc.score,
+    weight: WEIGHT_SOC_GOVERNANCE,
     detail: soc.detail,
   });
 

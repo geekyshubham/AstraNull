@@ -140,7 +140,7 @@ describe('/ready readiness caching', () => {
     // the delay is to keep answering in-flight work while the balancer removes
     // this instance. Asserted against an actual API route, not against a probe.
     assert.equal(
-      (await request(baseUrl, 'GET', '/v1/environments', { headers: demoHeaders('viewer') })).status,
+      (await request(baseUrl, 'GET', '/v1/targets', { headers: demoHeaders('viewer') })).status,
       200,
     );
   });
@@ -286,7 +286,7 @@ describe('probe endpoints are rate limited but not starved', () => {
       }),
     );
     const headers = demoHeaders('viewer');
-    for (let i = 0; i < 4; i++) await request(baseUrl, 'GET', '/v1/environments', { headers });
+    for (let i = 0; i < 4; i++) await request(baseUrl, 'GET', '/v1/targets', { headers });
 
     // The orchestrator probe must not be collateral damage of an API flood.
     assert.equal((await request(baseUrl, 'GET', '/health')).status, 200);
@@ -449,7 +449,7 @@ describe('security headers on real responses', () => {
   it('sets hardening headers and no-store on a /v1 JSON response', async () => {
     freshStore();
     const baseUrl = listen(createServer({ env: { ...process.env, ASTRANULL_NO_PERSIST: '1' } }));
-    const res = await request(baseUrl, 'GET', '/v1/environments', {
+    const res = await request(baseUrl, 'GET', '/v1/targets', {
       headers: demoHeaders('viewer'),
     });
     assert.equal(res.status, 200);

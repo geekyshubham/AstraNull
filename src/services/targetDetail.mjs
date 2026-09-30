@@ -23,7 +23,7 @@ const VERIFICATION_STATE_RANK = Object.freeze({
   unverified: 0,
   pending: 1,
   dns_verified: 2,
-  agent_verified: 3,
+  provider_verified: 2,
   user_confirmed: 4,
 });
 
@@ -74,21 +74,6 @@ function latestVerificationState(targetId) {
       transitioned_at: toIso(row.transitioned_at),
       ...(row.state !== 'pending' && row.source_ref ? { source_ref: row.source_ref } : {}),
     })),
-  };
-}
-
-function buildAgentBinding(target, tenantId) {
-  const agent = getStore().agents.find(
-    (a) =>
-      a.tenant_id === tenantId
-      && a.target_group_id === target.target_group_id
-      && (a.bound_target_id === target.id || a.id === target.agent_id),
-  );
-  if (!agent && !target.agent_binding) return null;
-  if (target.agent_binding) return target.agent_binding;
-  return {
-    agent_id: agent.id,
-    bound_at: toIso(agent.bound_at ?? agent.created_at ?? agent.enrolled_at),
   };
 }
 
@@ -266,7 +251,6 @@ export function getTargetDetail(ctx, targetId, query = {}) {
       kind: target.kind,
       value: target.value,
       expected_behavior: target.expected_behavior ?? 'cloud_baseline',
-      agent_binding: buildAgentBinding(target, ctx.tenantId),
       created_at: toIso(target.created_at),
       eligibility: target.eligibility ?? 'eligible',
       eligibility_reason: target.eligibility_reason ?? null,

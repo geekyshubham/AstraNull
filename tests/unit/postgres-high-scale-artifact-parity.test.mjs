@@ -59,7 +59,7 @@ describe('postgres tenant route wiring guard', () => {
   it('returns postgres_route_not_wired instead of throwing when tenants is unwired', () => {
     assert.match(
       server,
-      /persistenceMode === 'postgres'\s*&& !serviceDeps\.tenants\s*&& \(path === '\/v1\/tenants\/current'/,
+      /persistenceMode === 'postgres'\s*&& !serviceDeps\.tenants\s*&& path === '\/v1\/tenants\/current'/,
     );
     assert.match(server, /postgres_route_not_wired/);
   });

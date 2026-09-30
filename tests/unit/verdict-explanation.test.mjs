@@ -3,7 +3,6 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
   VALIDATION_EVIDENCE_REPOSITORY_METHODS,
   createPostgresValidationServices,
 } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
@@ -16,8 +15,6 @@ import {
   normalizeVerdictKey,
   resolveRemediationTemplate,
   summarizeExternalProbeEvidence,
-  summarizeObservationMode,
-  summarizePlacementConfidence,
   trafficHopState,
 } from '../../apps/web/react/src/lib/verdict-explanation.ts';
 
@@ -59,22 +56,6 @@ const PROBE_EVENT = {
   metadata: { external_result: 'connected' },
 };
 
-const OBSERVATION_EVENT = {
-  id: 'evt_obs',
-  test_run_id: 'run_1',
-  signal_type: 'agent_observation',
-  producer_kind: 'authenticated_agent',
-  agent_id: 'ag_1',
-  nonce_hash: 'nh_1',
-  timestamp: FIXED_NOW.toISOString(),
-};
-
-const ONLINE_AGENT = {
-  id: 'ag_1',
-  tenant_id: 'ten_demo',
-  status: 'online',
-  target_group_id: 'tg_1',
-};
 
 /**
  * Shared backing "database" for two independent finalizer instances.
@@ -123,12 +104,6 @@ function buildRaceRepositories(shared, { withObservation, runOverrides = {} }) {
     test_run_id: activeRun.id,
     nonce_hash: activeRun.correlation?.nonce_hash,
   };
-  const observationEvent = {
-    ...OBSERVATION_EVENT,
-    id: `evt_obs_${activeRun.id}`,
-    test_run_id: activeRun.id,
-    nonce_hash: activeRun.correlation?.nonce_hash,
-  };
   const validationEvidence = {};
   for (const method of VALIDATION_EVIDENCE_REPOSITORY_METHODS) {
     validationEvidence[method] = async () => undefined;
@@ -142,7 +117,9 @@ function buildRaceRepositories(shared, { withObservation, runOverrides = {} }) {
       result: await callback(options.client),
     };
   };
-  const events = withObservation ? [probeEvent, observationEvent] : [probeEvent];
+  // ADR-0008: verdicts derive from external probe evidence only; there is no agent
+  // observation event. Both racing finalizers see the same probe evidence.
+  const events = [probeEvent];
 
   validationEvidence.getTestRun = async (_ctx, id, options = {}) => {
     if (options.client !== undefined) assert.equal(options.client, auditClient);
@@ -254,12 +231,6 @@ function buildRaceRepositories(shared, { withObservation, runOverrides = {} }) {
     return { ...stored };
   };
 
-  const agentControl = {};
-  for (const method of VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS) {
-    agentControl[method] = async () => undefined;
-  }
-  agentControl.listAgents = async () => [ONLINE_AGENT];
-
   return {
     validationEvidence,
     audit: {
@@ -304,7 +275,6 @@ function buildRaceRepositories(shared, { withObservation, runOverrides = {} }) {
       },
     },
     coreCatalog: { getTargetGroup: validationEvidence.getTargetGroup },
-    agentControl,
     probeJobs: { createProbeJob: async () => undefined },
     killSwitch: { isKillSwitchActiveForTenant: async () => false },
   };
@@ -379,15 +349,15 @@ function findingAudits(shared) {
 }
 
 describe('concurrent verdict finalization is single-writer (createVerdictIfAbsent)', () => {
-  it('observation finalizer wins: no-observation replay returns the incumbent and adds no audit', async () => {
+  it('first finalizer wins: a second finalizer returns the incumbent and adds no audit', async () => {
     const shared = createSharedVerdictStore();
-    // Observation-ingest finalizer: agentObserved = true -> bypassable / severity high.
+    // ADR-0008: both finalizers see the same external probe evidence (connected ->
+    // edge_exposed / severity medium). The single-writer invariant still holds.
     const observed = buildRaceService(shared, { withObservation: true });
-    // Sweeper finalizer: agentObserved = false -> misplaced_agent / no finding.
     const unobserved = buildRaceService(shared, { withObservation: false });
 
     const winner = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
-    assert.equal(winner.verdict, 'bypassable');
+    assert.equal(winner.verdict, 'edge_exposed');
 
     const loserResult = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', {
       force: true,
@@ -396,27 +366,26 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     // Exactly one verdict was stored, and it is the first one published.
     assert.equal(shared.verdicts.size, 1);
     const stored = shared.verdicts.get('run_1');
-    assert.equal(stored.verdict, 'bypassable');
+    assert.equal(stored.verdict, 'edge_exposed');
 
-    // The losing finalizer observed the incumbent, not its own opposite verdict.
+    // The losing finalizer observed the incumbent, not its own duplicate verdict.
     const loserVerdict = loserResult?.verdict ?? loserResult;
-    assert.equal(loserVerdict.verdict, 'bypassable');
-    assert.notEqual(loserVerdict.verdict, 'misplaced_agent');
+    assert.equal(loserVerdict.verdict, 'edge_exposed');
     assert.equal(verdictWasInserted(loserVerdict), false);
 
     // Audit trail and finding severity both describe the stored verdict, exactly once.
     const audits = verdictAudits(shared);
     assert.equal(audits.length, 1);
     assert.equal(audits[0].action, 'verdict.published');
-    assert.equal(audits[0].metadata.verdict, 'bypassable');
+    assert.equal(audits[0].metadata.verdict, 'edge_exposed');
     assert.equal(
       shared.audits.some((entry) => entry.action === 'verdict.finalized_no_observation'),
       false,
     );
 
     assert.equal(shared.findings.length, 1);
-    assert.equal(shared.findings[0].severity, 'high');
-    assert.match(shared.findings[0].title, /bypassable/);
+    assert.equal(shared.findings[0].severity, 'medium');
+    assert.match(shared.findings[0].title, /edge_exposed/);
   });
 
   it('no-observation finalizer wins: later observation replay cannot rewrite verdict, audit or finding', async () => {
@@ -425,7 +394,7 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     const observed = buildRaceService(shared, { withObservation: true });
 
     const winner = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', { force: true });
-    assert.equal(winner.verdict.verdict, 'misplaced_agent');
+    assert.equal(winner.verdict.verdict, 'edge_exposed');
 
     const loserVerdict = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(
       RACE_CTX,
@@ -433,20 +402,19 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     );
 
     assert.equal(shared.verdicts.size, 1);
-    assert.equal(shared.verdicts.get('run_1').verdict, 'misplaced_agent');
+    assert.equal(shared.verdicts.get('run_1').verdict, 'edge_exposed');
 
-    // The observation finalizer got the incumbent back instead of publishing 'bypassable'.
-    assert.equal(loserVerdict.verdict, 'misplaced_agent');
+    // The second finalizer got the incumbent back instead of publishing a duplicate.
+    assert.equal(loserVerdict.verdict, 'edge_exposed');
     assert.equal(verdictWasInserted(loserVerdict), false);
 
     const audits = verdictAudits(shared);
     assert.equal(audits.length, 1);
-    assert.equal(audits[0].action, 'verdict.finalized_no_observation');
-    assert.equal(audits[0].metadata.verdict, 'misplaced_agent');
+    assert.equal(audits[0].action, 'verdict.published');
+    assert.equal(audits[0].metadata.verdict, 'edge_exposed');
 
-    // misplaced_agent creates no finding; the suppressed 'bypassable' must not add a
-    // high-severity finding that contradicts the stored verdict.
-    assert.equal(shared.findings.length, 0);
+    // edge_exposed creates exactly one finding; the second finalizer must not duplicate it.
+    assert.equal(shared.findings.length, 1);
   });
 
   it('two concurrent finalizers produce exactly one verdict and one audit event', async () => {
@@ -472,9 +440,9 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     assert.equal(bVerdict.verdict, stored.verdict);
 
     // Findings, if any, match the stored verdict's severity.
-    if (stored.verdict === 'bypassable') {
+    if (stored.verdict === 'edge_exposed') {
       assert.equal(shared.findings.length, 1);
-      assert.equal(shared.findings[0].severity, 'high');
+      assert.equal(shared.findings[0].severity, 'medium');
     } else {
       assert.equal(shared.findings.length, 0);
     }
@@ -511,10 +479,10 @@ describe('verdict publication side effects are crash-repairable', () => {
 
     const repaired = await service.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
 
-    assert.equal(repaired.verdict, 'bypassable');
+    assert.equal(repaired.verdict, 'edge_exposed');
     assert.equal(shared.verdicts.size, 1);
     assert.equal(verdictAudits(shared).length, 1);
-    assert.equal(verdictAudits(shared)[0].metadata.verdict, 'bypassable');
+    assert.equal(verdictAudits(shared)[0].metadata.verdict, 'edge_exposed');
     assert.equal(shared.findings.length, 1);
     assert.equal(shared.findings[0].last_verdict_id, repaired.id);
     assert.equal(findingAudits(shared).length, 1);
@@ -537,7 +505,7 @@ describe('verdict publication side effects are crash-repairable', () => {
 
     const repaired = await service.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
 
-    assert.equal(repaired.verdict, 'bypassable');
+    assert.equal(repaired.verdict, 'edge_exposed');
     assert.equal(verdictAudits(shared).length, 1);
     assert.equal(shared.findings.length, 1);
     assert.equal(shared.findingUpsertCalls, 2, 'failed write plus one successful repair');
@@ -801,7 +769,7 @@ describe('verdict-explanation (React portal)', () => {
     assert.match(summary, /external_result tcp_connect_ok/);
   });
 
-  it('buildVerdictExplanationFields prefers backend placement_confidence', () => {
+  it('buildVerdictExplanationFields reports external-probe fields only', () => {
     const fields = buildVerdictExplanationFields(
       {
         remediation_template: 'Fix edge path.',
@@ -809,28 +777,20 @@ describe('verdict-explanation (React portal)', () => {
           verdict: 'bypassable',
           confidence: 'high',
           explanation: 'Marker reached origin.',
-          placement_confidence: { level: 'high', observation_mode: 'packet_metadata' },
         },
         correlation: { nonce_hash: 'n1' },
       },
       [
         { signal_type: 'probe_result', producer_kind: 'signed_probe', metadata: { external_result: 'ok' } },
-        { signal_type: 'agent_observation', producer_kind: 'authenticated_agent', nonce_hash: 'n1', agent_id: 'ag_1' },
       ],
     );
 
     const labels = fields.map((field) => field.label);
     assert.deepEqual(labels, [
       'External probe evidence',
-      'Internal agent evidence',
-      'Observation mode',
-      'Placement confidence',
       'Conclusion',
       'Remediation',
     ]);
-    const placement = fields.find((field) => field.label === 'Placement confidence');
-    assert.match(placement?.value ?? '', /high/);
-    assert.match(placement?.value ?? '', /packet_metadata/);
     const conclusion = fields.find((field) => field.label === 'Conclusion');
     assert.match(conclusion?.value ?? '', /bypassable/);
     const remediation = fields.find((field) => field.label === 'Remediation');
@@ -886,12 +846,8 @@ describe('verdict-explanation (React portal)', () => {
 
     assert.match(field('External probe evidence'), /trusted-blocked/);
     assert.doesNotMatch(field('External probe evidence'), /untrusted-probe-decoy/);
-    assert.match(field('Internal agent evidence'), /No authenticated agent_observation/);
-    assert.match(field('Internal agent evidence'), /trusted-window-elapsed/);
-    assert.doesNotMatch(field('Internal agent evidence'), /agt_public_decoy|untrusted-no-observation-decoy/);
-    assert.doesNotMatch(field('Observation mode'), /untrusted-agent-mode/);
-    assert.match(field('Placement confidence'), /limited/);
-    assert.doesNotMatch(field('Placement confidence'), /high|agt_public_decoy|packet_metadata/);
+    const labels = fields.map((entry) => entry.label);
+    assert.deepEqual(labels, ['External probe evidence', 'Conclusion', 'Remediation']);
   });
 
   it('buildVerdictExplanationFields returns empty array without verdict payload', () => {
@@ -899,38 +855,10 @@ describe('verdict-explanation (React portal)', () => {
     assert.deepEqual(buildVerdictExplanationFields(null, []), []);
   });
 
-  it('summarizePlacementConfidence falls back when backend placement is absent', () => {
-    const supported = summarizePlacementConfidence(
-      [{ signal_type: 'agent_observation', producer_kind: 'authenticated_agent', nonce_hash: 'n1' }],
-      [],
-      undefined,
-    );
-    assert.match(supported, /authenticated agent observation/);
-
-    const limited = summarizePlacementConfidence(
-      [],
-      [{ signal_type: 'agent_no_observation', producer_kind: 'internal_control_plane' }],
-      undefined,
-    );
-    assert.match(limited, /limited/);
-  });
-
   it('normalizeVerdictKey and trafficHopState support visualization helpers', () => {
-    assert.equal(normalizeVerdictKey('misplaced_agent'), 'misplaced');
+    assert.equal(normalizeVerdictKey('bypassable'), 'bypassable');
     assert.equal(trafficHopState('origin', 'bypassable'), 'danger');
     assert.equal(trafficHopState('edge', 'protected'), 'ok');
-  });
-
-  it('summarizeObservationMode uses agent_no_observation metadata reason', () => {
-    const summary = summarizeObservationMode([
-      {
-        signal_type: 'agent_no_observation',
-        producer_kind: 'internal_control_plane',
-        metadata: { reason: 'bounded_observation_window_elapsed' },
-      },
-    ]);
-    assert.match(summary, /bounded_observation_window_elapsed/);
-    assert.doesNotMatch(summary, /^agent_no_observation$/);
   });
 
   it('resolveRemediationTemplate expands waf_posture_remediation from finding and run evidence', () => {
@@ -963,7 +891,7 @@ describe('verdict-explanation (React portal)', () => {
     });
     assert.match(guidance, /Enable WAF coverage/);
     assert.match(guidance, /reachable from external probes/);
-    assert.match(guidance, /Bind an outbound agent/);
+    assert.doesNotMatch(guidance, /Bind an outbound agent/);
     assert.doesNotMatch(guidance, /waf_posture_remediation/);
   });
 
@@ -995,10 +923,11 @@ describe('verdict-explanation (React portal)', () => {
     );
 
     const remediation = fields.find((field) => field.label === 'Remediation');
-    assert.match(remediation?.value ?? '', /Bind an outbound agent/);
+    assert.match(remediation?.value ?? '', /Enable WAF coverage/);
+    assert.doesNotMatch(remediation?.value ?? '', /Bind an outbound agent/);
     assert.doesNotMatch(remediation?.value ?? '', /waf_posture_remediation/);
 
-    const observationMode = fields.find((field) => field.label === 'Observation mode');
-    assert.match(observationMode?.value ?? '', /bounded_observation_window_elapsed/);
+    const labels = fields.map((field) => field.label);
+    assert.deepEqual(labels, ['External probe evidence', 'Conclusion', 'Remediation']);
   });
 });

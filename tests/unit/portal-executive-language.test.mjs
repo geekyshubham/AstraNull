@@ -15,7 +15,7 @@ import {
 } from '../../apps/web/react/src/lib/plain-language.mjs';
 
 const DASHBOARD_SOURCE = readFileSync(
-  new URL('../../apps/web/react/src/pages/page-components.tsx', import.meta.url),
+  new URL('../../apps/web/react/src/pages/dashboard-page.tsx', import.meta.url),
   'utf8',
 );
 const TARGET_SOURCE = readFileSync(
@@ -32,7 +32,7 @@ describe('portal executive language', () => {
   });
 
   it('gives ownership and protection states plain labels', () => {
-    assert.equal(plainVerificationLabel('agent_verified'), 'Observed from inside');
+    assert.equal(plainVerificationLabel('user_confirmed'), 'Owner confirmed');
     assert.equal(plainVerificationLabel('dns_verified'), 'Domain ownership verified');
     assert.equal(plainProtectionLabel('edge_protected'), 'Blocked at the edge only');
     assert.equal(plainProtectionLabel('underprotected'), 'Protection needs work');
@@ -160,11 +160,11 @@ describe('portal executive language', () => {
   });
 
   it('keeps executive and target summaries evidence-aware in source', () => {
-    assert.match(DASHBOARD_SOURCE, /Are we ready for a DDoS attack\?/);
-    assert.match(DASHBOARD_SOURCE, /Top fixes/);
+    assert.match(DASHBOARD_SOURCE, /Where does attack traffic get stopped\?/);
+    assert.match(DASHBOARD_SOURCE, /What to fix first/);
     assert.match(DASHBOARD_SOURCE, /dashboardReadinessMessage/);
     assert.match(TARGET_SOURCE, /plain_language_summary/);
-    assert.match(TARGET_SOURCE, /Protection at a glance/);
+    assert.match(TARGET_SOURCE, /Protection path/);
     assert.match(TARGET_SOURCE, /evidenceModePresentation/);
   });
 });

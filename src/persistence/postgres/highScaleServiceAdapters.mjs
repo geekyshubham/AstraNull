@@ -223,15 +223,12 @@ async function autoCancelActiveSafeRunsForKillSwitch(ctx, reason, validationEvid
       summary,
     });
     if (!cancellation?.cancelled) continue;
-    const cancelledAgentJobIds = cancellation.cancelled_agent_job_ids
-      ?? (cancellation.cancelled_agent_jobs ?? []).map((job) => job.id);
     await appendAudit(auditRepo, ctx, 'test_run.kill_switch_auto_cancel', 'test_run', run.id, {
       reason: reason ?? null,
       check_id: run.check_id,
       target_group_id: run.target_group_id,
       scan_id: run.scan_id ?? null,
       cancelled_probe_job_ids: cancellation.cancelled_jobs.map((job) => job.id),
-      cancelled_agent_job_ids: cancelledAgentJobIds,
     });
     cancelledRunIds.push(run.id);
     cancelledRuns.push(cancellation.run);

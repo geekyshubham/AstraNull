@@ -458,10 +458,11 @@ export const OUT_OF_SCOPE_VECTORS = Object.freeze([
  * existing NON_DDOS_AVAILABILITY_THREATS monitor_only pattern (E5, scope-bounded).
  *
  * detection_mode:
- *   - agent_local_telemetry: AstraNull's on-host agent (agents/linux/astranull-agent.mjs,
- *     a passive outbound-only metadata observer) sees the flood in local interface
- *     counters, netlink neighbor/route churn, and kernel/syslog — genuinely useful
- *     passive detection when a host sits in the affected L2/broadcast domain.
+ *   - integration_telemetry (local): for L2-adjacency floods, detection depends on a
+ *     customer-supplied on-host telemetry feed (host interface counters, netlink
+ *     neighbor/route churn, kernel/syslog exported to the customer's SIEM/metrics) —
+ *     genuinely useful passive detection when a host sits in the affected L2/broadcast
+ *     domain. AstraNull is outside-in only (ADR-0008) and ships no on-host agent.
  *   - integration_telemetry: detection depends on a customer-supplied feed/sensor
  *     (routing-session state, WIDS/wireless sensor, or a mobile-core signalling tap).
  *     RF and mobile-core sensors are specialised and most customers do not have them,
@@ -475,7 +476,7 @@ export const OUT_OF_SCOPE_VECTORS = Object.freeze([
  * @property {string} id
  * @property {string} name
  * @property {string[]} catalog_vector_ids
- * @property {'agent_local_telemetry'|'integration_telemetry'} detection_mode
+ * @property {'integration_telemetry'} detection_mode
  * @property {string} signal_source
  * @property {string} dependency
  * @property {true} monitor_only
@@ -488,11 +489,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-030', 'NET-031', 'NET-032', 'NET-033', 'NET-034'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent interface counters + netlink neighbor-table churn + kernel/syslog ND/RA/MLD messages',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: interface counters + netlink neighbor-table churn + kernel/syslog ND/RA/MLD messages',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable: NS/NA/RS/RA/MLD floods show as neighbor-table churn and interface-counter spikes on a host in the affected link; nothing safe can originate them.',
+    notes: 'Locally observable via customer-supplied telemetry: NS/NA/RS/RA/MLD floods show as neighbor-table churn and interface-counter spikes on a host in the affected link; nothing safe can originate them.',
   },
   {
     id: 'MON-002',
@@ -500,11 +501,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-091', 'NET-092', 'NET-093', 'NET-094'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent interface counters (broadcast/multicast rate) + ARP-table churn + syslog',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: interface counters (broadcast/multicast rate) + ARP-table churn + syslog',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable: ARP/broadcast/multicast/malformed-MAC floods surface as local broadcast-storm counters and ARP-cache thrash; detection only, no origination.',
+    notes: 'Locally observable via customer-supplied telemetry: ARP/broadcast/multicast/malformed-MAC floods surface as local broadcast-storm counters and ARP-cache thrash; detection only, no origination.',
   },
   {
     id: 'MON-003',
@@ -512,11 +513,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-095', 'NET-096', 'NET-097'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent multicast-group state + interface counters + kernel/syslog IGMP messages',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: multicast-group state + interface counters + kernel/syslog IGMP messages',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable: IGMP / fragmented / malformed IGMP floods appear in local multicast group-membership churn and packet counters.',
+    notes: 'Locally observable via customer-supplied telemetry: IGMP / fragmented / malformed IGMP floods appear in local multicast group-membership churn and packet counters.',
   },
   {
     id: 'MON-004',
@@ -524,11 +525,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-147', 'NET-148'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent interface counters + STP topology-change events in syslog (switch-integration feed optional)',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: interface counters + STP topology-change events in syslog (switch-integration feed optional)',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable indirectly: CAM exhaustion and STP/BPDU topology-change floods manifest as unicast-flooding and link-flap symptoms on attached hosts; switch SNMP/syslog integration sharpens it.',
+    notes: 'Locally observable via customer-supplied telemetry (indirectly): CAM exhaustion and STP/BPDU topology-change floods manifest as unicast-flooding and link-flap symptoms on attached hosts; switch SNMP/syslog integration sharpens it.',
   },
   {
     id: 'MON-005',
@@ -536,11 +537,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-149', 'NET-150'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent DHCP client-state + lease-acquisition failures + kernel/syslog',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: DHCP client-state + lease-acquisition failures + kernel/syslog',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable: DHCPv4/DHCPv6 discover/solicit starvation surfaces as lease-acquisition failure and DISCOVER retries on hosts in the same segment.',
+    notes: 'Locally observable via customer-supplied telemetry: DHCPv4/DHCPv6 discover/solicit starvation surfaces as lease-acquisition failure and DISCOVER retries on hosts in the same segment.',
   },
   {
     id: 'MON-006',
@@ -548,11 +549,11 @@ const MONITOR_ONLY_VECTORS_SOURCE = [
     catalog_vector_ids: ['NET-151', 'NET-152', 'NET-153', 'NET-154', 'NET-155'],
     reason: 'requires_l2_adjacency',
     domain: 'A1b',
-    detection_mode: 'agent_local_telemetry',
-    signal_source: 'on-host agent interface counters + 802.1X supplicant/link-control events in kernel/syslog',
-    dependency: 'on_network_agent_required',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'customer-supplied on-host telemetry: interface counters + 802.1X supplicant/link-control events in kernel/syslog',
+    dependency: 'customer_local_telemetry_required',
     monitor_only: true,
-    notes: 'Agent-observable: PPPoE / 802.1X-EAPOL / LLDP-CDP / LACP / FHRP control floods appear as link-control event storms and interface-counter spikes on attached hosts.',
+    notes: 'Locally observable via customer-supplied telemetry: PPPoE / 802.1X-EAPOL / LLDP-CDP / LACP / FHRP control floods appear as link-control event storms and interface-counter spikes on attached hosts.',
   },
   {
     id: 'MON-007',
@@ -653,8 +654,8 @@ const NON_DDOS_AVAILABILITY_THREATS_SOURCE = [
   { id: 'ND-008', name: 'Log / SIEM ingestion cost exhaustion', classification: 'operational_exhaustion', task_id: 'DET-026', monitor_only: true, scope_boundary: 'Monitor-only telemetry-budget guardrail; no probe.', notes: 'Telemetry flood raises observability cost without service outage.' },
   { id: 'ND-009', name: 'Certificate transparency / CT log noise', classification: 'operational_exhaustion', task_id: 'DET-026', monitor_only: true, scope_boundary: 'Monitor-only; out of probe scope.', notes: 'Monitor-only; related to ATT-122 origin leakage.' },
   { id: 'ND-010', name: 'Provider-reported UDS reflection signal', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-073'], task_id: 'DET-026', notes: 'Monitor-only provider taxonomy signal; no generic outside-in payload is defined.', check_ids: [], classification: 'reflection_incident', monitor_only: true, scope_boundary: 'Monitor-only provider taxonomy signal; no generic outside-in payload is defined.' },
-  { id: 'ND-011', name: 'Autoscaling thrash exhaustion', domain: 'A4a', exhausted_resource: 'backend_exhaustion', catalog_vector_ids: ['APP-048'], task_id: 'DET-026', notes: 'Monitor agent/service scaling oscillation and cost-budget telemetry; no cloud credentials are required.', check_ids: [], classification: 'operational_exhaustion', monitor_only: true, scope_boundary: 'Monitor agent/service scaling oscillation and cost-budget telemetry; no cloud credentials are required.' },
-  { id: 'ND-012', name: 'Log, trace, and telemetry exhaustion', domain: 'A4a', exhausted_resource: 'backend_exhaustion', catalog_vector_ids: ['APP-139'], task_id: 'DET-026', notes: 'Monitor agent and observability pipeline volume, queue, drop, and cost-budget telemetry.', check_ids: [], classification: 'operational_exhaustion', monitor_only: true, scope_boundary: 'Monitor agent and observability pipeline volume, queue, drop, and cost-budget telemetry.' },
+  { id: 'ND-011', name: 'Autoscaling thrash exhaustion', domain: 'A4a', exhausted_resource: 'backend_exhaustion', catalog_vector_ids: ['APP-048'], task_id: 'DET-026', notes: 'Monitor service scaling oscillation and cost-budget telemetry from customer-supplied feeds; no cloud credentials are required.', check_ids: [], classification: 'operational_exhaustion', monitor_only: true, scope_boundary: 'Monitor service scaling oscillation and cost-budget telemetry from customer-supplied feeds; no cloud credentials are required.' },
+  { id: 'ND-012', name: 'Log, trace, and telemetry exhaustion', domain: 'A4a', exhausted_resource: 'backend_exhaustion', catalog_vector_ids: ['APP-139'], task_id: 'DET-026', notes: 'Monitor observability pipeline volume, queue, drop, and cost-budget telemetry from customer-supplied feeds.', check_ids: [], classification: 'operational_exhaustion', monitor_only: true, scope_boundary: 'Monitor observability pipeline volume, queue, drop, and cost-budget telemetry from customer-supplied feeds.' },
 ];
 
 export const NON_DDOS_AVAILABILITY_THREATS = Object.freeze(
@@ -671,7 +672,7 @@ const ATTACK_VECTOR_REGISTRY_SOURCE = [
   { id: 'ATT-001', name: 'UDP flood', exhausted_resource: 'volumetric', task_id: 'DET-017', check_ids: ['l3.forbidden_udp_port.safe', 'high_scale.volumetric.request_only'], notes: 'Single-datagram probe + SOC volumetric marker; no flood generator in repo.' },
   { id: 'ATT-002', name: 'ICMP / ping flood', exhausted_resource: 'volumetric', task_id: 'DET-017', check_ids: ['l3.icmp_flood.readiness', 'high_scale.volumetric.request_only'], notes: 'Bounded readiness posture + SOC volumetric scenario; no flood generator in repo.' },
   { id: 'ATT-003', name: 'SYN flood', exhausted_resource: 'state_exhaustion', task_id: 'DET-017', check_ids: ['l3.forbidden_tcp_port.safe', 'l3.basic_deny_rule.safe', 'l3.syn_flood.readiness', 'l3.connection_table_exhaustion.request_only', 'high_scale.volumetric.request_only'] },
-  { id: 'ATT-004', name: 'ACK flood', exhausted_resource: 'packet_processing', task_id: 'DET-017', check_ids: ['l3.ack_flood.readiness'], notes: 'Readiness posture via declared PPS policy + agent observation; execution is SOC-gated.' },
+  { id: 'ATT-004', name: 'ACK flood', exhausted_resource: 'packet_processing', task_id: 'DET-017', check_ids: ['l3.ack_flood.readiness'], notes: 'Readiness posture via declared PPS policy and external probe evidence; execution is SOC-gated.' },
   { id: 'ATT-005', name: 'SYN-ACK flood', exhausted_resource: 'packet_processing', task_id: 'DET-017', check_ids: ['l3.syn_ack_flood.readiness'] },
   { id: 'ATT-006', name: 'RST flood', exhausted_resource: 'packet_processing', task_id: 'DET-017', check_ids: ['l3.rst_flood.readiness'] },
   { id: 'ATT-007', name: 'TCP flag floods (FIN/PSH/URG/NULL/Xmas)', exhausted_resource: 'packet_processing', task_id: 'DET-017', check_ids: ['l3.tcp_flag_anomaly.readiness'] },
@@ -855,7 +856,7 @@ const ATTACK_VECTOR_REGISTRY_SOURCE = [
   { id: 'ATT-175', name: 'Rate-limit evasion via header/IP rotation', exhausted_resource: 'delivery_pattern', task_id: 'DET-022', delivery_patterns: ['rate_limit_evasion'], check_ids: ['l7.low_rate_rate_limit.safe', 'waf.low_rate_limit.safe', 'pattern.rate_limit_evasion.readiness'] },
   { id: 'ATT-176', name: 'HTTP/2 general protocol readiness gap', exhausted_resource: 'application_l7', task_id: 'DET-021', check_ids: ['protocol.http2_readiness.safe'] },
   { id: 'ATT-028', name: 'IP protocol and empty-payload floods', domain: 'A1a', exhausted_resource: 'packet_processing', catalog_vector_ids: ['NET-004', 'NET-005', 'NET-006'], task_id: 'DET-017', notes: 'needs a governed raw-IP packet client with protocol-field and payload controls', check_ids: [] },
-  { id: 'ATT-029', name: 'ICMP control-message abuse', domain: 'A1a', exhausted_resource: 'packet_processing', catalog_vector_ids: ['NET-020', 'NET-021', 'NET-022'], task_id: 'DET-017', notes: 'needs bounded ICMP control-message generation with edge and agent observations', check_ids: [] },
+  { id: 'ATT-029', name: 'ICMP control-message abuse', domain: 'A1a', exhausted_resource: 'packet_processing', catalog_vector_ids: ['NET-020', 'NET-021', 'NET-022'], task_id: 'DET-017', notes: 'needs bounded ICMP control-message generation with edge and customer-supplied telemetry observations', check_ids: [] },
   { id: 'ATT-030', name: 'IPv6 extension-header abuse', domain: 'A1a', exhausted_resource: 'exploit_dos', catalog_vector_ids: ['NET-025', 'NET-109', 'NET-110', 'NET-111', 'NET-112'], task_id: 'DET-017', notes: 'needs an isolated-lab IPv6 extension-header and routing-header packet suite', check_ids: [] },
   { id: 'ATT-031', name: 'IPv6 atomic-fragment abuse', domain: 'A1a', exhausted_resource: 'exploit_dos', catalog_vector_ids: ['NET-027'], task_id: 'DET-017', notes: 'needs an isolated-lab IPv6 atomic-fragment parser test', check_ids: [] },
   { id: 'ATT-032', name: 'IPv6 neighbor-cache destination-scan exhaustion', domain: 'A1a', exhausted_resource: 'state_exhaustion', catalog_vector_ids: ['NET-035'], task_id: 'DET-017', notes: 'needs bounded off-link destination scans plus router neighbor-table telemetry', check_ids: [] },
@@ -865,7 +866,7 @@ const ATTACK_VECTOR_REGISTRY_SOURCE = [
   { id: 'ATT-036', name: 'DCCP request flood', domain: 'A1a', exhausted_resource: 'state_exhaustion', catalog_vector_ids: ['NET-074'], task_id: 'DET-017', notes: 'needs a governed DCCP request client and declared service endpoint', check_ids: [] },
   { id: 'ATT-037', name: 'TLS record fragmentation exhaustion', domain: 'A1a', exhausted_resource: 'computational', catalog_vector_ids: ['NET-080'], task_id: 'DET-021', notes: 'needs a bounded TLS record-level client that can fragment and emit empty records', check_ids: [] },
   { id: 'ATT-038', name: 'L2TP control-session exhaustion', domain: 'A1a', exhausted_resource: 'state_exhaustion', catalog_vector_ids: ['NET-083'], task_id: 'DET-017', notes: 'needs a bounded L2TP control-session client for a declared UDP/1701 service', check_ids: [] },
-  { id: 'ATT-039', name: 'SNAT ephemeral-port exhaustion', domain: 'A1a', exhausted_resource: 'state_exhaustion', catalog_vector_ids: ['NET-088'], task_id: 'DET-017', notes: 'needs agent or gateway SNAT-table telemetry correlated with a governed connection scenario', check_ids: [] },
+  { id: 'ATT-039', name: 'SNAT ephemeral-port exhaustion', domain: 'A1a', exhausted_resource: 'state_exhaustion', catalog_vector_ids: ['NET-088'], task_id: 'DET-017', notes: 'needs gateway or customer-supplied SNAT-table telemetry correlated with a governed connection scenario', check_ids: [] },
   { id: 'ATT-040', name: 'Malformed ICMP floods', domain: 'A1a', exhausted_resource: 'exploit_dos', catalog_vector_ids: ['NET-098', 'NET-099'], task_id: 'DET-017', notes: 'needs an isolated-lab ICMP frame builder for checksum and structural anomalies', check_ids: [] },
   { id: 'ATT-076', name: 'Malformed IPv4 packet floods', domain: 'A1a', exhausted_resource: 'exploit_dos', catalog_vector_ids: ['NET-101', 'NET-102', 'NET-103', 'NET-104', 'NET-164'], task_id: 'DET-017', notes: 'needs an isolated-lab IPv4 header builder for version, TTL, IHL, length, and checksum anomalies', check_ids: [] },
   { id: 'ATT-077', name: 'Malformed IPv6 packet floods', domain: 'A1a', exhausted_resource: 'exploit_dos', catalog_vector_ids: ['NET-106', 'NET-107', 'NET-108', 'NET-113', 'NET-114'], task_id: 'DET-017', notes: 'needs an isolated-lab IPv6 packet builder for version, hop-limit, length, address, and missing-L4 anomalies', check_ids: [] },
@@ -881,7 +882,7 @@ const ATTACK_VECTOR_REGISTRY_SOURCE = [
   { id: 'ATT-087', name: 'L2TP reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-032'], task_id: 'DET-018', notes: 'needs a protocol-correct bounded L2TP control request with response-size measurement', check_ids: [] },
   { id: 'ATT-088', name: 'Sentinel license-server reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-045'], task_id: 'DET-018', notes: 'needs a protocol-correct bounded Sentinel discovery request with response-size measurement', check_ids: [] },
   { id: 'ATT-089', name: 'TP240 PhoneHome amplification exposure', domain: 'A2', exhausted_resource: 'amplification', catalog_vector_ids: ['AMP-046'], task_id: 'DET-018', notes: 'needs a protocol-correct bounded TP240 request with strict response-size and amplification-ratio caps', check_ids: [] },
-  { id: 'ATT-177', name: 'TCP SYN-ACK reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-048'], task_id: 'DET-018', notes: 'needs provider or agent evidence for unsolicited SYN-ACK response behavior; no spoofed traffic', check_ids: [] },
+  { id: 'ATT-177', name: 'TCP SYN-ACK reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-048'], task_id: 'DET-018', notes: 'needs provider or customer-supplied telemetry evidence for unsolicited SYN-ACK response behavior; no spoofed traffic', check_ids: [] },
   { id: 'ATT-178', name: 'Cross-protocol UDP loop exposure', domain: 'A2', exhausted_resource: 'amplification', catalog_vector_ids: ['AMP-051'], task_id: 'DET-018', notes: 'needs a lab-only pair of declared services to test a bounded cross-protocol loop', check_ids: [] },
   { id: 'ATT-179', name: 'VxWorks service reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-055'], task_id: 'DET-018', notes: 'needs a protocol-correct bounded WDBRPC request with response-size measurement', check_ids: [] },
   { id: 'ATT-180', name: 'CUPS/IPP callback reflection exposure', domain: 'A2', exhausted_resource: 'reflection', catalog_vector_ids: ['AMP-057'], task_id: 'DET-018', notes: 'needs a declared callback canary and bounded IPP request to prove callback fan-out', check_ids: [] },

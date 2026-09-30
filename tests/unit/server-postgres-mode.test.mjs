@@ -463,64 +463,6 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(stateCalls, 0);
   });
 
-  it('returns postgres_route_not_wired for GET /v1/placement/reviews when placement service is missing', async () => {
-    ({ server, baseUrl } = await listenPostgresServer({
-      tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
-    }));
-
-    const headers = demoHeaders('admin');
-    const unwired = await request(baseUrl, 'GET', '/v1/placement/reviews', { headers });
-    assert.equal(unwired.status, 503);
-    assert.equal(unwired.json.error, 'postgres_route_not_wired');
-  });
-
-  it('handles GET /v1/placement/reviews via injected placement.listPlacementReviews', async () => {
-    let placementCalls = 0;
-    const placementSvc = {
-      async listPlacementReviews(ctx, query) {
-        placementCalls += 1;
-        assert.equal(ctx.tenantId, 'ten_demo');
-        assert.equal(query.target_group_id, 'tg_1');
-        return {
-          target_group_id: 'tg_1',
-          computed_at: '2026-07-03T12:00:00.000Z',
-          summary: {
-            total_groups: 1,
-            proven: 0,
-            needs_baseline: 1,
-            missing_agent: 0,
-            misplaced_risk: 0,
-            unbound_online_agent_count: 0,
-            summary: 'Placement diagnostics: 0 proven, 1 need baseline, 0 missing agent, 0 misplaced risk (of 1 group(s)).',
-          },
-          reviews: [
-            {
-              target_group_id: 'tg_1',
-              target_group_name: 'Origin',
-              status: 'needs_baseline',
-              warnings: ['no_recent_observation'],
-              bound_agent_ids: ['ag_1'],
-              online_bound_agent_ids: ['ag_1'],
-              recent_observation_count: 0,
-            },
-          ],
-          unbound_online_agent_ids: [],
-        };
-      },
-    };
-    ({ server, baseUrl } = await listenPostgresServer({
-      tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
-      placement: placementSvc,
-    }));
-
-    const headers = demoHeaders('admin');
-    const res = await request(baseUrl, 'GET', '/v1/placement/reviews?target_group_id=tg_1', { headers });
-    assert.equal(res.status, 200);
-    assert.equal(res.json.target_group_id, 'tg_1');
-    assert.equal(res.json.reviews[0].status, 'needs_baseline');
-    assert.equal(placementCalls, 1);
-  });
-
   it('returns postgres_route_not_wired for GET /v1/state when state service is missing', async () => {
     ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
@@ -585,7 +527,6 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(res.json.persistence, 'postgres');
     assert.equal(res.json.tenant_id, 'ten_demo');
     assert.equal(res.json.target_groups, 7);
-    assert.equal(res.json.agents_online, 2);
     assert.equal(res.json.test_runs_recent, 2);
     assert.equal(res.json.open_findings, 4);
     assert.equal(res.json.high_scale_requests, 3);
@@ -1004,136 +945,6 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(redriven.json.requeued_count, 0);
     assert.equal(redriveCalls, 1);
     assert.equal(getStore().notificationRules.length, 1);
-  });
-
-  it('returns postgres_route_not_wired for agent update routes when agentUpdates service is missing', async () => {
-    ({ server, baseUrl } = await listenPostgresServer({
-      tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
-    }));
-
-    const headers = demoHeaders('admin');
-    const listReleases = await request(baseUrl, 'GET', '/v1/agent-updates', { headers });
-    assert.equal(listReleases.status, 503);
-    assert.equal(listReleases.json.error, 'postgres_route_not_wired');
-
-    const listKeys = await request(baseUrl, 'GET', '/v1/agent-update-trust-keys', { headers });
-    assert.equal(listKeys.status, 503);
-
-    const createKey = await request(baseUrl, 'POST', '/v1/agent-update-trust-keys', {
-      headers,
-      body: { name: 'k', public_key_der_base64: 'QUJD' },
-    });
-    assert.equal(createKey.status, 503);
-
-    const rollback = await request(baseUrl, 'POST', '/v1/agent-updates/aup_missing/rollback', { headers });
-    assert.equal(rollback.status, 503);
-  });
-
-  it('denies viewer before agent update route wiring check', async () => {
-    ({ server, baseUrl } = await listenPostgresServer({
-      tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
-    }));
-
-    const forbidden = await request(baseUrl, 'GET', '/v1/agent-updates', {
-      headers: demoHeaders('viewer'),
-    });
-    assert.equal(forbidden.status, 403);
-
-    const forbiddenWrite = await request(baseUrl, 'POST', '/v1/agent-updates', {
-      headers: demoHeaders('viewer'),
-      body: { version: '2.0.0' },
-    });
-    assert.equal(forbiddenWrite.status, 403);
-  });
-
-  it('handles representative agent update routes via injected agentUpdates without dev store', async () => {
-    let trustCreateCalls = 0;
-    let pollCalls = 0;
-    let statusCalls = 0;
-    let rollbackCalls = 0;
-    const agentUpdates = {
-      async createAgentUpdateTrustKey(ctx, body) {
-        trustCreateCalls += 1;
-        assert.equal(ctx.tenantId, 'ten_demo');
-        assert.ok(body.public_key_der_base64);
-        return { trust_key: { id: 'aup_key_pg', name: 'k', fingerprint_sha256: 'fp', status: 'active' } };
-      },
-      async listAgentUpdateTrustKeys(ctx) {
-        assert.equal(ctx.tenantId, 'ten_demo');
-        return [{ id: 'aup_key_pg', name: 'k', fingerprint_sha256: 'fp', status: 'active' }];
-      },
-      async revokeAgentUpdateTrustKey() {
-        return { trust_key: { id: 'aup_key_pg', status: 'revoked' } };
-      },
-      async createAgentUpdateRelease(ctx) {
-        assert.equal(ctx.tenantId, 'ten_demo');
-        return { release: { id: 'aup_rel_pg', version: '2.0.0', state: 'active' } };
-      },
-      async listAgentUpdateReleases(ctx) {
-        assert.equal(ctx.tenantId, 'ten_demo');
-        return [{ id: 'aup_rel_pg', version: '2.0.0', state: 'active' }];
-      },
-      async requestAgentUpdateRollback(ctx, releaseId) {
-        rollbackCalls += 1;
-        assert.equal(ctx.tenantId, 'ten_demo');
-        assert.equal(releaseId, 'aup_rel_pg');
-        return { release: { id: releaseId, state: 'rollback_requested' } };
-      },
-      async pollAgentUpdate(agent) {
-        pollCalls += 1;
-        assert.equal(agent.id, 'agt_pg');
-        return { update: null };
-      },
-      async recordAgentUpdateStatus(agent, body) {
-        statusCalls += 1;
-        assert.equal(agent.id, 'agt_pg');
-        assert.equal(body.status, 'applied');
-        return { status: { id: 'aup_st_pg', status: 'applied' } };
-      },
-    };
-
-    resetStoreForTests({
-      tenants: [],
-      agentUpdateReleases: [{ id: 'aup_dev', tenant_id: 'ten_demo' }],
-      agentUpdateTrustKeys: [{ id: 'aup_dev_key', tenant_id: 'ten_demo' }],
-    });
-    ({ server, baseUrl } = await listenPostgresServer({
-      tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
-      agentUpdates,
-      agentAuth: {
-        async requireAgentAuth(_headers, agentId) {
-          return { agent: { id: agentId, tenant_id: 'ten_demo', version: '1.0.0' } };
-        },
-      },
-    }));
-
-    const headers = demoHeaders('admin');
-    const listed = await request(baseUrl, 'GET', '/v1/agent-updates', { headers });
-    assert.equal(listed.status, 200);
-    assert.equal(listed.json.items[0].id, 'aup_rel_pg');
-    assert.equal(getStore().agentUpdateReleases.length, 1);
-
-    const keys = await request(baseUrl, 'GET', '/v1/agent-update-trust-keys', { headers });
-    assert.equal(keys.status, 200);
-    assert.equal(keys.json.items[0].id, 'aup_key_pg');
-
-    const rollback = await request(baseUrl, 'POST', '/v1/agent-updates/aup_rel_pg/rollback', { headers });
-    assert.equal(rollback.status, 200);
-    assert.equal(rollbackCalls, 1);
-
-    const poll = await request(baseUrl, 'GET', '/v1/agents/agt_pg/update', {
-      headers: { Authorization: 'Bearer agc_test' },
-    });
-    assert.equal(poll.status, 200);
-    assert.equal(pollCalls, 1);
-
-    const status = await request(baseUrl, 'POST', '/v1/agents/agt_pg/update-status', {
-      headers: { Authorization: 'Bearer agc_test' },
-      body: { release_id: 'aup_rel_pg', status: 'applied', installed_version: '2.0.0' },
-    });
-    assert.equal(status.status, 201);
-    assert.equal(statusCalls, 1);
-    assert.equal(trustCreateCalls, 0);
   });
 
   it('handles POST /v1/events via injected events service without dev store', async () => {

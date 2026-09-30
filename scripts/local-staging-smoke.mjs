@@ -63,12 +63,6 @@ export function buildDevHeaders(
   };
 }
 
-export function buildAgentHeaders(credential) {
-  return {
-    authorization: `Bearer ${credential}`,
-  };
-}
-
 function expectStatus(response, expected, label) {
   if (response.status !== expected) {
     const error = response.json?.error ? ` (${response.json.error})` : '';
@@ -123,49 +117,6 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
   const cancelledRuns = await cancelActiveDemoRuns(baseUrl, headers);
   if (cancelledRuns > 0) checks.push('active_runs_cleared');
 
-  const token = await stagingFetch(baseUrl, '/v1/bootstrap-tokens', {
-    method: 'POST',
-    headers,
-    body: {
-      name: uniqueSmokeLabel('local-staging-smoke-token'),
-      target_group_id: LOCAL_STAGING_DEMO_IDS.targetGroupId,
-      max_registrations: 1,
-    },
-  });
-  expectStatus(token, 201, 'POST /v1/bootstrap-tokens');
-  if (!token.json?.secret) {
-    throw new Error('POST /v1/bootstrap-tokens expected one-time secret');
-  }
-  checks.push('bootstrap_token_created');
-
-  const agentName = uniqueSmokeLabel('local-staging-smoke-agent');
-  const registered = await stagingFetch(baseUrl, '/v1/agents/register', {
-    method: 'POST',
-    headers,
-    body: {
-      bootstrap_token: token.json.secret,
-      hostname: agentName,
-      name: agentName,
-      capabilities: ['canary', 'heartbeat'],
-    },
-  });
-  expectStatus(registered, 201, 'POST /v1/agents/register');
-  const agentId = registered.json?.agent?.id;
-  const agentCredential = registered.json?.agent_credential;
-  if (!agentId || !agentCredential) {
-    throw new Error('POST /v1/agents/register expected agent.id and agent_credential');
-  }
-  checks.push('agent_registered');
-
-  const agentHeaders = buildAgentHeaders(agentCredential);
-  const heartbeat = await stagingFetch(baseUrl, `/v1/agents/${agentId}/heartbeat`, {
-    method: 'POST',
-    headers: agentHeaders,
-    body: { version: 'local-staging-smoke' },
-  });
-  expectStatus(heartbeat, 200, `POST /v1/agents/${agentId}/heartbeat`);
-  checks.push('agent_heartbeat');
-
   const started = await stagingFetch(baseUrl, '/v1/test-runs', {
     method: 'POST',
     headers,
@@ -181,9 +132,6 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
   const nonceHash = run?.correlation?.nonce_hash;
   if (!runId || !nonceHash) {
     throw new Error('POST /v1/test-runs expected run.id and run.correlation.nonce_hash');
-  }
-  if (started.json?.jobs_dispatched < 1) {
-    throw new Error('POST /v1/test-runs expected at least one agent job');
   }
   checks.push('safe_validation_started');
 
@@ -225,44 +173,17 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
     checks.push('signed_probe_worker_processed');
   }
 
-  const jobs = await stagingFetch(baseUrl, `/v1/agents/${agentId}/jobs`, {
-    headers: agentHeaders,
-  });
-  expectStatus(jobs, 200, `GET /v1/agents/${agentId}/jobs`);
-  const job = (jobs.json?.jobs ?? []).find((entry) => entry.test_run_id === runId);
-  if (!job?.id) {
-    throw new Error(`GET /v1/agents/${agentId}/jobs expected job for ${runId}`);
+  let detail = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    detail = await stagingFetch(baseUrl, `/v1/test-runs/${runId}`, { headers });
+    expectStatus(detail, 200, `GET /v1/test-runs/${runId}`);
+    if (detail.json?.status === 'verdicted' && detail.json?.verdict?.verdict) break;
+    if (attempt < 9) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
   }
-  checks.push('agent_job_polled');
-
-  const ack = await stagingFetch(baseUrl, `/v1/agents/${agentId}/jobs/${job.id}/ack`, {
-    method: 'POST',
-    headers: agentHeaders,
-  });
-  expectStatus(ack, 200, `POST /v1/agents/${agentId}/jobs/${job.id}/ack`);
-  checks.push('agent_job_acknowledged');
-
-  const observation = await stagingFetch(baseUrl, `/v1/agents/${agentId}/observations`, {
-    method: 'POST',
-    headers: agentHeaders,
-    body: {
-      agent_job_id: job.id,
-      test_run_id: runId,
-      target_id: LOCAL_STAGING_DEMO_IDS.targetId,
-      nonce_hash: nonceHash,
-      metadata: { mode: 'local_staging_smoke' },
-    },
-  });
-  expectStatus(observation, 201, `POST /v1/agents/${agentId}/observations`);
-  checks.push('agent_observation_ingested');
-
-  const detail = await stagingFetch(baseUrl, `/v1/test-runs/${runId}`, { headers });
-  expectStatus(detail, 200, `GET /v1/test-runs/${runId}`);
-  if (detail.json?.status !== 'verdicted' || !detail.json?.verdict?.verdict) {
+  if (detail?.json?.status !== 'verdicted' || !detail.json?.verdict?.verdict) {
     throw new Error(`GET /v1/test-runs/${runId} expected verdicted run`);
-  }
-  if (detail.json.verdict?.placement_confidence?.agent_id !== agentId) {
-    throw new Error(`GET /v1/test-runs/${runId} expected placement confidence for smoke agent`);
   }
   checks.push('verdict_readback');
 
@@ -271,9 +192,6 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
   const eventItems = expectArrayResponse(events, `GET /v1/test-runs/${runId}/events`, ['items']);
   if (!eventItems.some((event) => event.signal_type === 'probe_result')) {
     throw new Error(`GET /v1/test-runs/${runId}/events expected probe_result event`);
-  }
-  if (!eventItems.some((event) => event.signal_type === 'agent_observation')) {
-    throw new Error(`GET /v1/test-runs/${runId}/events expected agent_observation event`);
   }
   checks.push('evidence_events_readback');
 
@@ -311,7 +229,7 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
   const exportVerdict = (exported.json?.payload?.verdicts ?? []).find(
     (entry) => entry.test_run_id === runId,
   );
-  if (!exportVerdict?.placement_confidence) {
+  if (!exportVerdict) {
     throw new Error(`GET /v1/reports/${reportId}/export expected verdict for ${runId}`);
   }
   if (exported.json?.custody?.artifact_type !== 'report_export' || !exported.json?.custody?.content_sha256) {
@@ -322,10 +240,8 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
   return {
     checks,
     run_id: runId,
-    agent_id: agentId,
     report_id: reportId,
     verdict: detail.json.verdict.verdict,
-    placement_confidence: detail.json.verdict.placement_confidence?.level ?? null,
   };
 }
 
@@ -357,7 +273,7 @@ export async function runLocalStagingSmoke(
   expectStatus(checksApi, 200, 'GET /v1/checks');
   const catalogItems = expectArrayResponse(checksApi, 'GET /v1/checks', ['checks', 'items']);
   // The customer-selectable catalog intentionally withholds checks that need extra run-time
-  // input (host_sni_bypass profiles, declared probe paths, agent_mode prerequisites) so the
+  // input (host_sni_bypass profiles, declared probe paths) so the
   // portal never offers a check that would immediately error. Assert both halves of that
   // contract: a selectable check is present, and a gated one is absent.
   if (!catalogItems.some((entry) => entry.check_id === SMOKE_CHECK_ID)) {

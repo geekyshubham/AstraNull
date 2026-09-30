@@ -1,0 +1,97 @@
+/*
+ * Target detail view — validation-path-first layout.
+ * Token-only: every color/space/radius comes from styles.css :root. No raw hex.
+ * The memorable element is the numbered "Validate this target" ladder; everything
+ * else stays quiet (tabs + collapsible facts) so the validation path is obvious.
+ */
+
+.target-detail-view { gap: var(--space-6); }
+.target-detail-view > .page-head { margin-bottom: 0; }
+
+/* Header identity */
+.target-detail-view .td-identity { min-width: 0; }
+.target-detail-view .td-identity .page-title { overflow-wrap: anywhere; }
+.target-detail-view .td-id { display: inline-block; margin-top: var(--space-1); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.target-detail-view .td-metaline { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2); color: var(--fg-2); font-size: var(--text-sm); }
+.target-detail-view .td-metaline .dot { color: var(--muted); }
+
+/* Tag chips + editor */
+.target-detail-view .td-tags { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); }
+.target-detail-view .td-tag { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px 4px 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); background: var(--surface); overflow-wrap: anywhere; }
+.target-detail-view .td-tag button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-width: 24px; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--muted); cursor: pointer; }
+.target-detail-view .td-tag button:hover { color: var(--fg); background: var(--surface-sunk); }
+.target-detail-view .td-tag-empty { color: var(--muted); font-size: var(--text-xs); }
+.target-detail-view .td-tag-form { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); }
+.target-detail-view .td-tag-form input { min-width: 12rem; height: 34px; padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
+.target-detail-view .td-tag-form input::placeholder { color: var(--muted); opacity: 1; }
+.target-detail-view .td-tag-form input:focus-visible { border-color: var(--border-strong); outline: 2px solid var(--focus-color); outline-offset: 1px; }
+@media (pointer: coarse) { .target-detail-view .td-tag-form input { height: 44px; } }
+.target-detail-view .td-tag-error { color: var(--danger); font-size: var(--text-xs); }
+
+/* Validation ladder — the hero */
+.target-detail-view .td-steps { display: flex; flex-direction: column; gap: 0; }
+.target-detail-view .td-step { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--space-4); padding: var(--space-5) 0; border-top: 1px solid var(--border-soft); }
+.target-detail-view .td-step:first-child { border-top: 0; }
+.target-detail-view .td-step-rail { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.target-detail-view .td-step-num { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-2); background: var(--surface); }
+.target-detail-view .td-step[data-state="done"] .td-step-num { border-color: color-mix(in oklab, var(--success), transparent 45%); color: var(--success); }
+.target-detail-view .td-step[data-state="active"] .td-step-num { border-color: var(--accent); color: var(--accent); }
+.target-detail-view .td-step-line { flex: 1; width: 2px; border-radius: var(--radius-pill); background: var(--border-soft); }
+.target-detail-view .td-step[data-state="done"] .td-step-line { background: color-mix(in oklab, var(--success), transparent 55%); }
+.target-detail-view .td-step-body { min-width: 0; }
+.target-detail-view .td-step-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.target-detail-view .td-step-head h3 { margin: 0; font-size: var(--text-base); }
+.target-detail-view .td-step-why { max-width: 70ch; margin: var(--space-2) 0 var(--space-3); color: var(--fg-2); font-size: var(--text-sm); line-height: 1.55; text-wrap: pretty; }
+.target-detail-view .td-step-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
+
+/* DNS TXT record card inside step 1 */
+.target-detail-view .td-dns { margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.target-detail-view .td-dns-row { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-soft); }
+.target-detail-view .td-dns-row:first-child { border-top: 0; }
+.target-detail-view .td-dns-key { color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em; font-family: var(--font-mono); }
+.target-detail-view .td-dns-val { min-width: 0; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg); overflow-wrap: anywhere; word-break: break-word; }
+.target-detail-view .td-copy-ok { color: var(--success); font-size: var(--text-xs); }
+
+/* Choose-checks radio list */
+.target-detail-view .td-check-choice { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; cursor: pointer; }
+.target-detail-view .td-check-choice input { cursor: pointer; accent-color: var(--accent); width: 18px; height: 18px; }
+
+/* Review-step verdict */
+.target-detail-view .td-verdict { display: flex; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-2); }
+.target-detail-view .td-verdict p { margin: 0; max-width: 70ch; color: var(--fg-2); font-size: var(--text-sm); line-height: 1.55; }
+
+/* Facts + tabs shared */
+.target-detail-view .td-facts .data-table td:first-child { width: 32%; }
+.target-detail-view .td-facts .mono { min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+.target-detail-view .td-panel { margin-top: var(--space-4); }
+
+/* Protection path layers */
+.target-detail-view .td-protection-lede { max-width: 78ch; margin: 0 0 var(--space-4); color: var(--fg); font-size: var(--text-base); line-height: 1.5; text-wrap: pretty; }
+.target-detail-view .td-protection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--border-soft); }
+.target-detail-view .td-layer { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); padding: var(--space-4); background: var(--surface); }
+.target-detail-view .td-layer-head { display: flex; align-items: center; gap: var(--space-2); color: var(--fg-2); }
+.target-detail-view .td-layer-head strong { color: var(--fg); font-size: var(--text-sm); }
+.target-detail-view .td-layer p { margin: 0; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
+
+/* Edge detection family grid */
+.target-detail-view .td-edge-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }
+.target-detail-view .td-edge-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface); }
+.target-detail-view .td-edge-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.target-detail-view .td-edge-card-head strong { font-size: var(--text-sm); }
+.target-detail-view .td-edge-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; }
+.target-detail-view .td-edge-card dt { color: var(--muted); font-size: var(--text-xs); }
+.target-detail-view .td-edge-card dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.target-detail-view .td-edge-chain { margin: var(--space-3) 0 0; color: var(--fg-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.target-detail-view .td-edge-chain .lbl { color: var(--muted); margin-right: var(--space-2); }
+
+.target-detail-view .td-history { margin-top: var(--space-4); }
+
+@media (max-width: 1100px) {
+  .target-detail-view .td-protection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .target-detail-view .td-step { grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-3); }
+  .target-detail-view .td-dns-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .target-detail-view .td-edge-grid { grid-template-columns: minmax(0, 1fr); }
+  .target-detail-view .td-protection-grid { grid-template-columns: minmax(0, 1fr); }
+}

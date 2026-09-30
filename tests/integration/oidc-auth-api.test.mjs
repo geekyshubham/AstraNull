@@ -150,13 +150,13 @@ describe('oidc-jwt API boundary', () => {
 
   it('ignores spoofed x-role when JWT role is viewer', async () => {
     const token = mintOidcJwt({ role: 'viewer', userId: 'usr_view' });
-    const res = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', {
+    const res = await request(baseUrl, 'POST', '/v1/targets', {
       headers: {
         Authorization: `Bearer ${token}`,
         'x-role': 'admin',
         'x-tenant-id': 'ten_demo',
       },
-      body: { name: 'should-fail', max_registrations: 1 },
+      body: { kind: 'fqdn', value: 'oidc-should-fail.example.com' },
     });
     assert.equal(res.status, 403);
     assert.equal(res.json.error, 'forbidden');
@@ -164,12 +164,12 @@ describe('oidc-jwt API boundary', () => {
 
   it('enforces JWT role for write access', async () => {
     const token = mintOidcJwt({ role: 'engineer', userId: 'usr_eng' });
-    const res = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', {
+    const res = await request(baseUrl, 'POST', '/v1/targets', {
       headers: { Authorization: `Bearer ${token}` },
-      body: { name: 'oidc-bootstrap', max_registrations: 1 },
+      body: { kind: 'fqdn', value: 'oidc-engineer.example.com', tags: ['env:prod'] },
     });
     assert.equal(res.status, 201);
-    assert.ok(res.json.secret);
+    assert.deepEqual(res.json.tags, ['env:prod']);
   });
 });
 
@@ -233,9 +233,9 @@ describe('oidc-jwt claim mapping through createServer', () => {
       role: ['corp-admin', 'unrelated'],
       roleClaimKey: 'groups',
     });
-    const res = await request(mappedBaseUrl, 'POST', '/v1/bootstrap-tokens', {
+    const res = await request(mappedBaseUrl, 'POST', '/v1/targets', {
       headers: { Authorization: `Bearer ${token}` },
-      body: { name: 'mapped-admin', max_registrations: 1 },
+      body: { kind: 'fqdn', value: 'oidc-mapped-admin.example.com' },
     });
     assert.equal(res.status, 201);
   });

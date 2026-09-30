@@ -26,17 +26,15 @@ export const RELEASE_GATE_REQUIRED_KINDS = Object.freeze({
     'third_party_security_review',
     'compliance_legal_signoff',
   ],
-  'Signed agent packages and install matrix': ['agent_install_matrix', 'agent_sbom_provenance'],
   'Database migrations': ['migration_apply', 'rollback_fixforward'],
   'Rollback and kill-switch drills': ['kill_switch_drill', 'operator_runbook_exercise', 'rollback_fixforward'],
   'Independent security review': ['third_party_security_review'],
   'SOC high-scale governance': ['governed_adapter', 'provider_approval', 'authorization_custody'],
-  'Staging QA / E2E matrix': ['staging_e2e_matrix', 'ui_accessibility_matrix', 'placement_confidence_staging'],
+  'Staging QA / E2E matrix': ['staging_e2e_matrix', 'ui_accessibility_matrix'],
   'Staging readiness attestation (profile-aware)': [
     'evidence_snapshot_manifest',
     'staging_e2e_matrix',
     'ui_accessibility_matrix',
-    'placement_confidence_staging',
   ],
   'Production readiness gap audit': ['evidence_snapshot_manifest'],
   'KMS/vault, edge, and control-plane release': [

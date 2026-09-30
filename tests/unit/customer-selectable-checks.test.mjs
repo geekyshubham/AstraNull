@@ -11,7 +11,6 @@ const INPUT_REQUIRING = [
   'origin.direct_reachability.safe',
   'origin.direct_bypass.safe',
   'origin.host_sni_bypass.safe',
-  'path.protected_canary.safe',
   'waf.origin_bypass.safe',
   'l7.login_abuse_flow.safe',
   'l7.api_quota_exhaustion.safe',
@@ -21,7 +20,7 @@ const INPUT_REQUIRING = [
   'l7.signup_registration_abuse.validation',
 ];
 
-test('checkRequiresAdditionalInput flags host_sni_bypass and agent_mode prerequisites', () => {
+test('checkRequiresAdditionalInput flags host_sni_bypass and declared probe-path checks', () => {
   for (const id of INPUT_REQUIRING) {
     const check = getCheckById(id);
     assert.ok(check, `check ${id} should still exist in the catalog`);

@@ -41,9 +41,6 @@ export const SUBSCRIPTION_INTERNAL_MANAGEMENT_REPOSITORY_METHODS = Object.freeze
 export const SUBSCRIPTION_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['listTargetGroups']);
 
 /** @type {readonly string[]} */
-export const SUBSCRIPTION_AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze(['listAgents']);
-
-/** @type {readonly string[]} */
 export const SUBSCRIPTION_VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
   'listTestRuns',
   'listFindings',
@@ -147,7 +144,6 @@ function emptySummary() {
  * @param {{
  *   internalManagement?: Record<string, unknown>,
  *   coreCatalog?: Record<string, unknown>,
- *   agentControl?: Record<string, unknown>,
  *   validationEvidence?: Record<string, unknown>,
  *   highScale?: Record<string, unknown>,
  * }} repositories
@@ -165,11 +161,6 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
     SUBSCRIPTION_CORE_CATALOG_REPOSITORY_METHODS,
   );
   assertRepositoryMethods(
-    repositories?.agentControl,
-    'agentControl',
-    SUBSCRIPTION_AGENT_CONTROL_REPOSITORY_METHODS,
-  );
-  assertRepositoryMethods(
     repositories?.validationEvidence,
     'validationEvidence',
     SUBSCRIPTION_VALIDATION_EVIDENCE_REPOSITORY_METHODS,
@@ -182,7 +173,6 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
 
   const internalManagement = repositories.internalManagement;
   const coreCatalog = repositories.coreCatalog;
-  const agentControl = repositories.agentControl;
   const validationEvidence = repositories.validationEvidence;
   const highScale = repositories.highScale;
   const nowFn = options.now ?? (() => new Date());
@@ -195,11 +185,10 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
       const nowMs = nowFn().getTime();
       const oneHourAgo = nowMs - ONE_HOUR_MS;
 
-      const [detail, groups, agents, runs, findings, highScaleRequests] = await Promise.all([
+      const [detail, groups, runs, findings, highScaleRequests] = await Promise.all([
         internalManagement.getTenantDetail(tenantId),
         // listTargetGroups defaults to active groups only (archived/deleted excluded).
         coreCatalog.listTargetGroups(ctx),
-        agentControl.listAgents(ctx),
         validationEvidence.listTestRuns(ctx, { limit: SAFE_RUN_LOOKBACK_LIMIT }),
         validationEvidence.listFindings(ctx),
         highScale.listHighScaleRequests(ctx),
@@ -211,7 +200,6 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
       const plan = getSubscriptionPlan(subscription?.plan_id) ?? null;
 
       const groupList = Array.isArray(groups) ? groups : [];
-      const agentList = Array.isArray(agents) ? agents : [];
       const runList = Array.isArray(runs) ? runs : [];
       const findingList = Array.isArray(findings) ? findings : [];
       const highScaleList = Array.isArray(highScaleRequests) ? highScaleRequests : [];
@@ -239,7 +227,7 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
         usage: {
           users: users.length,
           target_groups: groupList.length,
-          agents: agentList.length,
+          agents: 0,
           safe_runs_started_last_hour: safeRunsStartedLastHour,
           open_findings: openFindings,
           pending_high_scale_requests: pendingHighScale,

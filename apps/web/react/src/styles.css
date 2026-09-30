@@ -3762,6 +3762,8 @@ td .row-actions {
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
   padding: 0 18px;
+  /* Containing block for .sr-only tab counts, so they scroll with the rail instead of widening the page. */
+  position: relative;
 }
 
 .tab {
@@ -7369,19 +7371,19 @@ body .targets-page .targets-summary-cell span {
 }
 
 /* ── Integrations directory header ───────────────────────────────────────
-   `.dns-directory-heading` is a `.card-header > div:first-child`, and that
+   `.integration-directory-heading` is a `.card-header > div:first-child`, and that
    shared rule sets `flex-direction: column`. The page's own
    `align-items: center` was written for the row it intended, so in a column it
    centred the whole title/description/badge group and left a 280px gutter.
    Restore the row above the page's 640px breakpoint, where the column stack is
    deliberate. */
 @media (min-width: 641px) {
-  body .integration-page .card-header > .dns-directory-heading {
+  body .integration-page .card-header > .integration-directory-heading {
     flex-direction: row;
     align-items: flex-start;
   }
 
-  body .integration-page .card-header > .dns-directory-heading > div {
+  body .integration-page .card-header > .integration-directory-heading > div {
     min-width: 0;
     flex: 1;
   }

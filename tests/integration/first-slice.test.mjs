@@ -5,10 +5,11 @@ import {
   REPORT_KINDS,
 } from '../../src/contracts/complianceReports.mjs';
 import { createServer } from '../../src/server.mjs';
-import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
+import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
-import { getStore } from '../../src/store.mjs';
-import { createBootstrapToken } from '../../src/services/tokens.mjs';
+
+// ADR-0008: outside-in only. The validation loop is start -> external probe evidence ->
+// finalization -> verdict -> finding. No agents, bootstrap tokens, or observations.
 
 let baseUrl;
 let server;
@@ -26,15 +27,11 @@ after(() => {
 });
 
 describe('integration first validation slice', () => {
-  it('runs safe validation loop to bypassable finding and report', async () => {
+  it('runs the external-only validation loop through report export', async () => {
     const h = demoHeaders('engineer');
     const tg = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers: h,
-      body: {
-        name: 'Slice TG',
-        environment_id: 'env_demo',
-        validation_mode: 'agent_assisted',
-      },
+      body: { name: 'Slice TG' },
     });
     assert.equal(tg.status, 201);
     const tgId = tg.json.id;
@@ -44,31 +41,6 @@ describe('integration first validation slice', () => {
       body: { value: 'slice.example.com', kind: 'fqdn' },
     });
     assert.equal(tgt.status, 201);
-
-    const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret } = createBootstrapToken(ctx, {
-      target_group_id: tgId,
-      max_registrations: 1,
-    });
-
-    const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: {
-        bootstrap_token: secret,
-        hostname: 'slice-host',
-        name: 'slice-agent',
-        capabilities: ['canary', 'heartbeat'],
-      },
-    });
-    assert.equal(reg.status, 201);
-    const agentId = reg.json.agent.id;
-    const agentCredential = reg.json.agent_credential;
-
-    const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-      headers: agentHeaders(agentCredential),
-      body: { version: '0.2.0-production-readiness' },
-    });
-    assert.equal(hb.status, 200);
 
     const run = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: h,
@@ -80,39 +52,13 @@ describe('integration first validation slice', () => {
     });
     assert.equal(run.status, 201);
     const runId = run.json.run.id;
-    const nonce_hash = run.json.run.correlation.nonce_hash;
+    // Inline simulation records a probe_result event; the run enters collecting.
+    assert.equal(run.json.run.status, 'collecting');
 
-    const jobs = await request(baseUrl, 'GET', `/v1/agents/${agentId}/jobs`, {
-      headers: agentHeaders(agentCredential),
-    });
-    assert.equal(jobs.status, 200);
-    assert.ok(jobs.json.jobs.length >= 1);
-    const jobId = jobs.json.jobs[0].id;
-    await request(baseUrl, 'POST', `/v1/agents/${agentId}/jobs/${jobId}/ack`, {
-      headers: agentHeaders(agentCredential),
-    });
-
-    const obs = await request(baseUrl, 'POST', `/v1/agents/${agentId}/observations`, {
-      headers: agentHeaders(agentCredential),
-      body: {
-        agent_job_id: jobId,
-        test_run_id: runId,
-        target_id: tgt.json.id,
-        nonce_hash,
-        metadata: { mode: 'canary_observation' },
-      },
-    });
-    assert.equal(obs.status, 201);
-
-    const detail = await request(baseUrl, 'GET', `/v1/test-runs/${runId}`, { headers: h });
-    assert.equal(detail.json.verdict.verdict, 'bypassable');
-    assert.ok(detail.json.verdict.placement_confidence);
-    assert.equal(detail.json.verdict.placement_confidence.level, 'High');
-    assert.equal(detail.json.verdict.placement_confidence.status, 'observed_this_run');
-    assert.equal(detail.json.verdict.placement_confidence.agent_id, agentId);
-
-    const findings = await request(baseUrl, 'GET', '/v1/findings', { headers: h });
-    assert.ok(findings.json.items.length >= 1);
+    const events = await request(baseUrl, 'GET', `/v1/test-runs/${runId}/events`, { headers: h });
+    assert.ok(events.json.items.some((e) => e.signal_type === 'probe_result'));
+    // Verdicts come from external probe evidence only — never an agent observation.
+    assert.equal(events.json.items.some((e) => e.signal_type === 'agent_observation'), false);
 
     const report = await request(baseUrl, 'POST', '/v1/reports', {
       headers: demoHeaders('admin'),
@@ -153,47 +99,40 @@ describe('integration first validation slice', () => {
       { headers: demoHeaders('admin') },
     );
     assert.equal(reportExport.status, 200);
-    const exportVerdict = (reportExport.json.payload?.verdicts ?? []).find(
-      (v) => v.test_run_id === runId,
-    );
-    assert.ok(exportVerdict?.placement_confidence);
-    assert.equal(exportVerdict.placement_confidence.level, 'High');
 
     const audit = await request(baseUrl, 'GET', '/v1/audit-log', { headers: demoHeaders('admin') });
     assert.ok(audit.json.items.some((a) => a.action === 'test_run.started'));
   });
 
-  it('rejects cross-tenant observation injection', async () => {
+  it('rejects public ingestion of reserved internal signal types', async () => {
     const h = demoHeaders('engineer');
-    const listedAgents = await request(baseUrl, 'GET', '/v1/agents', { headers: h });
-    const agentId = listedAgents.json.items[0]?.id;
-    assert.ok(agentId);
-    const runs = await request(baseUrl, 'GET', '/v1/test-runs', { headers: h });
-    const runId = runs.json.items[0]?.id;
-    const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const tgId = getStore().targetGroups.find((g) => g.name === 'Slice TG')?.id ?? 'tg_1';
-    const { secret } = createBootstrapToken(ctx, { max_registrations: 1, target_group_id: tgId });
-    const agentFromReg = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'cross-tenant-agent' },
-    });
-    assert.equal(agentFromReg.status, 201);
-
-    const res = await request(baseUrl, 'POST', `/v1/agents/${agentFromReg.json.agent.id}/observations`, {
-      headers: agentHeaders(agentFromReg.json.agent_credential),
+    // agent_observation is a reserved internal signal type; a public caller cannot spoof it.
+    const res = await request(baseUrl, 'POST', '/v1/events', {
+      headers: h,
       body: {
-        tenant_id: 'ten_other',
-        test_run_id: runId,
-        nonce_hash: 'sha256:deadbeef',
+        event_id: 'evt_public_spoof',
+        signal_type: 'agent_observation',
+        source: 'external',
       },
     });
-    assert.equal(res.status, 403);
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error, 'reserved_signal_type');
   });
 
   it('blocks concurrent runs on one target group', async () => {
     const h = demoHeaders('engineer');
-    const tgId = getStore().targetGroups.find((g) => g.name === 'Slice TG').id;
-    const tgtId = getStore().targets.find((t) => t.target_group_id === tgId).id;
+    const tg = await request(baseUrl, 'POST', '/v1/target-groups', {
+      headers: h,
+      body: { name: 'Concurrent TG' },
+    });
+    assert.equal(tg.status, 201);
+    const tgId = tg.json.id;
+    const tgt = await request(baseUrl, 'POST', `/v1/target-groups/${tgId}/targets`, {
+      headers: h,
+      body: { value: '203.0.113.9', kind: 'ip' },
+    });
+    assert.equal(tgt.status, 201);
+    const tgtId = tgt.json.id;
     const first = await request(baseUrl, 'POST', '/v1/test-runs', {
       headers: h,
       body: {
@@ -212,22 +151,5 @@ describe('integration first validation slice', () => {
       },
     });
     assert.equal(second.status, 409);
-  });
-
-  it('rejects token replay after max registrations', async () => {
-    const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
-    const { secret } = createBootstrapToken(ctx, { max_registrations: 1, target_group_id: 'tg_1' });
-    const ok = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'replay-a' },
-    });
-    assert.equal(ok.status, 201);
-    const bad = await request(baseUrl, 'POST', '/v1/agents/register', {
-      headers: demoHeaders('engineer'),
-      body: { bootstrap_token: secret, hostname: 'replay-b' },
-    });
-    assert.equal(bad.status, 401);
-    const audited = getStore().auditLog.some((a) => a.action === 'bootstrap_token.replay_rejected');
-    assert.ok(audited);
   });
 });

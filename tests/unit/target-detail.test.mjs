@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
+  addTargetTag,
   apiErrorCode,
   edgeDetectionLockedReason,
   edgeDetectionReasonExplanation,
@@ -10,8 +11,11 @@ import {
   isLoaScopeEligible,
   isSignedLoaState,
   isTargetRunEligible,
+  normalizeTargetTag,
   ownershipMethodLabel,
+  ownershipStepStatus,
   parseOptionalPort,
+  removeTargetTag,
   targetDeclarationProvenanceLabel,
   targetDisplayValue,
   uniqueAppliedChecks,
@@ -27,10 +31,13 @@ const DETAIL_SOURCE = readFileSync(
 describe('target-detail truthfulness helpers', () => {
   it('fails run eligibility closed unless eligibility and ownership are explicitly affirmative', () => {
     assert.equal(isTargetRunEligible('eligible', 'dns_verified'), true);
-    assert.equal(isTargetRunEligible('eligible', 'agent_verified'), true);
+    assert.equal(isTargetRunEligible('eligible', 'provider_verified'), true);
+    // ADR-0008: agents are removed; a legacy `agent_verified` row is treated as unverified and
+    // must re-prove control with DNS/HTTP before it authorizes any egress.
+    assert.equal(isTargetRunEligible('eligible', 'agent_verified'), false);
     assert.equal(isTargetRunEligible('eligible', 'pending'), false);
-    assert.equal(isTargetRunEligible('unknown', 'agent_verified'), false);
-    assert.equal(isTargetRunEligible('not_eligible', 'agent_verified'), false);
+    assert.equal(isTargetRunEligible('unknown', 'dns_verified'), false);
+    assert.equal(isTargetRunEligible('not_eligible', 'dns_verified'), false);
     assert.equal(isTargetRunEligible('', ''), false);
   });
 
@@ -38,7 +45,6 @@ describe('target-detail truthfulness helpers', () => {
     assert.equal(isSignedLoaState('signed'), true);
     assert.equal(isSignedLoaState('active'), true);
     assert.equal(isSignedLoaState('required'), false);
-    assert.equal(isLoaScopeEligible('agent_verified'), true);
     assert.equal(isLoaScopeEligible('user_confirmed'), true);
     assert.equal(isLoaScopeEligible('dns_verified'), false);
   });
@@ -120,34 +126,67 @@ describe('target-detail edge presentation helpers', () => {
   });
 });
 
+describe('target-detail tag + ownership-step helpers', () => {
+  it('normalizes tags to the ADR-0008 server rule and rejects invalid input', () => {
+    assert.equal(normalizeTargetTag('  Env:Prod '), 'env:prod');
+    assert.equal(normalizeTargetTag('tier-1_edge.v2'), 'tier-1_edge.v2');
+    assert.equal(normalizeTargetTag('has space'), '');
+    assert.equal(normalizeTargetTag('-leadingdash'), '');
+    assert.equal(normalizeTargetTag('a'.repeat(49)), '');
+  });
+
+  it('adds and removes tags with dedupe, cap, and error messages', () => {
+    assert.deepEqual(addTargetTag(['env:prod'], 'team:edge'), { tags: ['env:prod', 'team:edge'], error: '' });
+    assert.deepEqual(addTargetTag(['env:prod'], 'env:prod'), { tags: ['env:prod'], error: '' });
+    assert.match(addTargetTag([], 'bad tag').error, /lowercase/);
+    const sixteen = Array.from({ length: 16 }, (_, i) => `t${i}`);
+    assert.match(addTargetTag(sixteen, 't99').error, /at most 16/);
+    assert.deepEqual(removeTargetTag(['env:prod', 'team:edge'], 'env:prod'), ['team:edge']);
+  });
+
+  it('derives the ownership step state only from verification + challenge, never inventing it', () => {
+    assert.deepEqual(ownershipStepStatus('dns_verified', null), { tone: 'success', label: 'Ownership proven', done: true });
+    assert.deepEqual(ownershipStepStatus('provider_verified', null), { tone: 'success', label: 'Ownership proven', done: true });
+    // ADR-0008: a legacy `agent_verified` state is not proof of control and stays unproven.
+    assert.deepEqual(ownershipStepStatus('agent_verified', null), { tone: 'warn', label: 'Not proven yet', done: false });
+    assert.equal(ownershipStepStatus('unverified', { state: 'pending' }).label, 'Waiting on DNS record');
+    assert.equal(ownershipStepStatus('unverified', { state: 'expired' }).done, false);
+    assert.equal(ownershipStepStatus('unverified', null).label, 'Not proven yet');
+  });
+});
+
 describe('target-detail React contract', () => {
-  it('uses explicit check selection and never treats catalog timestamps as target history', () => {
-    assert.match(DETAIL_SOURCE, /check_id: effectiveSelectedRunCheckId/);
+  it('leads with a stateful validation path and explicit check selection', () => {
+    assert.match(DETAIL_SOURCE, /Validate this target/);
+    assert.match(DETAIL_SOURCE, /check_id: effectiveSelectedCheckId/);
     assert.match(DETAIL_SOURCE, /type="radio"/);
     assert.doesNotMatch(DETAIL_SOURCE, /checks_applied\?\.\[0\]|checks_applied\[0\]/);
-    assert.doesNotMatch(DETAIL_SOURCE, /Last verdict|Last ran/);
   });
 
-  it('keeps page spacing, eligibility, links, and canonical history truthful', () => {
-    assert.match(DETAIL_SOURCE, /className="content target-detail-view"/);
-    assert.doesNotMatch(DETAIL_SOURCE, /className="content stack-tight"/);
+  it('removes all agent / placement language now that verdicts are external-probe only', () => {
+    assert.doesNotMatch(DETAIL_SOURCE, /agent_binding|agentBinding|Agent binding|Observed from inside|Agent observation recorded/);
+    assert.doesNotMatch(DETAIL_SOURCE, /environment_id|Environment<\/td>/);
+  });
+
+  it('surfaces the exact DNS TXT ownership record with copy and check-now actions', () => {
+    assert.match(DETAIL_SOURCE, /record_name/);
+    assert.match(DETAIL_SOURCE, /record_value/);
+    assert.match(DETAIL_SOURCE, /Check now/);
+    assert.match(DETAIL_SOURCE, /CopyButton/);
+    assert.match(DETAIL_SOURCE, /issueOwnershipChallenge|issueOwnership/);
+  });
+
+  it('keeps run eligibility fail-closed and the run action disabled until ownership passes', () => {
     assert.match(DETAIL_SOURCE, /isTargetRunEligible\(eligibility, verificationState\)/);
-    assert.match(DETAIL_SOURCE, /const eligibilityDisplay = targetEligible \? 'Eligible' : 'Locked'/);
-    assert.match(DETAIL_SOURCE, /value=\{eligibilityDisplay\}/);
-    assert.match(DETAIL_SOURCE, /\{eligibilityDisplay\}<\/Badge> for validation/);
-    assert.doesNotMatch(DETAIL_SOURCE, /value=\{formatTargetLabel\(eligibility\)\}/);
-    assert.doesNotMatch(DETAIL_SOURCE, /!eligibility\.startsWith/);
-    assert.match(DETAIL_SOURCE, /event\.stopPropagation\(\)/);
-    assert.match(DETAIL_SOURCE, /uniqueRecentRuns/);
-    assert.match(DETAIL_SOURCE, /label: 'Lifecycle'/);
-    assert.match(DETAIL_SOURCE, /label: 'Verdict'/);
+    assert.match(DETAIL_SOURCE, /disabled=\{!targetEligible \|\| !effectiveSelectedCheckId/);
+    assert.match(DETAIL_SOURCE, /className="content target-detail-view"/);
   });
 
-  it('backs recent-run verdicts with API evidence ids and surfaces the latest edge request', () => {
+  it('backs recent-run verdicts with API evidence ids and groups posture under tabs', () => {
     assert.doesNotMatch(DETAIL_SOURCE, /hasEvidenceBackedVerdict\(item, \[\]\)/);
     assert.match(DETAIL_SOURCE, /evidence_ids: run\.evidence_ids/);
-    assert.match(DETAIL_SOURCE, /\/v1\/waf\/edge-detection\//);
+    assert.match(DETAIL_SOURCE, /<Tabs/);
+    assert.match(DETAIL_SOURCE, /Protection path/);
     assert.match(DETAIL_SOURCE, /edgeDetectionReasonExplanation/);
-    assert.doesNotMatch(DETAIL_SOURCE, /edgeFamilyProviders\(/);
   });
 });

@@ -1,5 +1,5 @@
-const RUN_VERIFICATION_STATES = new Set(['dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed', 'verified']);
-const LOA_SCOPE_STATES = new Set(['agent_verified', 'user_confirmed']);
+const RUN_VERIFICATION_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed', 'verified']);
+const LOA_SCOPE_STATES = new Set(['user_confirmed']);
 const SIGNED_LOA_STATES = new Set(['signed', 'active', 'valid']);
 
 function asRecord(value) {
@@ -157,7 +157,6 @@ export function ownershipMethodLabel(verification) {
   const record = asRecord(verification) ?? {};
   const sourceKind = normalize(record.source_kind ?? record.method ?? record.ownership_method);
   if (sourceKind === 'dns_txt') return 'DNS TXT record';
-  if (sourceKind === 'agent_observation' || sourceKind === 'agent_heartbeat') return 'Agent observation';
   if (sourceKind === 'user_attestation' || sourceKind === 'manual_override') return 'Authorized user attestation';
   if (sourceKind) return humanize(sourceKind);
   return normalize(record.state) === 'unverified' ? 'No ownership proof recorded' : 'Ownership method not reported';
@@ -190,7 +189,56 @@ export function edgeDetectionReasonExplanation(reason) {
 /** Why Detect edge is locked for a target whose ownership is not yet proven. */
 export function edgeDetectionLockedReason(verificationState) {
   const state = humanize(verificationState) || 'Unverified';
-  return `Detect edge is locked: ownership is ${state.toLowerCase()}. Verify this target with DNS, provider, or agent proof first.`;
+  return `Detect edge is locked: ownership is ${state.toLowerCase()}. Verify this target with DNS or provider proof first.`;
+}
+
+const TAG_PATTERN = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
+const MAX_TAGS = 16;
+
+/**
+ * Normalize a tag exactly like ADR-0008's server rule: trim, lowercase, validate against the
+ * pattern. Returns '' for anything the server would reject with `invalid_target_tags`.
+ */
+export function normalizeTargetTag(value) {
+  const trimmed = firstString(value).toLowerCase();
+  return TAG_PATTERN.test(trimmed) ? trimmed : '';
+}
+
+/** Add a tag to the set, deduplicated and capped at 16. Returns { tags, error }. */
+export function addTargetTag(existing, value) {
+  const tags = Array.isArray(existing) ? existing.filter(Boolean) : [];
+  const normalized = normalizeTargetTag(value);
+  if (!normalized) {
+    return { tags, error: 'Use lowercase letters, numbers, and : _ . - (max 48 characters).' };
+  }
+  if (tags.includes(normalized)) return { tags, error: '' };
+  if (tags.length >= MAX_TAGS) return { tags, error: `A target can carry at most ${MAX_TAGS} tags.` };
+  return { tags: [...tags, normalized], error: '' };
+}
+
+export function removeTargetTag(existing, value) {
+  const tags = Array.isArray(existing) ? existing.filter(Boolean) : [];
+  return tags.filter((tag) => tag !== value);
+}
+
+/**
+ * Plain-language status for the ownership step, derived only from the target verification state
+ * and any recorded DNS challenge. Never invents a state the API did not report.
+ */
+export function ownershipStepStatus(verificationState, challenge) {
+  const state = normalize(verificationState);
+  const verified = RUN_VERIFICATION_STATES.has(state);
+  if (verified) {
+    return { tone: 'success', label: 'Ownership proven', done: true };
+  }
+  const challengeState = normalize(asRecord(challenge)?.state);
+  if (challengeState === 'pending') {
+    return { tone: 'info', label: 'Waiting on DNS record', done: false };
+  }
+  if (challengeState === 'expired') {
+    return { tone: 'warn', label: 'Challenge expired — issue a new one', done: false };
+  }
+  return { tone: 'warn', label: 'Not proven yet', done: false };
 }
 
 /** Prevent a clickable table row from intercepting nested controls or links. */

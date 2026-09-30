@@ -65,7 +65,7 @@ export function getCurrentSubscriptionSummary(ctx) {
     usage: {
       users: store.users.filter((user) => user.tenant_id === tenantId).length,
       target_groups: store.targetGroups.filter((group) => group.tenant_id === tenantId && group.archived_at == null).length,
-      agents: store.agents.filter((agent) => agent.tenant_id === tenantId).length,
+      agents: 0,
       safe_runs_started_last_hour: safeRunsStartedLastHour,
       open_findings: openFindings,
       pending_high_scale_requests: pendingHighScale,

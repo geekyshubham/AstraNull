@@ -88,7 +88,7 @@ function tenantHeaders(role, tenant = TENANT_A) {
 }
 
 describe('postgres audit remediation (live database, app role)', () => {
-  it('keeps connector gate, bootstrap tokens, SOC queue, agent updates, and CSV import consistent', { timeout: 180_000 }, async (t) => {
+  it('keeps connector gate, targets-first API, SOC queue, and CSV import consistent', { timeout: 180_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {
       t.skip(availability.reason);
@@ -117,19 +117,45 @@ describe('postgres audit remediation (live database, app role)', () => {
       });
       assert.equal(connector.status, 201, connector.text);
 
-      const releases = await request(baseUrl, 'GET', '/v1/agent-updates', { headers: tenantHeaders('admin') });
-      assert.equal(releases.status, 200, releases.text);
-      const trustKeys = await request(baseUrl, 'GET', '/v1/agent-update-trust-keys', { headers: tenantHeaders('admin') });
-      assert.equal(trustKeys.status, 200);
-      assert.equal((trustKeys.json.items ?? []).length, 0);
-      for (const body of [
-        { name: 'agent-install', max_registrations: 1, target_group_id: GROUP_A, environment_id: ENV_A },
-        { name: 'agent-install', max_registrations: 1, target_group_id: GROUP_A },
-      ]) {
-        const token = await request(baseUrl, 'POST', '/v1/bootstrap-tokens', { headers: tenantHeaders('admin'), body });
-        assert.equal(token.status, 201, token.text);
-        assert.match(token.json.secret, /^ast_/);
+      // ADR-0008: agents, bootstrap tokens, and environments are gone.
+      for (const removed of ['/v1/agent-updates', '/v1/bootstrap-tokens', '/v1/environments', '/v1/agents']) {
+        const res = await request(baseUrl, 'GET', removed, { headers: tenantHeaders('admin') });
+        assert.equal(res.status, 404, removed);
       }
+
+      // Targets-first: direct creation lands in one tenant default group; tags normalize and round-trip.
+      const direct = await request(baseUrl, 'POST', '/v1/targets', {
+        headers: tenantHeaders('admin'),
+        body: { kind: 'fqdn', value: 'direct.remed.example.com', tags: ['env:prod', ' Team:Edge ', 'env:prod'] },
+      });
+      assert.equal(direct.status, 201, direct.text);
+      assert.deepEqual(direct.json.tags, ['env:prod', 'team:edge']);
+      assert.notEqual(direct.json.target_group_id, GROUP_A);
+      const second = await request(baseUrl, 'POST', '/v1/targets', {
+        headers: tenantHeaders('admin'),
+        body: { kind: 'ip', value: '192.0.2.77' },
+      });
+      assert.equal(second.status, 201, second.text);
+      assert.equal(second.json.target_group_id, direct.json.target_group_id);
+      const retagged = await request(baseUrl, 'PATCH', `/v1/targets/${direct.json.id}`, {
+        headers: tenantHeaders('admin'),
+        body: { tags: ['env:staging'] },
+      });
+      assert.equal(retagged.status, 200, retagged.text);
+      assert.deepEqual(retagged.json.tags, ['env:staging']);
+      const badTags = await request(baseUrl, 'PATCH', `/v1/targets/${direct.json.id}`, {
+        headers: tenantHeaders('admin'),
+        body: { tags: ['Bad Tag!'] },
+      });
+      assert.equal(badTags.status, 400);
+      assert.equal(badTags.json.error, 'invalid_target_tags');
+      const foreignPatch = await request(baseUrl, 'PATCH', `/v1/targets/${direct.json.id}`, {
+        headers: tenantHeaders('admin', TENANT_B),
+        body: { tags: ['env:prod'] },
+      });
+      assert.equal(foreignPatch.status, 404);
+      const listed = await request(baseUrl, 'GET', '/v1/targets', { headers: tenantHeaders('admin') });
+      assert.deepEqual(listed.json.items.find((item) => item.id === direct.json.id)?.tags, ['env:staging']);
 
       const intake = await request(baseUrl, 'POST', '/v1/high-scale-requests', {
         headers: tenantHeaders('engineer'),

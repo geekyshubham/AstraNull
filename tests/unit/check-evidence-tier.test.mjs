@@ -13,7 +13,6 @@ import {
 } from '../../src/lib/probeEvidenceTiers.mjs';
 import {
   correlateExternalOnlyVerdict,
-  correlateVerdict,
   verdictSupportsReadiness,
 } from '../../src/services/correlation.mjs';
 
@@ -114,22 +113,13 @@ describe('fail-closed evidence tiers and correlation', () => {
 
   it('keeps semantic probe errors and execution timeouts inconclusive in both modes', () => {
     for (const externalResult of ['error', 'not_run', 'timeout']) {
-      const correlated = correlateVerdict({
-        externalResult,
-        probeKind: 'origin_leak_scan',
-        probeIoObserved: true,
-        agentObserved: false,
-        expectedBehavior: 'must_block_before_origin',
-        agentOnline: true,
-        agentBound: true,
-      });
       const externalOnly = correlateExternalOnlyVerdict({
         externalResult,
         probeKind: 'origin_leak_scan',
         probeIoObserved: true,
         expectedBehavior: 'must_block_before_origin',
       });
-      for (const result of [correlated, externalOnly]) {
+      for (const result of [externalOnly]) {
         assert.equal(result.verdict, 'inconclusive', externalResult);
         assert.equal(result.createsFinding, false, externalResult);
         assert.equal(verdictSupportsReadiness(result.verdict), false, externalResult);

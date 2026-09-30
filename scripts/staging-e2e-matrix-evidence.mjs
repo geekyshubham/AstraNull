@@ -10,7 +10,6 @@ const EVIDENCE_KIND = 'staging_e2e_matrix';
 
 export const REQUIRED_SCENARIOS = Object.freeze([
   'oidc_login',
-  'signed_agent_registration',
   'signed_probe_worker',
   'safe_validation_loop',
   'verdict_explanation',

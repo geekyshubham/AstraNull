@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createAgentControlRepository } from '../../src/persistence/postgres/agentControlRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createHighScaleRepository } from '../../src/persistence/postgres/highScaleRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
@@ -143,7 +142,6 @@ describe('postgres state portal parity', () => {
       await seed(pool);
       const state = createPostgresStateServices({
         coreCatalog: createCoreCatalogRepository(pool),
-        agentControl: createAgentControlRepository(pool),
         validationEvidence: createValidationEvidenceRepository(pool),
         highScale: createHighScaleRepository(pool),
         killSwitch: createKillSwitchRepository(pool),

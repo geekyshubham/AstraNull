@@ -1,8 +1,6 @@
 import type { DataItem } from '../../lib/types';
 import {
   buildVerdictExplanationFields,
-  isAuthenticatedAgentObservationEvent,
-  isInternalControlPlaneNoObservationEvent,
   isSignedProbeEvidenceEvent,
   normalizeVerdictKey,
   TRUTH_TABLE_ROWS,
@@ -74,17 +72,9 @@ export function TrafficPathPanel({
   const verdict = getNestedString(detail, ['verdict', 'verdict'], '');
   const confidence = getNestedString(detail, ['verdict', 'confidence'], '');
   const signedProbeCount = events.filter(isSignedProbeEvidenceEvent).length;
-  const authenticatedObservationCount = events.filter(isAuthenticatedAgentObservationEvent).length;
-  const noObservationCount = events.filter(isInternalControlPlaneNoObservationEvent).length;
   const statusLine = verdict
-    ? `${plainVerdictLabel(verdict)}${confidence ? ` (${plainCodeLabel(confidence)} confidence)` : ''}. This summary uses only trusted events recorded for the run.`
-    : 'No final verdict is recorded. Evidence states reflect only trusted events passed to this panel.';
-
-  const internalEvidenceLabel = authenticatedObservationCount > 0
-    ? `${authenticatedObservationCount} authenticated agent observation${authenticatedObservationCount === 1 ? '' : 's'} recorded`
-    : noObservationCount > 0
-      ? `${noObservationCount} control-plane no-observation event${noObservationCount === 1 ? '' : 's'} recorded`
-      : 'No trusted internal observation recorded';
+    ? `${plainVerdictLabel(verdict)}${confidence ? ` (${plainCodeLabel(confidence)} confidence)` : ''}. This summary uses only trusted external probe events recorded for the run.`
+    : 'No final verdict is recorded. Evidence states reflect only trusted external probe events passed to this panel.';
 
   return (
     <section className="traffic-path" aria-label="Recorded run evidence">
@@ -98,12 +88,6 @@ export function TrafficPathPanel({
                 ? `${signedProbeCount} signed result${signedProbeCount === 1 ? '' : 's'} recorded`
                 : 'No signed probe result recorded'}
             </span>
-          </div>
-        </div>
-        <div className="traffic-path-hop">
-          <div className={`traffic-path-node traffic-path-node--${authenticatedObservationCount > 0 ? 'ok' : noObservationCount > 0 ? 'warn' : 'muted'}`}>
-            <span className="traffic-path-label text-sm">Internal observation</span>
-            <span className="traffic-path-sub muted text-xs">{internalEvidenceLabel}</span>
           </div>
         </div>
       </div>

@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
   POSTGRES_STATE_SERVICE_METHODS,
-  STATE_AGENT_CONTROL_REPOSITORY_METHODS,
   STATE_CORE_CATALOG_REPOSITORY_METHODS,
   STATE_HIGH_SCALE_REPOSITORY_METHODS,
   STATE_KILL_SWITCH_REPOSITORY_METHODS,
@@ -30,14 +29,6 @@ const RECENT_TS = '2026-06-10T10:00:00.000Z';
 
 function stubRepositories(overrides = {}) {
   const groups = overrides.groups ?? [{ id: 'tg_1', name: 'Edge', tenant_id: 'ten_demo' }];
-  const agents = overrides.agents ?? [
-    {
-      id: 'agt_1',
-      tenant_id: 'ten_demo',
-      status: 'online',
-      target_group_id: 'tg_1',
-    },
-  ];
   const runs = overrides.runs ?? [
     {
       id: 'run_1',
@@ -58,7 +49,7 @@ function stubRepositories(overrides = {}) {
       id: 'evt_1',
       tenant_id: 'ten_demo',
       test_run_id: 'run_1',
-      signal_type: 'agent_observation',
+      signal_type: 'probe_result',
       timestamp: RECENT_TS,
     },
   ];
@@ -81,9 +72,6 @@ function stubRepositories(overrides = {}) {
 
   const coreCatalog = {
     listTargetGroups: async () => groups,
-  };
-  const agentControl = {
-    listAgents: async () => agents,
   };
   const validationEvidence = {
     listTestRuns: async (_ctx, options) => {
@@ -131,7 +119,7 @@ function stubRepositories(overrides = {}) {
     getKillSwitchRecord: async () => killSwitchRecord,
   };
 
-  return { coreCatalog, agentControl, validationEvidence, highScale, killSwitch };
+  return { coreCatalog, validationEvidence, highScale, killSwitch };
 }
 
 const GOVERNED_REQUEST = Object.freeze({
@@ -186,7 +174,6 @@ describe('postgres state service adapter', () => {
   it('exposes getState service method contract', () => {
     assert.deepEqual(POSTGRES_STATE_SERVICE_METHODS, ['getState']);
     assert.ok(STATE_CORE_CATALOG_REPOSITORY_METHODS.includes('listTargetGroups'));
-    assert.ok(STATE_AGENT_CONTROL_REPOSITORY_METHODS.includes('listAgents'));
     assert.ok(STATE_HIGH_SCALE_REPOSITORY_METHODS.includes('listHighScaleRequests'));
     assert.ok(STATE_KILL_SWITCH_REPOSITORY_METHODS.includes('getKillSwitchRecord'));
     for (const method of [
@@ -202,10 +189,10 @@ describe('postgres state service adapter', () => {
   it('throws when required repositories or methods are missing', () => {
     assert.throws(() => createPostgresStateServices({}), /coreCatalog/);
     const partial = stubRepositories();
-    delete partial.agentControl.listAgents;
+    delete partial.highScale.listHighScaleRequests;
     assert.throws(
       () => createPostgresStateServices(partial),
-      /agentControl\.listAgents/,
+      /highScale\.listHighScaleRequests/,
     );
     const noHighScale = stubRepositories();
     delete noHighScale.highScale.listHighScaleRequests;
@@ -318,100 +305,6 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.readiness.score, 0);
     assert.equal(payload.readiness.persistence, 'postgres');
   });
-
-  it('indexes placement inputs and ignores observations from readiness-ineligible runs', async () => {
-    const repositories = stubRepositories({
-      groups: [
-        { id: 'tg_1', name: 'Edge', tenant_id: 'ten_demo' },
-        { id: 'tg_2', name: 'Origin', tenant_id: 'ten_demo' },
-      ],
-      agents: [{
-        id: 'agt_1',
-        tenant_id: 'ten_demo',
-        status: 'online',
-        target_group_id: 'tg_1',
-      }],
-      runs: [
-        {
-          id: 'run_completed',
-          tenant_id: 'ten_demo',
-          target_group_id: 'tg_1',
-          status: 'completed',
-          created_at: RECENT_TS,
-          completed_at: RECENT_TS,
-        },
-        {
-          id: 'run_finalized',
-          tenant_id: 'ten_demo',
-          target_group_id: 'tg_1',
-          status: 'finalized',
-          created_at: RECENT_TS,
-          completed_at: RECENT_TS,
-        },
-        {
-          id: 'run_no_observation',
-          tenant_id: 'ten_demo',
-          target_group_id: 'tg_2',
-          status: 'completed',
-          created_at: RECENT_TS,
-          completed_at: RECENT_TS,
-        },
-      ],
-      evidence: [{
-        id: 'evidence_finalized',
-        tenant_id: 'ten_demo',
-        test_run_id: 'run_finalized',
-        related_event_id: 'evt_finalized',
-        created_at: RECENT_TS,
-      }],
-      verdict: false,
-      events: [
-        {
-          id: 'evt_completed',
-          tenant_id: 'ten_demo',
-          test_run_id: 'run_completed',
-          signal_type: 'agent_observation',
-          producer_kind: 'authenticated_agent',
-          timestamp: RECENT_TS,
-        },
-        {
-          id: 'evt_finalized',
-          tenant_id: 'ten_demo',
-          test_run_id: 'run_finalized',
-          signal_type: 'agent_observation',
-          producer_kind: 'authenticated_agent',
-          timestamp: RECENT_TS,
-        },
-        {
-          id: 'evt_no_observation',
-          tenant_id: 'ten_demo',
-          test_run_id: 'run_no_observation',
-          signal_type: 'agent_no_observation',
-          producer_kind: 'internal_control_plane',
-          timestamp: RECENT_TS,
-        },
-      ],
-    });
-    let batchSelection;
-    const loadBatch = repositories.validationEvidence.loadRunEvidenceBatch;
-    repositories.validationEvidence.loadRunEvidenceBatch = async (ctx, selection) => {
-      batchSelection = selection;
-      return loadBatch(ctx, selection);
-    };
-    const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
-
-    const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
-
-    assert.ok(batchSelection.eventRunIds.includes('run_finalized'));
-    const placement = payload.readiness.factors.find((factor) => factor.key === 'agent_placement')
-      .placement_diagnostics;
-    const byGroup = new Map(placement.groups.map((group) => [group.target_group_id, group]));
-    assert.equal(byGroup.get('tg_1').status, 'proven');
-    assert.equal(byGroup.get('tg_1').recent_observation_count, 1);
-    assert.equal(byGroup.get('tg_2').status, 'missing_agent');
-    assert.equal(byGroup.get('tg_2').recent_observation_count, 1);
-  });
-
   it('uses an aggregate open-finding count without materializing finding rows', async () => {
     const repositories = stubRepositories();
     let aggregateCalls = 0;
@@ -496,7 +389,6 @@ describe('postgres state service adapter', () => {
 
     assert.equal(payload.tenant_id, 'ten_demo');
     assert.equal(payload.target_groups, 1);
-    assert.equal(payload.agents_online, 1);
     assert.equal(payload.open_findings, 1);
     assert.equal(payload.recent_runs.length, 5);
     assert.equal(payload.recent_runs[0].id, 'run_1');
@@ -515,11 +407,10 @@ describe('postgres state service adapter', () => {
     assert.ok(payload.readiness.score >= 0);
     const factorKeys = payload.readiness.factors.map((f) => f.key);
     assert.ok(factorKeys.includes('coverage'));
-    assert.ok(factorKeys.includes('agent_placement'));
     assert.ok(factorKeys.includes('verdicts'));
     assert.ok(factorKeys.includes('evidence_freshness'));
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 10);
+    assert.equal(soc.score, 11);
     assert.match(soc.detail, /Kill switch state recorded/);
     assert.match(soc.detail, /Other request\(s\) still pending gates/);
     assert.equal(payload.readiness.persistence, 'postgres');
@@ -603,9 +494,9 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
 
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'coverage').score, 40);
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'verdicts').score, 25);
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness').score, 15);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'coverage').score, 44);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'verdicts').score, 28);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness').score, 17);
   });
 
   it('does not award readiness for vault evidence linked to a legacy reserved event', async () => {
@@ -684,8 +575,8 @@ describe('postgres state service adapter', () => {
     const coverage = payload.readiness.factors.find((factor) => factor.key === 'coverage');
     const freshness = payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness');
 
-    assert.equal(coverage.score, 40);
-    assert.equal(freshness.score, 15);
+    assert.equal(coverage.score, 44);
+    assert.equal(freshness.score, 17);
   });
 
   it('reports pending high-scale gates without awarding SOC readiness credit', async () => {
@@ -729,7 +620,7 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 10);
+    assert.equal(soc.score, 11);
     assert.match(soc.detail, /authorization pack accepted/);
     assert.match(soc.detail, /2 SOC approver/);
   });
@@ -748,7 +639,7 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 10);
+    assert.equal(soc.score, 11);
     assert.match(soc.detail, /Kill switch state recorded/);
     assert.deepEqual(Object.keys(payload.kill_switch).sort(), [
       'active',

@@ -71,9 +71,10 @@ describe('postgres portal ownership hardening', () => {
     assert.deepEqual(foreign, { error: 'scope_target_not_found', status: 400 });
     assert.equal(inserted, undefined);
 
+    // ADR-0008: legacy agent proof is no longer eligible LOA scope.
     const ineligibleOnly = await services.loa.sign(CTX, 'tg_1', {
       attested: true,
-      scope_ack: ['tgt_dns'],
+      scope_ack: ['tgt_agent'],
     });
     assert.deepEqual(ineligibleOnly, { error: 'invalid_scope_ack', status: 400 });
     assert.equal(inserted, undefined);
@@ -85,8 +86,8 @@ describe('postgres portal ownership hardening', () => {
       scope_snapshot: { targets: ['attacker_supplied'] },
     });
     assert.deepEqual(inserted.scope_snapshot, {
-      targets: ['tgt_agent', 'tgt_confirmed'],
-      excluded: [{ target_id: 'tgt_dns', reason: 'unverified' }],
+      targets: ['tgt_dns', 'tgt_confirmed'],
+      excluded: [{ target_id: 'tgt_agent', reason: 'unverified' }],
     });
     assert.deepEqual(signed.loa.scope_snapshot, inserted.scope_snapshot);
     assert.equal(JSON.stringify(signed).includes('attacker_supplied'), false);
@@ -342,7 +343,6 @@ describe('postgres portal audited transaction boundary', () => {
       'latest-runs-by-check',
       'current-verification',
       'waf-asset',
-      'agent-binding',
       'waf-snapshot',
       'edge-detection',
       'COMMIT',
@@ -628,7 +628,7 @@ describe('postgres portal audited transaction boundary', () => {
         return { rows: [activeLoa] };
       }
       if (sql.includes('SELECT * FROM target_verifications') && sql.includes('FOR UPDATE')) {
-        return { rows: [{ id: 'tv_agent', target_id: target.id, state: 'agent_verified' }] };
+        return { rows: [{ id: 'tv_dns', target_id: target.id, state: 'dns_verified' }] };
       }
       if (sql.includes('INSERT INTO target_verifications')) {
         return { rows: [{

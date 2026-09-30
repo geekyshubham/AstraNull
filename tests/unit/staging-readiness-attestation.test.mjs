@@ -330,7 +330,6 @@ describe('staging readiness attestation', () => {
       'provider_approval',
       'kill_switch_drill',
       'authorization_custody',
-      'placement_confidence_staging',
       'gateway_load_abuse',
     ]) {
       assert.ok(required.includes(kind), `expected ${kind} in high-scale-ga profile`);

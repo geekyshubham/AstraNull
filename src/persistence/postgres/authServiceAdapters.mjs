@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { createAddressedSecret, parseAddressedSecret } from '../../lib/addressedSecrets.mjs';
+import { parseAddressedSecret } from '../../lib/addressedSecrets.mjs';
 import { generateSalt, hashSecretWithSalt, verifySecretWithSalt } from '../../lib/crypto.mjs';
-import { newId } from '../../lib/ids.mjs';
 import {
   generateServiceAccountSecret,
   redactServiceAccount,
@@ -9,13 +8,7 @@ import {
 } from '../../lib/serviceAccountPolicy.mjs';
 
 /** @type {readonly string[]} */
-export const AUTH_TOKEN_REPOSITORY_METHODS = Object.freeze([
-  'createBootstrapToken',
-  'listBootstrapTokens',
-  'revokeBootstrapToken',
-  'findBootstrapTokenByAddressedHint',
-  'consumeBootstrapTokenRegistration',
-]);
+export const AUTH_TOKEN_REPOSITORY_METHODS = Object.freeze([]);
 
 /** @type {readonly string[]} */
 export const SERVICE_ACCOUNT_REPOSITORY_METHODS = Object.freeze([
@@ -29,12 +22,7 @@ export const SERVICE_ACCOUNT_REPOSITORY_METHODS = Object.freeze([
 ]);
 
 /** @type {readonly string[]} */
-export const POSTGRES_AUTH_TOKEN_SERVICE_METHODS = Object.freeze([
-  'createBootstrapToken',
-  'listBootstrapTokens',
-  'revokeBootstrapToken',
-  'consumeBootstrapToken',
-]);
+export const POSTGRES_AUTH_TOKEN_SERVICE_METHODS = Object.freeze([]);
 
 /** @type {readonly string[]} */
 export const POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS = Object.freeze([
@@ -45,19 +33,6 @@ export const POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS = Object.freeze([
   'authenticateServiceAccountBearer',
   'auditServiceAccountAuthFailure',
 ]);
-
-function redactBootstrapToken(record) {
-  if (!record) return record;
-  const { token_hash, token_salt, ...rest } = record;
-  return { ...rest, secret: undefined };
-}
-
-function verifyBootstrapTokenRecord(secret, candidate) {
-  if (candidate?.token_salt && candidate?.token_hash) {
-    return verifySecretWithSalt(secret, candidate.token_salt, candidate.token_hash);
-  }
-  return false;
-}
 
 function verifyServiceAccountRecord(secret, candidate) {
   if (!candidate?.secret_salt || !candidate?.secret_hash) return false;
@@ -96,7 +71,6 @@ function assertAuthRepositories(repositories) {
  * }} repositories
  * @param {{
  *   now?: () => Date,
- *   newId?: typeof newId,
  *   newServiceAccountId?: () => string,
  * }} [options]
  */
@@ -106,140 +80,12 @@ export function createPostgresAuthServices(repositories, options = {}) {
   const audit = repositories.audit;
 
   const nowFn = options.now ?? (() => new Date());
-  const newIdFn = options.newId ?? newId;
   const newServiceAccountIdFn =
     options.newServiceAccountId ?? (() => `sacc_${randomBytes(8).toString('hex')}`);
 
   async function appendAudit(entry) {
     await audit.appendAuditEvent(entry, { now: nowFn() });
   }
-
-  const tokens = {
-    async createBootstrapToken(ctx, body) {
-      const id = newIdFn('token');
-      const secret = createAddressedSecret('ast_', ctx.tenantId, id);
-      const tokenSalt = generateSalt();
-      const tokenHash = hashSecretWithSalt(secret, tokenSalt);
-      const createdAt = nowFn().toISOString();
-      const record = {
-        id,
-        tenant_id: ctx.tenantId,
-        name: body.name ?? 'Install token',
-        environment_id: typeof body.environment_id === 'string' && body.environment_id.trim() ? body.environment_id.trim() : null,
-        target_group_id: body.target_group_id ?? null,
-        token_salt: tokenSalt,
-        token_hash: tokenHash,
-        max_registrations: body.max_registrations ?? 1,
-        registrations_used: 0,
-        expires_at: body.expires_at ?? new Date(nowFn().getTime() + 86400000).toISOString(),
-        revoked_at: null,
-        created_at: createdAt,
-        created_by: ctx.userId,
-        prebind_fqdn:
-          typeof body.prebind_fqdn === 'string' && body.prebind_fqdn.trim() !== ''
-            ? body.prebind_fqdn.trim().toLowerCase()
-            : null,
-        deployment_packaging:
-          body.deployment_packaging === 'image'
-          || body.deployment_packaging === 'standalone'
-          || body.deployment_packaging === 'helm'
-            ? body.deployment_packaging
-            : null,
-      };
-      const token = await authTokens.createBootstrapToken(ctx, record);
-      await appendAudit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'bootstrap_token.created',
-        resource_type: 'bootstrap_token',
-        resource_id: id,
-        metadata: { max_registrations: record.max_registrations },
-      });
-      return { token, secret };
-    },
-
-    async listBootstrapTokens(ctx) {
-      const rows = await authTokens.listBootstrapTokens(ctx);
-      return rows.map(redactBootstrapToken);
-    },
-
-    async revokeBootstrapToken(ctx, id) {
-      const revokedAt = nowFn().toISOString();
-      const token = await authTokens.revokeBootstrapToken(ctx, id, revokedAt);
-      if (!token) return null;
-      await appendAudit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'bootstrap_token.revoked',
-        resource_type: 'bootstrap_token',
-        resource_id: id,
-      });
-      return redactBootstrapToken(token);
-    },
-
-    async consumeBootstrapToken(secret, agentMeta, tenantIdHint) {
-      const hints = parseAddressedSecret(secret, 'ast_');
-      if (!hints) {
-        return { error: 'invalid_token' };
-      }
-      const candidate = await authTokens.findBootstrapTokenByAddressedHint(hints);
-      if (!candidate || !verifyBootstrapTokenRecord(secret, candidate)) {
-        return { error: 'invalid_token' };
-      }
-      if (tenantIdHint && candidate.tenant_id !== tenantIdHint) {
-        return { error: 'invalid_token' };
-      }
-      if (candidate.revoked_at) {
-        return { error: 'revoked' };
-      }
-      if (new Date(candidate.expires_at) < nowFn()) {
-        return { error: 'expired' };
-      }
-      if (candidate.registrations_used >= candidate.max_registrations) {
-        await appendAudit({
-          tenant_id: candidate.tenant_id,
-          actor_user_id: 'agent',
-          actor_role: 'agent',
-          action: 'bootstrap_token.replay_rejected',
-          resource_type: 'bootstrap_token',
-          resource_id: candidate.id,
-          metadata: { reason: 'max_registrations' },
-        });
-        return { error: 'max_registrations' };
-      }
-
-      const usedAt = nowFn().toISOString();
-      const consumed = await authTokens.consumeBootstrapTokenRegistration(
-        { tenantId: candidate.tenant_id, id: candidate.id },
-        usedAt,
-      );
-      if (!consumed) {
-        await appendAudit({
-          tenant_id: candidate.tenant_id,
-          actor_user_id: 'agent',
-          actor_role: 'agent',
-          action: 'bootstrap_token.replay_rejected',
-          resource_type: 'bootstrap_token',
-          resource_id: candidate.id,
-          metadata: { reason: 'max_registrations' },
-        });
-        return { error: 'max_registrations' };
-      }
-
-      await appendAudit({
-        tenant_id: consumed.tenant_id,
-        actor_user_id: 'agent',
-        actor_role: 'agent',
-        action: 'bootstrap_token.used',
-        resource_type: 'bootstrap_token',
-        resource_id: consumed.id,
-        metadata: { hostname: agentMeta?.hostname },
-      });
-      return { token: consumed };
-    },
-  };
 
   const serviceAccounts = {
     async createServiceAccount(ctx, body) {
@@ -396,5 +242,5 @@ export function createPostgresAuthServices(repositories, options = {}) {
     },
   };
 
-  return { tokens, serviceAccounts };
+  return { serviceAccounts };
 }

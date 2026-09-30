@@ -9,7 +9,7 @@ const VERIFICATION_RANK = Object.freeze({
   unverified: 0,
   pending: 1,
   dns_verified: 2,
-  agent_verified: 3,
+  provider_verified: 2,
   user_confirmed: 4,
 });
 
@@ -38,7 +38,9 @@ function getLatestVerificationState(ctx, targetId) {
 }
 
 function isEligibleForLoaScope(state) {
-  return (VERIFICATION_RANK[state] ?? 0) >= VERIFICATION_RANK.agent_verified;
+  // ADR-0008: DNS/provider proof is the strongest machine rung now that agents are gone.
+  // user_confirmed requires a signed LOA, so this must not require user_confirmed itself.
+  return (VERIFICATION_RANK[state] ?? 0) >= VERIFICATION_RANK.dns_verified;
 }
 
 function buildScopeSnapshot(ctx, groupId, scopeAck) {

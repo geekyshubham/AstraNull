@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { checkProbeEndpointBinding } from '../../src/lib/probeEndpoint.mjs';
-import { heartbeatAgent, revokeAgent } from '../../src/services/agents.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 import { getStore } from '../../src/store.mjs';
 
@@ -109,58 +108,5 @@ describe('checkProbeEndpointBinding', () => {
       },
     );
     assert.equal(result.ok, true);
-  });
-});
-
-describe('heartbeatAgent probe_endpoint binding', () => {
-  it('accepts matching declared_fqdn against prebind and target group', () => {
-    freshStore();
-    const agent = seedBindingFixture();
-    const result = heartbeatAgent(agent, {
-      probe_endpoint: probeEndpointWithFqdn('API.Shop.Example.COM'),
-    });
-
-    assert.equal(result.probe_endpoint_accepted, true);
-    assert.equal(agent.probe_endpoint_status, 'reported');
-    assert.equal(agent.probe_endpoint.declared_fqdn, matchingFqdn);
-    assert.equal(agent.probe_endpoint_error, undefined);
-  });
-
-  it('rejects mismatching declared_fqdn with fqdn_prebind_mismatch', () => {
-    freshStore();
-    const agent = seedBindingFixture();
-    agent.probe_endpoint = {
-      declared_fqdn: matchingFqdn,
-      discovered_public_ip: '203.0.113.10',
-    };
-    agent.probe_endpoint_status = 'reported';
-
-    const result = heartbeatAgent(agent, {
-      probe_endpoint: probeEndpointWithFqdn('wrong.example.com'),
-    });
-
-    assert.equal(result.probe_endpoint_accepted, false);
-    assert.equal(agent.probe_endpoint_status, 'rejected');
-    assert.equal(agent.probe_endpoint_error, 'fqdn_prebind_mismatch');
-    assert.equal(agent.probe_endpoint.declared_fqdn, matchingFqdn);
-  });
-});
-
-describe('revokeAgent', () => {
-  it('sets last_token_validation_status to invalid', () => {
-    freshStore();
-    const agent = {
-      id: 'agent_revoke',
-      tenant_id: 'ten_demo',
-      name: 'revoke-agent',
-      hostname: 'host',
-      status: 'online',
-      last_token_validation_status: 'valid',
-    };
-    getStore().agents.push(agent);
-
-    revokeAgent({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' }, 'agent_revoke');
-
-    assert.equal(agent.last_token_validation_status, 'invalid');
   });
 });

@@ -38,7 +38,6 @@ export const PERSISTENCE_MODES = ['memory', 'dev-json', 'postgres'];
 
 export const PROBE_MODES = ['simulation', 'signed-worker'];
 export const HIGH_SCALE_ADAPTER_MODES = ['disabled', 'dry-run', 'governed-adapter'];
-export const AGENT_IDENTITY_MODES = ['bearer', 'gateway-mtls'];
 
 const MIN_SESSION_SECRET_LENGTH = 32;
 const MIN_PROBE_WORKER_SECRET_LENGTH = 32;
@@ -352,23 +351,6 @@ export function resolveHighScaleAdapterMode(env = process.env) {
   return mode;
 }
 
-export function resolveAgentIdentityMode(env = process.env) {
-  const explicit = env.ASTRANULL_AGENT_IDENTITY_MODE?.trim();
-  const nodeEnv = env.NODE_ENV ?? 'development';
-  const mode = explicit || (nodeEnv === 'production' ? 'gateway-mtls' : 'bearer');
-  if (!AGENT_IDENTITY_MODES.includes(mode)) {
-    throw new Error(
-      `Invalid ASTRANULL_AGENT_IDENTITY_MODE "${mode}". Allowed: ${AGENT_IDENTITY_MODES.join(', ')}.`,
-    );
-  }
-  if (nodeEnv === 'production' && mode === 'bearer' && !isHostedStagingDeployment(env)) {
-    throw new Error(
-      'Refusing to start: ASTRANULL_AGENT_IDENTITY_MODE=bearer is not permitted when NODE_ENV=production. Use gateway-mtls.',
-    );
-  }
-  return mode;
-}
-
 export function resolveAuthMode(env = process.env) {
   const explicit = env.ASTRANULL_AUTH_MODE?.trim();
   if (explicit) {
@@ -577,7 +559,6 @@ export function loadRuntimeConfig(env = process.env) {
   const { probeMode, probeWorkerSecret } = loadProbeDispatchConfig(env);
 
   const highScaleAdapterMode = resolveHighScaleAdapterMode(env);
-  const agentIdentityMode = resolveAgentIdentityMode(env);
 
   const rateLimitDisabled = env.ASTRANULL_RATE_LIMIT_DISABLED === '1';
   const rateLimitTrustProxyHeaders = env.ASTRANULL_TRUST_PROXY_HEADERS === '1';
@@ -747,7 +728,6 @@ export function loadRuntimeConfig(env = process.env) {
     connectorJobPrivateKeyConfigured: connectorWorkerConfig.connectorJobPrivateKeyConfigured,
     connectorJobPublicKeyConfigured: connectorWorkerConfig.connectorJobPublicKeyConfigured,
     highScaleAdapterMode,
-    agentIdentityMode,
     rateLimit: {
       windowMs: rateLimitWindowMs,
       maxRequests: rateLimitMaxRequests,

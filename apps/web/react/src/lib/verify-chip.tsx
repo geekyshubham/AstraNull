@@ -27,16 +27,13 @@ export function resolveVerifyChipState(
   if (state === 'user_confirmed') {
     return { label: 'user_confirmed', className: 'verify-chip is-verified verify-chip--strong', title };
   }
-  if (state === 'agent_verified') {
-    return { label: 'agent_verified', className: 'verify-chip is-verified', title };
-  }
   if (state === 'dns_verified') {
     return { label: 'dns_verified', className: 'verify-chip is-dns', title };
   }
   if (state === 'provider_verified') {
     return { label: 'provider_verified', className: 'verify-chip is-verified', title };
   }
-  if (['pending', 'dns_pending', 'awaiting_heartbeat', 'pending_agent'].includes(state)) {
+  if (['pending', 'dns_pending'].includes(state)) {
     return { label: state.replace(/_/g, ' '), className: 'verify-chip is-pending', title };
   }
   if (['checking', 'checking…', 'checking...'].includes(state)) {
@@ -56,9 +53,6 @@ export function resolveTargetVerificationProvenance(target: DataItem | null, ver
     const ref = sourceRef as DataItem;
     if (getString(ref, ['dns_challenge_id'])) {
       return `DNS TXT challenge ${getString(ref, ['dns_challenge_id'])} resolved in the verification record.`;
-    }
-    if (getString(ref, ['agent_id'])) {
-      return `Probe and agent correlated on ${getString(ref, ['agent_id'])} in the verification record.`;
     }
     if (sourceKind === 'provider_account' && getString(ref, ['connector_id'])) {
       const observedAt = getString(ref, ['observed_at'], 'the recorded poll time');

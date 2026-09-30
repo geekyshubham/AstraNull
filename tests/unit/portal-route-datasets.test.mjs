@@ -14,18 +14,18 @@ describe('portal route dataset policy', () => {
     assert.deepEqual(PORTAL_ROUTE_DATASETS['not-found'], []);
   });
 
-  it('places Targets immediately below Target groups with bounded inventory hydration', () => {
-    const targetGroupIndex = NAV_ITEMS.findIndex((item) => item.id === 'target-groups');
+  it('places Targets immediately above Target groups with bounded inventory hydration', () => {
+    const targetsIndex = NAV_ITEMS.findIndex((item) => item.id === 'targets');
 
-    assert.notEqual(targetGroupIndex, -1);
-    assert.equal(NAV_ITEMS[targetGroupIndex + 1]?.id, 'targets');
+    assert.notEqual(targetsIndex, -1);
+    assert.equal(NAV_ITEMS[targetsIndex + 1]?.id, 'target-groups');
     assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets', 'targetGroups']);
   });
 
   it('hydrates every dataset rendered by Target Groups', () => {
     const routeDatasets = PORTAL_ROUTE_DATASETS['target-groups'];
 
-    assert.deepEqual(routeDatasets, ['targetGroups', 'agents', 'runs', 'findings', 'evidence']);
+    assert.deepEqual(routeDatasets, ['targetGroups', 'runs', 'findings', 'evidence']);
     assert.ok(
       CORE_PORTAL_DATASETS.length + routeDatasets.length <= 12,
       'Target Groups hydration must stay within the global route bound',
@@ -33,14 +33,14 @@ describe('portal route dataset policy', () => {
   });
 
   it('keeps a representative route hydrate bounded', () => {
-    const routeDatasets = PORTAL_ROUTE_DATASETS.environments;
+    const routeDatasets = PORTAL_ROUTE_DATASETS.findings;
     const requestDatasets = [...CORE_PORTAL_DATASETS, ...routeDatasets];
 
-    // Environments render from authoritative /v1/environments records, and coverage is only
-    // counted from verdicts with evidence bound to the exact run, so both datasets are required.
-    assert.deepEqual(routeDatasets, ['environments', 'targetGroups', 'agents', 'runs', 'findings', 'evidence']);
+    // Findings render from authoritative records, and coverage is only counted from verdicts
+    // with evidence bound to the exact run, so the finding-related datasets are required.
+    assert.deepEqual(routeDatasets, ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence']);
     assert.deepEqual(requestDatasets, [...CORE_PORTAL_DATASETS, ...routeDatasets]);
-    assert.ok(requestDatasets.length <= 10, `environments requested ${requestDatasets.length} datasets`);
+    assert.ok(requestDatasets.length <= 10, `findings requested ${requestDatasets.length} datasets`);
   });
 
   it('keeps every route hydrate bounded', () => {

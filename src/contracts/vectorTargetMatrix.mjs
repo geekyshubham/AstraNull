@@ -1,6 +1,5 @@
 import {
   checkRequiresAdditionalInput,
-  evaluateCheckPrerequisites,
   getCheckById,
   isCustomerRunnable,
 } from './checks.mjs';
@@ -10,12 +9,10 @@ import { VECTOR_LIBRARY, VECTOR_LIBRARY_TOTAL } from './vectorLibrary.mjs';
 export const DEFAULT_VECTOR_TARGET_PROFILE = Object.freeze({
   target_kind: 'fqdn',
   validation_mode: 'external_only',
-  agent: 'none',
 });
 
 export const TARGET_VECTOR_DISPOSITIONS = Object.freeze([
   'safe_runnable',
-  'agent_required',
   'additional_input_required',
   'target_incompatible',
   'soc_gated',
@@ -45,9 +42,7 @@ function assessSafeCheck(checkId, profile) {
   if (targetKindCompatibilityError(check, syntheticTarget(profile.target_kind))) {
     reasons.push('target_kind_not_supported');
   }
-  const onlineAgents = profile.agent === 'none' ? [] : [{ capabilities: check.required_agent_modes ?? [] }];
-  if (evaluateCheckPrerequisites(check, { onlineAgents }).length > 0) reasons.push('agent_required');
-  if (checkRequiresAdditionalInput(check) && !reasons.includes('agent_required')) {
+  if (checkRequiresAdditionalInput(check)) {
     reasons.push('additional_customer_input_required');
   }
   return { check_id: checkId, runnable: reasons.length === 0, reasons };
@@ -58,9 +53,6 @@ function rowDisposition(vector, assessments) {
   if (vector.execution_disposition === 'soc_gated_only') return 'soc_gated';
   if (vector.execution_disposition !== 'safe_validation_available') return 'not_runnable';
   if (assessments.some((assessment) => assessment.runnable)) return 'safe_runnable';
-  if (assessments.some((assessment) => assessment.reasons.includes('agent_required'))) {
-    return 'agent_required';
-  }
   if (assessments.some((assessment) => (
     assessment.reasons.includes('additional_customer_input_required')
   ))) {
@@ -73,7 +65,6 @@ export function buildVectorTargetMatrix(profile = DEFAULT_VECTOR_TARGET_PROFILE)
   const normalizedProfile = {
     target_kind: String(profile.target_kind ?? 'fqdn').trim().toLowerCase(),
     validation_mode: String(profile.validation_mode ?? 'external_only').trim().toLowerCase(),
-    agent: String(profile.agent ?? 'none').trim().toLowerCase(),
   };
   const rows = VECTOR_LIBRARY.map((vector) => {
     const assessments = vector.execution_disposition === 'safe_validation_available'

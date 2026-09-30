@@ -2,40 +2,31 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { deriveWafSignalsFromBoundEvents } from '../../src/lib/wafBoundRunCorrelation.mjs';
 
-describe('waf bound run correlation', () => {
-  it('classifies marker leak when blocked externally but agent observes marker', () => {
-    const nonceHash = 'sha256:marker_leak';
+describe('waf bound run correlation (outside-in, external-only)', () => {
+  it('classifies a fail external result as validation failed', () => {
     const derived = deriveWafSignalsFromBoundEvents({
       probes: [{
         id: 'evt_probe_1',
-        nonce_hash: nonceHash,
-        metadata: { external_result: 'blocked' },
-      }],
-      agents: [{
-        nonce_hash: nonceHash,
-        metadata: { waf_marker: true, marker_type: 'header' },
+        nonce_hash: 'sha256:leak',
+        metadata: { external_result: 'allowed' },
       }],
     });
 
-    assert.equal(derived.wafDetected, true);
     assert.equal(derived.validationPassed, false);
     assert.equal(derived.validationFailed, true);
     assert.equal(derived.source_external, true);
-    assert.equal(derived.source_agent, true);
     assert.equal(derived.scenarioResults.length, 1);
     assert.equal(derived.scenarioResults[0].passed, false);
     assert.equal(derived.scenarioResults[0].observed_action, 'allow');
-    assert.equal(derived.scenarioResults[0].evidence_summary.observed_at_agent, true);
   });
 
-  it('stays inconclusive when blocked externally without fingerprint or agent block evidence', () => {
+  it('stays inconclusive when blocked externally without a WAF fingerprint', () => {
     const derived = deriveWafSignalsFromBoundEvents({
       probes: [{
         id: 'evt_probe_2',
         nonce_hash: 'sha256:blocked_only',
         metadata: { external_result: 'blocked' },
       }],
-      agents: [],
     });
 
     assert.equal(derived.validationPassed, false);
@@ -44,7 +35,7 @@ describe('waf bound run correlation', () => {
     assert.equal(derived.scenarioResults[0].observed_action, 'inconclusive');
   });
 
-  it('classifies blocked external WAF evidence as edge-only without an agent', () => {
+  it('classifies fingerprinted external block as edge-protected only', () => {
     const derived = deriveWafSignalsFromBoundEvents({
       probes: [{
         id: 'evt_probe_2b',
@@ -55,47 +46,43 @@ describe('waf bound run correlation', () => {
           waf_product_hint: 'cloudflare',
         },
       }],
-      agents: [],
     });
 
     assert.equal(derived.validationPassed, false);
     assert.equal(derived.edgeProtected, true);
+    assert.equal(derived.originLockdownConfirmed, false);
     assert.equal(derived.scenarioResults[0].passed, true);
     assert.equal(derived.scenarioResults[0].observed_action, 'block');
   });
 
-  it('classifies protected only with a matching agent not-reached-origin observation', () => {
-    const nonceHash = 'sha256:blocked_agent_confirmed';
+  it('classifies protected when an edge block is paired with external origin-lockdown evidence', () => {
     const derived = deriveWafSignalsFromBoundEvents({
       probes: [{
         id: 'evt_probe_confirmed',
-        nonce_hash: nonceHash,
-        metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
-      }],
-      agents: [{
-        nonce_hash: nonceHash,
-        metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
+        nonce_hash: 'sha256:blocked_locked',
+        metadata: {
+          external_result: 'blocked',
+          waf_fingerprint_detected: true,
+          origin_lockdown_confirmed: true,
+        },
       }],
     });
     assert.equal(derived.validationPassed, true);
     assert.equal(derived.edgeProtected, true);
+    assert.equal(derived.originLockdownConfirmed, true);
     assert.equal(derived.validationFailed, false);
+    assert.equal(derived.scenarioResults[0].evidence_summary.origin_lockdown_confirmed, true);
   });
 
-  it('does not correlate agent observations without matching nonce', () => {
+  it('marks origin bypass confirmed when an external probe reached the origin', () => {
     const derived = deriveWafSignalsFromBoundEvents({
       probes: [{
-        id: 'evt_probe_3',
-        nonce_hash: 'sha256:probe_nonce',
-        metadata: { external_result: 'blocked' },
-      }],
-      agents: [{
-        nonce_hash: 'sha256:other_nonce',
-        metadata: { waf_marker: true },
+        id: 'evt_probe_bypass',
+        nonce_hash: 'sha256:reached',
+        metadata: { external_result: 'reached_origin', origin_bypass_confirmed: true },
       }],
     });
-
-    assert.equal(derived.validationPassed, false);
-    assert.equal(derived.scenarioResults[0].evidence_summary.observed_at_agent, false);
+    assert.equal(derived.originBypassConfirmed, true);
+    assert.equal(derived.validationFailed, true);
   });
 });

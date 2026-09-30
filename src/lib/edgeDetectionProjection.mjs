@@ -255,20 +255,20 @@ function projectProtection(metadata, waf, effectiveness) {
   else if (waf.status !== 'detected') status = 'inconclusive';
   else if (reported === 'unprotected' || reported === 'underprotected') status = reported;
   else if (effectiveness.status === 'effective_for_tested_probes') {
-    status = reported === 'protected' && metadata.agent_corroborated === true
+    status = reported === 'protected' && metadata.origin_lockdown_confirmed === true
       ? 'protected'
       : 'edge_protected';
   }
   const labels = {
-    protected: 'Protected with origin corroboration',
-    edge_protected: 'Effective at the edge; origin not corroborated',
+    protected: 'Protected · edge block and origin lockdown',
+    edge_protected: 'Effective at the edge; origin lockdown not verified',
     underprotected: 'Underprotected',
     unprotected: 'Unprotected',
     detected_only: 'WAF detected; effectiveness not established',
     inconclusive: 'Inconclusive',
   };
   const tiers = {
-    protected: 'external_and_origin_corroborated',
+    protected: 'external_edge_and_origin_lockdown',
     edge_protected: 'external_probe_only',
     underprotected: 'external_probe_gap',
     unprotected: 'absence_or_gap_observed',
@@ -279,7 +279,7 @@ function projectProtection(metadata, waf, effectiveness) {
     status,
     label: labels[status],
     evidence_tier: tiers[status],
-    agent_corroborated: metadata.agent_corroborated === true,
+    origin_lockdown_confirmed: metadata.origin_lockdown_confirmed === true,
   };
 }
 

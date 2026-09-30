@@ -12,15 +12,13 @@ const OUT = path.join(__dirname, '..', 'docs', 'check-library.html');
 
 const GLOSSARY = {
   'Probe worker': 'AstraNull-signed outside process that runs bounded network probes against customer-declared targets (not in your app process).',
-  Agent: 'Customer-deployed outbound observer (heartbeat, packet, mirror, log-tail, or canary). Correlates inside traffic with outside probes — not required for every check.',
   'default_expected_behavior': 'Per-check pass criteria from the catalog (e.g. must_block_before_origin). Verdict correlation uses this, not customer-declared target fields.',
   'probe_profile.kind': 'The bounded probe technique used (HTTP HEAD, TCP connect, DNS lookup, etc.).',
   'Evidence tier': 'E1 is declaration-only, E2 is transport/observation-only, E3 is a bounded semantic-safe result, and E4 is SOC-governed.',
   'external_result': 'Probe outcome: blocked, timeout, connected, error, or not_run. Error/not_run and signed execution timeouts cannot establish readiness.',
-  'agent_observation': 'Metadata that the agent saw matching probe traffic at the observation point.',
   'metadata_marker': 'E1 declaration-only record. It performs zero network I/O and always remains inconclusive until customer evidence or a SOC-governed test exists.',
   'soc_gated': 'Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.',
-  nonce_hash: 'Correlation token linking probe job to agent observation without sending raw payloads.',
+  nonce_hash: 'Correlation token linking a probe job to its bounded external result without sending raw payloads.',
   'direct_origin_ip': 'Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.',
 };
 
@@ -103,8 +101,6 @@ function detectSummary(check) {
   }
   if (tier === 'E2') {
     parts.push('Observation only: this transport result remains inconclusive for readiness.');
-  } else if ((check.evidence_required ?? []).includes('agent_observation')) {
-    parts.push('Correlates outside probe with agent observation when agent-assisted.');
   } else {
     parts.push('Verdict is limited to the bounded semantic fact described above.');
   }
@@ -141,7 +137,6 @@ for (const c of safe) {
 const familyOrder = ['origin', 'l3_l4', 'path', 'dns', 'waf', 'l7', 'tls', 'protocol', 'reflection', 'amplification', 'exploit', 'pattern', 'operations'];
 
 function renderCheckCard(c) {
-  const agents = (c.required_agent_modes ?? []).join(', ') || 'none';
   const setup = (c.required_customer_setup ?? []).map((s) => `<li>${esc(s)}</li>`).join('');
   const evidence = (c.evidence_required ?? []).map(esc).join(', ');
   const stops = (c.stop_conditions ?? []).map(esc).join(', ');
@@ -175,8 +170,6 @@ function renderCheckCard(c) {
         <dd><code>${esc(c.default_expected_behavior ?? '—')}</code></dd>
         <dt>Targets</dt>
         <dd>${esc((c.supported_targets ?? []).join(', '))}</dd>
-        <dt>Agent modes</dt>
-        <dd>${esc(agents)}</dd>
         <dt>Evidence required</dt>
         <dd>${esc(evidence)}</dd>
         <dt>Stop conditions</dt>
@@ -301,8 +294,7 @@ const html = `<!DOCTYPE html>
           <li><strong>Declare</strong> target group + target (FQDN/IP/URL).</li>
           <li><strong>Start test run</strong> — planner picks check, creates signed probe job(s).</li>
           <li><strong>Probe worker</strong> executes a bounded probe (<code>probe_profile</code>) against the declared target only, or records <code>not_run</code> with zero I/O for an E1 <code>metadata_marker</code>.</li>
-          <li><strong>Agent</strong> (if deployed &amp; required) uploads metadata observation when local signal matches.</li>
-          <li><strong>Correlation</strong> compares <code>external_result</code> + observation vs the check&apos;s <code>default_expected_behavior</code> → verdict + finding.</li>
+          <li><strong>Correlation</strong> compares <code>external_result</code> vs the check&apos;s <code>default_expected_behavior</code> → verdict + finding (external probe evidence only).</li>
         </ol>
       </div>
     </section>

@@ -45,7 +45,7 @@ function seedDevStore() {
     { id: 'tgt_other', tenant_id: 'ten_demo', target_group_id: 'tg_web', kind: 'fqdn', value: 'other.example.test', created_at: '2026-09-01T00:00:00.000Z' },
   );
   store.targetVerifications = [
-    { id: 'tv_web', tenant_id: 'ten_demo', target_id: 'tgt_web', state: 'agent_verified', transitioned_at: '2026-09-02T00:00:00.000Z' },
+    { id: 'tv_web', tenant_id: 'ten_demo', target_id: 'tgt_web', state: 'dns_verified', transitioned_at: '2026-09-02T00:00:00.000Z' },
     { id: 'tv_other', tenant_id: 'ten_demo', target_id: 'tgt_other', state: 'dns_verified', transitioned_at: '2026-09-02T00:00:00.000Z' },
   ];
   store.testPolicies = POLICIES.map((policy) => ({ ...policy }));
@@ -97,7 +97,7 @@ describe('target detail bindings and run evidence (dev JSON)', () => {
   it('derives bound checks from test policies and returns run lifecycle plus verdict evidence', () => {
     const detail = getTargetDetail(CTX, 'tgt_web');
     assertTargetDetailBindings(detail);
-    assert.equal(detail.verification.state, 'agent_verified');
+    assert.equal(detail.verification.state, 'dns_verified');
   });
 
   it('keeps bound checks empty with a policy-specific reason when no policy binds the target', () => {

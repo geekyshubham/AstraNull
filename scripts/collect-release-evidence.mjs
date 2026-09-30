@@ -50,10 +50,6 @@ const COLLECTOR_SCRIPT_BY_KIND = {
   operator_runbook_exercise: { script: 'scripts/operator-runbook-evidence.mjs', npmScript: 'operator:runbook:evidence', requiresInput: false },
   oidc_prod_auth_preflight: { script: 'scripts/oidc-prod-auth-preflight.mjs', npmScript: 'oidc:prod:preflight', requiresInput: false },
   edge_protection: { script: 'scripts/edge-protection-evidence.mjs', npmScript: 'edge:protection:evidence' },
-  agent_sbom_provenance: { script: 'scripts/agent-sbom-provenance-evidence.mjs', npmScript: 'agent:sbom:provenance:evidence', requiresInput: false },
-  agent_install_matrix: { script: 'scripts/agent-install-matrix-evidence.mjs', npmScript: 'agent:install:matrix:evidence' },
-  agent_mtls_gateway: { script: 'scripts/agent-mtls-gateway-evidence.mjs', npmScript: 'agent:mtls:evidence' },
-  agent_trust_key_ceremony: { script: 'scripts/agent-trust-key-ceremony-evidence.mjs', npmScript: 'agent:trust-key:evidence' },
   governed_adapter: { script: 'scripts/governed-adapter-evidence.mjs', npmScript: 'soc:adapter:evidence' },
   provider_approval: { script: 'scripts/provider-approval-evidence.mjs', npmScript: 'soc:provider-approval:evidence' },
   kill_switch_drill: { script: 'scripts/kill-switch-drill-evidence.mjs', npmScript: 'soc:kill-switch:evidence' },
@@ -74,7 +70,6 @@ const COLLECTOR_SCRIPT_BY_KIND = {
   staging_e2e_matrix: { script: 'scripts/staging-e2e-matrix-evidence.mjs', npmScript: 'release:staging-e2e:evidence' },
   compliance_legal_signoff: { script: 'scripts/compliance-legal-signoff-evidence.mjs', npmScript: 'release:compliance-legal:evidence' },
   authorization_custody: { script: 'scripts/authorization-custody-evidence.mjs', npmScript: 'soc:authorization-custody:evidence' },
-  placement_confidence_staging: { script: 'scripts/placement-confidence-staging-evidence.mjs', npmScript: 'placement:staging:evidence' },
   gateway_load_abuse: { script: 'scripts/gateway-load-abuse-evidence.mjs', npmScript: 'gateway:load-abuse:evidence' },
 };
 
@@ -277,49 +272,6 @@ export function extractProductionReleaseRecord(kind, artifact, context) {
         response_latency_ms: artifact.response_latency_ms,
         latency_ok: artifact.latency_ok,
         transcript: artifact.transcript,
-        evidence_uri: context.evidenceUri(kind),
-      },
-      status: 'accepted',
-      release_id: context.releaseId,
-    };
-  }
-
-  if (kind === 'agent_sbom_provenance') {
-    return {
-      kind,
-      evidence: {
-        created_at: artifact.created_at,
-        package_format: artifact.package_format,
-        package: {
-          name: artifact.package?.name ?? 'astranull-agent',
-          sha256: artifact.package?.sha256,
-          size: artifact.package?.size,
-        },
-        sbom: {
-          sha256: artifact.sbom?.sha256,
-          size: artifact.sbom?.size,
-          summary: artifact.sbom?.summary,
-        },
-        provenance: {
-          sha256: artifact.provenance?.sha256,
-          size: artifact.provenance?.size,
-          summary: artifact.provenance?.summary,
-        },
-        evidence_uri: context.evidenceUri(kind),
-      },
-      status: 'accepted',
-      release_id: context.releaseId,
-    };
-  }
-
-  if (kind === 'agent_install_matrix') {
-    return {
-      kind,
-      evidence: {
-        created_at: artifact.created_at,
-        matrix_id: artifact.matrix_id,
-        overall_status: artifact.overall_status,
-        rows: artifact.rows,
         evidence_uri: context.evidenceUri(kind),
       },
       status: 'accepted',

@@ -144,7 +144,6 @@ describe('721-vector library contract', () => {
     assert.deepEqual(matrix.profile, {
       target_kind: 'fqdn',
       validation_mode: 'external_only',
-      agent: 'none',
     });
     assert.equal(matrix.rows.length, 721);
     assert.equal(new Set(matrix.rows.map((row) => row.vector_id)).size, 721);

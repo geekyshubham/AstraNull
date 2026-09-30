@@ -5,14 +5,10 @@ export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'governance' | '
 export type RouteId =
   | 'not-found'
   | 'dashboard'
-  | 'environments'
-  | 'environment-detail'
   | 'target-groups'
   | 'targets'
   | 'target-group-detail'
   | 'target-detail'
-  | 'agents'
-  | 'agent-detail'
   | 'checks'
   | 'check-detail'
   | 'test-policies'
@@ -41,10 +37,8 @@ export type PortalDataset =
   | 'state'
   | 'tenant'
   | 'deploymentFeatures'
-  | 'environments'
   | 'targetGroups'
   | 'targets'
-  | 'agents'
   | 'checks'
   | 'testPolicies'
   | 'runs'
@@ -59,7 +53,6 @@ export type PortalDataset =
   | 'audit'
   | 'connectors'
   | 'secrets'
-  | 'bootstrapTokens'
   | 'serviceAccounts'
   | 'wafAssets'
   | 'wafCoverage'
@@ -92,15 +85,11 @@ export const CORE_PORTAL_DATASETS = [
 
 export const PORTAL_ROUTE_DATASETS = {
   'not-found': [],
-  dashboard: ['environments', 'targetGroups', 'targets', 'agents', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
-  environments: ['environments', 'targetGroups', 'agents', 'runs', 'findings', 'evidence'],
-  'environment-detail': ['environments', 'targetGroups', 'targets', 'agents', 'checks', 'runs', 'findings', 'evidence'],
-  'target-groups': ['targetGroups', 'agents', 'runs', 'findings', 'evidence'],
+  dashboard: ['targetGroups', 'targets', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
+  'target-groups': ['targetGroups', 'runs', 'findings', 'evidence'],
   targets: ['targets', 'targetGroups'],
-  'target-group-detail': ['targetGroups', 'agents', 'checks', 'testPolicies', 'connectors', 'validationScans'],
-  'target-detail': ['checks'],
-  agents: ['targetGroups', 'agents'],
-  'agent-detail': ['agents', 'audit', 'checks', 'runs', 'evidence'],
+  'target-group-detail': ['targetGroups', 'checks', 'testPolicies', 'connectors', 'validationScans'],
+  'target-detail': ['checks', 'targetGroups'],
   checks: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
   'check-detail': ['checks', 'runs'],
   'test-policies': ['targetGroups', 'checks', 'testPolicies'],
@@ -117,11 +106,11 @@ export const PORTAL_ROUTE_DATASETS = {
   notifications: ['notifications'],
   audit: ['audit'],
   'release-evidence': ['releaseEvidence', 'releaseAttestation'],
-  settings: ['targetGroups', 'agents', 'evidence', 'secrets', 'bootstrapTokens', 'serviceAccounts'],
+  settings: ['targetGroups', 'evidence', 'secrets', 'serviceAccounts'],
   support: ['subscriptionSummary'],
   subscription: ['subscriptionSummary'],
   admin: ['internalOverview', 'internalSignupRequests', 'internalTenants', 'internalApprovalRequests', 'internalAudit'],
-  'tenant-detail': ['agents', 'internalTenants', 'internalApprovalRequests'],
+  'tenant-detail': ['internalTenants', 'internalApprovalRequests'],
   'internal-soc': ['findings', 'highScale', 'internalApprovalRequests'],
   'queue-detail': ['targetGroups', 'highScale']
 } as const satisfies Record<RouteId, readonly PortalDataset[]>;
@@ -190,8 +179,6 @@ export type StatePayload = {
     };
   };
   target_groups?: number;
-  agents_online?: number;
-  agents_total?: number;
   recent_runs?: DataItem[];
   open_findings?: number;
   high_scale_requests?: number;
@@ -209,12 +196,10 @@ export type DataItem = Record<string, unknown>;
 export type PortalData = {
   state: StatePayload | null;
   tenant: DataItem | null;
-  environments: DataItem[];
   targetGroups: DataItem[];
   targetGroupsMeta: DataItem | null;
   targets: DataItem[];
   targetsMeta: DataItem | null;
-  agents: DataItem[];
   checks: DataItem[];
   testPolicies: DataItem[];
   runs: DataItem[];
@@ -233,7 +218,6 @@ export type PortalData = {
   audit: DataItem[];
   connectors: DataItem[];
   secrets: DataItem[];
-  bootstrapTokens: DataItem[];
   serviceAccounts: DataItem[];
   wafAssets: DataItem[];
   wafCoverage: DataItem | null;

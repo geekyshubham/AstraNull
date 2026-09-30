@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
+import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
-import { createBootstrapToken } from '../../src/services/tokens.mjs';
 
 let baseUrl;
 let server;
 
-const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
 const matchingFqdn = 'api.shop.example.com';
 
-async function registerAgentWithProbeEndpoint() {
+// ADR-0008 (outside-in only): the agent-observed ownership challenge is removed. The
+// /v1/ownership-verifications write endpoints stay wired for API stability but fail closed;
+// ownership is proven through the DNS challenge instead.
+async function createTargetGroupWithTarget() {
   const h = demoHeaders('engineer');
   const tg = await request(baseUrl, 'POST', '/v1/target-groups', {
     headers: h,
@@ -25,38 +26,7 @@ async function registerAgentWithProbeEndpoint() {
     body: { value: matchingFqdn, kind: 'fqdn' },
   });
   assert.equal(tgt.status, 201);
-
-  const { secret } = createBootstrapToken(ctx, {
-    target_group_id: tgId,
-    prebind_fqdn: matchingFqdn,
-    max_registrations: 1,
-  });
-
-  const reg = await request(baseUrl, 'POST', '/v1/agents/register', {
-    headers: demoHeaders('engineer'),
-    body: {
-      bootstrap_token: secret,
-      hostname: 'ownership-agent-host',
-      name: 'ownership-agent-host',
-      capabilities: ['canary', 'heartbeat'],
-    },
-  });
-  assert.equal(reg.status, 201);
-
-  const agentId = reg.json.agent.id;
-  const agentCredential = reg.json.agent_credential;
-
-  const hb = await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
-    headers: agentHeaders(agentCredential),
-    body: {
-      version: '0.2.0-production-readiness',
-      probe_endpoint: { declared_fqdn: matchingFqdn },
-    },
-  });
-  assert.equal(hb.status, 200);
-  assert.equal(hb.json.probe_endpoint_accepted, true);
-
-  return { tgId, agentId };
+  return { tgId };
 }
 
 before(() => {
@@ -71,41 +41,29 @@ after(() => {
   server.close();
 });
 
-describe('ownership verification API', () => {
-  it('creates challenge, lists record, rejects early confirm, enforces RBAC', async () => {
-    const { tgId, agentId } = await registerAgentWithProbeEndpoint();
+describe('ownership verification API (outside-in)', () => {
+  it('fails closed on challenge creation, still lists, and enforces RBAC', async () => {
+    const { tgId } = await createTargetGroupWithTarget();
     const engineer = demoHeaders('engineer');
 
     const createRes = await request(baseUrl, 'POST', '/v1/ownership-verifications', {
       headers: engineer,
-      body: { target_group_id: tgId, agent_id: agentId },
+      body: { target_group_id: tgId },
     });
-    assert.equal(createRes.status, 201);
-    assert.equal(createRes.json.verification.status, 'challenge_sent');
-    assert.equal(typeof createRes.json.nonce, 'string');
-    assert.ok(createRes.json.nonce.length > 0);
-    const verificationId = createRes.json.verification.id;
+    assert.equal(createRes.status, 410);
+    assert.equal(createRes.json.error, 'ownership_agent_flow_removed');
 
     const listRes = await request(baseUrl, 'GET', '/v1/ownership-verifications', {
       headers: engineer,
     });
     assert.equal(listRes.status, 200);
-    const listed = listRes.json.items.find((item) => item.id === verificationId);
-    assert.ok(listed, 'verification appears in list');
-    assert.equal(listed.status, 'challenge_sent');
+    assert.ok(Array.isArray(listRes.json.items));
+    assert.equal(listRes.json.items.length, 0);
 
-    const confirmEarly = await request(
-      baseUrl,
-      'POST',
-      `/v1/ownership-verifications/${verificationId}/confirm`,
-      { headers: engineer },
-    );
-    assert.equal(confirmEarly.status, 409);
-    assert.equal(confirmEarly.json.error, 'ownership_not_verified');
-
+    // RBAC is still enforced ahead of the fail-closed body: a viewer cannot write.
     const viewerCreate = await request(baseUrl, 'POST', '/v1/ownership-verifications', {
       headers: demoHeaders('viewer'),
-      body: { target_group_id: tgId, agent_id: agentId },
+      body: { target_group_id: tgId },
     });
     assert.equal(viewerCreate.status, 403);
     assert.equal(viewerCreate.json.error, 'forbidden');

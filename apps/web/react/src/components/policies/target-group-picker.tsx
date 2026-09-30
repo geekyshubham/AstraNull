@@ -85,11 +85,9 @@ function TargetGroupOption({
 }) {
   const id = getString(group, ['id']);
   const name = getString(group, ['name', 'id'], 'Unnamed target group');
-  const env = getString(group, ['environment_id']);
   const criticality = getString(group, ['criticality']);
   const targetCount = getNumber(group, ['target_count', 'targets_count']);
   const metadata = [
-    env || null,
     criticality || null,
     targetCount === null ? null : `${targetCount} target${targetCount === 1 ? '' : 's'}`,
   ].filter(Boolean).join(' · ') || 'Group metadata unavailable';

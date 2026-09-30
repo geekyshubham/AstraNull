@@ -11,7 +11,7 @@ describe('target management trust boundary', () => {
   it('canonicalizes target kinds and values for deterministic dedupe', () => {
     assert.deepEqual(
       normalizeTargetInput({ kind: 'domain', value: 'WWW.Example.COM.' }),
-      { kind: 'fqdn', value: 'www.example.com', normalized_value: 'www.example.com', metadata: {}, dropped_fields: [] },
+      { kind: 'fqdn', value: 'www.example.com', normalized_value: 'www.example.com', metadata: {}, tags: [], dropped_fields: [] },
     );
     assert.equal(
       targetDedupeKey({ kind: 'url', value: 'HTTPS://Example.COM:443/path#fragment' }),

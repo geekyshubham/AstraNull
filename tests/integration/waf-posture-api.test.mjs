@@ -178,12 +178,10 @@ async function finalizeProtectedPosture(baseUrl, headers, asset) {
     metadata: {
       waf_fingerprint_detected: true,
       waf_product_hint: 'cloudflare',
+      // Outside-in only (ADR-0008): full "protected" is derived from external origin-lockdown
+      // evidence (origin not reachable), not an internal agent observation.
+      origin_lockdown_confirmed: true,
     },
-  });
-  injectMetadataAgentObservation({
-    testRunId: safeRun.id,
-    nonceHash,
-    metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
   });
 
   const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -243,12 +241,7 @@ async function finalizeUnderprotectedMarkerLeak(baseUrl, headers, asset, { safeR
   injectMetadataProbeEvent({
     testRunId: safeRun.id,
     nonceHash,
-    externalResult: 'blocked',
-  });
-  injectMetadataAgentObservation({
-    testRunId: safeRun.id,
-    nonceHash,
-    metadata: { waf_marker: true, marker_type: 'header' },
+    externalResult: 'allowed',
   });
 
   const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -279,24 +272,10 @@ async function finalizeUnderprotectedMarkerLeak(baseUrl, headers, asset, { safeR
   };
 }
 
-function injectMetadataAgentObservation({ testRunId, nonceHash, metadata = {} }) {
-  const store = getStore();
-  const agentId = `evt_agent_${nonceHash}`;
-  store.events.push({
-    id: agentId,
-    tenant_id: 'ten_demo',
-    test_run_id: testRunId,
-    target_id: 'tgt_1',
-    check_id: 'waf.marker_rule.safe',
-    agent_id: 'ag_waf_test',
-    source: 'agent',
-    signal_type: 'agent_observation',
-    timestamp: new Date().toISOString(),
-    nonce_hash: nonceHash,
-    metadata,
-  });
-  return agentId;
+function injectMetadataAgentObservation() {
+  throw new Error('agent observations are removed (ADR-0008); use origin_lockdown_confirmed on probe metadata');
 }
+void injectMetadataAgentObservation;
 
 describe('WAF posture API feature flag', () => {
   let server;
@@ -514,7 +493,7 @@ describe('WAF posture API', () => {
     assert.equal(getStore().wafScenarioResults?.length ?? 0, beforeScenarios);
   });
 
-  it('rejects protected finalize when client asserts observed_at_agent without corroborating events', async () => {
+  it('rejects a finalize whose evidence summary carries a forbidden observed_at_agent flag', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -543,7 +522,9 @@ describe('WAF posture API', () => {
       },
     });
     assert.equal(finalize.status, 400);
-    assert.equal(finalize.json.error, 'waf_validation_evidence_required');
+    // ADR-0008: observed_at_agent is no longer an allowed evidence key — the client-asserted
+    // agent flag is rejected outright rather than merely failing corroboration.
+    assert.equal(finalize.json.error, 'invalid_waf_evidence_summary');
   });
 
   it('does not use same-tenant events to corroborate an unbound nonce claim', async () => {
@@ -613,13 +594,8 @@ describe('WAF posture API', () => {
     const probeId = injectMetadataProbeEvent({
       testRunId: safeRun.id,
       nonceHash,
-      externalResult: 'blocked',
+      externalResult: 'allowed',
       metadata: { waf_fingerprint_detected: true, waf_product_hint: 'cloudflare' },
-    });
-    injectMetadataAgentObservation({
-      testRunId: safeRun.id,
-      nonceHash,
-      metadata: { waf_marker: true, observed_action: 'reached_origin' },
     });
 
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -636,7 +612,6 @@ describe('WAF posture API', () => {
         validation_failed: false,
         origin_bypass_confirmed: true,
         source_external: false,
-        source_agent: false,
         scenario_results: [{
           scenario_family: 'marker',
           expected_action: 'block',
@@ -652,7 +627,7 @@ describe('WAF posture API', () => {
     assert.equal(finalize.json.posture.status, 'underprotected');
     assert.deepEqual(finalize.json.posture.reason_codes, ['marker_rule_not_blocking']);
     assert.equal(finalize.json.posture.source_mix.external, true);
-    assert.equal(finalize.json.posture.source_mix.agent, true);
+    assert.equal(finalize.json.posture.source_mix.agent, undefined);
 
     const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${runId}`, {
       headers: engineer,
@@ -685,12 +660,8 @@ describe('WAF posture API', () => {
       metadata: {
         waf_fingerprint_detected: true,
         waf_product_hint: 'cloudflare',
+        origin_lockdown_confirmed: true,
       },
-    });
-    injectMetadataAgentObservation({
-      testRunId: safeRun.id,
-      nonceHash,
-      metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
     });
 
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -1003,12 +974,11 @@ describe('WAF posture API', () => {
       body: {
         validation_passed: true,
         validation_failed: false,
-        source_agent: true,
       },
     });
     assert.equal(finalize.status, 200);
     assert.equal(finalize.json.posture.status, 'edge_protected');
-    assert.equal(finalize.json.posture.source_mix.agent, false);
+    assert.equal(finalize.json.posture.source_mix.agent, undefined);
 
     const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${runId}`, { headers: engineer });
     assert.equal(detail.status, 200);
@@ -1017,10 +987,10 @@ describe('WAF posture API', () => {
     assert.equal(detail.json.scenario_results.length, 1);
     assert.equal(detail.json.scenario_results[0].passed, true);
     assert.equal(detail.json.scenario_results[0].evidence_summary_json.blocked, true);
-    assert.equal(detail.json.scenario_results[0].evidence_summary_json.observed_at_agent, false);
+    assert.equal(detail.json.scenario_results[0].evidence_summary_json.origin_lockdown_confirmed, false);
   });
 
-  it('classifies matching agent marker observation as underprotected, not protected', async () => {
+  it('classifies an external marker leak as underprotected, not protected', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const { posture, validationRunId } = await finalizeUnderprotectedMarkerLeak(
@@ -1031,7 +1001,7 @@ describe('WAF posture API', () => {
     assert.notEqual(posture.status, 'protected');
     assert.ok(['underprotected', 'unprotected'].includes(posture.status));
     assert.equal(posture.source_mix.external, true);
-    assert.equal(posture.source_mix.agent, true);
+    assert.equal(posture.source_mix.agent, undefined);
     const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${validationRunId}`, {
       headers: engineer,
     });
@@ -1207,7 +1177,7 @@ describe('WAF drift events API', () => {
     assert.equal(list.json.items.length, 0);
   });
 
-  it('emits mode_change drift when protected posture loses agent corroboration', async () => {
+  it('emits mode_change drift when protected posture loses origin-lockdown evidence', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const protectedOutcome = await finalizeProtectedPosture(baseUrl, engineer, asset);

@@ -183,8 +183,6 @@ const BASE_STATIC_ROUTE_ALIASES = {
   '/': '/index.html',
   '/app': '/index.html',
   '/admin': '/index.html',
-  '/agent-detail': '/index.html',
-  '/agents': '/index.html',
   '/audit': '/index.html',
   '/checks': '/index.html',
   '/cve-pipeline': '/index.html',

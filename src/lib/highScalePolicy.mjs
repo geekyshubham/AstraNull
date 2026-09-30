@@ -72,7 +72,6 @@ export const ARTIFACT_PROOF_FIELDS = {
 
 export const TELEMETRY_CATEGORIES = new Set([
   'external_availability',
-  'agent_health',
   'service_health',
   'mitigation',
   'stop_evidence',

@@ -164,7 +164,6 @@ function deriveConfidence({ snapshot = {}, asset = {}, factors = [] }) {
   if (!confidence) {
     const signals = [
       sourceMix.external,
-      sourceMix.agent,
       sourceMix.connector,
       sourceMix.validation,
       sourceMix.cve,

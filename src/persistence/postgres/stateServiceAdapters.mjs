@@ -3,11 +3,6 @@ import {
   authorizationPackComplete,
   distinctSocApprovalCount,
 } from '../../lib/highScalePolicy.mjs';
-import {
-  placementScoreFromDiagnostics,
-  publicPlacementDiagnosticsPayload,
-  summarizePlacementDiagnostics,
-} from '../../lib/placementDiagnostics.mjs';
 import { buildGetStatePayload } from '../../lib/statePayload.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 import { runVerdictSupportsReadiness } from '../../lib/readinessVerdicts.mjs';
@@ -16,11 +11,12 @@ import { runVerdictSupportsReadiness } from '../../lib/readinessVerdicts.mjs';
 const RECENT_EVIDENCE_WINDOW_DAYS = 30;
 const RECENT_EVIDENCE_WINDOW_MS = RECENT_EVIDENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-const WEIGHT_COVERAGE = 40;
-const WEIGHT_AGENT_PLACEMENT = 25;
-const WEIGHT_VERDICTS = 25;
-const WEIGHT_EVIDENCE_FRESHNESS = 15;
-const WEIGHT_SOC_GOVERNANCE = 10;
+// ADR-0008 removed the "Agent placement & health" factor (was weight 25). Remaining weights are
+// scaled by 100/90 and rounded to keep an integer sum of 100 (see services/readiness.mjs).
+const WEIGHT_COVERAGE = 44;
+const WEIGHT_VERDICTS = 28;
+const WEIGHT_EVIDENCE_FRESHNESS = 17;
+const WEIGHT_SOC_GOVERNANCE = 11;
 
 const RUN_EVIDENCE_TIMESTAMP_FIELDS = [
   'verdict_at',
@@ -29,8 +25,6 @@ const RUN_EVIDENCE_TIMESTAMP_FIELDS = [
   'created_at',
 ];
 
-const AGENT_OBSERVATION_SIGNALS = new Set(['agent_observation', 'agent_no_observation']);
-const PROVEN_OBSERVATION_SIGNAL = 'agent_observation';
 const GOVERNED_HS_STATES = new Set(['scheduled', 'running', 'stopped', 'closed']);
 
 const TEST_RUN_LIST_LIMIT = 500;
@@ -60,9 +54,6 @@ const GAP_POSTURE_VERDICTS = new Set([
 
 /** @type {readonly string[]} */
 export const STATE_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['listTargetGroups']);
-
-/** @type {readonly string[]} */
-export const STATE_AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze(['listAgents']);
 
 /** @type {readonly string[]} */
 export const STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
@@ -138,16 +129,6 @@ function assertStateRepositories(repositories) {
     }
   }
 
-  const agentControl = repositories?.agentControl;
-  if (!agentControl || typeof agentControl !== 'object') {
-    throw new Error('Postgres state service adapter requires repositories.agentControl.');
-  }
-  for (const method of STATE_AGENT_CONTROL_REPOSITORY_METHODS) {
-    if (typeof agentControl[method] !== 'function') {
-      throw new Error(`Postgres state service adapter requires agentControl.${method}().`);
-    }
-  }
-
   const validationEvidence = repositories?.validationEvidence;
   if (!validationEvidence || typeof validationEvidence !== 'object') {
     throw new Error('Postgres state service adapter requires repositories.validationEvidence.');
@@ -216,89 +197,9 @@ function evidenceFreshnessForRun(run, verdict, events, vaultItems, nowMs) {
   return { recent: hasRecent, stale: !hasRecent, backed: true };
 }
 
-function agentsForTenant(agents, tenantId) {
-  return agents.filter((a) => a.tenant_id === tenantId && a.status !== 'revoked');
-}
-
-function indexAgentsByGroup(agents) {
-  const byGroup = new Map();
-  for (const agent of agents) {
-    if (agent.target_group_id == null) continue;
-    const groupAgents = byGroup.get(agent.target_group_id) ?? [];
-    groupAgents.push(agent);
-    byGroup.set(agent.target_group_id, groupAgents);
-  }
-  return byGroup;
-}
-
-function indexRecentObservationsByGroup(eventsByRun, runs, tenantId, nowMs) {
-  const byGroup = new Map();
-  for (const run of runs) {
-    if (run.tenant_id !== tenantId || !run.target_group_id || !runStatusEligible(run)) continue;
-    for (const event of eventsByRun.get(run.id) ?? []) {
-      if (
-        event.tenant_id !== tenantId
-        || !AGENT_OBSERVATION_SIGNALS.has(event.signal_type)
-        || !isRecentMs(parseTs(event.timestamp ?? event.created_at), nowMs)
-      ) {
-        continue;
-      }
-      const summary = byGroup.get(run.target_group_id) ?? { count: 0, proven: false };
-      summary.count += 1;
-      if (event.signal_type === PROVEN_OBSERVATION_SIGNAL) summary.proven = true;
-      byGroup.set(run.target_group_id, summary);
-    }
-  }
-  return byGroup;
-}
-
-function diagnoseGroup(group, bound, unboundOnlineIds, observation) {
-  const boundIds = bound.map((agent) => agent.id);
-  const onlineBoundIds = bound.filter((agent) => agent.status === 'online').map((agent) => agent.id);
-  const recentObservationCount = observation?.count ?? 0;
-  const warnings = [];
-  let status;
-
-  if (bound.length === 0) {
-    status = 'missing_agent';
-    warnings.push('no_bound_agent');
-    if (unboundOnlineIds.length > 0) warnings.push('unbound_agent_only');
-  } else if (onlineBoundIds.length === 0) {
-    status = 'misplaced_risk';
-    warnings.push('no_online_bound_agent');
-  } else if (observation?.proven !== true) {
-    status = 'needs_baseline';
-    warnings.push('no_recent_observation');
-  } else {
-    status = 'proven';
-  }
-
-  return {
-    target_group_id: group.id,
-    target_group_name: group.name ?? group.id,
-    bound_agent_ids: boundIds,
-    online_bound_agent_ids: onlineBoundIds,
-    recent_observation_count: recentObservationCount,
-    status,
-    warnings,
-  };
-}
-
-function hasAgentObservationEvidence(eventsByRun, tenantId) {
-  for (const events of eventsByRun.values()) {
-    for (const e of events) {
-      if (e.tenant_id === tenantId && AGENT_OBSERVATION_SIGNALS.has(e.signal_type)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function computeReadinessSummary({
   tenantId,
   groups,
-  agents,
   runs,
   openFindingsCount,
   verdictByRun,
@@ -308,7 +209,6 @@ function computeReadinessSummary({
   killSwitch,
   nowMs,
 }) {
-  const onlineAgents = agents.filter((a) => a.status === 'online');
   const factors = [];
 
   const declaredGroupIds = new Set(groups.map((g) => g.id));
@@ -360,68 +260,8 @@ function computeReadinessSummary({
     key: 'coverage',
     label: 'Validation coverage',
     score: coverageScore,
+    weight: WEIGHT_COVERAGE,
     detail: coverageDetail,
-  });
-
-  const unboundOnline = agents.filter((a) => a.status === 'online' && a.target_group_id == null);
-  const unboundOnlineIds = unboundOnline.map((a) => a.id);
-  const agentsByGroup = indexAgentsByGroup(agents);
-  const observationsByGroup = indexRecentObservationsByGroup(eventsByRun, runs, tenantId, nowMs);
-  const groupDiagnostics = groups.map((group) =>
-    diagnoseGroup(
-      group,
-      agentsByGroup.get(group.id) ?? [],
-      unboundOnlineIds,
-      observationsByGroup.get(group.id),
-    ),
-  );
-  const placementDiagnostics = {
-    tenant_id: tenantId,
-    computed_at: new Date(nowMs).toISOString(),
-    unbound_online_agent_ids: unboundOnlineIds,
-    groups: groupDiagnostics,
-  };
-  const placementSummary = summarizePlacementDiagnostics(placementDiagnostics);
-  const pathObservation = hasAgentObservationEvidence(eventsByRun, tenantId);
-
-  let placementScore = 0;
-  let placementDetail;
-  if (!agents.length) {
-    placementDetail = 'No agents registered; internal path observation cannot be evidenced.';
-    if (totalGroups > 0) placementDetail += ` ${placementSummary.summary}`;
-  } else if (!onlineAgents.length) {
-    placementDetail = `0 online of ${agents.length} registered agent(s); agents are not reporting healthy.`;
-    if (!pathObservation) placementDetail += ' No agent observation evidence recorded yet.';
-    if (totalGroups > 0) placementDetail += ` ${placementSummary.summary}`;
-  } else if (totalGroups > 0) {
-    placementScore = placementScoreFromDiagnostics(placementDiagnostics, WEIGHT_AGENT_PLACEMENT) ?? 0;
-    placementDetail = `${onlineAgents.length} online of ${agents.length} registered agent(s). ${placementSummary.summary}`;
-    if (placementSummary.unbound_online_agent_count > 0 && placementSummary.proven === 0) {
-      placementDetail +=
-        ' Unbound online agents do not prove placement for declared target groups.';
-    } else if (!pathObservation && placementSummary.proven === 0) {
-      placementDetail +=
-        ' Online agents registered; path coverage is not yet proven by agent observation evidence.';
-    }
-  } else {
-    placementScore = Math.round(
-      Math.min(WEIGHT_AGENT_PLACEMENT, (onlineAgents.length / agents.length) * WEIGHT_AGENT_PLACEMENT),
-    );
-    placementDetail = `${onlineAgents.length} online of ${agents.length} registered agent(s).`;
-    if (pathObservation) {
-      placementDetail += ' Agent observation evidence exists for validation runs.';
-    } else {
-      placementDetail +=
-        ' Online agents registered; path coverage is not yet proven by agent observation evidence.';
-    }
-  }
-
-  factors.push({
-    key: 'agent_placement',
-    label: 'Agent placement & health',
-    score: placementScore,
-    detail: placementDetail,
-    placement_diagnostics: publicPlacementDiagnosticsPayload(placementDiagnostics),
   });
 
   const runsById = new Map(runs.map((run) => [run.id, run]));
@@ -456,6 +296,7 @@ function computeReadinessSummary({
     key: 'verdicts',
     label: 'Open findings impact',
     score: Math.round(verdictScore),
+    weight: WEIGHT_VERDICTS,
     detail: verdictDetail,
   });
 
@@ -474,6 +315,7 @@ function computeReadinessSummary({
     key: 'evidence_freshness',
     label: 'Evidence freshness',
     score: freshnessScore,
+    weight: WEIGHT_EVIDENCE_FRESHNESS,
     detail: freshnessDetail,
   });
 
@@ -482,6 +324,7 @@ function computeReadinessSummary({
     key: 'soc_readiness',
     label: 'SOC governance posture',
     score: socGovernance.score,
+    weight: WEIGHT_SOC_GOVERNANCE,
     detail: socGovernance.detail,
   });
 
@@ -626,7 +469,6 @@ function sanitizeKillSwitchRecord(record, tenantId) {
 /**
  * @param {{
  *   coreCatalog?: Record<string, unknown>,
- *   agentControl?: Record<string, unknown>,
  *   validationEvidence?: Record<string, unknown>,
  *   highScale?: Record<string, unknown>,
  *   killSwitch?: Record<string, unknown>,
@@ -636,7 +478,6 @@ function sanitizeKillSwitchRecord(record, tenantId) {
 export function createPostgresStateServices(repositories, options = {}) {
   assertStateRepositories(repositories);
   const coreCatalog = repositories.coreCatalog;
-  const agentControl = repositories.agentControl;
   const validationEvidence = repositories.validationEvidence;
   const highScale = repositories.highScale;
   const killSwitch = repositories.killSwitch;
@@ -653,7 +494,6 @@ export function createPostgresStateServices(repositories, options = {}) {
 
       const [
         groups,
-        agents,
         runs,
         evidenceItems,
         openFindingsCount,
@@ -661,7 +501,6 @@ export function createPostgresStateServices(repositories, options = {}) {
         killSwitchRecord,
       ] = await Promise.all([
         coreCatalog.listTargetGroups(ctx),
-        agentControl.listAgents(ctx),
         validationEvidence.listTestRuns(ctx, { limit: TEST_RUN_LIST_LIMIT }),
         validationEvidence.listEvidence(ctx, { limit: EVIDENCE_LIST_LIMIT }),
         validationEvidence.countOpenFindings(ctx),
@@ -669,7 +508,6 @@ export function createPostgresStateServices(repositories, options = {}) {
         killSwitch.getKillSwitchRecord(ctx),
       ]);
 
-      const tenantAgents = agentsForTenant(agents, tenantId);
       const sortedRuns = sortRunsNewestFirst(runs);
 
       const eligibleRuns = runs.filter(runStatusEligible);
@@ -725,7 +563,6 @@ export function createPostgresStateServices(repositories, options = {}) {
       const readiness = computeReadinessSummary({
         tenantId,
         groups,
-        agents: tenantAgents,
         runs,
         openFindingsCount,
         verdictByRun,
@@ -746,7 +583,6 @@ export function createPostgresStateServices(repositories, options = {}) {
         computed: {
           readiness,
           target_groups: groups.length,
-          agents_online: tenantAgents.filter((a) => a.status === 'online').length,
           recent_runs: sortedRuns
             .slice(0, RECENT_RUNS_LIMIT)
             .reverse()

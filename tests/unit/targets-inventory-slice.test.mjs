@@ -138,11 +138,10 @@ describe('GET /v1/targets inventory', () => {
       tenant_id: 'ten_demo',
       target_group_id: 'tg_1',
       target_group_name: 'TG',
-      environment_id: 'env_demo',
-      environment_name: 'Prod',
       kind: 'fqdn',
       value: 'Api.Example.COM',
       expected_behavior: 'must_block_before_origin',
+      tags: [],
       metadata: {
         eligibility: 'not_eligible',
         eligibility_reason: 'maintenance_window',
@@ -168,7 +167,7 @@ describe('GET /v1/targets inventory', () => {
     });
     assert.equal(otherTenant.status, 200);
     assert.deepEqual(otherTenant.json.items.map((target) => target.id), ['tgt_other']);
-    assert.equal(otherTenant.json.items[0].environment_name, 'Other production');
+    assert.equal(otherTenant.json.items[0].environment_name, undefined);
   });
 
   it('keeps the Postgres query tenant-bound and maps the same inventory contract', async () => {
@@ -202,7 +201,8 @@ describe('GET /v1/targets inventory', () => {
 
     assert.equal(items.length, 1);
     assert.equal(items[0].target_group_name, 'Payments');
-    assert.equal(items[0].environment_name, 'Production');
+    assert.equal(items[0].environment_name, undefined);
+    assert.deepEqual(items[0].tags, []);
     assert.equal(items[0].verification_state, 'dns_verified');
     assert.deepEqual(items[0].verification.source_ref, { dns_challenge_id: 'dns_pg' });
     assert.equal(items[0].eligibility, 'eligible');

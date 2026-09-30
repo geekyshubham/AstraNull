@@ -87,12 +87,6 @@ describe('target-group React truthfulness contract', () => {
     assert.doesNotMatch(SOURCE, /customerRunnableChecks\[0\]|safeCheckId|firstRunnableCheckId/);
   });
 
-  it('persists a bare IP with optional port metadata', () => {
-    assert.match(SOURCE, /'ip',\s*ip,\s*String\(form\.get\('expected_behavior'\)/s);
-    assert.match(SOURCE, /\{ port: parsedPort\.port, notes:/);
-    assert.doesNotMatch(SOURCE, /port \? `\$\{ip\}:\$\{port\}` : ip/);
-  });
-
   it('keeps imported provenance and target actions truthful without stealing the native row', () => {
     assert.match(SOURCE, /targets:bulk-import/);
     assert.match(SOURCE, /connector_id: inventoryProvider/);

@@ -10,11 +10,11 @@ import {
 import { Activity, Bot, CalendarClock, Check, Globe, Plus, Search, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
-import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
+import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../lib/route-params';
 // @ts-ignore Plain ESM keeps these UI decisions directly executable by node:test.
-import { apiErrorCode, edgeDetectionLockedReason, edgeDetectionReasonExplanation, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
+import { apiErrorCode, edgeDetectionLockedReason, edgeDetectionReasonExplanation, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
 import type { DataItem, PortalConfig, PortalData, PortalDataset, Session } from '../lib/types';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { canReadDataset, sessionHasPermission } from '../lib/dataset-access.mjs';
@@ -40,16 +40,15 @@ import {
   policySupportedTargetKinds,
 } from '../components/policies/target-group-picker';
 
-type OnboardTab = 'fqdn' | 'ip' | 'cloud';
+type OnboardTab = 'fqdn' | 'cloud';
 
 const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
   { id: 'fqdn', label: 'Domain · DNS TXT' },
-  { id: 'ip', label: 'IP address · Agent callback' },
   { id: 'cloud', label: 'DNS provider · select zones' }
 ];
 
 /** §7.1 verification states that unlock the per-row Run test action. */
-const RUN_ENABLED_STATES = new Set(['dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed']);
+const RUN_ENABLED_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed']);
 const DNS_INVENTORY_PROVIDERS = new Set(['cloudflare', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1']);
 const DNS_POLL_INTERVAL_MS = 30_000;
 const DNS_POLL_MAX_MS = 15 * 60 * 1000;
@@ -712,7 +711,6 @@ export function TargetGroupDetailView({
   const targets = Array.isArray(entity.targets) ? entity.targets as DataItem[] : [];
   const fqdnTargets = targets.filter((target) => getString(target, ['kind'], '').toLowerCase() === 'fqdn');
   const selectedDnsTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === selectedDnsTargetId) ?? null;
-  const agents = Array.isArray(data.agents) ? data.agents as DataItem[] : [];
   const checks = Array.isArray(data.checks) ? data.checks as DataItem[] : [];
   const policyItems = Array.isArray(data.testPolicies) ? data.testPolicies as DataItem[] : [];
   const relatedRuns = Array.isArray(entity.runs_recent) ? entity.runs_recent as DataItem[] : [];
@@ -736,7 +734,7 @@ export function TargetGroupDetailView({
   // straight off the target-group API entity (both fields exist in the dev store and Postgres,
   // defaulting to 'unverified'/'external_only').
   const ownershipStatus = getString(entity, ['ownership_status'], 'unverified');
-  const ownershipTone = ['agent_verified', 'dns_verified', 'provider_verified', 'user_confirmed', 'verified'].includes(ownershipStatus.trim().toLowerCase())
+  const ownershipTone = ['dns_verified', 'provider_verified', 'user_confirmed', 'verified'].includes(ownershipStatus.trim().toLowerCase())
     ? 'success'
     : ownershipStatus.trim().toLowerCase().includes('pending')
       ? 'warn'
@@ -1079,7 +1077,7 @@ export function TargetGroupDetailView({
       return null;
     }
     // Only send metadata keys that carry a value — keeps the persisted
-    // metadata_json clean (no empty agent_id / notes / port entries).
+    // metadata_json clean (no empty notes / port entries).
     const cleanedMetadata = metadata
       ? Object.fromEntries(Object.entries(metadata).filter(([, entry]) => entry && entry.trim()))
       : undefined;
@@ -1138,7 +1136,7 @@ export function TargetGroupDetailView({
       'fqdn',
       String(form.get('value') ?? ''),
       String(form.get('expected_behavior') ?? ''),
-      { agent_id: String(form.get('agent_id') ?? '') },
+      undefined,
       { closeModal: false, successMessage: 'Domain declared. Issuing its target-bound DNS challenge…' }
     );
     const targetId = getString(created, ['id'], '');
@@ -1146,24 +1144,6 @@ export function TargetGroupDetailView({
     pendingCreatedDnsTargetRef.current = targetId;
     setSelectedDnsTargetId(targetId);
     await issueDnsChallenge(targetId, getString(created, ['value'], targetId));
-  }
-
-  function submitIpTarget(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const ip = String(form.get('value') ?? '').trim();
-    const parsedPort = parseOptionalPort(form.get('port'));
-    if (parsedPort.error) {
-      setError(parsedPort.error);
-      setMessage('');
-      return;
-    }
-    void addTarget(
-      'ip',
-      ip,
-      String(form.get('expected_behavior') ?? ''),
-      { port: parsedPort.port, notes: String(form.get('notes') ?? '') }
-    );
   }
 
   async function issueDnsChallenge(targetId: string, createdTargetLabel = '') {
@@ -1333,8 +1313,8 @@ export function TargetGroupDetailView({
     }
   }
 
-  // Per-row Verify: for a domain, issue (or re-check) a scoped DNS TXT challenge in place; for an
-  // IP/agent-bound target, jump to target detail where the agent-binding flow lives (§4.5).
+  // Per-row Verify: for a domain, issue (or re-check) a scoped DNS TXT challenge in place; for a
+  // non-domain target, jump to target detail where its verification flow lives.
   function verifyTarget(item: DataItem) {
     if (!canWriteTargets) return;
     const id = getString(item, ['id'], '');
@@ -1619,7 +1599,7 @@ export function TargetGroupDetailView({
       return;
     }
     if (scopeAck.length === 0) {
-      setError('Select at least one agent-verified target for the authorization scope.');
+      setError('Select at least one verified target for the authorization scope.');
       return;
     }
 
@@ -1969,7 +1949,6 @@ export function TargetGroupDetailView({
   const edgeCdnProviders = boundedEdgeList(edgeDetectionEvidence?.cdn_providers);
   const edgeTopVendor = getString(edgeDetectionEvidence, ['top_vendor'], '');
   const edgeTopVendorConfidence = edgeConfidenceLabel(edgeDetectionEvidence?.top_vendor_confidence);
-  const groupEnvironmentId = getString(entity, ['environment_id'], '');
   const groupCriticality = getString(entity, ['criticality', 'tier'], '');
   const groupOwner = getString(entity, ['owner', 'owner_team', 'service_owner'], '');
 
@@ -1982,7 +1961,6 @@ export function TargetGroupDetailView({
           <p className="tg-page-summary">{getString(entity, ['description'], 'Manage declared scope, prove ownership, and schedule readiness checks.')}</p>
           <div className="tg-title-meta">
             <span className="muted mono">{entityId}</span>
-            <Badge tone="muted">Environment {groupEnvironmentId || 'Not reported'}</Badge>
             {groupCriticality ? <Badge tone="muted">{humanizeLabel(groupCriticality)}</Badge> : null}
             {groupOwner ? <Badge tone="muted">Owner {groupOwner}</Badge> : null}
           </div>
@@ -1991,7 +1969,6 @@ export function TargetGroupDetailView({
           {canStartScan ? <Button size="sm" onClick={() => setScanLauncher({ mode: 'create', scan: null })}><Activity size={14} /> Start validation scan</Button> : null}
           {canWriteTargets ? <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button> : null}
           {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openOnboardModal('cloud')}><Bot size={14} /> Import DNS zones</Button> : null}
-          {groupEnvironmentId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('environment-detail', groupEnvironmentId)}>Environment</AnchorButton> : null}
           <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
         </div>
       </div>
@@ -2004,7 +1981,7 @@ export function TargetGroupDetailView({
         <CardHeader>
           <div>
             <CardTitle>Ownership verification</CardTitle>
-            <CardDescription>Each step counts targets whose current proof is exactly that level, so stronger proof (agent, user) is not also counted under DNS. Group status is the weakest target's current proof. Incomplete proof keeps bounded validation fail closed.</CardDescription>
+            <CardDescription>Each step counts targets whose current proof is exactly that level, so stronger proof (provider, user) is not also counted under DNS. Group status is the weakest target's current proof. Incomplete proof keeps bounded validation fail closed.</CardDescription>
           </div>
           <Badge tone={ownershipTone} title={`Recorded ownership status: ${plainVerificationLabel(ownershipStatus)}`}>{plainVerificationLabel(ownershipStatus)}</Badge>
         </CardHeader>
@@ -2043,7 +2020,7 @@ export function TargetGroupDetailView({
         <div className="kpi-cell">
           <div className="kpi-label">Targets</div>
           <div className="kpi-value">{targetCount}</div>
-          <div className="kpi-delta" title="Ownership proven means current DNS, provider, agent, or user proof; the same rule gates bounded runs.">{ownershipProvenTargetCount} ownership proven (runnable) · {Math.max(0, targets.length - ownershipProvenTargetCount)} locked</div>
+          <div className="kpi-delta" title="Ownership proven means current DNS, provider, or user proof; the same rule gates bounded runs.">{ownershipProvenTargetCount} ownership proven (runnable) · {Math.max(0, targets.length - ownershipProvenTargetCount)} locked</div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">Ownership</div>
@@ -2642,16 +2619,6 @@ export function TargetGroupDetailView({
                     <option value="rate_shape">rate_shape</option>
                   </select>
                 </label>
-                <label>
-                  <span>Bind to agent (optional)</span>
-                  <select name="agent_id" defaultValue="">
-                    <option value="">any agent in {getString(entity, ['environment_id'], 'this environment')}</option>
-                    {agents.map((agent) => {
-                      const optId = getString(agent, ['id'], '');
-                      return <option key={optId} value={optId}>{optId} · {getString(agent, ['hostname', 'name'], optId)}</option>;
-                    })}
-                  </select>
-                </label>
                 <div className="form-actions full">
                   <Button type="submit" loading={busy === 'add-target-fqdn' || busy === `dns-issue-${entityId}`}>Add &amp; issue target-bound challenge</Button>
                 </div>
@@ -2675,42 +2642,6 @@ export function TargetGroupDetailView({
                   <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId} onClick={() => void verifyDnsChallenge(activeChallengeId)}>Check now</Button>
                   {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(activeChallenge?.last_checked_at ?? asDataItem(dnsVerifyResult.challenge)?.last_checked_at)}</span> : null}
                 </div>
-              </div>
-            </div></div>
-          ) : null}
-          {onboardTab === 'ip' ? (
-            <div role="tabpanel" id="target-onboarding-method-panel-ip" aria-labelledby="target-onboarding-method-tab-ip" className="tab-panel"><div className="stack-tight">
-              <p className="muted">You cannot prove control of an IP with DNS. Install an agent inside that instance. When the agent registers, its outbound call reveals the public IP and binds the target to a verified agent.</p>
-              <form className="product-form" onSubmit={submitIpTarget}>
-                <label><span>IP address</span><input name="value" className="mono" placeholder="203.0.113.10" required /></label>
-                <label><span>Port (optional)</span><input name="port" className="mono" inputMode="numeric" pattern="[0-9]*" placeholder="443" aria-describedby="ip-port-storage-note" /></label>
-                <label>
-                  <span>Expected behavior</span>
-                  <select name="expected_behavior" defaultValue="absorb_at_origin">
-                    <option value="absorb_at_origin">absorb_at_origin</option>
-                    <option value="block_at_edge">block_at_edge</option>
-                    <option value="rate_shape">rate_shape</option>
-                  </select>
-                </label>
-                <label className="full"><span>Notes (optional)</span><input name="notes" placeholder="Origin behind CDN · single-AZ · IPv4 only" /></label>
-                <p id="ip-port-storage-note" className="muted small full">The target remains a bare IP address. The port is stored separately.</p>
-                <div className="form-actions full">
-                  <Button type="submit" loading={busy === 'add-target-ip'}>Register &amp; wait for agent</Button>
-                  <AnchorButton size="sm" variant="secondary" href="#agents">Open agent install</AnchorButton>
-                </div>
-              </form>
-              <div className="dns-challenge">
-                <div className="dns-head">
-                  <span className="eyebrow">Agent callback</span>
-                  <span className="spacer" />
-                  <VerifyChip state="awaiting_heartbeat" provenance="Awaiting agent heartbeat from this IP" />
-                </div>
-                <ol className="muted small">
-                  <li>Install an agent on any host that can reach the target IP (container image, Helm chart, or native package from the Agents screen).</li>
-                  <li>Bind it at deploy time with <span className="mono">ASTRANULL_TARGET_GROUP={entityId}</span>. No inbound port needed.</li>
-                  <li>When the agent heartbeats, AstraNull records its <span className="mono">discovered_public_ip</span> and matches it against the IP you registered.</li>
-                  <li>Verified after a probe + agent correlation on the same nonce.</li>
-                </ol>
               </div>
             </div></div>
           ) : null}
@@ -2760,13 +2691,13 @@ export function TargetGroupDetailView({
                   <dt>Customer</dt><dd>{getString(data.tenant, ['name', 'display_name'], session.tenant_id ?? '—')}</dd>
                   <dt>Tenant</dt><dd className="mono">{session.tenant_id ?? getString(data.state, ['tenant_id'], '—')}</dd>
                   <dt>Target group</dt><dd>{getString(entity, ['name'], entityId)}</dd>
-                  <dt>Eligible scope</dt><dd>{loaScopeTargetCount} agent-verified target{loaScopeTargetCount === 1 ? '' : 's'}</dd>
+                  <dt>Eligible scope</dt><dd>{loaScopeTargetCount} verified target{loaScopeTargetCount === 1 ? '' : 's'}</dd>
                 </dl>
               </div>
 
               <div className="full">
                 <strong>Authorized target scope</strong>
-                <p className="muted small">Select every target you intend to authorize; none are selected automatically. Only agent-verified or user-confirmed targets are eligible. The server records the submitted IDs as the custody-bound scope snapshot.</p>
+                <p className="muted small">Select every target you intend to authorize; none are selected automatically. Only verified or user-confirmed targets are eligible. The server records the submitted IDs as the custody-bound scope snapshot.</p>
                 <div className="loa-scope-list">
                   {targets.map((target) => {
                     const id = getString(target, ['id'], '');
@@ -2781,7 +2712,7 @@ export function TargetGroupDetailView({
                     );
                   })}
                 </div>
-                {loaScopeTargetCount === 0 ? <div className="form-banner error" role="alert">No target is eligible for LOA scope yet. Complete agent verification first.</div> : null}
+                {loaScopeTargetCount === 0 ? <div className="form-banner error" role="alert">No target is eligible for LOA scope yet. Complete ownership verification first.</div> : null}
               </div>
 
               <label className="checkrow full"><input type="checkbox" name="attested" required /><span>I attest that every selected target is owned or explicitly authorized for AstraNull validation.</span></label>

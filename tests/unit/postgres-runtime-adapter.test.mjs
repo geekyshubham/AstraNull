@@ -11,13 +11,9 @@ import {
   getDefaultPostgresMigrationsDir,
 } from '../../src/persistence/postgres/runtime.mjs';
 import {
-  AGENT_CONTROL_REPOSITORY_METHODS,
-  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
   AUTH_TOKEN_REPOSITORY_METHODS,
   CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS,
   CORE_CATALOG_TENANT_SERVICE_METHODS,
-  POSTGRES_AGENT_AUTH_SERVICE_METHODS,
-  POSTGRES_AGENT_SERVICE_METHODS,
   POSTGRES_AUTH_TOKEN_SERVICE_METHODS,
   POSTGRES_PASSWORD_AUTH_SERVICE_METHODS,
   PASSWORD_AUTH_REPOSITORY_METHODS,
@@ -29,8 +25,6 @@ import {
   POSTGRES_REPORT_SERVICE_METHODS,
   POSTGRES_NOTIFICATION_SERVICE_METHODS,
   NOTIFICATION_REPOSITORY_METHODS,
-  AGENT_UPDATE_REPOSITORY_METHODS,
-  POSTGRES_AGENT_UPDATE_SERVICE_METHODS,
   POSTGRES_PROBE_JOB_SERVICE_METHODS,
   PROBE_JOB_REPOSITORY_METHODS,
   POSTGRES_STATE_SERVICE_METHODS,
@@ -149,18 +143,6 @@ function createHarness(overrides = {}) {
         }
         return repo;
       }
-      if (key === 'agentControl') {
-        const repo = {};
-        for (const method of [
-          ...new Set([
-            ...AGENT_CONTROL_REPOSITORY_METHODS,
-            ...VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
-          ]),
-        ]) {
-          repo[method] = async () => null;
-        }
-        return repo;
-      }
       if (key === 'validationEvidence') {
         const repo = {};
         for (const method of [
@@ -186,13 +168,6 @@ function createHarness(overrides = {}) {
       if (key === 'notifications') {
         const repo = {};
         for (const method of NOTIFICATION_REPOSITORY_METHODS) {
-          repo[method] = async () => null;
-        }
-        return repo;
-      }
-      if (key === 'agentUpdates') {
-        const repo = {};
-        for (const method of AGENT_UPDATE_REPOSITORY_METHODS) {
           repo[method] = async () => null;
         }
         return repo;
@@ -330,12 +305,10 @@ describe('postgres runtime adapter', () => {
       'audit',
       'authTokens',
       'passwordAuth',
-      'agentControl',
       'validationEvidence',
       'reports',
       'secretVault',
       'notifications',
-      'agentUpdates',
       'probeJobs',
       'killSwitch',
       'ownershipVerifications',
@@ -373,10 +346,7 @@ describe('postgres runtime adapter', () => {
     assert.equal(Object.keys(runtime.repositories).length, POSTGRES_RUNTIME_REPOSITORY_KEYS.length);
     assert.ok(runtime.services?.tenants);
     assert.ok(runtime.services?.targetGroups);
-    assert.ok(runtime.services?.tokens);
     assert.ok(runtime.services?.serviceAccounts);
-    assert.ok(runtime.services?.agents);
-    assert.ok(runtime.services?.agentAuth);
     assert.equal(typeof runtime.services.audit?.appendAuditEvent, 'function');
     assert.equal(typeof runtime.services.audit?.listAuditEntries, 'function');
     for (const method of CORE_CATALOG_TENANT_SERVICE_METHODS) {
@@ -394,12 +364,6 @@ describe('postgres runtime adapter', () => {
     assert.ok(runtime.services.passwordAuth);
     for (const method of POSTGRES_PASSWORD_AUTH_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.passwordAuth[method], 'function', method);
-    }
-    for (const method of POSTGRES_AGENT_SERVICE_METHODS) {
-      assert.equal(typeof runtime.services.agents[method], 'function', method);
-    }
-    for (const method of POSTGRES_AGENT_AUTH_SERVICE_METHODS) {
-      assert.equal(typeof runtime.services.agentAuth[method], 'function', method);
     }
     assert.ok(runtime.services.testRuns);
     assert.ok(runtime.services.evidence);
@@ -431,10 +395,6 @@ describe('postgres runtime adapter', () => {
     assert.ok(runtime.services.notifications);
     for (const method of POSTGRES_NOTIFICATION_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.notifications[method], 'function', method);
-    }
-    assert.ok(runtime.services.agentUpdates);
-    for (const method of POSTGRES_AGENT_UPDATE_SERVICE_METHODS) {
-      assert.equal(typeof runtime.services.agentUpdates[method], 'function', method);
     }
     assert.ok(runtime.services.state);
     for (const method of POSTGRES_STATE_SERVICE_METHODS) {

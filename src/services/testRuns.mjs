@@ -14,8 +14,7 @@ import { recordEvidence } from './evidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { enqueueAgentJob } from './agents.mjs';
-import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVerdict, probeEventHasProbeIo, withinCorrelationWindow } from './correlation.mjs';
+import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, probeEventHasProbeIo } from './correlation.mjs';
 import { upsertFindingFromVerdict } from './findings.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
@@ -39,82 +38,7 @@ import {
   wouldExceedEventCap,
 } from './safeTestPolicy.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
-import { computePlacementConfidence } from './placement.mjs';
 import { assertSubscriptionLimit, getTenantAccount } from './subscriptions.mjs';
-
-const OBSERVATION_RAW_FIELD_DENYLIST = new Set([
-  'packet_payload',
-  'raw_packet',
-  'raw_packets',
-  'packet_data',
-  'raw_payload',
-  'payload',
-  'body',
-  'headers',
-  'request_body',
-  'request_headers',
-  'authorization',
-  'cookie',
-  'raw_log',
-  'log_line',
-]);
-const OBSERVATION_RAW_FIELD_COMPACT_DENYLIST = new Set(
-  [...OBSERVATION_RAW_FIELD_DENYLIST].map((key) => key.replace(/_/g, '')),
-);
-
-function normalizeObservationRawFieldKey(key) {
-  return String(key)
-    .trim()
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-    .replace(/([a-z])([A-Z])/g, '$1_$2')
-    .replace(/[^a-zA-Z0-9]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .toLowerCase();
-}
-
-function observationBodyContainsRawFields(body) {
-  if (!body || typeof body !== 'object') return false;
-  const scan = (value) => {
-    if (value == null) return false;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (scan(item)) return true;
-      }
-      return false;
-    }
-    if (typeof value !== 'object') return false;
-    for (const key of Object.keys(value)) {
-      const normalized = normalizeObservationRawFieldKey(key);
-      const compact = normalized.replace(/_/g, '');
-      if (
-        OBSERVATION_RAW_FIELD_DENYLIST.has(normalized)
-        || OBSERVATION_RAW_FIELD_COMPACT_DENYLIST.has(compact)
-        || normalized.startsWith('raw_')
-        || compact.startsWith('raw')
-      ) {
-        return true;
-      }
-      if (scan(value[key])) return true;
-    }
-    return false;
-  };
-  return scan(body);
-}
-
-function rejectObservation(ctx, tenantId, agentId, reason, error, status, resourceId, extra = {}) {
-  audit({
-    tenant_id: tenantId,
-    actor_user_id: ctx?.userId ?? 'agent',
-    actor_role: ctx?.role ?? 'agent',
-    action: 'observation.rejected',
-    resource_type: 'test_run',
-    resource_id: resourceId ?? null,
-    metadata: { agent_id: agentId, reason, ...extra },
-  });
-  persistStore();
-  return { error, status };
-}
 
 export function listChecks() {
   return customerSelectableChecks(getStore().checkCatalog ?? []).map(withCheckSection);
@@ -177,36 +101,6 @@ function collectionDeadlineMs(check) {
   return seconds * 1000;
 }
 
-function hasMatchingObservation(run) {
-  const store = getStore();
-  const probeEvent = store.events.find(
-    (e) =>
-      e.test_run_id === run.id &&
-      e.signal_type === 'probe_result' &&
-      isTrustedProducerEvent(e) &&
-      e.nonce_hash === run.correlation.nonce_hash,
-  );
-  const obsEvents = store.events.filter(
-    (e) => e.test_run_id === run.id
-      && e.signal_type === 'agent_observation'
-      && isTrustedProducerEvent(e),
-  );
-  return obsEvents.some(
-    (e) =>
-      e.nonce_hash === run.correlation.nonce_hash &&
-      withinCorrelationWindow(probeEvent?.timestamp, e.timestamp, run.correlation.window_ms),
-  );
-}
-
-function boundOnlineAgentForRun(run) {
-  return getStore().agents.find(
-    (a) =>
-      a.tenant_id === run.tenant_id &&
-      a.status === 'online' &&
-      (a.target_group_id === run.target_group_id || !a.target_group_id),
-  );
-}
-
 function isCollectionWindowExpired(run) {
   if (!run.collection_deadline_at) return false;
   return Date.now() >= new Date(run.collection_deadline_at).getTime();
@@ -228,7 +122,6 @@ export function maybeFinalizeCollectingRun(run, { force = false } = {}) {
   if (!run || run.status !== 'collecting') return null;
   if (getStore().verdicts.some((v) => v.test_run_id === run.id)) return null;
   if (!hasExternalProbeEvidence(run)) return null;
-  if (hasMatchingObservation(run)) return null;
   if (!force && !isCollectionWindowExpired(run)) return null;
   return finalizeNoObservation(run);
 }
@@ -424,25 +317,12 @@ export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
   run.awaiting_external_probe = false;
   if (!hasExternalProbeEvidence(run)) return null;
 
-  const agent = boundOnlineAgentForRun(run);
-  if (hasMatchingObservation(run)) {
-    return finalizeVerdictIfReady(run, agent);
-  }
-  const group = store.targetGroups.find(
-    (g) => g.id === run.target_group_id && g.tenant_id === run.tenant_id,
-  );
-  if (group?.validation_mode === 'external_only') {
-    if (run.status === 'running') run.status = 'collecting';
-    const verdict = finalizeVerdictIfReady(run, agent, { agentObserved: false });
-    persistStore();
-    return verdict;
-  }
-  if (isCollectionWindowExpired(run)) {
-    return maybeFinalizeCollectingRun(run);
-  }
+  // ADR-0008: verdicts are produced from external probe evidence only. The run enters
+  // 'collecting'; the collection-window sweeper (or an explicit finalize) publishes the verdict.
   if (run.status === 'running') run.status = 'collecting';
+  const verdict = finalizeVerdictIfReady(run);
   persistStore();
-  return null;
+  return verdict;
 }
 
 export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, options = {}) {
@@ -595,13 +475,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     }
   }
 
-  const onlineAgents = getStore().agents.filter(
-    (a) =>
-      a.tenant_id === ctx.tenantId &&
-      a.status === 'online' &&
-      a.last_token_validation_status !== 'invalid',
-  );
-  const missingPrereqs = evaluateCheckPrerequisites(check, { onlineAgents });
+  const missingPrereqs = evaluateCheckPrerequisites(check, { onlineAgents: [] });
   if (missingPrereqs.length) {
     return {
       error: 'prerequisites_not_met',
@@ -817,32 +691,10 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     }
   }
 
-  const boundAgents = isOpsReadinessProbeKind(check)
-    ? []
-    : getStore().agents.filter(
-      (a) =>
-        a.tenant_id === ctx.tenantId &&
-        a.status === 'online' &&
-        a.last_token_validation_status !== 'invalid' &&
-        (a.target_group_id === targetGroupId || !a.target_group_id),
-    );
-
-  for (const agent of boundAgents) {
-    enqueueAgentJob({
-      tenantId: ctx.tenantId,
-      agentId: agent.id,
-      testRunId: runId,
-      checkId: check.check_id,
-      targetId: target.id,
-      nonce_hash: probe.nonce_hash,
-      nonce: probe.nonce,
-    });
-  }
-
   incMetric('test_runs_started_total');
   persistStore();
 
-  const result = { run, jobs_dispatched: boundAgents.length };
+  const result = { run, jobs_dispatched: 0 };
   if (probeEvent) result.probe_event = probeEvent;
   if (probeJob) {
     result.probe_job = {
@@ -855,203 +707,6 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   return result;
 }
 
-export function ingestObservation(ctx, agentId, body) {
-  const store = getStore();
-  const agent = store.agents.find((a) => a.id === agentId);
-  if (!agent) return { error: 'agent_not_found', status: 404 };
-  const run = store.testRuns.find(
-    (r) => r.id === body.test_run_id && r.tenant_id === agent.tenant_id,
-  );
-  if (!run) return { error: 'run_not_found', status: 404 };
-
-  if (body.tenant_id && body.tenant_id !== agent.tenant_id) {
-    audit({
-      tenant_id: agent.tenant_id,
-      actor_user_id: ctx.userId,
-      actor_role: ctx.role,
-      action: 'observation.tenant_rejected',
-      resource_type: 'agent',
-      resource_id: agentId,
-      metadata: { attempted_tenant: body.tenant_id },
-    });
-    persistStore();
-    return { error: 'cross_tenant_injection', status: 403 };
-  }
-
-  if (isKillSwitchActiveForTenant(run.tenant_id)) {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'kill_switch_active',
-      'kill_switch_active',
-      423,
-      run.id,
-      { agent_job_id: body.agent_job_id ?? body.job_id ?? null },
-    );
-  }
-
-  if (!['running', 'collecting'].includes(run.status)) {
-    audit({
-      tenant_id: run.tenant_id,
-      actor_user_id: ctx.userId,
-      actor_role: ctx.role,
-      action: 'observation.rejected_inactive_run',
-      resource_type: 'test_run',
-      resource_id: run.id,
-      metadata: { status: run.status, agent_id: agentId },
-    });
-    persistStore();
-    return { error: 'run_not_collecting', status: 409 };
-  }
-
-  if (observationBodyContainsRawFields(body)) {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'raw_packet_fields',
-      'raw_packet_rejected',
-      400,
-      run.id,
-    );
-  }
-
-  const agentJobId = body.agent_job_id ?? body.job_id;
-  if (!agentJobId) {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'missing_agent_job_id',
-      'missing_agent_job_id',
-      400,
-      run.id,
-    );
-  }
-
-  const job = store.agentJobs.find((j) => j.id === agentJobId);
-  if (!job) {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'agent_job_not_found',
-      'agent_job_not_found',
-      404,
-      run.id,
-      { agent_job_id: agentJobId },
-    );
-  }
-
-  const targetId = body.target_id ?? run.target_id;
-  const jobMismatch =
-    job.agent_id !== agentId ||
-    job.tenant_id !== run.tenant_id ||
-    job.test_run_id !== run.id ||
-    job.nonce_hash !== body.nonce_hash ||
-    job.target_id !== targetId ||
-    job.check_id !== run.check_id;
-
-  if (jobMismatch) {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'agent_job_mismatch',
-      'agent_job_mismatch',
-      403,
-      run.id,
-      { agent_job_id: agentJobId },
-    );
-  }
-
-  if (job.status === 'pending') {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'agent_job_not_acked',
-      'agent_job_not_acked',
-      409,
-      run.id,
-      { agent_job_id: agentJobId },
-    );
-  }
-
-  if (job.status === 'observed') {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'agent_job_already_observed',
-      'agent_job_already_observed',
-      409,
-      run.id,
-      { agent_job_id: agentJobId },
-    );
-  }
-
-  if (job.status !== 'acked') {
-    return rejectObservation(
-      ctx,
-      run.tenant_id,
-      agentId,
-      'agent_job_not_open',
-      'agent_job_not_open',
-      409,
-      run.id,
-      { agent_job_id: agentJobId, status: job.status },
-    );
-  }
-
-  if (wouldExceedEventCap(run, 1)) {
-    return denyEventCap(
-      { tenantId: run.tenant_id, userId: ctx?.userId ?? 'agent', role: ctx?.role ?? 'agent' },
-      run,
-      { agent_id: agentId, phase: 'agent_observation' },
-    );
-  }
-
-  const obsEvent = {
-    id: newId('event'),
-    tenant_id: run.tenant_id,
-    test_run_id: run.id,
-    target_id: body.target_id ?? run.target_id,
-    check_id: run.check_id,
-    agent_id: agentId,
-    source: 'agent',
-    signal_type: 'agent_observation',
-    producer_kind: 'authenticated_agent',
-    timestamp: new Date().toISOString(),
-    nonce_hash: body.nonce_hash,
-    metadata: redactObject(body.metadata ?? {}),
-  };
-  store.events.push(obsEvent);
-
-  job.status = 'observed';
-  job.observed_at = new Date().toISOString();
-
-  audit({
-    tenant_id: run.tenant_id,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'observation.ingested',
-    resource_type: 'test_run',
-    resource_id: run.id,
-    metadata: { agent_id: agentId },
-  });
-
-  if (run.awaiting_external_probe && !hasExternalProbeEvidence(run)) {
-    persistStore();
-    return { observation: obsEvent, run: { ...run, verdict: null } };
-  }
-
-  const verdict = finalizeVerdictIfReady(run, agent);
-  persistStore();
-  const storedVerdict = verdict ?? getStore().verdicts.find((v) => v.test_run_id === run.id) ?? null;
-  return { observation: obsEvent, run: { ...run, verdict: storedVerdict } };
-}
 
 function finalizeNoObservation(run) {
   const store = getStore();
@@ -1063,28 +718,12 @@ function finalizeNoObservation(run) {
       action: 'test_run.event_cap_denied',
       resource_type: 'test_run',
       resource_id: run.id,
-      metadata: { phase: 'agent_no_observation' },
+      metadata: { phase: 'collection_window_elapsed' },
     });
     persistStore();
     return null;
   }
-  store.events.push({
-    id: newId('event'),
-    tenant_id: run.tenant_id,
-    test_run_id: run.id,
-    target_id: run.target_id,
-    check_id: run.check_id,
-    source: 'system',
-    signal_type: 'agent_no_observation',
-    producer_kind: 'internal_control_plane',
-    timestamp: new Date().toISOString(),
-    metadata: {
-      reason: 'bounded_observation_window_elapsed',
-      collection_deadline_at: run.collection_deadline_at,
-    },
-  });
-  const agent = boundOnlineAgentForRun(run);
-  return finalizeVerdictIfReady(run, agent, { agentObserved: false, finalizedWithoutObservation: true });
+  return finalizeVerdictIfReady(run, { finalizedWithoutObservation: true });
 }
 
 function finalizeOpsReadinessVerdict(run, probe) {
@@ -1101,12 +740,6 @@ function finalizeOpsReadinessVerdict(run, probe) {
     .filter((e) => e.test_run_id === run.id)
     .map((e) => e.id);
 
-  const placement_confidence = computePlacementConfidence(store, run, {
-    agentObserved: false,
-    finalizedWithoutObservation: true,
-    agent: null,
-  });
-
   const verdict = {
     id: newId('evidence'),
     tenant_id: run.tenant_id,
@@ -1115,7 +748,6 @@ function finalizeOpsReadinessVerdict(run, probe) {
     check_id: run.check_id,
     verdict: result.verdict,
     confidence: result.confidence,
-    placement_confidence,
     explanation: result.explanation,
     evidence_ids: evidenceIds,
     severity: result.severity,
@@ -1135,8 +767,6 @@ function finalizeOpsReadinessVerdict(run, probe) {
     metadata: {
       verdict: verdict.verdict,
       confidence: verdict.confidence,
-      placement_confidence_level: placement_confidence.level,
-      placement_confidence_status: placement_confidence.status,
       ops_readiness: true,
     },
   });
@@ -1146,15 +776,11 @@ function finalizeOpsReadinessVerdict(run, probe) {
   return verdict;
 }
 
-function finalizeVerdictIfReady(run, agent, options = {}) {
+function finalizeVerdictIfReady(run, options = {}) {
   const store = getStore();
   if (store.verdicts.some((v) => v.test_run_id === run.id)) return store.verdicts.find((v) => v.test_run_id === run.id);
   if (!hasExternalProbeEvidence(run)) return null;
   const target = store.targets.find((t) => t.id === run.target_id);
-  const group = store.targetGroups.find(
-    (g) => g.id === run.target_group_id && g.tenant_id === run.tenant_id,
-  );
-  const externalOnly = group?.validation_mode === 'external_only';
   const probeEvent = store.events.find(
     (e) =>
       e.test_run_id === run.id &&
@@ -1162,24 +788,9 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
       isTrustedProducerEvent(e) &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
-  const obsEvents = store.events.filter(
-    (e) => e.test_run_id === run.id
-      && e.signal_type === 'agent_observation'
-      && isTrustedProducerEvent(e),
-  );
-  const matchingObs = obsEvents.find(
-    (e) =>
-      e.nonce_hash === run.correlation.nonce_hash &&
-      withinCorrelationWindow(probeEvent?.timestamp, e.timestamp, run.correlation.window_ms),
-  );
-
-  const agentObserved =
-    options.agentObserved !== undefined ? options.agentObserved : Boolean(matchingObs);
 
   if (
-    !externalOnly
-    && !options.finalizedWithoutObservation
-    && !matchingObs
+    !options.finalizedWithoutObservation
     && !isCollectionWindowExpired(run)
   ) {
     return null;
@@ -1190,30 +801,12 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
   const probeKind = getCheckById(run.check_id)?.probe_profile?.kind ?? null;
   const probeIoObserved = probeEventHasProbeIo(probeEvent);
 
-  const result = externalOnly
-    ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved })
-    : correlateVerdict({
-      externalResult,
-      agentObserved,
-      expectedBehavior,
-      agentOnline: agent?.status === 'online',
-      agentBound: Boolean(
-        agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
-      ),
-      probeKind,
-      probeIoObserved,
-    });
+  // ADR-0008: verdicts are produced from external probe evidence only.
+  const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved });
 
   const evidenceIds = store.events
     .filter((e) => e.test_run_id === run.id)
     .map((e) => e.id);
-
-  const placement_confidence = computePlacementConfidence(store, run, {
-    matchingObservation: matchingObs ?? null,
-    agentObserved,
-    finalizedWithoutObservation: Boolean(options.finalizedWithoutObservation),
-    agent: agent ?? null,
-  });
 
   const verdict = {
     id: newId('evidence'),
@@ -1223,16 +816,11 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
     check_id: run.check_id,
     verdict: result.verdict,
     confidence: result.confidence,
-    placement_confidence,
     explanation: result.explanation,
     evidence_ids: evidenceIds,
     severity: result.severity,
     created_at: new Date().toISOString(),
   };
-  if (externalOnly) {
-    verdict.placement = result.placement ?? 'unverified';
-    verdict.strengthen_hint = result.strengthen_hint;
-  }
   store.verdicts.push(verdict);
   run.status = 'verdicted';
   run.completed_at = new Date().toISOString();
@@ -1247,8 +835,6 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
     metadata: {
       verdict: verdict.verdict,
       confidence: verdict.confidence,
-      placement_confidence_level: placement_confidence.level,
-      placement_confidence_status: placement_confidence.status,
     },
   });
 
@@ -1268,23 +854,14 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
 
 function revokeDispatchedJobsForRun(run) {
   const cancelledProbeJobIds = [];
-  const cancelledAgentJobIds = [];
   for (const job of getStore().probeJobs) {
     if (job.tenant_id !== run.tenant_id || job.test_run_id !== run.id) continue;
-    if (job.ownership_verification_id) continue;
     if (!['pending', 'leased'].includes(job.status)) continue;
     job.status = 'cancelled';
     job.completed_at = run.completed_at;
     cancelledProbeJobIds.push(job.id);
   }
-  for (const job of getStore().agentJobs ?? []) {
-    if (job.tenant_id !== run.tenant_id || job.test_run_id !== run.id) continue;
-    if (!['pending', 'acked'].includes(job.status)) continue;
-    job.status = 'cancelled';
-    job.cancelled_at = run.completed_at;
-    cancelledAgentJobIds.push(job.id);
-  }
-  return { cancelledProbeJobIds, cancelledAgentJobIds };
+  return { cancelledProbeJobIds };
 }
 
 export function autoCancelActiveSafeRunsForKillSwitch(ctx, reason) {
@@ -1320,7 +897,6 @@ export function autoCancelActiveSafeRunsForKillSwitch(ctx, reason) {
         target_group_id: run.target_group_id,
         scan_id: run.scan_id ?? null,
         cancelled_probe_job_ids: revoked.cancelledProbeJobIds,
-        cancelled_agent_job_ids: revoked.cancelledAgentJobIds,
       },
     });
     cancelledRunIds.push(run.id);
@@ -1378,7 +954,6 @@ export function cancelTestRun(ctx, id, options = {}) {
       target_group_id: run.target_group_id,
       scan_id: options.scan_id ?? run.scan_id ?? null,
       cancelled_probe_job_ids: revoked.cancelledProbeJobIds,
-      cancelled_agent_job_ids: revoked.cancelledAgentJobIds,
     },
   });
   persistStore();

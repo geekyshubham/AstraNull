@@ -20,12 +20,11 @@ export function probeEventHasProbeIo(probeEvent) {
   return Number.isSafeInteger(probeRequestsSent) && probeRequestsSent > 0;
 }
 
-function correlateObservationOnlyVerdict(probeKind, { externalOnly = false } = {}) {
+function correlateObservationOnlyVerdict(probeKind) {
   const noIo = probeKind === 'metadata_marker';
   return {
     verdict: 'inconclusive',
-    confidence: externalOnly ? 'external_only' : 'low',
-    ...(externalOnly ? { placement: 'unverified', strengthen_hint: 'deploy_agent' } : {}),
+    confidence: 'external_only',
     explanation: noIo
       ? 'Metadata-only check performed no network I/O and cannot establish readiness or exposure.'
       : `${probeKind} recorded transport or liveness metadata only; it did not establish this check's verdict logic.`,
@@ -33,25 +32,24 @@ function correlateObservationOnlyVerdict(probeKind, { externalOnly = false } = {
   };
 }
 
-function correlateProbeFailure(externalResult, probeKind, { externalOnly = false } = {}) {
+function correlateProbeFailure(externalResult, probeKind) {
   const knownKindTimedOut = externalResult === 'timeout' && typeof probeKind === 'string';
   if (!['error', 'not_run'].includes(externalResult) && !knownKindTimedOut) return null;
   const resultLabel = externalResult === 'not_run' ? 'was not run' : `ended with ${externalResult}`;
   return {
     verdict: 'inconclusive',
-    confidence: externalOnly ? 'external_only' : 'low',
-    ...(externalOnly ? { placement: 'unverified', strengthen_hint: 'deploy_agent' } : {}),
+    confidence: 'external_only',
     explanation: `The ${probeKind ?? 'external'} probe ${resultLabel}; transport failure or an execution deadline cannot establish protection or exposure.`,
     createsFinding: false,
   };
 }
 
-export function correlateVerdict({
+/**
+ * Correlate a verdict from external probe evidence only (ADR-0008: no agents).
+ */
+export function correlateExternalOnlyVerdict({
   externalResult,
-  agentObserved,
   expectedBehavior,
-  agentOnline,
-  agentBound,
   probeKind,
   probeIoObserved = false,
 }) {
@@ -62,109 +60,6 @@ export function correlateVerdict({
   const probeFailure = correlateProbeFailure(externalResult, probeKind);
   if (probeFailure) return probeFailure;
 
-  if (!agentOnline || !agentBound) {
-    return {
-      verdict: 'inconclusive',
-      confidence: 'low',
-      explanation:
-        'Agent is offline or not bound to the target group; internal observation evidence is unavailable.',
-      createsFinding: false,
-    };
-  }
-
-  const blocked = externalResult === 'blocked' || externalResult === 'timeout';
-  const connected = externalResult === 'connected' || externalResult === 'allowed';
-
-  if (blocked && probeIoObserved !== true) {
-    return {
-      verdict: 'inconclusive',
-      confidence: 'low',
-      explanation: 'Blocked/timeout metadata had no attested probe I/O and cannot establish protection.',
-      createsFinding: false,
-    };
-  }
-
-  if (expectedBehavior === 'must_block_before_origin') {
-    if (blocked && !agentObserved) {
-      return {
-        verdict: 'protected',
-        confidence: 'medium',
-        explanation:
-          'The external probe was blocked or timed out and the agent did not observe the test traffic — consistent with protection.',
-        createsFinding: false,
-      };
-    }
-    if (connected && agentObserved) {
-      return {
-        verdict: 'bypassable',
-        confidence: 'high',
-        explanation:
-          'The external probe reached the target path and the agent observed the matching test traffic — bypass risk.',
-        createsFinding: true,
-        severity: 'high',
-      };
-    }
-    if (blocked && agentObserved) {
-      return {
-        verdict: 'penetrated',
-        confidence: 'high',
-        explanation:
-          'External response indicated block/timeout but the agent observed traffic — possible penetration with silent drop downstream.',
-        createsFinding: true,
-        severity: 'high',
-      };
-    }
-    if (connected && !agentObserved) {
-      return {
-        verdict: 'misplaced_agent',
-        confidence: 'low',
-        explanation:
-          'External probe succeeded but no agent observation — inconclusive placement or downstream block.',
-        createsFinding: false,
-      };
-    }
-  }
-
-  if (expectedBehavior === 'must_reach_canary') {
-    if (connected && agentObserved) {
-      return {
-        verdict: 'allowed_as_expected',
-        confidence: 'high',
-        explanation: 'Protected-path canary traffic reached the observation point as expected.',
-        createsFinding: false,
-      };
-    }
-    if (blocked && !agentObserved) {
-      return {
-        verdict: 'inconclusive',
-        confidence: 'low',
-        explanation: 'Canary path did not complete — protected path or canary may be unreachable.',
-        createsFinding: false,
-      };
-    }
-  }
-
-  return {
-    verdict: 'inconclusive',
-    confidence: 'low',
-    explanation: 'Insufficient correlated evidence for a definitive verdict.',
-    createsFinding: false,
-  };
-}
-
-export function correlateExternalOnlyVerdict({
-  externalResult,
-  expectedBehavior,
-  probeKind,
-  probeIoObserved = false,
-}) {
-  if (isObservationOnlyProbeKind(probeKind)) {
-    return correlateObservationOnlyVerdict(probeKind, { externalOnly: true });
-  }
-
-  const probeFailure = correlateProbeFailure(externalResult, probeKind, { externalOnly: true });
-  if (probeFailure) return probeFailure;
-
   const blocked = externalResult === 'blocked' || externalResult === 'timeout';
   const connected = externalResult === 'connected' || externalResult === 'allowed';
 
@@ -172,10 +67,8 @@ export function correlateExternalOnlyVerdict({
     return {
       verdict: 'inconclusive',
       confidence: 'external_only',
-      placement: 'unverified',
       explanation: 'Blocked/timeout metadata had no attested probe I/O and cannot establish edge protection.',
       createsFinding: false,
-      strengthen_hint: 'deploy_agent',
     };
   }
 
@@ -184,23 +77,38 @@ export function correlateExternalOnlyVerdict({
       return {
         verdict: 'edge_protected',
         confidence: 'external_only',
-        placement: 'unverified',
         explanation:
-          'External-only probe was blocked at the edge; origin reachability not proven without an agent.',
+          'External probe was blocked at the edge; the declared path did not respond as reachable.',
         createsFinding: false,
-        strengthen_hint: 'deploy_agent',
       };
     }
     if (connected) {
       return {
         verdict: 'edge_exposed',
         confidence: 'external_only',
-        placement: 'unverified',
         explanation:
-          'External-only probe reached the declared path; deploy an agent to confirm whether traffic reached origin.',
+          'External probe reached the declared path; the edge did not block traffic before origin.',
         createsFinding: true,
         severity: 'medium',
-        strengthen_hint: 'deploy_agent',
+      };
+    }
+  }
+
+  if (expectedBehavior === 'must_reach_canary') {
+    if (connected) {
+      return {
+        verdict: 'allowed_as_expected',
+        confidence: 'external_only',
+        explanation: 'Protected-path canary traffic reached the declared path as expected.',
+        createsFinding: false,
+      };
+    }
+    if (blocked) {
+      return {
+        verdict: 'inconclusive',
+        confidence: 'external_only',
+        explanation: 'Canary path did not complete — protected path or canary may be unreachable.',
+        createsFinding: false,
       };
     }
   }
@@ -208,10 +116,8 @@ export function correlateExternalOnlyVerdict({
   return {
     verdict: 'inconclusive',
     confidence: 'external_only',
-    placement: 'unverified',
-    explanation: 'Insufficient external-only evidence.',
+    explanation: 'Insufficient external probe evidence for a definitive verdict.',
     createsFinding: false,
-    strengthen_hint: 'deploy_agent',
   };
 }
 

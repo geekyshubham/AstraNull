@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = process.cwd();
-const IMPL_DIRS = ['src', 'agents', 'apps/web', 'scripts', 'workers'];
+const IMPL_DIRS = ['src', 'apps/web', 'scripts', 'workers'];
 
 const WAVE1_SERVICE_FILES = [
   'src/services/cvePipeline.mjs',

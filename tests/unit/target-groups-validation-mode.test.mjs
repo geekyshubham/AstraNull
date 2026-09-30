@@ -28,13 +28,13 @@ describe('target group validation_mode', () => {
     assert.equal(g.validation_mode, 'external_only');
   });
 
-  it('patch toggles validation_mode', () => {
+  it('patch always resolves validation_mode to external_only', () => {
     freshStore();
     const g = createTargetGroup(ctx, { name: 'Toggle' });
     assert.equal(g.validation_mode, 'external_only');
 
     const assisted = patchTargetGroup(ctx, g.id, { validation_mode: 'agent_assisted' });
-    assert.equal(assisted.validation_mode, 'agent_assisted');
+    assert.equal(assisted.validation_mode, 'external_only');
 
     const external = patchTargetGroup(ctx, g.id, { validation_mode: 'external_only' });
     assert.equal(external.validation_mode, 'external_only');

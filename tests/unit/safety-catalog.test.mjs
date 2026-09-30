@@ -33,7 +33,7 @@ function executableProbeProfileBlob(check) {
 
 describe('safety catalog', () => {
   it('requires WAF-safe checks with explicit customer setup and metadata-only evidence classes', () => {
-    const allowedEvidence = new Set(['probe_result', 'agent_observation', 'health_signal']);
+    const allowedEvidence = new Set(['probe_result', 'health_signal', 'customer_declaration']);
     for (const checkId of WAF_SAFE_CHECK_IDS) {
       const check = getCheckById(checkId);
       assert.equal(isCustomerRunnable(check), true, checkId);

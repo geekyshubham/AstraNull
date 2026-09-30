@@ -178,7 +178,6 @@ describe('validation scans (dev-json): stop and activity', () => {
   it('stops a scan mid-flight, cancels the active child and its jobs, and skips pending steps', () => {
     const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: CHECKS }, RUNTIME);
     const activeRun = getStore().testRuns[0];
-    getStore().agentJobs.push({ id: 'job_1', tenant_id: 'ten_demo', agent_id: 'agt_1', test_run_id: activeRun.id, status: 'pending' });
     getStore().probeJobs.push({ id: 'pjob_1', tenant_id: 'ten_demo', test_run_id: activeRun.id, status: 'pending' });
 
     const stopped = cancelValidationScan(CTX, scan.id, { reason: 'operator stop' });
@@ -187,7 +186,6 @@ describe('validation scans (dev-json): stop and activity', () => {
     assert.equal(stopped.cancelled_by, 'usr_engineer');
     assert.deepEqual(stopped.steps.map((step) => step.status), ['cancelled', 'skipped', 'skipped']);
     assert.equal(activeRun.status, 'cancelled');
-    assert.equal(getStore().agentJobs[0].status, 'cancelled');
     assert.equal(getStore().probeJobs[0].status, 'cancelled');
     assert.equal(activeRun.summary.cancellation.source, 'scan');
     assert.equal(getStore().testRuns.length, 1);
@@ -195,7 +193,6 @@ describe('validation scans (dev-json): stop and activity', () => {
     const runCancelAudit = getStore().auditLog.find((entry) => entry.action === 'test_run.cancelled');
     assert.equal(runCancelAudit.metadata.reason, 'operator stop');
     assert.equal(runCancelAudit.metadata.cancelled_by, 'usr_engineer');
-    assert.deepEqual(runCancelAudit.metadata.cancelled_agent_job_ids, ['job_1']);
     assert.deepEqual(runCancelAudit.metadata.cancelled_probe_job_ids, ['pjob_1']);
     const scanCancelAudit = getStore().auditLog.find((entry) => entry.action === 'validation_scan.cancelled');
     assert.equal(scanCancelAudit.metadata.skipped_steps, 2);

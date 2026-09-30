@@ -1,18 +1,12 @@
-import { generateNonce, hashNonce } from '../../lib/crypto.mjs';
+import { generateNonce } from '../../lib/crypto.mjs';
 import { newId } from '../../lib/ids.mjs';
-import { buildSignedProbeJobRecord, signProbeJob } from '../../lib/probeJobs.mjs';
 
 /** @type {readonly string[]} */
 export const OWNERSHIP_VERIFICATION_REPOSITORY_METHODS = Object.freeze([
   'insertVerification',
-  'insertVerificationWithProbeJob',
-  'setVerificationProbeJobId',
   'findById',
-  'findOpenByNonceHash',
   'listByTenant',
-  'recordOwnershipSignalAtomic',
   'confirmOwnershipAtomic',
-  'updateVerificationSignals',
   'updateVerificationConfirmed',
   'updateTargetGroupOwnershipStatus',
   'updateTargetGroupDnsOwnership',
@@ -37,6 +31,17 @@ export const POSTGRES_DNS_OWNERSHIP_SERVICE_METHODS = Object.freeze([
   'issueDnsOwnershipChallenge',
   'verifyDnsOwnership',
 ]);
+
+// Outside-in only (ADR-0008): the agent-observed ownership challenge is removed. These
+// endpoints stay wired for API stability but fail closed — ownership proof comes from the
+// DNS TXT challenge below.
+const AGENT_FLOW_REMOVED = Object.freeze({
+  error: 'ownership_agent_flow_removed',
+  status: 410,
+  message:
+    'Agent-observed ownership verification was removed (outside-in only). '
+    + 'Prove ownership with the DNS TXT challenge instead.',
+});
 
 function flattenTxtRecords(records) {
   if (!Array.isArray(records)) return [];
@@ -63,26 +68,6 @@ function assertRepository(repositories) {
   }
 }
 
-async function auditVerification(auditRepo, ctx, id, action) {
-  if (!auditRepo?.appendAuditEvent) return;
-  await auditRepo.appendAuditEvent({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId ?? null,
-    actor_role: ctx.role ?? 'system',
-    action,
-    resource_type: 'ownership_verification',
-    resource_id: id,
-  });
-}
-
-async function withOwnershipAuditLock(auditRepo, ctx, options, callback) {
-  if (options?.client) return callback(options.client);
-  if (typeof auditRepo?.withTenantAuditLock !== 'function') {
-    throw new Error('Postgres ownership mutation requires audit.withTenantAuditLock().');
-  }
-  return auditRepo.withTenantAuditLock(ctx.tenantId, ({ client }) => callback(client));
-}
-
 async function auditTargetGroup(auditRepo, ctx, targetGroupId, action) {
   if (!auditRepo?.appendAuditEvent) return;
   await auditRepo.appendAuditEvent({
@@ -95,86 +80,17 @@ async function auditTargetGroup(auditRepo, ctx, targetGroupId, action) {
   });
 }
 
-
-function buildOwnershipChallengeProbeJob(ctx, verification, runtimeConfig) {
-  const run = {
-    id: verification.id,
-    tenant_id: ctx.tenantId,
-    safety_constraints: { max_events: 1, max_duration_seconds: 30 },
-  };
-  const check = {
-    check_id: 'ownership.challenge',
-    vector_family: 'ownership',
-    title: 'Ownership challenge',
-    probe_profile: {
-      kind: 'ownership_challenge',
-      max_requests: 1,
-      timeout_ms: 5000,
-      marker: 'astranull-ownership-challenge',
-    },
-  };
-  const target = {
-    id: verification.agent_id,
-    kind: 'fqdn',
-    value: verification.declared_fqdn,
-  };
-  const job = buildSignedProbeJobRecord({
-    run,
-    check,
-    target,
-    probeProfile: undefined,
-    probeWorkerSecret: runtimeConfig.probeWorkerSecret,
-    now: new Date(),
-    newId: () => newId('pjob'),
-  });
-  job.ownership_verification_id = verification.id;
-  job.nonce_hash = verification.challenge_nonce_hash;
-  job.job_signature = signProbeJob(job, runtimeConfig.probeWorkerSecret);
-  return job;
-}
-
-async function validateOwnershipChallengeInputs(deps, ctx, body) {
-  const { ownershipVerifications, agentControl } = deps;
-  const targetGroupId = body.target_group_id;
-  const agentId = body.agent_id;
-
-  const group = await ownershipVerifications.getActiveTargetGroup(ctx, targetGroupId);
-  if (!group) return { error: 'target_group_not_found', status: 404 };
-
-  if (!agentControl?.getAgentById) {
-    return { error: 'agent_not_found', status: 404 };
+async function withOwnershipAuditLock(auditRepo, ctx, options, callback) {
+  if (options?.client) return callback(options.client);
+  if (typeof auditRepo?.withTenantAuditLock !== 'function') {
+    throw new Error('Postgres ownership mutation requires audit.withTenantAuditLock().');
   }
-  const agent = await agentControl.getAgentById(ctx, agentId);
-  if (!agent) return { error: 'agent_not_found', status: 404 };
-
-  if (agent.target_group_id !== group.id) {
-    return { error: 'agent_not_bound_to_target_group', status: 400 };
-  }
-  if (agent.status !== 'online') {
-    return { error: 'agent_not_online', status: 409 };
-  }
-  if (agent.last_token_validation_status === 'invalid') {
-    return { error: 'agent_token_invalid', status: 409 };
-  }
-
-  const declaredFqdnRaw = agent.probe_endpoint?.declared_fqdn ?? null;
-  if (!declaredFqdnRaw) {
-    return { error: 'agent_probe_endpoint_missing', status: 409 };
-  }
-  const declaredFqdn = String(declaredFqdnRaw).trim().toLowerCase();
-  const fqdnValues = await ownershipVerifications.listFqdnTargetValues(ctx, group.id);
-  const fqdnSet = new Set(fqdnValues);
-  if (!fqdnSet.has(declaredFqdn)) {
-    return { error: 'declared_fqdn_not_in_target_group', status: 400 };
-  }
-
-  return { group, agent, targetGroupId, agentId, declaredFqdn };
+  return auditRepo.withTenantAuditLock(ctx.tenantId, ({ client }) => callback(client));
 }
 
 /**
  * @param {{
  *   repositories: Record<string, unknown>,
- *   agentControl?: { getAgentById?: (...args: unknown[]) => unknown },
  *   probeJobs?: { createProbeJob?: (...args: unknown[]) => unknown },
  * }} deps
  */
@@ -182,120 +98,24 @@ export function createPostgresOwnershipVerificationServices(deps) {
   const repositories = deps?.repositories ?? deps;
   assertRepository(repositories);
   const ownershipVerifications = repositories.ownershipVerifications;
-  const agentControl = deps?.agentControl ?? repositories.agentControl;
-  const probeJobs = deps?.probeJobs ?? repositories.probeJobs;
   const audit = deps?.audit ?? repositories.audit;
 
-  const challengeDeps = { ownershipVerifications, agentControl };
-
   return {
-    async verifyOwnershipSetup(ctx, body, _runtimeConfig) {
-      const validated = await validateOwnershipChallengeInputs(challengeDeps, ctx, body);
-      if (validated.error) {
-        return {
-          dry_run: true,
-          ready: false,
-          error: validated.error,
-          status: validated.status,
-        };
-      }
-
-      const { targetGroupId, agentId, declaredFqdn } = validated;
-      if (audit?.appendAuditEvent) {
-        await audit.appendAuditEvent({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId ?? null,
-          actor_role: ctx.role ?? 'system',
-          action: 'ownership_verification.setup_verified',
-          resource_type: 'ownership_verification',
-          resource_id: targetGroupId,
-        });
-      }
-
-      return {
-        dry_run: true,
-        ready: true,
-        target_group_id: targetGroupId,
-        agent_id: agentId,
-        declared_fqdn: declaredFqdn,
-        checks: {
-          agent_online: true,
-          agent_bound: true,
-          token_valid: true,
-          fqdn_declared: true,
-        },
-      };
+    // Agent-observed ownership is gone (ADR-0008); use DNS ownership instead.
+    async verifyOwnershipSetup() {
+      return { dry_run: true, ready: false, ...AGENT_FLOW_REMOVED };
     },
 
-    async createOwnershipChallenge(ctx, body, runtimeConfig) {
-      const validated = await validateOwnershipChallengeInputs(challengeDeps, ctx, body);
-      if (validated.error) {
-        return { error: validated.error, status: validated.status };
-      }
-
-      const { targetGroupId, agentId, declaredFqdn } = validated;
-
-      const nonce = generateNonce();
-      const challenge_nonce_hash = hashNonce(nonce);
-      const id = newId('own');
-      const now = new Date().toISOString();
-      const record = {
-        id,
-        target_group_id: targetGroupId,
-        agent_id: agentId,
-        declared_fqdn: declaredFqdn,
-        status: 'challenge_sent',
-        challenge_nonce_hash,
-        probe_observed: false,
-        agent_observed: false,
-        verified_at: null,
-        confirmed_by_user_id: null,
-        confirmed_at: null,
-        created_at: now,
-        created_by: ctx.userId,
-      };
-      let verification;
-      if (runtimeConfig?.probeMode === 'signed-worker' && runtimeConfig.probeWorkerSecret) {
-        const job = buildOwnershipChallengeProbeJob(ctx, record, runtimeConfig);
-        const created = await ownershipVerifications.insertVerificationWithProbeJob(
-          ctx,
-          record,
-          job,
-          probeJobs,
-        );
-        verification = created.verification;
-      } else {
-        verification = await ownershipVerifications.insertVerification(ctx, record);
-      }
-      await auditVerification(audit, ctx, id, 'ownership_verification.challenge_created');
-
-      return { verification, nonce };
+    async createOwnershipChallenge() {
+      return { ...AGENT_FLOW_REMOVED };
     },
 
-    async recordOwnershipSignal(ctx, id, payload, options = {}) {
-      return withOwnershipAuditLock(audit, ctx, options, (client) =>
-        ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
-          verification_id: id,
-          source: payload.source,
-          nonce_hash: payload.nonce_hash,
-          ...(payload.probe_job_id == null ? {} : { probe_job_id: payload.probe_job_id }),
-          target_verification_id: newId('tv'),
-          observed_at: new Date().toISOString(),
-          transitioned_by: ctx.userId ?? 'system',
-        }, audit, { client }));
+    async recordOwnershipSignal() {
+      return { ...AGENT_FLOW_REMOVED };
     },
 
-    async recordOwnershipSignalByNonce({ tenantId }, payload, options = {}) {
-      const ctx = { tenantId, userId: 'system', role: 'system' };
-      return withOwnershipAuditLock(audit, ctx, options, (client) =>
-        ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
-          source: payload.source,
-          nonce_hash: payload.nonce_hash,
-          ...(payload.probe_job_id == null ? {} : { probe_job_id: payload.probe_job_id }),
-          target_verification_id: newId('tv'),
-          observed_at: new Date().toISOString(),
-          transitioned_by: 'system',
-        }, audit, { client }));
+    async recordOwnershipSignalByNonce() {
+      return { ...AGENT_FLOW_REMOVED };
     },
 
     async confirmOwnership(ctx, id) {
