@@ -38,11 +38,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 /**
  * The Node majors this project is allowed to build, test or ship on.
  *
- * Both are even-numbered LTS lines: v22 (Jod) is supported to 2027-04-30, v24 (Krypton) to
- * 2028-04-30. Add the next even LTS here when upgrading; do not add an odd major to make a
- * bump pass, because an odd major is by definition a line that never becomes LTS.
+ * All are even-numbered LTS lines: v22 (Jod) is supported to 2027-04-30, v24 (Krypton) to
+ * 2028-04-30, v26 to 2029-04-30 (LTS promotion 2026-10-28). Add the next even LTS here when
+ * upgrading; do not add an odd major to make a bump pass, because an odd major is by
+ * definition a line that never becomes LTS.
  */
-const ALLOWED_NODE_MAJORS = [22, 24];
+const ALLOWED_NODE_MAJORS = [22, 24, 26];
 
 /** Directories that are not ours to police. */
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.venv']);

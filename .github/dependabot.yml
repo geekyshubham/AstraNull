@@ -2,7 +2,7 @@ version: 2
 
 # Base images are pinned by @sha256 digest in every Dockerfile. Pinning alone
 # would freeze us on whatever CVEs the pinned layer carries, so Dependabot owns
-# the update path: it opens PRs that bump the digest as node:22-alpine is
+# the update path: it opens PRs that bump the digest as node:<major>-alpine is
 # rebuilt, and those PRs run the full CI gate before merge.
 updates:
   - package-ecosystem: docker

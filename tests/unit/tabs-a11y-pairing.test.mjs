@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import ts from 'typescript';
+// typescript@7 is the native compiler and has no JS compiler API, so parse TSX with the
+// oxc parser that Vite (already a dev dependency) exposes.
+import { parseAst } from 'vite';
 
 // Every <Tabs> must pair its tabs with panels (aria-controls ↔ role="tabpanel" + aria-labelledby).
 // The shared component only emits aria-controls/ids when getPanelId/getTabId are passed, so a caller
@@ -17,19 +19,31 @@ function tsxFiles(dir) {
   });
 }
 
-function tabsUsages(file) {
+function parseTsx(file) {
   const text = readFileSync(file, 'utf8');
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const found = [];
+  const nodes = [];
   (function visit(node) {
-    if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && node.tagName.getText(sf) === 'Tabs') {
-      const names = node.attributes.properties.filter(ts.isJsxAttribute).map((a) => a.name.getText(sf));
-      const panelAttr = node.attributes.properties.find((a) => ts.isJsxAttribute(a) && a.name.getText(sf) === 'getPanelId');
-      const prefix = panelAttr?.initializer?.getText(sf).match(/`([a-z0-9-]+)-panel-\$\{/)?.[1] ?? null;
-      found.push({ line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, names, prefix });
-    }
-    ts.forEachChild(node, visit);
-  })(sf);
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.type === 'string') nodes.push(node);
+    for (const value of Object.values(node)) visit(value);
+  })(parseAst(text, { lang: 'tsx' }, file));
+  const lineOf = (node) => text.slice(0, node.start).split('\n').length;
+  return { text, nodes, lineOf };
+}
+
+function tabsUsages(file) {
+  const { text, nodes, lineOf } = parseTsx(file);
+  const found = [];
+  for (const node of nodes) {
+    if (node.type !== 'JSXOpeningElement' || node.name?.name !== 'Tabs') continue;
+    const attributes = node.attributes.filter((a) => a.type === 'JSXAttribute');
+    const names = attributes.map((a) => a.name.name);
+    const panelAttr = attributes.find((a) => a.name.name === 'getPanelId');
+    const initializer = panelAttr?.value ? text.slice(panelAttr.value.start, panelAttr.value.end) : '';
+    const prefix = initializer.match(/`([a-z0-9-]+)-panel-\$\{/)?.[1] ?? null;
+    found.push({ line: lineOf(node), names, prefix });
+  }
   return { text, found };
 }
 
@@ -64,15 +78,12 @@ describe('tabs accessibility pairing', () => {
     // still type-checks: the condition becomes literal text and BOTH branches render. Catch it.
     const leaks = [];
     for (const file of tsxFiles(SRC)) {
-      const text = readFileSync(file, 'utf8');
-      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-      (function visit(node) {
-        if (ts.isJsxText(node) && /^\s*[A-Za-z_$][\w.$]*\s*(\?|&&)\s*\(?\s*$/.test(node.getText(sf))) {
-          const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-          leaks.push(`${path.relative(SRC, file)}:${line} renders "${node.getText(sf).trim()}" as text`);
+      const { nodes, lineOf } = parseTsx(file);
+      for (const node of nodes) {
+        if (node.type === 'JSXText' && /^\s*[A-Za-z_$][\w.$]*\s*(\?|&&)\s*\(?\s*$/.test(node.raw)) {
+          leaks.push(`${path.relative(SRC, file)}:${lineOf(node)} renders "${node.raw.trim()}" as text`);
         }
-        ts.forEachChild(node, visit);
-      })(sf);
+      }
     }
     assert.deepEqual(leaks, []);
   });
