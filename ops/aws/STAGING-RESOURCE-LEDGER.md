@@ -441,3 +441,31 @@ Rollback (code only; no schema change): from `/opt/astranull`, export all three
 A code rollback does not restore the prior admin password.
 
 CI auto-deploy is still blocked as recorded for `db97b3ae`: the `Deploy AWS` host/key secrets and the SSH allow-list must be fixed first.
+
+## Production release 2026-09-30 (`912c8a6a`, Dependabot batch + Node 26)
+
+Commit `912c8a6a680a47659b52e330fd237d93c17508d6` merges all 14 open Dependabot PRs (#26, #27, #31,
+#33–#43) and moves every image and CI workflow from Node 22 to Node 26 (`node:26-alpine@sha256:0b36e8c1…`,
+v26.10.0; LTS from 2026-10-28, EOL 2029-04-30). `ops/aws/Dockerfile` had no Dependabot PR and was moved
+by hand so the runtime-version-pin guard stays consistent. The `typescript` 7 bump removed the JS
+compiler API, so `tests/unit/tabs-a11y-pairing.test.mjs` now parses TSX with Vite's `parseAst`. The
+committed web bundle was rebuilt for react 19.2.8 / lucide-react 1.34 / vite 8.2. PR #1 (GuardianBot
+onboarding, v0.2.11 pins) was closed as superseded. `make verify` was green on Node 26.10.0 (unit
+4091/4091, integration 396 pass / 0 fail, e2e 21/21), and all six Dockerfiles built on the host.
+GitHub CI, Security scan and Portal revamp passed on `912c8a6a`.
+
+| Step | Detail |
+|---|---|
+| Archive | SHA-256 `a05f6e1363a618ab8599880329496c32a50af7f37f9380c6584bf4502798e32c`, extracted to `/opt/astranull-release-912c8a6a680a47659b52e330fd237d93c17508d6` |
+| Image | `astranull:912c8a6a…` → `sha256:e11e9630657597e4c0f602bc6e04515a695519ca42d63ba9da6e65c548941905` (Node v26.10.0, uid 10001) |
+| Backup | `/opt/astranull-backups/postgres-2026-09-30T10-49-34-080Z-f14e401f2e52.dump.enc` (+ manifest), encrypted SHA-256 `c766a884dc83…`, `pg_restore --list` ok, restore-drill `--validate-only` ok, no plaintext left |
+| Migrate | ok, head unchanged at `0057_waf_offensive_workflow` |
+| Activate | four app services recreated, all healthy on the new image with restarts=0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready; `react-app.js` (`d1faf5ac…`) and `.css` byte-identical to the commit; unauthenticated and header-auth API 401; security headers present; browser login as admin through the portal form, then dashboard, target groups, targets, agents, runs, findings, reports and notifications all rendered with 0 page errors, console errors or CSP violations; 0 errors in service logs |
+
+Rollback (code only; no schema change): export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:82fcaa6c90d11245838e0dea9cde728dfb29f27263702a5bcf8775444d7b2209` (`astranull:2d58cc48…`, Node 22)
+and run the same `compose up -d --no-build --force-recreate --wait` of the four app services.
+
+Still open: the `Deploy AWS` workflow on `912c8a6a` again timed out on SSH port 22, and GuardianBot fails on
+`main` (the last 60 runs all failed, independent of this release).
