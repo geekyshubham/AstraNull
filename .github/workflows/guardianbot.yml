@@ -73,7 +73,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@a168632f754ad526275b85b905256f77e2feade4
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
@@ -90,7 +90,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@a168632f754ad526275b85b905256f77e2feade4
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
