@@ -1121,7 +1121,7 @@ export function createServer(options = {}) {
             json(res, staffAuth.status, staffAuth.body);
             return;
           }
-          await handleInternalAdminApi(req, res, url, staffAuth.ctx, runtimeConfig, {
+          await handleInternalAdminApi(req, res, url, enrichStaffCtx(staffAuth.ctx, runtimeConfig, serviceDeps), runtimeConfig, {
             services: serviceDeps,
           });
           return;
@@ -3459,6 +3459,20 @@ async function handlePublicApi(req, res, url, runtimeConfig, options = {}) {
   }
 
   return json(res, 404, { error: 'not_found' });
+}
+
+// In Postgres mode, staff RBAC denials must be audited through the injected internal-management
+// service (never the dev auditInternal() → getStore()/persistStore() path, which mkdir'd
+// /app/.data and crashed the request with EACCES). Mirror the customer handleApi ctx enrichment:
+// carry persistenceMode plus the injected audit service so src/lib/staffRbac.mjs deny() can append
+// `staff.rbac.denied` best-effort without ever turning a 403 into a 500.
+function enrichStaffCtx(ctx, runtimeConfig, serviceDeps) {
+  if (runtimeConfig.persistenceMode !== 'postgres') return ctx;
+  return {
+    ...ctx,
+    persistenceMode: 'postgres',
+    internalAuditService: serviceDeps?.internalManagement ?? null,
+  };
 }
 
 async function handleInternalAdminApi(req, res, url, ctx, runtimeConfig, options = {}) {

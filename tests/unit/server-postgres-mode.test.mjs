@@ -405,6 +405,37 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(res.json.error, 'staff_forbidden');
   });
 
+  it('audits soc_lead staff RBAC denial through the injected service without touching the dev store', async () => {
+    // Regression for the EACCES mkdir /app/.data crash: a valid staff principal lacking
+    // staff:signup:read (soc_lead) must get an audited 403, not a 500 from the dev
+    // auditInternal() → getStore()/persistStore() path running under Postgres mode.
+    const auditCalls = [];
+    const internalManagement = {
+      async appendInternalAudit(ctx, event) {
+        auditCalls.push({ ctx, event });
+        return { ...event, id: 'ia_test' };
+      },
+      async getInternalOverview() {
+        throw new Error('must_not_dispatch');
+      },
+    };
+    ({ server, baseUrl } = await listenPostgresServer({ internalManagement }));
+    const res = await request(baseUrl, 'GET', '/internal/admin/overview', {
+      headers: staffHeaders('soc_lead'),
+    });
+    assert.equal(res.status, 403);
+    assert.equal(res.json.error, 'forbidden');
+    assert.equal(res.json.permission, 'staff:signup:read');
+    // The denial audit is best-effort/async; give the microtask queue a tick to drain.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(auditCalls.length, 1);
+    assert.equal(auditCalls[0].event.action, 'staff.rbac.denied');
+    assert.equal(auditCalls[0].event.metadata.permission, 'staff:signup:read');
+    assert.equal(auditCalls[0].ctx.staffRole, 'soc_lead');
+    // dev store must never have been written in Postgres mode.
+    assert.equal((getStore().internalAuditLog ?? []).length, 0);
+  });
+
   it('lists high-scale requests via injected highScale service without dev store', async () => {
     let listCalls = 0;
     ({ server, baseUrl } = await listenPostgresServer({
