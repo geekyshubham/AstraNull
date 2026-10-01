@@ -9444,7 +9444,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   "queue-detail": ["targetGroups", "highScale"]
 };
 //#endregion
-//#region ../../../Users/checkred_admin/Projects/astranull/node_modules/clsx/dist/clsx.mjs
+//#region node_modules/clsx/dist/clsx.mjs
 function gt(e) {
   var t, n, r = "";
   if (typeof e == "string" || typeof e == "number") r += e;
@@ -9461,7 +9461,7 @@ function _t() {
   return r;
 }
 //#endregion
-//#region ../../../Users/checkred_admin/Projects/astranull/node_modules/tailwind-merge/dist/bundle-mjs.mjs
+//#region node_modules/tailwind-merge/dist/bundle-mjs.mjs
 var vt = (e, t) => {
   let n = Array(e.length + t.length);
   for (let t = 0; t < e.length; t++) n[t] = e[t];
@@ -12774,7 +12774,7 @@ function Ua(e, t, n = {}) {
   return !s || vr(r, s);
 }
 //#endregion
-//#region ../../../Users/checkred_admin/Projects/astranull/node_modules/class-variance-authority/dist/index.mjs
+//#region node_modules/class-variance-authority/dist/index.mjs
 var Wa = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, Ga = _t, Ka = (e, t) => (n) => {
   if (t?.variants == null) return Ga(e, n?.class, n?.className);
   let { variants: r, defaultVariants: i } = t, a = Object.keys(r).map((e) => {
