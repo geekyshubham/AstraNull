@@ -525,3 +525,55 @@ Still open: `Deploy AWS` still fails at SSH and GuardianBot still fails on its r
 (same as earlier releases). The host `.env` has no `ASTRANULL_ALLOWED_ORIGINS` (compose warns and uses
 an empty value; this predates these releases). It also keeps an unused `ASTRANULL_AGENT_IDENTITY_MODE`
 line that the compose file no longer reads.
+
+## Production releases 2026-10-01 (`8f1bb428` domain page, `4b54df8a` connector grant fix, `eb68b284` copy polish)
+
+`8f1bb428ddfea83afb69d21cfe0ac1ac65e14737` adds the domain page's Run all checks action, live per-check
+status grouped by category, automatic WAF/CDN detection for freshly onboarded verified domains with an
+Evaluating state and "How we found out" evidence, and WAF/CDN efficacy from evidence-backed verdicts. It
+also raises scan caps to 500 checks / 500 steps, adds `GET /v1/validation-scans?target_id=`, and chunks the
+Postgres scan projection's run-id reads at 500. `4b54df8a7108372ea5e8c39cafadc09a5ef2a9c5` keeps
+`SELECT` on `schema_migrations` for the two connector roles after the grant reset (see incident below).
+`eb68b284b44a61a1ca08cfb0ed49d089212f0e83` uses plain check names in the All checks list and labels a
+layer that blocks under half of tested classes "Mostly not protecting". Before release: typecheck, lint,
+lint:portal, web build, safety-check ok; unit + node e2e 3779/3779; integration 369/369; full Playwright
+portal suite 210/210. No migrations; head stays `0058`. Compose file and `ops/aws/Dockerfile` on the host
+were byte-identical to the commit. Released by hand from operator `/32` `123.252.204.182`; `deploy.sh` not used.
+
+| Step | `8f1bb428` | `4b54df8a` | `eb68b284` |
+|---|---|---|---|
+| Archive SHA-256 (verified on host) | `7f5706a6652017a7…` | `77f58154740133ae…` | `f6113a74141457b8…` |
+| Image | `sha256:35ab113a4f9ab49bc5106ca67a8f264acc9f7f1bc1f2b11d6e4fd3648de9df2a` | `sha256:d1433d0c702aa7825793a7654d2ab5e425488e6b38a484441153fc867b692880` | `sha256:600a025b78c22f19b377a611a64ddc59c08643fa00cf48fe3809354fc623f033` |
+| Backup (encrypted, `pg_restore --list` ok, restore-drill `--validate-only` ok, root mode 600, plaintext removed) | `postgres-2026-10-01T10-24-32-125Z-bec629934381` SHA-256 `a3925ffc8ec4…` | `postgres-2026-10-01T10-36-31-459Z-d49d77ec3b9f` SHA-256 `174dadfc4f97…` | `postgres-2026-10-01T10-54-03-742Z-10faf207d05d` SHA-256 `e7e58492fb00…` |
+| Migrate | ok, head `0058` | ok, head `0058` | ok, head `0058` |
+| Activate | four app services healthy; connectors unhealthy (below) | all six healthy, restarts 0 | all six healthy, restarts 0 |
+
+Incident on `8f1bb428`: the migrate step's role-grant reset revokes every table privilege from the
+connector roles and re-grants a fixed list that omitted `schema_migrations`, which every Postgres runtime
+reads at startup. Both connector services logged `permission denied for table schema_migrations` and went
+unhealthy (core services unaffected). Restored by hand with
+`GRANT SELECT ON schema_migrations TO astranull_connector_scheduler, astranull_connector_worker` (no other
+privilege changed); both turned healthy within one interval. `4b54df8a` makes the grant part of the reset,
+and its own migrate run proved it: after the reset both roles still had `SELECT` and the connectors started
+healthy. The previous release (`0a4d22f8`) skipped migrate, which is why it was not hit then.
+
+Live checks on `eb68b284`: `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served
+`react-app.js` `24edf27d…` and `react-app.css` `0e8b62ba…` byte-identical to the commit and image;
+unauthenticated `/v1/targets` and `/v1/validation-scans?target_id=` 401; header auth 401; CSP/COOP/HSTS
+present; 0 error-level log lines. With short-lived role tokens (minted in the control-plane container,
+deleted afterwards): `/v1/validation-scans?target_id=` returns only that target's scans; viewer `POST`
+to `/v1/validation-scans` and `/v1/waf/edge-detection` 403. `scripts/live-portal-sweep.mjs` (read-only,
+non-GET blocked) 6 roles × 35 route cases = 210 visits: 0 page errors, 0 jargon, 0 overflow, 0
+unauthorized controls. The `8f1bb428` sweep flagged 12 jargon hits (raw "WAF/API-Gateway" check names)
+that `eb68b284` fixed. In the final 6-role pass, the auditor/viewer access-state and API-401 findings
+appeared only after the 20-minute tokens expired mid-run; a fresh-token auditor + viewer pass was clean
+(0 findings).
+
+Rollback to `0a4d22f8` (code only, no schema change): from `/opt/astranull`, export all three
+`ASTRANULL_*_IMAGE_ID` variables as `sha256:5cd7156a644ea0d7e1adf7ad26a52468751366dd4d329921a77567c9d85dc903`,
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`
+and `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+Do not run `migrate` with the `0a4d22f8` image: its grant reset would revoke the connector roles'
+`schema_migrations` access again. If it is run, re-apply the one `GRANT SELECT` above. Validation scans
+created by `8f1bb428`+ with more than 50 checks remain readable on `0a4d22f8` (the cap is enforced only on
+create/patch).
