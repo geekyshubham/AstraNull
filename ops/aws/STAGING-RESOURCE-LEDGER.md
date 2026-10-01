@@ -574,6 +574,8 @@ Rollback to `0a4d22f8` (code only, no schema change): from `/opt/astranull`, exp
 then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`
 and `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 Do not run `migrate` with the `0a4d22f8` image: its grant reset would revoke the connector roles'
-`schema_migrations` access again. If it is run, re-apply the one `GRANT SELECT` above. Validation scans
-created by `8f1bb428`+ with more than 50 checks remain readable on `0a4d22f8` (the cap is enforced only on
-create/patch).
+`schema_migrations` access again. If it is run, re-apply the one `GRANT SELECT` above. Older code checks
+the 50-check cap only on create/patch, so existing run-all scans stay individually readable. It does not
+chunk run-id reads, though: once listed scans carry more than 500 child runs in total (about four run-all
+scans), `GET /v1/validation-scans` on `0a4d22f8` throws, and the Test Runs and target-group scan lists fail.
+Pass a smaller `limit` until the scans age out of the list.
