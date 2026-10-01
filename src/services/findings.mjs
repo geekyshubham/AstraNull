@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { newId } from '../lib/ids.mjs';
+import { scrubFindingForCustomer } from '../lib/outsideInEvidence.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { emitNotification } from './notifications.mjs';
 
@@ -82,7 +83,8 @@ export function listFindings(ctx, options = {}) {
   );
   const limit = Number(options.limit);
   if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
-  return rows;
+  // EVIDENCE-01 / ADR-0008: customer list items must read external-only — scrub notes/remediation.
+  return rows.map(scrubFindingForCustomer);
 }
 
 export function listFindingsEnvelope(ctx, options = {}) {
@@ -104,12 +106,20 @@ export function listFindingsEnvelope(ctx, options = {}) {
   };
 }
 
-export function getFinding(ctx, id) {
+/** Live store row for internal mutation (patch). Not customer-facing — never scrubbed. */
+function findFindingRow(ctx, id) {
   return getStore().findings.find((f) => f.id === id && f.tenant_id === ctx.tenantId) ?? null;
 }
 
+export function getFinding(ctx, id) {
+  const row = findFindingRow(ctx, id);
+  // EVIDENCE-01 / ADR-0008: customer finding detail must read external-only. Scrub the projection;
+  // the stored row (returned by findFindingRow for mutation) is untouched.
+  return row ? scrubFindingForCustomer(row) : null;
+}
+
 export function patchFinding(ctx, id, body) {
-  const f = getFinding(ctx, id);
+  const f = findFindingRow(ctx, id);
   if (!f) return null;
   if (body.status) f.status = body.status;
   if (body.assignee !== undefined) f.assignee = body.assignee;
@@ -125,7 +135,8 @@ export function patchFinding(ctx, id, body) {
     metadata: body,
   });
   persistStore();
-  return f;
+  // Scrub the customer-facing PATCH response; the stored row stays as mutated above.
+  return scrubFindingForCustomer(f);
 }
 
 /**

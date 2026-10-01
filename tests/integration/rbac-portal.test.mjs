@@ -17,8 +17,12 @@ const PORTAL_ROUTES = Object.freeze(
 const SIDEBAR_ROUTE_IDS = Object.freeze(NAV_ITEMS.map((item) => item.id));
 
 const STAFF_ONLY_ROUTES = new Set(['admin', 'tenant-detail']);
-/** Staff-only SOC execution console. queue-detail is shared for customer pack completion. */
-const STAFF_SOC_ROUTES = new Set(['internal-soc']);
+/**
+ * SOC execution console. Shared route id with two planes: customer `soc`
+ * (tenant-scoped, gated on soc:high_scale) and staff soc_analyst/soc_lead
+ * (cross-tenant). queue-detail is shared for customer pack completion.
+ */
+const SOC_CONSOLE_ROUTES = new Set(['internal-soc']);
 const PERMISSION_GATED_ROUTES = Object.freeze({
   notifications: 'notification:read',
   audit: 'audit:read',
@@ -39,8 +43,13 @@ const CUSTOMER_ROLES = ['owner', 'engineer', 'viewer', 'auditor', 'admin', 'soc'
 const STAFF_SOC_ROLES = ['soc_analyst', 'soc_lead'];
 
 function expectedCustomerAccess(role, routeId) {
-  if (STAFF_ONLY_ROUTES.has(routeId) || STAFF_SOC_ROUTES.has(routeId)) {
+  if (STAFF_ONLY_ROUTES.has(routeId)) {
     return false;
+  }
+  // The SOC console is reachable by the customer soc role (soc:high_scale);
+  // engineers/viewers/admins lack that permission and stay denied.
+  if (SOC_CONSOLE_ROUTES.has(routeId)) {
+    return roleHasPermission(role, 'soc:high_scale');
   }
   const narrowedRoles = CUSTOMER_ROLE_NARROWED_ROUTES[routeId];
   if (narrowedRoles && !narrowedRoles.includes(role)) {
@@ -84,16 +93,24 @@ describe('portal RBAC matrix (FT-RBAC-01..03)', () => {
           `customer role=${role} must not see staff route ${routeId}`,
         );
       }
-      assert.equal(visible.includes('internal-soc'), false);
+      // The SOC console surfaces for the customer soc role (tenant-scoped plane)
+      // but stays hidden from every other customer role.
+      assert.equal(
+        visible.includes('internal-soc'),
+        role === 'soc',
+        `customer role=${role} internal-soc sidebar visibility`,
+      );
     }
   });
 
-  it('FT-RBAC-03 SOC console requires staff principal with SOC staff role', () => {
+  it('FT-RBAC-03 SOC console opens to customer soc and staff SOC roles only', () => {
     for (const role of CUSTOMER_ROLES) {
+      // Customer soc holds soc:high_scale -> tenant-scoped console; all other
+      // customer roles are denied.
       assert.equal(
         canAccessRoute(role, 'internal-soc', { principal: 'customer' }),
-        false,
-        `customer principal must not access internal-soc (role=${role})`,
+        role === 'soc',
+        `customer role=${role} internal-soc access`,
       );
     }
 

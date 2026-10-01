@@ -1341,6 +1341,7 @@ export function ValidationSurfacePage({
           title="Cancel this run in progress?"
           description={<p>Run {cancelRunId} stops collecting and records no verdict.</p>}
           confirmLabel="Cancel run"
+          dismissLabel="Keep run"
           busy={busy === `cancel-${cancelRunId}`}
           onCancel={() => setCancelRunId('')}
           onConfirm={() => void confirmCancelRun()}

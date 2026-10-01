@@ -182,6 +182,54 @@ describe('target detail bindings and run evidence (Postgres)', () => {
   });
 });
 
+describe('target detail exposes canonical top-level tags (WAF-CDN-01)', () => {
+  const AISTRIP_TAGS = ['env:production', 'domain:aistrip.com', 'cdn', 'waf'];
+
+  it('dev JSON detail target carries the declared tags from metadata', () => {
+    seedDevStore();
+    const target = getStore().targets.find((t) => t.id === 'tgt_web');
+    target.metadata = { tags: AISTRIP_TAGS };
+    const detail = getTargetDetail(CTX, 'tgt_web');
+    assert.deepEqual(detail.target.tags, AISTRIP_TAGS, 'detail must expose the same tags as the collection');
+  });
+
+  it('dev JSON detail target returns an empty tag array (never missing) when untagged', () => {
+    seedDevStore();
+    const detail = getTargetDetail(CTX, 'tgt_web');
+    assert.deepEqual(detail.target.tags, [], 'tags is always present as string[]');
+    assert.ok('tags' in detail.target);
+  });
+
+  it('Postgres detail bundle carries the declared tags from metadata_json', async () => {
+    const pool = {
+      async connect() {
+        return {
+          async query(text, params = []) {
+            const sql = String(text);
+            if (sql.includes('SELECT * FROM targets WHERE')) {
+              return { rows: [{ ...TARGET, metadata_json: { tags: AISTRIP_TAGS }, created_at: new Date('2026-09-01T00:00:00.000Z') }] };
+            }
+            if (sql.includes('COUNT(*) FILTER')) return { rows: [{ open_count: 0, closed_count: 0 }] };
+            if (sql.includes('DISTINCT ON (r.check_id)')) return { rows: [] };
+            if (sql.includes('FROM test_runs')) return { rows: [] };
+            if (sql.includes('FROM test_policies')) return { rows: [] };
+            if (sql.includes('FROM target_verification_current')) {
+              return { rows: [{ state: 'dns_verified', source_kind: 'dns_txt', source_ref: {} }] };
+            }
+            if (sql.includes('FROM target_verifications')) {
+              return { rows: [{ state: 'dns_verified', source_kind: 'dns_txt', source_ref: {}, transitioned_at: new Date('2026-09-02T00:00:00.000Z') }] };
+            }
+            return { rows: [] };
+          },
+          release() {},
+        };
+      },
+    };
+    const detail = await createPortalRevampRepository(pool).getTargetDetailBundle(CTX, 'tgt_web');
+    assert.deepEqual(detail.target.tags, AISTRIP_TAGS, 'Postgres detail must match the collection tags');
+  });
+});
+
 describe('target detail row helpers', () => {
   it('only publishes a last verdict when the verdict record cites evidence', () => {
     assert.equal(evidenceBackedVerdict({ verdict: 'pass', evidence_ids: ['evt_1'] }), 'pass');

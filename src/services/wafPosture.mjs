@@ -1937,6 +1937,15 @@ export function createConnector(ctx, body = {}, options = {}) {
       poll_revision: 0,
     };
     if (options.validateOnly === true) {
+      // CONNECTORS-01: create-time validation must mirror the post-create validate gate, which
+      // requires config.read_only=true (see validateConnector). Reject a config that omits an
+      // explicit read_only:true so the two gates agree before credential-backed polling ships.
+      // Fail closed: a missing/false/non-boolean read_only is rejected, nothing is persisted.
+      if (config_json.read_only !== true) {
+        const err = new Error('Connector config must set read_only=true for metadata-only validation.');
+        err.code = 'read_only_required';
+        throw err;
+      }
       return { valid: true, connector: { provider, name, status, secret_id } };
     }
     getStore().wafConnectors.push(record);

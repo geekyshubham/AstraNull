@@ -1874,6 +1874,14 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           updated_at: now,
         };
         if (options.validateOnly === true) {
+          // CONNECTORS-01: mirror the post-create validate gate (requires config.read_only=true)
+          // at create-time validation so both gates agree. Fail closed on missing/false read_only;
+          // nothing is persisted in validate_only.
+          if (config.read_only !== true) {
+            const err = new Error('Connector config must set read_only=true for metadata-only validation.');
+            err.code = 'read_only_required';
+            throw err;
+          }
           return { valid: true, connector: { provider, name, status: record.status, secret_id: secretId } };
         }
         const connector = await wafRepo.createConnector(ctx, record);

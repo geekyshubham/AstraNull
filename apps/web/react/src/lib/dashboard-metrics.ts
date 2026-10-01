@@ -137,24 +137,19 @@ export type TargetPostureRow = {
 
 /**
  * One row per declared target with its latest evidence-backed verdict.
- * Runs are matched by `target_id`; group runs (no target_id) fall back per group.
+ * Runs are matched by `target_id` only — a target never inherits a sibling's or its
+ * target group's run (DASH-01/DASH-02). An un-probed target reports "No result" so the
+ * dashboard cannot imply a never-tested target was validated (external-evidence-only).
  */
 export function buildTargetPostureRows(data: PortalData, limit?: number): TargetPostureRow[] {
   const latestByTarget = new Map<string, DataItem>();
-  const latestByGroup = new Map<string, DataItem>();
   for (const run of data.runs) {
     if (!evidenceBacked(run)) continue;
     const targetId = getString(run, ['target_id']);
-    const groupId = getString(run, ['target_group_id']);
+    if (!targetId) continue;
     const stamp = runTimestamp(run);
-    if (targetId) {
-      const prev = latestByTarget.get(targetId);
-      if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByTarget.set(targetId, run);
-    }
-    if (groupId) {
-      const prev = latestByGroup.get(groupId);
-      if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByGroup.set(groupId, run);
-    }
+    const prev = latestByTarget.get(targetId);
+    if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByTarget.set(targetId, run);
   }
 
   const openFindingsByTarget = new Map<string, number>();
@@ -168,7 +163,7 @@ export function buildTargetPostureRows(data: PortalData, limit?: number): Target
     const id = getString(target, ['id', 'target_id']);
     const openFindings = openFindingsByTarget.get(id) ?? 0;
     const groupId = getString(target, ['target_group_id']);
-    const run = latestByTarget.get(id) ?? latestByGroup.get(groupId) ?? null;
+    const run = latestByTarget.get(id) ?? null;
     const verdict = run ? runVerdictString(run) : '';
     return {
       id,

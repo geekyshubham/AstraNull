@@ -318,7 +318,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'governance',
     source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Executive, technical, SOC, audit, release, and WAF report builders.'
+    summary: 'Executive, technical, SOC, audit, and compliance report builders.'
   },
   {
     id: 'report-detail',

@@ -190,6 +190,41 @@ After pre-outage extraction and structural archive validation, followed by verif
 
 Before closing the change, independently verify `/health`, `/ready`, all worker heartbeat health states, migration head, `astranull_app` posture/zero ownership, tenant RLS smoke tests, login, and portal reads. Retain the encrypted artifact and manifest; never retain or copy the plaintext dump.
 
+## Staff console / internal admin + SOC (CONFIG-01)
+
+The staff console at `/internal/admin/*` (sign-up approvals, cross-tenant SOC high-scale
+queue, tenant/entitlement management) and the cross-tenant staff SOC execution plane require a
+**staff principal**. In production (`NODE_ENV=production`, any deployment profile) the runtime sets
+`requireExplicitRoleMap=true`, so `pickStaffRole()` **fails closed**: it ignores any staff role claim
+that is not an explicit left-hand key in the staff role map. With no map configured, every valid,
+correctly-signed staff token is refused with `403 staff_forbidden` and no staff principal can exist —
+this is CONFIG-01.
+
+To make the staff console reachable:
+
+1. Configure a real external IdP that emits a staff role claim (default claim name `staff_role`; override
+   with `ASTRANULL_OIDC_STAFF_ROLE_CLAIM`). This stack ships no real IdP; the bundled staging fixture
+   is for customer tokens and local walkthroughs and is **never** a staff-login path.
+2. In `ops/aws/.env` (never in `env.example`, never committed), set a **strict** map from that IdP's
+   staff claim values to AstraNull platform staff roles:
+
+   ```
+   ASTRANULL_OIDC_STAFF_ROLE_MAP=corp-internal-admin:internal_admin,corp-soc-lead:soc_lead,corp-soc-analyst:soc_analyst
+   ```
+
+   Platform staff roles: `internal_admin`, `billing_ops`, `support_engineer`, `soc_analyst`, `soc_lead`,
+   `security_admin`. `ops/aws/docker-compose.yml` forwards this variable to the control plane (empty
+   default — unset keeps the console fail-closed). The staff map is independent of
+   `ASTRANULL_OIDC_ROLE_MAP`, so a customer claim can never mint staff privileges, and a self-asserted
+   platform-role claim (a value that is not a left-hand IdP key) is still rejected.
+3. Redeploy so the control plane picks up the new environment snapshot.
+
+**Operator action required for the staff console:** until a real IdP and a strict
+`ASTRANULL_OIDC_STAFF_ROLE_MAP` are supplied, the staff console stays unreachable by design. Do not
+work around this by enabling bundled or unauthenticated staff login. The customer-tenant SOC console
+(the `soc` tenant role at `#internal-soc`) is unaffected and works through tenant-scoped
+`/internal/soc/*` APIs without any staff configuration.
+
 ## Not in this stack
 
 Enterprise IdP onboarding evidence, a production multi-region probe fleet, agent mTLS gateway, and certified governed high-scale adapters remain separately tracked production-release gates. The Compose `probe-worker` is the isolated reference worker for this host, not evidence of a multi-region production fleet.

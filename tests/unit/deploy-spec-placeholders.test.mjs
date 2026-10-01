@@ -130,4 +130,21 @@ describe('aws deploy env contract', () => {
   it('tells the operator not to commit .env', () => {
     assert.match(exampleText, /never commit/i);
   });
+
+  it('wires ASTRANULL_METRICS_TOKEN so the fail-closed /metrics route is scrapable (API-OPS-02)', () => {
+    // GET /metrics fails closed (401 metrics_token_not_configured) in production when the token is
+    // unset, so the scraper token must be present in env.example and passed to the control-plane
+    // service. The committed value stays a placeholder — never a real token.
+    assert.ok(example.has('ASTRANULL_METRICS_TOKEN'), `${ENV_EXAMPLE} must name ASTRANULL_METRICS_TOKEN`);
+    assert.match(
+      example.get('ASTRANULL_METRICS_TOKEN') ?? '',
+      /^</,
+      'ASTRANULL_METRICS_TOKEN must be a placeholder, not a real token',
+    );
+    assert.match(
+      compose,
+      /ASTRANULL_METRICS_TOKEN:\s*\$\{ASTRANULL_METRICS_TOKEN(?::-)?\}/,
+      'control-plane must receive ASTRANULL_METRICS_TOKEN from the env file',
+    );
+  });
 });

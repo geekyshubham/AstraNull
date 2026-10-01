@@ -6,6 +6,10 @@ import {
 import { buildCustodyManifest } from '../lib/custody.mjs';
 import { getCheckById } from '../contracts/checks.mjs';
 import { redactObject } from '../lib/redact.mjs';
+import {
+  scrubAgentPlacementText,
+  scrubPlacementConfidenceForCustomer,
+} from '../lib/outsideInEvidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { computeReadiness } from './readiness.mjs';
@@ -106,9 +110,11 @@ function buildExportPayload(ctx, report) {
       test_run_id: v.test_run_id,
       verdict: v.verdict,
       confidence: v.confidence,
-      placement_confidence: v.placement_confidence ?? null,
+      // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Scrub
+      // agent identifiers and agent/placement wording from historical/seeded verdict records.
+      placement_confidence: scrubPlacementConfidenceForCustomer(v.placement_confidence ?? null),
       evidence_ids: v.evidence_ids,
-      explanation: v.explanation,
+      explanation: scrubAgentPlacementText(v.explanation),
     })),
     soc_notes: socNotes.map((n) => ({ request_id: n.high_scale_request_id, body: n.body, at: n.created_at })),
   });
@@ -287,6 +293,8 @@ export function exportFinding(ctx, id) {
   const finding = store.findings.find((f) => f.id === id && f.tenant_id === ctx.tenantId);
   if (!finding) return null;
   const check = getCheckById(finding.check_id);
+  // EVIDENCE-01 / ADR-0008: finding export (customer artifact) must read external-only. Scrub the
+  // free-text prose (notes, remediation copy) before it is hashed into the custody digest.
   const payload = redactObject({
     finding_id: finding.id,
     title: finding.title,
@@ -294,9 +302,9 @@ export function exportFinding(ctx, id) {
     status: finding.status,
     check_id: finding.check_id,
     vector_family: check?.vector_family,
-    remediation_template: check?.remediation_template,
+    remediation_template: scrubAgentPlacementText(check?.remediation_template),
     evidence_ids: finding.evidence_ids,
-    notes: finding.notes,
+    notes: scrubAgentPlacementText(finding.notes),
   });
   const priorGlobal = getLatestChainedAuditEntry();
   const priorTenant = getLatestChainedAuditEntryForTenant(ctx.tenantId);

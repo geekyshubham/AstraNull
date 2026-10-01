@@ -147,16 +147,27 @@ export function sessionFromLoginResponse(loginResponse, now = Date.now()) {
  *
  * A missing or unparseable `expires_at` is NOT treated as expired: dev-headers sessions carry no
  * expiry at all, and failing closed here would lock local development out entirely. The bearer
- * path is what needs the guard, and it always has a real expiry.
+ * path is what needs the guard, and it always has a real expiry. `expires_at` may be an epoch-ms
+ * number (bundled-login sessions) or an ISO-8601 string (OIDC sessions); both are honored.
  *
  * @param {Session | null | undefined} session
  * @param {number} [now]
  */
 export function isSessionExpired(session, now = Date.now()) {
   if (!session) return true;
-  const expiresAt = Number(session.expires_at ?? 0);
-  if (!Number.isFinite(expiresAt) || expiresAt <= 0) return false;
+  const expiresAt = resolveExpiresAtMs(session.expires_at);
+  if (expiresAt === null) return false;
   return now > expiresAt;
+}
+
+/** Parse `expires_at` as epoch-ms or ISO-8601; returns null when absent/unparseable (dev mode). */
+function resolveExpiresAtMs(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** Operational staff SOC roles — must match STAFF_SOC_ROLES in route-access. */

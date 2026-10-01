@@ -789,8 +789,25 @@ describe('postgres validation evidence repository', () => {
     assert.match(q.text, /created_at < \$4::timestamptz/);
     assert.match(q.text, /ORDER BY COALESCE\(started_at, created_at\) DESC, id DESC/);
     assert.match(q.text, /LIMIT \$5/);
-    assert.deepEqual(q.params, [CTX.tenantId, 'tg_1', ['running', 'verdicted'], FIXED_NOW, 500]);
+    assert.deepEqual(q.params, [CTX.tenantId, 'tg_1', ['running', 'verdicted'], FIXED_NOW, 100]);
     assertUsesTenantPredicate(q.text, q.params, CTX.tenantId);
+  });
+
+  it('clamps huge and invalid test-run list limits to the documented max/default of 100', async () => {
+    // API-OPS-01: docs/api.md GET /v1/test-runs declares default 100 / max 100. Any oversized or
+    // invalid limit must resolve to 100 so the pagination contract clients rely on is honest.
+    for (const limit of [101, 500, 99999, '99999', 'abc', -5, 0, Number.NaN, null, undefined]) {
+      const pool = createRecordingPool((text) => {
+        if (text.includes('FROM test_runs')) return { rows: [] };
+        return { rows: [] };
+      });
+      const repo = createValidationEvidenceRepository(pool);
+      // eslint-disable-next-line no-await-in-loop
+      await repo.listTestRuns(CTX, { limit });
+      const [q] = dataQueries(pool.client);
+      const limitParam = q.params[q.params.length - 1];
+      assert.equal(limitParam, 100, `limit ${String(limit)} must clamp/fallback to 100, got ${limitParam}`);
+    }
   });
 
   it('listRunEvents applies signal type, before timestamp, and bounded LIMIT', async () => {

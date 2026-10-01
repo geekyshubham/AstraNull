@@ -70,7 +70,7 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 |---|---|---|---|
 | GET | `/health` | — | Liveness: `{ status, service }` (`service` is `astranull`). |
 | GET | `/ready` | — | Readiness for deploy gates: `{ status, service, auth_mode, persistence, probe_mode, probe_worker_secret_configured, timestamp }` (no secrets or database URLs); `503` with `status: not_ready` when the store is unavailable. |
-| GET | `/metrics` | — | Metrics endpoint. The in-process route is unauthenticated; production deployments must restrict scrape access at the gateway/network layer per observability policy. |
+| GET | `/metrics` | — | Prometheus-style metrics. Bearer-gated by `ASTRANULL_METRICS_TOKEN`: when the token is set the scraper must present it as `Authorization: Bearer <token>` (`401 unauthorized` otherwise). When the token is unset the route **fails closed** in production (`401 {"error":"unauthorized","reason":"metrics_token_not_configured"}`) and stays open only outside `NODE_ENV=production` for local scrapes. Production deployments must configure `ASTRANULL_METRICS_TOKEN` and the matching scraper credential, and still restrict scrape access at the gateway/network layer. |
 | GET | `/`, `/react-app.js`, `/react-app.css` | — | React SPA shell and bundle assets. |
 | GET | `/v1/public/site-config` | — | Public landing/login/signup configuration with no secrets, including exact top-level boolean `password_login_enabled`. |
 | POST | `/v1/auth/login` | — | Feature-gated customer password exchange; stored user tenant/role are authoritative. Requires a non-replayed TOTP code for MFA-enrolled accounts. |

@@ -12,7 +12,12 @@ export function getPublicSiteConfig(runtimeConfig) {
     signup_path: '/signup',
     customer_portal_path: '/app',
     auth_mode: runtimeConfig.authMode ?? 'dev-headers',
-    bundled_staging_login_enabled: runtimeConfig.bundledStagingOidc === true,
+    // The UI capability that renders the staging role picker / "Staging role bypass" disclosure.
+    // It must track the CUSTOMER mint gate (bundledStagingCustomerLogin, always false in
+    // production), NOT the OIDC trust root (bundledStagingOidc, which stays true in production to
+    // keep token verification and the password lane working). Reporting the trust root here is what
+    // shipped PUBLIC-AUTH-01: the production login page rendered the credential-free role picker.
+    bundled_staging_login_enabled: runtimeConfig.bundledStagingCustomerLogin === true,
     password_login_enabled: runtimeConfig.passwordLoginEnabled === true,
     feature_flags: {
       waf_posture: runtimeConfig.featureFlags?.wafPostureEnabled === true,

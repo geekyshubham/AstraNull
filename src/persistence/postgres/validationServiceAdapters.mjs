@@ -21,6 +21,10 @@ import {
 } from '../../lib/probeJobs.mjs';
 import { redactObject } from '../../lib/redact.mjs';
 import {
+  scrubFindingForCustomer,
+  scrubRunForCustomer,
+} from '../../lib/outsideInEvidence.mjs';
+import {
   countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
@@ -1097,7 +1101,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;
       const verdict = await validationEvidence.getVerdictForRun(ctx, id);
-      return { ...run, verdict: verdict ?? null };
+      // EVIDENCE-01 / ADR-0008: customer run detail must read external-only. Scrub the nested
+      // verdict explanation / placement_confidence at this projection seam. Stored rows are
+      // untouched (the repository mapper returns raw historical evidence for internal use).
+      return scrubRunForCustomer({ ...run, verdict: verdict ?? null });
     },
     /**
      * Finalize runs whose bounded collection window elapsed without any client call.
@@ -1736,7 +1743,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
   const findings = {
     async listFindings(ctx, options = {}) {
-      return validationEvidence.listFindings(ctx, options);
+      const rows = await validationEvidence.listFindings(ctx, options);
+      // EVIDENCE-01 / ADR-0008: customer list items must read external-only — scrub notes/remediation.
+      return Array.isArray(rows) ? rows.map(scrubFindingForCustomer) : rows;
     },
     async listFindingsEnvelope(ctx, options = {}) {
       const items = await this.listFindings(ctx, options);
@@ -1757,7 +1766,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
       };
     },
     async getFinding(ctx, id) {
-      return validationEvidence.getFinding(ctx, id);
+      // EVIDENCE-01 / ADR-0008: customer finding detail must read external-only; scrub the projection.
+      return scrubFindingForCustomer(await validationEvidence.getFinding(ctx, id));
     },
     async patchFinding(ctx, id, body) {
       const updated_at = nowFn().toISOString();
@@ -1775,7 +1785,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         },
         { now: nowFn() },
       );
-      return row;
+      // Scrub the customer-facing PATCH response; the stored row is unchanged.
+      return scrubFindingForCustomer(row);
     },
   };
 

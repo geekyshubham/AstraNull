@@ -55,7 +55,8 @@ function sleep(ms) {
 }
 
 const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
-const MAX_TEST_RUN_LIST_LIMIT = 500;
+// docs/api.md GET /v1/test-runs: limit default 100, max 100. Keep Postgres and dev-json aligned.
+const MAX_TEST_RUN_LIST_LIMIT = 100;
 const DEFAULT_RUN_EVENTS_LIST_LIMIT = 200;
 const MAX_RUN_EVENTS_LIST_LIMIT = 1000;
 const MAX_RUN_EVIDENCE_BATCH_IDS = 500;

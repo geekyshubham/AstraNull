@@ -64,6 +64,30 @@ describe('Targets portal contract', () => {
     assert.match(source, /They do not authorize or launch unmanaged DDoS traffic/);
   });
 
+  it('exposes disclosure semantics on the Add target toggle (A11Y-01)', () => {
+    const source = readPage('targets-page.tsx');
+    // The trigger announces expand/collapse state and the form it controls, mirroring the
+    // mobile "Open navigation" disclosure pattern.
+    assert.match(source, /aria-expanded=\{showAdd\}\s+aria-controls="target-declare-form"/);
+    // The controlled form carries the stable id the trigger points at.
+    assert.match(source, /<form id="target-declare-form"/);
+  });
+
+  it('collapses the targets toolbar to one column at <=620px without a desktop rule overriding it (TARGETS-01)', () => {
+    const styles = readFileSync(new URL('../../apps/web/react/src/styles.css', import.meta.url), 'utf8');
+    // The placeholder-clipping desktop rule must be scoped above the mobile breakpoint so it no
+    // longer out-specifies the single-column @media(max-width:620px) rule.
+    assert.match(
+      styles,
+      /@media \(min-width: 621px\) \{\s*body \.targets-page \.targets-toolbar \{\s*grid-template-columns: minmax\(280px, 1\.7fr\) repeat\(4, minmax\(150px, 1fr\)\);/,
+    );
+    // No unconditional body-scoped toolbar grid rule may remain (that was the 928px-overflow cause).
+    assert.doesNotMatch(
+      styles,
+      /^body \.targets-page \.targets-toolbar \{\s*\n\s*grid-template-columns: minmax\(280px/m,
+    );
+  });
+
   it('keeps integration domain intake and requested DNS providers visible', () => {
     const source = readPage('integrations-page.tsx');
 

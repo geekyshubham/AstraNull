@@ -1,4 +1,5 @@
 import { clampPageLimit, decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
+import { targetTagsFromRecord } from '../contracts/targetManagement.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { getStore } from '../store.mjs';
 import { getTargetEdgeDetection } from './targetEdgeDetectionStore.mjs';
@@ -251,6 +252,10 @@ export function getTargetDetail(ctx, targetId, query = {}) {
       kind: target.kind,
       value: target.value,
       expected_behavior: target.expected_behavior ?? 'cloud_baseline',
+      // WAF-CDN-01: expose canonical top-level `tags: string[]` so the detail page matches the
+      // collection serializer (docs/api.md: every target payload, including detail targets,
+      // exposes top-level tags). Reserved metadata stays stripped — only the trusted tag list.
+      tags: targetTagsFromRecord(target),
       created_at: toIso(target.created_at),
       eligibility: target.eligibility ?? 'eligible',
       eligibility_reason: target.eligibility_reason ?? null,

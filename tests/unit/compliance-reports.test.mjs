@@ -146,4 +146,49 @@ describe('report service compliance export', () => {
     assert.ok(soc2Entries.length >= 4);
     assert.doesNotMatch(JSON.stringify(jsonOut.payload), /packet_payload|raw_packet/);
   });
+
+  it('EVIDENCE-01: report export scrubs agent/placement vocabulary and agent ids from a seeded verdict', async () => {
+    const { getStore } = await import('../../src/store.mjs');
+    const store = getStore();
+    // Seed a pre-ADR-0008 run + verdict carrying agent/placement wording and an agent id, as
+    // historical/seeded prod data would.
+    store.testRuns.push({
+      id: 'run_legacy_agent', tenant_id: CTX.tenantId, target_group_id: 'tg_x', target_id: 'tgt_x',
+      check_id: 'origin.direct_bypass.safe', status: 'verdicted', created_at: new Date().toISOString(),
+    });
+    store.verdicts.push({
+      id: 'vd_legacy_agent', tenant_id: CTX.tenantId, test_run_id: 'run_legacy_agent', target_id: 'tgt_x',
+      check_id: 'origin.direct_bypass.safe', verdict: 'penetrated', confidence: 'high',
+      explanation: 'External response indicated block/timeout but the agent observed traffic — possible penetration with silent drop downstream.',
+      placement_confidence: {
+        level: 'Medium', status: 'observed_this_run',
+        reason: 'Bound online agent reported unknown observation; path evidence is broader than host-level.',
+        agent_id: 'agt_e563ad3b5baa04fd', observation_mode: 'unknown', evidence_event_id: 'evt_x',
+      },
+      evidence_ids: ['evt_x'], severity: 'medium', created_at: new Date().toISOString(),
+    });
+
+    const report = createReport(CTX, { kind: 'technical', title: 'legacy agent verdict export' });
+    const jsonOut = exportReport(CTX, report.id, 'json');
+    const serialized = JSON.stringify(jsonOut.payload);
+    // No agent identifier reaches the customer-facing export anywhere.
+    assert.doesNotMatch(serialized, /agt_e563ad3b5baa04fd/, 'agent_id must not be exported');
+    assert.doesNotMatch(serialized, /observation_mode/, 'observation_mode key must be dropped');
+    // The exported verdict record carries no agent/placement vocabulary.
+    const exported = jsonOut.payload.verdicts.find((v) => v.test_run_id === 'run_legacy_agent');
+    assert.doesNotMatch(exported.explanation, /\bagent\b/i, 'no "agent" wording in explanation');
+    assert.doesNotMatch(exported.explanation, /placement/i, 'no "placement" wording in explanation');
+    assert.doesNotMatch(exported.placement_confidence.reason, /\bagent\b/i, 'no "agent" wording in placement reason');
+    assert.doesNotMatch(exported.placement_confidence.reason, /placement/i, 'no "placement" wording in placement reason');
+    // The external-probe rewrite preserves the observation substance (no fabricated evidence).
+    assert.equal(exported.verdict, 'penetrated', 'verdict unchanged');
+    assert.equal(exported.confidence, 'high', 'confidence unchanged');
+    assert.match(exported.explanation, /external probe recorded traffic reaching the declared path/);
+    assert.equal('agent_id' in exported.placement_confidence, false);
+    assert.equal(exported.placement_confidence.level, 'Medium', 'non-prose placement fields preserved');
+    assert.equal(exported.placement_confidence.evidence_event_id, 'evt_x', 'evidence linkage preserved');
+    // Custody manifest still verifies over the scrubbed payload.
+    assert.equal(verifyCustodyManifest({ payload: jsonOut.payload, custody: jsonOut.custody }).ok, true);
+    assertNoSecrets(serialized);
+  });
 });

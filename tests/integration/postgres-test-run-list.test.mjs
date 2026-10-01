@@ -117,7 +117,7 @@ describe('postgres test-run list parity', () => {
         [TENANT],
       ));
       assert.equal((await testRuns.listTestRuns(CTX)).length, 100, 'Postgres default is bounded');
-      assert.equal((await testRuns.listTestRuns(CTX, { limit: '9999' })).length, 500, 'Postgres max is bounded');
+      assert.equal((await testRuns.listTestRuns(CTX, { limit: '9999' })).length, 100, 'Postgres max is clamped to documented 100');
 
       const devRuns = Array.from({ length: 507 }, (_, index) => ({
         id: `run_dev_cap_${index}`,
@@ -131,7 +131,10 @@ describe('postgres test-run list parity', () => {
       }));
       resetStoreForTests({ testRuns: devRuns, verdicts: [] });
       assert.equal(listDevTestRuns(CTX).length, 100, 'dev-json uses the same default');
-      assert.equal(listDevTestRuns(CTX, { limit: '9999' }).length, 500, 'dev-json uses the same max');
+      assert.equal(listDevTestRuns(CTX, { limit: '9999' }).length, 100, 'dev-json clamps to documented max 100');
+      assert.equal(listDevTestRuns(CTX, { limit: 'abc' }).length, 100, 'dev-json falls back to default for non-numeric limit');
+      assert.equal(listDevTestRuns(CTX, { limit: '-5' }).length, 100, 'dev-json falls back to default for negative limit');
+      assert.equal(listDevTestRuns(CTX, { limit: '0' }).length, 100, 'dev-json falls back to default for zero limit');
     });
   });
 });

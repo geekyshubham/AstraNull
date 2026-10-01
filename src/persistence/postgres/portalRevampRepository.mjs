@@ -7,6 +7,7 @@ import {
   encodeKeysetCursor,
 } from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { targetTagsFromRecord } from '../../contracts/targetManagement.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import {
   WAF_EDGE_DETECTION_CHECK_ID,
@@ -1086,6 +1087,10 @@ export function createPortalRevampRepository(pool) {
             kind: target.kind,
             value: target.value,
             expected_behavior: target.expected_behavior ?? 'cloud_baseline',
+            // WAF-CDN-01: expose canonical top-level `tags: string[]` so the detail page matches
+            // the collection serializer (docs/api.md: every target payload, including detail
+            // targets, exposes top-level tags). Reserved metadata stays stripped.
+            tags: targetTagsFromRecord(target),
             created_at: toIso(target.created_at),
             eligibility: latest?.state && latest.state !== 'unverified' ? 'eligible' : 'not_eligible',
             eligibility_reason: latest?.state && latest.state !== 'unverified' ? null : 'verification_required',

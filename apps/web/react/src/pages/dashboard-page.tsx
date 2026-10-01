@@ -31,6 +31,8 @@ import {
   type TargetPostureRow
 } from '../lib/dashboard-metrics';
 import { isFindingOpen } from '../lib/findings-helpers';
+// @ts-ignore Plain ESM keeps run-start role parity testable with node:test.
+import { canStartRun } from '../lib/run-permissions.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import { routeTabs } from '../lib/prototype-manifest';
 import type { BadgeTone, DataItem, PortalConfig, PortalData, ReadinessFactor, Session } from '../lib/types';
@@ -459,7 +461,9 @@ export function DashboardPage({
             <Button type="button" variant="secondary" size="sm" loading={refreshing} onClick={() => void handleRefresh()}>
               <RefreshCw size={15} aria-hidden="true" /> Refresh
             </Button>
-            <AnchorButton href="#runs" variant="default" size="sm">Run safe validation</AnchorButton>
+            {canStartRun(session.role) ? (
+              <AnchorButton href="#runs" variant="default" size="sm">Run safe validation</AnchorButton>
+            ) : null}
           </>
         }
       />

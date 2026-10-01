@@ -168,3 +168,44 @@ describe('portal executive language', () => {
     assert.match(TARGET_SOURCE, /evidenceModePresentation/);
   });
 });
+
+describe('QA swarm 2026-10-01 regressions', () => {
+  const read = (rel) => readFileSync(new URL(`../../apps/web/react/src/${rel}`, import.meta.url), 'utf8');
+
+  it('gates the dashboard Run safe validation CTA behind canStartRun (RBAC-01)', () => {
+    const source = read('pages/dashboard-page.tsx');
+    assert.match(source, /import \{ canStartRun \} from '\.\.\/lib\/run-permissions\.mjs'/);
+    // The CTA only renders for roles that actually hold test_run:start.
+    assert.match(source, /canStartRun\(session\.role\) \?[\s\S]*?Run safe validation/);
+  });
+
+  it('makes the Reports nav copy truthful — no WAF/release promise (WAF-CDN-02)', () => {
+    const nav = read('lib/navigation.ts');
+    const manifest = read('lib/prototype-manifest.ts');
+    assert.doesNotMatch(nav, /release, and WAF report builders/);
+    assert.match(nav, /Executive, technical, SOC, audit, and compliance report builders\./);
+    assert.doesNotMatch(
+      manifest,
+      /routeId: 'reports',[\s\S]*?summary: 'Executive, technical, SOC, audit, release, and WAF report builders\.'/,
+    );
+  });
+
+  it('describes WAF posture as external-probe evidence, not internal agents (EVIDENCE-01)', () => {
+    const panel = read('components/dashboard/waf-summary-panel.tsx');
+    assert.doesNotMatch(panel, /agent-confirmed/);
+    assert.doesNotMatch(panel, /internal corroboration/);
+    assert.match(panel, /Confirmed by external probe evidence/);
+  });
+
+  it('offers an unambiguous Keep run dismiss on cancel-run dialogs (RUNS-01)', () => {
+    const crud = read('lib/crud-ui.tsx');
+    // ConfirmModal supports an explicit dismiss label (defaulting to Cancel for other callers).
+    assert.match(crud, /dismissLabel = 'Cancel'/);
+    assert.match(crud, /onClick=\{onCancel\}>\{dismissLabel\}<\/Button>/);
+    for (const rel of ['pages/functional-surfaces.tsx', 'pages/detail-pages.tsx']) {
+      const source = read(rel);
+      // Cancel-run dialog pairs "Keep run" (dismiss) with "Cancel run" (confirm).
+      assert.match(source, /confirmLabel="Cancel run"\s*\n\s*dismissLabel="Keep run"/);
+    }
+  });
+});

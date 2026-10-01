@@ -11,8 +11,12 @@ import '../helpers/dev-data-dir.mjs';
  * The staff branch used to be gated by nothing but `bundledStagingOidc`, and defaulted `staff_role`
  * to `internal_admin`. With the fixture enabled on a NODE_ENV=production spec, an anonymous POST to
  * the live deployment returned a platform-staff bearer that then read /internal/admin successfully.
- * These tests cover both halves of the fix: the service refusing to mint staff without the separate
- * flag, and the config refusing to arm that flag in production at all.
+ * The CUSTOMER branch shared the same single flag, so the same production spec also minted
+ * credential-free owner/admin sessions for ten_demo (PUBLIC-AUTH-01). Both branches now have their
+ * own gate — `bundledStagingStaffLogin` and `bundledStagingCustomerLogin` — and neither arms under
+ * NODE_ENV=production, while `bundledStagingOidc` stays enabled as the OIDC trust root so token
+ * verification and the password lane keep working. These tests cover the service refusing to mint
+ * without each flag, and the config refusing to arm either flag in production at all.
  */
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -20,14 +24,29 @@ import test from 'node:test';
 import { loginBundledStagingPrincipal } from '../../src/services/bundledStagingAuth.mjs';
 import { rejectsPasswordlessProtectedStagingSession } from '../../src/server.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+import { getPublicSiteConfig } from '../../src/services/publicSite.mjs';
 
 const TEST_SECRET_ENCRYPTION_KEY = randomBytes(32).toString('hex');
 const TEST_PROBE_WORKER_SECRET = randomBytes(32).toString('base64url');
 
-/** Fixture on, staff mint on — the shape a dev/staging deployment resolves to. */
-const STAGING = { bundledStagingOidc: true, bundledStagingStaffLogin: true };
-/** Fixture on, staff mint off — the shape production resolves to. */
-const PRODUCTION_SHAPE = { bundledStagingOidc: true, bundledStagingStaffLogin: false };
+/** Fixture on, both mints on — the shape a dev/staging deployment resolves to. */
+const STAGING = {
+  bundledStagingOidc: true,
+  bundledStagingStaffLogin: true,
+  bundledStagingCustomerLogin: true,
+};
+/** Fixture on, staff mint off, customer mint on — staging with only the staff hole closed. */
+const STAFF_CLOSED = {
+  bundledStagingOidc: true,
+  bundledStagingStaffLogin: false,
+  bundledStagingCustomerLogin: true,
+};
+/** Fixture on, both mints off — the shape production resolves to (trust root stays on). */
+const PRODUCTION_SHAPE = {
+  bundledStagingOidc: true,
+  bundledStagingStaffLogin: false,
+  bundledStagingCustomerLogin: false,
+};
 
 test('bundled staging customer login mints access token', () => {
   const result = loginBundledStagingPrincipal(
@@ -50,7 +69,7 @@ test('password-protected accessibility identity cannot mint a bundled customer t
   ]) {
     const result = loginBundledStagingPrincipal(
       { principal: 'customer', tenant_id: 'ten_demo', user_id: userId, role: 'admin' },
-      PRODUCTION_SHAPE,
+      STAFF_CLOSED,
     );
     assert.equal(result.error, 'password_required');
     assert.equal(result.status, 403);
@@ -66,7 +85,7 @@ test('account-specific password guard does not disable other bundled staging cus
       user_id: 'accessibility-runner-neighbor@astranull.invalid',
       role: 'viewer',
     },
-    PRODUCTION_SHAPE,
+    STAFF_CLOSED,
   );
   assert.equal(result.error, undefined);
   assert.match(result.access_token, /^eyJ/);
@@ -157,13 +176,43 @@ test('staff refusal does not depend on the request body being well formed', () =
   assert.equal(result.access_token, undefined);
 });
 
-test('customer login still works while staff mint is disabled', () => {
-  // The customer branch is ten_demo-scoped and is currently the portal's only working login;
-  // closing the staff hole must not take the site down with it.
-  const result = loginBundledStagingPrincipal({ principal: 'customer' }, PRODUCTION_SHAPE);
+test('customer login still works while only the staff mint is disabled', () => {
+  // In staging the customer branch is ten_demo-scoped and is the portal's working login; closing
+  // the staff hole alone must not take it down. (In production BOTH mints are off — see below.)
+  const result = loginBundledStagingPrincipal({ principal: 'customer' }, STAFF_CLOSED);
   assert.equal(result.error, undefined);
   assert.match(result.access_token, /^eyJ/);
   assert.equal(result.principal, 'customer');
+});
+
+test('customer mint is refused when the customer flag is off, even with the fixture on', () => {
+  // PUBLIC-AUTH-01: the production shape. No password-less customer bearer may come back for any
+  // customer body — including the owner/admin role picker values the live bypass accepted.
+  for (const body of [
+    { principal: 'customer' },
+    { principal: 'customer', tenant_id: 'ten_demo', user_id: 'usr_admin', role: 'owner' },
+    { principal: 'customer', tenant_id: 'ten_demo', user_id: 'usr_admin', role: 'admin' },
+    { principal: 'customer', tenant_id: 'ten_demo', user_id: 'usr_qa_swarm_probe', role: 'viewer' },
+    { principal: 'CUSTOMER' },
+    {},
+    { principal: 'customer', tenant_id: 'ten_other' },
+  ]) {
+    const result = loginBundledStagingPrincipal(body, PRODUCTION_SHAPE);
+    assert.equal(result.error, 'customer_login_disabled', `leaked for ${JSON.stringify(body)}`);
+    assert.equal(result.status, 403);
+    assert.equal(result.access_token, undefined, 'no bearer may be minted');
+  }
+});
+
+test('customer refusal does not depend on the request body being well formed', () => {
+  // Refuse before validating tenant_id/user_id, so a caller cannot probe for a shape that slips
+  // past. An out-of-scope tenant would otherwise 400 (validation_failed) and reveal the live branch.
+  const result = loginBundledStagingPrincipal(
+    { principal: 'customer', tenant_id: 'ten_not_demo' },
+    PRODUCTION_SHAPE,
+  );
+  assert.equal(result.error, 'customer_login_disabled', 'must not report a validation error instead');
+  assert.equal(result.access_token, undefined);
 });
 
 /** Minimum env a production config load needs, independent of what is under test. */
@@ -224,4 +273,64 @@ test('disabling the fixture entirely also disables the staff mint', () => {
   );
   assert.equal(config.bundledStagingOidc, false);
   assert.equal(config.bundledStagingStaffLogin, false, 'staff mint cannot outlive its trust root');
+});
+
+// --- PUBLIC-AUTH-01: customer mint gate -----------------------------------------------------
+
+test('production keeps the trust root and password lane but disables the customer mint', () => {
+  const config = loadRuntimeConfig(productionEnv());
+  assert.equal(config.bundledStagingOidc, true, 'the OIDC trust root stays enabled');
+  assert.equal(
+    config.passwordLoginEnabled,
+    true,
+    'the password lane stays enabled (it defaults on when oidc-jwt + bundledStagingOidc)',
+  );
+  assert.equal(
+    config.bundledStagingCustomerLogin,
+    false,
+    'production must not mint anonymous customer principals from the bundled fixture',
+  );
+});
+
+test('production has no env escape hatch for the customer mint', () => {
+  // Symmetric with the staff mint: no opt-in exists, so a future env var cannot reopen PUBLIC-AUTH-01.
+  for (const value of ['1', 'true', 'yes', 'TRUE']) {
+    const config = loadRuntimeConfig(
+      productionEnv({ ASTRANULL_BUNDLED_STAGING_CUSTOMER_LOGIN: value }),
+    );
+    assert.equal(
+      config.bundledStagingCustomerLogin,
+      false,
+      `ASTRANULL_BUNDLED_STAGING_CUSTOMER_LOGIN=${value} must not re-enable the customer mint in production`,
+    );
+  }
+});
+
+test('non-production arms the customer mint but still honours an explicit opt-out', () => {
+  const dev = loadRuntimeConfig(productionEnv({ NODE_ENV: 'development' }));
+  assert.equal(dev.bundledStagingCustomerLogin, true, 'staging/dev keeps the customer login usable');
+
+  const optedOut = loadRuntimeConfig(
+    productionEnv({ NODE_ENV: 'development', ASTRANULL_BUNDLED_STAGING_CUSTOMER_LOGIN: '0' }),
+  );
+  assert.equal(optedOut.bundledStagingCustomerLogin, false, 'operators can disable it anywhere');
+});
+
+test('disabling the fixture entirely also disables the customer mint', () => {
+  const config = loadRuntimeConfig(
+    productionEnv({ NODE_ENV: 'development', ASTRANULL_BUNDLED_STAGING_OIDC: '0' }),
+  );
+  assert.equal(config.bundledStagingOidc, false);
+  assert.equal(config.bundledStagingCustomerLogin, false, 'customer mint cannot outlive its trust root');
+});
+
+test('site-config reports the customer-mint capability, not the trust root', () => {
+  // The login page keys the "Staging role bypass" disclosure off this flag; in production it must be
+  // false even though the trust root is on, so the credential-free role picker does not render.
+  const prod = getPublicSiteConfig(loadRuntimeConfig(productionEnv()));
+  assert.equal(prod.bundled_staging_login_enabled, false, 'production hides the staging bypass');
+  assert.equal(prod.password_login_enabled, true, 'password login stays advertised in production');
+
+  const dev = getPublicSiteConfig(loadRuntimeConfig(productionEnv({ NODE_ENV: 'development' })));
+  assert.equal(dev.bundled_staging_login_enabled, true, 'non-prod still exposes the staging bypass');
 });

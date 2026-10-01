@@ -16,7 +16,7 @@ import {
   sessionIdentity
 } from './lib/api';
 import { getRouteFromLocation, ROUTE_BY_ID } from './lib/navigation';
-import { staffHomeRoute } from './lib/portal-auth-policy.mjs';
+import { staffHomeRoute, isSessionExpired } from './lib/portal-auth-policy.mjs';
 import { createPayloadCommitGate, runGenerationKeyedPayload } from './lib/payload-commit-generation.mjs';
 import { canAccessRoute } from './lib/route-access';
 import { getRouteTenantId } from './lib/route-params';
@@ -162,6 +162,18 @@ export default function App() {
       }
       const nextConfig = gate.config;
       const nextSession = gate.session;
+      // Defense-in-depth: honor our own stored `expires_at` before rendering the authenticated
+      // shell, instead of waiting for an API 401. A missing/unparseable expiry (dev-headers) is
+      // not treated as expired, so local development is unaffected (RBAC-02).
+      if (nextSession && isSessionExpired(nextSession) && !isPublicOnlyPath(window.location.pathname)) {
+        clearSession();
+        setSession(null);
+        const candidate = portalSurface(window.location.pathname) === 'staff'
+          ? nextConfig?.staffLoginPath
+          : nextConfig?.loginUrl;
+        window.location.replace(resolveLoginDestination(candidate, window.location.pathname));
+        return;
+      }
       setConfig(nextConfig);
       setSession(nextSession);
       // Re-arm the one-shot re-auth latch for this newly established session, so

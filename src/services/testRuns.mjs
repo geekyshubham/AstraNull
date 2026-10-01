@@ -10,6 +10,7 @@ import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibil
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { redactObject } from '../lib/redact.mjs';
+import { scrubRunForCustomer } from '../lib/outsideInEvidence.mjs';
 import { recordEvidence } from './evidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
@@ -45,7 +46,8 @@ export function listChecks() {
 }
 
 const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
-const MAX_TEST_RUN_LIST_LIMIT = 500;
+// docs/api.md GET /v1/test-runs: limit default 100, max 100. Keep dev-json and Postgres aligned.
+const MAX_TEST_RUN_LIST_LIMIT = 100;
 
 function normalizeTestRunListLimit(limit) {
   const parsed = Number(limit);
@@ -71,10 +73,13 @@ export function listTestRuns(ctx, options = {}) {
   );
   rows = rows.slice(0, normalizeTestRunListLimit(options.limit));
   const verdicts = getStore().verdicts ?? [];
-  return rows.map((run) => ({
-    ...run,
-    verdict: run.verdict ?? verdicts.find((v) => v.tenant_id === ctx.tenantId && v.test_run_id === run.id) ?? null,
-  }));
+  return rows.map((run) =>
+    // EVIDENCE-01 / ADR-0008: list items carry the same nested verdict as run detail; scrub it here too.
+    scrubRunForCustomer({
+      ...run,
+      verdict: run.verdict ?? verdicts.find((v) => v.tenant_id === ctx.tenantId && v.test_run_id === run.id) ?? null,
+    }),
+  );
 }
 
 export function listTestRunsEnvelope(ctx, options = {}) {
@@ -151,7 +156,9 @@ export function getTestRun(ctx, id) {
   if (!run) return null;
   maybeFinalizeCollectingRun(run);
   const verdict = getStore().verdicts.find((v) => v.test_run_id === id);
-  return { ...run, verdict: verdict ?? null };
+  // EVIDENCE-01 / ADR-0008: customer run detail must read external-only. Scrub the nested verdict
+  // explanation / placement_confidence at this projection seam; stored rows are untouched.
+  return scrubRunForCustomer({ ...run, verdict: verdict ?? null });
 }
 
 export function getRunEvents(ctx, id) {
