@@ -1167,6 +1167,7 @@ function RunDetailView({
         title="Cancel this run in progress?"
         description={<p>Run {entityId} stops collecting and records no new verdict.</p>}
         confirmLabel="Cancel run"
+        dismissLabel="Keep run"
         busy={busy === `cancel-${entityId}`}
         onCancel={() => setConfirmCancelOpen(false)}
         onConfirm={() => void confirmCancelRun()}

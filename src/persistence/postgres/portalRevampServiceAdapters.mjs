@@ -9,6 +9,7 @@ import {
   isCurrentSuccessfulProviderSnapshot,
 } from '../../lib/connectorProviders/domainInventory.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { normalizeChallengeStateForRead } from '../../lib/ownershipPolicy.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { PORTAL_REVAMP_REPOSITORY_METHODS } from './portalRevampRepository.mjs';
 
@@ -285,7 +286,14 @@ export function createPostgresPortalRevampServices(deps) {
 
   const portalDns = {
     async listChallenges(ctx, groupId) {
-      const items = await portalRevamp.listDnsChallengesByGroup(ctx, groupId);
+      const rows = await portalRevamp.listDnsChallengesByGroup(ctx, groupId);
+      // OWNERSHIP-01: present `expired` for pending-but-past-expiry rows on read, without a DB
+      // write. The stored row (consumed by verify/reissue) is untouched, so the authoritative
+      // state machine stays race-safe; only the presented list is normalized.
+      const items = rows.map((row) => ({
+        ...row,
+        state: normalizeChallengeStateForRead(row.state, row.expires_at),
+      }));
       const count = items.length;
       return {
         items,

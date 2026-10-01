@@ -62,3 +62,26 @@ export function ownershipSummaryFromTargetStates(states = []) {
   }
   return summary;
 }
+
+/**
+ * OWNERSHIP-01: canonicalize a DNS-challenge state for *reads*. A challenge that is still stored
+ * as `pending` but whose `expires_at` is in the past is no longer actionable — presenting it as
+ * `pending` makes the UI tell operators to publish a dead TXT record. This normalizes the
+ * presented state to `expired` without mutating or persisting the row, so API reads and the
+ * target-detail page stay honest the instant the clock passes expiry.
+ *
+ * This is read-only: `verifyChallenge`/reissue paths key off the *stored* row (not this value),
+ * so lazy expiry here never races the authoritative state machine. The stored row still
+ * transitions to `expired` on the next verify (race-safe, audited).
+ *
+ * @param {string|null|undefined} state stored challenge state
+ * @param {string|null|undefined} expiresAt ISO expiry timestamp
+ * @param {number} [now] epoch ms (injectable for clock-controlled tests)
+ * @returns {string} the state to present
+ */
+export function normalizeChallengeStateForRead(state, expiresAt, now = Date.now()) {
+  if (state !== 'pending') return state;
+  const expiry = Date.parse(expiresAt);
+  if (Number.isFinite(expiry) && expiry <= now) return 'expired';
+  return state;
+}

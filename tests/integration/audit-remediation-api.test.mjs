@@ -64,6 +64,24 @@ describe('connector creation preflight', () => {
     });
     assert.equal(invalid.status, 400);
 
+    // CONNECTORS-01: validate_only must reject a config that omits an explicit read_only:true,
+    // matching the post-create validate gate. Nothing is persisted.
+    const missingReadOnly = await request(baseUrl, 'POST', '/v1/connectors', {
+      headers: demoHeaders('admin'),
+      body: { provider: 'cloudflare', name: 'QA-SWARM-x', config: {}, validate_only: true },
+    });
+    assert.equal(missingReadOnly.status, 400);
+    assert.equal(missingReadOnly.json.error, 'read_only_required');
+    assert.equal(getStore().wafConnectors.length, before, 'validate_only persists nothing');
+
+    const readOnlyFalse = await request(baseUrl, 'POST', '/v1/connectors', {
+      headers: demoHeaders('admin'),
+      body: { provider: 'cloudflare', name: 'QA-SWARM-y', config: { read_only: false }, validate_only: true },
+    });
+    assert.equal(readOnlyFalse.status, 400);
+    assert.equal(readOnlyFalse.json.error, 'read_only_required');
+    assert.equal(getStore().wafConnectors.length, before, 'validate_only persists nothing');
+
     const created = await request(baseUrl, 'POST', '/v1/connectors', {
       headers: demoHeaders('admin'),
       body: { provider: 'cloudflare', name: 'edge', status: 'active', config: { read_only: true } },

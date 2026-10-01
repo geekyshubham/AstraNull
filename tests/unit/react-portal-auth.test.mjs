@@ -177,6 +177,18 @@ describe('session expiry (shipped module)', () => {
       assert.equal(isSessionExpired(session, 9_999_999), false);
     }
   });
+
+  // RBAC-02: OIDC sessions store `expires_at` as an ISO-8601 string. A past ISO expiry must be
+  // honored (previously Number('2020-01-01T...') === NaN silently passed the guard).
+  it('honors an ISO-8601 string expires_at (RBAC-02)', () => {
+    const past = '2020-01-01T00:00:00.000Z';
+    const future = '2999-01-01T00:00:00.000Z';
+    assert.equal(isSessionExpired({ expires_at: past }, Date.parse('2026-01-01T00:00:00Z')), true);
+    assert.equal(isSessionExpired({ expires_at: future }, Date.parse('2026-01-01T00:00:00Z')), false);
+    // Numeric epoch-ms still works unchanged.
+    assert.equal(isSessionExpired({ expires_at: 1_000 }, 1_001), true);
+    assert.equal(isSessionExpired({ expires_at: 1_000 }, 999), false);
+  });
 });
 
 describe('api header construction (shipped module)', () => {
@@ -319,18 +331,25 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('viewer', 'reports'), true);
   });
 
-  it('restricts staff SOC console to staff principals with SOC staff roles', () => {
-    assert.equal(canAccessRoute('soc', 'internal-soc', { principal: 'customer' }), false);
+  it('opens the SOC console to the customer soc role and staff SOC roles only (SOC-01)', () => {
+    // Customer soc holds soc:high_scale -> tenant-scoped console is reachable.
+    assert.equal(canAccessRoute('soc', 'internal-soc', { principal: 'customer' }), true);
+    // Other customer roles lack soc:high_scale and stay denied.
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'customer' }), false);
+    assert.equal(canAccessRoute('owner', 'internal-soc', { principal: 'customer' }), false);
+    assert.equal(canAccessRoute('engineer', 'internal-soc', { principal: 'customer' }), false);
     assert.equal(canAccessRoute('viewer', 'internal-soc', { principal: 'customer' }), false);
+    assert.equal(canAccessRoute('auditor', 'internal-soc', { principal: 'customer' }), false);
+    // Staff SOC roles reach the cross-tenant staff console; other staff roles do not.
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'soc_analyst' }), true);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'support_engineer' }), false);
   });
 
-  it('shows staff SOC surface only for staff principals with SOC staff roles', () => {
+  it('keeps the staff SOC console gated to operational staff SOC roles', () => {
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'soc_analyst' }), true);
+    assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'soc_lead' }), true);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'support_engineer' }), false);
-    assert.equal(canAccessRoute('soc', 'internal-soc', { principal: 'customer' }), false);
+    assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'internal_admin' }), false);
   });
 
   it('keeps broadly readable routes visible to viewer', () => {
@@ -384,6 +403,20 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('admin', 'release-evidence'), false);
     assert.equal(canAccessRoute('owner', 'release-evidence'), false);
     assert.equal(canAccessRoute('soc', 'release-evidence'), false);
+  });
+
+  it('enforces client session expiry before rendering the protected shell (RBAC-02)', () => {
+    const bootStart = APP_SOURCE.indexOf('async function boot()');
+    const bootEnd = APP_SOURCE.indexOf('boot().catch', bootStart);
+    const boot = APP_SOURCE.slice(bootStart, bootEnd);
+    const expiryGuard = boot.indexOf('isSessionExpired(nextSession)');
+    const clear = boot.indexOf('clearSession()', expiryGuard);
+    const redirect = boot.indexOf('window.location.replace', expiryGuard);
+    const renderConfig = boot.indexOf('setConfig(nextConfig)');
+    assert.ok(expiryGuard >= 0, 'boot must check isSessionExpired on the stored session');
+    assert.ok(clear > expiryGuard, 'an expired session must clear its session key');
+    assert.ok(redirect > expiryGuard && redirect < renderConfig, 'expired session redirects to login before the shell renders');
+    assert.match(boot.slice(expiryGuard, renderConfig), /!isPublicOnlyPath/, 'public paths are exempt');
   });
 
   it('authorizes a cold hash route before route-specific hydration or first render', () => {

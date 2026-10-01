@@ -185,12 +185,12 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
         <WafKpi
           label="Protection worked"
           value={protectedCount ?? '—'}
-          note="Observed validation · agent-confirmed"
+          note="Confirmed by external probe evidence"
         />
         <WafKpi
           label="Blocked at edge only"
           value={edgeProtected ?? '—'}
-          note="Observed at edge · internal corroboration absent"
+          note="Blocked at edge · origin not separately proven"
         />
         <WafKpi
           label="Protection needs work"

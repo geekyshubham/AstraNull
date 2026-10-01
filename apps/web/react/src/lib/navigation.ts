@@ -83,7 +83,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'reports',
     label: 'Reports',
     group: 'governance',
-    description: 'Executive, technical, SOC, audit, release, and WAF report builders.',
+    description: 'Executive, technical, SOC, audit, and compliance report builders.',
     icon: FileText
   },
   {

@@ -1622,7 +1622,7 @@ export function SocConsolePage({
   config,
   session,
   onRefresh,
-  staffSocSurface = false
+  staffSocSurface: requestedStaffSocSurface = false
 }: {
   data: PortalData;
   config: PortalConfig;
@@ -1630,6 +1630,12 @@ export function SocConsolePage({
   onRefresh: () => Promise<void>;
   staffSocSurface?: boolean;
 }) {
+  // The staff cross-tenant plane is only ever rendered for a staff principal.
+  // The router requests it for the shared `internal-soc` route, but a customer
+  // `soc` principal (SOC-01) must land on the tenant-scoped console instead of
+  // the "Staff SOC role required" wall. Downgrading here keeps route/surface
+  // logic clean without widening what a customer session can read.
+  const staffSocSurface = requestedStaffSocSurface && session.principal === 'staff';
   const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [queueRefreshing, setQueueRefreshing] = useState(false);

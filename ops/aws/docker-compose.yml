@@ -108,6 +108,12 @@ services:
       ASTRANULL_OIDC_AUDIENCE: ${ASTRANULL_OIDC_AUDIENCE}
       ASTRANULL_OIDC_JWKS_URL: ${ASTRANULL_OIDC_JWKS_URL}
       ASTRANULL_OIDC_ROLE_MAP: ${ASTRANULL_OIDC_ROLE_MAP}
+      # Staff IdP role map (idp_role:platform_role,...). Independent of the customer
+      # role map so a customer mapping can never mint staff privileges. REQUIRED to
+      # establish any staff principal in production: pickStaffRole() fails CLOSED and
+      # skips unmapped claims under requireExplicitRoleMap, so leaving this blank keeps
+      # the staff console unreachable (CONFIG-01). It never enables bundled staff login.
+      ASTRANULL_OIDC_STAFF_ROLE_MAP: ${ASTRANULL_OIDC_STAFF_ROLE_MAP:-}
       ASTRANULL_OIDC_TENANT_CLAIM: ${ASTRANULL_OIDC_TENANT_CLAIM:-tenant_id}
       ASTRANULL_OIDC_ROLE_CLAIM: ${ASTRANULL_OIDC_ROLE_CLAIM:-role}
       ASTRANULL_OIDC_USER_CLAIM: ${ASTRANULL_OIDC_USER_CLAIM:-sub}
@@ -129,6 +135,10 @@ services:
       ASTRANULL_SIGNUP_MODE: ${ASTRANULL_SIGNUP_MODE:-disabled}
       ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION: ${ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION:-1}
       ASTRANULL_RATE_LIMIT_STORE: ${ASTRANULL_RATE_LIMIT_STORE:-memory}
+      # Scraper bearer for GET /metrics. Required in production: the in-process route fails CLOSED
+      # (401 metrics_token_not_configured) when unset, so the gateway/Prometheus scraper must present
+      # this token. Blank here leaves metrics unreadable in-process; supply a value in ops/aws/.env.
+      ASTRANULL_METRICS_TOKEN: ${ASTRANULL_METRICS_TOKEN:-}
     command: ["node", "src/index.mjs"]
     depends_on:
       postgres:

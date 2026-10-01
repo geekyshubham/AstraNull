@@ -2,14 +2,33 @@ import { staffRoleHasPermission } from '../contracts/staffRoles.mjs';
 import { auditInternal } from '../services/internalAudit.mjs';
 
 function deny(ctx, permission, meta, message) {
-  auditInternal({
-    staff_id: ctx.staffId ?? ctx.userId,
-    staff_role: ctx.staffRole ?? ctx.role,
-    action: 'staff.rbac.denied',
-    resource_type: meta.resource_type ?? 'api',
-    resource_id: meta.resource_id ?? null,
-    metadata: { permission, ...meta.metadata },
-  });
+  // Mirror the customer rbac.mjs split: in Postgres mode the denial is appended through the
+  // injected internal-audit service asynchronously/best-effort (so an audit write failure can
+  // never turn a 403 into a 500 — in dev-json/memory the dev auditInternal() unconditionally
+  // called getStore()/persistStore(), which under Postgres mkdir'd /app/.data and threw EACCES).
+  // Only the dev path keeps the synchronous auditInternal().
+  if (ctx.persistenceMode === 'postgres') {
+    const appendInternalAudit = ctx.internalAuditService?.appendInternalAudit;
+    if (typeof appendInternalAudit === 'function') {
+      Promise.resolve(
+        appendInternalAudit(ctx, {
+          action: 'staff.rbac.denied',
+          resource_type: meta.resource_type ?? 'api',
+          resource_id: meta.resource_id ?? null,
+          metadata: { permission, ...meta.metadata },
+        }),
+      ).catch(() => {});
+    }
+  } else {
+    auditInternal({
+      staff_id: ctx.staffId ?? ctx.userId,
+      staff_role: ctx.staffRole ?? ctx.role,
+      action: 'staff.rbac.denied',
+      resource_type: meta.resource_type ?? 'api',
+      resource_id: meta.resource_id ?? null,
+      metadata: { permission, ...meta.metadata },
+    });
+  }
   return {
     ok: false,
     status: 403,

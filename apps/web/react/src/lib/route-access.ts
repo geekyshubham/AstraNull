@@ -33,8 +33,14 @@ const ROUTE_CUSTOMER_ROLES: Partial<Record<RouteId, readonly string[]>> = {
 };
 
 const STAFF_ONLY_ROUTES = new Set<RouteId>(['admin', 'tenant-detail']);
-/** Staff-only SOC execution console. queue-detail is shared: customers complete packs; staff run lifecycle. */
-const STAFF_SOC_ROUTES = new Set<RouteId>(['internal-soc']);
+/**
+ * SOC execution console. Two distinct planes share this route id:
+ *   - customer `soc` role → tenant-scoped console (SocConsolePage staffSocSurface=false),
+ *     gated on the `soc:high_scale` backend permission (engineers/viewers lack it);
+ *   - staff `soc_analyst`/`soc_lead` → cross-tenant staff console (staffSocSurface=true).
+ * queue-detail is shared: customers complete packs; staff run lifecycle.
+ */
+const SOC_CONSOLE_ROUTES = new Set<RouteId>(['internal-soc']);
 
 export type RouteAccessContext = {
   principal?: string;
@@ -64,8 +70,14 @@ export function canAccessRoute(
       || staffSessionHasPermission({ principal, staff_role: staffRole }, 'staff:tenant:read');
   }
 
-  if (STAFF_SOC_ROUTES.has(routeId)) {
-    return principal === 'staff' && STAFF_SOC_ROLES.has(staffRole);
+  if (SOC_CONSOLE_ROUTES.has(routeId)) {
+    // Staff SOC roles reach the cross-tenant staff console.
+    if (principal === 'staff') return STAFF_SOC_ROLES.has(staffRole);
+    // Customer `soc` reaches the tenant-scoped console iff it holds the SOC
+    // high-scale permission. Engineers/viewers lack `soc:high_scale` and stay
+    // denied. This does not weaken server RBAC or expose cross-tenant reads —
+    // the tenant console uses tenant-scoped /internal/soc/* APIs only.
+    return roleHasPermission(normalizedRole, 'soc:high_scale');
   }
 
   // Customer datasets intentionally do not hydrate for a non-impersonating staff

@@ -687,6 +687,29 @@ export function loadRuntimeConfig(env = process.env) {
   const bundledStagingStaffLogin = bundledStagingOidc
     && nodeEnv !== 'production'
     && env.ASTRANULL_BUNDLED_STAGING_STAFF_LOGIN !== '0';
+  /**
+   * Whether the bundled fixture may mint anonymous CUSTOMER principals.
+   *
+   * Split from `bundledStagingOidc` for the same reason the staff flag is, and with the same lack
+   * of a production escape hatch. `bundledStagingOidc` is the OIDC trust root: it gates token
+   * VERIFICATION and the JWKS document (src/server.mjs) and enables the password lane
+   * (passwordLoginEnabled below), so it has to stay armed in production. Reusing it to also gate the
+   * unauthenticated mint is exactly what shipped the P0 (PUBLIC-AUTH-01): on the live
+   * NODE_ENV=production deployment `bundledStagingOidc` is true, so `POST /v1/auth/bundled-staging-login`
+   * minted a credential-free owner/admin bearer for ten_demo and the login page rendered the
+   * "Staging role bypass" role picker.
+   *
+   * This flag gates only the mint and the UI capability (getPublicSiteConfig reads it as
+   * `bundled_staging_login_enabled`). It never arms under NODE_ENV=production — the customer branch is
+   * demo-tenant-scoped but still issues a password-less session, which must not exist on a production
+   * deployment where the real lane is the IdP + password login. There is deliberately no env var that
+   * turns it back on there; a staging walkthrough that needs it runs with a non-production NODE_ENV.
+   * Verification (bundledStagingOidc) and the password lane are untouched, so password login keeps
+   * working in production with the trust root enabled.
+   */
+  const bundledStagingCustomerLogin = bundledStagingOidc
+    && nodeEnv !== 'production'
+    && env.ASTRANULL_BUNDLED_STAGING_CUSTOMER_LOGIN !== '0';
   const publicLoginUrl = (
     env.ASTRANULL_PUBLIC_LOGIN_URL
     ?? (bundledStagingOidc ? '/login' : '/app')
@@ -706,6 +729,7 @@ export function loadRuntimeConfig(env = process.env) {
     deploymentProfile,
     bundledStagingOidc,
     bundledStagingStaffLogin,
+    bundledStagingCustomerLogin,
     passwordLoginEnabled: parseOptionalBoolean(
       env.ASTRANULL_PASSWORD_LOGIN_ENABLED,
       'ASTRANULL_PASSWORD_LOGIN_ENABLED',

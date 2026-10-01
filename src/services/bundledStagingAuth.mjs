@@ -20,15 +20,16 @@ export function isPasswordProtectedBundledStagingCustomerId(userId) {
  * attacker-controlled — `role` and `staff_role` below are inputs, not assertions.
  *
  * The two branches are gated differently on purpose. Customer tokens are pinned to the ten_demo
- * tenant and remain available for general staging walkthrough identities; explicitly protected
- * customer IDs are refused below and must use the credentialed password lane. Staff tokens carry
- * platform authority over /internal/admin (tenants, signup approvals, subscriptions), which is not scoped to
- * a demo tenant — so the staff branch requires `bundledStagingStaffLogin`, which never arms under
- * NODE_ENV=production. Before that gate existed, an anonymous POST to the live deployment returned
- * an `internal_admin` bearer that read /internal/admin successfully.
+ * tenant and require `bundledStagingCustomerLogin`, which never arms under NODE_ENV=production;
+ * explicitly protected customer IDs are refused below and must use the credentialed password lane.
+ * Staff tokens carry platform authority over /internal/admin (tenants, signup approvals, subscriptions),
+ * which is not scoped to a demo tenant — so the staff branch requires `bundledStagingStaffLogin`, which
+ * also never arms under NODE_ENV=production. Before those gates existed, an anonymous POST to the live
+ * deployment returned usable `owner`/`internal_admin` bearers because both branches shared
+ * `bundledStagingOidc`, which must stay enabled in production as the OIDC trust root.
  *
  * @param {unknown} body
- * @param {{ bundledStagingOidc?: boolean, bundledStagingStaffLogin?: boolean }} runtimeConfig
+ * @param {{ bundledStagingOidc?: boolean, bundledStagingStaffLogin?: boolean, bundledStagingCustomerLogin?: boolean }} runtimeConfig
  */
 export function loginBundledStagingPrincipal(body, runtimeConfig) {
   if (!runtimeConfig.bundledStagingOidc) {
@@ -77,6 +78,20 @@ export function loginBundledStagingPrincipal(body, runtimeConfig) {
   }
 
   const tenantId = String(body?.tenant_id ?? BUNDLED_STAGING_DEMO_TENANT).trim();
+  // Checked before reading any other customer field: the customer branch mints a password-less
+  // session, so on a production deployment (where this flag is always false) it must be refused
+  // regardless of body shape. `bundledStagingOidc` stays true in production to keep the OIDC trust
+  // root and the password lane working, so the customer mint needs its own gate — see
+  // bundledStagingCustomerLogin in src/config.mjs (PUBLIC-AUTH-01).
+  if (!runtimeConfig.bundledStagingCustomerLogin) {
+    return {
+      error: 'customer_login_disabled',
+      status: 403,
+      message:
+        'Bundled staging customer login is disabled on this deployment. Customer principals must '
+        + 'sign in with their password or the configured identity provider.',
+    };
+  }
   if (tenantId !== BUNDLED_STAGING_DEMO_TENANT) {
     return { error: 'validation_failed', status: 400, fields: ['tenant_id'] };
   }

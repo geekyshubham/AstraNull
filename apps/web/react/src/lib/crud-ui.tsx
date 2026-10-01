@@ -55,6 +55,7 @@ type ConfirmModalProps = {
   title: string;
   description: ReactNode;
   confirmLabel: string;
+  dismissLabel?: string;
   confirmTone?: 'danger' | 'default';
   requireTypedId?: string;
   typedPlaceholder?: string;
@@ -68,6 +69,7 @@ export function ConfirmModal({
   title,
   description,
   confirmLabel,
+  dismissLabel = 'Cancel',
   confirmTone = 'danger',
   requireTypedId,
   typedPlaceholder,
@@ -125,7 +127,7 @@ export function ConfirmModal({
           </label>
         ) : null}
         <div className="modal-confirm-actions">
-          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>{dismissLabel}</Button>
           <Button type="submit" variant={confirmTone === 'danger' ? 'danger' : 'default'} loading={busy} disabled={!typedOk || busy}>
             {confirmLabel}
           </Button>
@@ -200,6 +202,7 @@ export type ConfirmRequest = {
   title: string;
   description: ReactNode;
   confirmLabel?: string;
+  dismissLabel?: string;
   confirmTone?: 'danger' | 'default';
   requireTypedId?: string;
 };
@@ -239,6 +242,7 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
         title={request?.title ?? 'Confirm action'}
         description={request?.description ?? ''}
         confirmLabel={request?.confirmLabel ?? 'Confirm'}
+        dismissLabel={request?.dismissLabel ?? 'Cancel'}
         confirmTone={request?.confirmTone ?? 'danger'}
         requireTypedId={request?.requireTypedId}
         onCancel={() => settle(false)}

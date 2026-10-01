@@ -6,6 +6,11 @@ import {
 import { buildCustodyManifest } from '../lib/custody.mjs';
 import { getCheckById } from '../contracts/checks.mjs';
 import { redactObject } from '../lib/redact.mjs';
+import {
+  scrubAgentPlacementText,
+  scrubReportSummaryForCustomer,
+  scrubVerdictForReportExport,
+} from '../lib/outsideInEvidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { computeReadiness } from './readiness.mjs';
@@ -93,7 +98,10 @@ function buildExportPayload(ctx, report) {
     report_id: report.id,
     title: report.title,
     kind: report.kind,
-    summary: report.summary,
+    // EVIDENCE-01 / ADR-0008: strip obsolete agent/placement keys and the legacy
+    // "Agent placement & health" readiness factor from the customer-facing summary. Stored
+    // summary is untouched; this is an export-time projection only.
+    summary: scrubReportSummaryForCustomer(report.summary),
     compliance_mapping: complianceMapping,
     runs: runs.map((r) => ({
       id: r.id,
@@ -102,14 +110,19 @@ function buildExportPayload(ctx, report) {
       safety_class: getCheckById(r.check_id)?.safety_class,
       status: r.status,
     })),
-    verdicts: verdicts.map((v) => ({
-      test_run_id: v.test_run_id,
-      verdict: v.verdict,
-      confidence: v.confidence,
-      placement_confidence: v.placement_confidence ?? null,
-      evidence_ids: v.evidence_ids,
-      explanation: v.explanation,
-    })),
+    // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Drop the
+    // legacy `placement_confidence` field name and rewrite agent/placement wording in the
+    // explanation; preserve verdict/confidence/evidence linkage (no fabricated evidence).
+    verdicts: verdicts.map((v) =>
+      scrubVerdictForReportExport({
+        test_run_id: v.test_run_id,
+        verdict: v.verdict,
+        confidence: v.confidence,
+        placement_confidence: v.placement_confidence ?? null,
+        evidence_ids: v.evidence_ids,
+        explanation: v.explanation,
+      }),
+    ),
     soc_notes: socNotes.map((n) => ({ request_id: n.high_scale_request_id, body: n.body, at: n.created_at })),
   });
 }
@@ -287,6 +300,8 @@ export function exportFinding(ctx, id) {
   const finding = store.findings.find((f) => f.id === id && f.tenant_id === ctx.tenantId);
   if (!finding) return null;
   const check = getCheckById(finding.check_id);
+  // EVIDENCE-01 / ADR-0008: finding export (customer artifact) must read external-only. Scrub the
+  // free-text prose (notes, remediation copy) before it is hashed into the custody digest.
   const payload = redactObject({
     finding_id: finding.id,
     title: finding.title,
@@ -294,9 +309,9 @@ export function exportFinding(ctx, id) {
     status: finding.status,
     check_id: finding.check_id,
     vector_family: check?.vector_family,
-    remediation_template: check?.remediation_template,
+    remediation_template: scrubAgentPlacementText(check?.remediation_template),
     evidence_ids: finding.evidence_ids,
-    notes: finding.notes,
+    notes: scrubAgentPlacementText(finding.notes),
   });
   const priorGlobal = getLatestChainedAuditEntry();
   const priorTenant = getLatestChainedAuditEntryForTenant(ctx.tenantId);

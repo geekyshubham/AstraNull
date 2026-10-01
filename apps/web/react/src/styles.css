@@ -7149,9 +7149,12 @@ body .catalog-search-control {
   border-radius: var(--radius-sm);
 }
 
-/* The search field was clipping its own placeholder mid-word. */
-body .targets-page .targets-toolbar {
-  grid-template-columns: minmax(280px, 1.7fr) repeat(4, minmax(150px, 1fr));
+/* The search field was clipping its own placeholder mid-word. Scope above the mobile
+   breakpoint so it does not defeat the single-column rule at <=620px (TARGETS-01). */
+@media (min-width: 621px) {
+  body .targets-page .targets-toolbar {
+    grid-template-columns: minmax(280px, 1.7fr) repeat(4, minmax(150px, 1fr));
+  }
 }
 
 /* Findings search was a 40px pill beside 44px 4px-radius selects. */

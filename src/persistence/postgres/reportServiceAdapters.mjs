@@ -11,6 +11,11 @@ import { buildCustodyManifest } from '../../lib/custody.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { redactObject } from '../../lib/redact.mjs';
 import {
+  scrubAgentPlacementText,
+  scrubReportSummaryForCustomer,
+  scrubVerdictForReportExport,
+} from '../../lib/outsideInEvidence.mjs';
+import {
   STATE_CORE_CATALOG_REPOSITORY_METHODS,
   STATE_HIGH_SCALE_REPOSITORY_METHODS,
   STATE_KILL_SWITCH_REPOSITORY_METHODS,
@@ -218,14 +223,17 @@ function mapRunForExport(run) {
 }
 
 function mapVerdictForExport(verdict) {
-  return {
+  // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Drop the
+  // legacy `placement_confidence` field name and rewrite agent/placement wording in the
+  // explanation; preserve verdict/confidence/evidence linkage (no fabricated evidence).
+  return scrubVerdictForReportExport({
     test_run_id: verdict.test_run_id,
     verdict: verdict.verdict,
     confidence: verdict.confidence,
     placement_confidence: verdict.placement_confidence ?? null,
     evidence_ids: verdict.evidence_ids,
     explanation: verdict.explanation,
-  };
+  });
 }
 
 async function priorAuditHashes(auditRepo, tenantId) {
@@ -330,7 +338,10 @@ export function createPostgresReportServices(repositories, options = {}) {
         report_id: report.id,
         title: report.title,
         kind: report.kind,
-        summary: report.summary,
+        // EVIDENCE-01 / ADR-0008: strip obsolete agent/placement keys and the legacy
+        // "Agent placement & health" readiness factor from the customer-facing summary. Stored
+        // summary is untouched; this is an export-time projection only.
+        summary: scrubReportSummaryForCustomer(report.summary),
         compliance_mapping: complianceMapping,
         runs: runRows.map(mapRunForExport),
         verdicts: verdictRows.map(mapVerdictForExport),
@@ -400,6 +411,8 @@ export function createPostgresReportServices(repositories, options = {}) {
       const finding = await validationEvidence.getFinding(ctx, id);
       if (!finding) return null;
       const check = getCheckById(finding.check_id);
+      // EVIDENCE-01 / ADR-0008: finding export (customer artifact) must read external-only. Scrub
+      // notes/remediation prose before it is hashed into the custody digest.
       const payload = redactObject({
         finding_id: finding.id,
         title: finding.title,
@@ -407,9 +420,9 @@ export function createPostgresReportServices(repositories, options = {}) {
         status: finding.status,
         check_id: finding.check_id,
         vector_family: check?.vector_family,
-        remediation_template: check?.remediation_template,
+        remediation_template: scrubAgentPlacementText(check?.remediation_template),
         evidence_ids: finding.evidence_ids,
-        notes: finding.notes,
+        notes: scrubAgentPlacementText(finding.notes),
       });
 
       const prior = await priorAuditHashes(auditRepo, ctx.tenantId);

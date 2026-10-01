@@ -177,6 +177,50 @@ describe('dashboard-metrics', () => {
     assert.equal(byKey.internet.status, 'none');
   });
 
+  it('never lets a target inherit a sibling or group run (DASH-01)', () => {
+    // Two targets share a group; only the verified one has runs. The unverified sibling
+    // (never probed, ownership gate forbids live traffic) must read "No result", not a
+    // group-inherited verdict.
+    const rows = buildTargetPostureRows(portalData({
+      targets: [
+        { id: 't_verified', value: 'astranull.site', target_group_id: 'tg_demo_origin', verification: { state: 'dns_verified' } },
+        { id: 't_unverified', value: 'checkred.com', target_group_id: 'tg_demo_origin', verification: { state: 'unverified' } }
+      ],
+      runs: [
+        // Both an own run and a bare group run exist for the group; neither may leak to the sibling.
+        { id: 'r_own', target_id: 't_verified', target_group_id: 'tg_demo_origin', status: 'completed', verdict: 'pass', completed_at: '2026-03-01T00:00:00Z' },
+        { id: 'r_group', target_group_id: 'tg_demo_origin', status: 'verdicted', verdict: 'pass', completed_at: '2026-03-02T00:00:00Z' }
+      ]
+    }));
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+    assert.equal(byId.t_verified.verdictStatus, 'pass', 'target with its own run keeps its verdict');
+    assert.equal(byId.t_unverified.verdictStatus, 'none', 'never-probed sibling shows No result');
+    assert.equal(byId.t_unverified.verdict, '', 'no inherited verdict string');
+  });
+
+  it('counts only target-bound evidence verdicts for coverage over 6 targets (DASH-02)', () => {
+    // 6 declared targets, all in one group; only 2 have their own evidence-backed runs.
+    const data = portalData({
+      targets: Array.from({ length: 6 }, (_unused, index) => ({
+        id: `t${index}`,
+        value: `t${index}.example.com`,
+        target_group_id: 'g',
+        verification: { state: index < 2 ? 'dns_verified' : 'unverified' }
+      })),
+      runs: [
+        { id: 'ra', target_id: 't0', target_group_id: 'g', status: 'completed', verdict: 'pass', completed_at: '2026-03-01T00:00:00Z' },
+        { id: 'rb', target_id: 't1', target_group_id: 'g', status: 'verdicted', verdict: 'penetrated', completed_at: '2026-03-02T00:00:00Z' }
+      ]
+    });
+    const withEvidence = new Set(
+      buildTargetPostureRows(data).filter((row) => row.verdictStatus !== 'none').map((row) => row.id)
+    );
+    // Numerator counts only the 2 target-bound verdicts, not group-inherited siblings → 2/6.
+    assert.deepEqual([...withEvidence].sort(), ['t0', 't1']);
+    assert.equal(withEvidence.size, 6 > 0 ? 2 : 0);
+    assert.equal(Math.round((withEvidence.size / data.targets.length) * 100), 33);
+  });
+
   it('pins source labels and shared formatting on every scale-count surface', () => {
     const dashboard = readFileSync('apps/web/react/src/pages/dashboard-page.tsx', 'utf8');
     const targets = readFileSync('apps/web/react/src/pages/targets-page.tsx', 'utf8');

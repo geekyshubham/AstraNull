@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { audit } from '../audit.mjs';
 import { encodeBase32 } from '../lib/base32.mjs';
 import { newId } from '../lib/ids.mjs';
+import { normalizeChallengeStateForRead } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
 
@@ -82,7 +83,9 @@ function formatChallenge(row) {
     record_name: row.record_name,
     record_value: row.record_value,
     ttl_seconds: row.ttl_seconds,
-    state: row.state,
+    // OWNERSHIP-01: present `expired` for a pending-but-past-expiry row on read, without
+    // persisting the transition. The stored row still flips to `expired` on the next verify.
+    state: normalizeChallengeStateForRead(row.state, row.expires_at),
     issued_at: row.issued_at,
     expires_at: row.expires_at,
     resolved_at: row.resolved_at ?? null,

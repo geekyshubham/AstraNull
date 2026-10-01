@@ -249,6 +249,60 @@ describe('verifyOidcStaffBearerToken — staff role map enforcement', () => {
     });
   });
 
+  // CONFIG-01 regression: valid staff IdP claims are rejected in production ONLY when no
+  // ASTRANULL_OIDC_STAFF_ROLE_MAP is supplied (requireExplicitRoleMap fails closed). Supplying
+  // the operator strict map through that env var — the ops/aws/docker-compose.yml passthrough this
+  // change adds — resolves the staff SOC principal. This proves CONFIG-01 is a config gap, not a
+  // code defect, and that no unmapped/self-asserted claim can establish staff.
+  it('resolves staff SOC roles from the operator env staff map and stays fail-closed without it (CONFIG-01)', async () => {
+    await withJwks(async (jwksUrl) => {
+      // 1) Production-shaped config with NO staff map configured anywhere: the exact CONFIG-01
+      //    symptom — a valid, correctly-signed staff claim is refused, so no staff principal exists.
+      const noMapCfg = staffOidcConfig(jwksUrl, {
+        requireExplicitRoleMap: true,
+        staffRoleMap: undefined,
+      });
+      delete process.env.ASTRANULL_OIDC_STAFF_ROLE_MAP;
+      const socClaim = {
+        iss: ISSUER,
+        aud: AUDIENCE,
+        sub: 'staff_soc_lead',
+        staff_role: 'corp-soc-lead',
+        exp: nowSec() + 3600,
+      };
+      assert.equal(
+        (await verifyOidcStaffBearerToken(signRs256Jwt(socClaim), noMapCfg)).error,
+        'invalid_staff_role',
+        'no staff map configured must fail closed (CONFIG-01 symptom)',
+      );
+
+      // 2) Operator supplies the strict map via the env var the compose passthrough now forwards.
+      process.env.ASTRANULL_OIDC_STAFF_ROLE_MAP =
+        'corp-internal-admin:internal_admin,corp-soc-lead:soc_lead,corp-soc-analyst:soc_analyst';
+      try {
+        const envCfg = staffOidcConfig(jwksUrl, {
+          requireExplicitRoleMap: true,
+          staffRoleMap: undefined,
+        });
+        const resolved = await verifyOidcStaffBearerToken(signRs256Jwt(socClaim), envCfg);
+        assert.equal(resolved.error, undefined, 'operator map must resolve the staff SOC principal');
+        assert.equal(resolved.staffRole, 'soc_lead');
+        assert.equal(resolved.principalType, 'staff');
+
+        // A self-asserted platform role that is NOT a left-hand IdP key stays rejected even with
+        // the map present — the map never trusts raw platform-role claims.
+        const selfAsserted = { ...socClaim, sub: 'staff_evil', staff_role: 'soc_lead' };
+        assert.equal(
+          (await verifyOidcStaffBearerToken(signRs256Jwt(selfAsserted), envCfg)).error,
+          'invalid_staff_role',
+          'self-asserted platform role must not resolve',
+        );
+      } finally {
+        delete process.env.ASTRANULL_OIDC_STAFF_ROLE_MAP;
+      }
+    });
+  });
+
   it('rejects a mapped value that is not a known staff role', async () => {
     await withJwks(async (jwksUrl) => {
       const cfg = staffOidcConfig(jwksUrl, {

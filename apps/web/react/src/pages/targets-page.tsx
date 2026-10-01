@@ -460,7 +460,7 @@ export function TargetsPage({
         </div>
         <div className="row-actions">
           <Button variant="secondary" onClick={() => { setVerificationFilter('unverified'); setEligibilityFilter('all'); }}>Review blocked</Button>
-          {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)}><Plus size={16} /> Add target</Button> : null}
+          {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
         </div>
       </div>
 
@@ -481,7 +481,7 @@ export function TargetsPage({
             <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Close</Button>
           </CardHeader>
           <CardContent>
-            <form className="targets-intake-form" onSubmit={(event) => void addTarget(event)}>
+            <form id="target-declare-form" className="targets-intake-form" onSubmit={(event) => void addTarget(event)}>
               <label>
                 <span>Kind</span>
                 <select name="kind" value={addKind} onChange={(event) => setAddKind(event.target.value)}>

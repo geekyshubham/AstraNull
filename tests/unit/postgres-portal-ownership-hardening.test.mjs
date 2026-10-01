@@ -192,6 +192,35 @@ describe('postgres portal ownership hardening', () => {
     assert.equal(deleted.error, 'target_not_found');
   });
 
+  it('listChallenges presents expired for a pending-but-past-expiry row without a DB write (OWNERSHIP-01)', async () => {
+    const expiredRow = {
+      id: 'dns_read_expired', tenant_id: CTX.tenantId, target_group_id: 'tg_1', target_id: 'tgt_1',
+      state: 'pending', record_name: '_astranull-challenge.example.test', record_value: 'TOKEN',
+      // Far in the past relative to any wall clock so the read normalizer sees it as expired.
+      issued_at: '2000-01-01T00:00:00.000Z', expires_at: '2000-01-01T00:15:00.000Z',
+    };
+    const activeRow = {
+      id: 'dns_read_active', tenant_id: CTX.tenantId, target_group_id: 'tg_1', target_id: 'tgt_2',
+      state: 'pending', record_name: '_astranull-challenge.active.example.test', record_value: 'TOKEN2',
+      // Far in the future so it stays actionable.
+      issued_at: '2999-01-01T00:00:00.000Z', expires_at: '2999-01-01T00:15:00.000Z',
+    };
+    const stored = [expiredRow, activeRow];
+    let writes = 0;
+    const services = portalServices({
+      listDnsChallengesByGroup: async () => stored,
+      finalizeDnsOwnershipCheck: async () => { writes += 1; return null; },
+    });
+
+    const listed = await services.portalDns.listChallenges(CTX, 'tg_1');
+    const byId = Object.fromEntries(listed.items.map((row) => [row.id, row]));
+    assert.equal(byId.dns_read_expired.state, 'expired', 'past-expiry pending reads as expired');
+    assert.equal(byId.dns_read_active.state, 'pending', 'future-expiry pending stays actionable');
+    // The underlying stored rows are untouched by the read.
+    assert.equal(expiredRow.state, 'pending', 'read normalization must not mutate stored state');
+    assert.equal(writes, 0, 'a plain read performs no finalize/DB write');
+  });
+
   it('uses a fresh finalization time when a matching DNS lookup crosses expiry', async () => {
     const beforeLookup = new Date('2026-06-01T11:59:59.900Z');
     const afterLookup = new Date('2026-06-01T12:00:00.100Z');
