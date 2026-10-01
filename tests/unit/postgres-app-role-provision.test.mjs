@@ -113,6 +113,13 @@ describe('Postgres purpose-specific role provisioning', () => {
     ));
     assert.equal(worker.some((text) => /connector_provider_rate_limits TO astranull_connector_worker/.test(text)), false);
     assert.equal(worker.some((text) => /INSERT, UPDATE ON tenant_connector_features/.test(text)), false);
+
+    // Both runtimes assert the migration head at startup, so the privilege reset must keep it readable.
+    for (const [calls, role] of [[scheduler, 'astranull_connector_scheduler'], [worker, 'astranull_connector_worker']]) {
+      const revokeAt = calls.indexOf(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${role}`);
+      const grantAt = calls.indexOf(`GRANT SELECT ON schema_migrations TO ${role}`);
+      assert.ok(revokeAt >= 0 && grantAt > revokeAt, `${role} keeps SELECT on schema_migrations after the reset`);
+    }
   });
 
   it('provisions app and backup roles atomically in one transaction', async () => {

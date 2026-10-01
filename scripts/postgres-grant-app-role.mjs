@@ -94,6 +94,9 @@ async function resetPurposeRolePrivileges(db, roleName) {
   await db.query(`GRANT USAGE ON SCHEMA public TO ${normalized}`);
   await db.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${normalized}`);
   await db.query(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${normalized}`);
+  // Every Postgres runtime (connector workers included) refuses to start unless it can read the
+  // migration head; without this the reset above leaves both connector services unhealthy.
+  await db.query(`GRANT SELECT ON schema_migrations TO ${normalized}`);
   return normalized;
 }
 
