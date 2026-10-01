@@ -89,6 +89,13 @@ describe('per-check status rows', () => {
     assert.equal(row(rows, 'origin.leak_scan.safe').status, 'not_run');
   });
 
+  it('shows customer-facing check names, not raw catalog jargon', () => {
+    const jwt = byId('waf.jwt_tamper_marker.safe');
+    assert.match(jwt.name, /API/);
+    const [rendered] = buildCheckRows({ checks: [jwt] });
+    assert.doesNotMatch(rendered.name, /\bAPI\b/);
+  });
+
   it('groups rows by category with failures first', () => {
     const scan = { steps: [
       { check_id: EDGE_DETECTION_CHECK_ID, status: 'verdicted', verdict: { verdict: 'edge_protected' } },
@@ -121,6 +128,9 @@ describe('WAF and CDN efficacy', () => {
     assert.equal(partial.waf.score, 50);
     assert.deepEqual(partial.waf.exposedChecks, ['SQLi marker']);
     assert.equal(assessEdgeEfficacy({ rows: [mk('cdn', 'failed')], edge }).cdn.status, 'not_protecting');
+    const weak = assessEdgeEfficacy({ rows: [mk('waf', 'passed'), mk('waf', 'failed', 'a'), mk('waf', 'failed', 'b')], edge });
+    assert.equal(weak.waf.status, 'mostly_exposed', 'blocking a minority of tested classes is not partial protection');
+    assert.equal(weak.waf.tone, 'danger');
   });
 
   it('downgrades to bypassable when the origin is reachable directly', () => {

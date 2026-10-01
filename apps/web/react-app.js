@@ -27201,7 +27201,7 @@ function Cm({ checks: e, scan: t = null, runs: n = [] }) {
     return {
       ...c,
       checkId: t,
-      name: am(e.name) || t,
+      name: Vs(am(e.name) || t),
       description: am(e.description),
       verdictLogic: am(e.verdict_logic),
       tier: um(e),
@@ -27266,6 +27266,10 @@ var Dm = Object.freeze({
     label: "Partially protecting",
     tone: "warn"
   },
+  mostly_exposed: {
+    label: "Mostly not protecting",
+    tone: "danger"
+  },
   not_protecting: {
     label: "Not protecting",
     tone: "danger"
@@ -27294,7 +27298,7 @@ function km(e, t, n, r) {
   let i = om(n?.[e]), a = am(i?.status), o = sm(t).filter((t) => t.category?.layer === e && ["passed", "failed"].includes(t.status)), s = o.filter((e) => e.status === "passed").length, c = o.length - s, l = "checks", u = om(n?.effectiveness);
   e === "waf" && o.length === 0 && Number(u?.tested_count) > 0 && (s = Number(u.blocked_count) || 0, c = Number(u.passed_count) || 0, l = "fingerprint_markers");
   let d = s + c, f;
-  f = d === 0 ? a === "detected" ? "present_unmeasured" : a === "not_detected" ? "absent" : "unknown" : c === 0 ? r ? "bypassable" : "protecting" : s === 0 ? "not_protecting" : r ? "bypassable" : "partial";
+  f = d === 0 ? a === "detected" ? "present_unmeasured" : a === "not_detected" ? "absent" : "unknown" : c === 0 ? r ? "bypassable" : "protecting" : s === 0 ? "not_protecting" : r ? "bypassable" : s / d < .5 ? "mostly_exposed" : "partial";
   let p = sm(t).filter((t) => t.category?.layer === e && t.status === "inconclusive").length;
   return {
     layer: e,
@@ -27551,6 +27555,7 @@ var Vm = {
 }, Um = {
   protecting: Ge,
   partial: We,
+  mostly_exposed: Ye,
   not_protecting: Ye,
   bypassable: Ye,
   present_unmeasured: Xe,

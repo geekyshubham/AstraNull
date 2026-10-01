@@ -87,6 +87,7 @@ const STATUS_ICONS: Record<RowStatus, LucideIcon> = {
 const EFFICACY_ICONS: Record<string, LucideIcon> = {
   protecting: ShieldCheck,
   partial: ShieldAlert,
+  mostly_exposed: ShieldX,
   not_protecting: ShieldX,
   bypassable: ShieldX,
   present_unmeasured: Shield,

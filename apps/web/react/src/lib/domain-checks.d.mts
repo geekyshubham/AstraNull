@@ -34,7 +34,7 @@ export type CheckRow = {
 
 export type CategoryGroup = { category: CheckCategory; rows: CheckRow[]; counts: Record<RowStatus, number> };
 
-export type EfficacyStatus = 'protecting' | 'partial' | 'not_protecting' | 'bypassable' | 'present_unmeasured' | 'absent' | 'unknown';
+export type EfficacyStatus = 'protecting' | 'partial' | 'mostly_exposed' | 'not_protecting' | 'bypassable' | 'present_unmeasured' | 'absent' | 'unknown';
 export type LayerEfficacy = {
   layer: 'waf' | 'cdn';
   status: EfficacyStatus;

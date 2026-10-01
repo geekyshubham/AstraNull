@@ -8,6 +8,7 @@
  */
 import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
+import { plainCheckName } from './plain-language.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
 const DECLARATION_ONLY_KIND = 'metadata_marker';
@@ -221,7 +222,7 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
     return {
       ...base,
       checkId,
-      name: text(check.name) || checkId,
+      name: plainCheckName(text(check.name) || checkId),
       description: text(check.description),
       verdictLogic: text(check.verdict_logic),
       tier: tierOf(check),
@@ -273,6 +274,7 @@ export function rowProgress(rows) {
 const EFFICACY_META = Object.freeze({
   protecting: { label: 'Protecting', tone: 'success' },
   partial: { label: 'Partially protecting', tone: 'warn' },
+  mostly_exposed: { label: 'Mostly not protecting', tone: 'danger' },
   not_protecting: { label: 'Not protecting', tone: 'danger' },
   bypassable: { label: 'Bypassable via origin', tone: 'danger' },
   present_unmeasured: { label: 'Detected · not measured yet', tone: 'info' },
@@ -304,7 +306,9 @@ function layerEfficacy(layer, rows, edge, exposed) {
   if (tested === 0) status = familyStatus === 'detected' ? 'present_unmeasured' : familyStatus === 'not_detected' ? 'absent' : 'unknown';
   else if (failed === 0) status = exposed ? 'bypassable' : 'protecting';
   else if (passed === 0) status = 'not_protecting';
-  else status = exposed ? 'bypassable' : 'partial';
+  else if (exposed) status = 'bypassable';
+  // Blocking a minority of what was tested is not "partial" protection in any useful sense.
+  else status = passed / tested < 0.5 ? 'mostly_exposed' : 'partial';
   const inconclusive = list(rows).filter((row) => row.category?.layer === layer && row.status === 'inconclusive').length;
   return {
     layer,
