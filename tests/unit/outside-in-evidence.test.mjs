@@ -4,7 +4,9 @@ import {
   containsAgentPlacementVocabulary,
   scrubAgentPlacementText,
   scrubPlacementConfidenceForCustomer,
+  scrubReportSummaryForCustomer,
   scrubVerdictForCustomer,
+  scrubVerdictForReportExport,
 } from '../../src/lib/outsideInEvidence.mjs';
 
 describe('outside-in evidence scrubbing (EVIDENCE-01 / ADR-0008)', () => {
@@ -80,5 +82,58 @@ describe('outside-in evidence scrubbing (EVIDENCE-01 / ADR-0008)', () => {
   it('leaves already-external-only wording unchanged', () => {
     const clean = 'External probe reached the declared path; the edge did not block traffic before origin.';
     assert.equal(scrubAgentPlacementText(clean), clean);
+  });
+
+  it('scrubReportSummaryForCustomer drops agent/placement keys and the legacy readiness factor', () => {
+    const summary = {
+      readiness_score: 58,
+      readiness_factors: [
+        { key: 'coverage', label: 'Validation coverage', score: 18 },
+        { key: 'agent_placement', label: 'Agent placement & health', score: 15 },
+        { key: 'change_management', label: 'Change management discipline', score: 7 },
+      ],
+      placement_diagnostics: {
+        missing_agent: 2,
+        bound_agent_ids: ['agt_e563ad3b5baa04fd'],
+        online_bound_agent_ids: ['agt_1111'],
+        unbound_online_agent_count: 1,
+      },
+      open_findings: 3,
+    };
+    const snapshot = JSON.parse(JSON.stringify(summary));
+    const out = scrubReportSummaryForCustomer(summary);
+    const serialized = JSON.stringify(out);
+    assert.doesNotMatch(serialized, /\b(agent|agents|placement)\b/i, 'no agent/placement vocabulary');
+    assert.doesNotMatch(serialized, /agt_/, 'no agent ids');
+    assert.equal('placement_diagnostics' in out, false);
+    const labels = out.readiness_factors.map((f) => f.label);
+    assert.ok(!labels.includes('Agent placement & health'), 'legacy factor dropped');
+    // "management" is NOT over-stripped (token/word/underscore-safe matching).
+    assert.ok(labels.includes('Change management discipline'), 'management preserved');
+    assert.ok(labels.includes('Validation coverage'));
+    assert.equal(out.readiness_score, 58, 'non-agent scalars preserved');
+    assert.equal(out.open_findings, 3);
+    // Pure: input untouched.
+    assert.deepEqual(summary, snapshot, 'input not mutated');
+  });
+
+  it('scrubVerdictForReportExport removes the placement_confidence field but preserves the rest', () => {
+    const stored = {
+      test_run_id: 'run_1',
+      verdict: 'penetrated',
+      confidence: 'external_only',
+      explanation: 'External response indicated block/timeout but the agent observed traffic.',
+      placement_confidence: { level: 'Medium', status: 'observed_this_run', agent_id: 'agt_x' },
+      evidence_ids: ['evt_1'],
+    };
+    const out = scrubVerdictForReportExport(stored);
+    assert.equal('placement_confidence' in out, false, 'placement_confidence field removed');
+    assert.ok(!containsAgentPlacementVocabulary(out.explanation));
+    assert.equal(out.verdict, 'penetrated');
+    assert.equal(out.confidence, 'external_only');
+    assert.deepEqual(out.evidence_ids, ['evt_1']);
+    // Stored record untouched.
+    assert.equal(stored.placement_confidence.agent_id, 'agt_x');
+    assert.match(stored.explanation, /the agent observed traffic/);
   });
 });

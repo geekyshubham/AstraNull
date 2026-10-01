@@ -140,6 +140,85 @@ export function scrubFindingForCustomer(finding) {
   return out;
 }
 
+// Whole-concept tokens that must never appear as a KEY (or key segment) in a customer-facing
+// report summary. Matched token/word/underscore-safe so compounds like `bound_agent_ids` or
+// `placement_diagnostics` are stripped, but words like `management` (token `management`, not
+// `agent`) are left alone.
+const AGENT_PLACEMENT_CONCEPT_TOKENS = new Set(['agent', 'agents', 'placement']);
+
+/**
+ * True when a key name carries a whole agent/agents/placement concept. Splits on non-word
+ * boundaries and underscores so `bound_agent_ids`/`online_bound_agent_ids`/`placement_diagnostics`
+ * match while `management` does not.
+ * @param {string} key
+ */
+function keyCarriesAgentPlacementConcept(key) {
+  if (typeof key !== 'string') return false;
+  for (const token of key.split(/[^a-z0-9]+/i)) {
+    if (AGENT_PLACEMENT_CONCEPT_TOKENS.has(token.toLowerCase())) return true;
+  }
+  return false;
+}
+
+/** True when a readiness-factor entry's key or label carries an agent/placement concept. */
+function readinessFactorCarriesAgentPlacement(factor) {
+  if (!factor || typeof factor !== 'object' || Array.isArray(factor)) return false;
+  if (typeof factor.key === 'string' && keyCarriesAgentPlacementConcept(factor.key)) return true;
+  if (typeof factor.label === 'string' && containsAgentPlacementVocabulary(factor.label)) return true;
+  return false;
+}
+
+/**
+ * Recursively copy a customer report summary, removing any object key that carries a whole
+ * `agent`/`agents`/`placement` concept (including underscore compounds like `placement_diagnostics`
+ * or `bound_agent_ids`) and dropping `readiness_factors` entries whose key/label carries that
+ * concept (e.g. `label: 'Agent placement & health'`). Pure: returns fresh copies and never mutates
+ * the stored summary. Non-object values pass through unchanged.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export function scrubReportSummaryForCustomer(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubReportSummaryForCustomer(item));
+  }
+  if (value === null || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (keyCarriesAgentPlacementConcept(key)) continue;
+    if (key === 'readiness_factors' && Array.isArray(child)) {
+      out[key] = child
+        .filter((factor) => !readinessFactorCarriesAgentPlacement(factor))
+        .map((factor) => scrubReportSummaryForCustomer(factor));
+      continue;
+    }
+    out[key] = scrubReportSummaryForCustomer(child);
+  }
+  return out;
+}
+
+/**
+ * Project a verdict record into a customer-facing REPORT EXPORT. Unlike
+ * {@link scrubVerdictForCustomer} (run-detail/list reads, which keep a scrubbed
+ * `placement_confidence` for level/status), the report export drops the legacy
+ * `placement_confidence` field name entirely — it is a pre-ADR-0008 agent-placement concept and
+ * must not appear in a customer artifact. `confidence`, `verdict`, `evidence_ids`, and a rewritten
+ * `explanation` are preserved. Returns a shallow copy; the stored record is untouched.
+ *
+ * @template {Record<string, unknown>} T
+ * @param {T} verdict
+ * @returns {Omit<T, 'placement_confidence'>}
+ */
+export function scrubVerdictForReportExport(verdict) {
+  if (verdict === null || verdict === undefined || typeof verdict !== 'object') return verdict;
+  const out = { ...verdict };
+  if (typeof out.explanation === 'string') {
+    out.explanation = scrubAgentPlacementText(out.explanation);
+  }
+  delete out.placement_confidence;
+  return out;
+}
+
 /**
  * Scrub a run-detail record projected to the customer: rewrites the nested `verdict` via
  * {@link scrubVerdictForCustomer}. Returns a shallow copy; the stored run/verdict are untouched.

@@ -8,7 +8,8 @@ import { getCheckById } from '../contracts/checks.mjs';
 import { redactObject } from '../lib/redact.mjs';
 import {
   scrubAgentPlacementText,
-  scrubPlacementConfidenceForCustomer,
+  scrubReportSummaryForCustomer,
+  scrubVerdictForReportExport,
 } from '../lib/outsideInEvidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
@@ -97,7 +98,10 @@ function buildExportPayload(ctx, report) {
     report_id: report.id,
     title: report.title,
     kind: report.kind,
-    summary: report.summary,
+    // EVIDENCE-01 / ADR-0008: strip obsolete agent/placement keys and the legacy
+    // "Agent placement & health" readiness factor from the customer-facing summary. Stored
+    // summary is untouched; this is an export-time projection only.
+    summary: scrubReportSummaryForCustomer(report.summary),
     compliance_mapping: complianceMapping,
     runs: runs.map((r) => ({
       id: r.id,
@@ -106,16 +110,19 @@ function buildExportPayload(ctx, report) {
       safety_class: getCheckById(r.check_id)?.safety_class,
       status: r.status,
     })),
-    verdicts: verdicts.map((v) => ({
-      test_run_id: v.test_run_id,
-      verdict: v.verdict,
-      confidence: v.confidence,
-      // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Scrub
-      // agent identifiers and agent/placement wording from historical/seeded verdict records.
-      placement_confidence: scrubPlacementConfidenceForCustomer(v.placement_confidence ?? null),
-      evidence_ids: v.evidence_ids,
-      explanation: scrubAgentPlacementText(v.explanation),
-    })),
+    // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Drop the
+    // legacy `placement_confidence` field name and rewrite agent/placement wording in the
+    // explanation; preserve verdict/confidence/evidence linkage (no fabricated evidence).
+    verdicts: verdicts.map((v) =>
+      scrubVerdictForReportExport({
+        test_run_id: v.test_run_id,
+        verdict: v.verdict,
+        confidence: v.confidence,
+        placement_confidence: v.placement_confidence ?? null,
+        evidence_ids: v.evidence_ids,
+        explanation: v.explanation,
+      }),
+    ),
     soc_notes: socNotes.map((n) => ({ request_id: n.high_scale_request_id, body: n.body, at: n.created_at })),
   });
 }

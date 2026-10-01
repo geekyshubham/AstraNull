@@ -12,7 +12,8 @@ import { newId } from '../../lib/ids.mjs';
 import { redactObject } from '../../lib/redact.mjs';
 import {
   scrubAgentPlacementText,
-  scrubPlacementConfidenceForCustomer,
+  scrubReportSummaryForCustomer,
+  scrubVerdictForReportExport,
 } from '../../lib/outsideInEvidence.mjs';
 import {
   STATE_CORE_CATALOG_REPOSITORY_METHODS,
@@ -222,16 +223,17 @@ function mapRunForExport(run) {
 }
 
 function mapVerdictForExport(verdict) {
-  return {
+  // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Drop the
+  // legacy `placement_confidence` field name and rewrite agent/placement wording in the
+  // explanation; preserve verdict/confidence/evidence linkage (no fabricated evidence).
+  return scrubVerdictForReportExport({
     test_run_id: verdict.test_run_id,
     verdict: verdict.verdict,
     confidence: verdict.confidence,
-    // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Scrub
-    // agent identifiers and agent/placement wording from historical/seeded verdict records.
-    placement_confidence: scrubPlacementConfidenceForCustomer(verdict.placement_confidence ?? null),
+    placement_confidence: verdict.placement_confidence ?? null,
     evidence_ids: verdict.evidence_ids,
-    explanation: scrubAgentPlacementText(verdict.explanation),
-  };
+    explanation: verdict.explanation,
+  });
 }
 
 async function priorAuditHashes(auditRepo, tenantId) {
@@ -336,7 +338,10 @@ export function createPostgresReportServices(repositories, options = {}) {
         report_id: report.id,
         title: report.title,
         kind: report.kind,
-        summary: report.summary,
+        // EVIDENCE-01 / ADR-0008: strip obsolete agent/placement keys and the legacy
+        // "Agent placement & health" readiness factor from the customer-facing summary. Stored
+        // summary is untouched; this is an export-time projection only.
+        summary: scrubReportSummaryForCustomer(report.summary),
         compliance_mapping: complianceMapping,
         runs: runRows.map(mapRunForExport),
         verdicts: verdictRows.map(mapVerdictForExport),

@@ -257,4 +257,78 @@ describe('EVIDENCE-01 customer projection scrubbing (postgres adapters)', () => 
     assert.equal(exported.severity, 'high');
     assert.ok(exported.custody?.content_sha256, 'custody digest present');
   });
+
+  it('scrubs the report JSON export summary + verdicts in the postgres adapter before custody digest', async () => {
+    const { verifyCustodyManifest } = await import('../../src/lib/custody.mjs');
+    const legacyReport = {
+      id: 'rpt_pg_legacy',
+      tenant_id: 'ten_demo',
+      kind: 'technical',
+      title: 'postgres legacy export regression',
+      status: 'ready',
+      period: null,
+      run_ids: ['run_1'],
+      summary: {
+        readiness_score: 58,
+        readiness_factors: [
+          { key: 'coverage', label: 'Validation coverage', score: 18 },
+          { key: 'agent_placement', label: 'Agent placement & health', score: 15 },
+          { key: 'change_management', label: 'Change management discipline', score: 7 },
+        ],
+        placement_diagnostics: {
+          missing_agent: 2,
+          bound_agent_ids: ['agt_e563ad3b5baa04fd'],
+          online_bound_agent_ids: ['agt_1111'],
+          unbound_online_agent_count: 1,
+        },
+        open_findings: 1,
+      },
+    };
+    const storedSummarySnapshot = JSON.parse(JSON.stringify(legacyReport.summary));
+    const reportsRepo = {
+      async createReport() { return null; },
+      async getReport() { return legacyReport; },
+      async listReports() { return []; },
+      async listRunsForReport() {
+        return [{ id: 'run_1', check_id: 'dns.safe', vector_family: 'dns', safety_class: 'safe', status: 'verdicted' }];
+      },
+      async listVerdictsForRunIds() {
+        return [{ ...verdictRow }];
+      },
+    };
+    const validationEvidence = {
+      async listTestRuns() { return []; },
+      async listFindings() { return []; },
+      async getFinding() { return null; },
+    };
+    const audit = {
+      async appendAuditEvent() { return null; },
+      async getLastAuditEntry() { return null; },
+    };
+    const { reports } = createPostgresReportServices({ reports: reportsRepo, validationEvidence, audit });
+    const jsonOut = await reports.exportReport(CTX, 'rpt_pg_legacy', 'json');
+    const serialized = JSON.stringify(jsonOut.payload);
+    assert.doesNotMatch(serialized, /\b(agent|agents|placement)\b/i, 'no agent/placement vocabulary in postgres export');
+    assert.doesNotMatch(serialized, /agt_/, 'no agent ids in postgres export');
+    assert.equal('placement_diagnostics' in jsonOut.payload.summary, false);
+    const labels = jsonOut.payload.summary.readiness_factors.map((f) => f.label);
+    assert.ok(!labels.includes('Agent placement & health'));
+    assert.ok(labels.includes('Change management discipline'), 'management preserved');
+    const exportedVerdict = jsonOut.payload.verdicts.find((v) => v.test_run_id === 'run_1');
+    assert.equal('placement_confidence' in exportedVerdict, false, 'placement_confidence field must be gone');
+    assert.equal(exportedVerdict.verdict, 'penetrated');
+    assert.equal(exportedVerdict.confidence, 'external_only');
+    assert.deepEqual(exportedVerdict.evidence_ids, ['evt_1']);
+    // Stored summary untouched; custody verifies over the delivered payload.
+    assert.deepEqual(legacyReport.summary, storedSummarySnapshot, 'stored summary unchanged');
+    assert.equal(verifyCustodyManifest({ payload: jsonOut.payload, custody: jsonOut.custody }).ok, true);
+
+    // Markdown/HTML remain working.
+    const mdOut = await reports.exportReport(CTX, 'rpt_pg_legacy', 'markdown');
+    assert.match(mdOut.content, /## Verdicts/);
+    assert.doesNotMatch(mdOut.content, /agt_/);
+    const htmlOut = await reports.exportReport(CTX, 'rpt_pg_legacy', 'html');
+    assert.match(htmlOut.content, /<h2>Verdicts<\/h2>/);
+    assert.doesNotMatch(htmlOut.content, /agt_/);
+  });
 });
