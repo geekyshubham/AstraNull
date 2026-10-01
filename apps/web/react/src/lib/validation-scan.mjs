@@ -8,7 +8,7 @@ export const STEP_STATUSES = Object.freeze([
 ]);
 export const ACTIVE_STEP_STATUSES = Object.freeze(['starting', 'running', 'collecting']);
 export const SCAN_RECURRENCE_CADENCES = Object.freeze(['daily', 'weekly', 'monthly']);
-export const MAX_SCAN_CHECKS = 50;
+export const MAX_SCAN_CHECKS = 500;
 export const MIN_SCHEDULE_LEAD_MS = 60_000;
 export const MAX_SCAN_NAME_LENGTH = 120;
 export const SCAN_POLL_BASE_MS = 2500;

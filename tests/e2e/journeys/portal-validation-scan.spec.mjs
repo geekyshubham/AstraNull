@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { createServer as createViteServer } from 'vite';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { MAX_SCAN_CHECKS } from '../../../src/contracts/validationScanManagement.mjs';
 import {
   dispatchDueScansForTest,
   expireScanCollectionWindowsForTest,
@@ -165,7 +166,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(originRow).toContainText(/max \d+ requests/);
     await originRow.getByRole('checkbox').check();
     const expectedChecks = sectionCount + 1;
-    await expect(modal.locator('.check-picker-selected')).toHaveText(`${expectedChecks} of 50 selected`);
+    await expect(modal.locator('.check-picker-selected')).toHaveText(`${expectedChecks} of ${MAX_SCAN_CHECKS} selected`);
     await expect(modal.locator('.scan-launcher-summary')).toContainText(`${expectedChecks} checks selected · ${expectedChecks} planned steps`);
 
     await modal.getByRole('button', { name: 'Review scan' }).click();

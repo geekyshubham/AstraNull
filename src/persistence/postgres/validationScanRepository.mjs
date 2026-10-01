@@ -383,6 +383,10 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
           params.push(options.targetGroupId);
           conditions.push(`target_group_id = $${params.length}`);
         }
+        if (options.targetId) {
+          params.push(options.targetId);
+          conditions.push(`target_id = $${params.length}`);
+        }
         const statuses = asArray(options.status).filter(Boolean);
         if (statuses.length) {
           params.push(statuses);

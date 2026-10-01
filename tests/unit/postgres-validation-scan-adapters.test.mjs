@@ -77,6 +77,7 @@ function createFakeScanRepository() {
       return [...scans.values()]
         .filter((scan) => scan.tenant_id === ctx.tenantId)
         .filter((scan) => !options.targetGroupId || scan.target_group_id === options.targetGroupId)
+        .filter((scan) => !options.targetId || scan.target_id === options.targetId)
         .filter((scan) => !options.status?.length || options.status.includes(scan.status))
         .filter((scan) => !options.excludeId || scan.id !== options.excludeId)
         .filter((scan) => !options.seriesId || scan.recurrence_series_id === options.seriesId)
@@ -788,5 +789,57 @@ describe('postgres validation scan service adapter', () => {
     assert.deepEqual(next.items.map((item) => item.action), ['observation.ingested']);
     const empty = await harness.services.getValidationScanActivity(CTX, scan.id, { after: next.cursor, runtimeConfig: RUNTIME_CONFIG });
     assert.equal(empty.count, 0);
+  });
+
+  it('lists scans whose combined child runs exceed one evidence batch, and filters by exact target', async () => {
+    const harness = createHarness();
+    const batchSizes = [];
+    const capped = (label) => (ids) => {
+      batchSizes.push([label, ids.length]);
+      if (ids.length > 500) throw new RangeError(`${label} accepts at most 500 run ids.`);
+    };
+    const checkRuns = capped('listTestRunsByIds');
+    const checkEvidence = capped('loadRunEvidenceBatch');
+    const checkJobs = capped('listProbeJobsForRuns');
+    const listRunsByIds = async (ctx, ids) => { checkRuns(ids); return ids.map((id) => harness.runs.get(id)).filter(Boolean); };
+    const services = createPostgresValidationScanServices({
+      validationScans: { ...harness.fake.repo, async listProbeJobsForRuns(ctx, ids) { checkJobs(ids); return []; } },
+      validationEvidence: {
+        async listTestRuns() { return []; },
+        async getTestRun(ctx, id) { return harness.runs.get(id) ?? null; },
+        async getTestRunByScanStepId() { return null; },
+        async getVerdictForRun() { return null; },
+        async listRunEvents() { return []; },
+        listTestRunsByIds: listRunsByIds,
+        async loadRunEvidenceBatch(ctx, selection) { checkEvidence(selection.runIds); return { verdicts: [], events: [] }; },
+      },
+      coreCatalog: { async getTargetGroup(ctx, id) { return id === GROUP_ID && ctx.tenantId === TENANT ? group() : null; } },
+      killSwitch: { async isKillSwitchActiveForTenant() { return false; } },
+    }, { testRuns: { async startTestRun() { return { error: 'unused', status: 500 }; }, async cancelTestRun() { return null; }, async getTestRun(ctx, id) { return harness.runs.get(id) ?? null; }, registerRunTerminalHook() { return () => {}; } }, now: () => NOW, runtimeConfig: RUNTIME_CONFIG });
+
+    let runCounter = 0;
+    for (const [scanId, targetId] of [['scan_big_a', TARGET_A], ['scan_big_b', TARGET_B]]) {
+      harness.fake.scans.set(scanId, {
+        id: scanId, tenant_id: TENANT, target_group_id: GROUP_ID, target_id: targetId, status: 'completed',
+        check_ids: [CHECK_ID], created_at: new Date(NOW.getTime() + runCounter).toISOString(),
+      });
+      for (let position = 0; position < 300; position += 1) {
+        runCounter += 1;
+        const runId = `run_big_${runCounter}`;
+        harness.runs.set(runId, { id: runId, tenant_id: TENANT, target_group_id: GROUP_ID, target_id: targetId, check_id: CHECK_ID, status: 'verdicted' });
+        harness.fake.steps.set(`step_big_${runCounter}`, {
+          id: `step_big_${runCounter}`, tenant_id: TENANT, scan_id: scanId, position, check_id: CHECK_ID,
+          target_id: targetId, status: 'verdicted', test_run_id: runId, request_snapshot: {},
+        });
+      }
+    }
+
+    const all = await services.listValidationScans(CTX, { target_group_id: GROUP_ID, limit: 10 });
+    assert.equal(all.count, 2);
+    assert.deepEqual(all.items.map((scan) => scan.steps.length), [300, 300]);
+    assert.ok(batchSizes.length >= 3 && batchSizes.every(([, size]) => size <= 500), JSON.stringify(batchSizes));
+
+    const exact = await services.listValidationScans(CTX, { target_group_id: GROUP_ID, target_id: TARGET_A, limit: 1 });
+    assert.deepEqual(exact.items.map((scan) => scan.id), ['scan_big_a']);
   });
 });

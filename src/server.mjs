@@ -2802,6 +2802,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (blockValidationScanRoute(serviceDeps, 'listValidationScans', res)) return;
     const result = await serviceDeps.validationScans.listValidationScans(ctx, {
       target_group_id: url.searchParams.get('target_group_id') ?? undefined,
+      target_id: url.searchParams.get('target_id') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
       limit: url.searchParams.get('limit') ?? undefined,
       runtimeConfig,

@@ -836,6 +836,7 @@ export function listValidationScans(ctx, options = {}) {
   // here made dev behave differently from production and gave a read surprising side effects.
   let rows = store.validationScans.filter((scan) => scan.tenant_id === ctx.tenantId);
   if (options.target_group_id) rows = rows.filter((scan) => scan.target_group_id === options.target_group_id);
+  if (options.target_id) rows = rows.filter((scan) => scan.target_id === options.target_id);
   if (options.status) {
     const statuses = new Set(String(options.status).split(',').map((value) => value.trim()).filter(Boolean));
     rows = rows.filter((scan) => statuses.has(scan.status));

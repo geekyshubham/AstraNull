@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Activity,
   Check,
@@ -8,6 +8,7 @@ import {
   Network,
   Play,
   Plus,
+  RefreshCw,
   Server,
   ShieldCheck,
   Target,
@@ -25,7 +26,7 @@ import {
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import { findingStatus, isFindingOpen } from '../lib/finding-lifecycle.mjs';
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
-import { addTargetTag, edgeDetectionReasonExplanation, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueAppliedChecks, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
+import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueAppliedChecks, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, Session } from '../lib/types';
@@ -38,12 +39,38 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Tabs } from '../components/ui/tabs';
 import { canStartRun } from '../lib/run-permissions.mjs';
+import { requestJson } from '../lib/api';
+import { apiErrorMessage } from '../lib/error-messages';
+import { ConfirmModal } from '../lib/crud-ui';
+import { isScanActive, nextPollDelay, scanErrorMessage } from '../lib/validation-scan.mjs';
+import {
+  EDGE_DETECTION_CHECK_ID,
+  assessEdgeEfficacy,
+  buildCheckRows,
+  declarationOnlyChecks,
+  edgeDetectionPhase,
+  runAllChecks,
+  shouldAutoDetectEdge,
+  validationScansPathForTarget,
+} from '../lib/domain-checks.mjs';
+import { AllChecksPanel, EdgeProtectionCard } from '../components/targets/domain-protection';
+import { CancelScanDialog } from '../components/runs/validation-scans-table';
 // @ts-ignore Plain ESM keeps evidence-conservative labels directly testable with node:test.
 import { evidenceModePresentation, plainCheckName, plainCodeLabel, plainFindingTitle, plainProtectionLabel, plainVerdictDescription, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 import './target-detail-view.css';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 type WorkspaceTab = 'protection' | 'edge' | 'runs' | 'findings';
+type EdgeLocalState = '' | 'pending' | 'blocked' | 'error';
+
+const TARGET_RUNS_LIMIT = 500;
+const EDGE_POLL_MS = 4_000;
+const EDGE_POLL_MAX_MS = 3 * 60 * 1000;
+const EDGE_BLOCKED_RETRY_MS = 15_000;
+const EDGE_BLOCKED_MAX_RETRIES = 20;
+const DNS_AUTO_RECHECK_MS = 30_000;
+const DNS_AUTO_RECHECK_MAX_MS = 15 * 60 * 1000;
+const ACTIVE_STEP_STATUSES = new Set(['pending', 'deferred', 'starting', 'running', 'collecting']);
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -271,6 +298,7 @@ export function TargetDetailView({
   session,
   checks,
   targetGroups = [],
+  wafEdgeEnabled = false,
   onRefresh,
 }: {
   entityId: string;
@@ -278,6 +306,8 @@ export function TargetDetailView({
   session: Session;
   checks: DataItem[];
   targetGroups?: DataItem[];
+  /** Tenant deployment feature `waf_posture`; WAF/CDN detection routes 404 without it. */
+  wafEdgeEnabled?: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [detail, setDetail] = useState<TargetDetailPayload | null>(null);
@@ -287,6 +317,15 @@ export function TargetDetailView({
   const [startedRunId, setStartedRunId] = useState('');
   const [selectedCheckId, setSelectedCheckId] = useState('');
   const [tab, setTab] = useState<WorkspaceTab>('protection');
+  const [scan, setScan] = useState<DataItem | null>(null);
+  const [targetRuns, setTargetRuns] = useState<DataItem[]>([]);
+  const [edgeLocal, setEdgeLocal] = useState<EdgeLocalState>('');
+  const [edgeError, setEdgeError] = useState('');
+  const [edgeReason, setEdgeReason] = useState('');
+  const [confirmRunAll, setConfirmRunAll] = useState(false);
+  const [stopOpen, setStopOpen] = useState(false);
+  const edgeAttemptedRef = useRef(new Set<string>());
+  const edgeRetriesRef = useRef(0);
 
   async function reload() {
     const refreshed = await populateTargetDetail(config, session, entityId);
@@ -347,6 +386,288 @@ export function TargetDetailView({
   const latestVerdictRun = runsRecent.find((run) => recentRunVerdict(run));
   const latestVerdict = latestVerdictRun ? recentRunVerdict(latestVerdictRun) : '';
 
+  // ---- Run all checks + WAF/CDN edge detection -------------------------------------------------
+  const runAll = useMemo(() => (target ? runAllChecks(checks, target) as DataItem[] : []), [checks, target]);
+  const declarationOnlyCount = useMemo(() => (target ? declarationOnlyChecks(checks, target).length : 0), [checks, target]);
+  const checkRows = useMemo(() => buildCheckRows({ checks: runAll, scan, runs: targetRuns }), [runAll, scan, targetRuns]);
+  const edgeDetection = detail?.edge_detection ?? null;
+  const edgeRequest = detail?.edge_detection_request ?? null;
+  const efficacy = useMemo(() => assessEdgeEfficacy({ rows: checkRows, edge: edgeDetection }), [checkRows, edgeDetection]);
+  const scanActive = isScanActive(scan);
+  const scanId = getString(scan, ['id'], '');
+  const fingerprintStep = Array.isArray(scan?.steps)
+    ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
+    : null;
+  const fingerprintStepActive = scanActive && ACTIVE_STEP_STATUSES.has(getString(fingerprintStep, ['status'], ''));
+  const edgePhase = edgeDetectionPhase({
+    eligible: targetEligible,
+    edge: edgeDetection,
+    request: edgeRequest,
+    localRequest: edgeLocal,
+    scanFingerprintActive: fingerprintStepActive,
+  });
+  const edgeEvaluating = edgePhase === 'evaluating';
+  const edgeRequestRunId = getString(edgeRequest, ['test_run_id'], '');
+  const groupIdForRuns = targetGroupId;
+  const earlyOwnershipDone = (ownershipStepStatus(verificationState, challenge) as { done: boolean }).done;
+
+  const loadTargetActivity = useCallback(async () => {
+    if (!groupIdForRuns) return;
+    const [scanList, runList] = await Promise.all([
+      requestJson(config, session, validationScansPathForTarget(groupIdForRuns, entityId)).catch(() => null) as Promise<DataItem | null>,
+      requestJson(config, session, `/v1/test-runs?target_id=${encodeURIComponent(entityId)}&limit=${TARGET_RUNS_LIMIT}`).catch(() => null) as Promise<DataItem | null>,
+    ]);
+    if (scanList && Array.isArray(scanList.items)) setScan((scanList.items[0] as DataItem | undefined) ?? null);
+    if (runList && Array.isArray(runList.items)) setTargetRuns(runList.items as DataItem[]);
+  }, [config, session, entityId, groupIdForRuns]);
+
+  useEffect(() => {
+    setScan(null);
+    setTargetRuns([]);
+    setEdgeLocal('');
+    setEdgeError('');
+    setEdgeReason('');
+    edgeRetriesRef.current = 0;
+  }, [entityId]);
+
+  useEffect(() => { void loadTargetActivity(); }, [loadTargetActivity]);
+
+  // Follow an active run-all scan. The fingerprint step persists the edge detection, so refresh
+  // the target when it settles; refresh everything when the scan finishes.
+  useEffect(() => {
+    if (!scanId || !scanActive) return undefined;
+    let stopped = false;
+    let timer: number | undefined;
+    let errors = 0;
+    let fingerprintWasActive = fingerprintStepActive;
+    const poll = async () => {
+      try {
+        const next = await requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}`) as DataItem;
+        if (stopped) return;
+        errors = 0;
+        setScan(next);
+        const step = Array.isArray(next.steps)
+          ? (next.steps as DataItem[]).find((row) => getString(row, ['check_id'], '') === EDGE_DETECTION_CHECK_ID)
+          : null;
+        const fingerprintNowActive = ACTIVE_STEP_STATUSES.has(getString(step ?? null, ['status'], ''));
+        if (fingerprintWasActive && !fingerprintNowActive) void reload().catch(() => undefined);
+        fingerprintWasActive = fingerprintNowActive;
+        if (!isScanActive(next)) {
+          void loadTargetActivity();
+          void reload().catch(() => undefined);
+          void onRefresh().catch(() => undefined);
+          return;
+        }
+      } catch {
+        if (stopped) return;
+        errors += 1;
+      }
+      const delay = nextPollDelay({ status: 'running', errorCount: errors });
+      if (delay !== null) timer = window.setTimeout(() => { void poll(); }, delay);
+    };
+    timer = window.setTimeout(() => { void poll(); }, nextPollDelay({ status: 'running' }) ?? 2500);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+    // fingerprintStepActive is read once as the starting point; the loop tracks it afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, session, scanId, scanActive, loadTargetActivity]);
+
+  const queueEdgeDetection = useCallback(async () => {
+    if (!targetGroupId) return;
+    setEdgeLocal('pending');
+    setEdgeError('');
+    setEdgeReason('');
+    try {
+      await requestJson(config, session, '/v1/waf/edge-detection', {
+        method: 'POST',
+        body: { target_group_id: targetGroupId, target_id: entityId },
+      });
+      edgeRetriesRef.current = 0;
+      await reload().catch(() => undefined);
+      void loadTargetActivity();
+    } catch (err) {
+      if (apiErrorCode(err) === 'concurrent_run_blocked') {
+        setEdgeLocal('blocked');
+        return;
+      }
+      setEdgeLocal('error');
+      setEdgeError(apiErrorMessage(err, 'WAF/CDN detection could not be queued.'));
+    }
+    // reload is stable enough for this call site; it only reads the current entity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, session, entityId, targetGroupId, loadTargetActivity]);
+
+  // Onboarding: once ownership is proven, detect the WAF/CDN edge right away (one bounded,
+  // signed-worker fingerprint run). Never before ownership: the server would refuse, and the
+  // page must not imply it can probe a domain the tenant has not verified.
+  useEffect(() => {
+    if (!detail || detail.loading || !target) return;
+    const attempted = edgeAttemptedRef.current.has(entityId);
+    if (!shouldAutoDetectEdge({
+      eligible: targetEligible,
+      featureEnabled: wafEdgeEnabled,
+      canRun: canStartBoundedRun,
+      edge: edgeDetection,
+      request: edgeRequest,
+      scanActive,
+      attempted,
+      hasPriorRuns: Number(detail.counts?.runs_total ?? runsRecent.length) > 0,
+    })) return;
+    edgeAttemptedRef.current.add(entityId);
+    void queueEdgeDetection();
+  }, [detail, target, entityId, targetEligible, wafEdgeEnabled, canStartBoundedRun, edgeDetection, edgeRequest, scanActive, queueEdgeDetection, runsRecent.length]);
+
+  // Another run in the group holds the single concurrency slot: retry until it frees up.
+  useEffect(() => {
+    if (edgeLocal !== 'blocked' || edgeDetection || scanActive) return undefined;
+    if (edgeRetriesRef.current >= EDGE_BLOCKED_MAX_RETRIES) return undefined;
+    const timer = window.setTimeout(() => {
+      edgeRetriesRef.current += 1;
+      void queueEdgeDetection();
+    }, EDGE_BLOCKED_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [edgeLocal, edgeDetection, scanActive, queueEdgeDetection]);
+
+  // While detection is in flight, refresh the target until the signed result is persisted.
+  useEffect(() => {
+    if (!edgeEvaluating || edgeDetection || fingerprintStepActive) return undefined;
+    let stopped = false;
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (stopped) return;
+      if (Date.now() - startedAt > EDGE_POLL_MAX_MS) {
+        window.clearInterval(timer);
+        setEdgeLocal('');
+        return;
+      }
+      void reload()
+        .then((next) => {
+          const status = getString(next?.edge_detection_request ?? null, ['run_status'], '').toLowerCase();
+          if (next?.edge_detection || (status && !['pending', 'planned', 'queued', 'running', 'collecting'].includes(status))) {
+            setEdgeLocal('');
+            void loadTargetActivity();
+          }
+        })
+        .catch(() => undefined);
+    }, EDGE_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgeEvaluating, edgeDetection, fingerprintStepActive, loadTargetActivity]);
+
+  // A finished detection run without a persisted result: ask why, so the card can say so.
+  useEffect(() => {
+    if (edgePhase !== 'no_result' || !edgeRequestRunId || !wafEdgeEnabled) return undefined;
+    let cancelled = false;
+    requestJson(config, session, `/v1/waf/edge-detection/${encodeURIComponent(edgeRequestRunId)}`)
+      .then((payload) => { if (!cancelled) setEdgeReason(getString(payload as DataItem, ['reason'], '')); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [config, session, edgePhase, edgeRequestRunId, wafEdgeEnabled]);
+
+  // Onboarding: keep re-checking a pending DNS TXT challenge so ownership (and then edge
+  // detection) unlocks without the user coming back to press Check now.
+  useEffect(() => {
+    if (!canWrite || earlyOwnershipDone || !challenge?.id || getString(challenge as unknown as DataItem, ['state'], '') !== 'pending' || !targetGroupId) return undefined;
+    const challengeId = challenge.id;
+    const startedAt = Date.now();
+    let busyCheck = false;
+    const timer = window.setInterval(() => {
+      if (busyCheck) return;
+      if (Date.now() - startedAt > DNS_AUTO_RECHECK_MAX_MS) { window.clearInterval(timer); return; }
+      busyCheck = true;
+      verifyOwnershipChallenge(config, session, targetGroupId, challengeId)
+        .then(async (result) => {
+          if ((result as DataItem)?.verified === true) {
+            window.clearInterval(timer);
+            setBanner(wafEdgeEnabled
+              ? 'Ownership proven. WAF/CDN detection is starting now.'
+              : 'Ownership proven. External validation is now unlocked for this target.');
+            await onRefresh().catch(() => undefined);
+            await reload().catch(() => undefined);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => { busyCheck = false; });
+    }, DNS_AUTO_RECHECK_MS);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, session, canWrite, earlyOwnershipDone, challenge?.id, challenge?.state, targetGroupId, wafEdgeEnabled]);
+
+  const runAllDisabledReason = !targetEligible
+    ? 'Prove ownership first. External probes stay blocked until this domain is at least DNS-verified.'
+    : runAll.length === 0
+      ? 'No runnable checks apply to this kind of target.'
+      : edgeEvaluating && !scanActive
+        ? 'WAF/CDN detection is running. Run all checks unlocks as soon as it finishes.'
+        : '';
+
+  async function startRunAll() {
+    if (!target || runAllDisabledReason) return;
+    setBusy('run-all');
+    setError('');
+    setBanner('');
+    try {
+      const created = await requestJson(config, session, '/v1/validation-scans', {
+        method: 'POST',
+        body: {
+          target_group_id: targetGroupId,
+          target_id: entityId,
+          check_ids: runAll.map((check) => getString(check, ['check_id'], '')).filter(Boolean),
+          name: `Run all checks · ${targetDisplayValue(target)}`.slice(0, 120),
+        },
+      }) as DataItem;
+      setConfirmRunAll(false);
+      setScan(created);
+      setBanner(`Running all ${runAll.length} checks. Results appear below as each one finishes.`);
+      document.getElementById('td-all-checks')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      setConfirmRunAll(false);
+      setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'Run all checks could not start.')));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const runAllRequestBound = runAll.reduce((total, check) => {
+    const max = Number((check.probe_profile as DataItem | undefined)?.max_requests);
+    return total + (Number.isFinite(max) ? max : 0);
+  }, 0);
+  const runAllCategoryCount = new Set(checkRows.map((row) => row.category.id)).size;
+
+  function edgePhaseDetail(): { text: string; action?: ReactNode } | null {
+    const detectLabel = edgePhase === 'not_started' ? 'Detect WAF and CDN' : 'Detect again';
+    const retry = canStartBoundedRun && wafEdgeEnabled && !scanActive
+      ? <Button size="sm" variant="secondary" onClick={() => void queueEdgeDetection()}><RefreshCw size={14} aria-hidden="true" />{detectLabel}</Button>
+      : undefined;
+    if (!wafEdgeEnabled && !edgeDetection) return { text: 'WAF/CDN detection is not enabled for this tenant. Run all checks still measures how the edge responds.' };
+    if (edgePhase === 'locked') {
+      return {
+        text: 'Detection starts automatically as soon as ownership is proven. AstraNull never probes a domain you have not verified.',
+        action: <Button size="sm" variant="secondary" onClick={() => document.getElementById('td-step-ownership')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><ShieldCheck size={14} aria-hidden="true" />Prove ownership</Button>,
+      };
+    }
+    if (edgePhase === 'waiting') return { text: 'Another run is active in this target group. Detection starts on its own as soon as that run finishes.' };
+    if (edgePhase === 'error') return { text: edgeError || 'WAF/CDN detection could not be queued.', action: retry };
+    if (edgePhase === 'no_result') {
+      return { text: edgeDetectionReasonExplanation(edgeReason) || 'The last detection run finished without a trusted signed-worker result, so nothing is asserted.', action: retry };
+    }
+    if (edgePhase === 'not_started') {
+      return canStartBoundedRun
+        ? { text: 'Detection has not run on this domain yet.', action: retry }
+        : { text: 'Detection has not run on this domain yet. An engineer or admin can start it.' };
+    }
+    if (edgePhase === 'not_detected' || edgePhase === 'inconclusive') {
+      const summary = getString(asDataItem(edgeDetection?.summary), ['edge'], '') || getString(edgeDetection, ['plain_language_summary'], '');
+      return { text: summary || 'The last detection did not identify a WAF or CDN.', action: retry };
+    }
+    return null;
+  }
+
   async function saveTags(next: string[]) {
     if (!target) return;
     await patchTargetTags(config, session, targetGroupId, entityId, next);
@@ -380,8 +701,10 @@ export function TargetDetailView({
       const result = await verifyOwnershipChallenge(config, session, targetGroupId, challenge.id) as DataItem;
       const verified = result?.verified === true || getString(asDataItem(result.challenge), ['state']) === 'resolved';
       setBanner(verified
-        ? 'Ownership proven. External validation is now unlocked for this target.'
-        : 'The DNS TXT record was not found yet. DNS can take a few minutes to propagate — try again shortly.');
+        ? wafEdgeEnabled
+          ? 'Ownership proven. External validation is unlocked and WAF/CDN detection is starting now.'
+          : 'Ownership proven. External validation is now unlocked for this target.'
+        : 'The DNS TXT record was not found yet. DNS can take a few minutes to propagate — try again shortly. This page keeps checking on its own.');
       await onRefresh();
       await reload();
     } catch (err) {
@@ -413,7 +736,6 @@ export function TargetDetailView({
   }
 
   async function verifyStartRun() {
-    const { requestJson } = await import('../lib/api');
     const started = await requestJson(config, session, '/v1/test-runs', {
       method: 'POST',
       body: { target_group_id: targetGroupId, target_id: entityId, check_id: effectiveSelectedCheckId },
@@ -455,7 +777,21 @@ export function TargetDetailView({
             <p className="muted">Per-target validation surface.</p>
           )}
         </div>
-        <div className="row-actions">
+        <div className="row-actions td-head-actions">
+          {hasTarget && canStartBoundedRun && !scanActive ? (
+            <Button
+              disabled={Boolean(runAllDisabledReason) || busy !== ''}
+              title={runAllDisabledReason || `Run all ${runAll.length} bounded checks on this domain`}
+              onClick={() => setConfirmRunAll(true)}
+            >
+              <Play size={15} aria-hidden="true" />Run all checks
+            </Button>
+          ) : null}
+          {hasTarget && scanActive ? (
+            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('scan-detail', scanId)}>
+              <span className="scan-live-dot" aria-hidden="true" />Running all checks
+            </AnchorButton>
+          ) : null}
           <AnchorButton size="sm" variant="ghost" href="#targets">All targets</AnchorButton>
         </div>
       </div>
@@ -566,173 +902,202 @@ export function TargetDetailView({
     { id: 'findings' as const, label: 'Findings', count: findings.length },
   ];
 
+  const phaseDetail = edgePhaseDetail();
+  const protectionCards = (
+    <>
+      <EdgeProtectionCard
+        edge={edgeDetection}
+        phase={edgePhase}
+        phaseDetail={phaseDetail?.text}
+        action={phaseDetail?.action}
+        waf={efficacy.waf}
+        cdn={efficacy.cdn}
+        originExposed={efficacy.originExposed}
+      />
+      <AllChecksPanel
+        rows={checkRows}
+        declarationOnlyCount={declarationOnlyCount}
+        scan={scan}
+        scanActive={scanActive}
+        canRun={canStartBoundedRun}
+        runDisabledReason={runAllDisabledReason}
+        busy={busy === 'run-all'}
+        onRunAll={() => setConfirmRunAll(true)}
+        onStop={() => setStopOpen(true)}
+      />
+    </>
+  );
+  const validateCard = (
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Validate this target</CardTitle>
+              <CardDescription>Four steps take you from a declared domain to an evidence-backed readiness verdict. Each step shows its real state and the exact next action.</CardDescription>
+            </div>
+            <Badge tone={targetEligible ? 'success' : 'warn'}>{targetEligible ? 'Ready to validate' : 'Ownership required'}</Badge>
+          </CardHeader>
+          <CardContent>
+            <ol className="td-steps">
+              {/* Step 1 — Prove ownership */}
+              <li className="td-step" data-state={stepStates[1]} id="td-step-ownership">
+                <div className="td-step-rail" aria-hidden="true">
+                  <span className="td-step-num">{stepStates[1] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 1}</span>
+                  <span className="td-step-line" />
+                </div>
+                <div className="td-step-body">
+                  <div className="td-step-head">
+                    <h3>Prove ownership</h3>
+                    <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
+                  </div>
+                  <p className="td-step-why">
+                    External validation probes are blocked until you prove you control this target — ownership must reach at least DNS-verified. Publish the DNS TXT record below, then choose Check now.
+                  </p>
+                  {ownershipDone ? (
+                    <p className="td-step-why">Verified via {ownershipMethodText(verification)}. You can move on to choosing checks.</p>
+                  ) : challenge && challenge.record_name ? (
+                    <>
+                      <div className="td-dns">
+                        <div className="td-dns-row">
+                          <span className="td-dns-key">Type</span>
+                          <span className="td-dns-val">TXT</span>
+                          <span />
+                        </div>
+                        <div className="td-dns-row">
+                          <span className="td-dns-key">Name</span>
+                          <span className="td-dns-val">{challenge.record_name}</span>
+                          <CopyButton value={challenge.record_name} label="DNS record name" />
+                        </div>
+                        <div className="td-dns-row">
+                          <span className="td-dns-key">Value</span>
+                          <span className="td-dns-val">{challenge.record_value}</span>
+                          <CopyButton value={challenge.record_value} label="DNS record value" />
+                        </div>
+                      </div>
+                      <div className="td-step-actions">
+                        {canWrite ? (
+                          <Button size="sm" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void checkOwnership()}>
+                            <ShieldCheck size={15} aria-hidden="true" />Check now
+                          </Button>
+                        ) : <Badge tone="muted">Read-only role</Badge>}
+                        {canWrite ? (
+                          <Button size="sm" variant="ghost" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>Reissue record</Button>
+                        ) : null}
+                        {challenge.last_checked_at ? <span className="muted small">Last checked {formatDate(challenge.last_checked_at)}</span> : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="td-step-actions">
+                      {canWrite ? (
+                        <Button size="sm" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>
+                          <ShieldCheck size={15} aria-hidden="true" />Issue DNS TXT record
+                        </Button>
+                      ) : <Badge tone="muted">Ask an admin to prove ownership</Badge>}
+                      <span className="muted small">A one-time TXT record proves you control this domain.</span>
+                    </div>
+                  )}
+                </div>
+              </li>
+
+              {/* Step 2 — Choose checks */}
+              <li className="td-step" data-state={stepStates[2]}>
+                <div className="td-step-rail" aria-hidden="true">
+                  <span className="td-step-num">{stepStates[2] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 2}</span>
+                  <span className="td-step-line" />
+                </div>
+                <div className="td-step-body">
+                  <div className="td-step-head">
+                    <h3>Choose a check</h3>
+                    <Badge tone={effectiveSelectedCheckId ? 'success' : hasChecks ? 'warn' : 'muted'}>
+                      {effectiveSelectedCheckId ? 'Selected' : hasChecks ? 'Pick one' : 'None bound'}
+                    </Badge>
+                  </div>
+                  <p className="td-step-why">These bounded checks are bound to this target by a test policy. Pick the one you want to validate.</p>
+                  {hasChecks ? (
+                    <DataTable columns={checkColumns} items={checksApplied} getRowId={(item) => getString(item, ['check_id', 'id'], '')} empty={emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })} />
+                  ) : (
+                    emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })
+                  )}
+                </div>
+              </li>
+
+              {/* Step 3 — Run bounded validation */}
+              <li className="td-step" data-state={stepStates[3]}>
+                <div className="td-step-rail" aria-hidden="true">
+                  <span className="td-step-num">{stepStates[3] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 3}</span>
+                  <span className="td-step-line" />
+                </div>
+                <div className="td-step-body">
+                  <div className="td-step-head">
+                    <h3>Run bounded validation</h3>
+                    <Badge tone={runDone ? 'success' : 'muted'}>{runDone ? `${runsRecent.length} run${runsRecent.length === 1 ? '' : 's'}` : 'Not run yet'}</Badge>
+                  </div>
+                  <p className="td-step-why">
+                    {targetEligible
+                      ? 'Rate-limited external probes run against this target and produce evidence. Nothing runs until you start it.'
+                      : 'This action stays disabled until ownership is proven — AstraNull will not aim probes at a target you have not verified.'}
+                  </p>
+                  <div className="td-step-actions">
+                    {canStartBoundedRun ? (
+                      <Button
+                        className={targetEligible && effectiveSelectedCheckId ? undefined : 'is-locked'}
+                        disabled={!targetEligible || !effectiveSelectedCheckId || busy !== ''}
+                        title={runReasonTitle}
+                        loading={busy === 'run'}
+                        onClick={() => void runBoundedChecks()}
+                      >
+                        <Play size={15} aria-hidden="true" />Run selected check
+                      </Button>
+                    ) : <Badge tone="muted">Read-only role</Badge>}
+                    {!targetEligible ? <span className="muted small">Locked — prove ownership in step 1.</span> : !effectiveSelectedCheckId ? <span className="muted small">Choose a check in step 2.</span> : null}
+                  </div>
+                </div>
+              </li>
+
+              {/* Step 4 — Review results */}
+              <li className="td-step" data-state={stepStates[4]}>
+                <div className="td-step-rail" aria-hidden="true">
+                  <span className="td-step-num">{stepStates[4] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 4}</span>
+                </div>
+                <div className="td-step-body">
+                  <div className="td-step-head">
+                    <h3>Review results</h3>
+                    {latestVerdict
+                      ? unresolvedAfterPass
+                        ? <Badge tone="warn">{`Passed · ${openFindings.length} open finding${openFindings.length === 1 ? '' : 's'}`}</Badge>
+                        : <Badge tone={runOutcomeTone(latestVerdict)}>{plainVerdictLabel(latestVerdict)}</Badge>
+                      : <Badge tone="muted">No verdict yet</Badge>}
+                  </div>
+                  {latestVerdict ? (
+                    <div className="td-verdict">
+                      <p>
+                        {unresolvedAfterPass
+                          ? `The latest run passed, but ${openFindings.length === 1 ? 'a finding' : `${openFindings.length} findings`} from earlier evidence ${openFindings.length === 1 ? 'is' : 'are'} still open. Confirm the fix is in place, then close ${openFindings.length === 1 ? 'it' : 'them'} in Findings.`
+                          : plainVerdictDescription(latestVerdict) || 'This verdict is backed by recorded probe evidence. Open the run for the full evidence trail.'}
+                      </p>
+                      {latestVerdictRun ? <DetailEntityLink route="run-detail" id={getString(latestVerdictRun, ['run_id', 'id'], '')} label="Open evidence" /> : null}
+                      {findings.length > 0 ? (
+                        <Button size="sm" variant="ghost" onClick={() => setTab('findings')}>
+                          <TriangleAlert size={14} aria-hidden="true" />{findings.length} finding{findings.length === 1 ? '' : 's'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="td-step-why">Once a bounded run finishes, the latest evidence-backed verdict and any findings appear here in plain language.</p>
+                  )}
+                </div>
+              </li>
+            </ol>
+          </CardContent>
+        </Card>
+  );
+
   return (
     <div className="content target-detail-view">
       {renderHeader()}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       {banner && !error ? <div className="form-banner" role="status">{banner}{startedRunId && startedRunId !== 'started' ? <> <DetailEntityLink route="run-detail" id={startedRunId} label="Open run" /></> : null}</div> : null}
 
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Validate this target</CardTitle>
-            <CardDescription>Four steps take you from a declared domain to an evidence-backed readiness verdict. Each step shows its real state and the exact next action.</CardDescription>
-          </div>
-          <Badge tone={targetEligible ? 'success' : 'warn'}>{targetEligible ? 'Ready to validate' : 'Ownership required'}</Badge>
-        </CardHeader>
-        <CardContent>
-          <ol className="td-steps">
-            {/* Step 1 — Prove ownership */}
-            <li className="td-step" data-state={stepStates[1]}>
-              <div className="td-step-rail" aria-hidden="true">
-                <span className="td-step-num">{stepStates[1] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 1}</span>
-                <span className="td-step-line" />
-              </div>
-              <div className="td-step-body">
-                <div className="td-step-head">
-                  <h3>Prove ownership</h3>
-                  <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
-                </div>
-                <p className="td-step-why">
-                  External validation probes are blocked until you prove you control this target — ownership must reach at least DNS-verified. Publish the DNS TXT record below, then choose Check now.
-                </p>
-                {ownershipDone ? (
-                  <p className="td-step-why">Verified via {ownershipMethodText(verification)}. You can move on to choosing checks.</p>
-                ) : challenge && challenge.record_name ? (
-                  <>
-                    <div className="td-dns">
-                      <div className="td-dns-row">
-                        <span className="td-dns-key">Type</span>
-                        <span className="td-dns-val">TXT</span>
-                        <span />
-                      </div>
-                      <div className="td-dns-row">
-                        <span className="td-dns-key">Name</span>
-                        <span className="td-dns-val">{challenge.record_name}</span>
-                        <CopyButton value={challenge.record_name} label="DNS record name" />
-                      </div>
-                      <div className="td-dns-row">
-                        <span className="td-dns-key">Value</span>
-                        <span className="td-dns-val">{challenge.record_value}</span>
-                        <CopyButton value={challenge.record_value} label="DNS record value" />
-                      </div>
-                    </div>
-                    <div className="td-step-actions">
-                      {canWrite ? (
-                        <Button size="sm" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void checkOwnership()}>
-                          <ShieldCheck size={15} aria-hidden="true" />Check now
-                        </Button>
-                      ) : <Badge tone="muted">Read-only role</Badge>}
-                      {canWrite ? (
-                        <Button size="sm" variant="ghost" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>Reissue record</Button>
-                      ) : null}
-                      {challenge.last_checked_at ? <span className="muted small">Last checked {formatDate(challenge.last_checked_at)}</span> : null}
-                    </div>
-                  </>
-                ) : (
-                  <div className="td-step-actions">
-                    {canWrite ? (
-                      <Button size="sm" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>
-                        <ShieldCheck size={15} aria-hidden="true" />Issue DNS TXT record
-                      </Button>
-                    ) : <Badge tone="muted">Ask an admin to prove ownership</Badge>}
-                    <span className="muted small">A one-time TXT record proves you control this domain.</span>
-                  </div>
-                )}
-              </div>
-            </li>
-
-            {/* Step 2 — Choose checks */}
-            <li className="td-step" data-state={stepStates[2]}>
-              <div className="td-step-rail" aria-hidden="true">
-                <span className="td-step-num">{stepStates[2] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 2}</span>
-                <span className="td-step-line" />
-              </div>
-              <div className="td-step-body">
-                <div className="td-step-head">
-                  <h3>Choose a check</h3>
-                  <Badge tone={effectiveSelectedCheckId ? 'success' : hasChecks ? 'warn' : 'muted'}>
-                    {effectiveSelectedCheckId ? 'Selected' : hasChecks ? 'Pick one' : 'None bound'}
-                  </Badge>
-                </div>
-                <p className="td-step-why">These bounded checks are bound to this target by a test policy. Pick the one you want to validate.</p>
-                {hasChecks ? (
-                  <DataTable columns={checkColumns} items={checksApplied} getRowId={(item) => getString(item, ['check_id', 'id'], '')} empty={emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })} />
-                ) : (
-                  emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })
-                )}
-              </div>
-            </li>
-
-            {/* Step 3 — Run bounded validation */}
-            <li className="td-step" data-state={stepStates[3]}>
-              <div className="td-step-rail" aria-hidden="true">
-                <span className="td-step-num">{stepStates[3] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 3}</span>
-                <span className="td-step-line" />
-              </div>
-              <div className="td-step-body">
-                <div className="td-step-head">
-                  <h3>Run bounded validation</h3>
-                  <Badge tone={runDone ? 'success' : 'muted'}>{runDone ? `${runsRecent.length} run${runsRecent.length === 1 ? '' : 's'}` : 'Not run yet'}</Badge>
-                </div>
-                <p className="td-step-why">
-                  {targetEligible
-                    ? 'Rate-limited external probes run against this target and produce evidence. Nothing runs until you start it.'
-                    : 'This action stays disabled until ownership is proven — AstraNull will not aim probes at a target you have not verified.'}
-                </p>
-                <div className="td-step-actions">
-                  {canStartBoundedRun ? (
-                    <Button
-                      className={targetEligible && effectiveSelectedCheckId ? undefined : 'is-locked'}
-                      disabled={!targetEligible || !effectiveSelectedCheckId || busy !== ''}
-                      title={runReasonTitle}
-                      loading={busy === 'run'}
-                      onClick={() => void runBoundedChecks()}
-                    >
-                      <Play size={15} aria-hidden="true" />Run selected check
-                    </Button>
-                  ) : <Badge tone="muted">Read-only role</Badge>}
-                  {!targetEligible ? <span className="muted small">Locked — prove ownership in step 1.</span> : !effectiveSelectedCheckId ? <span className="muted small">Choose a check in step 2.</span> : null}
-                </div>
-              </div>
-            </li>
-
-            {/* Step 4 — Review results */}
-            <li className="td-step" data-state={stepStates[4]}>
-              <div className="td-step-rail" aria-hidden="true">
-                <span className="td-step-num">{stepStates[4] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 4}</span>
-              </div>
-              <div className="td-step-body">
-                <div className="td-step-head">
-                  <h3>Review results</h3>
-                  {latestVerdict
-                    ? unresolvedAfterPass
-                      ? <Badge tone="warn">{`Passed · ${openFindings.length} open finding${openFindings.length === 1 ? '' : 's'}`}</Badge>
-                      : <Badge tone={runOutcomeTone(latestVerdict)}>{plainVerdictLabel(latestVerdict)}</Badge>
-                    : <Badge tone="muted">No verdict yet</Badge>}
-                </div>
-                {latestVerdict ? (
-                  <div className="td-verdict">
-                    <p>
-                      {unresolvedAfterPass
-                        ? `The latest run passed, but ${openFindings.length === 1 ? 'a finding' : `${openFindings.length} findings`} from earlier evidence ${openFindings.length === 1 ? 'is' : 'are'} still open. Confirm the fix is in place, then close ${openFindings.length === 1 ? 'it' : 'them'} in Findings.`
-                        : plainVerdictDescription(latestVerdict) || 'This verdict is backed by recorded probe evidence. Open the run for the full evidence trail.'}
-                    </p>
-                    {latestVerdictRun ? <DetailEntityLink route="run-detail" id={getString(latestVerdictRun, ['run_id', 'id'], '')} label="Open evidence" /> : null}
-                    {findings.length > 0 ? (
-                      <Button size="sm" variant="ghost" onClick={() => setTab('findings')}>
-                        <TriangleAlert size={14} aria-hidden="true" />{findings.length} finding{findings.length === 1 ? '' : 's'}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="td-step-why">Once a bounded run finishes, the latest evidence-backed verdict and any findings appear here in plain language.</p>
-                )}
-              </div>
-            </li>
-          </ol>
-        </CardContent>
-      </Card>
+      {targetEligible ? (<>{protectionCards}{validateCard}</>) : (<>{validateCard}{protectionCards}</>)}
 
       <Card>
         <CardHeader>
@@ -805,6 +1170,37 @@ export function TargetDetailView({
           ) : null}
         </CardContent>
       </Card>
+
+      <ConfirmModal
+        open={confirmRunAll}
+        title={`Run all ${runAll.length} checks on ${targetDisplayValue(target)}?`}
+        description={(
+          <div className="stack-tight scan-review">
+            <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
+            <p>WAF/CDN detection and origin exposure run first, then one check at a time. Each result appears on this page as it lands.</p>
+            <p>The run paces itself inside your safe-run limits. If an hourly limit is reached it pauses and shows when it resumes.</p>
+            <p>Other runs in this target group wait until it finishes. You can stop it at any time.</p>
+            {declarationOnlyCount > 0 ? <p className="muted small">{declarationOnlyCount} declaration-only checks are skipped because they send no traffic.</p> : null}
+          </div>
+        )}
+        confirmLabel="Run all checks"
+        confirmTone="default"
+        busy={busy === 'run-all'}
+        onCancel={() => setConfirmRunAll(false)}
+        onConfirm={() => void startRunAll()}
+      />
+      <CancelScanDialog
+        scan={stopOpen ? scan : null}
+        config={config}
+        session={session}
+        onClose={() => setStopOpen(false)}
+        onCancelled={(result) => {
+          setStopOpen(false);
+          setScan(result);
+          setBanner('Run all checks stopped. Finished results are kept.');
+          void loadTargetActivity();
+        }}
+      />
     </div>
   );
 }

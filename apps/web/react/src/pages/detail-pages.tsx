@@ -3639,7 +3639,7 @@ export function DetailRoutePage({
         </div>
       );
     }
-    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} targetGroups={data.targetGroups} onRefresh={onRefresh} />;
+    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} targetGroups={data.targetGroups} wafEdgeEnabled={data.deploymentFeatures?.waf_posture === true} onRefresh={onRefresh} />;
   }
 
   if (route === 'check-detail') {

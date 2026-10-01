@@ -13,8 +13,10 @@ export const STEP_STATUSES = Object.freeze([
 export const ACTIVE_STEP_STATUSES = Object.freeze(['starting', 'running', 'collecting']);
 export const TERMINAL_STEP_STATUSES = Object.freeze(['verdicted', 'denied', 'skipped', 'cancelled']);
 export const SCAN_RECURRENCE_CADENCES = Object.freeze(['daily', 'weekly', 'monthly']);
-export const MAX_SCAN_CHECKS = 50;
-export const MAX_SCAN_STEPS = 200;
+// Sized so one "run all checks" scan can cover the full customer catalog for one target, and so
+// one scan's run ids never exceed the 500-id Postgres evidence batch used by scan projection.
+export const MAX_SCAN_CHECKS = 500;
+export const MAX_SCAN_STEPS = 500;
 export const MAX_SCAN_NAME_LENGTH = 120;
 export const MAX_CANCEL_REASON_LENGTH = 500;
 export const MIN_SCHEDULE_LEAD_MS = 60_000;

@@ -148,6 +148,7 @@ For each surface: **prototype screen id** → **React target file(s)** → **pan
   6. **Findings on this target** table (§4.6.2).
 - **Hydrator:** `populateTargetDetail(entityId)` in `apps/web/react/src/lib/target-detail.ts` (new). Reads `GET /v1/targets/:id` + `GET /v1/waf/assets?target_id=…` + `GET /v1/findings?target_id=…` + `GET /v1/test-runs?target_id=…`.
 - **RBAC:** same gates as target-group-detail; deletion of a target lives on this page.
+- **Run all checks and edge protection (2026-10, UX-018):** the header carries **Run all checks** (owner/admin/engineer; disabled until ownership is at least DNS-verified). It confirms the plan, then starts one exact-target validation scan over every customer-runnable, kind-compatible, network-observable check; declaration-only (E1) checks are listed, not run. Above the validation ladder (below it while unverified) the page shows an **Edge protection** card — WAF and CDN tiles with detection state (Evaluating while the fingerprint run is in flight), efficacy from evidence-backed verdicts (blocked vs reached; origin exposure reads as bypassable), and a "How we found out" disclosure with every source per layer — followed by an **All checks** panel grouped by category with live per-check status and each check's how-it-works, request bound, response, and result. A freshly onboarded domain queues WAF/CDN detection automatically as soon as ownership verifies; the page re-checks a pending DNS TXT challenge every 30 seconds.
 
 ### 4.6 Findings + finding detail
 

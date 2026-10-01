@@ -75,6 +75,10 @@ describe('validation scans API', () => {
     assert.equal(listed.status, 200);
     assert.equal(listed.json.count, 1);
     assert.equal(listed.json.items[0].id, created.json.id);
+    const byTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_1&limit=1', { headers: viewer });
+    assert.deepEqual(byTarget.json.items.map((scan) => scan.id), [created.json.id]);
+    const otherTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_other', { headers: viewer });
+    assert.equal(otherTarget.json.count, 0);
 
     const stopped = await request(baseUrl, 'POST', `/v1/validation-scans/${created.json.id}/cancel`, {
       headers: engineer,

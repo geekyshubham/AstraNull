@@ -32,6 +32,16 @@ import { isWithinSafeTestWindow, normalizeSafetyPolicy } from '../../lib/safeTes
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'running', 'collecting']);
+// Matches the 500-id cap of the evidence and probe-job batch reads.
+const RUN_ID_BATCH_SIZE = 500;
+
+function chunkRunIds(runIds) {
+  const chunks = [];
+  for (let index = 0; index < runIds.length; index += RUN_ID_BATCH_SIZE) {
+    chunks.push(runIds.slice(index, index + RUN_ID_BATCH_SIZE));
+  }
+  return chunks;
+}
 
 /** @type {readonly string[]} */
 export const POSTGRES_VALIDATION_SCAN_SERVICE_METHODS = Object.freeze([
@@ -946,17 +956,22 @@ export function createPostgresValidationScanServices(repositories, options = {})
       ? await repo.listStepsForScans(ctx, scans.map((scan) => scan.id))
       : (await Promise.all(scans.map((scan) => repo.listSteps(ctx, scan.id)))).flat();
     for (const step of allSteps) stepsByScan.get(step.scan_id)?.push(step);
-    const runIds = allSteps.map((step) => step.test_run_id).filter(Boolean);
+    const runIds = [...new Set(allSteps.map((step) => step.test_run_id).filter(Boolean))];
+    // A listed page of scans can hold more child runs than one evidence batch accepts, so read in
+    // batch-sized chunks instead of failing the whole list.
+    const runIdChunks = chunkRunIds(runIds);
     const runs = runIds.length && typeof validationEvidence.listTestRunsByIds === 'function'
-      ? await validationEvidence.listTestRunsByIds(ctx, runIds)
+      ? (await Promise.all(runIdChunks.map((chunk) => validationEvidence.listTestRunsByIds(ctx, chunk)))).flat()
       : await Promise.all(runIds.map((runId) => validationEvidence.getTestRun(ctx, runId)));
     const runById = new Map(runs.filter(Boolean).map((run) => [run.id, run]));
     let verdicts = [];
     let events = [];
     if (runIds.length && typeof validationEvidence.loadRunEvidenceBatch === 'function') {
-      const batch = await validationEvidence.loadRunEvidenceBatch(ctx, { runIds, eventRunIds: runIds, eventLimitPerRun: 200 });
-      verdicts = batch.verdicts ?? [];
-      events = batch.events ?? [];
+      for (const chunk of runIdChunks) {
+        const batch = await validationEvidence.loadRunEvidenceBatch(ctx, { runIds: chunk, eventRunIds: chunk, eventLimitPerRun: 200 });
+        verdicts.push(...(batch.verdicts ?? []));
+        events.push(...(batch.events ?? []));
+      }
     } else if (runIds.length) {
       for (const runId of runIds) {
         const verdict = await validationEvidence.getVerdictForRun(ctx, runId);
@@ -971,7 +986,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       eventsByRun.get(event.test_run_id).push(event);
     }
     const probeJobs = runIds.length && typeof repo.listProbeJobsForRuns === 'function'
-      ? await repo.listProbeJobsForRuns(ctx, runIds)
+      ? (await Promise.all(runIdChunks.map((chunk) => repo.listProbeJobsForRuns(ctx, chunk)))).flat()
       : [];
     const probeJobByRun = new Map();
     for (const job of probeJobs) if (!probeJobByRun.has(job.test_run_id)) probeJobByRun.set(job.test_run_id, job);
@@ -1116,6 +1131,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       const limit = Math.max(1, Math.min(200, Number(callOptions.limit) || 50));
       const scans = await repo.listScans(ctx, {
         targetGroupId: callOptions.target_group_id || null,
+        targetId: callOptions.target_id || null,
         status: statuses,
         limit,
       });

@@ -279,12 +279,23 @@ export function TargetsPage({
         tags
       };
       if (groupId) body.target_group_id = groupId;
-      await requestJson(config, session, '/v1/targets', { method: 'POST', body });
+      const created = await requestJson(config, session, '/v1/targets', { method: 'POST', body }) as DataItem;
+      const createdId = getString(created, ['id'], '');
+      const createdGroupId = getString(created, ['target_group_id'], groupId);
+      // Onboarding: issue the DNS TXT ownership challenge straight away so the target page can
+      // show the record, keep re-checking it, and start WAF/CDN detection once it verifies.
+      if (createdId && createdGroupId && addKind === 'fqdn') {
+        await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(createdGroupId)}/dns-ownership/issue`, {
+          method: 'POST',
+          body: { target_id: createdId }
+        }).catch(() => undefined);
+      }
       setMessage(`${value} added to declared scope. Verify ownership before running checks.`);
       setShowAdd(false);
       setAddTags('');
       setAddKind('fqdn');
       await onRefresh();
+      if (createdId) window.location.hash = `target-detail?id=${encodeURIComponent(createdId)}`;
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not add the target.'));
     } finally {
