@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { Check, FileCheck2, ShieldCheck, Target, TriangleAlert, UserCog, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
@@ -19,7 +19,20 @@ import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { plainCheckName, plainCodeLabel, plainEmptyReason, plainFindingTitle, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
-import { findingSlaDueAt, findingStatus as readFindingStatus, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
+import {
+  FINDING_RULE_ASSETS_FOCUS,
+  countFindingAssets,
+  findingAssetLabel,
+  findingObservedAt,
+  findingRuleSiblings,
+  findingRuleTitle,
+  findingSlaDueAt,
+  findingStatus as readFindingStatus,
+  isFindingSlaBreach,
+  resolveFindingRetestAction
+} from '../lib/findings-helpers';
+import { buildTargetGroupNameMap, resolveTargetGroupLabel } from '../lib/finding-group-labels.mjs';
+import '../components/findings/findings-groups.css';
 import { MetricCard } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
 
@@ -61,7 +74,7 @@ type FindingDecisionStep = { id: string; label: string; done: boolean; meta: str
 function buildFindingDecisionSteps(status: string, owner: string, remState: string, hasPlaybook: boolean): FindingDecisionStep[] {
   const normalizedStatus = status.trim().toLowerCase();
   const normalizedOwner = owner.trim().toLowerCase();
-  const ownerAssigned = Boolean(normalizedOwner && normalizedOwner !== 'unassigned' && normalizedOwner !== '—');
+  const ownerAssigned = Boolean(normalizedOwner && normalizedOwner !== 'unassigned' && normalizedOwner !== 'not reported');
   const remediationTracked = hasPlaybook;
   const decisionRecorded = ['accepted_risk', 'closed'].includes(normalizedStatus);
   return [
@@ -88,14 +101,14 @@ function findingStatusTone(value: string): StatTone {
   return 'info';
 }
 
-function formatFindingLabel(value: string, fallback = '—') {
+function formatFindingLabel(value: string, fallback = 'Not reported') {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   const label = trimmed.replace(/_/g, ' ');
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
+function getString(item: DataItem | null | undefined, keys: string[], fallback = 'Not reported') {
   if (!item) return fallback;
   for (const key of keys) {
     const value = item[key];
@@ -113,7 +126,7 @@ function coerceItemArray(value: unknown): DataItem[] | null {
 /** Humanize a byte count for the evidence-bundle Size column (matches the prototype's KB/MB display). */
 function formatBytes(value: unknown): string {
   const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  if (!Number.isFinite(bytes) || bytes <= 0) return 'Not reported';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -229,6 +242,40 @@ export function FindingDetailView({
   const checkId = getString(entity, ['check_id'], '');
   const vectorFamily = getString(entity, ['vector_family', 'vector'], '');
   const decisionSteps = buildFindingDecisionSteps(findingStatus, owner, remediation.remState, hasRemediationPlaybook);
+  // Every loaded finding that shares this finding's rule (same recorded outcome), this one included.
+  const ruleSiblings = useMemo(
+    () => findingRuleSiblings(entity, data.findings ?? [], data.targets ?? []),
+    [entity, data.findings, data.targets]
+  );
+  const ruleTitle = findingRuleTitle(entity, data.checks);
+  const ruleAssetsRef = useRef<HTMLElement | null>(null);
+  const ruleOpenCount = ruleSiblings.filter((item) => {
+    const status = readFindingStatus(item).toLowerCase();
+    return status === 'open' || status === 'remediation_pending';
+  }).length;
+  const ruleAssetCount = countFindingAssets(ruleSiblings, data.targets ?? []);
+  const ruleHasSiblings = ruleSiblings.length > 1;
+  const findingsListError = data.loadErrors?.findings ?? '';
+  const targetGroupsLoadError = data.loadErrors?.targetGroups ?? '';
+  const targetGroupNames = useMemo(() => buildTargetGroupNameMap(data.targetGroups ?? []), [data.targetGroups]);
+  const ruleGroupNamesUnavailable = Boolean(targetGroupsLoadError) && ruleSiblings.some((item) => (
+    resolveTargetGroupLabel(getString(item, ['target_group_id'], ''), { names: targetGroupNames, loadError: targetGroupsLoadError }).state === 'unavailable'
+  ));
+
+  // A grouped queue row opens #finding-detail?id=...&focus=rule-assets; bring the asset list into view.
+  useEffect(() => {
+    if (loading) return;
+    const query = window.location.hash.split('?')[1] ?? '';
+    if (new URLSearchParams(query).get('focus') !== FINDING_RULE_ASSETS_FOCUS) return;
+    const node = ruleAssetsRef.current;
+    if (!node) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      node.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [entityId, loading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -313,7 +360,7 @@ export function FindingDetailView({
     setChainVerified(null);
     await runAction(`verify-${entityId}`, async () => {
       // The verify endpoint recomputes the SHA-256 over the export payload and compares it to
-      // the custody manifest digest, so it needs { payload, custody } — not { finding_id }.
+      // the custody manifest digest, so it needs { payload, custody }, not { finding_id }.
       // The finding export is the canonical producer of that bound pair ({ ...payload, custody }).
       const exported = await requestJson(config, session, `/v1/findings/${entityId}/export`, { method: 'POST' }) as DataItem | null;
       if (!exported || typeof exported !== 'object') {
@@ -333,7 +380,7 @@ export function FindingDetailView({
         throw new Error(`Custody verification failed: ${formatFindingLabel(reason)}.`);
       }
       setChainVerified(true);
-    }, 'Custody chain verified — SHA-256 digest matches the sealed manifest.');
+    }, 'Custody chain verified. The SHA-256 digest matches the sealed manifest.');
   }
 
   async function exportBundle() {
@@ -357,7 +404,7 @@ export function FindingDetailView({
       >{getString(item, ['value', 'id'], '')}</AnchorButton>
     },
     { key: 'kind', label: 'Kind', render: (item) => plainCodeLabel(getString(item, ['kind'], ''), 'Not reported') },
-    { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
+    { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], 'Not reported')}</span> },
     {
       key: 'verification',
       label: 'Verification',
@@ -365,6 +412,89 @@ export function FindingDetailView({
     },
     { key: 'eligibility', label: 'Eligibility', render: (item) => plainCodeLabel(getString(item, ['eligibility'], ''), 'Not reported') },
     { key: 'verdict', label: 'Last verdict', render: (item) => { const verdict = getString(item, ['last_verdict'], ''); return verdict ? plainVerdictLabel(verdict) : 'No result yet'; } }
+  ];
+
+  const ruleAssetColumns: TableColumn<DataItem>[] = [
+    {
+      key: 'asset',
+      label: 'Asset',
+      render: (item) => {
+        const siblingId = getString(item, ['id'], '');
+        const label = findingAssetLabel(item, data.targets);
+        if (siblingId === entityId) {
+          return <span className="rule-asset-current"><strong>{label}</strong><small>This finding</small></span>;
+        }
+        return siblingId ? (
+          <a className="rule-asset-link" href={buildDetailHref('finding-detail', siblingId)} aria-label={`Open finding on ${label}`}>
+            <strong>{label}</strong>
+            <small className="mono">{siblingId}</small>
+          </a>
+        ) : <span className="mono">{label}</span>;
+      }
+    },
+    {
+      key: 'check',
+      label: 'Check',
+      render: (item) => {
+        const itemCheckId = getString(item, ['check_id', 'check'], '');
+        if (!itemCheckId) return <span className="rule-asset-meta">Not reported</span>;
+        const itemCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === itemCheckId);
+        return <span className="rule-asset-stack"><span>{plainCheckName(getString(itemCheck ?? {}, ['name', 'title'], itemCheckId))}</span><small className="mono">{itemCheckId}</small></span>;
+      }
+    },
+    {
+      key: 'group',
+      label: 'Target group',
+      render: (item) => {
+        const group = resolveTargetGroupLabel(getString(item, ['target_group_id'], ''), { names: targetGroupNames, loadError: targetGroupsLoadError });
+        if (group.state === 'ungrouped') return <span className="rule-asset-meta">Ungrouped</span>;
+        if (group.state === 'named') {
+          return <span className="rule-asset-stack"><span>{group.name}</span><small className="mono">{group.id}</small></span>;
+        }
+        if (group.state === 'unavailable') {
+          return <span className="rule-asset-stack"><span className="mono">{group.id}</span><small>Group name unavailable</small></span>;
+        }
+        return <span className="mono">{group.id}</span>;
+      }
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => {
+        const status = readFindingStatus(item);
+        return <Badge tone={findingStatusTone(status)}>{formatFindingLabel(status)}</Badge>;
+      }
+    },
+    {
+      key: 'severity',
+      label: 'Severity',
+      render: (item) => {
+        const value = getString(item, ['severity'], 'unknown');
+        return <Badge tone={findingSeverityTone(value)}>{formatSeverityLabel(value)}</Badge>;
+      }
+    },
+    {
+      key: 'observed',
+      label: 'Last observed',
+      render: (item) => {
+        const observed = findingObservedAt(item);
+        return observed ? formatDate(observed) : <span className="rule-asset-meta">Not reported</span>;
+      }
+    },
+    {
+      key: 'evidence',
+      label: 'Evidence',
+      render: (item) => {
+        const evidenceIds = Array.isArray(item.evidence_ids) ? item.evidence_ids.map(String).filter(Boolean) : [];
+        const evidenceId = evidenceIds[0] ?? getString(item, ['evidence_id'], '');
+        if (!evidenceId) return <span className="rule-asset-evidence-missing">No evidence ID recorded</span>;
+        return (
+          <a className="rule-asset-evidence" href={buildDetailHref('evidence-detail', evidenceId)} aria-label={`Open evidence ${evidenceId} for ${findingAssetLabel(item, data.targets)}`}>
+            {evidenceId}{evidenceIds.length > 1 ? ` +${evidenceIds.length - 1}` : ''}
+          </a>
+        );
+      }
+    }
   ];
 
   const artifactColumns: TableColumn<DataItem>[] = [
@@ -385,10 +515,10 @@ export function FindingDetailView({
       label: 'Run',
       render: (item) => {
         const runId = getString(item, ['run_id'], '');
-        return runId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', runId)}>{runId}</AnchorButton> : <span>—</span>;
+        return runId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', runId)}>{runId}</AnchorButton> : <span className="rule-asset-meta">Not reported</span>;
       }
     },
-    { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], '—')}>{getString(item, ['sha256', 'content_sha256'], '—')}</span> },
+    { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], 'Not reported')}>{getString(item, ['sha256', 'content_sha256'], 'Not reported')}</span> },
     { key: 'sealed', label: 'Sealed', render: (item) => formatDate(item.sealed_at) },
     { key: 'size', label: 'Size', render: (item) => <span className="num">{formatBytes(item.size_bytes)}</span> },
     {
@@ -408,10 +538,10 @@ export function FindingDetailView({
     ...(custodyChain.length
       ? ['chain:', ...custodyChain.flatMap((step) => [
           `  - artifact: ${getString(step, ['kind', 'step'], 'artifact')}`,
-          `    sha256: ${getString(step, ['sha256'], '—')}`
+          `    sha256: ${getString(step, ['sha256'], 'not_recorded')}`
         ])]
       : []),
-    `bundle_sha256: ${bundleSha256 || '—'}`,
+    `bundle_sha256: ${bundleSha256 || 'not_recorded'}`,
     ...(custodySealedAt ? [`sealed_at: ${custodySealedAt}`] : []),
     `verified: ${chainVerified === null ? 'not_checked' : chainVerified}`
   ].join('\n');
@@ -502,7 +632,7 @@ export function FindingDetailView({
             </ol>
             <div className="kv-list">
               <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
-              <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
+              <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
             </div>
             {canWriteFinding ? (
             <form className="product-form product-form--compact" onSubmit={(event) => {
@@ -576,7 +706,7 @@ export function FindingDetailView({
             <EmptyState
               icon={TriangleAlert}
               title="No declared targets matched."
-              body="It may apply at the target-group level — zone-wide, edge-wide — rather than to a single declared target."
+              body="It may apply at the target-group level, for example zone-wide or edge-wide, rather than to a single declared target."
             />
           ) : (
             <DataTable
@@ -589,6 +719,52 @@ export function FindingDetailView({
         </CardContent>
       </Card>
 
+      <section
+        id="rule-assets"
+        ref={ruleAssetsRef}
+        tabIndex={-1}
+        className="rule-assets-section"
+        aria-labelledby="rule-assets-title"
+      >
+      <Card className="rule-assets-card">
+        <CardHeader>
+          <div>
+            <CardTitle id="rule-assets-title">Affected assets for this rule</CardTitle>
+            <CardDescription>Every loaded finding that recorded &ldquo;{ruleTitle}&rdquo;. Open an asset for its own explanation, remediation, retest, and custody export.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {findingsListError ? (
+            <div className="form-banner error" role="alert">
+              Could not load the finding list, so other assets for this rule may be missing: {findingsListError}
+            </div>
+          ) : null}
+          {ruleHasSiblings && ruleGroupNamesUnavailable ? (
+            <div className="form-banner error" role="status">
+              Target group names are unavailable because target groups could not be loaded, so group IDs are shown instead: {targetGroupsLoadError}
+            </div>
+          ) : null}
+          <p className="rule-assets-summary">
+            {ruleHasSiblings ? (
+              <>
+                <span className="tabular-nums">{ruleSiblings.length}</span> findings on <span className="tabular-nums">{ruleAssetCount}</span> {ruleAssetCount === 1 ? 'asset' : 'assets'}, <span className="tabular-nums">{ruleOpenCount}</span> open
+              </>
+            ) : 'No other loaded finding records this outcome. When validation records it on another asset, that asset is listed here.'}
+          </p>
+          {ruleHasSiblings ? (
+            <DataTable
+              className="rule-assets-table"
+              columns={ruleAssetColumns}
+              items={ruleSiblings}
+              getRowId={(item, index) => getString(item, ['id'], String(index))}
+              getRowProps={(item) => (getString(item, ['id'], '') === entityId ? { className: 'is-current-asset', 'aria-current': 'true' } : {})}
+              empty={<span className="muted">No findings recorded for this rule.</span>}
+            />
+          ) : null}
+        </CardContent>
+      </Card>
+      </section>
+
       <Card data-od-id="finding-remediation" className="finding-remediation-card">
         <CardHeader>
           <div>
@@ -600,10 +776,10 @@ export function FindingDetailView({
           {hasRemediationPlaybook ? (
             <>
               <div className="finding-remediation-meta">
-                <div className="rem-cell"><span className="rem-label">Action</span><span className="rem-value mono">{remediation.remAction || '—'}</span></div>
-                <div className="rem-cell"><span className="rem-label">Owner</span><span className="rem-value">{remediation.remOwner || '—'}</span></div>
+                <div className="rem-cell"><span className="rem-label">Action</span><span className="rem-value mono">{remediation.remAction || 'Not reported'}</span></div>
+                <div className="rem-cell"><span className="rem-label">Owner</span><span className="rem-value">{remediation.remOwner || 'Not reported'}</span></div>
                 <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Recorded remediation state: ${plainCodeLabel(remediation.remState)}`}>{plainCodeLabel(remediation.remState, 'Not reported')}</Badge></div>
-                <div className="rem-cell"><span className="rem-label">SLA</span><span className="rem-value">{remediation.remSla || '—'}</span></div>
+                <div className="rem-cell"><span className="rem-label">SLA</span><span className="rem-value">{remediation.remSla || 'Not reported'}</span></div>
               </div>
               {remediation.remDescription ? (
                 <p className="finding-remediation-desc">{remediation.remDescription}</p>
@@ -665,7 +841,7 @@ export function FindingDetailView({
             />
           ) : evidence.artifacts.length > 0 ? (
             <>
-              <p className="muted small">Select an artifact to open its evidence detail — payload, SHA-256 digest, and custody position.</p>
+              <p className="muted small">Select an artifact to open its evidence detail: payload, SHA-256 digest, and custody position.</p>
               <DataTable
                 columns={artifactColumns}
                 items={evidence.artifacts}

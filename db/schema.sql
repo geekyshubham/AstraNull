@@ -1039,7 +1039,10 @@ CREATE TABLE notification_rules (
   trigger TEXT,
   triggers_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   enabled BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ,
+  updated_by TEXT,
+  deleted_at TIMESTAMPTZ
 );
 
 CREATE TABLE notification_events (
@@ -1050,7 +1053,8 @@ CREATE TABLE notification_events (
   subject TEXT,
   metadata_json JSONB DEFAULT '{}'::jsonb,
   delivery_status TEXT DEFAULT 'metadata_only',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  dedupe_key TEXT
 );
 
 CREATE TABLE service_accounts (
@@ -1170,7 +1174,11 @@ CREATE TABLE notification_delivery_attempts (
   exhausted BOOLEAN,
   provider_status INT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  attempted_at TIMESTAMPTZ
+  attempted_at TIMESTAMPTZ,
+  claimed_by TEXT,
+  claimed_at TIMESTAMPTZ,
+  lease_expires_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ
 );
 
 CREATE TABLE production_release_evidence (
@@ -2093,6 +2101,15 @@ CREATE INDEX idx_high_scale_telemetry_request_observed
   ON high_scale_telemetry(tenant_id, high_scale_request_id, observed_at);
 CREATE UNIQUE INDEX uniq_soc_report_per_high_scale_request ON soc_reports(tenant_id, high_scale_request_id);
 CREATE INDEX idx_notification_delivery_attempts_event ON notification_delivery_attempts(tenant_id, notification_event_id);
+CREATE INDEX idx_notification_delivery_attempts_rule_latest ON notification_delivery_attempts(tenant_id, rule_id, created_at DESC);
+CREATE INDEX idx_notification_delivery_attempts_due ON notification_delivery_attempts(tenant_id, next_retry_at, id)
+  WHERE status = 'provider_retry_scheduled' AND superseded_at IS NULL;
+CREATE UNIQUE INDEX uniq_notification_events_dedupe ON notification_events(tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+-- Lifecycle-notification reconciliation windows (0062_notification_outbox_reconciliation.sql).
+CREATE INDEX idx_reports_tenant_created ON reports(tenant_id, created_at, id);
+CREATE INDEX idx_verdicts_tenant_created ON verdicts(tenant_id, created_at, id);
+CREATE INDEX idx_findings_tenant_high_created ON findings(tenant_id, created_at, id)
+  WHERE severity IN ('high', 'critical');
 CREATE INDEX idx_production_release_evidence_tenant_kind_created
   ON production_release_evidence(tenant_id, kind, created_at DESC);
 CREATE INDEX idx_test_runs_tenant_created ON test_runs(tenant_id, created_at DESC);

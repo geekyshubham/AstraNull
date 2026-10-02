@@ -71,6 +71,7 @@ export {
   NOTIFICATION_REPOSITORY_METHODS,
   POSTGRES_NOTIFICATION_SERVICE_METHODS,
   createPostgresNotificationServices,
+  registerPostgresRunNotificationHook,
 } from './notificationServiceAdapters.mjs';
 
 export {

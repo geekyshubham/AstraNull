@@ -1,0 +1,50 @@
+/* Readiness posture donut. Token-only.
+   Root cause of the old right-hand gap: .gauge-side had no flex basis, so the
+   legend shrank to its intrinsic width beside the fixed 168px ring. The side
+   column now grows to fill the remaining width, and takes the full row when
+   the block wraps under the ring. */
+
+.dash-gauge-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5) var(--space-6);
+  width: 100%;
+  min-width: 0;
+}
+
+.dash-gauge-block > .gauge--segmented {
+  flex: 0 0 auto;
+}
+
+.dash-gauge-block > .gauge-side {
+  flex: 1 1 15rem;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dash-gauge-block .gauge-legend {
+  width: 100%;
+}
+
+.dash-gauge-block .legend-row {
+  grid-template-columns: 9px minmax(4.5rem, auto) minmax(0, 1fr) auto auto;
+  width: 100%;
+}
+
+.gauge-side-note {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+/* When the ring wraps above the legend, center it so the stacked layout stays balanced. */
+@media (max-width: 420px) {
+  .dash-gauge-block { justify-content: center; }
+  .dash-gauge-block > .gauge-side { flex-basis: 100%; }
+  .dash-gauge-block .legend-row { gap: var(--space-2); }
+}

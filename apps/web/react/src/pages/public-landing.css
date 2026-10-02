@@ -1,0 +1,684 @@
+/* AstraNull public landing. Persuade mode, calm and technical.
+   Token-only: colour, type, space, radius and motion come from styles.css :root.
+   Every rule is scoped under .public-landing (or the landing footer) so it
+   outranks the shared primitives that load after this file in the bundle.
+   Shape rule: panels and the record figure use --radius-lg, inline field
+   chips use --radius-sm, buttons keep the shared pill. Depth is hairline
+   borders only (no drop shadows). */
+
+.public-landing {
+  /* Orange reads as ink on the dark canvas; on the light canvas it falls to
+     about 2.3:1, so accent text is mixed toward the foreground there. */
+  --landing-accent-ink: var(--accent);
+  --landing-prose: var(--fg-2);
+  --landing-rule: var(--border);
+  --landing-measure: 62ch;
+  --landing-sticky-top: 96px;
+
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+:root[data-theme="light"] .public-landing,
+:root[data-theme="light"] .public-footer {
+  --landing-accent-ink: color-mix(in oklab, var(--accent), var(--fg) 48%);
+}
+
+.public-landing code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+.public-landing .public-hero {
+  padding: clamp(48px, 8vw, 96px) 0 clamp(56px, 7vw, 88px);
+}
+
+.public-landing .public-kicker {
+  margin: 0;
+  color: var(--landing-accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.public-landing .public-hero h1 {
+  max-width: 24ch;
+  margin: var(--space-5) 0 0;
+  color: var(--fg);
+  font-size: clamp(36px, 5.2vw, 64px);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.public-landing .public-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: clamp(var(--space-8), 6vw, 96px);
+  align-items: start;
+  margin-top: clamp(var(--space-8), 5vw, 64px);
+}
+
+.public-landing .public-hero-lead {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--landing-prose);
+  font-size: var(--text-lg);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.public-landing .public-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+}
+
+.public-landing .public-actions .btn {
+  min-height: 44px;
+  padding-inline: 20px;
+}
+
+.public-landing .public-actions .btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* The verdict record: real field names from the API, described rather than
+   filled with invented results. */
+.public-landing .public-record {
+  margin: 0;
+  border: 1px solid var(--landing-rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.public-landing .public-record-title {
+  margin: 0;
+  border-bottom: 1px solid var(--landing-rule);
+  padding: var(--space-4) var(--space-5);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.public-landing .public-record-fields {
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+}
+
+.public-landing .public-record-fields > div {
+  display: grid;
+  grid-template-columns: minmax(0, 15ch) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.public-landing .public-record-fields > div + div {
+  border-top: 1px solid var(--border-soft);
+}
+
+.public-landing .public-record-fields dt {
+  min-width: 0;
+  color: var(--fg);
+}
+
+.public-landing .public-record-fields dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.public-landing .public-record-vocab {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.public-landing .public-record-vocab code {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1-5);
+  color: var(--fg);
+}
+
+.public-landing .public-record-vocab code.is-accent {
+  border-color: color-mix(in oklab, var(--accent), transparent 40%);
+  color: var(--landing-accent-ink);
+}
+
+.public-landing .public-record figcaption {
+  border-top: 1px solid var(--landing-rule);
+  padding: var(--space-3) var(--space-5);
+  color: var(--landing-prose);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* ── Shared section rhythm ──────────────────────────────────────────── */
+.public-landing .public-section {
+  border-top: 1px solid var(--landing-rule);
+  padding: clamp(56px, 8vw, 112px) 0;
+  scroll-margin-top: 72px;
+}
+
+.public-landing .public-section h2,
+.public-landing .public-cta-final h2 {
+  max-width: 22ch;
+  margin: 0;
+  color: var(--fg);
+  font-size: clamp(28px, 3.6vw, 44px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.public-landing .public-section-lead {
+  max-width: var(--landing-measure);
+  margin: var(--space-4) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.public-landing .public-section-head {
+  margin-bottom: clamp(var(--space-8), 5vw, 56px);
+}
+
+.public-landing h3 {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+/* ── Validation flow: sticky intro beside an ordered rail ───────────── */
+.public-landing .public-flow-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: clamp(var(--space-8), 6vw, 96px);
+  align-items: start;
+}
+
+.public-landing .public-flow-intro {
+  position: sticky;
+  top: var(--landing-sticky-top);
+}
+
+.public-landing .public-flow {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The rail is a positioned hairline joining the markers, not a card stripe. */
+.public-landing .public-flow::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 19px;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.public-landing .public-flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--space-5);
+  padding-bottom: var(--space-10);
+}
+
+.public-landing .public-flow-step:last-child {
+  padding-bottom: 0;
+}
+
+.public-landing .public-flow-marker {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.public-landing .public-flow-step h3 {
+  padding-top: var(--space-2);
+}
+
+.public-landing .public-flow-step p {
+  max-width: var(--landing-measure);
+  margin: var(--space-2) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.public-landing .public-flow-records {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5) var(--space-2);
+}
+
+.public-landing .public-flow-step .public-flow-records {
+  margin-top: var(--space-3);
+}
+
+.public-landing .public-flow-records > span {
+  color: var(--meta);
+  font-size: var(--text-xs);
+}
+
+:root[data-theme="light"] .public-landing .public-flow-records > span {
+  color: var(--fg-2);
+}
+
+.public-landing .public-flow-records code {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--wash);
+  padding: 1px var(--space-1-5);
+  color: var(--fg);
+  font-size: var(--text-xs);
+}
+
+/* The high-scale step sits behind a gate: dashed frame, lock marker. */
+.public-landing .public-flow-step.is-gate > div {
+  border: 1px dashed color-mix(in oklab, var(--accent), transparent 35%);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.public-landing .public-flow-step.is-gate .public-flow-marker {
+  border-color: var(--accent);
+  color: var(--landing-accent-ink);
+}
+
+.public-landing .public-flow-step.is-gate h3 {
+  padding-top: 0;
+}
+
+.public-landing .public-flow-step .public-flow-gate {
+  margin: 0 0 var(--space-2);
+  color: var(--landing-accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* ── Boundaries ledger: a 2x2 rule grid, not a card grid ────────────── */
+.public-landing .public-ledger {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--landing-rule);
+  list-style: none;
+}
+
+.public-landing .public-ledger > li {
+  min-width: 0;
+  border-bottom: 1px solid var(--landing-rule);
+  padding: var(--space-8) var(--space-8) var(--space-8) 0;
+}
+
+.public-landing .public-ledger > li:nth-child(2n) {
+  border-left: 1px solid var(--landing-rule);
+  padding-left: var(--space-8);
+  padding-right: 0;
+}
+
+.public-landing .public-ledger-label {
+  display: block;
+  margin-bottom: var(--space-3);
+  color: var(--landing-accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.public-landing .public-ledger p {
+  max-width: 52ch;
+  margin: var(--space-2) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+
+.public-landing .public-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: var(--landing-measure);
+  margin: var(--space-8) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.public-landing .public-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--landing-accent-ink);
+}
+
+/* ── High-scale lane: a small request feeding a large SOC-owned panel ─ */
+.public-landing .public-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) auto minmax(0, 1.6fr);
+  gap: var(--space-5);
+  align-items: center;
+}
+
+.public-landing .public-lane-panel {
+  min-width: 0;
+  border: 1px solid var(--landing-rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+}
+
+.public-landing .public-lane-panel.is-soc {
+  border-color: color-mix(in oklab, var(--accent), transparent 45%);
+  background: color-mix(in oklab, var(--accent), transparent 95%);
+}
+
+.public-landing .public-lane-role {
+  margin: 0 0 var(--space-2);
+  color: var(--landing-accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.public-landing .public-lane-panel > p:last-child {
+  margin: var(--space-3) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+
+.public-landing .public-lane-arrow {
+  color: var(--meta);
+}
+
+.public-landing .public-lane-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: soc-stage;
+}
+
+.public-landing .public-lane-stages li {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: var(--space-1) var(--space-2);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  counter-increment: soc-stage;
+}
+
+.public-landing .public-lane-stages li::before {
+  content: counter(soc-stage);
+  color: var(--landing-prose);
+  font-family: var(--font-mono);
+}
+
+/* ── Comparison table ───────────────────────────────────────────────── */
+.public-landing .public-compare {
+  border: 1px solid var(--landing-rule);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  overflow-x: auto;
+}
+
+.public-landing .public-compare table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.public-landing .public-compare th,
+.public-landing .public-compare td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-4) var(--space-5);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.public-landing .public-compare thead th {
+  border-bottom-color: var(--landing-rule);
+  background: var(--wash);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.public-landing .public-compare tbody th {
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.public-landing .public-compare td {
+  color: var(--landing-prose);
+}
+
+.public-landing .public-compare tbody tr:last-child th,
+.public-landing .public-compare tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.public-landing .public-compare tbody tr:hover td,
+.public-landing .public-compare tbody tr:focus-within td {
+  background: transparent;
+}
+
+.public-landing .public-compare-yes {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.public-landing .public-compare thead th:nth-child(2) {
+  color: var(--landing-accent-ink);
+}
+
+/* ── Closing call to action ─────────────────────────────────────────── */
+.public-landing .public-cta-final {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-8);
+  align-items: end;
+  border-top: 1px solid var(--landing-rule);
+  padding: clamp(56px, 8vw, 112px) 0;
+}
+
+.public-landing .public-cta-final p {
+  max-width: 52ch;
+  margin: var(--space-3) 0 0;
+  color: var(--landing-prose);
+  line-height: 1.6;
+}
+
+.public-landing .public-cta-final .public-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────── */
+.public-footer {
+  border-top: 1px solid var(--border);
+}
+
+.public-footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4) var(--space-6);
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-6);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.public-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-5);
+}
+
+.public-footer a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--fg-2);
+  transition: color var(--motion-fast) var(--motion-ease);
+}
+
+.public-footer a:hover {
+  color: var(--fg);
+}
+
+/* Visible keyboard focus on every landing link, including inline ones. */
+.public-landing a:focus-visible,
+.public-footer a:focus-visible,
+.public-landing .public-compare:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .public-landing .public-hero-grid,
+  .public-landing .public-flow-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-landing .public-flow-intro {
+    position: static;
+  }
+
+  .public-landing .public-lane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-landing .public-lane-arrow {
+    justify-self: start;
+    margin-left: var(--space-6);
+    transform: rotate(90deg);
+  }
+
+  .public-landing .public-cta-final {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .public-landing .public-cta-final .public-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .public-landing {
+    padding: 0 var(--space-4);
+  }
+
+  .public-footer-inner {
+    padding-inline: var(--space-4);
+  }
+
+  .public-landing .public-ledger {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-landing .public-ledger > li,
+  .public-landing .public-ledger > li:nth-child(2n) {
+    border-left: 0;
+    padding: var(--space-6) 0;
+  }
+
+  .public-landing .public-record-fields > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+
+  .public-landing .public-lane-panel {
+    padding: var(--space-5);
+  }
+}
+
+@media (max-width: 420px) {
+  .public-landing .public-actions .btn {
+    width: 100%;
+  }
+
+  .public-landing .public-flow-step {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .public-landing .public-flow-marker {
+    width: 32px;
+    height: 32px;
+  }
+
+  .public-landing .public-flow::before {
+    left: 15px;
+  }
+
+  .public-landing .public-flow-step.is-gate > div {
+    padding: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .public-landing .public-actions .btn:active:not(:disabled) {
+    transform: none;
+  }
+
+  .public-footer a {
+    transition: none;
+  }
+}

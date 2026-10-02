@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { cn } from '../../lib/utils';
+import './primitives.css';
 
 export type CardProps = React.HTMLAttributes<HTMLDivElement> & {
   density?: 'default' | 'compact';
   /** Slightly elevated surface; uses the shared theme elevation tokens. */
   raised?: boolean;
-  /** The whole card navigates or opens something, so it may respond to hover. */
+  /** The whole card navigates or opens something, so it may respond to hover and press. */
   interactive?: boolean;
 };
 
@@ -13,6 +14,7 @@ export function Card({ className, density = 'default', raised = false, interacti
   return (
     <div
       data-ui="card"
+      data-interactive={interactive ? 'true' : undefined}
       className={cn(
         'card',
         density === 'compact' && 'card-compact',

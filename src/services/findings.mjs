@@ -2,7 +2,7 @@ import { audit } from '../audit.mjs';
 import { newId } from '../lib/ids.mjs';
 import { scrubFindingForCustomer } from '../lib/outsideInEvidence.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { emitNotification } from './notifications.mjs';
+import { emitNotificationIfSubscribed } from './notifications.mjs';
 
 export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   const store = getStore();
@@ -47,10 +47,11 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   };
   store.findings.push(finding);
   if (['high', 'critical'].includes(finding.severity)) {
-    emitNotification(ctx, {
+    // Parity with Postgres: record only for subscribed tenants, never fail finding creation.
+    emitNotificationIfSubscribed(ctx, {
       trigger: 'finding.high_severity',
       subject: finding.title,
-      metadata: { finding_id: finding.id, severity: finding.severity },
+      metadata: { finding_id: finding.id, severity: finding.severity, verdict_id: verdict.id },
     });
   }
   audit({

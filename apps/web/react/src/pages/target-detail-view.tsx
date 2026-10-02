@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Activity,
   Check,
+  CircleCheck,
+  CircleDashed,
+  Clock,
   Cloud,
   Copy,
   FileCheck2,
@@ -38,8 +41,10 @@ import { emptyStateFromApi } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Tabs } from '../components/ui/tabs';
+import { DesignVariantSwitch, useDesignVariant } from '../components/ui/design-variant';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { requestJson } from '../lib/api';
+import { prefersReducedMotion } from '../lib/motion';
 import { apiErrorMessage } from '../lib/error-messages';
 import { ConfirmModal } from '../lib/crud-ui';
 import { isScanActive, nextPollDelay, scanErrorMessage } from '../lib/validation-scan.mjs';
@@ -72,7 +77,7 @@ const DNS_AUTO_RECHECK_MS = 30_000;
 const DNS_AUTO_RECHECK_MAX_MS = 15 * 60 * 1000;
 const ACTIVE_STEP_STATUSES = new Set(['pending', 'deferred', 'starting', 'running', 'collecting']);
 
-function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
+function getString(item: DataItem | null | undefined, keys: string[], fallback = 'Not reported') {
   if (!item) return fallback;
   for (const key of keys) {
     const value = item[key];
@@ -96,7 +101,7 @@ function stringList(value: unknown, maxItems = 8) {
   return items;
 }
 
-function formatLabel(value: string, fallback = '—') {
+function formatLabel(value: string, fallback = 'Not reported') {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   const friendly: Record<string, string> = {
@@ -166,7 +171,7 @@ function recentRunVerdict(run: DataItem) {
 }
 
 function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {
-  if (!id) return <strong>—</strong>;
+  if (!id) return <span className="muted">None</span>;
   return (
     <AnchorButton size="sm" variant="ghost" href={buildDetailHref(route, id)} onClick={(event) => event.stopPropagation()}>
       {label ?? id}
@@ -287,6 +292,52 @@ function TagEditor({
   );
 }
 
+type SummaryItem = { id: string; label: string; value: string; tone?: StatTone; note?: string; numeric?: boolean };
+
+/** Plain-language WAF/CDN detection phase. Detection state only, never an effectiveness claim. */
+function edgeSummaryLabel(phase: string, available: boolean): { label: string; tone: StatTone } {
+  if (!available) return { label: 'Not enabled', tone: 'muted' };
+  const map: Record<string, { label: string; tone: StatTone }> = {
+    detected: { label: 'Edge detected', tone: 'success' },
+    not_detected: { label: 'No edge detected', tone: 'warn' },
+    inconclusive: { label: 'Not enough evidence', tone: 'warn' },
+    error: { label: 'Detection failed', tone: 'danger' },
+    evaluating: { label: 'Evaluating', tone: 'info' },
+    pending: { label: 'Evaluating', tone: 'info' },
+    locked: { label: 'Waiting for ownership', tone: 'muted' },
+    waiting: { label: 'Queued', tone: 'muted' },
+    no_result: { label: 'No usable result', tone: 'warn' },
+    not_started: { label: 'Not started', tone: 'muted' },
+  };
+  return map[phase] ?? { label: 'Not enough evidence', tone: 'warn' };
+}
+
+function SummaryToneIcon({ tone }: { tone?: StatTone }) {
+  if (!tone || tone === 'default') return null;
+  const Icon = tone === 'success' ? CircleCheck : tone === 'info' ? Clock : tone === 'muted' ? CircleDashed : TriangleAlert;
+  return <Icon size={16} className="td-summary-icon" data-tone={tone} aria-hidden="true" />;
+}
+
+/** Premium-only at-a-glance strip. Every value is derived from the same payload the sections below render. */
+function SummaryStrip({ items }: { items: SummaryItem[] }) {
+  return (
+    <section className="td-summary-region" aria-label="Target summary">
+    <dl className="td-summary">
+      {items.map((item) => (
+        <div key={item.id} className="td-summary-item">
+          <dt>{item.label}</dt>
+          <dd className={item.numeric ? 'td-summary-value tabular-nums' : 'td-summary-value'}>
+            <SummaryToneIcon tone={item.tone} />
+            <span>{item.value}</span>
+          </dd>
+          {item.note ? <dd className="td-summary-note">{item.note}</dd> : null}
+        </div>
+      ))}
+    </dl>
+    </section>
+  );
+}
+
 function buildOwnershipHistory(verification: DataItem | null) {
   const rawHistory = Array.isArray(verification?.history) ? verification.history : [];
   return uniqueVerificationHistory(rawHistory) as DataItem[];
@@ -326,6 +377,8 @@ export function TargetDetailView({
   const [stopOpen, setStopOpen] = useState(false);
   const edgeAttemptedRef = useRef(new Set<string>());
   const edgeRetriesRef = useRef(0);
+  // Presentation only: both variants render the same data, actions, and states.
+  const [variant, setVariant] = useDesignVariant('target-detail');
 
   async function reload() {
     const refreshed = await populateTargetDetail(config, session, entityId);
@@ -624,7 +677,7 @@ export function TargetDetailView({
       setConfirmRunAll(false);
       setScan(created);
       setBanner(`Running all ${runAll.length} checks. Results appear below as each one finishes.`);
-      document.getElementById('td-all-checks')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
     } catch (err) {
       setConfirmRunAll(false);
       setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'Run all checks could not start.')));
@@ -648,7 +701,7 @@ export function TargetDetailView({
     if (edgePhase === 'locked') {
       return {
         text: 'Detection starts automatically as soon as ownership is proven. AstraNull never probes a domain you have not verified.',
-        action: <Button size="sm" variant="secondary" onClick={() => document.getElementById('td-step-ownership')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}><ShieldCheck size={14} aria-hidden="true" />Prove ownership</Button>,
+        action: <Button size="sm" variant="secondary" onClick={() => document.getElementById('td-step-ownership')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' })}><ShieldCheck size={14} aria-hidden="true" />Prove ownership</Button>,
       };
     }
     if (edgePhase === 'waiting') return { text: 'Another run is active in this target group. Detection starts on its own as soon as that run finishes.' };
@@ -704,7 +757,7 @@ export function TargetDetailView({
         ? wafEdgeEnabled
           ? 'Ownership proven. External validation is unlocked and WAF/CDN detection is starting now.'
           : 'Ownership proven. External validation is now unlocked for this target.'
-        : 'The DNS TXT record was not found yet. DNS can take a few minutes to propagate — try again shortly. This page keeps checking on its own.');
+        : 'The DNS TXT record was not found yet. DNS can take a few minutes to propagate, so try again shortly. This page keeps checking on its own.');
       await onRefresh();
       await reload();
     } catch (err) {
@@ -793,6 +846,7 @@ export function TargetDetailView({
             </AnchorButton>
           ) : null}
           <AnchorButton size="sm" variant="ghost" href="#targets">All targets</AnchorButton>
+          <DesignVariantSwitch value={variant} onChange={setVariant} className="td-variant-switch" />
         </div>
       </div>
     );
@@ -800,7 +854,7 @@ export function TargetDetailView({
 
   if (!detail || detail.loading) {
     return (
-      <div className="content target-detail-view">
+      <div className="content target-detail-view" data-variant={variant}>
         {renderHeader()}
         <div className="stack" aria-busy="true" aria-live="polite">
           <div className="skeleton skeleton-row" />
@@ -816,7 +870,7 @@ export function TargetDetailView({
       ? detail.meta as DataItem
       : detail.error ? { empty_reason: detail.error } : null;
     return (
-      <div className="content target-detail-view">
+      <div className="content target-detail-view" data-variant={variant}>
         {renderHeader()}
         {emptyStateFromApi({ icon: Target, meta: emptyMeta, actionHref: '#targets', actionLabel: 'Back to targets' })}
       </div>
@@ -838,6 +892,22 @@ export function TargetDetailView({
 
   // Step states drive the numbered rail: done | active (first not-done) | todo.
   const stepStates = computeStepStates([true, ownershipDone, checksStepDone, runDone, reviewDone]);
+
+  const edgeSummary = edgeSummaryLabel(edgePhase, wafEdgeEnabled || Boolean(edgeDetection));
+  const summaryItems: SummaryItem[] = [
+    { id: 'ownership', label: 'Ownership', value: ownershipStep.label, tone: ownershipStep.tone },
+    { id: 'edge', label: 'WAF / CDN detection', value: edgeSummary.label, tone: edgeSummary.tone, note: 'Detection only, not effectiveness' },
+    { id: 'checks', label: 'Bound checks', value: String(checksApplied.length), numeric: true, note: targetEligible ? 'Validation unlocked' : 'Validation locked' },
+    { id: 'runs', label: 'Recorded runs', value: String(runsRecent.length), numeric: true },
+    { id: 'findings', label: 'Open findings', value: String(openFindings.length), tone: openFindings.length > 0 ? 'warn' : undefined, numeric: true, note: `${findings.length} recorded in total` },
+    {
+      id: 'verdict',
+      label: 'Latest verdict',
+      value: latestVerdict ? (unresolvedAfterPass ? 'Passed, findings open' : plainVerdictLabel(latestVerdict)) : 'No verdict yet',
+      tone: latestVerdict ? (unresolvedAfterPass ? 'warn' : runOutcomeTone(latestVerdict)) : 'muted',
+      note: 'Evidence-backed results only',
+    },
+  ];
 
   const runColumns: TableColumn<DataItem>[] = [
     { key: 'run', label: 'Run', render: (item) => {
@@ -890,7 +960,7 @@ export function TargetDetailView({
   ];
 
   const runReasonTitle = !targetEligible
-    ? 'Prove ownership to at least DNS-verified first — external probes stay blocked until then.'
+    ? 'Prove ownership to at least DNS-verified first. External probes stay blocked until then.'
     : effectiveSelectedCheckId
       ? `Run ${displayCheckName(effectiveSelectedCheckId)} now`
       : 'Choose a bound check above first.';
@@ -938,7 +1008,7 @@ export function TargetDetailView({
           </CardHeader>
           <CardContent>
             <ol className="td-steps">
-              {/* Step 1 — Prove ownership */}
+              {/* Step 1: prove ownership */}
               <li className="td-step" data-state={stepStates[1]} id="td-step-ownership">
                 <div className="td-step-rail" aria-hidden="true">
                   <span className="td-step-num">{stepStates[1] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 1}</span>
@@ -950,7 +1020,7 @@ export function TargetDetailView({
                     <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
                   </div>
                   <p className="td-step-why">
-                    External validation probes are blocked until you prove you control this target — ownership must reach at least DNS-verified. Publish the DNS TXT record below, then choose Check now.
+                    External validation probes are blocked until you prove you control this target. Ownership must reach at least DNS-verified. Publish the DNS TXT record below, then choose Check now.
                   </p>
                   {ownershipDone ? (
                     <p className="td-step-why">Verified via {ownershipMethodText(verification)}. You can move on to choosing checks.</p>
@@ -998,7 +1068,7 @@ export function TargetDetailView({
                 </div>
               </li>
 
-              {/* Step 2 — Choose checks */}
+              {/* Step 2: choose checks */}
               <li className="td-step" data-state={stepStates[2]}>
                 <div className="td-step-rail" aria-hidden="true">
                   <span className="td-step-num">{stepStates[2] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 2}</span>
@@ -1020,7 +1090,7 @@ export function TargetDetailView({
                 </div>
               </li>
 
-              {/* Step 3 — Run bounded validation */}
+              {/* Step 3: run bounded validation */}
               <li className="td-step" data-state={stepStates[3]}>
                 <div className="td-step-rail" aria-hidden="true">
                   <span className="td-step-num">{stepStates[3] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 3}</span>
@@ -1034,7 +1104,7 @@ export function TargetDetailView({
                   <p className="td-step-why">
                     {targetEligible
                       ? 'Rate-limited external probes run against this target and produce evidence. Nothing runs until you start it.'
-                      : 'This action stays disabled until ownership is proven — AstraNull will not aim probes at a target you have not verified.'}
+                      : 'This action stays disabled until ownership is proven. AstraNull will not aim probes at a target you have not verified.'}
                   </p>
                   <div className="td-step-actions">
                     {canStartBoundedRun ? (
@@ -1048,12 +1118,12 @@ export function TargetDetailView({
                         <Play size={15} aria-hidden="true" />Run selected check
                       </Button>
                     ) : <Badge tone="muted">Read-only role</Badge>}
-                    {!targetEligible ? <span className="muted small">Locked — prove ownership in step 1.</span> : !effectiveSelectedCheckId ? <span className="muted small">Choose a check in step 2.</span> : null}
+                    {!targetEligible ? <span className="muted small">Locked until ownership is proven in step 1.</span> : !effectiveSelectedCheckId ? <span className="muted small">Choose a check in step 2.</span> : null}
                   </div>
                 </div>
               </li>
 
-              {/* Step 4 — Review results */}
+              {/* Step 4: review results */}
               <li className="td-step" data-state={stepStates[4]}>
                 <div className="td-step-rail" aria-hidden="true">
                   <span className="td-step-num">{stepStates[4] === 'done' ? <Check size={15} strokeWidth={2.6} /> : 4}</span>
@@ -1092,14 +1162,18 @@ export function TargetDetailView({
   );
 
   return (
-    <div className="content target-detail-view">
+    <div className="content target-detail-view" data-variant={variant}>
       {renderHeader()}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       {banner && !error ? <div className="form-banner" role="status">{banner}{startedRunId && startedRunId !== 'started' ? <> <DetailEntityLink route="run-detail" id={startedRunId} label="Open run" /></> : null}</div> : null}
 
+      {variant === 'premium' ? <SummaryStrip items={summaryItems} /> : null}
+
+      <div className="td-layout">
+      <div className="td-main">
       {targetEligible ? (<>{protectionCards}{validateCard}</>) : (<>{validateCard}{protectionCards}</>)}
 
-      <Card>
+      <Card className="td-evidence-card">
         <CardHeader>
           <div>
             <CardTitle>Evidence &amp; posture</CardTitle>
@@ -1127,7 +1201,9 @@ export function TargetDetailView({
           </div>
         </CardContent>
       </Card>
+      </div>
 
+      <div className="td-rail">
       <Card className="td-facts">
         <CardHeader>
           <div>
@@ -1146,7 +1222,7 @@ export function TargetDetailView({
                 <tr><td className="muted">Ownership method</td><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
                 <tr><td className="muted">Ownership status</td><td><VerifyChip state={verificationState} provenance={provenance} label={ownershipLabel(verificationState)} /></td></tr>
                 <tr><td className="muted">Target group</td><td><DetailEntityLink route="target-group-detail" id={targetGroupId} label={targetGroupName} /></td></tr>
-                <tr><td className="muted">Expected behavior</td><td>{formatLabel(getString(target, ['expected_behavior', 'expected'], '—'))}</td></tr>
+                <tr><td className="muted">Expected behavior</td><td>{formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</td></tr>
                 <tr><td className="muted">Tags</td><td>{tags.length ? <span className="mono">{tags.join(', ')}</span> : <span className="muted">None</span>}</td></tr>
                 {detail.loa ? (
                   <tr><td className="muted">Group LOA</td><td><Badge tone={getString(detail.loa, ['state'], '') === 'signed' ? 'success' : 'warn'}>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</Badge></td></tr>
@@ -1170,6 +1246,8 @@ export function TargetDetailView({
           ) : null}
         </CardContent>
       </Card>
+      </div>
+      </div>
 
       <ConfirmModal
         open={confirmRunAll}

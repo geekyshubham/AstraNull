@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
+import './primitives.css';
 
 const buttonVariants = cva('btn', {
   variants: {
@@ -25,14 +26,20 @@ const buttonVariants = cva('btn', {
 export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
   VariantProps<typeof buttonVariants> & {
     loading?: boolean;
+    /**
+     * Visible label while `loading` (e.g. "Saving…"). When omitted the original
+     * label stays visible beside the spinner, so the button never changes width.
+     */
+    loadingText?: string;
   };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, loading, disabled, children, type = 'button', ...props }, ref) => (
+  ({ className, variant, size, loading, loadingText, disabled, children, type = 'button', ...props }, ref) => (
     <button
       ref={ref}
       type={type}
       data-ui="button"
+      data-loading={loading ? 'true' : undefined}
       className={cn(buttonVariants({ variant, size }), loading && 'btn-loading', className)}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
@@ -40,8 +47,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       {...props}
     >
       {loading ? <span className="spinner btn-inline-spinner" aria-hidden="true" /> : null}
-      {loading ? <span className="sr-only">Loading</span> : null}
-      {children}
+      {loading && !loadingText ? <span className="sr-only">Loading</span> : null}
+      {loading && loadingText ? loadingText : children}
     </button>
   )
 );

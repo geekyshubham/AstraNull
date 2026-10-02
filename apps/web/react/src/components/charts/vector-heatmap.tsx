@@ -1,6 +1,4 @@
 import { Target } from 'lucide-react';
-import type { CSSProperties } from 'react';
-import { Fragment } from 'react';
 import { Badge } from '../ui/badge';
 import { EmptyState } from '../ui/empty-state';
 // The coverage derivation lives in plain ESM so `node --test` can exercise the SHIPPED logic.
@@ -11,6 +9,7 @@ import type { FamilyCoverage, FamilyCoverageStatus } from '../../lib/vector-cove
 import { VECTOR_FAMILIES, familyCheckIds, familyCoverage } from '../../lib/vector-coverage.mjs';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName } from '../../lib/plain-language.mjs';
+import './charts.css';
 
 type VectorHeatmapProps = {
   checks: Record<string, unknown>[];
@@ -43,21 +42,27 @@ function coverageTitle(coverage: FamilyCoverage) {
   return `${coverage.evidenceCount} evidence · ${coverage.runCount} runs · ${coverage.policyCount} policies`;
 }
 
-function HeatmapCell({ coverage }: { coverage: FamilyCoverage }) {
+function HeatmapCell({ coverage, groupName, familyName }: { coverage: FamilyCoverage; groupName: string; familyName: string }) {
   const tone = COVERAGE_TONE[coverage.status];
+  const detail = coverageTitle(coverage);
   return (
     <span
-      className={`heatmap-cell heatmap-${tone}`}
-      title={coverageTitle(coverage)}
+      className={`heatmap-cell heatmap-${tone} matrix-cell`}
+      data-status={coverage.status}
+      title={detail}
+      aria-label={`${groupName}, ${familyName}: ${COVERAGE_LABEL[coverage.status]}. ${detail}`}
     >
-      {COVERAGE_LABEL[coverage.status]}
+      <strong>{COVERAGE_LABEL[coverage.status]}</strong>
+      {coverage.status === 'no-data' ? null : (
+        <small>{coverage.evidenceCount} evidence</small>
+      )}
     </span>
   );
 }
 
 function HeatmapLegend() {
   return (
-    <div className="heatmap-legend">
+    <div className="heatmap-legend" aria-label="Coverage status legend">
       <Badge tone="success">Evidence</Badge>
       <Badge tone="warn">Policy/run</Badge>
       <Badge tone="danger">No record</Badge>
@@ -79,8 +84,6 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
     );
   }
 
-  const gridStyle = { '--heatmap-cols': VECTOR_FAMILIES.length } as CSSProperties;
-
   return (
     <div className="stack-tight">
       <p className="muted small">
@@ -92,32 +95,48 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
         role="region"
         aria-label="Vector coverage summary matrix, scrollable"
       >
-        <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
-          <span className="heatmap-head">Target group</span>
-          {VECTOR_FAMILIES.map((family) => (
-            <span className="heatmap-head" key={family.label}>
-              {plainCheckName(family.label)}
-            </span>
-          ))}
-          {groups.map((group, groupIndex) => (
-            <Fragment key={String(group.id ?? groupIndex)}>
-              <strong className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</strong>
-              {VECTOR_FAMILIES.map((family) => {
-                const groupId = String(group.id ?? '');
-                const coverage = familyCoverage({
-                  checkIds: familyCheckIds(checks, family),
-                  groupId,
-                  testPolicies,
-                  runs,
-                  evidence,
-                });
-                return <HeatmapCell key={`${groupIndex}-${family.label}`} coverage={coverage} />;
-              })}
-            </Fragment>
-          ))}
-        </div>
-        <HeatmapLegend />
+        <table className="matrix-table">
+          <caption className="sr-only">
+            Vector coverage by declared target group: {groups.length} groups across {VECTOR_FAMILIES.length} vector families.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col"><span className="heatmap-head matrix-corner">Target group</span></th>
+              {VECTOR_FAMILIES.map((family) => (
+                <th scope="col" key={family.label}>
+                  <span className="heatmap-head">{plainCheckName(family.label)}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group, groupIndex) => {
+              const groupId = String(group.id ?? '');
+              const groupName = String(group.name ?? group.id ?? 'Declared group');
+              return (
+                <tr key={groupId || `group-${groupIndex}`}>
+                  <th scope="row"><span className="heatmap-name">{groupName}</span></th>
+                  {VECTOR_FAMILIES.map((family) => {
+                    const coverage = familyCoverage({
+                      checkIds: familyCheckIds(checks, family),
+                      groupId,
+                      testPolicies,
+                      runs,
+                      evidence,
+                    });
+                    return (
+                      <td key={`${groupIndex}-${family.label}`}>
+                        <HeatmapCell coverage={coverage} groupName={groupName} familyName={plainCheckName(family.label)} />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      <HeatmapLegend />
     </div>
   );
 }

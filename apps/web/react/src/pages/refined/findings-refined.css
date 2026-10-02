@@ -1,0 +1,226 @@
+/* Refined findings view. Page-specific rules only; shared primitives live in styles/refined.css. */
+
+.refined .rf-summary-note {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunk);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.refined .rf-stat[data-tone='danger'] .rf-stat-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--danger);
+}
+
+/* Filters --------------------------------------------------------------- */
+.refined .rf-findings-filters {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.refined .rf-status-tabs {
+  justify-self: start;
+}
+
+.refined .rf-status-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.refined .rf-tab-count {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.refined .rf-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(140px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+  min-width: 0;
+}
+
+.refined .rf-filter-grid > * {
+  min-width: 0;
+}
+
+.refined .rf-search {
+  margin: 0;
+}
+
+.refined .rf-search-control {
+  position: relative;
+  display: block;
+}
+
+.refined .rf-search-control .input {
+  width: 100%;
+  padding-left: calc(var(--space-3) + 20px);
+}
+
+.refined .rf-search-icon {
+  position: absolute;
+  top: 50%;
+  left: var(--space-3);
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.refined .rf-result-count {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* Table cells ----------------------------------------------------------- */
+.refined .rf-findings-table .data-table td {
+  vertical-align: top;
+}
+
+.refined .rf-clickable-row {
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+
+.refined .rf-clickable-row:hover {
+  background: var(--wash);
+}
+
+.refined .rf-alert-link {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 44px;
+  color: var(--fg);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.refined .rf-alert-title {
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-alert-link:hover .rf-alert-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.refined .rf-alert-check {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-asset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.refined .rf-asset-chip {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+}
+
+.refined .rf-asset-more {
+  background: var(--surface-sunk);
+  color: var(--muted);
+}
+
+.refined .rf-cell-stack {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+  min-width: 0;
+}
+
+.refined .rf-cell-stack small {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-cell-muted {
+  color: var(--muted);
+}
+
+.refined .rf-findings-table .badge svg {
+  flex: none;
+}
+
+/* The finding card sits inside a table cell here, so drop its own card chrome. */
+.refined .rf-findings-table .finding-card {
+  display: grid;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.refined .rf-findings-table .finding-card:hover {
+  background: transparent;
+}
+
+.refined .rf-findings-table .finding-card .fc-meta {
+  margin-left: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Pager ----------------------------------------------------------------- */
+.refined .rf-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.refined .rf-pager-info {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 1100px) {
+  .refined .rf-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .refined .rf-search {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .refined .rf-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .refined .rf-status-tabs {
+    justify-self: stretch;
+  }
+
+  .refined .rf-pager {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (pointer: coarse) {
+  .refined .rf-search-control .input {
+    min-height: 44px;
+  }
+}

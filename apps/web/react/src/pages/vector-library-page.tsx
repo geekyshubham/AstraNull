@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { EmptyState } from '../components/ui/empty-state';
 import { Select, type SelectOption } from '../components/ui/select';
 import { DataTable, type TableColumn } from '../components/ui/table';
+import { DesignVariantSwitch, useDesignVariant } from '../components/ui/design-variant';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal } from '../lib/crud-ui';
 import { requestJson } from '../lib/api';
@@ -21,10 +22,10 @@ import {
   type VectorAvailability,
 } from '../lib/vector-library.mjs';
 import { PageContextSummary, PageHeader } from './page-components';
+import './vector-library-page.css';
 
 const PAGE_SIZE = 25;
 const API_PAGE_SIZE = 100;
-const STYLE_ID = 'astranull-vector-library-styles';
 
 const RUN_START_ROLES = new Set(['owner', 'admin', 'engineer']);
 type Tone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
@@ -76,36 +77,6 @@ function loadAllVectorPages(config: PortalConfig, session: Session, cacheKey: st
   })();
   vectorLibraryRequestCache = { key: cacheKey, promise };
   return promise;
-}
-
-function ensureStyles() {
-  if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = `
-.vector-library-page > .card { overflow: visible; }
-.vector-library-controls { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: end; }
-.vector-target-controls { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: var(--space-3); }
-.vector-search-control { display: flex; min-height: 44px; align-items: center; gap: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
-.vector-search-control input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }
-.vector-library-table .data-table { min-width: 1120px; }
-.vector-primary, .vector-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.vector-primary strong { color: var(--fg); }
-.vector-primary small, .vector-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }
-.vector-target-note { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunk); }
-.vector-target-note svg { flex: none; margin-top: 2px; }
-.vector-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
-.vector-pagination-actions { display: flex; gap: var(--space-2); }
-.vector-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
-.vector-detail-block { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-sunk); }
-.vector-detail-block.full { grid-column: 1 / -1; }
-.vector-detail-block h4 { margin: 0 0 var(--space-2); color: var(--fg); font-size: var(--text-sm); }
-.vector-detail-block p { margin: 0; color: var(--fg-2); line-height: 1.55; }
-.vector-detail-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
-@media (max-width: 920px) { .vector-library-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } .vector-search-field { grid-column: 1 / -1; } }
-@media (max-width: 620px) { .vector-library-controls, .vector-target-controls, .vector-detail-grid { grid-template-columns: minmax(0, 1fr); } .vector-search-field, .vector-detail-block.full { grid-column: auto; } }
-`;
-  document.head.appendChild(style);
 }
 
 const CAPABILITY_OPTIONS: SelectOption[] = [
@@ -168,7 +139,7 @@ export function VectorLibraryPage({
   const [targetReloadKey, setTargetReloadKey] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
 
-  useEffect(() => ensureStyles(), []);
+  const [variant, setVariant] = useDesignVariant('vector-library');
   const canStartBoundedRun = RUN_START_ROLES.has(String(session.role ?? '').trim().toLowerCase());
 
   useEffect(() => {
@@ -338,7 +309,7 @@ export function VectorLibraryPage({
       render: (vector) => (
         <span className="vector-primary">
           <strong>{plainCheckName(getString(vector, ['canonical_name'], 'Unnamed vector'))}</strong>
-          <code className="traffic-path-label">{getString(vector, ['vector_id'], '—')}</code>
+          <code className="traffic-path-label">{getString(vector, ['vector_id'], 'No ID')}</code>
           <small>{getString(vector, ['family'])} · {getString(vector, ['protocol_service'])}</small>
         </span>
       ),
@@ -388,26 +359,38 @@ export function VectorLibraryPage({
   ];
 
   return (
-    <div className="content vector-library-page">
+    <div className="content vector-library-page" data-variant={variant}>
       <PageHeader
         route="checks"
         eyebrow="721-vector catalog"
         title="Vector library"
         description="Understand the exposure each vector evaluates, what failure means, which control should prevent it, and whether an exact declared target is eligible for a bounded check."
-        actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void refresh()}>Refresh</Button>}
+        actions={(
+          <>
+            <DesignVariantSwitch value={variant} onChange={setVariant} />
+            <Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void refresh()}>Refresh</Button>
+          </>
+        )}
       />
       <PageContextSummary>
         <span className="tabular-nums">{vectors.length || 721}</span> catalog vectors · bounded checks only · SOC/high-scale vectors remain request-only
       </PageContextSummary>
+      {variant === 'premium' ? (
+        <dl className="vector-facts">
+          <div><dt>Matching vectors</dt><dd className="tabular-nums">{loading ? 'Loading' : filteredVectors.length}</dd></div>
+          <div className="vector-fact-wide"><dt>Evaluation target</dt><dd>{selectedTarget ? targetLabel(selectedTarget) : 'Not selected'}</dd></div>
+          <div><dt>Launch access</dt><dd>{canStartBoundedRun ? 'Bounded checks' : 'Review only'}</dd></div>
+        </dl>
+      ) : null}
       {message ? <div className="form-banner success" role="status" aria-live="polite">{message}</div> : null}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
 
-      <Card>
+      <Card className="vector-scope-card">
         <CardHeader>
           <div><CardTitle>Evaluation target</CardTitle><CardDescription>Select both identifiers explicitly. AstraNull never substitutes the first group or target.</CardDescription></div>
           <Badge tone={selectedTarget ? 'success' : 'warn'}>{selectedTarget ? 'Exact target selected' : 'Selection required'}</Badge>
         </CardHeader>
-        <CardContent className="stack-tight">
+        <CardContent className="vector-scope-body">
           <div className="vector-target-controls">
             <Select label="Declared target group" value={targetGroupId} options={groupOptions} onChange={setTargetGroupId} />
             <Select label="Exact target" value={targetId} options={targetOptions} disabled={!targetGroupId || targetsLoading || Boolean(targetsError)} onChange={setTargetId} />
@@ -420,12 +403,12 @@ export function VectorLibraryPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="vector-catalog-card">
         <CardHeader>
           <div><CardTitle>Catalog</CardTitle><CardDescription>{filteredVectors.length} matching vectors. Only {PAGE_SIZE} rows render per page.</CardDescription></div>
           <Badge tone="muted">No vector-level verdict synthesis</Badge>
         </CardHeader>
-        <CardContent className="stack-tight">
+        <CardContent className="vector-catalog-body">
           <div className="vector-library-controls" role="group" aria-label="Vector library filters">
             <label className="field vector-search-field"><span>Search</span><span className="vector-search-control"><Search size={15} aria-hidden="true" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ID, name, protocol, exposure, control…" /></span></label>
             <Select label="Catalog section" value={section} options={sectionOptions} onChange={setSection} />
@@ -446,7 +429,7 @@ export function VectorLibraryPage({
           )}
           {!loading && filteredVectors.length > 0 ? (
             <nav className="vector-pagination" aria-label="Vector library pages">
-              <span className="muted">Page {safePage + 1} of {pageCount} · rows {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, filteredVectors.length)} of {filteredVectors.length}</span>
+              <span className="muted">Page {safePage + 1} of {pageCount} · rows {safePage * PAGE_SIZE + 1}-{Math.min((safePage + 1) * PAGE_SIZE, filteredVectors.length)} of {filteredVectors.length}</span>
               <span className="vector-pagination-actions">
                 <Button size="sm" variant="secondary" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}><ChevronLeft size={15} aria-hidden="true" /> Previous</Button>
                 <Button size="sm" variant="secondary" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next <ChevronRight size={15} aria-hidden="true" /></Button>
@@ -464,7 +447,7 @@ export function VectorLibraryPage({
         wide
       >
         {selectedVector && detailAvailability && detailEvidence ? (
-          <div className="stack-tight">
+          <div className="vector-detail">
             <div className="vector-detail-grid">
               <section className="vector-detail-block"><h4>Intended detection goal</h4><p>{getString(selectedVector, ['intended_detection_goal'])}</p></section>
               <section className="vector-detail-block"><h4>What failure means</h4><p>{getString(selectedVector, ['failure_means'])}</p></section>
@@ -474,6 +457,7 @@ export function VectorLibraryPage({
               <section className="vector-detail-block"><h4>Defensive indicators</h4><p>{getString(selectedVector, ['defensive_indicators'])}</p></section>
               <section className="vector-detail-block"><h4>Scope boundary</h4><p>{getString(selectedVector, ['boundaries', 'out_of_scope_reason'], 'No additional boundary recorded.')}</p></section>
             </div>
+            <div className="vector-detail-rail" role="group" aria-label="Target applicability and launch">
             <div className="vector-target-note" role="note">
               {detailAvailability.id === 'safe_runnable' ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
               <div><Badge tone={detailAvailability.tone as Tone}>{detailAvailability.label}</Badge><p className="muted">{detailAvailability.detail}</p></div>
@@ -485,6 +469,7 @@ export function VectorLibraryPage({
               {detailAvailability.id === 'monitor_only' ? <AnchorButton href="#integrations" variant="secondary" size="sm">Open telemetry integrations</AnchorButton> : null}
               <Button variant="ghost" size="sm" onClick={() => setSelectedVector(null)}>Close</Button>
               {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Button size="sm" disabled={!selectedCheckId || busy !== ''} onClick={prepareRun}>Review run</Button> : null}
+            </div>
             </div>
           </div>
         ) : null}

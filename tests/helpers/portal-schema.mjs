@@ -224,6 +224,9 @@ export const TARGET_DETAIL_SHAPE = {
     kind: 'string',
     value: 'string',
     expected_behavior: 'string',
+    // ADR-0008: tags are the membership mechanism (e.g. `env:prod`); every target payload
+    // exposes the trusted top-level list, which may be empty.
+    tags: ['string'],
     created_at: 'string',
     eligibility: 'string',
     eligibility_reason: 'null',

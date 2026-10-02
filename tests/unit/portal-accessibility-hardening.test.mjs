@@ -57,7 +57,11 @@ describe('portal accessibility hardening', () => {
     assert.match(heatmap, /className="heatmap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="Vector coverage summary matrix, scrollable"/m);
     assert.doesNotMatch(heatmap, /HEATMAP_CELL_STYLE|style=\{HEATMAP_CELL_STYLE/);
     assert.match(landing, /className="public-compare table-wrap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="AstraNull capability comparison, scrollable"/m);
-    assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.public-compare \{\s*overflow-x: auto;/m);
+    // The landing comparison table lives in its own stylesheet and scrolls at every width.
+    const landingCss = read('apps/web/react/src/pages/public-landing.css');
+    assert.match(landing, /import '\.\/public-landing\.css';/);
+    assert.match(landingCss, /\.public-landing \.public-compare \{[^}]*overflow-x: auto;/m);
+    assert.match(landingCss, /\.public-landing \.public-compare:focus-visible/);
     assert.match(css, /pre\.verdict-explanation-value[\s\S]*overflow: visible/);
   });
 

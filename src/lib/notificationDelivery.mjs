@@ -10,6 +10,8 @@ export const WEBHOOK_MAX_ATTEMPTS = 3;
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 export const WEBHOOK_MAX_PAYLOAD_BYTES = 32_768;
 export const PROVIDER_MAX_PAYLOAD_BYTES = 65_536;
+/** Microsoft Teams rejects messages above 28 KB, so fail fast instead of burning retries. */
+export const TEAMS_MAX_PAYLOAD_BYTES = 28_672;
 
 export const SMTP_CONNECT_TIMEOUT_MS = 10_000;
 export const SMTP_TOTAL_TIMEOUT_MS = 10_000;
@@ -148,7 +150,8 @@ function formatMetadataSummary(metadata) {
 export function buildEmailPayload(event, rule) {
   const from = process.env.ASTRANULL_SMTP_FROM?.trim() || 'noreply@astranull.local';
   const to = rule.destination;
-  const subject = `[AstraNull] ${event.subject}`;
+  // Fold any line breaks so the subject can never split into extra SMTP headers.
+  const subject = `[AstraNull] ${String(event.subject ?? '').replace(/[\r\n\u0000]+/g, ' ')}`;
   const metadataSummary = formatMetadataSummary(event.metadata);
   const html_body = `<!DOCTYPE html>
 <html><body>
@@ -213,9 +216,30 @@ export function buildSlackPayload(event, rule) {
  * }} event
  * @param {{ destination: string }} rule
  */
-export function buildTeamsPayload(event, rule) {
+/**
+ * Portal link for Teams card actions. Built from ASTRANULL_PORTAL_URL (or ASTRANULL_PUBLIC_BASE_URL);
+ * returns null when neither is a valid https URL so cards never carry a dead placeholder link.
+ * @param {{ portalUrl?: string }} [options]
+ */
+export function resolveNotificationPortalUrl(options = {}) {
+  const raw = String(
+    options.portalUrl ?? process.env.ASTRANULL_PORTAL_URL ?? process.env.ASTRANULL_PUBLIC_BASE_URL ?? '',
+  ).trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password) return null;
+    const base = url.pathname.replace(/\/+$/, '');
+    return `${url.origin}${base}/app#notifications`;
+  } catch {
+    return null;
+  }
+}
+
+export function buildTeamsPayload(event, rule, options = {}) {
   void rule;
   const metadataSummary = formatMetadataSummary(event.metadata);
+  const portalUrl = resolveNotificationPortalUrl(options);
   return {
     type: 'message',
     attachments: [
@@ -248,13 +272,9 @@ export function buildTeamsPayload(event, rule) {
               isSubtle: true,
             },
           ],
-          actions: [
-            {
-              type: 'Action.OpenUrl',
-              title: 'View notification',
-              url: 'https://app.astranull.local/notifications',
-            },
-          ],
+          ...(portalUrl
+            ? { actions: [{ type: 'Action.OpenUrl', title: 'View in AstraNull', url: portalUrl }] }
+            : {}),
         },
       },
     ],
@@ -468,6 +488,22 @@ function smtpWrite(socket, command) {
   socket.write(`${command}\r\n`);
 }
 
+const SMTP_UNSAFE_CHARS = /[\r\n\u0000]/;
+
+/**
+ * Defense in depth: rule creation already rejects CR/LF in destinations, but an envelope field that
+ * reaches the SMTP layer with a line break could inject commands or headers, so refuse it here too.
+ * @param {{ from?: string, to?: string, subject?: string }} envelope
+ */
+export function smtpEnvelopeIsSafe(envelope) {
+  for (const field of ['from', 'to', 'subject']) {
+    const value = String(envelope?.[field] ?? '');
+    if (SMTP_UNSAFE_CHARS.test(value)) return false;
+    if (field !== 'subject' && (!value || /[\s<>]/.test(value))) return false;
+  }
+  return true;
+}
+
 function smtpCapabilityLines(response) {
   return String(response?.text ?? '')
     .split('\n')
@@ -503,6 +539,14 @@ function smtpSupportsAuthMechanism(response, mechanism) {
  * }} [options]
  */
 export async function deliverEmail(envelope, options = {}) {
+  if (!smtpEnvelopeIsSafe(envelope)) {
+    return {
+      status: 'provider_failed_dlq',
+      reason: 'smtp_envelope_invalid',
+      provider_error: 'smtp_envelope_invalid',
+      exhausted: true,
+    };
+  }
   const host = options.smtpHost ?? process.env.ASTRANULL_SMTP_HOST;
   if (!host || !String(host).trim()) {
     return {
@@ -698,7 +742,7 @@ export async function deliverSlack(payload, destination, options = {}) {
  * @param {{ fetchFn?: typeof fetch, timeoutMs?: number }} [options]
  */
 export async function deliverTeams(payload, destination, options = {}) {
-  const encoded = encodeProviderPayload(payload);
+  const encoded = encodeProviderPayload(payload, TEAMS_MAX_PAYLOAD_BYTES);
   if (!encoded.ok) {
     return {
       status: 'provider_failed_dlq',

@@ -15,10 +15,12 @@ import { seedPortalEmpty, PORTAL_EMPTY_IDS } from '../fixtures/portal-empty/seed
 
 let baseUrl;
 let server;
+let baselineStore;
 
 before(() => {
   process.env.ASTRANULL_WAF_POSTURE_ENABLED = '1';
   const store = seedPortalBaseline();
+  baselineStore = store;
   store.targetEdgeDetections = [{
     id: 'ted_contract_checkout',
     tenant_id: PORTAL_BASELINE_IDS.tenantId,
@@ -92,6 +94,36 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     assert.ok(typeof live.json.counts?.runs_total === 'number');
     assert.ok(live.json.runs_recent.length > 0);
     assert.equal(Object.hasOwn(live.json.runs_recent[0], 'agent_id'), false);
+  });
+
+  it('FT-SHAPE-01b target-detail documents and returns the trusted target.tags list (ADR-0008)', async () => {
+    // Tags are the membership mechanism (env:<name> replaced environments), so the documented
+    // schema must require them as string[] rather than tolerate or drop them.
+    assert.deepEqual(TARGET_DETAIL_SHAPE.target.tags, ['string']);
+    const target = baselineStore.targets.find((entry) => entry.id === PORTAL_BASELINE_IDS.targetId);
+    const previousMetadata = target.metadata;
+    target.metadata = { ...(previousMetadata ?? {}), tags: ['env:prod', 'team:edge'] };
+    try {
+      const live = await liveGet(`/v1/targets/${PORTAL_BASELINE_IDS.targetId}`);
+      assert.equal(live.status, 200);
+      assertConforms('live tagged target-detail', live.json, TARGET_DETAIL_SHAPE);
+      assert.deepEqual(live.json.target.tags, ['env:prod', 'team:edge']);
+    } finally {
+      target.metadata = previousMetadata;
+    }
+
+    const base = (await liveGet(`/v1/targets/${PORTAL_BASELINE_IDS.targetId}`)).json;
+    const missing = structuredClone(base);
+    delete missing.target.tags;
+    const missingResult = validateShape(missing, TARGET_DETAIL_SHAPE);
+    assert.equal(missingResult.ok, false);
+    assert.ok(missingResult.issues.includes('$.target.tags: missing required field'));
+
+    const malformed = structuredClone(base);
+    malformed.target.tags = ['env:prod', 7];
+    const malformedResult = validateShape(malformed, TARGET_DETAIL_SHAPE);
+    assert.equal(malformedResult.ok, false);
+    assert.ok(malformedResult.issues.some((issue) => issue.startsWith('$.target.tags[1]')));
   });
 
   it('FT-SHAPE-02 GET /v1/findings/:id/evidence conforms to evidence schema', async () => {

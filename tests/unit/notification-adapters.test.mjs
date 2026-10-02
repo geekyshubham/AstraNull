@@ -17,6 +17,8 @@ import {
   resolveNotificationDeliveryMode,
   sendProviderHttpsPost,
   sendWebhookNotification,
+  smtpEnvelopeIsSafe,
+  TEAMS_MAX_PAYLOAD_BYTES,
 } from '../../src/lib/notificationDelivery.mjs';
 
 const sampleEvent = {
@@ -120,16 +122,76 @@ describe('notification delivery adapters', () => {
   });
 
   it('buildTeamsPayload produces valid Adaptive Card JSON', () => {
-    const payload = buildTeamsPayload(sampleEvent, { ...sampleRule, channel: 'teams', destination: 'https://teams.invalid/hook' });
+    const payload = buildTeamsPayload(
+      sampleEvent,
+      { ...sampleRule, channel: 'teams', destination: 'https://teams.invalid/hook' },
+      { portalUrl: 'https://portal.example.com' },
+    );
 
     assert.equal(payload.type, 'message');
     assert.equal(payload.attachments[0].contentType, 'application/vnd.microsoft.card.adaptive');
     assert.equal(payload.attachments[0].content.type, 'AdaptiveCard');
     assert.ok(payload.attachments[0].content.body.length >= 3);
-    assert.ok(payload.attachments[0].content.actions.length >= 1);
+    assert.deepEqual(payload.attachments[0].content.actions, [
+      { type: 'Action.OpenUrl', title: 'View in AstraNull', url: 'https://portal.example.com/app#notifications' },
+    ]);
     const cardText = JSON.stringify(payload);
     assert.match(cardText, /\[REDACTED\]/);
     assertNoForbiddenFields(payload, 'teams payload');
+  });
+
+  it('buildTeamsPayload omits the card action when no https portal URL is configured', () => {
+    const saved = { portal: process.env.ASTRANULL_PORTAL_URL, base: process.env.ASTRANULL_PUBLIC_BASE_URL };
+    delete process.env.ASTRANULL_PORTAL_URL;
+    delete process.env.ASTRANULL_PUBLIC_BASE_URL;
+    try {
+      const unset = buildTeamsPayload(sampleEvent, sampleRule);
+      assert.equal(unset.attachments[0].content.actions, undefined);
+      const insecure = buildTeamsPayload(sampleEvent, sampleRule, { portalUrl: 'http://portal.example.com' });
+      assert.equal(insecure.attachments[0].content.actions, undefined);
+      assert.ok(!JSON.stringify(unset).includes('astranull.local'));
+    } finally {
+      if (saved.portal !== undefined) process.env.ASTRANULL_PORTAL_URL = saved.portal;
+      if (saved.base !== undefined) process.env.ASTRANULL_PUBLIC_BASE_URL = saved.base;
+    }
+  });
+
+  it('deliverTeams fails fast above the 28 KB Teams message limit', async () => {
+    let called = false;
+    const payload = { type: 'message', text: 'x'.repeat(TEAMS_MAX_PAYLOAD_BYTES) };
+    const result = await deliverTeams(payload, 'https://teams.invalid/hook', {
+      fetchFn: async () => {
+        called = true;
+        return { ok: true, status: 200 };
+      },
+    });
+    assert.equal(called, false);
+    assert.equal(result.status, 'provider_failed_dlq');
+    assert.equal(result.reason, 'provider_payload_too_large');
+    assert.equal(result.exhausted, true);
+  });
+
+  it('deliverEmail refuses CR/LF in envelope fields before opening a socket', async () => {
+    let connected = false;
+    const envelope = { ...buildEmailPayload(sampleEvent, sampleRule), to: 'a@b.com\r\nRCPT TO:<x@y>' };
+    assert.equal(smtpEnvelopeIsSafe(envelope), false);
+    const result = await deliverEmail(envelope, {
+      smtpHost: 'smtp.example.invalid',
+      connect: () => {
+        connected = true;
+        throw new Error('must not connect');
+      },
+    });
+    assert.equal(connected, false);
+    assert.equal(result.status, 'provider_failed_dlq');
+    assert.equal(result.reason, 'smtp_envelope_invalid');
+    assert.equal(smtpEnvelopeIsSafe({ ...envelope, to: 'alerts@customer.example', subject: 'x\nBcc: y' }), false);
+  });
+
+  it('buildEmailPayload folds line breaks out of the subject', () => {
+    const envelope = buildEmailPayload({ ...sampleEvent, subject: 'Line one\r\nBcc: evil@example.com' }, sampleRule);
+    assert.ok(!/[\r\n]/.test(envelope.subject));
+    assert.equal(smtpEnvelopeIsSafe(envelope), true);
   });
 
   it('deliverEmail returns queued_provider_not_configured when SMTP host missing', async () => {

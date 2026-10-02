@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
+import './primitives.css';
 
 const badgeVariants = cva('badge', {
   variants: {
@@ -22,11 +23,22 @@ export type BadgeProps = React.HTMLAttributes<HTMLSpanElement> &
   VariantProps<typeof badgeVariants> & {
     /** Keeps the existing API; all shared chips use the mono uppercase foundation. */
     mono?: boolean;
+    /**
+     * Leading status dot in the tone's ink. Decorative only: the label text still
+     * carries the meaning, so tone is never conveyed by color alone.
+     */
+    dot?: boolean;
   };
 
-export function Badge({ className, tone, mono = false, children, ...props }: BadgeProps) {
+export function Badge({ className, tone, mono = false, dot = false, children, ...props }: BadgeProps) {
   return (
-    <span data-ui="badge" className={cn(badgeVariants({ tone }), !mono && 'badge-sans', className)} {...props}>
+    <span
+      data-ui="badge"
+      data-tone={tone ?? 'default'}
+      className={cn(badgeVariants({ tone }), !mono && 'badge-sans', className)}
+      {...props}
+    >
+      {dot ? <span className="badge-dot" aria-hidden="true" /> : null}
       {decorateBadgeChildren(children)}
     </span>
   );

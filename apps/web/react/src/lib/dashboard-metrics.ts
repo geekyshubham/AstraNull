@@ -137,7 +137,7 @@ export type TargetPostureRow = {
 
 /**
  * One row per declared target with its latest evidence-backed verdict.
- * Runs are matched by `target_id` only — a target never inherits a sibling's or its
+ * Runs are matched by `target_id` only: a target never inherits a sibling's or its
  * target group's run (DASH-01/DASH-02). An un-probed target reports "No result" so the
  * dashboard cannot imply a never-tested target was validated (external-evidence-only).
  */
@@ -167,7 +167,7 @@ export function buildTargetPostureRows(data: PortalData, limit?: number): Target
     const verdict = run ? runVerdictString(run) : '';
     return {
       id,
-      value: getString(target, ['value', 'hostname', 'name'], '—'),
+      value: getString(target, ['value', 'hostname', 'name'], 'Unnamed target'),
       kind: getString(target, ['kind'], 'fqdn').toLowerCase(),
       groupId,
       groupName: getString(target, ['target_group_name', 'target_group_id'], ''),
@@ -182,7 +182,7 @@ export function buildTargetPostureRows(data: PortalData, limit?: number): Target
     } satisfies TargetPostureRow;
   });
 
-  // Worst posture first (gaps), then review, then unproven, then pass — the fixes-first ordering.
+  // Worst posture first (gaps), then review, then unproven, then pass (the fixes-first ordering).
   const order: Record<EvidenceStatus, number> = { gap: 0, review: 1, none: 2, pass: 3 };
   rows.sort((left, right) => {
     if (order[left.verdictStatus] !== order[right.verdictStatus]) return order[left.verdictStatus] - order[right.verdictStatus];
@@ -332,4 +332,69 @@ export function findingSeverityBuckets(findings: DataItem[]): { critical: number
     else other += 1;
   }
   return { critical, high, other, total: critical + high + other };
+}
+
+export type SeverityKey = 'critical' | 'high' | 'medium' | 'low' | 'unrecorded';
+
+export type SeveritySlice = {
+  key: SeverityKey;
+  label: string;
+  count: number;
+  /** Whole-number share of all open findings; 0 when nothing is open. */
+  share: number;
+};
+
+const SEVERITY_SLICE_LABEL: Record<SeverityKey, string> = {
+  critical: 'Critical (S1)',
+  high: 'High (S2)',
+  medium: 'Medium (S3)',
+  low: 'Low or info (S4)',
+  unrecorded: 'Severity not recorded'
+};
+
+/** Normalises a raw finding severity (s1..s4 or word form) to one display bucket. */
+export function severityKey(raw: string): SeverityKey {
+  const key = raw.trim().toLowerCase();
+  if (['s1', 'critical'].includes(key)) return 'critical';
+  if (['s2', 'high'].includes(key)) return 'high';
+  if (['s3', 'medium'].includes(key)) return 'medium';
+  if (['s4', 'low', 'info'].includes(key)) return 'low';
+  return 'unrecorded';
+}
+
+/**
+ * Open findings split by recorded severity, most severe first. Counts come only
+ * from loaded findings; a finding without a recognised severity is reported as
+ * "not recorded" instead of being folded into a lower bucket.
+ */
+export function findingSeverityDistribution(findings: DataItem[]): { slices: SeveritySlice[]; total: number } {
+  const counts: Record<SeverityKey, number> = { critical: 0, high: 0, medium: 0, low: 0, unrecorded: 0 };
+  for (const finding of findings) {
+    if (!isFindingOpen(finding)) continue;
+    counts[severityKey(getString(finding, ['severity']))] += 1;
+  }
+  const total = counts.critical + counts.high + counts.medium + counts.low + counts.unrecorded;
+  const order: SeverityKey[] = ['critical', 'high', 'medium', 'low', 'unrecorded'];
+  return {
+    total,
+    slices: order.map((key) => ({
+      key,
+      label: SEVERITY_SLICE_LABEL[key],
+      count: counts[key],
+      share: total > 0 ? Math.round((counts[key] / total) * 100) : 0
+    }))
+  };
+}
+
+const SEVERITY_SHORT_LABEL: Record<SeverityKey, string> = {
+  critical: 'Critical',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
+  unrecorded: 'Not recorded'
+};
+
+/** One-word severity for compact rows; keeps "S1"-style codes out of dense lists. */
+export function severityShortLabel(raw: string): string {
+  return SEVERITY_SHORT_LABEL[severityKey(raw)];
 }

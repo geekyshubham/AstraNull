@@ -11,6 +11,21 @@ export function isNotificationManagementRoute(path, method) {
   return path === '/v1/notifications' && (method === 'GET' || method === 'POST');
 }
 
+/**
+ * PATCH/DELETE /v1/notifications/:ruleId (rule lifecycle). Single segment only, so the deeper
+ * retries/process and dlq/redrive paths never match. A literal like `provider-credentials` only
+ * has POST, so PATCH/DELETE on it simply resolves to a 404 rule lookup.
+ */
+export const NOTIFICATION_RULE_ID_ROUTE = /^\/v1\/notifications\/([A-Za-z0-9_-]{1,128})$/;
+
+/**
+ * @param {string} path
+ * @param {string} method
+ */
+export function isNotificationRuleLifecycleRoute(path, method) {
+  return (method === 'PATCH' || method === 'DELETE') && NOTIFICATION_RULE_ID_ROUTE.test(path);
+}
+
 export function isHighScaleRoute(path, method) {
   if (path === '/v1/high-scale-requests' && (method === 'GET' || method === 'POST')) return true;
   if (/^\/v1\/high-scale-requests\/[^/]+\/artifacts$/.test(path) && (method === 'GET' || method === 'POST')) {

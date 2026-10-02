@@ -71,7 +71,10 @@ describe('postgres tenant query audit parser', () => {
     assert.ok(SKIP_FILE_BASENAMES.has('migrations.mjs'));
     const defaults = defaultPostgresAuditPaths();
     assert.ok(defaults.some((p) => p.endsWith('coreCatalogRepository.mjs')));
+    // Tenant-scoped SQL outside the *Repository / *ServiceAdapters naming is still audited.
+    assert.ok(defaults.some((p) => p.endsWith('notificationReconciliation.mjs')));
     assert.ok(!defaults.some((p) => p.endsWith('migrations.mjs')));
+    assert.ok(!defaults.some((p) => p.endsWith('runtime.mjs')));
   });
 });
 

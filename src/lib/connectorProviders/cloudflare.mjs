@@ -235,7 +235,9 @@ export async function pollCloudflare({
 
 export const cloudflareProvider = {
   provider: 'cloudflare',
-  required_scopes: ['Zone:Read', 'Account:Read'],
+  // Least privilege: the poller reads /zones and /zones/{id}/rulesets only. Names match the
+  // Cloudflare dashboard permission picker; WAF read is optional (rulesets inventory).
+  required_scopes: ['Zone > Zone > Read', 'Zone > WAF > Read (optional, rulesets)'],
   snapshot_kinds: ['waf_policy', 'dns_zone', 'cdn_property'],
   poll: pollCloudflare,
 };

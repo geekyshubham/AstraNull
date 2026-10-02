@@ -1,0 +1,330 @@
+/* Shared UI primitive interaction states.
+   Imported by components/ui/*.tsx. Vite emits component CSS *before* styles.css in
+   the single bundle, so every selector here carries one extra attribute/class over
+   its styles.css counterpart (usually `[data-ui]`) to win the cascade deliberately.
+   Token-only: every value resolves to a variable defined in styles.css :root. */
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+[data-ui='button'].btn[data-ui] {
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+[data-ui='button'].btn[data-ui] > svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+[data-ui='button'].btn-icon[data-ui] > svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+/* Keyboard focus: the ring sits outside the pill and never relies on hover. */
+[data-ui='button'].btn[data-ui]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: var(--focus-ring-offset);
+  box-shadow: none;
+}
+
+/* Press: one short, transform-only response (no layout work). */
+[data-ui='button'].btn[data-ui]:active:not(:disabled):not([aria-disabled='true']) {
+  transform: scale(var(--press-scale));
+  transition-duration: var(--motion-micro);
+}
+
+/* Disabled reads as unavailable, not as broken: no hover, no press, clear cursor. */
+[data-ui='button'].btn[data-ui]:disabled:not([data-loading='true']),
+[data-ui='button'].btn[data-ui][aria-disabled='true']:not([data-loading='true']) {
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Loading is busy, not disabled: keep full contrast so the label stays legible. */
+[data-ui='button'].btn[data-ui][data-loading='true'] {
+  cursor: progress;
+  opacity: 1;
+  transform: none;
+}
+
+[data-ui='button'].btn-default[data-ui][data-loading='true'] {
+  border-color: var(--accent-active);
+  background: var(--accent-active);
+  color: var(--accent-on);
+}
+
+[data-ui='button'].btn[data-ui] .btn-inline-spinner {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin: 0;
+  border-width: 2px;
+  border-color: color-mix(in oklab, currentColor, transparent 70%);
+  border-top-color: currentColor;
+}
+
+/* ── Interactive cards ───────────────────────────────────────────────── */
+[data-ui='card'].card-interactive[data-interactive] {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-ui='card'].card-interactive[data-interactive]:focus-visible {
+  border-color: var(--border-strong);
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+[data-ui='card'].card-interactive[data-interactive]:active {
+  transform: scale(var(--press-scale-subtle));
+  transition-duration: var(--motion-micro);
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────── */
+[data-ui='tabs'].tabs[data-ui] {
+  scroll-padding-inline: var(--space-2);
+  scrollbar-width: none;
+}
+
+[data-ui='tabs'].tabs[data-ui]::-webkit-scrollbar {
+  display: none;
+}
+
+[data-ui='tabs'] .tab[role='tab'] {
+  gap: var(--space-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-ui='tabs'] .tab[role='tab'] .tab-count {
+  margin-left: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-ui='tabs'] .tab[role='tab']:not([aria-selected='true']):not([aria-disabled='true']):hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+[data-ui='tabs'] .tab[role='tab']:not([aria-selected='true']):not([aria-disabled='true']):active {
+  background: var(--surface-pressed);
+}
+
+/* The selected tab is marked by surface, ring, and full ink: never by color alone. */
+[data-ui='tabs'] .tab[role='tab'][aria-selected='true'] {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+[data-ui='tabs'] .tab[role='tab']:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: var(--focus-ring-offset-tight);
+  box-shadow: none;
+}
+
+[data-ui='tabs'] .tab[role='tab'][aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ── Data table ──────────────────────────────────────────────────────── */
+.table-wrap .data-table[data-ui] tbody tr.table-row-clickable {
+  cursor: pointer;
+}
+
+.table-wrap .data-table[data-ui] tbody tr.table-row-clickable:hover td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.table-wrap .data-table[data-ui] tbody tr.table-row-clickable:active td {
+  background: var(--surface-selected);
+}
+
+/* Opt-in sticky header: the wrap becomes the scroll container in both axes. */
+.table-wrap.table-wrap-sticky[role='region'] {
+  max-height: var(--table-max-height);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.table-wrap.table-wrap-sticky .data-table[data-ui] .data-table-head th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* The head wash is translucent; layer it on the opaque surface so rows never show through. */
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--wash), var(--wash));
+}
+
+/* ── Select ──────────────────────────────────────────────────────────── */
+[data-ui='select'].field .select-display {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-ui='select'].field .select-display:focus-visible {
+  border-color: var(--focus-color);
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: var(--focus-ring-offset-tight);
+  box-shadow: none;
+}
+
+[data-ui='select'].field .select-display:active:not(:disabled) {
+  background-color: var(--surface-pressed);
+}
+
+[data-ui='select'].field .select-chevron {
+  flex: none;
+  color: var(--fg-2);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+[data-ui='select'].field .select-shell.open .select-chevron {
+  transform: rotate(180deg);
+}
+
+[data-ui='select'].field .select-shell.select-menu-up .select-menu {
+  transform-origin: bottom center;
+}
+
+[data-ui='select'].field .select-menu {
+  transform-origin: top center;
+}
+
+[data-ui='select'].field-invalid .select-display,
+[data-ui='select'].field-invalid .select-display:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
+[data-ui='select'].field-invalid .select-display:focus-visible {
+  outline-color: var(--danger);
+}
+
+[data-ui='select'].field .field-error-text,
+[data-ui='select'].field .field-hint-text {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+[data-ui='select'].field .field-error-text {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+[data-ui='select'].field .field-hint-text {
+  color: var(--fg-2);
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+[data-ui='empty-state'].empty-state h2 {
+  max-width: 40ch;
+  text-wrap: balance;
+}
+
+[data-ui='empty-state'].empty-state p {
+  max-width: 52ch;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+[data-ui='empty-state'].empty-state .empty-icon {
+  color: var(--fg-2);
+}
+
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* ── Badge ───────────────────────────────────────────────────────────── */
+.badge-dot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
+/* ── Progress ────────────────────────────────────────────────────────── */
+.progress-field {
+  display: grid;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.progress-meta-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-meta-value {
+  flex: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+[data-ui='progress'].progress-indeterminate {
+  overflow: hidden;
+}
+
+[data-ui='progress'].progress-indeterminate .progress-bar {
+  width: 40%;
+  animation: primitive-progress-sweep var(--motion-loop) var(--ease-out) infinite;
+}
+
+@keyframes primitive-progress-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+/* ── Touch targets ───────────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  [data-ui='tabs'] .tab[role='tab'] {
+    min-height: 44px;
+  }
+
+  [data-ui='select'].field .select-display {
+    min-height: 44px;
+  }
+}
+
+/* ── Reduced motion: state changes stay, movement goes ──────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-ui='button'].btn[data-ui]:active:not(:disabled):not([aria-disabled='true']),
+  [data-ui='card'].card-interactive[data-interactive]:active {
+    transform: none;
+  }
+
+  [data-ui='select'].field .select-chevron {
+    transition: none;
+  }
+
+  [data-ui='progress'].progress-indeterminate .progress-bar {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
+}

@@ -70,6 +70,51 @@ describe('notifications', () => {
     assert.equal(unsafeHttp.error, 'invalid_webhook_destination');
   });
 
+  it('rejects SMTP-injection, malformed email, and credentialed provider destinations', () => {
+    freshStore();
+    const injected = createNotificationRule(demoCtx, {
+      channel: 'email',
+      destination: 'a@b.com\r\nRCPT TO:<x@y>',
+      triggers: ['finding.high_severity'],
+    });
+    assert.equal(injected.status, 400);
+    assert.equal(injected.error, 'invalid_destination');
+
+    for (const bad of ['a@b.com, c@d.com', 'not-an-email', '<a@b.com>']) {
+      const res = createNotificationRule(demoCtx, { channel: 'email', destination: bad });
+      assert.equal(res.status, 400, bad);
+    }
+
+    const slackHttp = createNotificationRule(demoCtx, { channel: 'slack', destination: 'http://hooks.slack.com/services/x' });
+    assert.equal(slackHttp.error, 'invalid_webhook_destination');
+    const teamsCreds = createNotificationRule(demoCtx, { channel: 'teams', destination: 'https://user:pass@teams.invalid/hook' });
+    assert.equal(teamsCreds.status, 400);
+    assert.equal(teamsCreds.error, 'webhook_url_credentials_not_allowed');
+    const slackChannelName = createNotificationRule(demoCtx, { channel: 'slack', destination: '#alerts' });
+    assert.equal(slackChannelName.error, 'invalid_webhook_destination');
+
+    const ok = createNotificationRule(demoCtx, { channel: 'email', destination: 'alerts@customer.example' });
+    assert.ok(ok.id);
+    assert.deepEqual(getStore().notificationRules.map((r) => r.id), [ok.id]);
+  });
+
+  it('derives the delivery note from the active delivery mode', () => {
+    freshStore();
+    const saved = process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE;
+    try {
+      delete process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE;
+      const off = createNotificationRule(demoCtx, { channel: 'slack', destination: 'https://hooks.slack.invalid/services/a' });
+      assert.match(off.delivery_note, /not enabled/);
+      process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE = 'slack';
+      const on = createNotificationRule(demoCtx, { channel: 'slack', destination: 'https://hooks.slack.invalid/services/b' });
+      assert.equal(on.delivery_note, 'Outbound delivery for Slack is enabled.');
+      assert.ok(!/\u2014/.test(on.delivery_note + off.delivery_note));
+    } finally {
+      if (saved === undefined) delete process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE;
+      else process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE = saved;
+    }
+  });
+
   it('records redacted events, delivery attempts, and safe audits on emit', async () => {
     freshStore();
     createNotificationRule(demoCtx, {
@@ -215,12 +260,12 @@ describe('notifications', () => {
 
     createNotificationRule(demoCtx, {
       channel: 'slack',
-      destination: '#demo-alerts',
+      destination: 'https://hooks.slack.invalid/services/demo-alerts',
       triggers: ['safe_test.completed'],
     });
     createNotificationRule(otherCtx, {
       channel: 'slack',
-      destination: '#other-alerts',
+      destination: 'https://hooks.slack.invalid/services/other-alerts',
       triggers: ['safe_test.completed'],
     });
 
@@ -238,7 +283,7 @@ describe('notifications', () => {
     const listed = listNotifications(demoCtx);
     assert.equal(listed.rules.length, 1);
     assert.equal(listed.rules[0].destination, undefined);
-    assert.equal(listed.rules[0].destination_preview, 'slack:#demo-alerts');
+    assert.equal(listed.rules[0].destination_preview, 'slack://hooks.slack.invalid…');
     assert.ok(listed.events.every((e) => e.tenant_id === 'ten_demo'));
     assert.equal(listed.events.length, 1);
   });
@@ -269,6 +314,15 @@ describe('POST /v1/notifications', () => {
     });
     assert.equal(res.status, 400);
     assert.equal(res.json.error, 'invalid_channel');
+  });
+
+  it('returns HTTP 400 for an email destination carrying SMTP commands', async () => {
+    const res = await request(baseUrl, 'POST', '/v1/notifications', {
+      headers: demoHeaders('admin'),
+      body: { channel: 'email', destination: 'a@b.com\r\nRCPT TO:<x@y>' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error, 'invalid_destination');
   });
 
   it('returns destination previews, not raw destinations, after creating rules over HTTP', async () => {

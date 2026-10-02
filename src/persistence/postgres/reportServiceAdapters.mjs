@@ -9,7 +9,9 @@ import {
 } from '../../contracts/complianceReports.mjs';
 import { buildCustodyManifest } from '../../lib/custody.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { incMetric } from '../../lib/metrics.mjs';
 import { redactObject } from '../../lib/redact.mjs';
+import { reportReadyNotification } from './notificationReconciliation.mjs';
 import {
   scrubAgentPlacementText,
   scrubReportSummaryForCustomer,
@@ -261,6 +263,34 @@ export function createPostgresReportServices(repositories, options = {}) {
     ? createPostgresStateServices(repositories, { now: nowFn }).getState
     : null;
 
+  const notifications = options.notifications ?? null;
+  const notificationRules = repositories.notifications ?? null;
+
+  /**
+   * report.ready: await only the durable, idempotent outbox enqueue (one event per report id).
+   * Provider delivery runs on the notification service's background worker, so a slow or stalled
+   * destination never delays report creation. A failure never fails report generation: the
+   * committed report row is the durable record that the notification is owed, and the
+   * reconciliation pass in the recovery worker (notificationReconciliation.mjs) enqueues it under
+   * the same dedupe key, so the outcome is still exactly one event per report (R03).
+   */
+  async function notifyReportReady(ctx, report) {
+    const enqueue = typeof notifications?.enqueueNotification === 'function'
+      ? notifications.enqueueNotification.bind(notifications)
+      : null;
+    if (!enqueue) return;
+    try {
+      if (typeof notificationRules?.listNotificationRules === 'function') {
+        const rules = await notificationRules.listNotificationRules(ctx);
+        if (!(rules ?? []).some((r) => r.enabled && r.triggers?.includes('report.ready'))) return;
+      }
+      await enqueue(ctx, reportReadyNotification(report));
+    } catch {
+      // Recovered by outbox reconciliation; the metric only signals that recovery is pending.
+      incMetric('notification_emit_failed');
+    }
+  }
+
   const reports = {
     async createReport(ctx, body) {
       const runs = await validationEvidence.listTestRuns(ctx, { limit: 10 });
@@ -316,6 +346,7 @@ export function createPostgresReportServices(repositories, options = {}) {
         },
         { now: nowFn() },
       );
+      await notifyReportReady(ctx, report ?? record);
       return report;
     },
 

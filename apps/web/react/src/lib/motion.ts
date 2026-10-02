@@ -5,6 +5,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
  * tweens and CSS transitions cannot drift apart (DESIGN.md "Geometry, spacing,
  * and motion").
  */
+/** Press feedback tier (`--motion-micro`): a tap must answer before it is released. */
+export const MOTION_MICRO_MS = 90;
 export const MOTION_FAST_MS = 120;
 export const MOTION_BASE_MS = 200;
 export const MOTION_SLOW_MS = 300;
@@ -40,6 +42,34 @@ export function useReducedMotion(): boolean {
   }, []);
 
   return reduced;
+}
+
+/**
+ * Bring `child` fully into view inside a horizontally scrolling `container`
+ * (tab rails, segmented controls) without moving the page vertically.
+ *
+ * `Element.scrollIntoView` also scrolls every ancestor, which yanks the page
+ * when the rail sits below the fold; this only adjusts the rail's own
+ * `scrollLeft`. Smooth scrolling is dropped under reduced motion.
+ */
+export function scrollIntoInlineView(container: HTMLElement | null, child: HTMLElement | null, gutter = 8): void {
+  if (!container || !child) return;
+  if (container.scrollWidth <= container.clientWidth) return;
+  const containerRect = container.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+  let delta = 0;
+  if (childRect.left < containerRect.left + gutter) {
+    delta = childRect.left - containerRect.left - gutter;
+  } else if (childRect.right > containerRect.right - gutter) {
+    delta = childRect.right - containerRect.right + gutter;
+  }
+  if (delta === 0) return;
+  const left = container.scrollLeft + delta;
+  if (typeof container.scrollTo === 'function') {
+    container.scrollTo({ left, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  } else {
+    container.scrollLeft = left;
+  }
 }
 
 function easeOutCubic(t: number): number {

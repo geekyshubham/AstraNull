@@ -1,4 +1,9 @@
 import { redactObject, redactString } from './redact.mjs';
+import {
+  isDeliveryChannelActive,
+  parseNotificationDeliveryModes,
+  rejectProviderDestinationWithCredentials,
+} from './notificationDelivery.mjs';
 
 export const ALLOWED_CHANNELS = new Set(['in_app', 'webhook', 'email', 'slack', 'teams']);
 
@@ -11,11 +16,44 @@ export const ALLOWED_TRIGGERS = new Set([
 
 export const DEFAULT_TRIGGERS = ['finding.high_severity', 'high_scale.state_change'];
 
-export const POSTGRES_NOTIFICATION_DELIVERY_NOTE =
-  'Postgres stores delivery metadata only — no Slack/email/Teams/webhook send.';
+export const MAX_DESTINATION_LENGTH = 2048;
 
-export const DEV_NOTIFICATION_DELIVERY_NOTE =
-  'Developer validation stores delivery metadata only — no Slack/email/Teams/webhook send.';
+// Whitespace and control characters are never valid in a destination. Rejecting them server-side
+// keeps CR/LF out of SMTP envelopes and headers no matter which client created the rule.
+const CONTROL_OR_SPACE = /[\s\u0000-\u001f\u007f]/;
+// Same single addr-spec shape the portal enforces (apps/web/react/src/lib/notification-channels.mjs).
+const EMAIL_PATTERN = /^[^@\s<>()[\]\\,;:"]+@[^@\s<>()[\]\\,;:"]+\.[^@\s<>()[\]\\,;:".]{2,}$/;
+
+const CHANNEL_DISPLAY_NAMES = Object.freeze({
+  webhook: 'Webhook',
+  email: 'Email',
+  slack: 'Slack',
+  teams: 'Microsoft Teams',
+});
+
+/**
+ * Honest, mode-aware note for a newly created rule. Replaces the old fixed "metadata only" note,
+ * which was wrong once an operator enabled outbound delivery.
+ * @param {string} channel
+ * @param {{ deliveryMode?: string, smtpHost?: string }} [options]
+ */
+export function notificationDeliveryNote(channel, options = {}) {
+  if (channel === 'in_app') return 'Events are recorded in the in-app feed.';
+  const name = CHANNEL_DISPLAY_NAMES[channel] ?? channel;
+  const modes = parseNotificationDeliveryModes(
+    options.deliveryMode ?? process.env.ASTRANULL_NOTIFICATION_DELIVERY_MODE,
+  );
+  if (!isDeliveryChannelActive(modes, channel)) {
+    return `Outbound delivery for ${name} is not enabled on this server, so events are recorded in the delivery ledger only.`;
+  }
+  if (channel === 'email') {
+    const host = options.smtpHost ?? process.env.ASTRANULL_SMTP_HOST;
+    if (!host || !String(host).trim()) {
+      return 'Email delivery is enabled, but no SMTP relay is configured, so events are recorded in the delivery ledger only.';
+    }
+  }
+  return `Outbound delivery for ${name} is enabled.`;
+}
 
 function normalizeChannel(raw) {
   if (typeof raw !== 'string') return null;
@@ -58,9 +96,19 @@ function validateDestination(channel, destination) {
     return { error: 'missing_destination', status: 400 };
   }
   const normalized = destination.trim();
-  if (channel === 'webhook' && !isAllowedWebhookDestination(normalized)) {
+  if (normalized.length > MAX_DESTINATION_LENGTH || CONTROL_OR_SPACE.test(normalized)) {
+    return { error: 'invalid_destination', status: 400 };
+  }
+  if (channel === 'email') {
+    if (!EMAIL_PATTERN.test(normalized)) return { error: 'invalid_email_destination', status: 400 };
+    return { ok: true, destination: normalized };
+  }
+  // webhook, slack, teams: https (http only for dev hosts) and never user:password@ credentials.
+  if (!isAllowedWebhookDestination(normalized)) {
     return { error: 'invalid_webhook_destination', status: 400 };
   }
+  const credentialCheck = rejectProviderDestinationWithCredentials(normalized);
+  if (!credentialCheck.ok) return { error: credentialCheck.error, status: 400 };
   return { ok: true, destination: normalized };
 }
 
@@ -107,6 +155,15 @@ export function destinationPreview(channel, destination) {
     return `email:${redacted.slice(0, 24)}`;
   }
   if (channel === 'in_app') return 'in_app:feed';
+  if (channel === 'slack' || channel === 'teams') {
+    // Slack and Teams webhook URLs are secrets; show only the host.
+    try {
+      const u = new URL(destination);
+      return `${channel}://${u.hostname}${u.pathname && u.pathname !== '/' ? '…' : ''}`;
+    } catch {
+      return `${channel}:${redacted.slice(0, 24)}`;
+    }
+  }
   return `${channel}:${redacted.slice(0, 32)}`;
 }
 

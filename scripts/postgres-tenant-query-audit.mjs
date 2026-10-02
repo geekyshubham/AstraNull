@@ -146,16 +146,15 @@ const FORBIDDEN_OUTPUT_PATTERNS = [
 const ALLOW_COMMENT_RE = /tenant-query-audit:\s*(?:allow|global)/i;
 
 /**
+ * Every Postgres persistence module except SKIP_FILE_BASENAMES, so tenant-scoped SQL in a module
+ * that is not named *Repository / *ServiceAdapters (e.g. notificationReconciliation.mjs) is still
+ * audited in CI.
  * @param {string} root
  */
 export function defaultPostgresAuditPaths(root = ROOT) {
   const dir = path.join(root, 'src', 'persistence', 'postgres');
   return readdirSync(dir)
-    .filter(
-      (name) =>
-        (name.endsWith('Repository.mjs') || name.endsWith('ServiceAdapters.mjs')) &&
-        !SKIP_FILE_BASENAMES.has(name),
-    )
+    .filter((name) => name.endsWith('.mjs') && !SKIP_FILE_BASENAMES.has(name))
     .map((name) => path.join(dir, name))
     .sort();
 }

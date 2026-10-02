@@ -2,6 +2,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
+import './primitives.css';
 
 const SELECT_MENU_MAX_HEIGHT = 280;
 /**
@@ -26,6 +27,10 @@ type SelectProps = {
   onChange: (value: string) => void;
   className?: string;
   disabled?: boolean;
+  /** Supporting text under the field, linked with aria-describedby. */
+  hint?: string;
+  /** Validation message under the field; marks the trigger aria-invalid. */
+  error?: string;
 };
 
 function SelectOptionCopy({ label: optionLabel, description }: { label: string; description?: string }) {
@@ -37,7 +42,7 @@ function SelectOptionCopy({ label: optionLabel, description }: { label: string; 
   );
 }
 
-export function Select({ label, name, value, options, onChange, className, disabled = false }: SelectProps) {
+export function Select({ label, name, value, options, onChange, className, disabled = false, hint, error }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<'down' | 'up'>('down');
   const [menuMaxHeight, setMenuMaxHeight] = useState(SELECT_MENU_MAX_HEIGHT);
@@ -46,6 +51,11 @@ export function Select({ label, name, value, options, onChange, className, disab
   const menuRef = useRef<HTMLSpanElement>(null);
   const listId = useId();
   const labelId = useId();
+  const hintId = useId();
+  const errorId = useId();
+  const errorText = error?.trim() ?? '';
+  const hintText = hint?.trim() ?? '';
+  const describedBy = [errorText ? errorId : null, hintText ? hintId : null].filter(Boolean).join(' ') || undefined;
   const selected = options.find((option) => option.value === value) ?? options[0];
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === selected?.value));
 
@@ -181,7 +191,7 @@ export function Select({ label, name, value, options, onChange, className, disab
   }
 
   return (
-    <label className={cn('field', disabled && 'field-disabled', className)}>
+    <label className={cn('field', disabled && 'field-disabled', errorText && 'field-invalid', className)} data-ui="select">
       <span id={labelId}>{label}</span>
       <span
         className={cn(
@@ -224,12 +234,14 @@ export function Select({ label, name, value, options, onChange, className, disab
           aria-controls={listId}
           aria-expanded={open}
           aria-haspopup="listbox"
+          aria-describedby={describedBy}
+          aria-invalid={errorText ? true : undefined}
           disabled={disabled}
           onClick={toggleOpen}
           onKeyDown={onTriggerKeyDown}
         >
           <SelectOptionCopy label={selected?.label ?? ''} description={selected?.description} />
-          <ChevronDown size={16} aria-hidden="true" />
+          <ChevronDown className="select-chevron" size={16} aria-hidden="true" />
         </button>
         <span
           ref={menuRef}
@@ -257,6 +269,16 @@ export function Select({ label, name, value, options, onChange, className, disab
           ))}
         </span>
       </span>
+      {errorText ? (
+        <span id={errorId} className="field-error-text">
+          {errorText}
+        </span>
+      ) : null}
+      {hintText ? (
+        <span id={hintId} className="field-hint-text">
+          {hintText}
+        </span>
+      ) : null}
     </label>
   );
 }

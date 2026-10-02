@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Check,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -30,6 +29,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Reveal } from '../components/ui/motion';
 import { Select } from '../components/ui/select';
 import { BrandMark } from '../components/layout/brand';
+import './public-landing.css';
 
 type BadgeTone = NonNullable<BadgeProps['tone']>;
 
@@ -123,11 +123,13 @@ function AuthAsidePoints({ items }: { items: { icon: LucideIcon; text: string }[
 function PublicAccessActions({
   signupEnabled,
   loginUrl,
-  showArrowOnPrimary = false
+  showArrowOnPrimary = false,
+  children
 }: {
   signupEnabled: boolean;
   loginUrl: string;
   showArrowOnPrimary?: boolean;
+  children?: React.ReactNode;
 }) {
   return (
     <div className="public-actions">
@@ -140,6 +142,7 @@ function PublicAccessActions({
           <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
         </>
       ) : <AnchorButton href={loginUrl}>Log in</AnchorButton>}
+      {children}
     </div>
   );
 }
@@ -324,136 +327,223 @@ function AuthCardHeader({
   );
 }
 
-type LandingEvidenceItem = {
+type LandingBoundary = {
   label: string;
   title: string;
   body: string;
-  icon: LucideIcon;
 };
 
-const LANDING_BOUNDARIES: readonly LandingEvidenceItem[] = [
+const LANDING_BOUNDARIES: readonly LandingBoundary[] = [
   {
     label: 'Scope',
     title: 'Customer-declared targets.',
-    body: 'You choose the exact FQDNs, DNS zones, and TCP surfaces in scope. The core product does not perform automatic IP inventory discovery.',
-    icon: FileCheck2
+    body: 'You choose the exact FQDNs, DNS zones, and TCP surfaces in scope. AstraNull does not perform automatic IP inventory discovery.'
   },
   {
     label: 'Access',
     title: 'No infrastructure keys by default.',
-    body: 'The no-access-first path requires no customer cloud credentials. Validation runs from the outside in.',
-    icon: LockKeyhole
+    body: 'The no-access-first path needs no customer cloud credentials and no installed agent. Validation runs from the outside in.'
   },
   {
     label: 'Execution',
-    title: 'Bounded checks with an ownership gate.',
-    body: 'Safe validation is constrained to proven targets and bounded probe jobs. Missing evidence remains visible instead of being inferred.',
-    icon: ShieldCheck
+    title: 'Bounded checks behind an ownership gate.',
+    body: 'Safe checks run as bounded probe jobs, and only against targets with proven ownership. Missing evidence stays visible instead of being inferred.'
   },
   {
     label: 'Escalation',
-    title: 'High-scale remains governed.',
-    body: 'Customers request high-scale work. The SOC validates authorization, schedules execution, and retains the stop controls and audit trail.',
-    icon: Siren
+    title: 'High-scale stays governed.',
+    body: 'Customers request high-scale work. The SOC validates authorization, schedules execution, and keeps the stop controls and the audit trail.'
   }
 ];
 
-const LANDING_PROOF: readonly LandingEvidenceItem[] = [
+type LandingFlowStep = {
+  id: string;
+  title: string;
+  body: string;
+  records: readonly string[];
+  gate?: boolean;
+};
+
+const LANDING_FLOW: readonly LandingFlowStep[] = [
   {
-    label: '01 · Declaration',
-    title: 'Record the expected path.',
-    body: 'The target, its tags, ownership state, and expected protected behavior establish what the validation is allowed to test.',
-    icon: FileCheck2
+    id: 'declare',
+    title: 'Declare the targets',
+    body: 'List the FQDNs, DNS zones, and TCP surfaces in scope, by hand or through CSV or API import, and group them with tags. Ownership is proven, for example with a DNS TXT challenge, before any probe runs.',
+    records: ['target', 'tags', 'ownership_status']
   },
   {
-    label: '02 · Bounded probe',
-    title: 'Observe from outside.',
-    body: 'A signed, rate-bounded job records reachability and path metadata against the approved target instead of inventing a posture from configuration.',
-    icon: ShieldCheck
+    id: 'probe',
+    title: 'Probe from the outside',
+    body: 'Signed, rate-bounded probe jobs observe each approved target from outside your network. There is no agent to install and no cloud credential to grant.',
+    records: ['check_id', 'probe_result']
   },
   {
-    label: '03 · External evidence',
-    title: 'Evidence from external probes.',
-    body: 'Bounded external probes record what happened at the edge. Verdicts report external-only confidence — no internal agents are required.',
-    icon: UserRound
+    id: 'evidence',
+    title: 'Keep the evidence',
+    body: 'Each observation is stored with the check and the expected behavior it was tested against. A missing observation stays a visible gap. It is never filled in by inference.',
+    records: ['evidence_ids', 'expected_behavior']
   },
   {
-    label: '04 · Verdict and custody',
-    title: 'Explain the conclusion.',
-    body: 'The verdict points back to its evidence references and reason codes. Exports preserve custody metadata for review and audit.',
-    icon: CheckCircle2
+    id: 'verdict',
+    title: 'Reach a readiness verdict',
+    body: 'Correlation turns evidence into a verdict such as protected, exposed, bypassable, or inconclusive, with the reason codes behind it. Exports carry custody metadata for review and audit.',
+    records: ['verdict', 'reason_codes', 'confidence']
+  },
+  {
+    id: 'high-scale',
+    title: 'Escalate through the SOC',
+    body: 'High-scale tests are requested, never self-served. The SOC reviews authorization, schedules the window, runs the test, and holds the stop control.',
+    records: ['high_scale_request_id'],
+    gate: true
   }
 ];
+
+type VerdictRecordField = {
+  field: string;
+  description?: string;
+  vocabulary?: readonly string[];
+};
+
+/* Field names mirror the verdict record the API returns. Values describe the
+   field or list its allowed vocabulary; nothing here is a customer result. */
+const VERDICT_RECORD_FIELDS: readonly VerdictRecordField[] = [
+  { field: 'target_id', description: 'A customer-declared FQDN, DNS zone, or TCP surface' },
+  { field: 'confidence', vocabulary: ['external_only'] },
+  { field: 'verdict', vocabulary: ['protected', 'exposed', 'bypassable', 'inconclusive'] },
+  { field: 'evidence_ids', description: 'References to the probe evidence behind the verdict' },
+  { field: 'reason_codes', description: 'Why correlation reached this verdict' }
+];
+
+const SOC_STAGES = [
+  'Scope review',
+  'Authorization review',
+  'Risk review',
+  'Schedule',
+  'Go or no-go',
+  'Execute',
+  'Monitor',
+  'Stop or complete',
+  'Report'
+] as const;
 
 const LANDING_COMPARE = [
   ['Scope source', 'Customer-declared targets', 'Operator-defined test target', 'Provider resource inventory'],
   ['Cloud credentials', 'Not required by default', 'Depends on the test setup', 'Required for the provider account'],
-  ['Evidence origin', 'External probe evidence (external-only)', 'Not inherent', 'Provider telemetry'],
+  ['Evidence origin', 'External probe evidence (external_only)', 'Not inherent', 'Provider telemetry'],
   ['High-scale control', 'SOC approval and governed execution', 'Operator-owned', 'Provider-specific'],
   ['Evidence model', 'Correlated evidence and custody references', 'Tool-specific run output', 'Provider metrics and logs']
 ];
 
-const LANDING_TRUST_ITEMS = [
-  { icon: Check, text: 'Customer-declared scope' },
-  { icon: Check, text: 'No cloud credentials by default' },
-  { icon: Check, text: 'Ownership-gated safe checks' },
-  { icon: Check, text: 'SOC-gated high-scale' }
-] as const;
-
-function PublicEvidenceList({ items }: { items: readonly LandingEvidenceItem[] }) {
+function VerdictRecordSpec() {
   return (
-    <ol className="auth-points">
-      {items.map(({ label, title, body, icon: Icon }) => (
-        <li key={label}>
-          <Icon size={16} aria-hidden="true" />
-          <span>
-            <span className="check-fact-label">{label}</span>
-            <strong>{title}</strong> {body}
-          </span>
-        </li>
-      ))}
-    </ol>
+    <figure className="public-record" aria-labelledby="public-record-title">
+      <p id="public-record-title" className="public-record-title">What every verdict carries</p>
+      <dl className="public-record-fields">
+        {VERDICT_RECORD_FIELDS.map(({ field, description, vocabulary }) => (
+          <div key={field}>
+            <dt><code>{field}</code></dt>
+            <dd>
+              {vocabulary ? (
+                <ul className="public-record-vocab" aria-label={`Allowed ${field} values`}>
+                  {vocabulary.map((value) => (
+                    <li key={value}>
+                      <code className={field === 'confidence' ? 'is-accent' : undefined}>{value}</code>
+                    </li>
+                  ))}
+                </ul>
+              ) : description}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <figcaption>Field names from the verdict record. Values show what each field holds, not a customer result.</figcaption>
+    </figure>
   );
 }
 
-function ValidationContractPreview() {
+function BoundariesSection() {
   return (
-    <aside id="boundaries" aria-labelledby="validation-contract-title">
-      <Card className="auth-card">
-        <CardHeader className="auth-card-header">
-          <Badge tone="muted">No-access-first</Badge>
-          <div className="auth-card-heading">
-            <CardTitle id="validation-contract-title">Validation contract</CardTitle>
-            <CardDescription>What AstraNull requires, observes, and refuses to assume.</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="stack">
-          <PublicEvidenceList items={LANDING_BOUNDARIES} />
-          <div className="callout info">
-            <ShieldCheck size={18} aria-hidden="true" />
-            <p>Default validation is bounded and defensive. It does not expose self-service attack tooling or unmanaged traffic generation.</p>
-          </div>
-        </CardContent>
-      </Card>
-    </aside>
+    <Reveal as="section" className="public-section" id="boundaries" aria-labelledby="boundaries-heading">
+      <div className="public-section-head">
+        <h2 id="boundaries-heading">What it requires, and what it refuses to assume.</h2>
+        <p className="public-section-lead">Four limits shape every validation run, from the first declared target to a SOC-run high-scale test.</p>
+      </div>
+      <ul className="public-ledger">
+        {LANDING_BOUNDARIES.map(({ label, title, body }) => (
+          <li key={label}>
+            <span className="public-ledger-label">{label}</span>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </li>
+        ))}
+      </ul>
+      <p className="public-note">
+        <ShieldCheck size={18} aria-hidden="true" />
+        <span>Default validation is bounded and defensive. AstraNull does not expose self-service attack tooling or unmanaged traffic generation.</span>
+      </p>
+    </Reveal>
   );
 }
 
-function ProofChainSection() {
+function ValidationFlowSection() {
   return (
-    <Reveal as="section" className="public-section public-section--spaced" id="proof" aria-labelledby="proof-heading">
-      <p className="eyebrow">Evidence before verdict</p>
-      <h2 id="proof-heading">A conclusion should show its chain of proof.</h2>
-      <p className="public-section-lead">AstraNull starts with declared scope, records bounded observations, and keeps uncertainty explicit. A verdict is the end of that chain, not a substitute for it.</p>
-      <Card className="auth-card">
-        <CardContent className="stack">
-          <PublicEvidenceList items={LANDING_PROOF} />
-          <div className="callout info">
-            <FileCheck2 size={18} aria-hidden="true" />
-            <p>Evidence references, reason codes, and custody metadata travel with the result so reviewers can inspect what supports it.</p>
-          </div>
-        </CardContent>
-      </Card>
+    <section className="public-section" id="proof" aria-labelledby="proof-heading">
+      <div className="public-flow-layout">
+        <Reveal className="public-flow-intro">
+          <h2 id="proof-heading">From declared target to readiness verdict.</h2>
+          <p className="public-section-lead">A verdict is the end of a chain you can inspect, not a substitute for it. Each step records what the next one is allowed to rely on.</p>
+        </Reveal>
+        <ol className="public-flow">
+          {LANDING_FLOW.map((step, index) => (
+            <Reveal
+              as="li"
+              step={index}
+              key={step.id}
+              className={step.gate ? 'public-flow-step is-gate' : 'public-flow-step'}
+            >
+              <span className="public-flow-marker" aria-hidden="true">
+                {step.gate ? <LockKeyhole size={16} /> : String(index + 1).padStart(2, '0')}
+              </span>
+              <div>
+                {step.gate ? <p className="public-flow-gate">Separate lane, SOC only</p> : null}
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+                <p className="public-flow-records">
+                  <span>Recorded as</span>
+                  {step.records.map((record) => <code key={record}>{record}</code>)}
+                </p>
+              </div>
+            </Reveal>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+function HighScaleSection() {
+  return (
+    <Reveal as="section" className="public-section" id="high-scale" aria-labelledby="high-scale-heading">
+      <div className="public-section-head">
+        <h2 id="high-scale-heading">High-scale testing is a SOC decision, not a button.</h2>
+        <p className="public-section-lead">Customers can ask for a high-scale test. Only the AstraNull SOC can approve, schedule, execute, stop, and close one.</p>
+      </div>
+      <div className="public-lane">
+        <div className="public-lane-panel">
+          <p className="public-lane-role">Customer</p>
+          <h3>Request</h3>
+          <p>Name the declared target group, the objective, a preferred window, and reachable contacts.</p>
+        </div>
+        <ArrowRight className="public-lane-arrow" size={20} aria-hidden="true" />
+        <div className="public-lane-panel is-soc">
+          <p className="public-lane-role">AstraNull SOC</p>
+          <h3>Review, run, and close</h3>
+          <ol className="public-lane-stages" aria-label="SOC workflow stages">
+            {SOC_STAGES.map((stage) => <li key={stage}>{stage}</li>)}
+          </ol>
+          <p>A kill switch must be available before start. Production tests need SOC analyst and SOC lead approval, scope locks after final approval, and every decision lands in the audit log.</p>
+        </div>
+      </div>
     </Reveal>
   );
 }
@@ -462,6 +552,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   const productName = String(config.siteConfig.product_name ?? 'AstraNull');
   const promise = String(config.siteConfig.promise ?? PLATFORM_PROMISE);
   const signupEnabled = config.siteConfig.signup_enabled !== false;
+  const demoEnabled = config.authMode === 'dev-headers';
   const loginUrl = config.loginUrl;
 
   usePageMeta({
@@ -469,13 +560,13 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   });
 
   return (
-    <PublicShell loginHref={loginUrl} signupEnabled={signupEnabled}>
-      <main id="public-main" className="public-wrap">
-        <section className="public-section">
+    <PublicShell loginHref={loginUrl} signupEnabled={signupEnabled} showEyebrow={false}>
+      <main id="public-main" className="public-wrap public-landing">
+        <section className="public-hero" aria-labelledby="public-hero-heading">
+          <p className="public-kicker">No-access-first DDoS readiness validation</p>
+          <h1 id="public-hero-heading">Prove DDoS readiness without handing over your cloud keys.</h1>
           <div className="public-hero-grid">
-            <Reveal>
-              <p className="eyebrow">No-access-first DDoS readiness validation</p>
-              <h1 className="auth-title">Prove DDoS readiness without handing over your cloud keys.</h1>
+            <div className="public-hero-copy">
               <p className="public-hero-lead">{promise}</p>
               <div className="public-actions">
                 {signupEnabled ? (
@@ -486,28 +577,26 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 ) : (
                   <AnchorButton href={loginUrl}>Log in</AnchorButton>
                 )}
-                <AnchorButton href="#proof" variant="secondary">See the proof chain</AnchorButton>
+                <AnchorButton href="#proof" variant="secondary">See how validation works</AnchorButton>
               </div>
-              <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
-                {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
-                  <span key={text}>
-                    <Icon size={16} aria-hidden="true" />
-                    {text}
-                  </span>
-                ))}
-              </div>
-            </Reveal>
+            </div>
             <Reveal step={1}>
-              <ValidationContractPreview />
+              <VerdictRecordSpec />
             </Reveal>
           </div>
         </section>
 
-        <ProofChainSection />
+        <ValidationFlowSection />
 
-        <Reveal as="section" className="public-section public-section--compare" id="compare">
-          <h2>Compare the operating model, not a marketing score.</h2>
-          <p className="public-section-lead">The distinction is where scope comes from, what access is required, who controls high-scale work, and what evidence remains after the run.</p>
+        <BoundariesSection />
+
+        <HighScaleSection />
+
+        <Reveal as="section" className="public-section" id="compare" aria-labelledby="compare-heading">
+          <div className="public-section-head">
+            <h2 id="compare-heading">Compare the operating model, not a marketing score.</h2>
+            <p className="public-section-lead">The difference is where scope comes from, what access is required, who controls high-scale work, and what evidence remains after the run.</p>
+          </div>
           <div
             className="public-compare table-wrap"
             tabIndex={0}
@@ -537,24 +626,35 @@ export function PublicLandingPage({ config }: PublicPageProps) {
           </div>
         </Reveal>
 
-        <Reveal as="section" className="public-cta-final">
-          <h2>Start with the scope you need to prove.</h2>
-          <p>Request reviewed access, or return to an existing customer workspace.</p>
-          <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} />
+        <Reveal as="section" className="public-cta-final" aria-labelledby="cta-heading">
+          <div>
+            <h2 id="cta-heading">Start with the scope you need to prove.</h2>
+            <p>Request reviewed access, or return to an existing customer workspace.</p>
+          </div>
+          <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl}>
+            {demoEnabled ? (
+              <Button type="button" variant="ghost" onClick={() => enterDemoPortal(config.portalPath)}>
+                Try the demo workspace
+              </Button>
+            ) : null}
+          </PublicAccessActions>
         </Reveal>
+      </main>
 
-        <footer className="public-footer">
+      <footer className="public-footer">
+        <div className="public-footer-inner">
           <span>© {productName} · Defensive DDoS readiness validation.</span>
           <nav aria-label="Public footer">
             <a href={loginUrl}>Log in</a>
             {signupEnabled ? <a href="/signup">Request access</a> : null}
             <a href="/signup-status">Request status</a>
+            <a href="#proof">How it works</a>
             <a href="#boundaries">Boundaries</a>
-            <a href="#proof">Proof chain</a>
+            <a href="#high-scale">High-scale</a>
             <a href="#compare">Compare</a>
           </nav>
-        </footer>
-      </main>
+        </div>
+      </footer>
     </PublicShell>
   );
 }

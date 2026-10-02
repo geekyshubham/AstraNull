@@ -1,6 +1,7 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
 import { cn, DEPLOYMENT_MODE_GAP_MESSAGE } from '../../lib/utils';
 import { useScrollEdges } from '../../lib/scroll-edges';
+import './primitives.css';
 
 export type TableColumn<T> = {
   key: string;
@@ -23,6 +24,11 @@ type DataTableProps<T> = {
   loadError?: string | null;
   /** Retry affordance for `loadError`. Omitted renders the message alone. */
   onRetry?: () => void;
+  /**
+   * Cap the table body height (any CSS length, e.g. `'60vh'`) so the header row
+   * sticks while rows scroll. Omitted keeps the table at its natural height.
+   */
+  maxHeight?: string;
 };
 
 /**
@@ -47,7 +53,7 @@ export function TableLoadError({
   return (
     <div className="form-banner error table-load-error" role="alert">
       <span>
-        {permanent ? message : `Could not load — ${message}`}
+        {permanent ? message : `Could not load: ${message}`}
         {retainedRows ? ' Showing previously loaded rows below.' : ''}
       </span>
       {onRetry && !permanent ? (
@@ -90,6 +96,8 @@ function DataTableBodyRow<T>({
 }: DataTableBodyRowProps<T>) {
   const { className: rowClassName, onClick, onKeyDown, ...restRowProps } = rowProps;
   const zebra = index % 2 === 1;
+  // A row that opens something gets the pointer, hover, and press affordance.
+  const clickable = Boolean(onClick);
   const nestedInteractiveOwnsEvent = (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => {
     const target = event.target;
     if (!(target instanceof Element) || target === event.currentTarget) return false;
@@ -100,7 +108,12 @@ function DataTableBodyRow<T>({
   return (
     <tr
       {...restRowProps}
-      className={cn(zebra && 'table-row-zebra', isSelected && 'table-row-selected', rowClassName)}
+      className={cn(
+        zebra && 'table-row-zebra',
+        isSelected && 'table-row-selected',
+        clickable && 'table-row-clickable',
+        rowClassName
+      )}
       aria-selected={isSelected ? true : restRowProps['aria-selected']}
       onClick={onClick ? (event) => {
         if (nestedInteractiveOwnsEvent(event)) return;
@@ -125,10 +138,12 @@ function DataTableBodyRow<T>({
 function DataTableChrome<T>({
   columns,
   className,
+  maxHeight,
   children
 }: {
   columns: TableColumn<T>[];
   className?: string | undefined;
+  maxHeight?: string | undefined;
   children: ReactNode;
 }) {
   const { setScrollNode, edges } = useScrollEdges<HTMLDivElement>();
@@ -141,12 +156,13 @@ function DataTableChrome<T>({
           (WCAG 2.1.1 / axe scrollable-region-focusable). role+label name it. */}
       <div
         ref={setScrollNode}
-        className={cn('table-wrap', className)}
+        className={cn('table-wrap', maxHeight && 'table-wrap-sticky', className)}
+        style={maxHeight ? ({ '--table-max-height': maxHeight } as CSSProperties) : undefined}
         tabIndex={0}
         role="region"
         aria-label={`${columns.map((column) => column.label).join(', ')} data table`}
       >
-        <table className="data-table">
+        <table className="data-table" data-ui="data-table">
           <TableHeaderRow columns={columns} />
           {children}
         </table>
@@ -164,7 +180,8 @@ export function DataTable<T>({
   getRowId,
   getRowProps,
   loadError = null,
-  onRetry
+  onRetry,
+  maxHeight
 }: DataTableProps<T>) {
   const failureMessage = loadError?.trim() ?? '';
   if (items.length === 0) {
@@ -189,7 +206,7 @@ export function DataTable<T>({
       {failureMessage ? (
         <TableLoadError message={failureMessage} onRetry={onRetry} retainedRows />
       ) : null}
-      <DataTableChrome columns={columns} className={className}>
+      <DataTableChrome columns={columns} className={className} maxHeight={maxHeight}>
         <tbody>
           {items.map((item, index) => {
             const rowId = getRowId?.(item, index) ?? index;

@@ -2875,6 +2875,8 @@ describe('postgres notification service adapters', () => {
     assert.deepEqual(POSTGRES_NOTIFICATION_SERVICE_METHODS, [
       'listNotifications',
       'createNotificationRule',
+      'updateNotificationRule',
+      'deleteNotificationRule',
       'emitNotification',
       'processDueNotificationRetries',
       'redriveNotificationDlq',

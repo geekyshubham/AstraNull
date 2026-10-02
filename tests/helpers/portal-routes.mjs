@@ -53,6 +53,7 @@ export const DETAIL_ROUTE_IDS = Object.freeze([
   'run-detail',
   'scan-detail',
   'finding-detail',
+  'finding-group-detail',
   'report-detail',
   'tenant-detail',
   'queue-detail',

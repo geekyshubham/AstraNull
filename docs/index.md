@@ -107,6 +107,7 @@
 |---|---|
 | [WAF/CDN/Cloud Connectors](integrations/01-waf-cdn-cloud-connectors.md) | Optional read-only connector pull matrix and normalized snapshots. |
 | [Remediation/SIEM/SOAR Connectors](integrations/02-remediation-siem-soar-connectors.md) | Optional Jira, ServiceNow, Splunk, Sentinel, XSOAR, Slack, and webhook workflows. |
+| [DNS and Edge Provider Setup](integrations/03-dns-edge-provider-setup.md) | Least-privilege, read-only setup steps and official doc links for every Provider directory entry. |
 
 ## WAF Posture Add-on
 

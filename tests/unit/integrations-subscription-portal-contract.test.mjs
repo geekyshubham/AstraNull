@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const SOURCE = readFileSync(
@@ -90,12 +90,39 @@ describe('Integrations portal annotations', () => {
     // Provider directory uses the dedicated ProviderLogo component.
     assert.match(integrations, /import \{ ProviderLogo, type ProviderLogoId \} from '\.\.\/components\/integrations\/provider-logos'/);
     assert.match(integrations, /<ProviderLogo provider=\{provider\.logo\}/);
-    // Simple Icons (CC0) attribution must be present in the logo source.
-    assert.match(PROVIDER_LOGOS_SOURCE, /Simple Icons/);
-    assert.match(PROVIDER_LOGOS_SOURCE, /CC0/);
-    // Marks render in currentColor so token CSS controls color; no emoji.
-    assert.match(PROVIDER_LOGOS_SOURCE, /fill="currentColor"/);
+    // Full-color DNS Migrator marks ship as bundled PNG imports with a notice.
+    assert.match(PROVIDER_LOGOS_SOURCE, /import cloudflareLogo from '\.\/logos\/cloudflare\.png'/);
+    assert.match(PROVIDER_LOGOS_SOURCE, /THIRD_PARTY_NOTICES\/provider-logos-NOTICE\.txt/);
+    // Decorative when adjacent text names the provider; dark variants follow the theme.
+    assert.match(PROVIDER_LOGOS_SOURCE, /alt=\{decorative \? '' : title\}/);
+    assert.match(PROVIDER_LOGOS_SOURCE, /route53DarkLogo/);
+    assert.match(PROVIDER_LOGOS_SOURCE, /getAttribute\('data-theme'\) !== 'light'/);
+    // Generic fallback stays an outline glyph; no emoji anywhere.
+    assert.match(PROVIDER_LOGOS_SOURCE, /stroke="currentColor"/);
     assert.doesNotMatch(PROVIDER_LOGOS_SOURCE, /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
+    // The logo well is neutral: no per-provider color tints.
+    assert.doesNotMatch(INTEGRATIONS_STYLES_SOURCE, /provider-logo-frame\[data-provider/);
+    for (const file of ['cloudflare', 'akamai', 'route53', 'route53-dark', 'godaddy', 'namecheap', 'hetzner', 'hetzner-dark', 'gcp', 'azure', 'ns1', 'ns1-dark']) {
+      assert.ok(existsSync(new URL(`../../apps/web/react/src/components/integrations/logos/${file}.png`, import.meta.url)), `${file}.png is bundled`);
+    }
+  });
+
+  it('links a verified least-privilege setup guide for every directory provider', () => {
+    const guides = readFileSync(
+      new URL('../../apps/web/react/src/components/integrations/provider-setup-guides.ts', import.meta.url),
+      'utf8',
+    );
+    const ids = [...integrations.matchAll(/^    id: '([a-z0-9_]+)',$/gm)].map((match) => match[1]);
+    assert.ok(ids.length >= 9, 'directory ids parsed');
+    for (const id of ids) assert.match(guides, new RegExp(`\\n  ${id}: \\{`), `${id} has a setup guide`);
+    assert.match(guides, /Zone > Zone > Read/);
+    assert.match(guides, /DNS—Zone Record Management/);
+    assert.match(guides, /View zones/);
+    assert.match(guides, /wafv2:ListWebACLs and wafv2:GetWebACL/);
+    assert.match(integrations, /<BookOpen size=\{14\} aria-hidden="true" \/> Setup guide/);
+    assert.match(integrations, /rel="noopener noreferrer"/);
+    assert.match(integrations, /scope: awsScope/);
+    assert.ok(existsSync(new URL('../../docs/integrations/03-dns-edge-provider-setup.md', import.meta.url)));
   });
 
   it('declares single domains via POST /v1/targets without environments (ADR-0008)', () => {
@@ -123,6 +150,51 @@ describe('Integrations portal annotations', () => {
     assert.match(integrations, /const targetGroupsLoadError = data\.loadErrors\.targetGroups/);
     assert.match(integrations, /loadError=\{connectorsLoadError\}/);
     assert.match(integrations, /onRetry=\{\(\) => void onRefresh\(\)\}/);
+  });
+
+  it('mounts notification channels and offers direct CTAs from the connector empty state', () => {
+    assert.match(integrations, /import \{ NotificationChannelsPanel \} from '\.\.\/components\/integrations\/notification-channels'/);
+    assert.match(integrations, /<NotificationChannelsPanel\s+config=\{config\}\s+session=\{session\}\s+onChanged=\{onRefresh\}/);
+    assert.match(integrations, /title="No connectors configured yet"/);
+    assert.match(integrations, /actionLabel=\{canAddIntegration \? 'Add provider' : undefined\}/);
+    assert.match(integrations, /onAction=\{canAddIntegration \? \(\) => openProviderFlow\(\) : undefined\}/);
+    assert.match(integrations, /Set up notifications/);
+    assert.match(integrations, /prefersReducedMotion\(\) \? 'auto' : 'smooth'/);
+    const panel = readFileSync(
+      new URL('../../apps/web/react/src/components/integrations/notification-channels.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.match(panel, />Notification channels</);
+    assert.match(panel, /headingId\?: string/);
+  });
+
+  it('renders provider and notification channel cards with one shared tile language', () => {
+    const tiles = readFileSync(
+      new URL('../../apps/web/react/src/components/integrations/integration-tile-styles.ts', import.meta.url),
+      'utf8',
+    );
+    const panel = readFileSync(
+      new URL('../../apps/web/react/src/components/integrations/notification-channels.tsx', import.meta.url),
+      'utf8',
+    );
+    const channelLogos = readFileSync(
+      new URL('../../apps/web/react/src/components/integrations/channel-logos.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.doesNotMatch(tiles, /#[0-9a-f]{3,8}\b/i);
+    assert.match(tiles, /prefers-reduced-motion: reduce/);
+    assert.match(tiles, /min-height: 44px/);
+    for (const source of [integrations, panel]) {
+      assert.match(source, /INTEGRATION_TILE_STYLES/);
+      for (const cls of ['integration-tile-grid', 'integration-tile', 'integration-identity', 'integration-tile-footer', 'integration-chip', 'integration-tile-actions']) {
+        assert.match(source, new RegExp(`className="${cls}"`), `${cls} is shared`);
+      }
+    }
+    assert.match(integrations, /className="integration-logo-well"/);
+    assert.match(channelLogos, /'integration-logo-well'/);
+    // The old per-family card classes are gone, so the two grids cannot drift apart.
+    assert.doesNotMatch(integrations, /className="provider-card"|provider-mode-chip/);
+    assert.doesNotMatch(panel, /nc-card|nc-grid/);
   });
 
   it('uses scoped design tokens rather than raw color literals', () => {

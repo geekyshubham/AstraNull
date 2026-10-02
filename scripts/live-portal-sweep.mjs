@@ -16,7 +16,7 @@ const EXPECTED_ROUTE_IDS = [
   'audit', 'release-evidence', 'settings', 'support', 'subscription', 'admin',
   'internal-soc', 'check-detail', 'policy-detail',
   'target-group-detail', 'target-detail', 'run-detail',
-  'scan-detail', 'finding-detail', 'evidence-detail', 'report-detail',
+  'scan-detail', 'finding-detail', 'finding-group-detail', 'evidence-detail', 'report-detail',
   'tenant-detail', 'queue-detail',
 ];
 const REQUIRED_TARGET_GROUP_IDS = ['tg_demo_origin', 'tg_e667ec494cba38ec'];
@@ -291,6 +291,8 @@ function routeCases(fixtures) {
     'dashboard', 'targets', 'target-groups', 'checks', 'test-policies',
     'runs', 'findings', 'reports', 'integrations', 'notifications', 'audit', 'release-evidence',
     'settings', 'support', 'subscription', 'admin', 'internal-soc',
+    // Keyless visit renders the grouped-issue empty state; keys are derived client-side.
+    'finding-group-detail',
   ].map((route) => ({ route, name: route, hash: route, expectedToken: '' }));
   const detail = [];
   const push = (route, entity, extras = '') => detail.push({

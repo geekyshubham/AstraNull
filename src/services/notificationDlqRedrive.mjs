@@ -46,6 +46,8 @@ export async function redriveNotificationDlq(ctx, options = {}) {
     deliveryMode,
     events,
     rules,
+    // Live store read per attempt so the lifecycle gate sees the current rule state.
+    resolveRule: (ruleId) => store.notificationRules.find((r) => r.id === ruleId && r.tenant_id === ctx.tenantId) ?? null,
     attemptIds: options.attemptIds,
     ruleId: options.ruleId,
     dryRun: options.dryRun === true,
@@ -103,6 +105,8 @@ export async function redriveNotificationDlq(ctx, options = {}) {
       requeued_count: batch.requeued_count,
       skipped_count: batch.skipped_count,
       still_dlq_count: batch.still_dlq_count,
+      held_count: batch.held_count ?? 0,
+      cancelled_count: batch.cancelled_count ?? 0,
       processed_count: batch.processed.length,
       rule_id: options.ruleId ?? null,
       attempt_ids_count: Array.isArray(options.attemptIds) ? options.attemptIds.length : 0,

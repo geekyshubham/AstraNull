@@ -29,3 +29,9 @@ Error/retry before empty state. Flatten plan facts, keep the entitlement table a
 
 ## Agents
 Registered-agent evidence table comes first. Never silently choose the first target group for a token. Keep trust/update/install operations secondary and responsive; compact mobile rows to essential evidence.
+
+## Refined variant (Test policies, Runs, Findings)
+Opt-in per page through the Classic/Refined switch in the header (role=group "Page design", aria-pressed); Classic stays the default. All Refined styles are scoped under `.refined` in `styles/refined.css` and use tokens only. Header uses a fixed rem step, summary strips hold real counts (two columns on phones with dividers that follow the grid), stat numerals use the body font with tabular figures, segmented controls stay one row, and disabled controls keep full opacity with `--muted` text. On phones, tables marked `.rf-stack-table` become label/value cards so status, SLA, and owner stay visible without sideways scroll.
+
+## Grouped-alert detail
+Refined Findings groups findings by alert (same check plus normalized issue) and links each row to `#finding-group-detail?key=`. The detail page shows the alert's severity, meaning, and every affected asset with status, SLA, and owner, each linking to the existing finding detail for triage and retest. It has only a Refined layout; choosing Classic saves that preference and returns to `#findings`. Severity counts and badges share one normalization (S1-S4 map to critical/high/medium/low).

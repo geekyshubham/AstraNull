@@ -1,22 +1,34 @@
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from 'react';
 import type { DataItem } from '../../lib/types';
-import { cn, scoreTone } from '../../lib/utils';
-import { Badge } from '../ui/badge';
+import { scoreTone } from '../../lib/utils';
+import './score-trend.css';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainVerdictLabel } from '../../lib/plain-language.mjs';
+import { nextKeyboardIndex, resolveActiveIndex, selectionIdAt } from './score-trend-selection';
+
+type ScoreTone = 'success' | 'warn' | 'danger';
+type VerdictTone = ScoreTone | 'muted';
 
 type ScoreTrendProps = {
   runs: DataItem[];
-  currentScore: number;
-  tone?: 'success' | 'warn' | 'danger';
+  /** Published tenant readiness score from GET /v1/state, or null when none is published. */
+  currentScore: number | null;
+  tone?: ScoreTone;
 };
 
-type ScoreTone = NonNullable<ScoreTrendProps['tone']>;
-type VerdictTone = ScoreTone | 'muted';
-
-const TONE_STROKE: Record<ScoreTone, string> = {
-  success: 'var(--success)',
-  warn: 'var(--warn)',
-  danger: 'var(--danger)',
+type ScoredPoint = {
+  key: string;
+  runId: string;
+  label: string;
+  value: number;
+  date: string;
 };
 
 const TERMINAL_VERDICT_STATUSES = new Set(['completed', 'verdicted', 'finalized']);
@@ -100,8 +112,12 @@ function verdictTone(verdict: string): VerdictTone {
   return 'muted';
 }
 
+function runTimestamp(run: DataItem): string {
+  return String(run.completed_at ?? run.created_at ?? run.started_at ?? '');
+}
+
 function runSortKey(run: DataItem): string {
-  return String(run.completed_at ?? run.created_at ?? run.started_at ?? run.id ?? '');
+  return runTimestamp(run) || String(run.id ?? '');
 }
 
 function runLabel(run: DataItem, index: number): string {
@@ -109,22 +125,374 @@ function runLabel(run: DataItem, index: number): string {
   return id ? `…${id.slice(-8)}` : `Run ${index + 1}`;
 }
 
-const TREND_WIDTH = 320;
-const TREND_HEIGHT = 120;
-const TREND_PAD_LEFT = 28;
-const TREND_PAD_RIGHT = 12;
-const TREND_PAD_Y = 12;
+function shortDate(iso: string): string {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '';
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
-function trendCoordinates(values: number[]) {
-  const plotWidth = TREND_WIDTH - TREND_PAD_LEFT - TREND_PAD_RIGHT;
-  const plotHeight = TREND_HEIGHT - TREND_PAD_Y * 2;
-  return values.map((value, index) => {
-    const x = values.length === 1
-      ? TREND_PAD_LEFT + plotWidth / 2
-      : TREND_PAD_LEFT + (index * plotWidth) / (values.length - 1);
-    const y = TREND_HEIGHT - TREND_PAD_Y - (value / 100) * plotHeight;
-    return { x, y };
-  });
+function plural(count: number, singular: string, pluralForm = `${singular}s`) {
+  return count === 1 ? singular : pluralForm;
+}
+
+function signedPoints(delta: number) {
+  if (delta === 0) return 'No change';
+  return `${delta > 0 ? '+' : ''}${delta} ${plural(Math.abs(delta), 'point')}`;
+}
+
+/* ---------- Summary figures (shared by every non-empty state) ---------- */
+
+function TrendFigures({
+  currentScore,
+  points,
+  categoricalOnlyCount
+}: {
+  currentScore: number | null;
+  points: ScoredPoint[];
+  categoricalOnlyCount: number;
+}) {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const delta = points.length >= 2 ? Math.round((last.value - first.value) * 10) / 10 : null;
+  return (
+    <dl className="trend-figures">
+      <div className="trend-figure">
+        <dt>Published score</dt>
+        <dd>
+          {currentScore === null ? 'Not published' : currentScore}
+          {currentScore === null ? null : <span className="unit">/100</span>}
+        </dd>
+      </div>
+      <div className="trend-figure">
+        <dt>Change across scored runs</dt>
+        <dd data-direction={delta === null ? 'none' : delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat'}>
+          {delta === null ? 'Needs two runs' : signedPoints(delta)}
+        </dd>
+      </div>
+      <div className="trend-figure">
+        <dt>Scored runs</dt>
+        <dd>
+          {points.length}
+          {categoricalOnlyCount > 0 ? (
+            <span className="trend-figure-note">{`+${categoricalOnlyCount} verdict-only`}</span>
+          ) : null}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+/* ---------- Measured-width hook so axis text never stretches ---------- */
+
+function useMeasuredWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const update = () => setWidth(Math.floor(node.getBoundingClientRect().width));
+    update();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
+/* ---------- Line chart (two or more scored runs) ---------- */
+
+const CHART_HEIGHT = 224;
+const PAD_TOP = 18;
+const PAD_RIGHT = 16;
+const PAD_BOTTOM = 30;
+const PAD_LEFT = 36;
+const Y_TICKS = [0, 25, 50, 75, 100];
+/** Matches the success boundary used by scoreTone and the executive readiness message. */
+const READY_THRESHOLD = 80;
+const TIP_WIDTH = 148;
+/** Above this many scored runs, individual markers crowd the line; only the latest and active run get one. */
+const DENSE_POINT_LIMIT = 40;
+/** The verdict strip shows at most this many recent runs; the tally still counts every run. */
+const VERDICT_STRIP_LIMIT = 60;
+const TIP_HEIGHT = 42;
+
+function xTickIndexes(count: number, width: number): number[] {
+  if (width < 420) return count > 1 ? [0, count - 1] : [0];
+  if (count <= 6) return Array.from({ length: count }, (_unused, index) => index);
+  const picks = Array.from({ length: 5 }, (_unused, step) => Math.round((step * (count - 1)) / 4));
+  return [...new Set(picks)];
+}
+
+function TrendLineChart({
+  points,
+  currentScore,
+  tone,
+  categoricalOnlyCount
+}: {
+  points: ScoredPoint[];
+  currentScore: number | null;
+  tone: ScoreTone;
+  categoricalOnlyCount: number;
+}) {
+  const [plotRef, width] = useMeasuredWidth<HTMLDivElement>();
+  // Selection is remembered by stable run id; the index is re-derived from the
+  // current points on every render so shrinking or replaced history cannot
+  // leave a stale index pointing past the data (F01).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const active = resolveActiveIndex(points, selectedId);
+  const setActive = (index: number | null) => setSelectedId(selectionIdAt(points, index));
+  const tableId = useId();
+  const captionId = useId();
+  const dense = points.length > DENSE_POINT_LIMIT;
+
+  const count = points.length;
+  const plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
+  const plotHeight = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
+  const baseline = PAD_TOP + plotHeight;
+  const xAt = (index: number) => PAD_LEFT + (count === 1 ? plotWidth / 2 : (index * plotWidth) / (count - 1));
+  const yAt = (value: number) => PAD_TOP + (1 - value / 100) * plotHeight;
+  const coords = points.map((point, index) => ({ x: xAt(index), y: yAt(point.value) }));
+  const linePath = coords.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${coords[count - 1].x.toFixed(1)} ${baseline} L${coords[0].x.toFixed(1)} ${baseline} Z`;
+
+  const first = points[0];
+  const last = points[count - 1];
+  const low = points.reduce((min, point) => (point.value < min.value ? point : min), first);
+  const high = points.reduce((max, point) => (point.value > max.value ? point : max), first);
+  const delta = Math.round((last.value - first.value) * 10) / 10;
+  const direction = delta > 0 ? `up ${signedPoints(delta).slice(1)}` : delta < 0 ? `down ${signedPoints(delta).slice(1)}` : 'unchanged';
+  const summary = `Latest scored run is ${last.value} of 100, ${direction} from the first of ${count} scored runs. Range ${low.value} to ${high.value}.`;
+  const ariaLabel = `Readiness score line chart. ${summary} Use the left and right arrow keys to read each run.`;
+
+  function pointDescription(index: number | null) {
+    const point = index === null ? undefined : points[index];
+    if (!point) return '';
+    return `Run ${point.runId || point.label}${point.date ? `, ${point.date}` : ''}: readiness ${point.value} of 100.`;
+  }
+
+  function onPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    let nearest = 0;
+    let best = Number.POSITIVE_INFINITY;
+    coords.forEach(({ x }, index) => {
+      const distance = Math.abs(x - px);
+      if (distance < best) {
+        best = distance;
+        nearest = index;
+      }
+    });
+    setActive(nearest);
+  }
+
+  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const next = nextKeyboardIndex(event.key, active, count);
+    if (next === undefined) return;
+    if (next !== null) event.preventDefault();
+    setActive(next);
+  }
+
+  const activePoint = active === null ? null : points[active] ?? null;
+  const activeCoord = active === null ? null : coords[active] ?? null;
+  const tipX = activeCoord ? Math.min(Math.max(activeCoord.x - TIP_WIDTH / 2, PAD_LEFT), Math.max(PAD_LEFT, width - PAD_RIGHT - TIP_WIDTH)) : 0;
+  const tipY = activeCoord ? (activeCoord.y - TIP_HEIGHT - 12 < 0 ? activeCoord.y + 12 : activeCoord.y - TIP_HEIGHT - 12) : 0;
+  const thresholdY = yAt(READY_THRESHOLD);
+
+  return (
+    <div className="trend" data-tone={tone}>
+      <TrendFigures currentScore={currentScore} points={points} categoricalOnlyCount={categoricalOnlyCount} />
+      <div
+        ref={plotRef}
+        className="trend-plot"
+        tabIndex={0}
+        role="group"
+        aria-roledescription="line chart"
+        aria-label={ariaLabel}
+        aria-describedby={captionId}
+        data-active-run={activePoint ? activePoint.runId || activePoint.label : undefined}
+        onKeyDown={onKeyDown}
+        onFocus={() => {
+          if (active === null) setActive(count - 1);
+        }}
+        onBlur={() => setActive(null)}
+      >
+        {width > 0 ? (
+          <svg
+            width={width}
+            height={CHART_HEIGHT}
+            viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
+            aria-hidden="true"
+            focusable="false"
+            onPointerMove={onPointerMove}
+            onPointerLeave={() => setActive(null)}
+          >
+            {Y_TICKS.map((tick) => (
+              <g key={tick}>
+                <line
+                  className="trend-grid-line"
+                  data-base={tick === 0 ? 'true' : undefined}
+                  x1={PAD_LEFT}
+                  x2={width - PAD_RIGHT}
+                  y1={yAt(tick)}
+                  y2={yAt(tick)}
+                />
+                <text className="trend-axis" x={PAD_LEFT - 8} y={yAt(tick) + 4} textAnchor="end">{tick}</text>
+              </g>
+            ))}
+            <line className="trend-threshold" x1={PAD_LEFT} x2={width - PAD_RIGHT} y1={thresholdY} y2={thresholdY} />
+            <text className="trend-threshold-label" x={width - PAD_RIGHT} y={thresholdY - 6} textAnchor="end">
+              {`Ready threshold ${READY_THRESHOLD}`}
+            </text>
+            <path className="trend-area" d={areaPath} />
+            <path className="trend-line" d={linePath} />
+            {activeCoord ? <line className="trend-guide" x1={activeCoord.x} x2={activeCoord.x} y1={PAD_TOP} y2={baseline} /> : null}
+            {coords.map(({ x, y }, index) => (dense && index !== active && index !== count - 1 ? null : (
+              <circle
+                key={points[index].key}
+                className="trend-point"
+                data-active={active === index ? 'true' : undefined}
+                cx={x}
+                cy={y}
+                r={active === index ? 5.5 : 3.5}
+              />
+            )))}
+            {xTickIndexes(count, width).map((index) => (
+              <text
+                key={`x-${points[index].key}`}
+                className="trend-axis"
+                x={coords[index].x}
+                y={CHART_HEIGHT - 8}
+                textAnchor={index === 0 ? 'start' : index === count - 1 ? 'end' : 'middle'}
+              >
+                {points[index].date || points[index].label}
+              </text>
+            ))}
+            {activePoint && activeCoord ? (
+              <g className="trend-tip" transform={`translate(${tipX.toFixed(1)} ${tipY.toFixed(1)})`}>
+                <rect className="trend-tip-box" width={TIP_WIDTH} height={TIP_HEIGHT} rx={6} />
+                <text className="trend-tip-value" x={10} y={17}>{`${activePoint.value} / 100`}</text>
+                <text className="trend-tip-meta" x={10} y={33}>
+                  {activePoint.date ? `${activePoint.date}, run ${activePoint.label}` : `Run ${activePoint.label}`}
+                </text>
+              </g>
+            ) : null}
+          </svg>
+        ) : null}
+      </div>
+      <p className="trend-caption" id={captionId}>
+        {summary}
+        {categoricalOnlyCount > 0
+          ? ` ${categoricalOnlyCount} verdict-only ${plural(categoricalOnlyCount, 'run')} carried no readiness score and ${categoricalOnlyCount === 1 ? 'is' : 'are'} not plotted.`
+          : ''}
+      </p>
+      <p className="sr-only trend-live" aria-live="polite">{pointDescription(active)}</p>
+      <table className="sr-only" id={tableId}>
+        <caption>Published readiness score per run, oldest first</caption>
+        <thead>
+          <tr>
+            <th scope="col">Run</th>
+            <th scope="col">Date</th>
+            <th scope="col">Readiness score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point) => (
+            <tr key={point.key}>
+              <td>{point.runId || point.label}</td>
+              <td>{point.date || 'Not recorded'}</td>
+              <td>{point.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ---------- One scored run: state the fact, draw no line ---------- */
+
+function SingleScoredRun({
+  point,
+  currentScore,
+  tone,
+  categoricalOnlyCount
+}: {
+  point: ScoredPoint;
+  currentScore: number | null;
+  tone: ScoreTone;
+  categoricalOnlyCount: number;
+}) {
+  return (
+    <div className="trend" data-tone={tone}>
+      <TrendFigures currentScore={currentScore} points={[point]} categoricalOnlyCount={categoricalOnlyCount} />
+      <div className="trend-pending">
+        <p className="trend-pending-title">One scored run so far</p>
+        <p>
+          {`Run ${point.label}${point.date ? ` on ${point.date}` : ''} published a readiness score of ${point.value} of 100. `}
+          A trend line needs at least two scored runs, so none is drawn yet.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- No per-run scores: evidence-backed verdict sequence ---------- */
+
+const VERDICT_GROUP_LABEL: Record<VerdictTone, string> = {
+  success: 'Passed',
+  warn: 'Needs review',
+  danger: 'Gap found',
+  muted: 'Other result'
+};
+
+function VerdictHistory({
+  verdictRuns,
+  currentScore
+}: {
+  verdictRuns: { run: DataItem; verdict: string; index: number }[];
+  currentScore: number | null;
+}) {
+  const tally: Record<VerdictTone, number> = { success: 0, warn: 0, danger: 0, muted: 0 };
+  for (const { verdict } of verdictRuns) tally[verdictTone(verdict)] += 1;
+  const groups = (Object.keys(tally) as VerdictTone[]).filter((tone) => tally[tone] > 0);
+  const shown = verdictRuns.slice(-VERDICT_STRIP_LIMIT);
+  const truncated = verdictRuns.length > shown.length;
+
+  return (
+    <div className="trend">
+      <TrendFigures currentScore={currentScore} points={[]} categoricalOnlyCount={verdictRuns.length} />
+      <div className="verdict-history">
+        <p className="trend-pending-title">
+          {truncated
+            ? `Latest ${shown.length} of ${verdictRuns.length} evidence-backed verdicts, oldest first`
+            : 'Evidence-backed verdicts, oldest first'}
+        </p>
+        <ol className="verdict-strip" aria-label={`Verdicts for ${shown.length} evidence-backed ${plural(shown.length, 'run')}, oldest first`}>
+          {shown.map(({ run, verdict, index }) => {
+            const label = `Run ${String(run.id ?? index + 1)}: ${plainVerdictLabel(verdict)}`;
+            return (
+              <li key={`${String(run.id ?? index)}-${index}`} data-tone={verdictTone(verdict)} title={label}>
+                <span className="sr-only">{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <ul className="verdict-tally" aria-label={`Verdict tally across all ${verdictRuns.length} evidence-backed ${plural(verdictRuns.length, 'run')}`}>
+          {groups.map((tone) => (
+            <li key={tone} data-tone={tone}>
+              <span className="verdict-tally-swatch" aria-hidden="true" />
+              {VERDICT_GROUP_LABEL[tone]}
+              <strong>{tally[tone]}</strong>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <p className="trend-caption">
+        These runs carried no readiness score, so no score line is drawn. Each mark is one run with a published, evidence-backed verdict.
+      </p>
+    </div>
+  );
 }
 
 export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
@@ -139,113 +507,48 @@ export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
   const publishedCurrentScore = readinessScoreValue(currentScore);
 
   if (scoredRuns.length === 0 && verdictRuns.length === 0) {
-    const currentLabel = publishedCurrentScore === null
-      ? ''
-      : ` Current published score: ${publishedCurrentScore}/100; no per-run score history was returned.`;
     return (
-      <div
-        className="score-trend score-trend--empty"
-        role="status"
-        aria-label={`Readiness trend unavailable; no per-run scores or evidence-backed verdicts yet.${currentLabel}`}
-      >
-        <span className="muted score-trend-caption">
-          No per-run readiness scores or evidence-backed verdicts yet.{currentLabel}
-        </span>
+      <div className="trend-empty" role="status">
+        <p className="trend-pending-title">No run history to plot yet</p>
+        <p>
+          No validation run has published a readiness score or an evidence-backed verdict.
+          {publishedCurrentScore === null ? '' : ` The current published score is ${publishedCurrentScore} of 100.`}
+        </p>
       </div>
     );
   }
 
   if (scoredRuns.length === 0) {
+    return <VerdictHistory verdictRuns={verdictRuns} currentScore={publishedCurrentScore} />;
+  }
+
+  const points: ScoredPoint[] = scoredRuns.map(({ run, value }, index) => ({
+    key: `${String(run.id ?? 'run')}-${index}`,
+    runId: String(run.id ?? ''),
+    label: runLabel(run, index),
+    value,
+    date: shortDate(runTimestamp(run))
+  }));
+  const latestScore = publishedCurrentScore ?? points[points.length - 1].value;
+  const strokeTone = tone ?? (scoreTone(latestScore) as ScoreTone);
+
+  if (points.length === 1) {
     return (
-      <div
-        className="score-trend"
-        role="region"
-        aria-label={`Categorical verdict history across ${verdictRuns.length} evidence-backed run${verdictRuns.length === 1 ? '' : 's'}; no per-run readiness scores were returned.`}
-      >
-        <div className="score-trend-header">
-          <span className="score-trend-title">Published verdict history</span>
-          <span className="score-trend-subtitle muted">
-            No per-run readiness scores returned · showing evidence-backed categories
-          </span>
-        </div>
-        <div className="row wrap">
-          {verdictRuns.map(({ run, verdict, index }) => {
-            const label = runLabel(run, index);
-            return (
-              <Badge
-                key={`${String(run.id ?? label)}-${index}`}
-                tone={verdictTone(verdict)}
-                title={`Run ${String(run.id ?? index + 1)} · ${verdict}`}
-              >
-                {label} · {plainVerdictLabel(verdict)}
-              </Badge>
-            );
-          })}
-        </div>
-        <span className="muted score-trend-caption">
-          {verdictRuns.length} evidence-backed verdict{verdictRuns.length === 1 ? '' : 's'}
-          {publishedCurrentScore === null ? '' : ` · current published score ${publishedCurrentScore}/100`}
-        </span>
-      </div>
+      <SingleScoredRun
+        point={points[0]}
+        currentScore={publishedCurrentScore}
+        tone={strokeTone}
+        categoricalOnlyCount={categoricalOnlyCount}
+      />
     );
   }
 
-  const chartValues = scoredRuns.map(({ value }) => value);
-  const coords = trendCoordinates(chartValues);
-  const polylinePoints = coords.map(({ x, y }) => `${x},${y}`).join(' ');
-  const baselineY = TREND_HEIGHT - TREND_PAD_Y;
-  const areaPoints = `${coords[0].x},${baselineY} ${polylinePoints} ${coords[coords.length - 1].x},${baselineY}`;
-  const gridLevels = [0, 50, 100];
-  const plotHeight = TREND_HEIGHT - TREND_PAD_Y * 2;
-  const gridYs = gridLevels.map(
-    (level) => TREND_HEIGHT - TREND_PAD_Y - (level / 100) * plotHeight
-  );
-  const latestScore = publishedCurrentScore ?? scoredRuns[scoredRuns.length - 1].value;
-  const strokeTone = tone ?? scoreTone(latestScore);
-  const strokeColor = TONE_STROKE[strokeTone];
-  const scoreSummary = scoredRuns.map(({ value }) => value).join(', ');
-  const ariaLabel = `Readiness score trend across ${scoredRuns.length} run${scoredRuns.length === 1 ? '' : 's'} with published per-run scores: ${scoreSummary}. Current published score: ${latestScore}.`;
-
   return (
-    <div className={cn('score-trend', `score-trend-stroke--${strokeTone}`)} role="img" aria-label={ariaLabel}>
-      <div className="score-trend-header">
-        <span className="score-trend-title">Run readiness scores</span>
-        <span className="score-trend-subtitle muted">Each point is a published per-run readiness score</span>
-      </div>
-      <svg className="score-trend-svg" viewBox={`0 0 ${TREND_WIDTH} ${TREND_HEIGHT}`} width="100%" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        {gridYs.map((gy, index) => (
-          <g key={gridLevels[index]}>
-            <line className="score-trend-grid" x1={TREND_PAD_LEFT} x2={TREND_WIDTH - TREND_PAD_RIGHT} y1={gy} y2={gy} />
-            <text className="score-trend-axis-label" x={TREND_PAD_LEFT - 6} y={gy + 3} textAnchor="end">
-              {gridLevels[index]}
-            </text>
-          </g>
-        ))}
-        <polygon className="score-trend-area" points={areaPoints} />
-        <polyline
-          className="score-trend-line"
-          points={polylinePoints}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth={2}
-          vectorEffect="non-scaling-stroke"
-        />
-        {coords.map(({ x, y }, index) => {
-          const run = scoredRuns[index].run;
-          const label = runLabel(run, index);
-          return (
-            <g key={`${String(run.id ?? label)}-${index}`}>
-              <circle className="score-trend-point" cx={x} cy={y} r={4} fill={strokeColor} />
-              <title>{`Run ${String(run.id ?? index + 1)} · readiness score ${scoredRuns[index].value}/100`}</title>
-            </g>
-          );
-        })}
-      </svg>
-      <span className="muted score-trend-caption">
-        {scoredRuns.length} scored run{scoredRuns.length === 1 ? '' : 's'}
-        {categoricalOnlyCount === 0 ? '' : ` · ${categoricalOnlyCount} categorical-only verdict${categoricalOnlyCount === 1 ? '' : 's'} omitted from the score line`}
-        {' · '}current published score {latestScore}/100
-      </span>
-    </div>
+    <TrendLineChart
+      points={points}
+      currentScore={publishedCurrentScore}
+      tone={strokeTone}
+      categoricalOnlyCount={categoricalOnlyCount}
+    />
   );
 }

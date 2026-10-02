@@ -1,0 +1,40 @@
+Provider logos
+
+Files: apps/web/react/src/components/integrations/logos/*.png
+Used by: apps/web/react/src/components/integrations/provider-logos.tsx
+
+Source
+  The 128x128 PNG marks were copied from the DNS Migrator project
+  (apps/web/public/providers). DNS Migrator rendered them from:
+    - Simple Icons glyphs with brand fills (CC0 1.0, https://simpleicons.org):
+      Cloudflare, Akamai, GoDaddy, Hetzner, Namecheap.
+    - The official AWS artwork export: Amazon Web Services (route53, route53-dark).
+    - Vendor-published raster marks: Google Cloud (gcp), Microsoft Azure (azure),
+      IBM NS1 Connect (ns1, ns1-dark).
+
+Trademarks
+  Cloudflare, Akamai, Amazon Web Services, AWS, Route 53, GoDaddy, Namecheap,
+  Hetzner, Google Cloud, Microsoft Azure, IBM and NS1 are trademarks of their
+  respective owners. AstraNull is not affiliated with, sponsored by, or endorsed
+  by any of them.
+
+  The marks are used only to identify the third-party service a connector
+  reads from or a manual metadata record describes (nominative use). They are
+  shown unmodified, at small size, next to the provider's name, and never as
+  AstraNull branding.
+
+  Remove or replace a mark if its owner's brand guidelines require it.
+
+Notification channel marks
+
+Files: apps/web/react/src/components/integrations/channel-logos.tsx
+  - Slack: the official Slack mark (inline SVG path data), fills taken from
+    Slack's published brand colours. Used only to identify the Slack
+    incoming-webhook integration, per Slack's brand guidelines.
+  - Microsoft Teams: the Teams product icon, path data from Microsoft's Fluent
+    UI brand-icons set (assets/brand-icons/product/svg/teams_48x1.svg). Used
+    under the Microsoft Fabric Assets License, section 1(b), "To illustrate
+    that Application integrates with one or more Microsoft products and
+    services". Microsoft and Microsoft Teams are trademarks of the Microsoft
+    group of companies.
+  - Email and Webhook: lucide-react glyphs (ISC License); no third-party brand.

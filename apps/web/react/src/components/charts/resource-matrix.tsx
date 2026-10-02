@@ -1,5 +1,4 @@
 import { ShieldCheck, TriangleAlert } from 'lucide-react';
-import type { CSSProperties } from 'react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { requestJson } from '../../lib/api';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
@@ -21,6 +20,7 @@ import {
 } from '../../lib/resource-matrix.mjs';
 import { Badge } from '../ui/badge';
 import { EmptyState } from '../ui/empty-state';
+import './charts.css';
 
 type ResourceMatrixProps = {
   checks: Record<string, unknown>[];
@@ -73,36 +73,6 @@ function statusLabel(family: ResourceFamily, status: ResourceMatrixStatus) {
     ? READINESS_STATUS_LABEL[status]
     : VALIDATION_STATUS_LABEL[status];
 }
-
-const CELL_STYLE: Record<ResourceMatrixStatus, CSSProperties> = {
-  protected: {
-    background: 'color-mix(in oklab, var(--success), transparent 90%)',
-    color: 'var(--success)',
-  },
-  exposed: {
-    background: 'color-mix(in oklab, var(--danger), transparent 91%)',
-    color: 'var(--danger)',
-  },
-  inconclusive: {
-    background: 'color-mix(in oklab, var(--warn), transparent 90%)',
-    color: 'var(--warn)',
-  },
-  stale: {
-    border: '1px dashed var(--warn)',
-    background: 'color-mix(in oklab, var(--warn), transparent 94%)',
-    color: 'var(--warn)',
-  },
-  not_run: {
-    border: '1px solid var(--border)',
-    background: 'color-mix(in oklab, var(--fg), transparent 96%)',
-    color: 'var(--fg-2)',
-  },
-  not_applicable: {
-    border: '1px solid var(--border)',
-    background: 'color-mix(in oklab, var(--fg), transparent 94%)',
-    color: 'var(--fg-2)',
-  },
-};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -204,14 +174,30 @@ function MatrixCell({
     : `${state.testedCheckCount}/${state.applicableCheckCount} tested`;
   return (
     <span
-      className={`heatmap-cell heatmap-${STATUS_TONE[state.status]}`}
-      style={{ ...CELL_STYLE[state.status], display: 'block', minWidth: '8.5rem', textAlign: 'center' }}
+      className={`heatmap-cell heatmap-${STATUS_TONE[state.status]} matrix-cell`}
+      data-status={state.status}
       title={description}
       aria-label={description}
     >
-      <strong style={{ display: 'block' }}>{statusLabel(family, state.status)}</strong>
-      <small style={{ display: 'block', marginTop: '0.2rem', color: 'inherit' }}>{count}</small>
+      <strong>{statusLabel(family, state.status)}</strong>
+      <small>{count}</small>
     </span>
+  );
+}
+
+function MatrixSkeleton({ columns, rows }: { columns: number; rows: number }) {
+  const style = { ['--skeleton-cols' as string]: Math.min(columns, 6) };
+  return (
+    <div className="chart-skeleton" role="status" aria-live="polite" style={style}>
+      <span className="sr-only">Loading declared targets and stored verdict details before calculating posture.</span>
+      {[0, ...Array.from({ length: Math.max(1, Math.min(rows, 4)) }, (_unused, index) => index + 1)].map((row) => (
+        <div className={row === 0 ? 'chart-skeleton-row is-head' : 'chart-skeleton-row'} key={row} aria-hidden="true">
+          {Array.from({ length: Math.min(columns, 6) + 1 }, (_unused, cell) => (
+            <span className="skeleton" key={cell} />
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -356,19 +342,12 @@ export function ResourceMatrix({
   }
 
   if (hydration.status === 'loading') {
-    return (
-      <EmptyState
-        icon={ShieldCheck}
-        title="Loading verdict evidence…"
-        body="Loading declared targets and stored verdict details before calculating posture."
-        variant="skeleton"
-      />
-    );
+    return <MatrixSkeleton columns={RESOURCE_FAMILIES.length} rows={groups.length} />;
   }
 
   return (
     <>
-      <p id={descriptionId} className="muted" style={{ marginTop: 0 }}>
+      <p id={descriptionId} className="matrix-intro">
         Every shipped exhausted-resource family is shown: {readinessFamilyCount} availability families contribute to DDoS readiness posture and {validationFamilyCount} application-security families show validation coverage only.
         Each cell uses the latest evidence-referenced stored verdict per applicable check. Evidence is fresh for {RESOURCE_EVIDENCE_FRESHNESS_DAYS} days.
         Protected or passing evidence requires a fresh pass for every applicable check; partial coverage remains inconclusive.
@@ -380,19 +359,21 @@ export function ResourceMatrix({
         aria-describedby={descriptionId}
         tabIndex={0}
       >
-        <table style={{ borderCollapse: 'separate', borderSpacing: '0.4rem', minWidth: '100%', width: 'max-content' }}>
-          <caption style={{ textAlign: 'left', padding: '0 0.4rem 0.4rem', color: 'var(--fg-2)' }}>
+        <table className="matrix-table matrix-table--resource">
+          <caption>
             All {groups.length} active target groups across all {RESOURCE_FAMILIES.length} shipped exhausted-resource families. Scroll horizontally to review every family.
           </caption>
           <thead>
             <tr>
-              <th className="heatmap-head" scope="col" style={{ textAlign: 'left', minWidth: '10rem' }}>Target group</th>
+              <th scope="col"><span className="heatmap-head matrix-corner">Target group</span></th>
               {RESOURCE_FAMILIES.map((family) => (
-                <th className="heatmap-head" scope="col" key={family.id} title={family.description}>
-                  <span style={{ display: 'block' }}>{plainCheckName(family.label)}</span>
-                  <small style={{ display: 'block', marginTop: '0.2rem', color: 'var(--fg-2)', fontWeight: 400 }}>
-                    {family.metric} · {family.scoredForDdosReadiness ? 'DDoS readiness' : 'validation only'}
-                  </small>
+                <th scope="col" key={family.id} title={family.description}>
+                  <span className="heatmap-head">
+                    {plainCheckName(family.label)}
+                    <small className="matrix-head-meta">
+                      {family.metric} · {family.scoredForDdosReadiness ? 'DDoS readiness' : 'validation only'}
+                    </small>
+                  </span>
                 </th>
               ))}
             </tr>
@@ -402,8 +383,8 @@ export function ResourceMatrix({
               const currentGroupId = String(group.id ?? '');
               return (
                 <tr key={currentGroupId || `group-${groupIndex}`}>
-                  <th className="heatmap-name" scope="row" style={{ textAlign: 'left' }}>
-                    {String(group.name ?? group.id ?? 'Declared group')}
+                  <th scope="row">
+                    <span className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</span>
                   </th>
                   {RESOURCE_FAMILIES.map((family) => {
                     const state = resourceFamilyVerdictState({
@@ -431,7 +412,7 @@ export function ResourceMatrix({
         </table>
       </div>
       <MatrixLegend />
-      <p className="muted" style={{ marginBottom: 0 }}>
+      <p className="matrix-footnote">
         “Not run” or “Not validated” means no evidence-backed stored verdict was found in the bounded records currently loaded; it is not proof that no historical run exists.
       </p>
     </>

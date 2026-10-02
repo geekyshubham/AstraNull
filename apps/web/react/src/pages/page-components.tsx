@@ -59,6 +59,9 @@ import { isFindingOpen } from '../lib/findings-helpers';
 import { buildDetailHref } from '../lib/route-params';
 import { DEFENSIVE_RULES, NAV_GROUP_LABELS, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
+import { useDesignVariant } from '../lib/design-variant';
+import { VariantSwitch } from '../components/ui/variant-switch';
+import { PoliciesRefined, type PoliciesRefinedProps } from './refined/policies-refined';
 import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
 import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
 
@@ -1995,6 +1998,7 @@ export function PolicyPage({
   onRefresh: () => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
+  const [designVariant, setDesignVariant] = useDesignVariant('test-policies');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -2404,83 +2408,21 @@ export function PolicyPage({
     setArchivePolicyId('');
   }
 
-  return (
-    <div className="content">
-      <PageHeader
-        route="test-policies"
-        title="Test policies"
-        eyebrow="Declared scope · bounded execution"
-        description="Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts remain declarations until external probe evidence is recorded; high-scale scenarios stay SOC-scheduled."
-        actions={canWritePolicies ? (
-          <Button
-            variant="default"
-            size="sm"
-            disabled={busy !== ''}
-            onClick={() => setShowCreateSchedule(true)}
-          >
-            Create schedule
-          </Button>
-        ) : undefined}
-      />
-      <div className="kpi-row">
-        <KpiCell
-          label="Active schedules"
-          value={data.loadErrors.testPolicies ? '—' : formatNumber(activePolicies.length)}
-          delta={data.loadErrors.checks ? 'Check catalog unavailable' : `${safeChecks.length} checks bindable`}
-        />
-        <KpiCell
-          label="Next run"
-          value={data.loadErrors.testPolicies ? '—' : nextRunLabel}
-          delta={data.loadErrors.testPolicies ? 'Policy data unavailable' : upcomingRuns.length > 0 ? `${upcomingRuns.length} upcoming` : 'No cadence scheduled'}
-        />
-        <KpiCell label="Checks bound" value={data.loadErrors.testPolicies ? '—' : formatNumber(boundPolicyCount)} delta="Exact schedule bindings" />
-        <KpiCell
-          label="SOC-scheduled"
-          value={data.loadErrors.testPolicies || data.loadErrors.checks ? '—' : formatNumber(socScheduledCount)}
-          delta={data.loadErrors.testPolicies || data.loadErrors.checks ? 'SOC schedule data unavailable' : socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
-        />
-      </div>
-      {(message || error) && (
-        <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
-      )}
-      <Card className="card--dense">
-        <PanelCardHeader
-          title="Validation schedules"
-          description={
-            <>
-              Scheduled bindings between declared target groups and customer-runnable checks.
-              {' '}
-              <span className="muted small">
-                {activePolicies.length} active · {data.testPolicies.length} total · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
-              </span>
-            </>
-          }
-          trailing={data.testPolicies.length > 0 ? <Badge tone="info">{activePolicies.length} active</Badge> : undefined}
-        />
-        <CardContent>
-          <DataTable
-            columns={policyColumns}
-            items={data.testPolicies}
-            loadError={data.loadErrors.testPolicies}
-            onRetry={() => void onRefresh()}
-            getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
-            getRowProps={(item) => {
-              const id = getString(item, ['id', 'policy_id'], '');
-              if (!id) return {};
-              const rowBusy = busy === `patch-policy-${id}` || busy === `archive-policy-${id}`;
-              const linkProps = detailRowProps('policy-detail', id, `Open schedule ${id} detail`);
-              return rowBusy ? { ...linkProps, 'aria-busy': true } : linkProps;
-            }}
-            empty={renderFriendlyEmptyState({
-              icon: ClipboardList,
-              title: 'No schedules yet.',
-              body: 'Create a validation schedule after declaring target groups and reviewing the check catalog.',
-              actionLabel: canWritePolicies ? 'New schedule' : undefined,
-              onAction: canWritePolicies ? () => setShowCreateSchedule(true) : undefined
-            })}
-          />
-        </CardContent>
-      </Card>
+  function getPolicyRowProps(item: DataItem) {
+    const id = getString(item, ['id', 'policy_id'], '');
+    if (!id) return {};
+    const rowBusy = busy === `patch-policy-${id}` || busy === `archive-policy-${id}`;
+    const linkProps = detailRowProps('policy-detail', id, `Open schedule ${id} detail`);
+    return rowBusy ? { ...linkProps, 'aria-busy': true } : linkProps;
+  }
+  const policyEmptyState = renderFriendlyEmptyState({
+    icon: ClipboardList,
+    title: 'No schedules yet.',
+    body: 'Create a validation schedule after declaring target groups and reviewing the check catalog.',
+    actionLabel: canWritePolicies ? 'New schedule' : undefined,
+    onAction: canWritePolicies ? () => setShowCreateSchedule(true) : undefined
+  });
+  const createScheduleModal = (
       <FormModal
         open={canWritePolicies && showCreateSchedule}
         title="Create validation schedule"
@@ -2638,6 +2580,8 @@ export function PolicyPage({
               </div>
             </form>
       </FormModal>
+  );
+  const archiveScheduleModal = (
       <ConfirmModal
         open={canWritePolicies && Boolean(archivePolicyId)}
         title={`Archive schedule ${archivePolicyId}`}
@@ -2647,6 +2591,144 @@ export function PolicyPage({
         onCancel={() => setArchivePolicyId('')}
         onConfirm={() => void archivePolicy(archivePolicyId)}
       />
+  );
+  const policyModals = <>{createScheduleModal}{archiveScheduleModal}</>;
+  const variantSwitch = <VariantSwitch value={designVariant} onChange={setDesignVariant} />;
+
+  if (designVariant === 'refined') {
+    const refinedProps: PoliciesRefinedProps = {
+      data,
+      config,
+      session,
+      onRefresh,
+      variant: designVariant,
+      onVariantChange: setDesignVariant,
+      busy,
+      message,
+      error,
+      canWritePolicies,
+      policyColumns,
+      activePolicies,
+      safeChecks,
+      socGatedChecks,
+      socScheduledCount,
+      boundPolicyCount,
+      upcomingRuns,
+      nextRunLabel,
+      getPolicyRowProps,
+      getPolicyNextRun: (item) => {
+        const socGated = isPolicySocGated(item, checksById);
+        return { ...derivePolicyNextRun(item, socGated), socGated };
+      },
+      policyEmptyState,
+      onCreateSchedule: () => setShowCreateSchedule(true),
+      // Refined renders the create form inline from this model, so only the archive confirm is a modal.
+      modals: archiveScheduleModal,
+      createForm: {
+        open: canWritePolicies && showCreateSchedule,
+        onClose: () => setShowCreateSchedule(false),
+        onSubmit: (event) => void handleCreatePolicy(event),
+        targetGroups: activePolicyTargetGroups,
+        selectedGroupIds: policyTargetGroupIds,
+        onTargetGroupsChange: handlePolicyTargetGroupChange,
+        bindings: policyTargetBindings,
+        onSelectTarget: (targetGroupId, selectedTargetId) => setPolicyTargetBindings((current) => ({
+          ...current,
+          [targetGroupId]: {
+            targets: current[targetGroupId]?.targets ?? [],
+            selectedTargetId,
+            loading: false,
+            error: ''
+          }
+        })),
+        onRetryTargets: (targetGroupId) => void loadPolicyTargetsForGroup(targetGroupId),
+        bindingsReady: policyBindingsReady,
+        selectedCheck: selectedPolicyCheck,
+        checkId: policyCheckId,
+        checkOptions: policyCheckOptions,
+        onCheckChange: handlePolicyCheckChange,
+        cadence: policyCadence,
+        cadenceOptions: POLICY_CADENCE_OPTIONS,
+        onCadenceChange: setPolicyCadence,
+        expectedVerdict: policyExpectedVerdict,
+        verdictOptions: POLICY_VERDICT_OPTIONS,
+        onExpectedVerdictChange: setPolicyExpectedVerdict
+      }
+    };
+    return <PoliciesRefined {...refinedProps} />;
+  }
+
+  return (
+    <div className="content">
+      <PageHeader
+        route="test-policies"
+        title="Test policies"
+        eyebrow="Declared scope · bounded execution"
+        description="Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts remain declarations until external probe evidence is recorded; high-scale scenarios stay SOC-scheduled."
+        actions={(
+          <>
+            {variantSwitch}
+            {canWritePolicies ? (
+              <Button
+                variant="default"
+                size="sm"
+                disabled={busy !== ''}
+                onClick={() => setShowCreateSchedule(true)}
+              >
+                Create schedule
+              </Button>
+            ) : null}
+          </>
+        )}
+      />
+      <div className="kpi-row">
+        <KpiCell
+          label="Active schedules"
+          value={data.loadErrors.testPolicies ? '—' : formatNumber(activePolicies.length)}
+          delta={data.loadErrors.checks ? 'Check catalog unavailable' : `${safeChecks.length} checks bindable`}
+        />
+        <KpiCell
+          label="Next run"
+          value={data.loadErrors.testPolicies ? '—' : nextRunLabel}
+          delta={data.loadErrors.testPolicies ? 'Policy data unavailable' : upcomingRuns.length > 0 ? `${upcomingRuns.length} upcoming` : 'No cadence scheduled'}
+        />
+        <KpiCell label="Checks bound" value={data.loadErrors.testPolicies ? '—' : formatNumber(boundPolicyCount)} delta="Exact schedule bindings" />
+        <KpiCell
+          label="SOC-scheduled"
+          value={data.loadErrors.testPolicies || data.loadErrors.checks ? '—' : formatNumber(socScheduledCount)}
+          delta={data.loadErrors.testPolicies || data.loadErrors.checks ? 'SOC schedule data unavailable' : socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
+        />
+      </div>
+      {(message || error) && (
+        <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
+      )}
+      <Card className="card--dense">
+        <PanelCardHeader
+          title="Validation schedules"
+          description={
+            <>
+              Scheduled bindings between declared target groups and customer-runnable checks.
+              {' '}
+              <span className="muted small">
+                {activePolicies.length} active · {data.testPolicies.length} total · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
+              </span>
+            </>
+          }
+          trailing={data.testPolicies.length > 0 ? <Badge tone="info">{activePolicies.length} active</Badge> : undefined}
+        />
+        <CardContent>
+          <DataTable
+            columns={policyColumns}
+            items={data.testPolicies}
+            loadError={data.loadErrors.testPolicies}
+            onRetry={() => void onRefresh()}
+            getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
+            getRowProps={getPolicyRowProps}
+            empty={policyEmptyState}
+          />
+        </CardContent>
+      </Card>
+      {policyModals}
     </div>
   );
 }

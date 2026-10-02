@@ -18,6 +18,7 @@ export type RouteId =
   | 'scan-detail'
   | 'findings'
   | 'finding-detail'
+  | 'finding-group-detail'
   | 'evidence-detail'
   | 'reports'
   | 'report-detail'
@@ -98,7 +99,10 @@ export const PORTAL_ROUTE_DATASETS = {
   'run-detail': ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
   'scan-detail': ['targetGroups', 'checks'],
   findings: ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
-  'finding-detail': ['targets', 'checks', 'findings', 'wafActionItems'],
+  // targetGroups: the rule-wide asset table labels groups by recorded name, so a cold deep link must load them.
+  'finding-detail': ['targetGroups', 'targets', 'checks', 'findings', 'wafActionItems'],
+  // Grouped Refined view: same datasets as the findings list it is derived from.
+  'finding-group-detail': ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
   'evidence-detail': ['evidence', 'findings'],
   reports: ['reports', 'audit'],
   'report-detail': ['targetGroups', 'runs', 'findings', 'reports'],

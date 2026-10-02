@@ -3,6 +3,7 @@ import type { DataItem } from '../../lib/types';
 // @ts-ignore Plain ESM keeps machine-code presentation directly testable with node:test.
 import { plainEmptyReason } from '../../lib/plain-language.mjs';
 import { EmptyState } from '../ui/empty-state';
+import '../charts/charts.css';
 
 function getNumber(item: DataItem | null | undefined, keys: string[], fallback: number | null = null) {
   if (!item) return fallback;
@@ -221,7 +222,17 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
           <p className="muted small">Provider names come from connector metadata. A detected provider or an unfilled bar segment is not proof that traffic was blocked.</p>
         </div>
         {vendors.length > 0 ? (
-          vendors.map((row) => <VendorCoverageRow key={row.vendor} {...row} />)
+          <>
+            <ul className="dw-legend" aria-label="Provider bar legend">
+              <li><span className="dw-legend-swatch" data-tone="pass" aria-hidden="true" />Protection worked</li>
+              <li><span className="dw-legend-swatch" data-tone="warn" aria-hidden="true" />Blocked at edge only</li>
+              <li><span className="dw-legend-swatch" data-tone="fail" aria-hidden="true" />Needs work</li>
+              <li><span className="dw-legend-swatch" data-tone="rest" aria-hidden="true" />Not enough evidence</li>
+            </ul>
+            <div className="dw-vendor-list">
+              {vendors.map((row) => <VendorCoverageRow key={row.vendor} {...row} />)}
+            </div>
+          </>
         ) : (
           <p className="dash-waf-vendors--empty">
             Vendor coverage breakdown appears when connectors publish per-vendor asset metadata.

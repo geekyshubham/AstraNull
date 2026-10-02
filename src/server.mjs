@@ -103,6 +103,8 @@ import { createFixedWindowRateLimiter, deriveClientKey } from './lib/rateLimit.m
 import * as adapterStub from './services/executionAdapterStub.mjs';
 import {
   isNotificationManagementRoute,
+  isNotificationRuleLifecycleRoute,
+  NOTIFICATION_RULE_ID_ROUTE,
   isHighScaleRoute,
   isPortalRevampRoute,
   portalRevampServicesWired,
@@ -432,6 +434,12 @@ function blockPostgresNotificationRoute(runtimeConfig, serviceDeps, path, method
   }
   if (path === '/v1/notifications/dlq/redrive' && method === 'POST') {
     if (typeof serviceDeps.notifications?.redriveNotificationDlq === 'function') return false;
+    respondPostgresRouteNotWired(res);
+    return true;
+  }
+  if (isNotificationRuleLifecycleRoute(path, method)) {
+    const fnName = method === 'PATCH' ? 'updateNotificationRule' : 'deleteNotificationRule';
+    if (typeof serviceDeps.notifications?.[fnName] === 'function') return false;
     respondPostgresRouteNotWired(res);
     return true;
   }
@@ -2156,6 +2164,30 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const result = await createFn(ctx, body);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, formatNotificationRuleForRead(result));
+  }
+  const notificationRuleMatch = path.match(NOTIFICATION_RULE_ID_ROUTE);
+  if (notificationRuleMatch && method === 'PATCH') {
+    const gate = requirePermission(ctx, 'notification:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockPostgresNotificationRoute(runtimeConfig, serviceDeps, path, method, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const updateFn =
+      serviceDeps.notifications?.updateNotificationRule ?? notifications.updateNotificationRule;
+    const result = await updateFn(ctx, notificationRuleMatch[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, { error: result.error });
+    return json(res, 200, formatNotificationRuleForRead(result));
+  }
+  if (notificationRuleMatch && method === 'DELETE') {
+    const gate = requirePermission(ctx, 'notification:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockPostgresNotificationRoute(runtimeConfig, serviceDeps, path, method, res)) return;
+    const deleteFn =
+      serviceDeps.notifications?.deleteNotificationRule ?? notifications.deleteNotificationRule;
+    const result = await deleteFn(ctx, notificationRuleMatch[1]);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, { error: result.error });
+    return json(res, 200, { id: result.id, deleted: true, deleted_at: result.deleted_at });
   }
   if (method === 'POST' && path === '/v1/notifications/retries/process') {
     const gate = requirePermission(ctx, 'notification:write');

@@ -1,0 +1,119 @@
+/* Alert (finding group) detail. Page-specific rules only; shared primitives live in styles/refined.css. */
+
+.refined .rf-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--motion-ease);
+}
+
+.refined .rf-back-link:hover {
+  color: var(--fg);
+}
+
+.refined .rf-alert-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.refined .rf-alert-meta .rf-chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+  padding-block: var(--space-1);
+}
+
+.refined .rf-stat-date {
+  font-size: var(--text-lg);
+}
+
+/* What this means ------------------------------------------------------- */
+.refined .rf-meaning {
+  display: grid;
+  gap: var(--space-4);
+  justify-items: start;
+}
+
+.refined .rf-meaning-list {
+  display: grid;
+  gap: var(--space-4);
+  width: 100%;
+  margin: 0;
+}
+
+.refined .rf-meaning-list > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-5);
+  min-width: 0;
+}
+
+.refined .rf-meaning-list dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+
+.refined .rf-meaning-list dd {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-meaning-list dd strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.refined .rf-meaning-steps {
+  display: block;
+  margin-top: var(--space-2);
+  white-space: pre-line;
+}
+
+/* Asset table ----------------------------------------------------------- */
+.refined .rf-asset-name {
+  color: var(--fg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.refined .rf-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .refined .rf-meaning-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+
+  .refined .rf-row-actions > * {
+    flex: 1 1 auto;
+  }
+}
+
+@media (pointer: coarse) {
+  .refined .rf-row-actions > * {
+    min-height: 44px;
+  }
+}

@@ -316,3 +316,101 @@ describe('postgres notification repository', () => {
     assert.equal(inserted[0].provider_status, 502);
   });
 });
+
+describe('postgres notification repository delivery claims (R02/R04)', () => {
+  it('claimDeliveryAttempt is a tenant-scoped conditional UPDATE ... RETURNING with a DB-clock lease', async () => {
+    const pool = createRecordingPool((sql) => {
+      if (/UPDATE notification_delivery_attempts a/i.test(sql)) {
+        return {
+          rows: [{
+            id: 'natt_1', tenant_id: CTX.tenantId, notification_event_id: 'nevt_1', rule_id: 'nrule_1',
+            channel: 'webhook', status: 'provider_retry_scheduled', attempt_number: 0, max_attempts: 3,
+            next_retry_at: FIXED_NOW, created_at: FIXED_NOW, lease_expires_at: FIXED_NOW,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createNotificationRepository(pool);
+    const claimed = await repo.claimDeliveryAttempt(CTX, { attemptId: 'natt_1', claimToken: 'tok', leaseMs: 1000, dueBy: FIXED_NOW });
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const [update] = dataQueries(pool.client);
+    assert.match(update.text, /WHERE a\.tenant_id = \$1 AND a\.id = \$2/);
+    assert.match(update.text, /superseded_at IS NULL/);
+    assert.match(update.text, /lease_expires_at IS NULL OR a\.lease_expires_at <= clock_timestamp\(\)/);
+    assert.match(update.text, /RETURNING/);
+    assert.deepEqual(update.params, [CTX.tenantId, 'natt_1', 'tok', 1000, FIXED_NOW]);
+    assert.equal(claimed.notification_event_id, 'nevt_1');
+    assert.equal(claimed.lease_expires_at, FIXED_NOW);
+  });
+
+  it('claimDeliveryAttempt returns null when the claim is lost', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const repo = createNotificationRepository(pool);
+    assert.equal(await repo.claimDeliveryAttempt(CTX, { attemptId: 'natt_1', claimToken: 'tok', leaseMs: 1000 }), null);
+  });
+
+  it('listDueDeliveryAttempts reads due work from the attempt ledger with a keyset cursor', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const repo = createNotificationRepository(pool);
+    await repo.listDueDeliveryAttempts(CTX, {
+      asOf: FIXED_NOW, limit: 25, after: { next_retry_at: '2026-06-01T11:00:00.000Z', id: 'natt_0' },
+    });
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const [select] = dataQueries(pool.client);
+    assert.doesNotMatch(select.text, /ORDER BY e\.created_at DESC/);
+    assert.match(select.text, /a\.next_retry_at <= \$2::timestamptz/);
+    assert.match(select.text, /\(a\.next_retry_at, a\.id\) > \(\$3::timestamptz, \$4::text\)/);
+    assert.match(select.text, /ORDER BY a\.next_retry_at ASC, a\.id ASC/);
+    // The cursor column must carry full database precision: a ms-truncated Date string would
+    // re-serve the page-boundary row on the next page and burn the tick's work budget on it.
+    assert.match(select.text, /a\.next_retry_at::text AS next_retry_at_cursor/);
+    assert.deepEqual(select.params, [CTX.tenantId, FIXED_NOW, '2026-06-01T11:00:00.000Z', 'natt_0', 25]);
+  });
+
+  it('listDlqDeliveryAttempts selects a full-precision created_at cursor column', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const repo = createNotificationRepository(pool);
+    await repo.listDlqDeliveryAttempts(CTX, {
+      limit: 25, after: { created_at: '2026-06-01T11:00:00.000123Z', id: 'natt_0' },
+    });
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const [select] = dataQueries(pool.client);
+    assert.match(select.text, /ORDER BY a\.created_at ASC, a\.id ASC/);
+    assert.match(select.text, /\(a\.created_at, a\.id\) > \(/);
+    assert.match(select.text, /a\.created_at::text AS created_at_cursor/);
+  });
+
+  it('mapDeliveryAttemptRow keeps the cursor columns as exact strings', async () => {
+    // A microsecond-precision boundary row must survive the mapping unchanged: an ISO round-trip
+    // would truncate to milliseconds and break the keyset page advance.
+    const MICROSECOND_TS = '2026-06-01T11:00:00.000123+00:00';
+    const pool = createRecordingPool((sql) => {
+      if (/FROM notification_delivery_attempts a/i.test(sql)) {
+        return {
+          rows: [{
+            id: 'natt_1', tenant_id: CTX.tenantId, notification_event_id: 'nevt_1', rule_id: 'nrule_1',
+            channel: 'webhook', status: 'provider_retry_scheduled', attempt_number: 1, max_attempts: 3,
+            next_retry_at: MICROSECOND_TS, created_at: MICROSECOND_TS, lease_expires_at: null,
+            next_retry_at_cursor: '2026-06-01T11:00:00.000123',
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createNotificationRepository(pool);
+    const [row] = await repo.listDueDeliveryAttempts(CTX, { asOf: FIXED_NOW, limit: 10 });
+    assert.equal(row.attempt.next_retry_at_cursor, '2026-06-01T11:00:00.000123');
+    assert.notEqual(new Date(row.attempt.next_retry_at).toISOString(), row.attempt.next_retry_at_cursor, 'the cursor is not a ms-truncated Date string');
+  });
+
+  it('completeDeliveryAttemptClaim writes nothing when this claim no longer owns the attempt', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const repo = createNotificationRepository(pool);
+    const result = await repo.completeDeliveryAttemptClaim(CTX, {
+      attemptId: 'natt_1', claimToken: 'tok', eventId: 'nevt_1', record: { id: 'natt_2' },
+    });
+    assert.deepEqual(result, { completed: false, attempt: null });
+    assert.equal(dataQueries(pool.client).some((q) => /INSERT INTO/i.test(q.text)), false);
+  });
+});

@@ -1,6 +1,7 @@
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import {
   Activity,
+  ChevronRight,
   ListChecks,
   Network,
   RefreshCw,
@@ -14,7 +15,6 @@ import { ResourceMatrix } from '../components/charts/resource-matrix';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
-import { EvidenceGuide } from '../components/ui/evidence-guide';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { DataTable, type TableColumn } from '../components/ui/table';
@@ -24,8 +24,10 @@ import {
   buildTargetPostureRows,
   classifyVerdict,
   findingSeverityBuckets,
+  findingSeverityDistribution,
   overallDefenseStatus,
   resolveRecentRuns,
+  severityShortLabel,
   type DefensePathStage,
   type EvidenceStatus,
   type TargetPostureRow
@@ -46,6 +48,8 @@ type UiBadgeTone = BadgeTone;
 type DashboardTabId = 'overview' | 'risk-trends';
 const DASHBOARD_TAB_IDS: readonly DashboardTabId[] = ['overview', 'risk-trends'];
 const DASHBOARD_TAB_STORAGE_KEY = 'astranull-dashboard-tab';
+/** Placeholder for a value whose source failed to load. Plain text, no dash glyphs. */
+const UNAVAILABLE = 'n/a';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -89,7 +93,7 @@ const STATUS_TONE: Record<EvidenceStatus, UiBadgeTone> = {
 
 function formatShortRelative(iso: string) {
   const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return '—';
+  if (!Number.isFinite(ts)) return UNAVAILABLE;
   const seconds = Math.round(Math.max(0, Date.now() - ts) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
@@ -146,10 +150,14 @@ function buildNextSteps(data: PortalData): NextStep[] {
     for (const finding of openFindings.slice(0, 3)) {
       const id = getString(finding, ['id']);
       const severity = getString(finding, ['severity'], 'unknown');
+      const title = fixTitle(finding, data.targets, data.checks);
+      const plainTitle = plainFindingTitle(finding, data.targets, data.checks);
+      const severityText = `${severityShortLabel(severity)} severity`;
       steps.push({
         key: `finding-${id || steps.length}`,
-        title: fixTitle(finding, data.targets, data.checks),
-        detail: `${formatSeverityLabel(severity)} · ${plainFindingTitle(finding, data.targets, data.checks)}`,
+        title,
+        // The fallback title already repeats the finding name; only add it when it adds information.
+        detail: title === `Review ${plainTitle}` ? `${severityText} open finding` : `${severityText}: ${plainTitle}`,
         href: id ? buildDetailHref('finding-detail', id) : '#findings',
         tone: ['s1', 'critical', 's2', 'high'].includes(severity.toLowerCase()) ? 'danger' : 'warn'
       });
@@ -233,6 +241,43 @@ function WeightedFactors({ factors }: { factors: ReadinessFactor[] }) {
   );
 }
 
+/* ---------- KPI card: whole card is the hit area when it navigates ---------- */
+
+function KpiCard({
+  label,
+  value,
+  sub,
+  href,
+  onActivate,
+  actionLabel
+}: {
+  label: string;
+  value: ReactNode;
+  sub: ReactNode;
+  href?: string;
+  onActivate?: () => void;
+  actionLabel?: string;
+}) {
+  const body = (
+    <>
+      <span className="dashboard-kpi-top">
+        <span className="dashboard-kpi-label">{label}</span>
+        {href || onActivate ? <ChevronRight className="dashboard-kpi-chevron" size={16} aria-hidden="true" /> : null}
+      </span>
+      <span className="dashboard-kpi-value">{value}</span>
+      {sub}
+      {actionLabel ? <span className="sr-only">{actionLabel}</span> : null}
+    </>
+  );
+  if (href) {
+    return <a className="dashboard-kpi is-interactive" href={href}>{body}</a>;
+  }
+  if (onActivate) {
+    return <button type="button" className="dashboard-kpi is-interactive" onClick={onActivate}>{body}</button>;
+  }
+  return <div className="dashboard-kpi">{body}</div>;
+}
+
 /* ---------- Defense path strip (the one bold element) ---------- */
 
 const OVERALL_LABEL: Record<EvidenceStatus, string> = {
@@ -261,10 +306,7 @@ function DefensePathStrip({ stages }: { stages: DefensePathStage[] }) {
       <div className="defense-path-track" role="list" aria-label="Outside-in defense path stages">
         {stages.map((stage) => (
           <div className="defense-stage" data-status={stage.status} role="listitem" key={stage.key}>
-            <div className="defense-stage-top">
-              <span className="defense-stage-label">{stage.label}</span>
-              <span className="defense-stage-dot" data-status={stage.status} aria-hidden="true" />
-            </div>
+            <span className="defense-stage-label">{stage.label}</span>
             <span className="defense-stage-headline">{stage.headline}</span>
             <p className="defense-stage-detail">{stage.detail}</p>
             <Badge tone={STATUS_TONE[stage.status]} title={stage.detail}>
@@ -329,15 +371,21 @@ export function DashboardPage({
   const verifiedShare = declaredTargets > 0 ? Math.round((verifiedTargets / declaredTargets) * 100) : null;
 
   // Evidence coverage: declared targets with at least one evidence-backed verdict.
+  const allPostureRows = buildTargetPostureRows(data);
   const targetsWithEvidence = new Set(
-    buildTargetPostureRows(data).filter((row) => row.verdictStatus !== 'none').map((row) => row.id)
+    allPostureRows.filter((row) => row.verdictStatus !== 'none').map((row) => row.id)
   ).size;
+  // Posture tally across every declared target, worst first, for the scannable summary line.
+  const postureTally = (['gap', 'review', 'pass', 'none'] as EvidenceStatus[]).map((status) => ({
+    status,
+    count: allPostureRows.filter((row) => row.verdictStatus === status).length
+  }));
   const coverageUnavailable = targetsUnavailable || Boolean(data.loadErrors.runs);
   const coveragePercent = coverageUnavailable || declaredTargets === 0 ? null : Math.round((targetsWithEvidence / declaredTargets) * 100);
 
   const lastValidationIso = getString(data.state ?? {}, ['last_validation_at'])
     || (recentRuns[0] ? String(recentRuns[0].completed_at ?? recentRuns[0].started_at ?? recentRuns[0].created_at ?? '') : '');
-  const lastValidationLabel = data.loadErrors.runs ? '—' : lastValidationIso ? formatShortRelative(lastValidationIso) : 'Never';
+  const lastValidationLabel = data.loadErrors.runs ? UNAVAILABLE : lastValidationIso ? formatShortRelative(lastValidationIso) : 'Never';
 
   const executive = dashboardReadinessMessage({
     score,
@@ -397,7 +445,7 @@ export function DashboardPage({
       render: (item) => (
         <span className="posture-target">
           <strong>{getString(item, ['target_hostname', 'target_value'], getString(item, ['check_id'], 'Validation run'))}</strong>
-          <small className="mono">{getString(item, ['id'], '—')}</small>
+          <small className="mono">{getString(item, ['id'], UNAVAILABLE)}</small>
         </span>
       )
     },
@@ -437,17 +485,26 @@ export function DashboardPage({
     };
   }
 
+  // Oldest first by recorded open date; findings without a date sort last, never as "oldest".
   const agingFindings = [...data.findings]
     .filter(isFindingOpen)
-    .sort((left, right) => String(left.created_at ?? left.id ?? '').localeCompare(String(right.created_at ?? right.id ?? '')))
+    .sort((left, right) => {
+      const lt = Date.parse(String(left.created_at ?? ''));
+      const rt = Date.parse(String(right.created_at ?? ''));
+      const lValid = Number.isFinite(lt);
+      const rValid = Number.isFinite(rt);
+      if (lValid && rValid && lt !== rt) return lt - rt;
+      if (lValid !== rValid) return lValid ? -1 : 1;
+      return String(left.id ?? '').localeCompare(String(right.id ?? ''));
+    })
     .slice(0, 8);
 
-  const severityRows: { label: string; count: number; tone: 'danger' | 'warn' | 'muted' }[] = [
-    { label: 'Critical (S1)', count: severity.critical, tone: 'danger' },
-    { label: 'High (S2)', count: severity.high, tone: 'warn' },
-    { label: 'Medium / Low', count: severity.other, tone: 'muted' }
-  ];
-  const severityMax = Math.max(1, severity.critical, severity.high, severity.other);
+  // Severity split for the risk-trends findings panel; counts come only from loaded open findings.
+  const severityDist = findingSeverityDistribution(data.findings);
+  const severitySlices = severityDist.slices.filter((slice) => slice.key !== 'unrecorded' || slice.count > 0);
+  const severityStackLabel = `${formatNumber(severityDist.total)} open ${pluralize(severityDist.total, 'finding')}: ${severitySlices
+    .map((slice) => `${slice.label} ${formatNumber(slice.count)}`)
+    .join(', ')}`;
 
   return (
     <div className="content dashboard-page">
@@ -468,12 +525,12 @@ export function DashboardPage({
         }
       />
       <PageContextSummary>
-        <span className="tabular-nums">{targetsUnavailable ? '—' : formatNumber(declaredTargets)}</span>{' '}
-        {`declared ${pluralize(declaredTargets, 'target')} · `}
-        <span className="tabular-nums">{targetsUnavailable ? '—' : formatNumber(verifiedTargets)}</span>{' '}
-        {`ownership verified · `}
-        <span className="tabular-nums">{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</span>{' '}
-        {`evidence ${pluralize(data.evidence.length, 'record')} · high-scale remains SOC-gated`}
+        <span className="tabular-nums">{targetsUnavailable ? UNAVAILABLE : formatNumber(declaredTargets)}</span>{' '}
+        {`declared ${pluralize(declaredTargets, 'target')}, `}
+        <span className="tabular-nums">{targetsUnavailable ? UNAVAILABLE : formatNumber(verifiedTargets)}</span>{' '}
+        {`ownership verified, `}
+        <span className="tabular-nums">{data.loadErrors.evidence ? UNAVAILABLE : formatNumber(data.evidence.length)}</span>{' '}
+        {`evidence ${pluralize(data.evidence.length, 'record')}. High-scale tests stay SOC-gated.`}
       </PageContextSummary>
       <Tabs
         value={tab}
@@ -498,25 +555,35 @@ export function DashboardPage({
           <DefensePathStrip stages={defensePath} />
 
           <div className="dashboard-kpis" role="group" aria-label="Readiness key metrics">
-            <div className="dashboard-kpi">
-              <span className="dashboard-kpi-label">Readiness</span>
-              <span className="dashboard-kpi-value">{score ?? '—'}{score !== null ? <span className="unit">/100</span> : null}</span>
-              <span className="dashboard-kpi-sub">{executive.headline}</span>
-            </div>
-            <div className="dashboard-kpi">
-              <span className="dashboard-kpi-label">Declared targets</span>
-              <span className="dashboard-kpi-value">{targetsUnavailable ? '—' : formatNumber(declaredTargets)}</span>
-              <span className="dashboard-kpi-sub">{targetsUnavailable ? 'Target data unavailable' : verifiedShare === null ? 'No targets declared yet' : `${formatNumber(verifiedTargets)} ownership verified (${verifiedShare}%)`}</span>
-            </div>
-            <div className="dashboard-kpi">
-              <span className="dashboard-kpi-label">Evidence coverage</span>
-              <span className="dashboard-kpi-value">{coveragePercent === null ? '—' : coveragePercent}{coveragePercent !== null ? <span className="unit">%</span> : null}</span>
-              <span className="dashboard-kpi-sub">{coverageUnavailable ? 'Coverage unavailable' : `${formatNumber(targetsWithEvidence)} of ${formatNumber(declaredTargets)} targets have evidence-backed verdicts`}</span>
-            </div>
-            <div className="dashboard-kpi">
-              <span className="dashboard-kpi-label">Open findings</span>
-              <span className="dashboard-kpi-value">{data.loadErrors.findings ? '—' : formatNumber(severity.total)}</span>
-              {data.loadErrors.findings ? (
+            <KpiCard
+              label="Readiness"
+              value={<>{score ?? UNAVAILABLE}{score !== null ? <span className="unit">/100</span> : null}</>}
+              sub={<span className="dashboard-kpi-sub">{executive.headline}</span>}
+              onActivate={() => {
+                handleTabChange('risk-trends');
+                // The KPI unmounts with the overview panel; hand focus to the tab it opened.
+                window.requestAnimationFrame(() => document.getElementById('dashboard-sections-tab-risk-trends')?.focus());
+              }}
+              actionLabel="Open readiness trend"
+            />
+            <KpiCard
+              label="Declared targets"
+              value={targetsUnavailable ? UNAVAILABLE : formatNumber(declaredTargets)}
+              sub={<span className="dashboard-kpi-sub">{targetsUnavailable ? 'Target data unavailable' : verifiedShare === null ? 'No targets declared yet' : `${formatNumber(verifiedTargets)} ownership verified (${verifiedShare}%)`}</span>}
+              href="#targets"
+              actionLabel="Open targets"
+            />
+            <KpiCard
+              label="Evidence coverage"
+              value={<>{coveragePercent === null ? UNAVAILABLE : coveragePercent}{coveragePercent !== null ? <span className="unit">%</span> : null}</>}
+              sub={<span className="dashboard-kpi-sub">{coverageUnavailable ? 'Coverage unavailable' : `${formatNumber(targetsWithEvidence)} of ${formatNumber(declaredTargets)} targets have evidence-backed verdicts`}</span>}
+              href="#runs"
+              actionLabel="Open test runs"
+            />
+            <KpiCard
+              label="Open findings"
+              value={data.loadErrors.findings ? UNAVAILABLE : formatNumber(severity.total)}
+              sub={data.loadErrors.findings ? (
                 <span className="dashboard-kpi-sub">Finding data unavailable</span>
               ) : (
                 <span className="dashboard-kpi-split">
@@ -524,106 +591,122 @@ export function DashboardPage({
                   <Badge tone="warn" title="Severity 2 (High)">{formatNumber(severity.high)} high</Badge>
                 </span>
               )}
-            </div>
+              href="#findings"
+              actionLabel="View all findings"
+            />
           </div>
 
           <div className="an-dash-grid">
-            <div className="dashboard-col">
-              <Card>
-                <CardHeader>
-                  <div>
-                    <CardTitle>Target posture</CardTitle>
-                    <CardDescription>Declared targets, worst posture first. Open a row for its evidence and checks.</CardDescription>
-                  </div>
-                  <AnchorButton variant="ghost" size="sm" href="#targets">All targets</AnchorButton>
-                </CardHeader>
-                <CardContent>
-                  <DataTable
-                    columns={postureColumns}
-                    items={postureRows}
-                    loadError={[data.loadErrors.targets, data.loadErrors.runs].filter(Boolean).join(' ') || null}
-                    onRetry={() => void onRefresh()}
-                    getRowId={(row) => row.id}
-                    getRowProps={(row) => rowProps('target-detail', row.id, `Open target ${row.value} detail`)}
-                    empty={<EmptyState icon={Target} title="No targets declared yet." body="Declare a domain, hostname, IP, or CIDR to start validating readiness." actionHref="#targets" actionLabel="Declare a target" />}
-                  />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <div>
-                    <CardTitle>Recent validation activity</CardTitle>
-                    <CardDescription>The latest safe validation runs and their verdicts.</CardDescription>
-                  </div>
-                  <AnchorButton variant="ghost" size="sm" href="#runs">All runs</AnchorButton>
-                </CardHeader>
-                <CardContent>
-                  <DataTable
-                    columns={runColumns}
-                    items={recentRuns}
-                    loadError={data.loadErrors.runs}
-                    onRetry={() => void onRefresh()}
-                    getRowId={(item) => getString(item, ['id'])}
-                    getRowProps={(item) => rowProps('run-detail', getString(item, ['id']), `Open run ${getString(item, ['id'])} detail`)}
-                    empty={<EmptyState icon={ListChecks} title="No validation runs yet." body="Start a safe validation from Test Runs after declaring a target." actionHref="#runs" actionLabel="Open test runs" />}
-                  />
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="dashboard-col">
-              <Card>
-                <CardHeader>
-                  <div>
-                    <CardTitle>What to fix first</CardTitle>
-                    <CardDescription>Up to three actions backed by the evidence currently loaded.</CardDescription>
-                  </div>
-                  <Badge tone={nextSteps.length > 0 ? 'warn' : 'success'}>{formatNumber(nextSteps.length)} to review</Badge>
-                </CardHeader>
-                <CardContent>
-                  {nextSteps.length > 0 ? (
-                    <ol className="fix-list">
-                      {nextSteps.map((step, index) => (
-                        <li className="fix-row" key={step.key}>
-                          <span className="fix-rank" data-tone={step.tone} aria-hidden="true">{index + 1}</span>
-                          <span className="fix-copy">
-                            <strong>{step.title}</strong>
-                            <span>{step.detail}</span>
-                          </span>
-                          <AnchorButton href={step.href} variant="secondary" size="sm">Review</AnchorButton>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <EmptyState icon={ListChecks} title="No priority fix is loaded." body="Keep scheduled validation current so new gaps surface here." />
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
+            <Card className="dash-area-readiness">
+              <CardHeader>
+                <div>
                   <CardTitle>Readiness posture</CardTitle>
-                  <CardDescription>Correlated checks this cycle</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
-                </CardContent>
-              </Card>
+                  <CardDescription>Correlated check verdicts this cycle, and the weighted factors behind the published score.</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="readiness-split">
+                  <section className="readiness-split-pane" aria-labelledby="dash-posture-breakdown-title">
+                    <h3 className="dash-subhead" id="dash-posture-breakdown-title">Check verdicts</h3>
+                    <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
+                  </section>
+                  <section className="readiness-split-pane" aria-labelledby="dash-weighted-factors-title">
+                    <h3 className="dash-subhead" id="dash-weighted-factors-title">Weighted factors</h3>
+                    <p className="dash-subhead-note">Each factor contributes its points to the published readiness score.</p>
+                    <WeightedFactors factors={readinessFactors} />
+                  </section>
+                </div>
+              </CardContent>
+            </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Weighted factors</CardTitle>
-                  <CardDescription>Each factor contributes its points to the published readiness score.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <WeightedFactors factors={readinessFactors} />
-                </CardContent>
-              </Card>
-            </div>
+            <Card className="dash-area-targets">
+              <CardHeader>
+                <div>
+                  <CardTitle>Target posture</CardTitle>
+                  <CardDescription>Declared targets, worst posture first. Open a row for its evidence and checks.</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#targets">All targets</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                {!targetsUnavailable && !data.loadErrors.runs && declaredTargets > 0 ? (
+                  <ul className="posture-tally" aria-label={`Latest verdict across ${formatNumber(declaredTargets)} declared ${pluralize(declaredTargets, 'target')}`}>
+                    {postureTally.map(({ status, count }) => (
+                      <li key={status} data-status={status} data-empty={count === 0 ? 'true' : undefined}>
+                        <span className="posture-tally-value">{formatNumber(count)}</span>
+                        <span className="posture-tally-label">{postureVerdictLabel(status)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <DataTable
+                  columns={postureColumns}
+                  items={postureRows}
+                  loadError={[data.loadErrors.targets, data.loadErrors.runs].filter(Boolean).join(' ') || null}
+                  onRetry={() => void onRefresh()}
+                  getRowId={(row) => row.id}
+                  getRowProps={(row) => rowProps('target-detail', row.id, `Open target ${row.value} detail`)}
+                  empty={<EmptyState icon={Target} title="No targets declared yet." body="Declare a domain, hostname, IP, or CIDR to start validating readiness." actionHref="#targets" actionLabel="Declare a target" />}
+                />
+                {!targetsUnavailable && !data.loadErrors.runs && declaredTargets > postureRows.length ? (
+                  <p className="posture-more">
+                    {`Showing the ${formatNumber(postureRows.length)} worst of ${formatNumber(declaredTargets)} declared targets. `}
+                    <a href="#targets">See every target</a>
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="dash-area-fixes">
+              <CardHeader>
+                <div>
+                  <CardTitle>What to fix first</CardTitle>
+                  <CardDescription>Up to three actions backed by the evidence currently loaded.</CardDescription>
+                </div>
+                {nextSteps.length > 0 ? <Badge tone="warn">{`${formatNumber(nextSteps.length)} to review`}</Badge> : null}
+              </CardHeader>
+              <CardContent>
+                {nextSteps.length > 0 ? (
+                  <ol className="fix-list">
+                    {nextSteps.map((step, index) => (
+                      <li className="fix-row" key={step.key}>
+                        <span className="fix-rank" data-tone={step.tone} aria-hidden="true">{index + 1}</span>
+                        <span className="fix-copy">
+                          <strong>{step.title}</strong>
+                          <span>{step.detail}</span>
+                        </span>
+                        <AnchorButton href={step.href} variant="secondary" size="sm">Review</AnchorButton>
+                      </li>
+                    ))}
+                  </ol>
+                ) : data.loadErrors.findings ? (
+                  <EmptyState icon={TriangleAlert} title="Priority fixes unavailable." body="Findings did not load, so AstraNull cannot rank what to fix first." actionLabel="Retry" onAction={() => void onRefresh()} />
+                ) : (
+                  <EmptyState icon={ListChecks} title="No open finding needs a fix." body="Keep scheduled validation current so new evidence-backed gaps surface here first." />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="dash-area-activity">
+              <CardHeader>
+                <div>
+                  <CardTitle>Recent validation activity</CardTitle>
+                  <CardDescription>The latest safe validation runs and their verdicts.</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#runs">All runs</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={runColumns}
+                  items={recentRuns}
+                  loadError={data.loadErrors.runs}
+                  onRetry={() => void onRefresh()}
+                  getRowId={(item) => getString(item, ['id'])}
+                  getRowProps={(item) => rowProps('run-detail', getString(item, ['id']), `Open run ${getString(item, ['id'])} detail`)}
+                  empty={<EmptyState icon={ListChecks} title="No validation runs yet." body="Start a safe validation from Test Runs after declaring a target." actionHref="#runs" actionLabel="Open test runs" />}
+                />
+              </CardContent>
+            </Card>
           </div>
-
-          <EvidenceGuide compact />
         </div>
       ) : null}
 
@@ -632,75 +715,101 @@ export function DashboardPage({
           <div className="risk-trends">
             <Card className="risk-trends-hero">
               <CardHeader>
-                <CardTitle>Readiness trend</CardTitle>
-                <CardDescription>Published per-run scores, with evidence-backed verdict history when a numeric score is absent.</CardDescription>
+                <div>
+                  <CardTitle>Readiness trend</CardTitle>
+                  <CardDescription>Published per-run readiness scores, oldest to newest. Runs without a score show their evidence-backed verdict instead.</CardDescription>
+                </div>
               </CardHeader>
               <CardContent>
-                {score === null ? (
-                  <EmptyState icon={Activity} title="Readiness score unavailable." body="Trend appears after the platform publishes an evidence-backed score." />
+                {data.loadErrors.runs ? (
+                  <EmptyState icon={Activity} title="Run history unavailable." body="The readiness trend appears once validation runs load." actionLabel="Retry" onAction={() => void onRefresh()} />
                 ) : (
                   <ScoreTrend runs={data.runs} currentScore={score} />
                 )}
               </CardContent>
             </Card>
 
-            <div className="risk-secondary">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Open findings by severity</CardTitle>
-                  <CardDescription>Current open gaps grouped by severity.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {data.loadErrors.findings ? (
-                    <EmptyState icon={TriangleAlert} title="Finding data unavailable." body="Severity distribution appears once findings load." />
-                  ) : severity.total === 0 ? (
-                    <EmptyState icon={TriangleAlert} title="No open findings." body="Open findings appear after validation runs produce evidence-backed gaps." />
-                  ) : (
-                    <div className="severity-dist" role="img" aria-label={`Open findings: ${severity.critical} critical, ${severity.high} high, ${severity.other} medium or low`}>
-                      {severityRows.map((row) => (
-                        <div className="severity-dist-row" key={row.label}>
-                          <span className="severity-dist-label">{row.label}</span>
-                          <span className="severity-dist-track" aria-hidden="true">
-                            <span className="severity-dist-fill" data-tone={row.tone} style={{ width: `${Math.round((row.count / severityMax) * 100)}%` }} />
-                          </span>
-                          <span className="severity-dist-count">{formatNumber(row.count)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Aging open findings</CardTitle>
-                  <CardDescription>Oldest open gaps that still pressure readiness.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {agingFindings.length === 0 ? (
-                    <EmptyState icon={TriangleAlert} title="No open findings." body="Open findings appear after validation runs produce evidence-backed gaps." actionLabel="Open findings" actionHref="#findings" />
-                  ) : (
-                    <ul className="dashboard-link-list">
-                      {agingFindings.map((finding) => {
-                        const id = getString(finding, ['id']);
-                        return (
-                          <li key={id}>
-                            <div className="dashboard-link-copy">
-                              <strong>{plainFindingTitle(finding, data.targets, data.checks)}</strong>
-                              <span className="dashboard-link-meta">
-                                <Badge tone={severityBadgeTone(getString(finding, ['severity']))}>{formatSeverityLabel(getString(finding, ['severity'], 'unknown'))}</Badge>
-                                <span className="muted">opened {formatDate(finding.created_at)}</span>
-                              </span>
-                            </div>
-                            <AnchorButton size="sm" variant="secondary" href={id ? buildDetailHref('finding-detail', id) : '#findings'}>Triage</AnchorButton>
+            <Card className="risk-secondary">
+              <CardHeader>
+                <div>
+                  <CardTitle>Open findings</CardTitle>
+                  <CardDescription>Severity split of every loaded open finding, and the oldest gaps still waiting on a fix.</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#findings">All findings</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                {data.loadErrors.findings ? (
+                  <EmptyState icon={TriangleAlert} title="Finding data unavailable." body="Severity and aging appear once findings load." actionLabel="Retry" onAction={() => void onRefresh()} />
+                ) : severityDist.total === 0 ? (
+                  <EmptyState icon={TriangleAlert} title="No open findings." body="Open findings appear after validation runs produce evidence-backed gaps." actionLabel="Open findings" actionHref="#findings" />
+                ) : (
+                  <div className="risk-findings">
+                    <section className="risk-findings-severity" aria-labelledby="risk-severity-title">
+                      <div className="risk-findings-head">
+                        <h3 className="dash-subhead" id="risk-severity-title">By severity</h3>
+                        <span className="risk-findings-total">
+                          <strong className="tabular-nums">{formatNumber(severityDist.total)}</strong> open
+                        </span>
+                      </div>
+                      <div className="severity-stack" role="img" aria-label={severityStackLabel}>
+                        {severitySlices.filter((slice) => slice.count > 0).map((slice) => (
+                          <span
+                            key={slice.key}
+                            className="severity-stack-seg"
+                            data-severity={slice.key}
+                            style={{ flexGrow: slice.count }}
+                            title={`${slice.label}: ${formatNumber(slice.count)}`}
+                          />
+                        ))}
+                      </div>
+                      <ul className="severity-bars" aria-label="Open findings per severity">
+                        {severitySlices.map((slice) => (
+                          <li key={slice.key} className="severity-bar" data-severity={slice.key} data-empty={slice.count === 0 ? 'true' : undefined}>
+                            <span className="severity-bar-label">
+                              <span className="severity-bar-swatch" aria-hidden="true" />
+                              {slice.label}
+                            </span>
+                            <span className="severity-bar-count tabular-nums">{formatNumber(slice.count)}</span>
+                            <span className="severity-bar-share tabular-nums" title={`${slice.label} share of open findings`}>{`${slice.share}%`}</span>
                           </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+                        ))}
+                      </ul>
+                    </section>
+
+                    <section className="risk-findings-aging" aria-labelledby="risk-aging-title">
+                      <div className="risk-findings-head">
+                        <h3 className="dash-subhead" id="risk-aging-title">Oldest open</h3>
+                        <span className="risk-findings-total">{`${formatNumber(agingFindings.length)} of ${formatNumber(severityDist.total)} shown`}</span>
+                      </div>
+                      <ol className="aging-list">
+                        {agingFindings.map((finding) => {
+                          const id = getString(finding, ['id']);
+                          const severityRaw = getString(finding, ['severity'], 'unknown');
+                          return (
+                            <li key={id || plainFindingTitle(finding, data.targets, data.checks)} className="aging-row">
+                              <a className="aging-link" href={id ? buildDetailHref('finding-detail', id) : '#findings'}>
+                                <span className="aging-title">{plainFindingTitle(finding, data.targets, data.checks)}</span>
+                                <span className="aging-meta">
+                                  <Badge tone={severityBadgeTone(severityRaw)} title={formatSeverityLabel(severityRaw)}>{severityShortLabel(severityRaw)}</Badge>
+                                  {Number.isFinite(Date.parse(String(finding.created_at ?? ''))) ? (
+                                    <>
+                                      <span>{`Opened ${formatDate(finding.created_at)}`}</span>
+                                      <span className="aging-age">{formatShortRelative(String(finding.created_at))}</span>
+                                    </>
+                                  ) : (
+                                    <span>Open date not recorded</span>
+                                  )}
+                                </span>
+                              </a>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </section>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             <Card>
               <CardHeader>

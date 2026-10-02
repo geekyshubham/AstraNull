@@ -1,0 +1,138 @@
+/* Grouped finding queue: one row per rule, assets listed inside. Tokens only. */
+.findings-surface .finding-rule-row { cursor: pointer; }
+
+.finding-rule-card { gap: var(--space-1); }
+.finding-rule-card .fc-headline strong { overflow-wrap: anywhere; }
+
+.frc-assets {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.frc-asset-count {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.frc-asset-names {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.frc-asset {
+  max-width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  background: var(--surface-sunk);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.frc-asset-more {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.frc-check {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.frc-key {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.frc-findings { color: var(--fg-2); }
+
+/* Finding detail: same rule on other assets */
+/* Clears the sticky topbar when the queue lands here with focus=rule-assets. */
+.rule-assets-section { scroll-margin-top: calc(var(--space-12) + var(--space-6)); border-radius: var(--radius-lg); }
+.rule-assets-section:focus { outline: none; }
+.rule-assets-section:focus-visible { box-shadow: var(--focus-ring); }
+
+.rule-assets-summary {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* The table scrolls inside its own focusable region; the page never scrolls sideways. */
+.rule-assets-table .data-table { min-width: 860px; }
+
+.rule-asset-stack {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.rule-asset-stack small { color: var(--fg-2); font-size: var(--text-xs); }
+.rule-asset-meta { color: var(--fg-2); font-size: var(--text-sm); }
+
+.rule-asset-link {
+  display: inline-flex;
+  min-height: 44px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.rule-asset-link strong { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+.rule-asset-link small { color: var(--fg-2); font-size: var(--text-xs); }
+.rule-asset-link:hover strong { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.rule-asset-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.rule-asset-current {
+  display: inline-flex;
+  min-height: 44px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.rule-asset-current strong { color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
+.rule-asset-current small { color: var(--fg-2); font-size: var(--text-xs); font-weight: 600; }
+
+.rule-assets-table tr.is-current-asset td { background: var(--surface-sunk); }
+
+.rule-asset-evidence {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.rule-asset-evidence:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.rule-asset-evidence-missing { color: var(--fg-2); font-size: var(--text-xs); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .rule-asset-link strong,
+  .rule-asset-evidence { transition: color var(--motion-fast) var(--ease-standard); }
+}

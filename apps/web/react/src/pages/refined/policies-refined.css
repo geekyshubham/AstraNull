@@ -1,0 +1,465 @@
+/* Refined test-policies view. Page-specific rules only; shared primitives live in styles/refined.css. */
+
+/* Table panel ------------------------------------------------------------ */
+.refined.rf-policies .rf-panel-flush .table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.refined.rf-policies .rf-section-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 68ch;
+}
+
+.refined.rf-policies .rf-section-head {
+  align-items: flex-end;
+}
+
+/* State filter counts */
+.refined.rf-policies .rf-segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.refined.rf-policies .rf-segmented-count {
+  color: var(--meta);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.refined.rf-policies .rf-segmented button[aria-pressed='true'] .rf-segmented-count {
+  color: var(--fg-2);
+}
+
+/* Summary strip: five stats wrap cleanly. Hairline dividers come from a 1px gap over the
+   border tint, so a wrapped row never starts with a stray left border. */
+.refined.rf-policies .rf-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border-soft);
+}
+
+.refined.rf-policies .rf-summary-strip .rf-stat {
+  flex: 1 1 168px;
+  border: 0;
+  background: var(--surface);
+}
+
+/* Summary strip details */
+.refined.rf-policies .rf-stat-date {
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.refined.rf-policies .rf-stat-of {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+/* Table cells ------------------------------------------------------------ */
+.refined.rf-policies .rf-cell {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  min-width: 0;
+  white-space: normal;
+}
+
+.refined.rf-policies .rf-cell-title {
+  color: var(--fg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.refined.rf-policies .rf-cell-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.refined.rf-policies .rf-cell-meta svg {
+  flex: none;
+}
+
+/* Classic scope/check renders carry ghost AnchorButtons; flatten them to quiet inline links. */
+.refined.rf-policies .rf-cell-link {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.refined.rf-policies .rf-cell-link .btn {
+  min-height: 32px;
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border-color: transparent;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.refined.rf-policies .rf-cell-link .stack-tight {
+  gap: var(--space-1);
+}
+
+.refined.rf-policies .rf-cell-link .mono {
+  overflow-wrap: anywhere;
+}
+
+/* Footnotes under the table */
+.refined.rf-policies .rf-footnotes {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.refined.rf-policies .rf-footnote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.refined.rf-policies .rf-footnote svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+/* Inline create panel ---------------------------------------------------- */
+.refined.rf-policies .rf-create {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.refined.rf-policies .rf-create-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.refined.rf-policies .rf-create-heading {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 72ch;
+  flex: 1 1 320px;
+}
+
+.refined.rf-policies .rf-create-heading h2 {
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.refined.rf-policies .rf-create-heading h2:focus {
+  outline: none;
+}
+
+.refined.rf-policies .rf-create-heading h2:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.refined.rf-policies .rf-create-heading p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+/* The shared .product-form is a two-column grid; Refined lays out by section instead. */
+.refined.rf-policies .rf-policy-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.refined.rf-policies .rf-form-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3) var(--space-8);
+  padding: var(--space-5) 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.refined.rf-policies .rf-form-section:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.refined.rf-policies .rf-form-intro {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.refined.rf-policies .rf-form-intro h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.refined.rf-policies .rf-form-intro p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.refined.rf-policies .rf-step {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.refined.rf-policies .rf-policy-form .rf-form-fields {
+  grid-column: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  align-content: start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.refined.rf-policies .rf-form-fields > .full {
+  grid-column: 1 / -1;
+}
+
+.refined.rf-policies .rf-form-fields .field {
+  margin: 0;
+}
+
+.refined.rf-policies .rf-help {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.refined.rf-policies .rf-help a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Exact-target bindings */
+.refined.rf-policies .rf-binding-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.refined.rf-policies .rf-binding {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.refined.rf-policies .rf-binding .field {
+  margin: 0;
+}
+
+.refined.rf-policies .rf-binding-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.refined.rf-policies .rf-binding-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.refined.rf-policies .rf-binding-note svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--success);
+}
+
+.refined.rf-policies .rf-binding-note strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* Safe window disclosure */
+.refined.rf-policies .rf-disclosure {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.refined.rf-policies .rf-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.refined.rf-policies .rf-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.refined.rf-policies .rf-disclosure > summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.refined.rf-policies .rf-disclosure[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.refined.rf-policies .rf-disclosure > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.refined.rf-policies .rf-disclosure-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+.refined.rf-policies .rf-disclosure-body > .full {
+  grid-column: 1 / -1;
+}
+
+.refined.rf-policies .rf-disclosure-body input {
+  min-height: 40px;
+}
+
+/* Footer: readiness line plus actions */
+.refined.rf-policies .rf-policy-form > .form-banner {
+  margin-bottom: var(--space-4);
+}
+
+.refined.rf-policies .rf-form-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+.refined.rf-policies .rf-readiness {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 260px;
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.refined.rf-policies .rf-readiness svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+/* Wide layout: section intro on the left, fields on the right. */
+@media (min-width: 960px) {
+  .refined.rf-policies .rf-form-section {
+    grid-template-columns: minmax(180px, 15rem) minmax(0, 1fr);
+  }
+}
+
+@media (pointer: coarse) {
+  .refined.rf-policies .rf-cell-link .btn {
+    min-height: 44px;
+  }
+}
+
+/* Phone: table is rendered as labeled cards by the shared DataTable rules. */
+@media (max-width: 700px) {
+  .refined.rf-policies .rf-toolbar,
+  .refined.rf-policies .rf-segmented {
+    width: 100%;
+  }
+
+  .refined.rf-policies .rf-segmented button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .refined.rf-policies .rf-form-footer .form-actions {
+    width: 100%;
+  }
+
+  .refined.rf-policies .rf-binding {
+    padding: var(--space-3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refined.rf-policies .rf-disclosure > summary::before {
+    transition: none;
+  }
+}

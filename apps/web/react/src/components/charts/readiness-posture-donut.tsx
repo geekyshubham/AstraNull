@@ -3,6 +3,7 @@ import type { DataItem, ReadinessPostureSegment, StatePayload } from '../../lib/
 import { countLabel } from '../../lib/utils';
 import { EmptyState } from '../ui/empty-state';
 import { Activity } from 'lucide-react';
+import './readiness-posture-donut.css';
 
 const SEGMENT_COLORS: Record<string, string> = {
   pass: 'var(--success)',
@@ -76,7 +77,7 @@ export function ReadinessPostureDonut({
         <div className="gauge-hole" style={{ background: 'var(--surface)' }}>
           <span className="gauge-score-cap" aria-hidden="true">Readiness</span>
           <div className="gauge-score" aria-hidden="true">
-            <span className="gauge-score-value">{score ?? '—'}</span>
+            <span className="gauge-score-value">{score ?? 'n/a'}</span>
             {score !== null ? <span className="gauge-score-scale">/100</span> : null}
           </div>
         </div>
@@ -87,7 +88,7 @@ export function ReadinessPostureDonut({
             <PostureLegendRow key={segment.key} segment={segment} total={total} />
           ))}
         </div>
-        <p className="muted small">{correlationSummary} · this cycle</p>
+        <p className="gauge-side-note">{correlationSummary} this cycle</p>
       </div>
     </div>
   );

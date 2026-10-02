@@ -64,6 +64,10 @@ import { useTransitionKey } from '../lib/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
+import { useDesignVariant } from '../lib/design-variant';
+import { VariantSwitch } from '../components/ui/variant-switch';
+import { RunsRefined, type RunsRefinedProps } from './refined/runs-refined';
+import { FindingsRefined, type FindingsRefinedProps } from './refined/findings-refined';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
@@ -756,6 +760,9 @@ export function ValidationSurfacePage({
   onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
+  // Both hooks run unconditionally (rules of hooks); each page keeps its own preference.
+  const [runsVariant, setRunsVariant] = useDesignVariant('runs');
+  const [findingsVariant, setFindingsVariant] = useDesignVariant('findings');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -1231,111 +1238,62 @@ export function ValidationSurfacePage({
       inFlightRuns.length > 0 ? `${inFlightRuns.length} active ${pluralize(inFlightRuns.length, 'run')}` : '',
       activeScans.length > 0 ? `${activeScans.length} active ${pluralize(activeScans.length, 'scan')}` : ''
     ].filter(Boolean).join(', ');
-    return (
-      <div className="content validation-runs-page">
-        <PageHeader
-          route="runs"
-          eyebrow="Validation history"
-          title="Test runs"
-          description="Review bounded safe checks and SOC-governed requests with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
-          actions={(
-            <RunsPageHeadActions
-              onRefresh={() => void onRefresh()}
-              onRequestSoc={canRequestHighScale ? () => setShowSocRequestForm(true) : undefined}
-              onStartSafeRun={() => { window.location.hash = '#checks'; }}
-              onStartScan={canManageScans ? () => setScanLauncher({ mode: 'create', scan: null }) : undefined}
-              refreshBusy={busy === 'refresh-runs'}
-              safeRunBusy={false}
-              safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
-            />
-          )}
-        />
-        <PageContextSummary>
-          <span className="tabular-nums">{data.runs.length}</span>{` ${pluralize(data.runs.length, 'run')} · `}<span className="tabular-nums">{inFlightRuns.length}</span> in progress
-        </PageContextSummary>
-        <RunsSocGatePanel
-          data={data}
-          config={config}
-          session={session}
-          onRefresh={onRefresh}
-          onMessage={setMessage}
-          onError={setError}
-          busy={busy}
-          setBusy={setBusy}
-          requestFormOpen={showSocRequestForm}
-          onRequestFormOpenChange={setShowSocRequestForm}
-        />
-        {inFlightRuns.length > 0 || activeScans.length > 0 ? (
-          <div className="form-banner info" role="status" aria-live="polite">
-            Runs in progress — live status auto-refreshes every 8s ({liveCounts}). Verdicts appear when the observation window closes.
-          </div>
-        ) : null}
-        {!canOpenVectorLibrary && startDisabledReason ? (
-          <div className="form-banner neutral" role="note">
-            Open the vector library once ready — {startDisabledReason}
-          </div>
-        ) : (
-          <div className="form-banner neutral" role="note">
-            Customer-safe runs start in the vector library, where you must select the exact target group, target, vector, and mapped bounded check.
-          </div>
-        )}
-        <MutationFeedbackBanner message={message} error={error} neutral />
-        <Card className="validation-scans-card">
-          <CardHeader>
-            <div><CardTitle>Validation scans</CardTitle><CardDescription>Multi-check scans run one bounded child run at a time. Scheduled scans dispatch at their planned time and stay editable until then.</CardDescription></div>
-            <Badge tone="muted">{data.validationScans.length} {pluralize(data.validationScans.length, 'scan')}</Badge>
-          </CardHeader>
-          <CardContent className="stack-tight">
-            <div className="catalog-filter-grid" role="group" aria-label="Validation scan filters">
-              <Select label="Scan status" value={scanStatusFilter} options={scanStatusOptions} onChange={setScanStatusFilter} />
-            </div>
-            <ValidationScansTable
-              scans={visibleScans}
-              meta={data.validationScansMeta}
-              loadError={data.loadErrors.validationScans}
-              onRetry={() => void onRefresh(['validationScans'])}
-              canManage={canManageScans}
-              config={config}
-              session={session}
-              onEdit={(scan) => setScanLauncher({ mode: 'edit', scan })}
-              onReschedule={(scan) => setScanLauncher({ mode: 'reschedule', scan })}
-              onCancelled={(scan) => {
-                setError('');
-                setMessage(`Scan ${scanDisplayName(scan)} is ${scanStatusLabel(getString(scan, ['status'], '')).toLowerCase()}.`);
-                void onRefresh(['validationScans', 'runs']);
-              }}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <div><CardTitle>Run history</CardTitle><CardDescription>Open a row for probe results, correlation, and custody chain.</CardDescription></div>
-            <Badge tone="muted">Evidence backed</Badge>
-          </CardHeader>
-          <CardContent className="stack-tight">
-            <div className="catalog-filter-grid" role="group" aria-label="Run history filters">
-              <Select label="Lifecycle status" value={runStatusFilter} options={runStatusOptions} onChange={setRunStatusFilter} />
-            </div>
-            <DataTable
-              className="validation-runs-table"
-              columns={runColumns}
-              items={filteredRuns}
-              getRowProps={(item) => {
-                const id = getString(item, ['id'], '');
-                return buildDetailHashRowProps('run-detail', id, `Open ${id} detail`);
-              }}
-              empty={renderFriendlyEmptyState({
-                icon: Activity,
-                title: 'No test runs yet.',
-                body: 'Start a validation run after declaring target scope.',
-                actionLabel: 'Open vector library',
-                onAction: () => { window.location.hash = '#checks'; }
-              })}
-              loadError={data.loadErrors.runs}
-              onRetry={onRefresh ? () => void onRefresh() : undefined}
-            />
-          </CardContent>
-        </Card>
+    const runHeadActions = (
+      <RunsPageHeadActions
+        onRefresh={() => void onRefresh()}
+        onRequestSoc={canRequestHighScale ? () => setShowSocRequestForm(true) : undefined}
+        onStartSafeRun={() => { window.location.hash = '#checks'; }}
+        onStartScan={canManageScans ? () => setScanLauncher({ mode: 'create', scan: null }) : undefined}
+        refreshBusy={busy === 'refresh-runs'}
+        safeRunBusy={false}
+        safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
+      />
+    );
+    const runSocGatePanel = (
+      <RunsSocGatePanel
+        data={data}
+        config={config}
+        session={session}
+        onRefresh={onRefresh}
+        onMessage={setMessage}
+        onError={setError}
+        busy={busy}
+        setBusy={setBusy}
+        requestFormOpen={showSocRequestForm}
+        onRequestFormOpenChange={setShowSocRequestForm}
+      />
+    );
+    const validationScansTable = (
+      <ValidationScansTable
+        scans={visibleScans}
+        meta={data.validationScansMeta}
+        loadError={data.loadErrors.validationScans}
+        onRetry={() => void onRefresh(['validationScans'])}
+        canManage={canManageScans}
+        config={config}
+        session={session}
+        onEdit={(scan) => setScanLauncher({ mode: 'edit', scan })}
+        onReschedule={(scan) => setScanLauncher({ mode: 'reschedule', scan })}
+        onCancelled={(scan) => {
+          setError('');
+          setMessage(`Scan ${scanDisplayName(scan)} is ${scanStatusLabel(getString(scan, ['status'], '')).toLowerCase()}.`);
+          void onRefresh(['validationScans', 'runs']);
+        }}
+      />
+    );
+    const getRunRowProps = (item: DataItem) => {
+      const id = getString(item, ['id'], '');
+      return buildDetailHashRowProps('run-detail', id, `Open ${id} detail`);
+    };
+    const runsEmptyState = renderFriendlyEmptyState({
+      icon: Activity,
+      title: 'No test runs yet.',
+      body: 'Start a validation run after declaring target scope.',
+      actionLabel: 'Open vector library',
+      onAction: () => { window.location.hash = '#checks'; }
+    });
+    const runModals = (
+      <>
         <ConfirmModal
           open={Boolean(cancelRunId)}
           title="Cancel this run in progress?"
@@ -1373,6 +1331,109 @@ export function ValidationSurfacePage({
             void onRefresh(['validationScans']);
           }}
         />
+      </>
+    );
+    if (runsVariant === 'refined') {
+      const refinedProps: RunsRefinedProps = {
+        data,
+        config,
+        session,
+        onRefresh,
+        variant: runsVariant,
+        onVariantChange: setRunsVariant,
+        busy,
+        message,
+        error,
+        canManageScans,
+        canRequestHighScale,
+        inFlightRunCount: inFlightRuns.length,
+        activeScanCount: activeScans.length,
+        liveCounts,
+        canOpenVectorLibrary,
+        startDisabledReason,
+        headerActions: runHeadActions,
+        socGatePanel: runSocGatePanel,
+        scanStatusFilter,
+        scanStatusOptions,
+        onScanStatusFilterChange: setScanStatusFilter,
+        validationScansTable,
+        runColumns,
+        filteredRuns,
+        runStatusFilter,
+        runStatusOptions,
+        onRunStatusFilterChange: setRunStatusFilter,
+        getRunRowProps,
+        runsEmptyState,
+        modals: runModals
+      };
+      return <RunsRefined {...refinedProps} />;
+    }
+    return (
+      <div className="content validation-runs-page">
+        <PageHeader
+          route="runs"
+          eyebrow="Validation history"
+          title="Test runs"
+          description="Review bounded safe checks and SOC-governed requests with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
+          actions={(
+            <>
+              <VariantSwitch value={runsVariant} onChange={setRunsVariant} />
+              {runHeadActions}
+            </>
+          )}
+        />
+        <PageContextSummary>
+          <span className="tabular-nums">{data.runs.length}</span>{` ${pluralize(data.runs.length, 'run')} · `}<span className="tabular-nums">{inFlightRuns.length}</span> in progress
+        </PageContextSummary>
+        {runSocGatePanel}
+        {inFlightRuns.length > 0 || activeScans.length > 0 ? (
+          <div className="form-banner info" role="status" aria-live="polite">
+            Runs in progress — live status auto-refreshes every 8s ({liveCounts}). Verdicts appear when the observation window closes.
+          </div>
+        ) : null}
+        {!canOpenVectorLibrary && startDisabledReason ? (
+          <div className="form-banner neutral" role="note">
+            Open the vector library once ready — {startDisabledReason}
+          </div>
+        ) : (
+          <div className="form-banner neutral" role="note">
+            Customer-safe runs start in the vector library, where you must select the exact target group, target, vector, and mapped bounded check.
+          </div>
+        )}
+        <MutationFeedbackBanner message={message} error={error} neutral />
+        <Card className="validation-scans-card">
+          <CardHeader>
+            <div><CardTitle>Validation scans</CardTitle><CardDescription>Multi-check scans run one bounded child run at a time. Scheduled scans dispatch at their planned time and stay editable until then.</CardDescription></div>
+            <Badge tone="muted">{data.validationScans.length} {pluralize(data.validationScans.length, 'scan')}</Badge>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div className="catalog-filter-grid" role="group" aria-label="Validation scan filters">
+              <Select label="Scan status" value={scanStatusFilter} options={scanStatusOptions} onChange={setScanStatusFilter} />
+            </div>
+            {validationScansTable}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <div><CardTitle>Run history</CardTitle><CardDescription>Open a row for probe results, correlation, and custody chain.</CardDescription></div>
+            <Badge tone="muted">Evidence backed</Badge>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div className="catalog-filter-grid" role="group" aria-label="Run history filters">
+              <Select label="Lifecycle status" value={runStatusFilter} options={runStatusOptions} onChange={setRunStatusFilter} />
+            </div>
+            <DataTable
+              className="validation-runs-table"
+              columns={runColumns}
+              items={filteredRuns}
+              getRowProps={getRunRowProps}
+              empty={runsEmptyState}
+              loadError={data.loadErrors.runs}
+              onRetry={onRefresh ? () => void onRefresh() : undefined}
+            />
+          </CardContent>
+        </Card>
+        {runModals}
       </div>
     );
   }
@@ -1380,6 +1441,22 @@ export function ValidationSurfacePage({
   if (route === 'findings') {
     const findingKpis = computeFindingKpis(data.findings);
     const findingsLoadError = data.loadErrors.findings ?? '';
+    if (findingsVariant === 'refined') {
+      const refinedProps: FindingsRefinedProps = {
+        data,
+        config,
+        session,
+        variant: findingsVariant,
+        onVariantChange: setFindingsVariant,
+        busy,
+        message,
+        error,
+        findingKpis,
+        findingsLoadError,
+        onRefresh: () => void handleSurfaceRefresh()
+      };
+      return <FindingsRefined {...refinedProps} />;
+    }
     return (
       <div className="content validation-findings-page">
         <PageHeader
@@ -1387,7 +1464,12 @@ export function ValidationSurfacePage({
           eyebrow="Triage & remediate"
           title="Findings"
           description="Every finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path."
-          actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>}
+          actions={(
+            <>
+              <VariantSwitch value={findingsVariant} onChange={setFindingsVariant} />
+              <Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>
+            </>
+          )}
         />
         <PageContextSummary>
           {findingsLoadError ? 'Finding inventory unavailable' : <><span className="tabular-nums">{findingKpis.openCount}</span> open · <span className="tabular-nums">{findingKpis.acceptedRiskCount}</span> accepted risk · <span className="tabular-nums">{findingKpis.closed30dCount}</span> closed in 30d · <span className="tabular-nums">{findingKpis.slaBreachCount}</span> SLA breached</>}
@@ -1395,7 +1477,7 @@ export function ValidationSurfacePage({
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
-            <div><CardTitle>Finding queue</CardTitle><CardDescription>Filter evidence-backed gaps, then open any row for explanation, remediation, safe retest, and custody export.</CardDescription></div>
+            <div><CardTitle>Finding queue</CardTitle><CardDescription>One row per rule, with every asset it was observed on. Open a row to see the affected assets, then any asset for explanation, remediation, safe retest, and custody export.</CardDescription></div>
             <Badge tone={findingKpis.slaBreachCount > 0 ? 'danger' : 'muted'}>{findingKpis.slaBreachCount} SLA breached</Badge>
           </CardHeader>
           <CardContent className="findings-surface-wrap">

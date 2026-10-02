@@ -39,6 +39,8 @@ export async function processDueNotificationRetries(ctx, options = {}) {
     deliveryMode,
     events,
     rules,
+    // Live store read per attempt so the lifecycle gate sees the current rule state.
+    resolveRule: (ruleId) => store.notificationRules.find((r) => r.id === ruleId && r.tenant_id === ctx.tenantId) ?? null,
     asOf,
     now: options.now ?? asOf,
     dryRun: options.dryRun === true,

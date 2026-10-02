@@ -20,6 +20,7 @@ import { createValidationEvidenceRepository } from './validationEvidenceReposito
 import { createReportRepository } from './reportRepository.mjs';
 import { createSecretVaultRepository } from './secretVaultRepository.mjs';
 import { createNotificationRepository } from './notificationRepository.mjs';
+import { registerPostgresNotificationReconciliation } from './notificationReconciliation.mjs';
 import { createProbeJobRepository } from './probeJobRepository.mjs';
 import { createKillSwitchRepository } from './killSwitchRepository.mjs';
 import { createOwnershipVerificationRepository } from './ownershipVerificationRepository.mjs';
@@ -49,6 +50,7 @@ import {
   createPostgresValidationServices,
   createPostgresReportServices,
   createPostgresNotificationServices,
+  registerPostgresRunNotificationHook,
   createPostgresStateServices,
   createPostgresProbeJobServices,
   createPostgresHighScaleServices,
@@ -269,8 +271,22 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       encryptionKey: loadSecretEncryptionKey(env),
       connectorEncryptionKey: loadConnectorSecretEncryptionKey(env),
     });
-    const reportServices = createPostgresReportServices(repositories);
     const notificationServices = createPostgresNotificationServices(repositories);
+    const reportServices = createPostgresReportServices(repositories, {
+      notifications: notificationServices,
+    });
+    registerPostgresRunNotificationHook({
+      testRuns: validationServices.testRuns,
+      notifications: notificationServices,
+      notificationRules: repositories.notifications,
+      validationEvidence: repositories.validationEvidence,
+    });
+    // R03: recovery ticks also enqueue lifecycle notifications whose initial enqueue was lost.
+    registerPostgresNotificationReconciliation({
+      pool,
+      notifications: notificationServices,
+      audit: repositories.audit,
+    });
     const stateServices = createPostgresStateServices(repositories);
     const ownershipVerificationBase = createPostgresOwnershipVerificationServices({
       repositories,

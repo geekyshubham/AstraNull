@@ -240,6 +240,8 @@ export function toMetadataOnlyTenantRetryResult(result) {
     delivery_mode: result.delivery_mode,
     due_count: result.due_count,
     scheduled_not_due_count: result.scheduled_not_due_count,
+    held_count: result.held_count ?? 0,
+    cancelled_count: result.cancelled_count ?? 0,
     network_sends_performed: result.network_sends_performed,
     processed: sanitizeProcessedForSummary(result.processed),
     error: result.error ?? undefined,

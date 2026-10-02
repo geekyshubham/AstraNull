@@ -211,11 +211,31 @@ export function AppShell({
       }
     }
 
+    // While the drawer is modal, the page behind it is neither scrollable nor reachable by
+    // assistive tech (aria-modal alone is not honoured by every screen reader).
+    const main = mainRef.current;
+    document.body.classList.add('nav-drawer-open');
+    if (main) main.inert = true;
+
     document.addEventListener('keydown', onDrawerKeyDown);
     return () => {
       document.removeEventListener('keydown', onDrawerKeyDown);
+      document.body.classList.remove('nav-drawer-open');
+      if (main) main.inert = false;
       previousFocus?.focus();
     };
+  }, [sidebarOpen]);
+
+  // Widening past the drawer breakpoint while it is open would leave a desktop sidebar
+  // announced as a modal dialog, so the drawer closes itself at that boundary.
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const drawerQuery = window.matchMedia('(max-width: 1120px)');
+    function onViewportChange(event: MediaQueryListEvent) {
+      if (!event.matches) setSidebarOpen(false);
+    }
+    drawerQuery.addEventListener('change', onViewportChange);
+    return () => drawerQuery.removeEventListener('change', onViewportChange);
   }, [sidebarOpen]);
 
   /**
@@ -371,13 +391,13 @@ export function AppShell({
           <ShellIconButton label="Open navigation" className="menu-btn" buttonRef={menuButtonRef} expanded={sidebarOpen} controls="portal-navigation" onClick={() => setSidebarOpen(true)}>
             <Menu size={18} aria-hidden="true" focusable="false" />
           </ShellIconButton>
-          <div className="crumbs" aria-label="Breadcrumb">
-            <span>{NAV_GROUP_LABELS[current.group]}</span>
+          <nav className="crumbs" aria-label="Breadcrumb">
+            <span className="crumbs-group">{NAV_GROUP_LABELS[current.group]}</span>
             <span className="sep" aria-hidden="true">
               ›
             </span>
-            <b>{current.label}</b>
-          </div>
+            <b aria-current="page">{current.label}</b>
+          </nav>
           <div className="topbar-spacer" aria-hidden="true" />
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>

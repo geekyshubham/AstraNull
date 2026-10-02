@@ -62,12 +62,8 @@ test.describe('portal executive clarity', () => {
     const mainText = await page.locator('#portal-main').innerText();
     expect(mainText).not.toMatch(/Agent health|Agents healthy|Environment status/);
 
-    const glossary = page.locator('.evidence-guide');
-    const summary = glossary.locator('summary');
-    await summary.focus();
-    await page.keyboard.press('Enter');
-    await expect(glossary).toHaveAttribute('open', '');
-    await expect(glossary.getByText('Declared only', { exact: true })).toBeVisible();
+    // The evidence glossary lives on target detail; the dashboard overview no longer repeats it.
+    await expect(page.locator('#portal-main .evidence-guide')).toHaveCount(0);
   });
 
   test('Dashboard defense path reports edge/WAF from coverage data, not raw codes', async ({ page }) => {

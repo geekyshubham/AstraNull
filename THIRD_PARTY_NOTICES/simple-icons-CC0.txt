@@ -1,19 +1,12 @@
 Simple Icons — https://github.com/simple-icons/simple-icons
 License: CC0 1.0 Universal (public domain dedication)
 
-The following provider brand marks bundled in
-apps/web/react/src/components/integrations/provider-logos.tsx use SVG path data
-taken verbatim from Simple Icons:
-
-  - Cloudflare (cloudflare)
-  - Akamai (akamai)
-  - Amazon Web Services / Route 53 (amazonwebservices)
-  - GoDaddy (godaddy)
-  - Namecheap (namecheap)
-  - Hetzner (hetzner)
-  - Google Cloud (googlecloud)
-  - Microsoft Azure (microsoftazure)
-  - IBM Cloud / IBM NS1 (ibmcloud)
+The full-color provider logo PNGs bundled in
+apps/web/react/src/components/integrations/logos/ were rendered by the
+DNS Migrator project. Several of them (Cloudflare, Akamai, GoDaddy, Hetzner,
+Namecheap) were rendered from Simple Icons glyph path data with brand fills.
+AstraNull no longer embeds Simple Icons path data directly; see
+THIRD_PARTY_NOTICES/provider-logos-NOTICE.txt for the full provider logo notice.
 
 Simple Icons is released under CC0 1.0. To the extent possible under law, the
 authors have waived all copyright and related or neighboring rights to Simple

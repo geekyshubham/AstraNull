@@ -38,18 +38,18 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard
   },
   {
-    id: 'targets',
-    label: 'Targets',
-    group: 'scope',
-    description: 'All declared hostnames, IPs, and CIDRs with tags, verification, eligibility, and group context.',
-    icon: Crosshair
-  },
-  {
     id: 'target-groups',
     label: 'Target groups',
     group: 'scope',
     description: 'Customer-declared business services, expected behavior, and owners.',
     icon: Target
+  },
+  {
+    id: 'targets',
+    label: 'Targets',
+    group: 'scope',
+    description: 'All declared hostnames, IPs, and CIDRs with tags, verification, eligibility, and group context.',
+    icon: Crosshair
   },
   {
     id: 'checks',
@@ -200,6 +200,13 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     label: 'Finding detail',
     group: 'validation',
     description: 'Verdict explanation, triage state, remediation, evidence bundle, and custody export for one finding.',
+    icon: TriangleAlert
+  },
+  {
+    id: 'finding-group-detail',
+    label: 'Finding group',
+    group: 'validation',
+    description: 'Affected assets, shared verdict, and remediation context for one grouped finding.',
     icon: TriangleAlert
   },
   {

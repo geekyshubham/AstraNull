@@ -1,0 +1,264 @@
+/*
+ * Refined test-runs view. Page-specific rules only; shared primitives live in styles/refined.css.
+ * Dials: variance 4 / motion 3 / density 6. Token-only, so light and dark follow styles.css.
+ */
+
+/* Summary strip --------------------------------------------------------- */
+.refined.rf-runs .rf-runs-summary .rf-stat {
+  align-content: start;
+}
+
+.refined.rf-runs .rf-stat-hint {
+  line-height: 1.45;
+}
+
+/* Verdict mix: a proportional bar. Meaning is carried by the text hint beside it. */
+.refined.rf-runs .rf-mix-bar {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  max-width: 220px;
+  height: 4px;
+  margin: var(--space-1) 0;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--border-soft);
+}
+
+.refined.rf-runs .rf-mix-seg {
+  flex-basis: 0;
+  min-width: 4px;
+}
+
+.refined.rf-runs .rf-mix-seg.is-pass { background: var(--success); }
+.refined.rf-runs .rf-mix-seg.is-review { background: var(--warn); }
+.refined.rf-runs .rf-mix-seg.is-gap { background: var(--danger); }
+
+/* Governed SOC callout: full border and quiet tint, never a side stripe. */
+.refined.rf-runs .rf-governed {
+  min-width: 0;
+}
+
+.refined.rf-runs .rf-governed > .card {
+  margin: 0;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.refined.rf-runs .rf-governed > .card + .card {
+  margin-top: var(--space-4);
+}
+
+.refined.rf-runs .rf-governed .card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+
+.refined.rf-runs .rf-governed .callout-soc {
+  margin: 0 0 var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+/* View bar: tabs on the left, quiet live indicator on the right. */
+.refined.rf-runs .rf-runs-data {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.refined.rf-runs .rf-runs-viewbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.refined.rf-runs .rf-runs-viewbar .tabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.refined.rf-runs .rf-runs-viewbar .tab {
+  min-height: 44px;
+}
+
+.refined.rf-runs .rf-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.refined.rf-runs .rf-live.is-live {
+  color: var(--fg-2);
+}
+
+.refined.rf-runs .rf-live-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+.refined.rf-runs .rf-live.is-live .rf-live-dot {
+  background: var(--info);
+  animation: rf-runs-live-pulse 1.6s var(--motion-ease) infinite;
+}
+
+@keyframes rf-runs-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Panels ---------------------------------------------------------------- */
+.refined.rf-runs .rf-runs-panel {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.refined.rf-runs .rf-runs-panel[hidden] {
+  display: none;
+}
+
+.refined.rf-runs .rf-runs-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+.refined.rf-runs .rf-runs-panel-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 72ch;
+}
+
+.refined.rf-runs .rf-runs-panel-copy p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.refined.rf-runs .rf-runs-panel-copy .rf-runs-note {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.refined.rf-runs .rf-runs-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.refined.rf-runs .rf-runs-filter {
+  min-width: 200px;
+}
+
+.refined.rf-runs .rf-toolbar {
+  align-items: flex-end;
+}
+
+/* Table chrome ---------------------------------------------------------- */
+.refined.rf-runs .rf-panel-flush .table-wrap,
+.refined.rf-runs .rf-panel-flush .table-scroller {
+  border: 0;
+  border-radius: 0;
+}
+
+.refined.rf-runs .rf-panel-flush .table-wrap .data-table tbody td {
+  height: 52px;
+  vertical-align: middle;
+}
+
+.refined.rf-runs .rf-cell {
+  min-width: 0;
+}
+
+/* Long run IDs wrap instead of truncating. */
+.refined.rf-runs .rf-cell-run code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.refined.rf-runs .rf-duration {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.refined.rf-runs .rf-cell-started,
+.refined.rf-runs .rf-cell-started .muted {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.refined.rf-runs .rf-cell-verdict small {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.refined.rf-runs .rf-quiet {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 700px) {
+  .refined.rf-runs .rf-runs-viewbar {
+    align-items: stretch;
+  }
+
+  .refined.rf-runs .rf-runs-viewbar .tabs {
+    width: 100%;
+  }
+
+  .refined.rf-runs .rf-runs-filter {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .refined.rf-runs .rf-toolbar {
+    width: 100%;
+  }
+
+  .refined.rf-runs .rf-panel-flush .table-wrap .data-table tbody td {
+    height: auto;
+  }
+
+  .refined.rf-runs .rf-cell-started,
+  .refined.rf-runs .rf-duration {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refined.rf-runs .rf-live.is-live .rf-live-dot {
+    animation: none;
+    opacity: 0.85;
+  }
+}

@@ -366,7 +366,7 @@ Any UI panel that reads a field NOT listed in the response below is a spec viola
     "kind": "fqdn",
     "value": "checkout.acme.com",
     "expected_behavior": "cloud_baseline",
-    "agent_binding": { "agent_id": "agt_...", "bound_at": "..." },
+    "tags": ["env:prod", "team:edge"],
     "created_at": "...",
     "eligibility": "eligible",
     "eligibility_reason": null
@@ -407,6 +407,8 @@ Any UI panel that reads a field NOT listed in the response below is a spec viola
   "counts": { "runs_total": 0, "findings_open": 0, "findings_closed": 0 }
 }
 ```
+
+`target.tags` is required and always a `string[]` (possibly empty): the trusted tag list read from target metadata, using the same rules as every other target payload ([ADR-0008](../adr/0008-outside-in-only-targets-first.md); tags such as `env:<name>` are the membership mechanism that replaced environments). The response carries no `agent_binding` (agents were removed by ADR-0008). Contract test `FT-SHAPE-01`/`FT-SHAPE-01b` (`tests/contract/portal-shapes.test.mjs`, schema `TARGET_DETAIL_SHAPE` in `tests/helpers/portal-schema.mjs`) pins this shape.
 
 `checks_applied` lists customer-runnable, kind-compatible checks bound by non-archived test policies on the target (target-scoped wins over group-wide); `last_verdict` is set only when the latest run's verdict record cites evidence. `runs_recent[].verdict` comes only from the run's verdict record (never from run status) and `evidence_ids` are that record's citations. `edge_detection_request` is the latest `waf.fingerprint.safe` run for the target; its outcome is read from `GET /v1/waf/edge-detection/:id`. Both dev JSON and Postgres build these rows with `src/lib/targetDetailRows.mjs`; Postgres reads verification state from `target_verification_current`.
 

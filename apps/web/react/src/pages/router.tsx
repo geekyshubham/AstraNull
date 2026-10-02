@@ -19,6 +19,7 @@ import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } fro
 import { TargetsPage } from './targets-page';
 import { VectorLibraryPage } from './vector-library-page';
 import { ScanDetailView } from './scan-detail-view';
+import { FindingGroupDetailPage } from './refined/finding-group-detail';
 
 const DETAIL_ROUTES = new Set<RouteId>([
   'target-group-detail',
@@ -74,6 +75,9 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
   }
   if (DETAIL_ROUTES.has(route)) {
     return <DetailRoutePage route={route} data={data} config={config} session={session} onRefresh={onRefresh} />;
+  }
+  if (route === 'finding-group-detail') {
+    return <FindingGroupDetailPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (route === 'scan-detail') {
     return <ScanDetailView data={data} config={config} session={session} onRefresh={onRefresh} />;

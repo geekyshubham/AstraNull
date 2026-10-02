@@ -14,11 +14,11 @@ describe('portal route dataset policy', () => {
     assert.deepEqual(PORTAL_ROUTE_DATASETS['not-found'], []);
   });
 
-  it('places Targets immediately above Target groups with bounded inventory hydration', () => {
-    const targetsIndex = NAV_ITEMS.findIndex((item) => item.id === 'targets');
+  it('places Target groups immediately above Targets with bounded inventory hydration', () => {
+    const groupsIndex = NAV_ITEMS.findIndex((item) => item.id === 'target-groups');
 
-    assert.notEqual(targetsIndex, -1);
-    assert.equal(NAV_ITEMS[targetsIndex + 1]?.id, 'target-groups');
+    assert.notEqual(groupsIndex, -1);
+    assert.equal(NAV_ITEMS[groupsIndex + 1]?.id, 'targets');
     assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets', 'targetGroups']);
   });
 

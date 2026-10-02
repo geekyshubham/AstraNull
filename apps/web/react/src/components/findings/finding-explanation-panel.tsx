@@ -179,7 +179,7 @@ export function FindingExplanationPanel({
         <p className="muted">This finding does not identify an originating test run, so external probe evidence cannot be attributed.</p>
         {getString(finding, ['notes'], '') ? (
           <div className="verdict-explanation-grid">
-            <ExplanationField label="Finding note — not linked run evidence" value={getString(finding, ['notes'])} fullWidth />
+            <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} fullWidth />
           </div>
         ) : null}
         {getString(finding, ['remediation_template'], '') ? (
@@ -209,7 +209,7 @@ export function FindingExplanationPanel({
         <div className="verdict-explanation-grid" aria-label="Unverified finding provenance">
           <ExplanationField label="Originating run requested by finding" value={testRunId} />
           {getString(finding, ['notes'], '') ? (
-            <ExplanationField label="Finding note — not linked run evidence" value={getString(finding, ['notes'])} />
+            <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} />
           ) : null}
         </div>
       </div>

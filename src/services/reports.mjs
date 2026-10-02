@@ -15,6 +15,7 @@ import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { computeReadiness } from './readiness.mjs';
 import { listSocNotes } from './highScale.mjs';
+import { emitNotificationIfSubscribed } from './notifications.mjs';
 import {
   buildComplianceMapping,
   buildHtmlComplianceSection,
@@ -61,6 +62,11 @@ export function createReport(ctx, body) {
     resource_id: id,
   });
   persistStore();
+  emitNotificationIfSubscribed(ctx, {
+    trigger: 'report.ready',
+    subject: `Report ready: ${report.title}`,
+    metadata: { report_id: id, kind: reportKind },
+  });
   return report;
 }
 

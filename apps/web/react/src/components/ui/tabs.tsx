@@ -1,10 +1,14 @@
 import * as React from 'react';
+import { scrollIntoInlineView } from '../../lib/motion';
 import { cn } from '../../lib/utils';
+import './primitives.css';
 
 export type TabOption<T extends string> = {
   id: T;
   label: string;
   count?: number;
+  /** Shown but not selectable; skipped by arrow-key navigation. */
+  disabled?: boolean;
 };
 
 type TabsProps<T extends string> = {
@@ -22,6 +26,7 @@ type TabsProps<T extends string> = {
 type TabButtonProps<T extends string> = {
   option: TabOption<T>;
   selected: boolean;
+  focusable: boolean;
   panelId: string | undefined;
   tabId: string | undefined;
   onSelect: () => void;
@@ -32,6 +37,7 @@ type TabButtonProps<T extends string> = {
 function TabButton<T extends string>({
   option,
   selected,
+  focusable,
   panelId,
   tabId,
   onSelect,
@@ -46,12 +52,13 @@ function TabButton<T extends string>({
       role="tab"
       aria-selected={selected}
       aria-controls={panelId}
-      tabIndex={selected ? 0 : -1}
+      aria-disabled={option.disabled || undefined}
+      tabIndex={focusable ? 0 : -1}
       className={cn('tab', selected && 'active')}
-      onClick={onSelect}
+      onClick={option.disabled ? undefined : onSelect}
       onKeyDown={onKeyDown}
     >
-      {option.label}
+      <span className="tab-label">{option.label}</span>
       {typeof option.count === 'number' ? (
         <span className="tab-count">
           <span className="sr-only">{option.count} items</span>
@@ -71,36 +78,68 @@ export function Tabs<T extends string>({
   getPanelId,
   getTabId
 }: TabsProps<T>) {
+  const listRef = React.useRef<HTMLDivElement>(null);
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedIndex = options.findIndex((option) => option.id === value);
+  // Roving tabindex: the selected tab owns the single tab stop; if nothing valid is
+  // selected, the first enabled tab does, so the list is never unreachable.
+  const rovingIndex =
+    selectedIndex >= 0 && !options[selectedIndex]?.disabled
+      ? selectedIndex
+      : options.findIndex((option) => !option.disabled);
+
+  // Keep the active tab visible inside a horizontally scrolling rail.
+  React.useEffect(() => {
+    if (selectedIndex < 0) return;
+    scrollIntoInlineView(listRef.current, tabRefs.current[selectedIndex] ?? null);
+  }, [selectedIndex]);
 
   function focusTab(index: number) {
     const option = options[index];
-    if (!option) return;
+    if (!option || option.disabled) return;
     onChange(option.id);
     requestAnimationFrame(() => {
       tabRefs.current[index]?.focus();
     });
   }
 
+  /** Next enabled index from `start` moving by `step`, wrapping; -1 when none. */
+  function enabledFrom(start: number, step: 1 | -1) {
+    const total = options.length;
+    for (let offset = 0; offset < total; offset += 1) {
+      const index = (((start + step * offset) % total) + total) % total;
+      if (!options[index]?.disabled) return index;
+    }
+    return -1;
+  }
+
   function onTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (options.length === 0) return;
+    let next = -1;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusTab((index + 1) % options.length);
+      next = enabledFrom(index + 1, 1);
     } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusTab((index - 1 + options.length) % options.length);
+      next = enabledFrom(index - 1, -1);
     } else if (event.key === 'Home') {
-      event.preventDefault();
-      focusTab(0);
+      next = enabledFrom(0, 1);
     } else if (event.key === 'End') {
-      event.preventDefault();
-      focusTab(options.length - 1);
+      next = enabledFrom(options.length - 1, -1);
+    } else {
+      return;
     }
+    event.preventDefault();
+    if (next >= 0) focusTab(next);
   }
 
   return (
-    <div className={cn('tabs', className)} role="tablist" aria-orientation="horizontal" aria-label={ariaLabel}>
+    <div
+      ref={listRef}
+      data-ui="tabs"
+      className={cn('tabs', className)}
+      role="tablist"
+      aria-orientation="horizontal"
+      aria-label={ariaLabel}
+    >
       {options.map((option, index) => {
         const selected = option.id === value;
         const panelId = getPanelId?.(option.id);
@@ -111,6 +150,7 @@ export function Tabs<T extends string>({
             key={option.id}
             option={option}
             selected={selected}
+            focusable={index === rovingIndex}
             panelId={panelId}
             tabId={tabId}
             onSelect={() => onChange(option.id)}

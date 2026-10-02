@@ -9,6 +9,8 @@ import {
   countHighScaleRequests,
   countOpenFindings,
   findingSeverityBuckets,
+  findingSeverityDistribution,
+  severityShortLabel,
   isTargetVerified,
   overallDefenseStatus,
   resolveDashboardMetrics,
@@ -237,5 +239,41 @@ describe('dashboard-metrics', () => {
       governance,
       /{formatNumber\(openFindingsCount\)}<\/span> open findings/,
     );
+  });
+});
+
+describe('findingSeverityDistribution', () => {
+  it('counts only open findings, most severe first, and keeps unrecorded severity separate', () => {
+    const { slices, total } = findingSeverityDistribution([
+      { id: 'f1', severity: 's1', status: 'open' },
+      { id: 'f2', severity: 'critical', status: 'open' },
+      { id: 'f3', severity: 'high', status: 'open' },
+      { id: 'f4', severity: 's3', status: 'open' },
+      { id: 'f5', severity: 'info', status: 'open' },
+      { id: 'f6', severity: '', status: 'open' },
+      { id: 'f7', severity: 's1', status: 'resolved' }
+    ]);
+    assert.equal(total, 6);
+    assert.deepEqual(slices.map((slice) => slice.key), ['critical', 'high', 'medium', 'low', 'unrecorded']);
+    assert.deepEqual(slices.map((slice) => slice.count), [2, 1, 1, 1, 1]);
+    assert.equal(slices[0].share, 33);
+    assert.equal(slices.reduce((sum, slice) => sum + slice.count, 0), total);
+  });
+
+  it('reports zero shares instead of dividing by zero when nothing is open', () => {
+    const { slices, total } = findingSeverityDistribution([{ id: 'f1', severity: 's1', status: 'resolved' }]);
+    assert.equal(total, 0);
+    assert.ok(slices.every((slice) => slice.count === 0 && slice.share === 0));
+  });
+});
+
+describe('severityShortLabel', () => {
+  it('maps codes and words to one-word labels and never invents a severity', () => {
+    assert.equal(severityShortLabel('s1'), 'Critical');
+    assert.equal(severityShortLabel('S2'), 'High');
+    assert.equal(severityShortLabel('medium'), 'Medium');
+    assert.equal(severityShortLabel('s4'), 'Low');
+    assert.equal(severityShortLabel(''), 'Not recorded');
+    assert.equal(severityShortLabel('bogus'), 'Not recorded');
   });
 });

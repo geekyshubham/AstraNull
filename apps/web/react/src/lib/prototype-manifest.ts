@@ -299,6 +299,17 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     summary: 'Verdict explanation, remediation, evidence bundle, and custody export for one finding.'
   },
   {
+    id: 'finding-group-detail',
+    label: 'Finding Group',
+    route: '/app#finding-group-detail?key=:key',
+    routeId: 'finding-group-detail',
+    audience: 'Customer',
+    group: 'validation',
+    source: 'pages/refined/finding-group-detail.tsx',
+    status: 'React implemented',
+    summary: 'Affected assets, shared verdict, and remediation context for findings that share one check and verdict.'
+  },
+  {
     id: 'evidence-detail',
     label: 'Evidence Detail',
     route: '/app#evidence-detail?id=:id',
