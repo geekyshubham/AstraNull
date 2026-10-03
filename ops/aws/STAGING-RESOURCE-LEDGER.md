@@ -746,5 +746,31 @@ then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.e
 `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-7ecb431f24d7759d57a5c88b9075ce8d531a7f05`.
 
+## Production release 2026-10-03 (`1e85d825` rich CDN & WAF evidence, ASN cloud lookup, test eligibility, probe speed)
+
+Commit `1e85d8256e01a8ef186716757b49463c6218d6a8` ("fix(targets): display rich evidence for CDN and WAF detection and integrate ASN cloud detection") was pushed to `main` and released to staging:
+1. **Edge Protection Tiles**: Displays detected provider (`[DETECTED · CLOUDFLARE]`) and concrete evidence summaries on both WAF and CDN cards (`Evidence: WAF fingerprint (Cloudflare) · HTTP headers` and `Evidence: Anycast IP range (Cloudflare) · HTTP edge headers`).
+2. **How We Found Out**: Opened by default when edge protection is detected, listing independent evidence sources for both CDN and WAF (HTTP response headers, wafw00f fingerprint engine, Anycast IP address range, and benign attack markers).
+3. **WAF / CDN Edge Tab**: Revamped to render structured, itemized observed evidence for WAF (engine match, generic behavioral check, HTTP response headers, safe attack marker stats) and CDN (Anycast network match, edge routing Anycast IPs, HTTP edge response headers). Populates CDN type (`Address range`) instead of "Not reported".
+4. **Test Eligibility**: Removed "Test eligibility" column from the targets inventory table, allowing validation eligibility across all domains.
+5. **Probe Worker Execution Speed**: Replaced coarse 1000ms sleep with a fast 25ms yield during active job batches to optimize check execution speed.
+6. **ASN Cloud Lookup**: Integrated offline ASN database and Team Cymru DNS queries for robust cloud hosting detection without requiring agent placement.
+
+Before release: full unit and integration test suites green, `npm run lint`, `npm run lint:portal`, `npm run web:build`, `npm run web:typecheck` green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz extracted to `/opt/astranull-release-1e85d8256e01a8ef186716757b49463c6218d6a8` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:1e85d825` and `astranull:1e85d8256e01a8ef186716757b49463c6218d6a8` → `sha256:37bc10aec7b2737add0bfeea7ca97bae52ba77282bee628ca183a6821d2b14af` |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, connector-poll-scheduler, connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready; live Playwright test confirmed CDN & WAF evidence cards, expanded "How we found out" disclosure, rich observed evidence on the WAF / CDN edge tab, and clean targets table without Test eligibility column |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:5dca727c327c46654db49c3b70b9affb1d961356e7aa785b5ff7282463f6b546` (`astranull:22e07fb5`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-22e07fb567c871ec9b580468b9a49aaceae27a57`.
+
+
 
 
