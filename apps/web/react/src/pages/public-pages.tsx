@@ -217,6 +217,15 @@ function usePageMeta({ title, robots }: { title: string; robots?: string }) {
   }, [title, robots]);
 }
 
+function navigateSpa(destination: string) {
+  if (destination.startsWith('/') && !destination.startsWith('//')) {
+    window.history.pushState(null, '', destination);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    return;
+  }
+  window.location.href = destination;
+}
+
 function enterDemoPortal(portalPath: string) {
   saveSession({
     mode: 'dev-headers',
@@ -225,7 +234,7 @@ function enterDemoPortal(portalPath: string) {
     user_id: 'usr_admin',
     role: 'admin'
   });
-  window.location.href = portalPath;
+  navigateSpa(portalPath);
 }
 
 function PublicShell({
@@ -767,7 +776,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   useEffect(() => {
     const existing = loadSession();
     if (existing?.access_token && existing.principal !== 'staff') {
-      window.location.replace(config.portalPath);
+      navigateSpa(config.portalPath);
     }
   }, [config.portalPath]);
 
@@ -801,7 +810,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
         user_id: userId.trim(),
         role
       });
-      window.location.href = config.portalPath;
+      navigateSpa(config.portalPath);
       return;
     }
     const response = await fetch('/v1/auth/bundled-staging-login', {
@@ -823,7 +832,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
       ));
     }
     saveSession(sessionFromLoginResponse(json as Record<string, unknown>));
-    window.location.href = config.portalPath;
+    navigateSpa(config.portalPath);
   }
 
   /** Submit real credentials to the password lane. Role/tenant come from the server. */
@@ -858,7 +867,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     setTotp('');
     setMfaRequired(false);
     saveSession(sessionFromLoginResponse(json));
-    window.location.href = config.portalPath;
+    navigateSpa(config.portalPath);
   }
 
   function clearMfaChallenge() {
@@ -2071,7 +2080,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   useEffect(() => {
     const existing = loadSession();
     if (existing?.access_token && existing.principal === 'staff') {
-      window.location.replace(staffHomePath(existing));
+      navigateSpa(staffHomePath(existing));
     }
   }, []);
 
@@ -2106,7 +2115,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         staff_login_path: staffLoginPath
       };
       saveSession(devSession);
-      window.location.href = staffHomePath(devSession);
+      navigateSpa(staffHomePath(devSession));
       return;
     }
 
@@ -2133,7 +2142,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         staff_login_path: staffLoginPath
       };
       saveSession(staffSession);
-      window.location.href = staffHomePath(staffSession);
+      navigateSpa(staffHomePath(staffSession));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Staff login failed.');
       setLoading(false);

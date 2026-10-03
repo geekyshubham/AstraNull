@@ -61,7 +61,7 @@
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }
-    #boot-splash {
+    #boot {
       position: fixed;
       inset: 0;
       z-index: 40;
@@ -69,7 +69,10 @@
       place-items: center;
       padding: 24px;
       background: var(--boot-bg);
+      opacity: 1;
+      transition: opacity var(--boot-motion-slow) cubic-bezier(.2, 0, 0, 1);
     }
+    #boot.boot-hidden { opacity: 0; pointer-events: none; }
     .boot-inner { display: flex; flex-direction: column; align-items: center; text-align: center; }
     .boot-loader { position: relative; width: 72px; height: 72px; display: grid; place-items: center; }
     .boot-loader .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; }
@@ -114,7 +117,7 @@
        clears #root's children on first commit — and App renders an empty tree
        until config resolves, so a splash inside #root would blank out mid-boot.
        The observer below removes it once React commits real content. -->
-  <div id="boot-splash" role="status" aria-live="polite" aria-label="Loading the AstraNull console">
+  <div id="boot" role="status" aria-live="polite" aria-busy="true" aria-label="Loading the AstraNull console" data-od-id="boot-overlay">
       <div class="boot-inner">
         <div class="boot-loader">
           <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
@@ -130,24 +133,35 @@
           </svg>
         </div>
         <div class="boot-word">AstraNull</div>
-        <p class="boot-status">Loading console</p>
+        <p class="boot-status" id="boot-status">Loading console</p>
       </div>
     </div>
   <div id="root"></div>
   <script>
     (function () {
-      var splash = document.getElementById('boot-splash');
+      var boot = document.getElementById('boot');
       var root = document.getElementById('root');
-      if (!splash || !root) return;
+      if (!boot || !root) return;
+      var settled = false;
       function mounted() { return !!root.querySelector('*'); }
-      function remove() {
-        if (splash.parentNode) splash.parentNode.removeChild(splash);
+      function finish() {
+        if (settled) return;
+        settled = true;
+        boot.classList.add('boot-hidden');
+        var removed = false;
+        function remove() {
+          if (removed) return;
+          removed = true;
+          if (boot && boot.parentNode) boot.parentNode.removeChild(boot);
+        }
+        boot.addEventListener('transitionend', remove, { once: true });
+        setTimeout(remove, 300);
       }
-      if (mounted()) { remove(); return; }
+      if (mounted()) { finish(); return; }
       var obs = new MutationObserver(function () {
         if (!mounted()) return;
         obs.disconnect();
-        remove();
+        finish();
       });
       obs.observe(root, { childList: true, subtree: true });
     })();

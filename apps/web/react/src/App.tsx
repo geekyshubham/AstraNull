@@ -134,7 +134,13 @@ export default function App() {
     const candidate = portalSurface(window.location.pathname) === 'staff'
       ? config?.staffLoginPath
       : config?.loginUrl;
-    window.location.replace(resolveLoginDestination(candidate, window.location.pathname));
+    const dest = resolveLoginDestination(candidate, window.location.pathname);
+    if (dest.startsWith('/') && !dest.startsWith('//')) {
+      window.history.replaceState(null, '', dest);
+      setPath(window.location.pathname);
+      return;
+    }
+    window.location.replace(dest);
   }, [config]);
 
   // An expired or revoked session surfaces as 401 (or a staff-role 403) on
@@ -157,8 +163,14 @@ export default function App() {
       if (gate.redirectToLogin && !isPublicOnlyPath(window.location.pathname)) {
         // Deployments without a dedicated sign-in page report the portal path
         // itself as login_url, so this must never resolve to the current page.
-        window.location.replace(resolveLoginDestination(gate.loginUrl, window.location.pathname));
-        return;
+        const dest = resolveLoginDestination(gate.loginUrl, window.location.pathname);
+        if (dest.startsWith('/') && !dest.startsWith('//')) {
+          history.replaceState(null, '', dest);
+          setPath(window.location.pathname);
+        } else {
+          window.location.replace(dest);
+          return;
+        }
       }
       const nextConfig = gate.config;
       const nextSession = gate.session;
@@ -242,6 +254,27 @@ export default function App() {
       window.removeEventListener('popstate', onHashChange);
     };
   }, [activeSession.principal, activeSession.role, activeSession.staff_role]);
+
+  useEffect(() => {
+    function onInternalLinkClick(e: MouseEvent) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = (e.target as HTMLElement)?.closest('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || anchor.target === '_blank') return;
+      if (href.startsWith('/') && !href.startsWith('//')) {
+        e.preventDefault();
+        const currentFull = window.location.pathname + window.location.search + window.location.hash;
+        if (currentFull !== href) {
+          window.history.pushState(null, '', href);
+          setPath(window.location.pathname);
+          setRoute(getRouteFromLocation());
+        }
+      }
+    }
+    document.addEventListener('click', onInternalLinkClick);
+    return () => document.removeEventListener('click', onInternalLinkClick);
+  }, []);
 
   useEffect(() => {
     if (!config || loading) return;
