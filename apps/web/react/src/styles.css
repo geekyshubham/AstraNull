@@ -2952,31 +2952,48 @@ tr:last-child td {
   padding-right: 46px;
 }
 
+[data-ui='button'].btn.auth-password-toggle,
 .auth-password-toggle {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  transform: translateY(-50%);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);
+  position: absolute !important;
+  top: 50% !important;
+  right: 6px !important;
+  display: grid !important;
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  place-items: center !important;
+  padding: 0 !important;
+  transform: translateY(-50%) !important;
+  border: 0 !important;
+  border-radius: var(--radius-sm) !important;
+  background: transparent !important;
+  color: var(--muted) !important;
+  cursor: pointer !important;
+  z-index: 2 !important;
+  transition: color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease) !important;
 }
 
+[data-ui='button'].btn.auth-password-toggle:hover,
 .auth-password-toggle:hover {
-  background: color-mix(in oklab, var(--fg), transparent 92%);
-  color: var(--fg);
+  background: color-mix(in oklab, var(--fg), transparent 92%) !important;
+  color: var(--fg) !important;
 }
 
+[data-ui='button'].btn.auth-password-toggle:focus-visible,
 .auth-password-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 1px !important;
+}
+
+@media (pointer: coarse) {
+  [data-ui='button'].btn.auth-password-toggle,
+  .auth-password-toggle {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+  }
 }
 
 /* The credential-free staging exchange is kept reachable but visually demoted,
@@ -5607,9 +5624,20 @@ th {
 
 .data-table {
   width: 100%;
+  min-width: 780px;
   border-collapse: collapse;
   border-spacing: 0;
   font-variant-numeric: tabular-nums;
+}
+
+.validation-runs-table.data-table,
+.refined.rf-runs .data-table {
+  min-width: 860px;
+}
+
+.table-wrap .data-table code,
+.table-wrap .data-table .mono {
+  white-space: nowrap;
 }
 
 .data-table .data-table-head th,
@@ -7703,8 +7731,24 @@ body .tg-detail-view .rule-search:focus-within,
   background: var(--surface-pressed);
 }
 
+.field[data-ui='select'].select-open,
+.field[data-ui='select']:has(.select-shell.open),
+.rf-runs-filter:has(.select-shell.open),
+.rf-toolbar:has(.select-shell.open),
+.rf-runs-panel-head:has(.select-shell.open),
+.catalog-filter-grid:has(.select-shell.open),
+.table-filter-bar:has(.select-shell.open) {
+  position: relative;
+  z-index: 50;
+}
+
+.select-shell.open {
+  position: relative;
+  z-index: 60;
+}
+
 .select-menu:not([hidden]) {
-  z-index: var(--z-dropdown);
+  z-index: 100;
   box-shadow: var(--elev-popover);
 }
 

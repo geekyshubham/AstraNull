@@ -18,9 +18,12 @@ const VARIANTS: Array<{ id: DesignVariant; label: string }> = [
 function readStoredVariant(pageKey: string): DesignVariant {
   try {
     const stored = window.localStorage.getItem(`${STORAGE_PREFIX}${pageKey}`);
-    return stored === 'premium' ? 'premium' : 'classic';
-  } catch {
+    if (stored === 'classic') return 'classic';
+    if (stored === 'premium') return 'premium';
+    if (pageKey === 'target-detail') return 'premium';
     return 'classic';
+  } catch {
+    return pageKey === 'target-detail' ? 'premium' : 'classic';
   }
 }
 

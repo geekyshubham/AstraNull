@@ -1,5 +1,4 @@
 import { isValidElement, useMemo, useState, type HTMLAttributes, type ReactNode } from 'react';
-import { Info, ShieldCheck } from 'lucide-react';
 import { DataTable, type TableColumn } from '../../components/ui/table';
 import { Select, type SelectOption } from '../../components/ui/select';
 import { Tabs } from '../../components/ui/tabs';
@@ -205,11 +204,13 @@ export function RunsRefined(props: RunsRefinedProps) {
               { id: 'scans', label: 'Validation scans', count: scansUnavailable ? undefined : data.validationScans.length }
             ]}
           />
-          {/* Mounted while idle so the change to live is announced. */}
-          <p className={cn('rf-live', live && 'is-live')} role="status" aria-live="polite">
-            <span className="rf-live-dot" aria-hidden="true" />
-            <span>{live ? `Live: ${props.liveCounts}. Refreshing every 8s.` : 'Idle. Live status auto-refreshes while a run or scan is in progress.'}</span>
-          </p>
+          {/* Only render live indicator when a run or scan is actually active */}
+          {live ? (
+            <p className="rf-live is-live" role="status" aria-live="polite">
+              <span className="rf-live-dot" aria-hidden="true" />
+              <span>{`Live: ${props.liveCounts}. Refreshing every 8s.`}</span>
+            </p>
+          ) : null}
         </div>
 
         <div
@@ -222,15 +223,8 @@ export function RunsRefined(props: RunsRefinedProps) {
           <div className="rf-runs-panel-head">
             <div className="rf-runs-panel-copy">
               <p>Open a row for probe results, correlation, and custody chain.</p>
-              {launchBlocked ? null : (
-                <p className="rf-runs-note" role="note">
-                  <Info size={14} aria-hidden="true" />
-                  <span>{vectorLibraryNote}</span>
-                </p>
-              )}
             </div>
             <div className="rf-toolbar">
-              <span className="rf-chip" title="Verdicts show only when a published verdict has bound evidence"><ShieldCheck aria-hidden="true" />Evidence backed</span>
               <div className="rf-runs-filter" role="group" aria-label="Run history filters">
                 <Select label="Lifecycle status" value={props.runStatusFilter} options={props.runStatusOptions} onChange={props.onRunStatusFilterChange} />
               </div>

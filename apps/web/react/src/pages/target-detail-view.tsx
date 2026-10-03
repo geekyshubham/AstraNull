@@ -799,31 +799,38 @@ export function TargetDetailView({
   function renderHeader() {
     const hasTarget = Boolean(target);
     return (
-      <div className="page-head">
+      <div className="page-head td-page-head">
         <div className="td-identity">
-          <p className="eyebrow">Declared target</p>
-          <h1 className="page-title mono">{hasTarget ? targetDisplayValue(target) : entityId}</h1>
-          {hasTarget ? (
-            <>
-              <div className="td-metaline">
-                <span>{formatLabel(kind)}</span>
-                <span className="dot" aria-hidden="true">·</span>
-                <span>Expected: {formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</span>
-                {targetGroupId ? (
-                  <>
-                    <span className="dot" aria-hidden="true">·</span>
-                    <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-group-detail', targetGroupId)}>Group: {targetGroupName}</AnchorButton>
-                  </>
-                ) : null}
-              </div>
-              <div className="detail-status-line">
+          <p className="td-breadcrumbs">
+            <a href="#targets" className="td-breadcrumb-link">Targets</a>
+            <span className="td-breadcrumb-sep">/</span>
+            <span className="td-breadcrumb-current">{hasTarget ? targetDisplayValue(target) : entityId}</span>
+          </p>
+          <div className="td-title-cluster">
+            <h1 className="page-title mono">{hasTarget ? targetDisplayValue(target) : entityId}</h1>
+            {hasTarget ? (
+              <div className="td-title-badges">
                 <VerifyChip state={verificationState} provenance={provenance} label={ownershipLabel(verificationState)} />
-                <span className="detail-status-sep" aria-hidden="true">·</span>
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
                   {targetEligible ? 'Validation unlocked' : 'Validation locked'}
                 </Badge>
+                <span className="td-kind-tag">{formatLabel(kind)}</span>
               </div>
-              <span className="td-id mono muted">{entityId}</span>
+            ) : null}
+          </div>
+          {hasTarget ? (
+            <>
+              <div className="td-metaline">
+                <span className="td-id mono muted">{entityId}</span>
+                <span className="dot" aria-hidden="true">·</span>
+                <span>Expected: <strong>{formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</strong></span>
+                {targetGroupId ? (
+                  <>
+                    <span className="dot" aria-hidden="true">·</span>
+                    <AnchorButton size="sm" variant="ghost" className="td-group-pill" href={buildDetailHref('target-group-detail', targetGroupId)}>Group: {targetGroupName}</AnchorButton>
+                  </>
+                ) : null}
+              </div>
               <TagEditor tags={tags} canEdit={canWrite} onChange={saveTags} />
             </>
           ) : (

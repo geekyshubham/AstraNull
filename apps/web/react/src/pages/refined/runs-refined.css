@@ -134,6 +134,8 @@
 }
 
 .refined.rf-runs .rf-runs-panel-head {
+  position: relative;
+  z-index: 10;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -193,10 +195,14 @@
   min-width: 0;
 }
 
-/* Long run IDs wrap instead of truncating. */
+/* Long run IDs stay on a single line and keep table columns cleanly aligned. */
+.refined.rf-runs .rf-cell-run {
+  min-width: 170px;
+  white-space: nowrap;
+}
+
 .refined.rf-runs .rf-cell-run code {
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 500;

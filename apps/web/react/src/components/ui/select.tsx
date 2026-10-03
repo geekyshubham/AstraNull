@@ -191,7 +191,7 @@ export function Select({ label, name, value, options, onChange, className, disab
   }
 
   return (
-    <label className={cn('field', disabled && 'field-disabled', errorText && 'field-invalid', className)} data-ui="select">
+    <label className={cn('field', disabled && 'field-disabled', errorText && 'field-invalid', open && 'select-open', className)} data-ui="select">
       <span id={labelId}>{label}</span>
       <span
         className={cn(

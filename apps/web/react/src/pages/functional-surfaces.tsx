@@ -1391,11 +1391,7 @@ export function ValidationSurfacePage({
           <div className="form-banner neutral" role="note">
             Open the vector library once ready — {startDisabledReason}
           </div>
-        ) : (
-          <div className="form-banner neutral" role="note">
-            Direct validation runs start via validation scans above or bounded checks in the vector library.
-          </div>
-        )}
+        ) : null}
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card className="validation-scans-card">
           <CardHeader>
@@ -1412,7 +1408,6 @@ export function ValidationSurfacePage({
         <Card>
           <CardHeader>
             <div><CardTitle>Run history</CardTitle><CardDescription>Open a row for probe results, correlation, and custody chain.</CardDescription></div>
-            <Badge tone="muted">Evidence backed</Badge>
           </CardHeader>
           <CardContent className="stack-tight">
             <div className="catalog-filter-grid" role="group" aria-label="Run history filters">

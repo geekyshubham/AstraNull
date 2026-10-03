@@ -15026,7 +15026,7 @@ function hc({ label: e, name: t, value: n, options: r, onChange: i, className: a
     o || u((e) => (e || j(), !e));
   }
   return /* @__PURE__ */ (0, H.jsxs)("label", {
-    className: Yi("field", o && "field-disabled", S && "field-invalid", a),
+    className: Yi("field", o && "field-disabled", S && "field-invalid", l && "select-open", a),
     "data-ui": "select",
     children: [
       /* @__PURE__ */ (0, H.jsx)("span", {
@@ -30189,9 +30189,10 @@ var s_ = "astranull.design-variant.", c_ = [{
 }];
 function l_(e) {
   try {
-    return window.localStorage.getItem(`${s_}${e}`) === "premium" ? "premium" : "classic";
+    let t = window.localStorage.getItem(`${s_}${e}`);
+    return t === "classic" ? "classic" : t === "premium" || e === "target-detail" ? "premium" : "classic";
   } catch {
-    return "classic";
+    return e === "target-detail" ? "premium" : "classic";
   }
 }
 function u_(e) {
@@ -31514,68 +31515,57 @@ function kv({ rows: e, declarationOnlyCount: t, scan: n, scanActive: r, canRun: 
                 [t.category.id]: n
               }));
             },
-            children: [
-              /* @__PURE__ */ (0, H.jsxs)("summary", { children: [
-                /* @__PURE__ */ (0, H.jsx)("span", {
-                  className: "td-cat-icon",
-                  children: /* @__PURE__ */ (0, H.jsx)(n, {
-                    size: 18,
-                    "aria-hidden": "true"
-                  })
-                }),
-                /* @__PURE__ */ (0, H.jsxs)("span", {
-                  className: "td-cat-title",
-                  children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: t.category.label }), /* @__PURE__ */ (0, H.jsxs)("span", {
-                    className: "muted small",
-                    children: [
-                      t.rows.length,
-                      " check",
-                      t.rows.length === 1 ? "" : "s"
-                    ]
-                  })]
-                }),
-                /* @__PURE__ */ (0, H.jsxs)("span", {
-                  className: "td-cat-tally",
-                  children: [
-                    t.counts.failed ? /* @__PURE__ */ (0, H.jsx)(G, {
-                      tone: "danger",
-                      children: `${t.counts.failed} exposed`
-                    }) : null,
-                    t.counts.passed ? /* @__PURE__ */ (0, H.jsx)(G, {
-                      tone: "success",
-                      children: `${t.counts.passed} protected`
-                    }) : null,
-                    t.counts.running ? /* @__PURE__ */ (0, H.jsx)(G, {
-                      tone: "info",
-                      children: "Running"
-                    }) : null
-                  ]
-                }),
-                /* @__PURE__ */ (0, H.jsx)(we, {
-                  size: 16,
-                  className: "td-chevron",
+            children: [/* @__PURE__ */ (0, H.jsxs)("summary", { children: [
+              /* @__PURE__ */ (0, H.jsx)("span", {
+                className: "td-cat-icon",
+                children: /* @__PURE__ */ (0, H.jsx)(n, {
+                  size: 18,
                   "aria-hidden": "true"
                 })
-              ] }),
-              /* @__PURE__ */ (0, H.jsx)("p", {
-                className: "td-cat-how",
-                children: t.category.how
               }),
-              /* @__PURE__ */ (0, H.jsx)("ul", {
-                className: "td-check-list",
-                children: t.rows.map((e) => /* @__PURE__ */ (0, H.jsx)(Ov, { row: e }, e.checkId))
+              /* @__PURE__ */ (0, H.jsxs)("span", {
+                className: "td-cat-title",
+                children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: t.category.label }), /* @__PURE__ */ (0, H.jsxs)("span", {
+                  className: "muted small",
+                  children: [
+                    t.rows.length,
+                    " check",
+                    t.rows.length === 1 ? "" : "s"
+                  ]
+                })]
+              }),
+              /* @__PURE__ */ (0, H.jsxs)("span", {
+                className: "td-cat-tally",
+                children: [
+                  t.counts.failed ? /* @__PURE__ */ (0, H.jsx)(G, {
+                    tone: "danger",
+                    children: `${t.counts.failed} exposed`
+                  }) : null,
+                  t.counts.passed ? /* @__PURE__ */ (0, H.jsx)(G, {
+                    tone: "success",
+                    children: `${t.counts.passed} protected`
+                  }) : null,
+                  t.counts.running ? /* @__PURE__ */ (0, H.jsx)(G, {
+                    tone: "info",
+                    children: "Running"
+                  }) : null
+                ]
+              }),
+              /* @__PURE__ */ (0, H.jsx)(we, {
+                size: 16,
+                className: "td-chevron",
+                "aria-hidden": "true"
               })
-            ]
+            ] }), /* @__PURE__ */ (0, H.jsx)("ul", {
+              className: "td-check-list",
+              children: t.rows.map((e) => /* @__PURE__ */ (0, H.jsx)(Ov, { row: e }, e.checkId))
+            })]
           }, t.category.id);
         }),
         h.length ? null : /* @__PURE__ */ (0, H.jsx)("p", {
           className: "muted",
           children: "No checks match this filter."
-        }),
-        t > 0 ? /* @__PURE__ */ (0, H.jsxs)("p", {
-          className: "muted small td-decl-note",
-          children: [t, " declaration-only checks also apply. They record customer-declared readiness, send no traffic, and are not part of Run all checks."]
-        }) : null
+        })
       ]
     })]
   });
@@ -32263,71 +32253,83 @@ function ny({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   function tt() {
     let t = !!L;
     return /* @__PURE__ */ (0, H.jsxs)("div", {
-      className: "page-head",
+      className: "page-head td-page-head",
       children: [/* @__PURE__ */ (0, H.jsxs)("div", {
         className: "td-identity",
         children: [
-          /* @__PURE__ */ (0, H.jsx)("p", {
-            className: "eyebrow",
-            children: "Declared target"
+          /* @__PURE__ */ (0, H.jsxs)("p", {
+            className: "td-breadcrumbs",
+            children: [
+              /* @__PURE__ */ (0, H.jsx)("a", {
+                href: "#targets",
+                className: "td-breadcrumb-link",
+                children: "Targets"
+              }),
+              /* @__PURE__ */ (0, H.jsx)("span", {
+                className: "td-breadcrumb-sep",
+                children: "/"
+              }),
+              /* @__PURE__ */ (0, H.jsx)("span", {
+                className: "td-breadcrumb-current",
+                children: t ? Hm(L) : e
+              })
+            ]
           }),
-          /* @__PURE__ */ (0, H.jsx)("h1", {
-            className: "page-title mono",
-            children: t ? Hm(L) : e
-          }),
-          t ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [
-            /* @__PURE__ */ (0, H.jsxs)("div", {
-              className: "td-metaline",
-              children: [
-                /* @__PURE__ */ (0, H.jsx)("span", { children: Vv(ce) }),
-                /* @__PURE__ */ (0, H.jsx)("span", {
-                  className: "dot",
-                  "aria-hidden": "true",
-                  children: "·"
-                }),
-                /* @__PURE__ */ (0, H.jsxs)("span", { children: ["Expected: ", Vv(Rv(L, ["expected_behavior", "expected"], "Not reported"))] }),
-                R ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [/* @__PURE__ */ (0, H.jsx)("span", {
-                  className: "dot",
-                  "aria-hidden": "true",
-                  children: "·"
-                }), /* @__PURE__ */ (0, H.jsxs)(Qs, {
-                  size: "sm",
-                  variant: "ghost",
-                  href: kc("target-group-detail", R),
-                  children: ["Group: ", me]
-                })] }) : null
-              ]
-            }),
-            /* @__PURE__ */ (0, H.jsxs)("div", {
-              className: "detail-status-line",
+          /* @__PURE__ */ (0, H.jsxs)("div", {
+            className: "td-title-cluster",
+            children: [/* @__PURE__ */ (0, H.jsx)("h1", {
+              className: "page-title mono",
+              children: t ? Hm(L) : e
+            }), t ? /* @__PURE__ */ (0, H.jsxs)("div", {
+              className: "td-title-badges",
               children: [
                 /* @__PURE__ */ (0, H.jsx)(sg, {
                   state: ue,
                   provenance: pe,
                   label: Gv(ue)
                 }),
-                /* @__PURE__ */ (0, H.jsx)("span", {
-                  className: "detail-status-sep",
-                  "aria-hidden": "true",
-                  children: "·"
-                }),
                 /* @__PURE__ */ (0, H.jsx)(G, {
                   tone: de ? "success" : "warn",
                   title: `Reported eligibility ${le}; ownership ${ue}`,
                   children: de ? "Validation unlocked" : "Validation locked"
+                }),
+                /* @__PURE__ */ (0, H.jsx)("span", {
+                  className: "td-kind-tag",
+                  children: Vv(ce)
                 })
               ]
-            }),
-            /* @__PURE__ */ (0, H.jsx)("span", {
-              className: "td-id mono muted",
-              children: e
-            }),
-            /* @__PURE__ */ (0, H.jsx)(Zv, {
-              tags: se,
-              canEdit: he,
-              onChange: Xe
-            })
-          ] }) : /* @__PURE__ */ (0, H.jsx)("p", {
+            }) : null]
+          }),
+          t ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [/* @__PURE__ */ (0, H.jsxs)("div", {
+            className: "td-metaline",
+            children: [
+              /* @__PURE__ */ (0, H.jsx)("span", {
+                className: "td-id mono muted",
+                children: e
+              }),
+              /* @__PURE__ */ (0, H.jsx)("span", {
+                className: "dot",
+                "aria-hidden": "true",
+                children: "·"
+              }),
+              /* @__PURE__ */ (0, H.jsxs)("span", { children: ["Expected: ", /* @__PURE__ */ (0, H.jsx)("strong", { children: Vv(Rv(L, ["expected_behavior", "expected"], "Not reported")) })] }),
+              R ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [/* @__PURE__ */ (0, H.jsx)("span", {
+                className: "dot",
+                "aria-hidden": "true",
+                children: "·"
+              }), /* @__PURE__ */ (0, H.jsxs)(Qs, {
+                size: "sm",
+                variant: "ghost",
+                className: "td-group-pill",
+                href: kc("target-group-detail", R),
+                children: ["Group: ", me]
+              })] }) : null
+            ]
+          }), /* @__PURE__ */ (0, H.jsx)(Zv, {
+            tags: se,
+            canEdit: he,
+            onChange: Xe
+          })] }) : /* @__PURE__ */ (0, H.jsx)("p", {
             className: "muted",
             children: "Per-target validation surface."
           })
@@ -40370,15 +40372,15 @@ function oS(e) {
                 label: "Validation scans",
                 count: l ? void 0 : t.validationScans.length
               }]
-            }), /* @__PURE__ */ (0, H.jsxs)("p", {
-              className: Yi("rf-live", o && "is-live"),
+            }), o ? /* @__PURE__ */ (0, H.jsxs)("p", {
+              className: "rf-live is-live",
               role: "status",
               "aria-live": "polite",
               children: [/* @__PURE__ */ (0, H.jsx)("span", {
                 className: "rf-live-dot",
                 "aria-hidden": "true"
-              }), /* @__PURE__ */ (0, H.jsx)("span", { children: o ? `Live: ${e.liveCounts}. Refreshing every 8s.` : "Idle. Live status auto-refreshes while a run or scan is in progress." })]
-            })]
+              }), /* @__PURE__ */ (0, H.jsx)("span", { children: `Live: ${e.liveCounts}. Refreshing every 8s.` })]
+            }) : null]
           }),
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "rf-runs-panel",
@@ -40388,23 +40390,12 @@ function oS(e) {
             hidden: i !== "history",
             children: [/* @__PURE__ */ (0, H.jsxs)("div", {
               className: "rf-runs-panel-head",
-              children: [/* @__PURE__ */ (0, H.jsxs)("div", {
+              children: [/* @__PURE__ */ (0, H.jsx)("div", {
                 className: "rf-runs-panel-copy",
-                children: [/* @__PURE__ */ (0, H.jsx)("p", { children: "Open a row for probe results, correlation, and custody chain." }), p ? null : /* @__PURE__ */ (0, H.jsxs)("p", {
-                  className: "rf-runs-note",
-                  role: "note",
-                  children: [/* @__PURE__ */ (0, H.jsx)(St, {
-                    size: 14,
-                    "aria-hidden": "true"
-                  }), /* @__PURE__ */ (0, H.jsx)("span", { children: f })]
-                })]
-              }), /* @__PURE__ */ (0, H.jsxs)("div", {
+                children: /* @__PURE__ */ (0, H.jsx)("p", { children: "Open a row for probe results, correlation, and custody chain." })
+              }), /* @__PURE__ */ (0, H.jsx)("div", {
                 className: "rf-toolbar",
-                children: [/* @__PURE__ */ (0, H.jsxs)("span", {
-                  className: "rf-chip",
-                  title: "Verdicts show only when a published verdict has bound evidence",
-                  children: [/* @__PURE__ */ (0, H.jsx)(Cn, { "aria-hidden": "true" }), "Evidence backed"]
-                }), /* @__PURE__ */ (0, H.jsx)("div", {
+                children: /* @__PURE__ */ (0, H.jsx)("div", {
                   className: "rf-runs-filter",
                   role: "group",
                   "aria-label": "Run history filters",
@@ -40414,7 +40405,7 @@ function oS(e) {
                     options: e.runStatusOptions,
                     onChange: e.onRunStatusFilterChange
                   })
-                })]
+                })
               })]
             }), /* @__PURE__ */ (0, H.jsx)("div", {
               className: "rf-panel rf-panel-flush",
@@ -42779,11 +42770,7 @@ function GC({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           className: "form-banner neutral",
           role: "note",
           children: ["Open the vector library once ready — ", c]
-        }) : /* @__PURE__ */ (0, H.jsx)("div", {
-          className: "form-banner neutral",
-          role: "note",
-          children: "Direct validation runs start via validation scans above or bounded checks in the vector library."
-        }),
+        }) : null,
         /* @__PURE__ */ (0, H.jsx)(IC, {
           message: f,
           error: m,
@@ -42813,10 +42800,7 @@ function GC({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             }), x]
           })]
         }),
-        /* @__PURE__ */ (0, H.jsxs)(K, { children: [/* @__PURE__ */ (0, H.jsxs)(q, { children: [/* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Run history" }), /* @__PURE__ */ (0, H.jsx)(Y, { children: "Open a row for probe results, correlation, and custody chain." })] }), /* @__PURE__ */ (0, H.jsx)(G, {
-          tone: "muted",
-          children: "Evidence backed"
-        })] }), /* @__PURE__ */ (0, H.jsxs)(X, {
+        /* @__PURE__ */ (0, H.jsxs)(K, { children: [/* @__PURE__ */ (0, H.jsx)(q, { children: /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Run history" }), /* @__PURE__ */ (0, H.jsx)(Y, { children: "Open a row for probe results, correlation, and custody chain." })] }) }), /* @__PURE__ */ (0, H.jsxs)(X, {
           className: "stack-tight",
           children: [/* @__PURE__ */ (0, H.jsx)("div", {
             className: "catalog-filter-grid",

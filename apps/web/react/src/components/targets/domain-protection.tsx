@@ -417,7 +417,7 @@ export type AllChecksPanelProps = {
 };
 
 /** Every run-all check for this domain, grouped by category, with live status and what it did. */
-export function AllChecksPanel({ rows, declarationOnlyCount, scan, scanActive, canRun, runDisabledReason, busy, onRunAll, onStop }: AllChecksPanelProps) {
+export function AllChecksPanel({ rows, declarationOnlyCount: _declarationOnlyCount, scan, scanActive, canRun, runDisabledReason, busy, onRunAll, onStop }: AllChecksPanelProps) {
   const [filter, setFilter] = useState<'all' | RowStatus>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const counts = useMemo(() => {
@@ -516,7 +516,6 @@ export function AllChecksPanel({ rows, declarationOnlyCount, scan, scanActive, c
                 </span>
                 <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
               </summary>
-              <p className="td-cat-how">{group.category.how}</p>
               <ul className="td-check-list">
                 {group.rows.map((row) => <CheckRowItem key={row.checkId} row={row} />)}
               </ul>
@@ -524,11 +523,6 @@ export function AllChecksPanel({ rows, declarationOnlyCount, scan, scanActive, c
           );
         })}
         {!groups.length ? <p className="muted">No checks match this filter.</p> : null}
-        {declarationOnlyCount > 0 ? (
-          <p className="muted small td-decl-note">
-            {declarationOnlyCount} declaration-only checks also apply. They record customer-declared readiness, send no traffic, and are not part of Run all checks.
-          </p>
-        ) : null}
       </CardContent>
     </Card>
   );
