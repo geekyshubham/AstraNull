@@ -44,7 +44,7 @@ import {
 export const WORKER_VERSION = '0.1.0';
 const POLL_INTERVAL_MIN_MS = 1000;
 const POLL_INTERVAL_MAX_MS = 60_000;
-const DEFAULT_POLL_INTERVAL_MS = 5000;
+const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_API_URL = 'http://localhost:3000';
 const MIN_SECRET_LENGTH = 32;
 const CONTROL_REQUEST_TIMEOUT_MS = 15_000;
@@ -1483,7 +1483,7 @@ export async function runProbeWorker(config, deps = {}) {
     : PROBE_WORKER_CYCLE_TIMEOUT_MS;
 
   do {
-    await withHardDeadline(
+    const results = await withHardDeadline(
       Promise.resolve().then(() => pollOnce(config)),
       cycleTimeoutMs,
       'probe_worker_cycle_timeout',
@@ -1493,10 +1493,12 @@ export async function runProbeWorker(config, deps = {}) {
       writeHeartbeat(config.heartbeatFile, `${new Date().toISOString()}\n`, { mode: 0o600 });
     }
     if (config.once) break;
+    const hasWork = Array.isArray(results) && results.length > 0;
+    const delayMs = hasWork ? 25 : config.pollIntervalMs;
     if (typeof deps.sleepFn === 'function') {
-      await deps.sleepFn(config.pollIntervalMs);
+      await deps.sleepFn(delayMs);
     } else {
-      await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+      await new Promise((r) => setTimeout(r, delayMs));
     }
   } while (!config.once);
 }

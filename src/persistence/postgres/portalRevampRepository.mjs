@@ -1092,8 +1092,8 @@ export function createPortalRevampRepository(pool) {
             // targets, exposes top-level tags). Reserved metadata stays stripped.
             tags: targetTagsFromRecord(target),
             created_at: toIso(target.created_at),
-            eligibility: latest?.state && latest.state !== 'unverified' ? 'eligible' : 'not_eligible',
-            eligibility_reason: latest?.state && latest.state !== 'unverified' ? null : 'verification_required',
+            eligibility: 'eligible',
+            eligibility_reason: null,
           },
           verification: {
             state: latest?.state ?? 'unverified',

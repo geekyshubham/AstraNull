@@ -148,7 +148,17 @@ function familyDetectionLine(edge: DataItem | null, family: 'waf' | 'cdn', phase
   if (phaseIsEvaluating(phase)) return null;
   const row = asItem(edge?.[family]);
   const status = str(row, 'status');
-  const provider = str(row, 'vendor') || str(row, 'provider');
+  const layers = Array.isArray(edge?.layers) ? edge.layers : [];
+  const layerProvider = (layers as Array<Record<string, unknown>>).find((l) => l?.family === family)?.provider;
+  const providerList = family === 'cdn'
+    ? (Array.isArray(edge?.cdn_providers) ? edge.cdn_providers : [])
+    : (Array.isArray(edge?.waf_providers) ? edge.waf_providers : []);
+  const provider = str(row, 'vendor')
+    || str(row, 'provider')
+    || (typeof edge?.[`${family}_provider`] === 'string' ? String(edge[`${family}_provider`]) : '')
+    || (layerProvider ? String(layerProvider) : '')
+    || (providerList.length > 0 ? String(providerList[0]) : '')
+    || (family === 'cdn' && status === 'detected' && str(asItem(edge?.waf), 'vendor') ? str(asItem(edge?.waf), 'vendor') : '');
   if (status === 'detected') return { tone: 'success' as const, text: provider ? `Detected · ${providerName(provider)}` : 'Detected', provider };
   if (status === 'not_detected') return { tone: 'warn' as const, text: 'Not detected', provider: '' };
   if (edge) return { tone: 'muted' as const, text: 'Inconclusive', provider: '' };

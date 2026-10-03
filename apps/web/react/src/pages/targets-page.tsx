@@ -130,12 +130,6 @@ function isVerified(state: string) {
   return ['dns_verified', 'provider_verified', 'user_confirmed', 'verified'].includes(state.trim().toLowerCase());
 }
 
-function eligibilityTone(value: string): Tone {
-  const key = value.trim().toLowerCase();
-  if (key === 'eligible' || key === 'ready') return 'success';
-  if (key.startsWith('not') || key === 'ineligible') return 'warn';
-  return 'muted';
-}
 
 function sourceLabel(item: DataItem) {
   const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
@@ -198,7 +192,6 @@ export function TargetsPage({
   const { confirm } = useConfirmModal();
   const [query, setQuery] = useState('');
   const [verificationFilter, setVerificationFilter] = useState('all');
-  const [eligibilityFilter, setEligibilityFilter] = useState('all');
   const [groupFilter, setGroupFilter] = useState('all');
   const [kindFilter, setKindFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
@@ -224,12 +217,10 @@ export function TargetsPage({
     const needle = query.trim().toLowerCase();
     return targets.filter((item) => {
       const state = verificationState(item).toLowerCase();
-      const eligibility = getString(item, ['eligibility'], 'unknown').toLowerCase();
       if (verificationFilter === 'verified' && !isVerified(state)) return false;
       if (verificationFilter === 'unverified' && isVerified(state)) return false;
       const groupId = getString(item, ['target_group_id'], '');
       const kind = getString(item, ['kind'], 'unknown').toLowerCase();
-      if (eligibilityFilter !== 'all' && eligibility !== eligibilityFilter) return false;
       if (groupFilter !== 'all' && groupId !== groupFilter) return false;
       if (kindFilter !== 'all' && kind !== kindFilter) return false;
       if (tagFilter !== 'all' && !targetTags(item).includes(tagFilter)) return false;
@@ -241,15 +232,10 @@ export function TargetsPage({
         sourceLabel(item)
       ].some((value) => value.toLowerCase().includes(needle));
     });
-  }, [targets, query, verificationFilter, eligibilityFilter, groupFilter, kindFilter, tagFilter]);
+  }, [targets, query, verificationFilter, groupFilter, kindFilter, tagFilter]);
 
   const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
-  const eligibleCount = targets.filter((item) => getString(item, ['eligibility'], '').toLowerCase() === 'eligible').length;
-  const blockedCount = targets.filter((item) => {
-    const state = verificationState(item);
-    const eligibility = getString(item, ['eligibility'], 'unknown').toLowerCase();
-    return !isVerified(state) || eligibility !== 'eligible';
-  }).length;
+  const unverifiedCount = targets.length - verifiedCount;
   const targetKinds = [...new Set(targets.map((item) => getString(item, ['kind'], 'unknown').toLowerCase()).filter(Boolean))].sort();
 
   async function addTarget(event: FormEvent<HTMLFormElement>) {
@@ -402,20 +388,7 @@ export function TargetsPage({
         return <VerifyChip state={verificationState(item)} provenance={resolveTargetVerificationProvenance(item, verification)} />;
       }
     },
-    {
-      key: 'eligibility',
-      label: 'Test eligibility',
-      render: (item) => {
-        const eligibility = getString(item, ['eligibility'], 'unknown');
-        const reason = getString(item, ['eligibility_reason'], '');
-        return (
-          <span className="source-cell">
-            <Badge tone={eligibilityTone(eligibility)} title={reason || `Eligibility ${eligibility}`}>{eligibility.replace(/_/g, ' ')}</Badge>
-            {reason && reason !== '—' ? <small>{reason.replace(/_/g, ' ')}</small> : null}
-          </span>
-        );
-      }
-    },
+
     {
       key: 'source',
       label: 'Added from',
@@ -456,10 +429,10 @@ export function TargetsPage({
         <div>
           <p className="eyebrow">Proof for customer-declared scope</p>
           <h1>Targets</h1>
-          <p>All declared hostnames and IPs, with separate ownership proof and fail-closed eligibility before bounded validation can run.</p>
+          <p>All declared hostnames and IPs, ready for bounded validation.</p>
         </div>
         <div className="row-actions">
-          <Button variant="secondary" onClick={() => { setVerificationFilter('unverified'); setEligibilityFilter('all'); }}>Review blocked</Button>
+          <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Review unverified</Button>
           {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
         </div>
       </div>
@@ -470,8 +443,8 @@ export function TargetsPage({
       <div className="targets-summary" aria-label="Target inventory summary">
         <div className="targets-summary-cell"><span>Declared targets</span><strong>{formatNumber(targets.length)}</strong></div>
         <div className="targets-summary-cell"><span>Ownership verified</span><strong>{formatNumber(verifiedCount)}</strong></div>
-        <div className="targets-summary-cell"><span>Eligible for validation</span><strong>{formatNumber(eligibleCount)}</strong></div>
-        <div className="targets-summary-cell"><span>Unverified or blocked</span><strong>{formatNumber(blockedCount)}</strong></div>
+        <div className="targets-summary-cell"><span>Ready for validation</span><strong>{formatNumber(targets.length)}</strong></div>
+        <div className="targets-summary-cell"><span>Unverified</span><strong>{formatNumber(unverifiedCount)}</strong></div>
       </div>
 
       {canWriteTargets && showAdd ? (
@@ -526,7 +499,6 @@ export function TargetsPage({
           <div className="targets-toolbar">
             <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, group, tag, or provider" /></label>
             <label className="targets-filter"><span>Verification</span><select value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)}><option value="all">All states</option><option value="verified">Verified</option><option value="unverified">Not verified</option></select></label>
-            <label className="targets-filter"><span>Eligibility</span><select value={eligibilityFilter} onChange={(event) => setEligibilityFilter(event.target.value)}><option value="all">All decisions</option><option value="eligible">Eligible</option><option value="not_eligible">Not eligible</option><option value="ineligible">Ineligible</option></select></label>
             <label className="targets-filter"><span>Target group</span><select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}><option value="all">All groups</option>{groups.flatMap((group) => { const id = getString(group, ['id'], ''); return id ? [<option key={id} value={id}>{getString(group, ['name', 'id'], id)}</option>] : []; })}</select></label>
             <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
             <label className="targets-filter"><span>Tag</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>

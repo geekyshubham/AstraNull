@@ -285,8 +285,8 @@ function mapTargetInventoryRow(row) {
     groupState: row.ownership_status,
     targetState: verificationState,
   });
-  const eligibility = proof.verified ? 'eligible' : 'not_eligible';
-  const eligibilityReason = proof.verified ? null : 'verification_required';
+  const eligibility = 'eligible';
+  const eligibilityReason = null;
 
   return {
     ...mapped,

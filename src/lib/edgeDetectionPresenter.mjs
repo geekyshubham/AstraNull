@@ -310,19 +310,28 @@ export function presentTargetEdgeDetection(row) {
   if (!record) return null;
 
   const evidence = asRecord(record.evidence_json) ?? {};
+  const layers = presentedLayers(evidence, record);
+  const cdnProvider = boundedString(record.cdn_provider)
+    || stringList(record.cdn_providers)[0]
+    || layers.find((l) => l.family === 'cdn')?.provider
+    || (record.cdn_status === 'detected' && boundedString(record.waf_vendor) ? boundedString(record.waf_vendor) : '');
+  const cdnProviders = stringList(record.cdn_providers);
+  if (cdnProvider && !cdnProviders.includes(cdnProvider)) {
+    cdnProviders.push(cdnProvider);
+  }
   const presented = {
     status: boundedString(record.status) || 'inconclusive',
     reason: boundedString(record.reason) || null,
     waf: familyPresentation(record.waf_status, record.waf_vendor, record.waf_type),
-    cdn: familyPresentation(record.cdn_status, record.cdn_provider, record.cdn_type),
+    cdn: familyPresentation(record.cdn_status, cdnProvider, record.cdn_type),
     cloud: familyPresentation(
       asRecord(evidence.cloud)?.status,
       asRecord(evidence.cloud)?.provider,
       asRecord(evidence.cloud)?.type,
     ),
-    layers: presentedLayers(evidence, record),
+    layers,
     waf_providers: stringList(record.waf_providers),
-    cdn_providers: stringList(record.cdn_providers),
+    cdn_providers: cdnProviders,
     cloud_providers: stringList(evidence.cloud_providers),
     confidence: boundedNumber(record.confidence, { max: 1 }),
     evidence_consistency: boundedString(evidence.evidence_consistency, 32) || 'single_source',

@@ -147,7 +147,7 @@ describe('validation scan UI helpers: live view formatting', () => {
     assert.equal(ui.nextPollDelay({ status: 'running' }), ui.SCAN_POLL_BASE_MS);
     assert.equal(ui.nextPollDelay({ status: 'pending' }), ui.SCAN_POLL_BASE_MS);
     assert.equal(ui.nextPollDelay({ status: 'scheduled' }), ui.SCAN_POLL_SCHEDULED_MS);
-    assert.equal(ui.nextPollDelay({ status: 'running', errorCount: 1 }), 5000);
+    assert.equal(ui.nextPollDelay({ status: 'running', errorCount: 1 }), ui.SCAN_POLL_BASE_MS * 2);
     assert.equal(ui.nextPollDelay({ status: 'running', errorCount: 6 }), ui.SCAN_POLL_MAX_MS);
     for (const status of contract.TERMINAL_SCAN_STATUSES) assert.equal(ui.nextPollDelay({ status }), null, status);
   });

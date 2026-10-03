@@ -455,9 +455,24 @@ export function projectEdgeDetection(metadata = {}) {
     },
     'vendor',
   );
-  const cdn = signalProjection(cdnSignal, cdnTypedMatch, 'provider');
+  const cdnLayerMatch = layers.find((layer) => layer.family === 'cdn');
+  const cdnFallbackProvider = cdnTypedMatch?.provider
+    || cdnLayerMatch?.provider
+    || boundedList(edgeSignature.cdn_providers)[0]
+    || (edgeSignature.cdncheck?.matched && edgeSignature.cdncheck?.provider ? boundedString(edgeSignature.cdncheck.provider) : undefined)
+    || (cdnSignal.value && !conflictingVendorSignals && bestVendor?.vendor ? boundedString(bestVendor.vendor) : undefined);
+  const cdnMatch = cdnTypedMatch || (cdnFallbackProvider ? {
+    provider: cdnFallbackProvider,
+    type: cdnLayerMatch?.sources?.[0] || (bestVendor?.vendor ? 'response_fingerprint' : 'edge_fingerprint'),
+  } : null);
+  const cdn = signalProjection(cdnSignal, cdnMatch, 'provider');
   const cloudTypedMatch = findEdgeProviderMatch(edgeSignature, 'cloud');
   const cloud = signalProjection(cloudSignal, cloudTypedMatch, 'provider');
+
+  const projectedCdnProviders = boundedList(edgeSignature.cdn_providers);
+  if (cdnMatch?.provider && !projectedCdnProviders.includes(cdnMatch.provider)) {
+    projectedCdnProviders.push(cdnMatch.provider);
+  }
 
   const positive = (wafSignal.value && !wafSignal.conflict)
     || (cdnSignal.value && !cdnSignal.conflict)
@@ -512,7 +527,7 @@ export function projectEdgeDetection(metadata = {}) {
     protection,
     network_firewall: networkFirewall,
     waf_providers: boundedList(edgeSignature.waf_providers),
-    cdn_providers: boundedList(edgeSignature.cdn_providers),
+    cdn_providers: projectedCdnProviders,
     cloud_providers: boundedList(edgeSignature.cloud_providers),
     detected_vendor: responseProvider,
     confidence,

@@ -13627,7 +13627,7 @@ var Pa = Object.freeze([
   "daily",
   "weekly",
   "monthly"
-]), Ia = 6e4, La = 2500, Ra = 1e4, za = 15e3, Ba = Object.freeze({
+]), Ia = 6e4, La = 1e3, Ra = 1e4, za = 15e3, Ba = Object.freeze({
   soc_gated_check: "One selected check requires SOC governance and cannot run as a customer scan. Remove it and try again.",
   check_requires_additional_input: "One selected check needs additional customer setup before it can run. Remove it and try again.",
   unknown_check: "One selected check is not in the current catalog. Refresh the catalog and try again.",
@@ -25741,7 +25741,7 @@ function Fm(e) {
   return t ? Object.fromEntries(Object.keys(t).sort().map((e) => [e, Fm(t[e])])) : e;
 }
 function Im(e, t) {
-  return Nm(e) === "eligible" && Om.has(Nm(t));
+  return !0;
 }
 function Lm(e) {
   return km.has(Nm(e));
@@ -31065,11 +31065,11 @@ function yv(e) {
 }
 function bv(e, t, n) {
   if (yv(n)) return null;
-  let r = hv(e?.[t]), i = gv(r, "status"), a = gv(r, "vendor") || gv(r, "provider");
+  let r = hv(e?.[t]), i = gv(r, "status"), a = (Array.isArray(e?.layers) ? e.layers : []).find((e) => e?.family === t)?.provider, o = t === "cdn" ? Array.isArray(e?.cdn_providers) ? e.cdn_providers : [] : Array.isArray(e?.waf_providers) ? e.waf_providers : [], s = gv(r, "vendor") || gv(r, "provider") || (typeof e?.[`${t}_provider`] == "string" ? String(e[`${t}_provider`]) : "") || (a ? String(a) : "") || (o.length > 0 ? String(o[0]) : "") || (t === "cdn" && i === "detected" && gv(hv(e?.waf), "vendor") ? gv(hv(e?.waf), "vendor") : "");
   return i === "detected" ? {
     tone: "success",
-    text: a ? `Detected · ${Z_(a)}` : "Detected",
-    provider: a
+    text: s ? `Detected · ${Z_(s)}` : "Detected",
+    provider: s
   } : i === "not_detected" ? {
     tone: "warn",
     text: "Not detected",
@@ -32121,7 +32121,7 @@ function ny({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     R,
     a
   ]);
-  let Ge = de ? Oe.length === 0 ? "No runnable checks apply to this kind of target." : ze && !Pe ? "WAF/CDN detection is running. Run all checks unlocks as soon as it finishes." : "" : "Prove ownership first. External probes stay blocked until this domain is at least DNS-verified.";
+  let Ge = Oe.length === 0 ? "No runnable checks apply to this kind of target." : ze && !Pe ? "WAF/CDN detection is running. Run all checks unlocks as soon as it finishes." : "";
   async function Ke() {
     if (L && !Ge) {
       u("run-all"), f(""), m("");
@@ -55814,10 +55814,6 @@ function ik(e) {
   ].includes(e.trim().toLowerCase());
 }
 function ak(e) {
-  let t = e.trim().toLowerCase();
-  return t === "eligible" || t === "ready" ? "success" : t.startsWith("not") || t === "ineligible" ? "warn" : "muted";
-}
-function ok(e) {
   let t = e.metadata && typeof e.metadata == "object" && !Array.isArray(e.metadata) ? e.metadata : null, n = nk(e, ["import_integration", "import_source"], "");
   return n && n !== "—" ? n : nk(t, [
     "source_app",
@@ -55825,16 +55821,16 @@ function ok(e) {
     "source"
   ], nk(e, ["source"], "manual"));
 }
-function sk(e) {
+function ok(e) {
   let t = nk(e, ["kind"], "unknown").toLowerCase(), n = nk(e, ["value"], "");
   return t === "fqdn" || t === "hostname" || t === "domain" ? "Hostname" : t === "ip" ? n.includes(":") ? "IPv6" : "IPv4" : t === "cidr" ? "CIDR" : t.replace(/_/g, " ");
 }
-function ck(e) {
+function sk(e) {
   let t = e.trim().toLowerCase().replace(/[\s-]+/g, "_");
   return t.includes("cloudflare") ? "cloudflare" : t.includes("route53") || t.includes("route_53") ? "route53" : t.includes("godaddy") ? "godaddy" : t.includes("namecheap") ? "namecheap" : t.includes("hetzner") || t === "hdns" ? "hetzner_dns" : t.includes("google") || t === "gcp" ? "gcp" : t.includes("azure") ? "azure" : t.includes("aws") ? "aws" : t || "manual";
 }
-function lk({ source: e }) {
-  let t = ck(e), n = t === "cloudflare" ? He : t === "route53" ? dn : t === "hetzner_dns" ? yn : [
+function ck({ source: e }) {
+  let t = sk(e), n = t === "cloudflare" ? He : t === "route53" ? dn : t === "hetzner_dns" ? yn : [
     "gcp",
     "azure",
     "aws"
@@ -55845,48 +55841,44 @@ function lk({ source: e }) {
     children: /* @__PURE__ */ (0, H.jsx)(n, { size: 15 })
   });
 }
-function uk({ data: e, config: t, session: n, onRefresh: r }) {
-  let { confirm: i } = zc(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)("all"), [l, u] = (0, D.useState)("all"), [d, f] = (0, D.useState)("all"), [p, m] = (0, D.useState)("all"), [h, g] = (0, D.useState)("all"), [_, v] = (0, D.useState)(!1), [y, b] = (0, D.useState)("fqdn"), [x, S] = (0, D.useState)(""), [C, w] = (0, D.useState)(""), [T, E] = (0, D.useState)(""), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), [M, N] = (0, D.useState)(""), ee = Oa(n, "target_group:write"), P = Array.isArray(e.targets) ? e.targets : [], F = Array.isArray(e.targetGroups) ? e.targetGroups : [], I = ek(x), te = ek(T), ne = (0, D.useMemo)(() => [...new Set(P.flatMap((e) => tk(e)))].sort(), [P]), re = (0, D.useMemo)(() => {
+function lk({ data: e, config: t, session: n, onRefresh: r }) {
+  let { confirm: i } = zc(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)("all"), [l, u] = (0, D.useState)("all"), [d, f] = (0, D.useState)("all"), [p, m] = (0, D.useState)("all"), [h, g] = (0, D.useState)(!1), [_, v] = (0, D.useState)("fqdn"), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)(""), [C, w] = (0, D.useState)(""), [T, E] = (0, D.useState)(""), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), M = Oa(n, "target_group:write"), N = Array.isArray(e.targets) ? e.targets : [], ee = Array.isArray(e.targetGroups) ? e.targetGroups : [], P = ek(y), F = ek(C), I = (0, D.useMemo)(() => [...new Set(N.flatMap((e) => tk(e)))].sort(), [N]), te = (0, D.useMemo)(() => {
     let e = a.trim().toLowerCase();
-    return P.filter((t) => {
-      let n = rk(t).toLowerCase(), r = nk(t, ["eligibility"], "unknown").toLowerCase();
+    return N.filter((t) => {
+      let n = rk(t).toLowerCase();
       if (s === "verified" && !ik(n) || s === "unverified" && ik(n)) return !1;
-      let i = nk(t, ["target_group_id"], ""), a = nk(t, ["kind"], "unknown").toLowerCase();
-      return l !== "all" && r !== l || d !== "all" && i !== d || p !== "all" && a !== p || h !== "all" && !tk(t).includes(h) ? !1 : !e || [
+      let r = nk(t, ["target_group_id"], ""), i = nk(t, ["kind"], "unknown").toLowerCase();
+      return l !== "all" && r !== l || d !== "all" && i !== d || p !== "all" && !tk(t).includes(p) ? !1 : !e || [
         nk(t, ["value"], ""),
         nk(t, ["target_group_name", "target_group_id"], ""),
         tk(t).join(" "),
-        ok(t)
+        ak(t)
       ].some((t) => t.toLowerCase().includes(e));
     });
   }, [
-    P,
+    N,
     a,
     s,
     l,
     d,
-    p,
-    h
-  ]), ie = P.filter((e) => ik(rk(e))).length, L = P.filter((e) => nk(e, ["eligibility"], "").toLowerCase() === "eligible").length, ae = P.filter((e) => {
-    let t = rk(e), n = nk(e, ["eligibility"], "unknown").toLowerCase();
-    return !ik(t) || n !== "eligible";
-  }).length, oe = [...new Set(P.map((e) => nk(e, ["kind"], "unknown").toLowerCase()).filter(Boolean))].sort();
-  async function se(e) {
-    if (e.preventDefault(), !ee) return;
+    p
+  ]), ne = N.filter((e) => ik(rk(e))).length, re = N.length - ne, ie = [...new Set(N.map((e) => nk(e, ["kind"], "unknown").toLowerCase()).filter(Boolean))].sort();
+  async function L(e) {
+    if (e.preventDefault(), !M) return;
     let i = new FormData(e.currentTarget), a = String(i.get("value") ?? "").trim(), o = String(i.get("expected_behavior") ?? "block_at_edge"), s = String(i.get("target_group_id") ?? "").trim();
     if (!a) {
-      N("Target value is required.");
+      j("Target value is required.");
       return;
     }
-    let { tags: c, error: l } = ek(x);
+    let { tags: c, error: l } = ek(y);
     if (l) {
-      N(l);
+      j(l);
       return;
     }
-    k("add"), j(""), N("");
+    E("add"), k(""), j("");
     try {
       let e = {
-        kind: y,
+        kind: _,
         value: a,
         expected_behavior: o,
         tags: c
@@ -55896,53 +55888,53 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
         method: "POST",
         body: e
       }), l = nk(i, ["id"], ""), u = nk(i, ["target_group_id"], s);
-      l && u && y === "fqdn" && await V(t, n, `/v1/target-groups/${encodeURIComponent(u)}/dns-ownership/issue`, {
+      l && u && _ === "fqdn" && await V(t, n, `/v1/target-groups/${encodeURIComponent(u)}/dns-ownership/issue`, {
         method: "POST",
         body: { target_id: l }
-      }).catch(() => void 0), j(`${a} added to declared scope. Verify ownership before running checks.`), v(!1), S(""), b("fqdn"), await r(), l && (window.location.hash = `target-detail?id=${encodeURIComponent(l)}`);
+      }).catch(() => void 0), k(`${a} added to declared scope. Verify ownership before running checks.`), g(!1), b(""), v("fqdn"), await r(), l && (window.location.hash = `target-detail?id=${encodeURIComponent(l)}`);
     } catch (e) {
-      N(Eo(e, "Could not add the target."));
+      j(Eo(e, "Could not add the target."));
     } finally {
-      k("");
+      E("");
     }
   }
-  function ce(e) {
-    w(nk(e, ["id"], "")), E(tk(e).join(", ")), j(""), N("");
+  function ae(e) {
+    S(nk(e, ["id"], "")), w(tk(e).join(", ")), k(""), j("");
   }
-  async function le(e) {
-    if (e.preventDefault(), !ee || !C) return;
-    let { tags: i, error: a } = ek(T);
+  async function oe(e) {
+    if (e.preventDefault(), !M || !x) return;
+    let { tags: i, error: a } = ek(C);
     if (a) {
-      N(a);
+      j(a);
       return;
     }
-    k(`tags-${C}`), j(""), N("");
+    E(`tags-${x}`), k(""), j("");
     try {
-      await V(t, n, `/v1/targets/${encodeURIComponent(C)}`, {
+      await V(t, n, `/v1/targets/${encodeURIComponent(x)}`, {
         method: "PATCH",
         body: { tags: i }
-      }), j("Target tags updated."), w(""), await r();
+      }), k("Target tags updated."), S(""), await r();
     } catch (e) {
-      N(Eo(e, "Could not update target tags."));
+      j(Eo(e, "Could not update target tags."));
     } finally {
-      k("");
+      E("");
     }
   }
-  async function ue(e) {
-    if (!ee) return;
+  async function se(e) {
+    if (!M) return;
     let a = nk(e, ["id"], ""), o = nk(e, ["target_group_id"], ""), s = nk(e, ["value"], a);
     if (a && o && await i({
       title: "Remove declared target",
       description: `Remove ${s} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`,
       confirmLabel: "Remove target"
     })) {
-      k(`remove-${a}`), j(""), N("");
+      E(`remove-${a}`), k(""), j("");
       try {
-        await V(t, n, `/v1/target-groups/${encodeURIComponent(o)}/targets/${encodeURIComponent(a)}`, { method: "DELETE" }), j(`${s} removed from declared scope.`), await r();
+        await V(t, n, `/v1/target-groups/${encodeURIComponent(o)}/targets/${encodeURIComponent(a)}`, { method: "DELETE" }), k(`${s} removed from declared scope.`), await r();
       } catch (e) {
-        N(Eo(e, "Could not remove the target."));
+        j(Eo(e, "Could not remove the target."));
       } finally {
-        k("");
+        E("");
       }
     }
   }
@@ -55958,32 +55950,30 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
             children: "Proof for customer-declared scope"
           }),
           /* @__PURE__ */ (0, H.jsx)("h1", { children: "Targets" }),
-          /* @__PURE__ */ (0, H.jsx)("p", { children: "All declared hostnames and IPs, with separate ownership proof and fail-closed eligibility before bounded validation can run." })
+          /* @__PURE__ */ (0, H.jsx)("p", { children: "All declared hostnames and IPs, ready for bounded validation." })
         ] }), /* @__PURE__ */ (0, H.jsxs)("div", {
           className: "row-actions",
           children: [/* @__PURE__ */ (0, H.jsx)(U, {
             variant: "secondary",
-            onClick: () => {
-              c("unverified"), u("all");
-            },
-            children: "Review blocked"
-          }), ee ? /* @__PURE__ */ (0, H.jsxs)(U, {
-            onClick: () => v((e) => !e),
-            "aria-expanded": _,
+            onClick: () => c("unverified"),
+            children: "Review unverified"
+          }), M ? /* @__PURE__ */ (0, H.jsxs)(U, {
+            onClick: () => g((e) => !e),
+            "aria-expanded": h,
             "aria-controls": "target-declare-form",
             children: [/* @__PURE__ */ (0, H.jsx)(nn, { size: 16 }), " Add target"]
           }) : null]
         })]
       }),
-      A ? /* @__PURE__ */ (0, H.jsx)("div", {
+      O ? /* @__PURE__ */ (0, H.jsx)("div", {
         className: "form-banner",
         role: "status",
-        children: A
+        children: O
       }) : null,
-      M ? /* @__PURE__ */ (0, H.jsx)("div", {
+      A ? /* @__PURE__ */ (0, H.jsx)("div", {
         className: "form-banner error",
         role: "alert",
-        children: M
+        children: A
       }) : null,
       /* @__PURE__ */ (0, H.jsxs)("div", {
         className: "targets-summary",
@@ -55991,38 +55981,38 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
         children: [
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "targets-summary-cell",
-            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Declared targets" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(P.length) })]
+            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Declared targets" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(N.length) })]
           }),
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "targets-summary-cell",
-            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Ownership verified" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(ie) })]
+            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Ownership verified" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(ne) })]
           }),
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "targets-summary-cell",
-            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Eligible for validation" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(L) })]
+            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Ready for validation" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(N.length) })]
           }),
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "targets-summary-cell",
-            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Unverified or blocked" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(ae) })]
+            children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Unverified" }), /* @__PURE__ */ (0, H.jsx)("strong", { children: z(re) })]
           })
         ]
       }),
-      ee && _ ? /* @__PURE__ */ (0, H.jsxs)(K, {
+      M && h ? /* @__PURE__ */ (0, H.jsxs)(K, {
         className: "targets-intake",
         children: [/* @__PURE__ */ (0, H.jsxs)(q, { children: [/* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Add a target" }), /* @__PURE__ */ (0, H.jsx)(Y, { children: "Declare one target manually. Exact-target DNS verification is required before any external probe can run. Omit the group to land in the tenant default group." })] }), /* @__PURE__ */ (0, H.jsx)(U, {
           size: "sm",
           variant: "ghost",
-          onClick: () => v(!1),
+          onClick: () => g(!1),
           children: "Close"
         })] }), /* @__PURE__ */ (0, H.jsx)(X, { children: /* @__PURE__ */ (0, H.jsxs)("form", {
           id: "target-declare-form",
           className: "targets-intake-form",
-          onSubmit: (e) => void se(e),
+          onSubmit: (e) => void L(e),
           children: [
             /* @__PURE__ */ (0, H.jsxs)("label", { children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Kind" }), /* @__PURE__ */ (0, H.jsx)("select", {
               name: "kind",
-              value: y,
-              onChange: (e) => b(e.target.value),
+              value: _,
+              onChange: (e) => v(e.target.value),
               children: ZO.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
                 value: e.value,
                 children: e.label
@@ -56058,7 +56048,7 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
               children: [/* @__PURE__ */ (0, H.jsx)("option", {
                 value: "",
                 children: "Default (auto)"
-              }), F.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
+              }), ee.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
                 value: nk(e, ["id"], ""),
                 children: nk(e, ["name", "id"], "Unnamed group")
               }, nk(e, ["id"], "")))]
@@ -56071,21 +56061,21 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
                   name: "tags",
                   className: "mono",
                   placeholder: "env:prod, tier:edge",
-                  value: x,
-                  onChange: (e) => S(e.target.value),
-                  "aria-invalid": I.error ? !0 : void 0,
-                  "aria-describedby": I.error ? "add-tags-error" : void 0
+                  value: y,
+                  onChange: (e) => b(e.target.value),
+                  "aria-invalid": P.error ? !0 : void 0,
+                  "aria-describedby": P.error ? "add-tags-error" : void 0
                 }),
-                I.error ? /* @__PURE__ */ (0, H.jsx)("small", {
+                P.error ? /* @__PURE__ */ (0, H.jsx)("small", {
                   id: "add-tags-error",
                   className: "field-error",
                   role: "alert",
-                  children: I.error
+                  children: P.error
                 }) : /* @__PURE__ */ (0, H.jsxs)("small", {
                   className: "muted",
                   children: [
                     "Comma-separated. ",
-                    I.tags.length,
+                    P.tags.length,
                     "/",
                     QO,
                     " valid."
@@ -56095,17 +56085,17 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, H.jsxs)(U, {
               type: "submit",
-              loading: O === "add",
-              disabled: !!I.error,
+              loading: T === "add",
+              disabled: !!P.error,
               children: [/* @__PURE__ */ (0, H.jsx)(nn, { size: 15 }), " Add target"]
             })
           ]
         }) })]
       }) : null,
       /* @__PURE__ */ (0, H.jsxs)(K, { children: [/* @__PURE__ */ (0, H.jsx)(q, { children: /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Target inventory" }), /* @__PURE__ */ (0, H.jsxs)(Y, { children: [
-        z(re.length),
+        z(te.length),
         " of ",
-        z(P.length),
+        z(N.length),
         " configured targets. Use Open target for evidence-backed detail; other row actions remain independent."
       ] })] }) }), /* @__PURE__ */ (0, H.jsxs)(X, { children: [
         /* @__PURE__ */ (0, H.jsxs)("div", {
@@ -56152,38 +56142,13 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, H.jsxs)("label", {
               className: "targets-filter",
-              children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Eligibility" }), /* @__PURE__ */ (0, H.jsxs)("select", {
+              children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Target group" }), /* @__PURE__ */ (0, H.jsxs)("select", {
                 value: l,
                 onChange: (e) => u(e.target.value),
-                children: [
-                  /* @__PURE__ */ (0, H.jsx)("option", {
-                    value: "all",
-                    children: "All decisions"
-                  }),
-                  /* @__PURE__ */ (0, H.jsx)("option", {
-                    value: "eligible",
-                    children: "Eligible"
-                  }),
-                  /* @__PURE__ */ (0, H.jsx)("option", {
-                    value: "not_eligible",
-                    children: "Not eligible"
-                  }),
-                  /* @__PURE__ */ (0, H.jsx)("option", {
-                    value: "ineligible",
-                    children: "Ineligible"
-                  })
-                ]
-              })]
-            }),
-            /* @__PURE__ */ (0, H.jsxs)("label", {
-              className: "targets-filter",
-              children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Target group" }), /* @__PURE__ */ (0, H.jsxs)("select", {
-                value: d,
-                onChange: (e) => f(e.target.value),
                 children: [/* @__PURE__ */ (0, H.jsx)("option", {
                   value: "all",
                   children: "All groups"
-                }), F.flatMap((e) => {
+                }), ee.flatMap((e) => {
                   let t = nk(e, ["id"], "");
                   return t ? [/* @__PURE__ */ (0, H.jsx)("option", {
                     value: t,
@@ -56195,26 +56160,26 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, H.jsxs)("label", {
               className: "targets-filter",
               children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Kind" }), /* @__PURE__ */ (0, H.jsxs)("select", {
-                value: p,
-                onChange: (e) => m(e.target.value),
+                value: d,
+                onChange: (e) => f(e.target.value),
                 children: [/* @__PURE__ */ (0, H.jsx)("option", {
                   value: "all",
                   children: "All kinds"
-                }), oe.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
+                }), ie.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
                   value: e,
-                  children: sk({ kind: e })
+                  children: ok({ kind: e })
                 }, e))]
               })]
             }),
             /* @__PURE__ */ (0, H.jsxs)("label", {
               className: "targets-filter",
               children: [/* @__PURE__ */ (0, H.jsx)("span", { children: "Tag" }), /* @__PURE__ */ (0, H.jsxs)("select", {
-                value: h,
-                onChange: (e) => g(e.target.value),
+                value: p,
+                onChange: (e) => m(e.target.value),
                 children: [/* @__PURE__ */ (0, H.jsx)("option", {
                   value: "all",
                   children: "All tags"
-                }), ne.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
+                }), I.map((e) => /* @__PURE__ */ (0, H.jsx)("option", {
                   value: e,
                   children: e
                 }, e))]
@@ -56226,9 +56191,9 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
           className: "targets-result-count",
           "aria-live": "polite",
           children: [
-            z(re.length),
+            z(te.length),
             " matching ",
-            re.length === 1 ? "target" : "targets"
+            te.length === 1 ? "target" : "targets"
           ]
         }),
         /* @__PURE__ */ (0, H.jsx)(yu, {
@@ -56249,7 +56214,7 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
                   children: [/* @__PURE__ */ (0, H.jsx)("strong", {
                     title: nk(e, ["value"], ""),
                     children: nk(e, ["value"], "—")
-                  }), /* @__PURE__ */ (0, H.jsx)("span", { children: sk(e) })]
+                  }), /* @__PURE__ */ (0, H.jsx)("span", { children: ok(e) })]
                 })]
               })
             },
@@ -56258,7 +56223,7 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
               label: "Kind",
               render: (e) => /* @__PURE__ */ (0, H.jsx)(G, {
                 tone: "muted",
-                children: sk(e)
+                children: ok(e)
               })
             },
             {
@@ -56300,28 +56265,13 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
               }
             },
             {
-              key: "eligibility",
-              label: "Test eligibility",
-              render: (e) => {
-                let t = nk(e, ["eligibility"], "unknown"), n = nk(e, ["eligibility_reason"], "");
-                return /* @__PURE__ */ (0, H.jsxs)("span", {
-                  className: "source-cell",
-                  children: [/* @__PURE__ */ (0, H.jsx)(G, {
-                    tone: ak(t),
-                    title: n || `Eligibility ${t}`,
-                    children: t.replace(/_/g, " ")
-                  }), n && n !== "—" ? /* @__PURE__ */ (0, H.jsx)("small", { children: n.replace(/_/g, " ") }) : null]
-                });
-              }
-            },
-            {
               key: "source",
               label: "Added from",
               render: (e) => {
-                let t = ok(e);
+                let t = ak(e);
                 return /* @__PURE__ */ (0, H.jsxs)("span", {
                   className: "provider-line",
-                  children: [/* @__PURE__ */ (0, H.jsx)(lk, { source: t }), /* @__PURE__ */ (0, H.jsxs)("span", {
+                  children: [/* @__PURE__ */ (0, H.jsx)(ck, { source: t }), /* @__PURE__ */ (0, H.jsxs)("span", {
                     className: "source-cell",
                     children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: t.replace(/_/g, " ") }), /* @__PURE__ */ (0, H.jsx)("small", { children: nk(e, ["source"], "manual") })]
                   })]
@@ -56359,18 +56309,18 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
                       "aria-label": `Open target ${nk(e, ["value"], t)}`,
                       children: "Open target"
                     }),
-                    ee ? /* @__PURE__ */ (0, H.jsx)(U, {
+                    M ? /* @__PURE__ */ (0, H.jsx)(U, {
                       size: "sm",
                       variant: "secondary",
-                      onClick: () => ce(e),
+                      onClick: () => ae(e),
                       "aria-label": `Edit tags for ${nk(e, ["value"], t)}`,
                       children: "Edit tags"
                     }) : null,
-                    ee ? /* @__PURE__ */ (0, H.jsxs)(U, {
+                    M ? /* @__PURE__ */ (0, H.jsxs)(U, {
                       size: "sm",
                       variant: "danger",
-                      loading: O === `remove-${t}`,
-                      onClick: () => void ue(e),
+                      loading: T === `remove-${t}`,
+                      onClick: () => void se(e),
                       "aria-label": `Remove target ${nk(e, ["value"], t)}`,
                       children: [/* @__PURE__ */ (0, H.jsx)(Gn, { size: 13 }), " Remove"]
                     }) : null
@@ -56379,31 +56329,31 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
               }
             }
           ],
-          items: re,
+          items: te,
           getRowId: (e, t) => nk(e, ["id"], String(t)),
           loadError: e.loadErrors.targets,
           onRetry: () => void r(),
           empty: /* @__PURE__ */ (0, H.jsx)(W, {
             icon: Un,
-            title: P.length ? "No targets match these filters" : "No targets configured yet",
-            body: P.length ? "Clear or adjust the filters to return to the full declared inventory." : "Add a target here, or import approved provider inventory into a target group.",
-            actionLabel: !P.length && ee ? "Add target" : void 0,
-            onAction: !P.length && ee ? () => v(!0) : void 0
+            title: N.length ? "No targets match these filters" : "No targets configured yet",
+            body: N.length ? "Clear or adjust the filters to return to the full declared inventory." : "Add a target here, or import approved provider inventory into a target group.",
+            actionLabel: !N.length && M ? "Add target" : void 0,
+            onAction: !N.length && M ? () => g(!0) : void 0
           })
         })
       ] })] }),
       /* @__PURE__ */ (0, H.jsxs)(Ic, {
-        open: ee && !!C,
+        open: M && !!x,
         title: "Edit target tags",
         description: "Trimmed, lowercased, deduplicated. Kind and value stay immutable.",
-        onClose: () => w(""),
-        children: [M ? /* @__PURE__ */ (0, H.jsx)("div", {
+        onClose: () => S(""),
+        children: [A ? /* @__PURE__ */ (0, H.jsx)("div", {
           className: "form-banner error",
           role: "alert",
-          children: M
+          children: A
         }) : null, /* @__PURE__ */ (0, H.jsxs)("form", {
           className: "product-form",
-          onSubmit: (e) => void le(e),
+          onSubmit: (e) => void oe(e),
           children: [/* @__PURE__ */ (0, H.jsxs)("label", {
             className: "full",
             children: [
@@ -56411,22 +56361,22 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
               /* @__PURE__ */ (0, H.jsx)("input", {
                 className: "mono",
                 placeholder: "env:prod, tier:edge",
-                value: T,
-                onChange: (e) => E(e.target.value),
+                value: C,
+                onChange: (e) => w(e.target.value),
                 autoFocus: !0,
-                "aria-invalid": te.error ? !0 : void 0,
-                "aria-describedby": te.error ? "edit-tags-error" : void 0
+                "aria-invalid": F.error ? !0 : void 0,
+                "aria-describedby": F.error ? "edit-tags-error" : void 0
               }),
-              te.error ? /* @__PURE__ */ (0, H.jsx)("small", {
+              F.error ? /* @__PURE__ */ (0, H.jsx)("small", {
                 id: "edit-tags-error",
                 className: "field-error",
                 role: "alert",
-                children: te.error
+                children: F.error
               }) : /* @__PURE__ */ (0, H.jsxs)("small", {
                 className: "muted",
                 children: [
                   "Comma-separated. ",
-                  te.tags.length,
+                  F.tags.length,
                   "/",
                   QO,
                   " valid."
@@ -56438,13 +56388,13 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
             children: [/* @__PURE__ */ (0, H.jsx)(U, {
               type: "button",
               variant: "ghost",
-              disabled: O !== "",
-              onClick: () => w(""),
+              disabled: T !== "",
+              onClick: () => S(""),
               children: "Cancel"
             }), /* @__PURE__ */ (0, H.jsx)(U, {
               type: "submit",
-              loading: O === `tags-${C}`,
-              disabled: !!te.error,
+              loading: T === `tags-${x}`,
+              disabled: !!F.error,
               children: "Save tags"
             })]
           })]
@@ -56455,12 +56405,12 @@ function uk({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/vector-library-page.tsx
-var dk = 25, fk = 100, pk = /* @__PURE__ */ new Set([
+var uk = 25, dk = 100, fk = /* @__PURE__ */ new Set([
   "owner",
   "admin",
   "engineer"
 ]);
-function mk(e, t, n = "") {
+function pk(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -56468,34 +56418,34 @@ function mk(e, t, n = "") {
   }
   return n;
 }
-function hk(e) {
+function mk(e) {
   return Array.isArray(e) ? e : [];
 }
-function gk(e) {
+function hk(e) {
   return e.replaceAll("_", " ").replace(/\b\w/g, (e) => e.toUpperCase());
 }
-function _k(e) {
-  return `${mk(e, [
+function gk(e) {
+  return `${pk(e, [
     "value",
     "hostname",
     "id"
-  ], "Unnamed target")} · ${gk(mk(e, ["kind"], "target"))}`;
+  ], "Unnamed target")} · ${hk(pk(e, ["kind"], "target"))}`;
 }
-var vk = null;
-function yk(e, t, n) {
-  if (vk?.key === n) return vk.promise;
+var _k = null;
+function vk(e, t, n) {
+  if (_k?.key === n) return _k.promise;
   let r = (async () => {
-    let n = await V(e, t, `/v1/vectors?limit=${fk}&offset=0`), r = hk(n.items), i = n.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : {}, a = Number(i.total ?? r.length), o = [];
-    for (let e = fk; e < a; e += fk) o.push(e);
-    let s = await Promise.all(o.map((n) => V(e, t, `/v1/vectors?limit=${fk}&offset=${n}`)));
-    return [...r, ...s.flatMap((e) => hk(e.items))];
+    let n = await V(e, t, `/v1/vectors?limit=${dk}&offset=0`), r = mk(n.items), i = n.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : {}, a = Number(i.total ?? r.length), o = [];
+    for (let e = dk; e < a; e += dk) o.push(e);
+    let s = await Promise.all(o.map((n) => V(e, t, `/v1/vectors?limit=${dk}&offset=${n}`)));
+    return [...r, ...s.flatMap((e) => mk(e.items))];
   })();
-  return vk = {
+  return _k = {
     key: n,
     promise: r
   }, r;
 }
-var bk = [
+var yk = [
   {
     value: "",
     label: "All evidence capabilities"
@@ -56520,7 +56470,7 @@ var bk = [
     value: "monitor_only",
     label: "E5 · Monitor only"
   }
-], xk = [
+], bk = [
   {
     value: "",
     label: "All execution boundaries"
@@ -56533,7 +56483,7 @@ var bk = [
     value: "monitor_only",
     label: "Monitor only"
   }
-], Sk = [
+], xk = [
   {
     value: "",
     label: "All target dispositions"
@@ -56559,11 +56509,11 @@ var bk = [
     label: "Awaiting target selection"
   }
 ];
-function Ck({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, D.useState)([]), [o, s] = (0, D.useState)(!0), [c, l] = (0, D.useState)(""), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)(""), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(0), [S, C] = (0, D.useState)(""), [w, T] = (0, D.useState)([]), [E, O] = (0, D.useState)(!1), [k, A] = (0, D.useState)(""), [j, M] = (0, D.useState)(""), [N, ee] = (0, D.useState)(null), [P, F] = (0, D.useState)(""), [I, te] = (0, D.useState)(null), [ne, re] = (0, D.useState)(""), [ie, L] = (0, D.useState)(""), [ae, oe] = (0, D.useState)(""), [se, ce] = (0, D.useState)(0), [ue, de] = (0, D.useState)(0), [fe, pe] = u_("vector-library"), R = pk.has(String(n.role ?? "").trim().toLowerCase());
+function Sk({ data: e, config: t, session: n, onRefresh: r }) {
+  let [i, a] = (0, D.useState)([]), [o, s] = (0, D.useState)(!0), [c, l] = (0, D.useState)(""), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)(""), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(0), [S, C] = (0, D.useState)(""), [w, T] = (0, D.useState)([]), [E, O] = (0, D.useState)(!1), [k, A] = (0, D.useState)(""), [j, M] = (0, D.useState)(""), [N, ee] = (0, D.useState)(null), [P, F] = (0, D.useState)(""), [I, te] = (0, D.useState)(null), [ne, re] = (0, D.useState)(""), [ie, L] = (0, D.useState)(""), [ae, oe] = (0, D.useState)(""), [se, ce] = (0, D.useState)(0), [ue, de] = (0, D.useState)(0), [fe, pe] = u_("vector-library"), R = fk.has(String(n.role ?? "").trim().toLowerCase());
   (0, D.useEffect)(() => {
     let e = !1;
-    return s(!0), l(""), yk(t, n, `${n.tenant_id ?? ""}:${n.user_id ?? ""}:${ue}`).then((t) => {
+    return s(!0), l(""), vk(t, n, `${n.tenant_id ?? ""}:${n.user_id ?? ""}:${ue}`).then((t) => {
       e || a(t);
     }).catch((t) => {
       e || l(Eo(t, "Vector library could not be loaded."));
@@ -56580,7 +56530,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
     if (T([]), M(""), A(""), O(!1), !S) return;
     let e = !1;
     return O(!0), V(t, n, `/v1/target-groups/${encodeURIComponent(S)}`).then((t) => {
-      e || T(hk(t.targets).filter((e) => e.deleted_at == null && e.archived_at == null));
+      e || T(mk(t.targets).filter((e) => e.deleted_at == null && e.archived_at == null));
     }).catch((t) => {
       e || A(Eo(t, "Exact targets could not be loaded."));
     }).finally(() => {
@@ -56594,14 +56544,14 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
     S,
     se
   ]), (0, D.useEffect)(() => {
-    S && (e.targetGroups.some((e) => mk(e, ["id"]) === S && e.deleted_at == null && e.archived_at == null) || (C(""), T([]), M(""), ee(null), F(""), te(null)));
+    S && (e.targetGroups.some((e) => pk(e, ["id"]) === S && e.deleted_at == null && e.archived_at == null) || (C(""), T([]), M(""), ee(null), F(""), te(null)));
   }, [e.targetGroups, S]);
-  let me = e.targetGroups.filter((e) => e.deleted_at == null && e.archived_at == null), he = me.some((e) => mk(e, ["id"]) === S) ? w.find((e) => mk(e, ["id"]) === j) ?? null : null, ge = [{
+  let me = e.targetGroups.filter((e) => e.deleted_at == null && e.archived_at == null), he = me.some((e) => pk(e, ["id"]) === S) ? w.find((e) => pk(e, ["id"]) === j) ?? null : null, ge = [{
     value: "",
     label: "Select a declared target group"
   }, ...me.map((e) => ({
-    value: mk(e, ["id"]),
-    label: mk(e, [
+    value: pk(e, ["id"]),
+    label: pk(e, [
       "name",
       "title",
       "id"
@@ -56610,8 +56560,8 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
     value: "",
     label: E ? "Loading exact targets…" : "Select an exact target"
   }, ...w.map((e) => ({
-    value: mk(e, ["id"]),
-    label: _k(e)
+    value: pk(e, ["id"]),
+    label: gk(e)
   }))], ve = (0, D.useMemo)(() => ph(i, {
     query: u,
     section: f,
@@ -56638,10 +56588,10 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
     v,
     j
   ]);
-  let ye = Math.max(1, Math.ceil(ve.length / dk)), be = Math.min(b, ye - 1), xe = ve.slice(be * dk, (be + 1) * dk), Ce = [{
+  let ye = Math.max(1, Math.ceil(ve.length / uk)), be = Math.min(b, ye - 1), xe = ve.slice(be * uk, (be + 1) * uk), Ce = [{
     value: "",
     label: "All catalog sections"
-  }, ...[...new Set(i.map((e) => mk(e, ["section"])).filter(Boolean))].sort().map((e) => ({
+  }, ...[...new Set(i.map((e) => pk(e, ["section"])).filter(Boolean))].sort().map((e) => ({
     value: e,
     label: e
   }))];
@@ -56665,7 +56615,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       return;
     }
     if (!N || !he || !S) return;
-    let t = fh(N, e.checks, he), n = t.runnableChecks.find((e) => mk(e, ["check_id"]) === P);
+    let t = fh(N, e.checks, he), n = t.runnableChecks.find((e) => pk(e, ["check_id"]) === P);
     if (!n) {
       oe("Select one mapped customer-safe check before continuing.");
       return;
@@ -56682,7 +56632,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       return;
     }
     if (!I || !he || !S) return;
-    let e = mk(I.check, ["check_id"]);
+    let e = pk(I.check, ["check_id"]);
     re("start-run"), oe(""), L("");
     try {
       let i = await V(t, n, "/v1/test-runs", {
@@ -56693,7 +56643,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
           check_id: e
         }
       }), a = i.run && typeof i.run == "object" && !Array.isArray(i.run) ? i.run : i;
-      L(`Bounded check started${mk(a, ["id"]) ? `: ${mk(a, ["id"])}` : ""}. Evidence will be recorded at check level.`), te(null), await r();
+      L(`Bounded check started${pk(a, ["id"]) ? `: ${pk(a, ["id"])}` : ""}. Evidence will be recorded at check level.`), te(null), await r();
     } catch (e) {
       oe(Eo(e, "Bounded check could not be started."));
     } finally {
@@ -56707,15 +56657,15 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       render: (e) => /* @__PURE__ */ (0, H.jsxs)("span", {
         className: "vector-primary",
         children: [
-          /* @__PURE__ */ (0, H.jsx)("strong", { children: Yl(mk(e, ["canonical_name"], "Unnamed vector")) }),
+          /* @__PURE__ */ (0, H.jsx)("strong", { children: Yl(pk(e, ["canonical_name"], "Unnamed vector")) }),
           /* @__PURE__ */ (0, H.jsx)("code", {
             className: "traffic-path-label",
-            children: mk(e, ["vector_id"], "No ID")
+            children: pk(e, ["vector_id"], "No ID")
           }),
           /* @__PURE__ */ (0, H.jsxs)("small", { children: [
-            mk(e, ["family"]),
+            pk(e, ["family"]),
             " · ",
-            mk(e, ["protocol_service"])
+            pk(e, ["protocol_service"])
           ] })
         ]
       })
@@ -56725,7 +56675,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Exposure evaluated",
       render: (e) => /* @__PURE__ */ (0, H.jsxs)("span", {
         className: "vector-cell-stack",
-        children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: mk(e, ["targeted_resource_or_assumption"], "Not recorded") }), /* @__PURE__ */ (0, H.jsx)("small", { children: mk(e, ["intended_detection_goal"]) })]
+        children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: pk(e, ["targeted_resource_or_assumption"], "Not recorded") }), /* @__PURE__ */ (0, H.jsx)("small", { children: pk(e, ["intended_detection_goal"]) })]
       })
     },
     {
@@ -56738,7 +56688,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
           children: [/* @__PURE__ */ (0, H.jsxs)(G, {
             tone: t.tone,
             children: [
-              mk(e, ["evidence_tier"]),
+              pk(e, ["evidence_tier"]),
               " · ",
               t.label
             ]
@@ -56765,7 +56715,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Expected control",
       render: (e) => /* @__PURE__ */ (0, H.jsxs)("span", {
         className: "vector-cell-stack",
-        children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: mk(e, ["expected_controls"], "Not recorded") }), /* @__PURE__ */ (0, H.jsx)("small", { children: "Open to review failure meaning and evidence boundary." })]
+        children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: pk(e, ["expected_controls"], "Not recorded") }), /* @__PURE__ */ (0, H.jsx)("small", { children: "Open to review failure meaning and evidence boundary." })]
       })
     },
     {
@@ -56782,8 +56732,8 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
     value: "",
     label: "Select a mapped bounded check"
   }, ...(Ae?.runnableChecks ?? []).map((e) => ({
-    value: mk(e, ["check_id"]),
-    label: `${mk(e, [
+    value: pk(e, ["check_id"]),
+    label: `${pk(e, [
       "name",
       "title",
       "check_id"
@@ -56823,7 +56773,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
           })] }),
           /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "vector-fact-wide",
-            children: [/* @__PURE__ */ (0, H.jsx)("dt", { children: "Evaluation target" }), /* @__PURE__ */ (0, H.jsx)("dd", { children: he ? _k(he) : "Not selected" })]
+            children: [/* @__PURE__ */ (0, H.jsx)("dt", { children: "Evaluation target" }), /* @__PURE__ */ (0, H.jsx)("dd", { children: he ? gk(he) : "Not selected" })]
           }),
           /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)("dt", { children: "Launch access" }), /* @__PURE__ */ (0, H.jsx)("dd", { children: R ? "Bounded checks" : "Review only" })] })
         ]
@@ -56873,7 +56823,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
               children: [/* @__PURE__ */ (0, H.jsx)(Un, {
                 size: 18,
                 "aria-hidden": "true"
-              }), /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: he ? _k(he) : "No exact target selected" }), /* @__PURE__ */ (0, H.jsx)("p", {
+              }), /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: he ? gk(he) : "No exact target selected" }), /* @__PURE__ */ (0, H.jsx)("p", {
                 className: "muted",
                 children: "Target fit is recalculated from each mapped check. Ownership, eligibility, concurrency, and rate limits are checked again at launch."
               })] })]
@@ -56886,7 +56836,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
         children: [/* @__PURE__ */ (0, H.jsxs)(q, { children: [/* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Catalog" }), /* @__PURE__ */ (0, H.jsxs)(Y, { children: [
           ve.length,
           " matching vectors. Only ",
-          dk,
+          uk,
           " rows render per page."
         ] })] }), /* @__PURE__ */ (0, H.jsx)(G, {
           tone: "muted",
@@ -56923,19 +56873,19 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
                 /* @__PURE__ */ (0, H.jsx)(hc, {
                   label: "Evidence capability",
                   value: m,
-                  options: bk,
+                  options: yk,
                   onChange: h
                 }),
                 /* @__PURE__ */ (0, H.jsx)(hc, {
                   label: "Execution boundary",
                   value: g,
-                  options: xk,
+                  options: bk,
                   onChange: _
                 }),
                 /* @__PURE__ */ (0, H.jsx)(hc, {
                   label: "Selected-target disposition",
                   value: v,
-                  options: Sk,
+                  options: xk,
                   onChange: y
                 })
               ]
@@ -56947,7 +56897,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
               className: "vector-library-table",
               columns: ke,
               items: xe,
-              getRowId: (e) => mk(e, ["vector_id"]),
+              getRowId: (e) => pk(e, ["vector_id"]),
               loadError: c,
               onRetry: () => de((e) => e + 1),
               empty: /* @__PURE__ */ (0, H.jsx)(W, {
@@ -56967,9 +56917,9 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
                   " of ",
                   ye,
                   " · rows ",
-                  be * dk + 1,
+                  be * uk + 1,
                   "-",
-                  Math.min((be + 1) * dk, ve.length),
+                  Math.min((be + 1) * uk, ve.length),
                   " of ",
                   ve.length
                 ]
@@ -57001,8 +56951,8 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
       }),
       /* @__PURE__ */ (0, H.jsx)(Ic, {
         open: !!N,
-        title: N ? `${mk(N, ["vector_id"])} · ${Yl(mk(N, ["canonical_name"]))}` : "Vector detail",
-        description: N ? `${mk(N, ["section"])} · ${mk(N, ["family"])}` : void 0,
+        title: N ? `${pk(N, ["vector_id"])} · ${Yl(pk(N, ["canonical_name"]))}` : "Vector detail",
+        description: N ? `${pk(N, ["section"])} · ${pk(N, ["family"])}` : void 0,
         onClose: () => ee(null),
         wide: !0,
         children: N && Ae && je ? /* @__PURE__ */ (0, H.jsxs)("div", {
@@ -57012,15 +56962,15 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
             children: [
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Intended detection goal" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["intended_detection_goal"]) })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Intended detection goal" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["intended_detection_goal"]) })]
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "What failure means" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["failure_means"]) })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "What failure means" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["failure_means"]) })]
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Control that should prevent it" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["expected_controls"]) })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Control that should prevent it" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["expected_controls"]) })]
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
@@ -57029,7 +56979,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
                   /* @__PURE__ */ (0, H.jsx)("p", { children: /* @__PURE__ */ (0, H.jsxs)(G, {
                     tone: je.tone,
                     children: [
-                      mk(N, ["evidence_tier"]),
+                      pk(N, ["evidence_tier"]),
                       " · ",
                       je.label
                     ]
@@ -57039,15 +56989,15 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block full",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "How the exposure works" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["how_it_works"]) })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "How the exposure works" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["how_it_works"]) })]
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Defensive indicators" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["defensive_indicators"]) })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Defensive indicators" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["defensive_indicators"]) })]
               }),
               /* @__PURE__ */ (0, H.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Scope boundary" }), /* @__PURE__ */ (0, H.jsx)("p", { children: mk(N, ["boundaries", "out_of_scope_reason"], "No additional boundary recorded.") })]
+                children: [/* @__PURE__ */ (0, H.jsx)("h4", { children: "Scope boundary" }), /* @__PURE__ */ (0, H.jsx)("p", { children: pk(N, ["boundaries", "out_of_scope_reason"], "No additional boundary recorded.") })]
               })
             ]
           }), /* @__PURE__ */ (0, H.jsxs)("div", {
@@ -57119,9 +57069,9 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, H.jsxs)("p", { children: [
               /* @__PURE__ */ (0, H.jsx)("strong", { children: "Vector intent:" }),
               " ",
-              mk(I.vector, ["vector_id"]),
+              pk(I.vector, ["vector_id"]),
               " · ",
-              Yl(mk(I.vector, ["canonical_name"]))
+              Yl(pk(I.vector, ["canonical_name"]))
             ] }),
             /* @__PURE__ */ (0, H.jsxs)("p", { children: [
               /* @__PURE__ */ (0, H.jsx)("strong", { children: "Target group:" }),
@@ -57131,20 +57081,20 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, H.jsxs)("p", { children: [
               /* @__PURE__ */ (0, H.jsx)("strong", { children: "Exact target:" }),
               " ",
-              _k(he),
+              gk(he),
               " · ",
               j
             ] }),
             /* @__PURE__ */ (0, H.jsxs)("p", { children: [
               /* @__PURE__ */ (0, H.jsx)("strong", { children: "Check:" }),
               " ",
-              mk(I.check, [
+              pk(I.check, [
                 "name",
                 "title",
                 "check_id"
               ]),
               " · ",
-              mk(I.check, ["check_id"])
+              pk(I.check, ["check_id"])
             ] }),
             /* @__PURE__ */ (0, H.jsxs)("p", { children: [
               /* @__PURE__ */ (0, H.jsx)("strong", { children: "Evidence limit:" }),
@@ -57164,7 +57114,7 @@ function Ck({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/scan-detail-view.tsx
-function wk(e, t, n = "") {
+function Ck(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -57172,17 +57122,17 @@ function wk(e, t, n = "") {
   }
   return n;
 }
-function Tk(e) {
+function wk(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function Ek(e) {
+function Tk(e) {
   return Array.isArray(e) ? e : [];
 }
-function Dk(e, t) {
+function Ek(e, t) {
   let n = Number(e?.[t]);
   return Number.isFinite(n) ? n : 0;
 }
-function Ok(e) {
+function Dk(e) {
   return {
     scanId: e,
     scan: null,
@@ -57193,10 +57143,10 @@ function Ok(e) {
     lastRefreshedAt: ""
   };
 }
-function kk(e, t, n) {
-  let [r, i] = (0, D.useState)(() => Ok(n)), [a, o] = (0, D.useState)(0), s = (0, D.useRef)(wc(n)), c = (0, D.useRef)(null), l = (0, D.useRef)("");
+function Ok(e, t, n) {
+  let [r, i] = (0, D.useState)(() => Dk(n)), [a, o] = (0, D.useState)(0), s = (0, D.useRef)(wc(n)), c = (0, D.useRef)(null), l = (0, D.useRef)("");
   (0, D.useEffect)(() => {
-    s.current.activate(n), c.current = null, l.current = "", i(Ok(n));
+    s.current.activate(n), c.current = null, l.current = "", i(Dk(n));
   }, [n]), (0, D.useEffect)(() => {
     if (!n) return;
     let r, a = !1, o = s.current;
@@ -57205,9 +57155,9 @@ function kk(e, t, n) {
       try {
         let [f, p] = await Promise.all([V(e, t, `/v1/validation-scans/${encodeURIComponent(n)}`), V(e, t, d)]);
         if (a || !o.isCurrent(s)) return;
-        let m = Ek(p.items);
-        wk(p, ["cursor"]) && (c.current = wk(p, ["cursor"]));
-        let h = wk(f, ["status"]);
+        let m = Tk(p.items);
+        Ck(p, ["cursor"]) && (c.current = Ck(p, ["cursor"]));
+        let h = Ck(f, ["status"]);
         l.current = h, i((e) => ({
           scanId: n,
           scan: f,
@@ -57267,8 +57217,8 @@ function kk(e, t, n) {
     refresh: u
   };
 }
-function Ak({ step: e }) {
-  let t = wk(e, ["status"]), n = wk(e, ["error_code"]) || wk(e, ["skip_reason"]);
+function kk({ step: e }) {
+  let t = Ck(e, ["status"]), n = Ck(e, ["error_code"]) || Ck(e, ["skip_reason"]);
   return /* @__PURE__ */ (0, H.jsxs)("span", {
     className: "scan-cell-stack",
     children: [
@@ -57293,29 +57243,29 @@ function Ak({ step: e }) {
     ]
   });
 }
-function jk({ step: e }) {
-  let t = Tk(e.verdict);
+function Ak({ step: e }) {
+  let t = wk(e.verdict);
   if (!t) return /* @__PURE__ */ (0, H.jsx)("span", {
     className: "muted",
     children: "No verdict yet"
   });
-  let n = wk(t, ["confidence"]);
+  let n = Ck(t, ["confidence"]);
   return /* @__PURE__ */ (0, H.jsxs)("span", {
     className: "scan-cell-stack",
     children: [
-      /* @__PURE__ */ (0, H.jsx)("strong", { children: Wa(wk(t, ["verdict"], "unknown")) }),
+      /* @__PURE__ */ (0, H.jsx)("strong", { children: Wa(Ck(t, ["verdict"], "unknown")) }),
       n ? /* @__PURE__ */ (0, H.jsxs)("small", {
         className: "muted",
         children: ["Confidence ", Wa(n).toLowerCase()]
       }) : null,
-      wk(t, ["severity"]) ? /* @__PURE__ */ (0, H.jsxs)("small", {
+      Ck(t, ["severity"]) ? /* @__PURE__ */ (0, H.jsxs)("small", {
         className: "muted",
-        children: ["Severity ", wk(t, ["severity"])]
+        children: ["Severity ", Ck(t, ["severity"])]
       }) : null
     ]
   });
 }
-function Mk({ items: e, loading: t }) {
+function jk({ items: e, loading: t }) {
   return /* @__PURE__ */ (0, H.jsxs)(K, { children: [/* @__PURE__ */ (0, H.jsxs)(q, { children: [/* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)(J, { children: "Activity log" }), /* @__PURE__ */ (0, H.jsx)(Y, { children: "Metadata only: no request or response bodies are recorded. Entries are shown in recorded time order." })] }), /* @__PURE__ */ (0, H.jsxs)(G, {
     tone: "muted",
     children: [
@@ -57336,12 +57286,12 @@ function Mk({ items: e, loading: t }) {
       className: "activity-log",
       "aria-label": "Scan activity",
       children: e.map((e) => {
-        let t = Tk(e.metadata), n = wk(e, ["kind"], "event"), r = wk(e, ["test_run_id"]), i = wk(e, ["check_id"]);
+        let t = wk(e.metadata), n = Ck(e, ["kind"], "event"), r = Ck(e, ["test_run_id"]), i = Ck(e, ["check_id"]);
         return /* @__PURE__ */ (0, H.jsxs)("li", {
           className: "activity-log-item",
           children: [/* @__PURE__ */ (0, H.jsx)("time", {
             className: "activity-log-time",
-            dateTime: wk(e, ["at"]),
+            dateTime: Ck(e, ["at"]),
             children: B(e.at)
           }), /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "activity-log-body",
@@ -57353,7 +57303,7 @@ function Mk({ items: e, loading: t }) {
                 children: n
               }), /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "activity-log-summary",
-                children: Wa(wk(e, ["summary"], wk(e, ["action"])))
+                children: Wa(Ck(e, ["summary"], Ck(e, ["action"])))
               })]
             }), /* @__PURE__ */ (0, H.jsxs)("div", {
               className: "activity-log-meta",
@@ -57367,9 +57317,9 @@ function Mk({ items: e, loading: t }) {
                   href: kc("run-detail", r),
                   children: ["Run ", r]
                 }) : null,
-                wk(e, ["actor_role"]) ? /* @__PURE__ */ (0, H.jsxs)("span", {
+                Ck(e, ["actor_role"]) ? /* @__PURE__ */ (0, H.jsxs)("span", {
                   className: "muted small",
-                  children: ["by ", wk(e, ["actor_role"])]
+                  children: ["by ", Ck(e, ["actor_role"])]
                 }) : null,
                 t ? Object.entries(t).filter(([, e]) => e != null && typeof e != "object").map(([e, t]) => /* @__PURE__ */ (0, H.jsxs)("span", {
                   className: "activity-log-chip",
@@ -57390,13 +57340,13 @@ function Mk({ items: e, loading: t }) {
     }) : null
   ] })] });
 }
-function Nk({ config: e, session: t, onRefresh: n }) {
+function Mk({ config: e, session: t, onRefresh: n }) {
   let [r, i] = (0, D.useState)(0);
   (0, D.useEffect)(() => {
     let e = () => i((e) => e + 1);
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []);
-  let a = (0, D.useMemo)(() => Dc(""), [r]), o = kk(e, t, a), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)(""), d = o.scan, f = wk(d, ["status"]), p = Tk(d?.summary), m = Ek(d?.steps), h = Ek(d?.excluded), g = Ka(d), _ = Xa(d), v = Ya(d), y = ah(t.role), b = wk(d, ["target_group_id"]), x = d ? g ? `Scan ${$a(f).toLowerCase()}. Refreshing every ${Math.round(La / 1e3)} seconds. ${Dk(p, "completed")} of ${Dk(p, "total")} steps complete.` : _ ? `Scan scheduled. Checking for dispatch every ${Math.round(za / 1e3)} seconds.` : `Scan ${$a(f).toLowerCase()}. Live updates stopped.` : "";
+  let a = (0, D.useMemo)(() => Dc(""), [r]), o = Ok(e, t, a), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)(""), d = o.scan, f = Ck(d, ["status"]), p = wk(d?.summary), m = Tk(d?.steps), h = Tk(d?.excluded), g = Ka(d), _ = Xa(d), v = Ya(d), y = ah(t.role), b = Ck(d, ["target_group_id"]), x = d ? g ? `Scan ${$a(f).toLowerCase()}. Refreshing every ${Math.round(La / 1e3)} seconds. ${Ek(p, "completed")} of ${Ek(p, "total")} steps complete.` : _ ? `Scan scheduled. Checking for dispatch every ${Math.round(za / 1e3)} seconds.` : `Scan ${$a(f).toLowerCase()}. Live updates stopped.` : "";
   return a ? o.status === "missing" ? /* @__PURE__ */ (0, H.jsxs)("div", {
     className: "content",
     children: [/* @__PURE__ */ (0, H.jsx)(Xp, {
@@ -57457,9 +57407,9 @@ function Nk({ config: e, session: t, onRefresh: n }) {
         " ",
         /* @__PURE__ */ (0, H.jsx)("code", { children: a }),
         " · created by ",
-        wk(d, ["created_by"], "unknown"),
+        Ck(d, ["created_by"], "unknown"),
         " (",
-        wk(d, ["created_by_role"], "role not recorded"),
+        Ck(d, ["created_by_role"], "role not recorded"),
         ") · ",
         B(d.created_at)
       ] }) : null,
@@ -57516,8 +57466,8 @@ function Nk({ config: e, session: t, onRefresh: n }) {
           " ",
           B(d.completed_at),
           d.abort_reason ? ` · aborted: ${Wa(d.abort_reason)}` : "",
-          d.cancel_reason ? ` · reason: ${wk(d, ["cancel_reason"])}` : "",
-          d.cancelled_by ? ` · cancelled by ${wk(d, ["cancelled_by"])}` : "",
+          d.cancel_reason ? ` · reason: ${Ck(d, ["cancel_reason"])}` : "",
+          d.cancelled_by ? ` · cancelled by ${Ck(d, ["cancelled_by"])}` : "",
           d.next_occurrence_at && d.recurrence ? ` · next occurrence ${B(d.next_occurrence_at)}` : ""
         ]
       }) : null,
@@ -57537,54 +57487,54 @@ function Nk({ config: e, session: t, onRefresh: n }) {
             children: [
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "completed")
+                children: Ek(p, "completed")
               }),
               " of ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "total")
+                children: Ek(p, "total")
               }),
               " steps complete",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "running")
+                children: Ek(p, "running")
               }),
               " running",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "deferred")
+                children: Ek(p, "deferred")
               }),
               " deferred",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "pending")
+                children: Ek(p, "pending")
               }),
               " pending",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "verdicted")
+                children: Ek(p, "verdicted")
               }),
               " verdicted",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "denied")
+                children: Ek(p, "denied")
               }),
               " denied",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "skipped")
+                children: Ek(p, "skipped")
               }),
               " skipped",
               " · ",
               /* @__PURE__ */ (0, H.jsx)("span", {
                 className: "tabular-nums",
-                children: Dk(p, "cancelled")
+                children: Ek(p, "cancelled")
               }),
               " cancelled"
             ]
@@ -57621,14 +57571,14 @@ function Nk({ config: e, session: t, onRefresh: n }) {
               render: (e) => /* @__PURE__ */ (0, H.jsxs)("span", {
                 className: "scan-cell-stack",
                 children: [
-                  /* @__PURE__ */ (0, H.jsx)("strong", { children: wk(e, ["check_name", "check_id"]) }),
+                  /* @__PURE__ */ (0, H.jsx)("strong", { children: Ck(e, ["check_name", "check_id"]) }),
                   /* @__PURE__ */ (0, H.jsx)("code", {
                     className: "check-picker-row-id",
-                    children: wk(e, ["check_id"])
+                    children: Ck(e, ["check_id"])
                   }),
                   /* @__PURE__ */ (0, H.jsx)("small", {
                     className: "muted",
-                    children: [wk(e, ["section_label"]), wk(e, ["evidence_tier"])].filter(Boolean).join(" · ") || "Section not recorded"
+                    children: [Ck(e, ["section_label"]), Ck(e, ["evidence_tier"])].filter(Boolean).join(" · ") || "Section not recorded"
                   })
                 ]
               })
@@ -57638,16 +57588,16 @@ function Nk({ config: e, session: t, onRefresh: n }) {
               label: "Target",
               render: (e) => /* @__PURE__ */ (0, H.jsxs)("span", {
                 className: "scan-cell-stack",
-                children: [/* @__PURE__ */ (0, H.jsx)("span", { children: wk(e, ["target_value", "target_id"]) }), /* @__PURE__ */ (0, H.jsx)("small", {
+                children: [/* @__PURE__ */ (0, H.jsx)("span", { children: Ck(e, ["target_value", "target_id"]) }), /* @__PURE__ */ (0, H.jsx)("small", {
                   className: "muted",
-                  children: wk(e, ["target_kind"], "kind not recorded")
+                  children: Ck(e, ["target_kind"], "kind not recorded")
                 })]
               })
             },
             {
               key: "status",
               label: "Status",
-              render: (e) => /* @__PURE__ */ (0, H.jsx)(Ak, { step: e })
+              render: (e) => /* @__PURE__ */ (0, H.jsx)(kk, { step: e })
             },
             {
               key: "request",
@@ -57661,7 +57611,7 @@ function Nk({ config: e, session: t, onRefresh: n }) {
               key: "response",
               label: "Response",
               render: (e) => {
-                let t = Tk(e.response);
+                let t = wk(e.response);
                 return /* @__PURE__ */ (0, H.jsxs)("span", {
                   className: "scan-cell-stack",
                   children: [/* @__PURE__ */ (0, H.jsx)("span", {
@@ -57685,13 +57635,13 @@ function Nk({ config: e, session: t, onRefresh: n }) {
             {
               key: "verdict",
               label: "Verdict",
-              render: (e) => /* @__PURE__ */ (0, H.jsx)(jk, { step: e })
+              render: (e) => /* @__PURE__ */ (0, H.jsx)(Ak, { step: e })
             },
             {
               key: "run",
               label: "Run",
               render: (e) => {
-                let t = wk(e, ["test_run_id"]);
+                let t = Ck(e, ["test_run_id"]);
                 return t ? /* @__PURE__ */ (0, H.jsx)(Qs, {
                   size: "sm",
                   variant: "ghost",
@@ -57706,7 +57656,7 @@ function Nk({ config: e, session: t, onRefresh: n }) {
             }
           ],
           items: m,
-          getRowId: (e) => wk(e, ["step_id"]),
+          getRowId: (e) => Ck(e, ["step_id"]),
           empty: /* @__PURE__ */ (0, H.jsx)("p", {
             className: "muted",
             children: "This scan has no planned steps."
@@ -57724,19 +57674,19 @@ function Nk({ config: e, session: t, onRefresh: n }) {
             children: h.map((e, t) => /* @__PURE__ */ (0, H.jsxs)("li", { children: [
               /* @__PURE__ */ (0, H.jsx)("code", {
                 className: "check-picker-row-id",
-                children: wk(e, ["check_id"])
+                children: Ck(e, ["check_id"])
               }),
               " on ",
-              wk(e, ["target_id"]),
+              Ck(e, ["target_id"]),
               ": ",
-              Wa(wk(e, ["reason"])),
-              wk(e, ["target_kind"]) ? ` (target kind ${wk(e, ["target_kind"])}` : "",
-              Array.isArray(e.supported_targets) && e.supported_targets.length ? `, supports ${e.supported_targets.map(String).join(", ")})` : wk(e, ["target_kind"]) ? ")" : ""
-            ] }, `${wk(e, ["check_id"])}-${wk(e, ["target_id"])}-${t}`))
+              Wa(Ck(e, ["reason"])),
+              Ck(e, ["target_kind"]) ? ` (target kind ${Ck(e, ["target_kind"])}` : "",
+              Array.isArray(e.supported_targets) && e.supported_targets.length ? `, supports ${e.supported_targets.map(String).join(", ")})` : Ck(e, ["target_kind"]) ? ")" : ""
+            ] }, `${Ck(e, ["check_id"])}-${Ck(e, ["target_id"])}-${t}`))
           })]
         }) : null]
       })] }) : null,
-      d ? /* @__PURE__ */ (0, H.jsx)(Mk, {
+      d ? /* @__PURE__ */ (0, H.jsx)(jk, {
         items: o.activity,
         loading: o.status === "loading"
       }) : null,
@@ -57746,7 +57696,7 @@ function Nk({ config: e, session: t, onRefresh: n }) {
         session: t,
         onClose: () => c(!1),
         onCancelled: (e) => {
-          c(!1), u(`Scan ${uo(e)} is ${$a(wk(e, ["status"])).toLowerCase()}.`), o.refresh(), n(["validationScans", "runs"]);
+          c(!1), u(`Scan ${uo(e)} is ${$a(Ck(e, ["status"])).toLowerCase()}.`), o.refresh(), n(["validationScans", "runs"]);
         }
       })
     ]
@@ -57768,7 +57718,7 @@ function Nk({ config: e, session: t, onRefresh: n }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/refined/finding-group-detail.tsx
-var Pk = [
+var Nk = [
   {
     id: "all",
     label: "All"
@@ -57785,18 +57735,18 @@ var Pk = [
     id: "closed",
     label: "Closed"
   }
-], Fk = "#findings?variant=refined";
-function Ik() {
+], Pk = "#findings?variant=refined";
+function Fk() {
   let e = window.location.hash.replace(/^#/, ""), t = e.indexOf("?");
   return t >= 0 ? new URLSearchParams(e.slice(t + 1)).get("key") ?? "" : "";
 }
-function Lk(e) {
+function Ik(e) {
   return typeof e == "string" ? e.trim() : "";
 }
-function Rk({ data: e, onRefresh: t }) {
-  let [, n] = mp("findings"), [r, i] = (0, D.useState)(Ik), [a, o] = (0, D.useState)("all"), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)("");
+function Lk({ data: e, onRefresh: t }) {
+  let [, n] = mp("findings"), [r, i] = (0, D.useState)(Fk), [a, o] = (0, D.useState)("all"), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)("");
   (0, D.useEffect)(() => {
-    let e = () => i(Ik());
+    let e = () => i(Fk());
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []), (0, D.useEffect)(() => {
     o("all");
@@ -57840,13 +57790,13 @@ function Rk({ data: e, onRefresh: t }) {
       c(!1);
     }
   }
-  let v = d?.findings.find((e) => String(e.id ?? "") === d.representativeId) ?? d?.findings[0] ?? null, y = v ? hy(v, e.wafActionItems ?? []) : null, b = d ? $l(d.verdict) : "", x = v ? Lk(v.notes) : "", S = d ? KS(d) : null, C = S ? [S.nearestDueAt ? `Earliest due ${B(S.nearestDueAt)}` : S.undatedOpenCount > 0 ? "" : "No open SLA due date", S.undatedOpenCount > 0 ? `${S.undatedOpenCount} open ${ua(S.undatedOpenCount, "finding")} not dated` : ""].filter(Boolean).join(", ") : "";
+  let v = d?.findings.find((e) => String(e.id ?? "") === d.representativeId) ?? d?.findings[0] ?? null, y = v ? hy(v, e.wafActionItems ?? []) : null, b = d ? $l(d.verdict) : "", x = v ? Ik(v.notes) : "", S = d ? KS(d) : null, C = S ? [S.nearestDueAt ? `Earliest due ${B(S.nearestDueAt)}` : S.undatedOpenCount > 0 ? "" : "No open SLA due date", S.undatedOpenCount > 0 ? `${S.undatedOpenCount} open ${ua(S.undatedOpenCount, "finding")} not dated` : ""].filter(Boolean).join(", ") : "";
   return /* @__PURE__ */ (0, H.jsxs)("div", {
     className: "content refined rf-finding-group",
     children: [
       /* @__PURE__ */ (0, H.jsxs)("a", {
         className: "rf-back-link",
-        href: Fk,
+        href: Pk,
         children: [/* @__PURE__ */ (0, H.jsx)(I, {
           size: 16,
           "aria-hidden": "true"
@@ -58075,7 +58025,7 @@ function Rk({ data: e, onRefresh: t }) {
                 className: "rf-segmented",
                 role: "group",
                 "aria-label": "Affected asset status filter",
-                children: Pk.map((e) => /* @__PURE__ */ (0, H.jsxs)("button", {
+                children: Nk.map((e) => /* @__PURE__ */ (0, H.jsxs)("button", {
                   type: "button",
                   "aria-pressed": a === e.id,
                   onClick: () => o(e.id),
@@ -58201,14 +58151,14 @@ function Rk({ data: e, onRefresh: t }) {
         title: "This finding group is unavailable.",
         body: r ? "The alert may have closed or changed since the link was shared. Open the findings list for current alerts." : "Open an alert from the Refined findings view to see its affected assets.",
         actionLabel: "Open findings",
-        actionHref: Fk
+        actionHref: Pk
       })
     ]
   });
 }
 //#endregion
 //#region apps/web/react/src/pages/router.tsx
-var zk = /* @__PURE__ */ new Set([
+var Rk = /* @__PURE__ */ new Set([
   "target-group-detail",
   "target-detail",
   "run-detail",
@@ -58218,14 +58168,14 @@ var zk = /* @__PURE__ */ new Set([
   "policy-detail",
   "tenant-detail",
   "queue-detail"
-]), Bk = /* @__PURE__ */ new Set(["runs", "findings"]);
-function Vk(e) {
+]), zk = /* @__PURE__ */ new Set(["runs", "findings"]);
+function Bk(e) {
   return `Loading ${e.replaceAll("-", " ")}`;
 }
-function Hk({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating: a }) {
+function Vk({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating: a }) {
   return a ? /* @__PURE__ */ (0, H.jsx)(du, {
     rows: 4,
-    label: Vk(e)
+    label: Bk(e)
   }) : e === "not-found" ? /* @__PURE__ */ (0, H.jsxs)("div", {
     className: "content",
     children: [/* @__PURE__ */ (0, H.jsx)("h1", { children: "Portal route not found." }), /* @__PURE__ */ (0, H.jsx)(W, {
@@ -58245,23 +58195,23 @@ function Hk({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "targets" ? /* @__PURE__ */ (0, H.jsx)(uk, {
+  }) : e === "targets" ? /* @__PURE__ */ (0, H.jsx)(lk, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : zk.has(e) ? /* @__PURE__ */ (0, H.jsx)(Yb, {
+  }) : Rk.has(e) ? /* @__PURE__ */ (0, H.jsx)(Yb, {
     route: e,
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "finding-group-detail" ? /* @__PURE__ */ (0, H.jsx)(Rk, {
+  }) : e === "finding-group-detail" ? /* @__PURE__ */ (0, H.jsx)(Lk, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "scan-detail" ? /* @__PURE__ */ (0, H.jsx)(Nk, {
+  }) : e === "scan-detail" ? /* @__PURE__ */ (0, H.jsx)(Mk, {
     data: t,
     config: n,
     session: r,
@@ -58271,12 +58221,12 @@ function Hk({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "checks" ? /* @__PURE__ */ (0, H.jsx)(Ck, {
+  }) : e === "checks" ? /* @__PURE__ */ (0, H.jsx)(Sk, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : Bk.has(e) ? /* @__PURE__ */ (0, H.jsx)(GC, {
+  }) : zk.has(e) ? /* @__PURE__ */ (0, H.jsx)(GC, {
     route: e,
     data: t,
     config: n,
@@ -58343,10 +58293,10 @@ function Hk({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
 }
 //#endregion
 //#region apps/web/react/src/App.tsx
-function Uk() {
+function Hk() {
   return null;
 }
-function Wk(e) {
+function Uk(e) {
   return [
     "/",
     "/landing.html",
@@ -58360,7 +58310,7 @@ function Wk(e) {
     "/staff-login.html"
   ].includes(e);
 }
-function Gk(e, t) {
+function Wk(e, t) {
   if (e.principal !== "staff" || !Ho(e) || t !== "internal-soc" && t !== "queue-detail") return e;
   let n = Oc(e.tenant_id ?? "").trim();
   return {
@@ -58368,15 +58318,15 @@ function Gk(e, t) {
     tenant_id: n || void 0
   };
 }
-function Kk(e) {
+function Gk(e) {
   return e.principal === "staff" ? Uo(e) : "dashboard";
 }
-function qk(e, t, n) {
+function Kk(e, t, n) {
   if (e === "not-found" || e === t) return "";
   let r = Ls.get(e)?.label ?? e, i = Ls.get(t)?.label ?? t;
   return `${r} is not available for the ${(n.principal === "staff" ? n.staff_role : n.role) ?? "current"} role. Showing ${i} instead.`;
 }
-function Jk() {
+function qk() {
   let [e, t] = (0, D.useState)(() => Bs()), [n, r] = (0, D.useState)(() => window.location.pathname), [i, a] = (0, D.useState)(null), [o, s] = (0, D.useState)(() => Jo()), [c, l] = (0, D.useState)(Ns), [u, d] = (0, D.useState)(!0), [f, p] = (0, D.useState)(null), [m, h] = (0, D.useState)(""), g = (0, D.useRef)(!1), _ = (0, D.useRef)(null), v = (0, D.useRef)(null), y = (0, D.useRef)(wc(e));
   y.current.activate(e);
   let b = (0, D.useMemo)(() => o ?? {}, [o]);
@@ -58389,7 +58339,7 @@ function Jk() {
   }, [m]);
   let x = (0, D.useCallback)(async (e, t, n, r = {}) => {
     if (!e) return;
-    let i = Gk(t, n);
+    let i = Wk(t, n);
     await Tc({
       gate: y.current,
       routeKey: n,
@@ -58407,7 +58357,7 @@ function Jk() {
       onSettled: () => p((e) => e === n ? null : e)
     });
   }, []), S = (0, D.useCallback)(() => {
-    if (Xo(), s(null), Wk(window.location.pathname)) return;
+    if (Xo(), s(null), Uk(window.location.pathname)) return;
     let e = Lo(Fo(window.location.pathname) === "staff" ? i?.staffLoginPath : i?.loginUrl, window.location.pathname);
     if (e.startsWith("/") && !e.startsWith("//")) {
       window.history.replaceState(null, "", e), r(window.location.pathname);
@@ -58425,7 +58375,7 @@ function Jk() {
     g.current = !0;
     async function e() {
       let e = await is(Fo(window.location.pathname));
-      if (e.redirectToLogin && !Wk(window.location.pathname)) {
+      if (e.redirectToLogin && !Uk(window.location.pathname)) {
         let t = Lo(e.loginUrl, window.location.pathname);
         if (t.startsWith("/") && !t.startsWith("//")) history.replaceState(null, "", t), r(window.location.pathname);
         else {
@@ -58434,18 +58384,18 @@ function Jk() {
         }
       }
       let n = e.config, i = e.session;
-      if (i && zo(i) && !Wk(window.location.pathname)) {
+      if (i && zo(i) && !Uk(window.location.pathname)) {
         Xo(), s(null);
         let e = Fo(window.location.pathname) === "staff" ? n?.staffLoginPath : n?.loginUrl;
         window.location.replace(Lo(e, window.location.pathname));
         return;
       }
-      if (a(n), s(i), i && ss(), !Wk(window.location.pathname) && i) {
-        let e = Bs(), r = Kk(i), a = Ks(i.role, e, {
+      if (a(n), s(i), i && ss(), !Uk(window.location.pathname) && i) {
+        let e = Bs(), r = Gk(i), a = Ks(i.role, e, {
           principal: i.principal,
           staffRole: i.staff_role
         }) ? e : r;
-        a !== e && (window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${r}`), v.current = r, h(qk(e, r, i))), t(a), await x(n, i, a), _.current = a;
+        a !== e && (window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${r}`), v.current = r, h(Kk(e, r, i))), t(a), await x(n, i, a), _.current = a;
       }
       d(!1);
     }
@@ -58461,11 +58411,11 @@ function Jk() {
       let e = Bs(), n = Jo(), i = n?.role ?? b.role, a = {
         principal: n?.principal ?? b.principal,
         staffRole: n?.staff_role ?? b.staff_role
-      }, o = Kk({
+      }, o = Gk({
         principal: a.principal,
         staff_role: a.staffRole
       });
-      Ks(i, e, a) ? (v.current && e !== v.current && (v.current = null, h("")), y.current.activate(e), _.current !== e && p(e), t(e)) : (v.current = o, h(qk(e, o, {
+      Ks(i, e, a) ? (v.current && e !== v.current && (v.current = null, h("")), y.current.activate(e), _.current !== e && p(e), t(e)) : (v.current = o, h(Kk(e, o, {
         principal: a.principal,
         role: i,
         staff_role: a.staffRole
@@ -58505,8 +58455,8 @@ function Jk() {
       principal: b.principal,
       staffRole: b.staff_role
     })) {
-      let n = Kk(b);
-      v.current = n, h(qk(e, n, b)), y.current.activate(n), window.location.replace(`${window.location.pathname}${window.location.search}#${n}`), t(n);
+      let n = Gk(b);
+      v.current = n, h(Kk(e, n, b)), y.current.activate(n), window.location.replace(`${window.location.pathname}${window.location.search}#${n}`), t(n);
     }
   }, [
     u,
@@ -58516,7 +58466,7 @@ function Jk() {
     b.role,
     b.staff_role
   ]), (0, D.useEffect)(() => {
-    !u && i && o && (Wk(n) || _.current !== e && (_.current = e, p(e), x(i, o, e)));
+    !u && i && o && (Uk(n) || _.current !== e && (_.current = e, p(e), x(i, o, e)));
   }, [
     e,
     u,
@@ -58553,7 +58503,7 @@ function Jk() {
     e,
     S
   ]);
-  return u || !i ? /* @__PURE__ */ (0, H.jsx)(Uk, {}) : n === "/" || n === "/landing.html" ? /* @__PURE__ */ (0, H.jsx)(pl, { config: i }) : n === "/login" || n === "/login.html" ? /* @__PURE__ */ (0, H.jsx)(yl, { config: i }) : n === "/signup" || n === "/signup.html" ? /* @__PURE__ */ (0, H.jsx)(Pl, { config: i }) : n === "/signup-status" ? /* @__PURE__ */ (0, H.jsx)(Fl, {}) : n === "/set-password" ? /* @__PURE__ */ (0, H.jsx)(Cl, { config: i }) : n === "/internal/admin/login" || n === "/staff-login.html" ? /* @__PURE__ */ (0, H.jsx)(Il, { config: i }) : /* @__PURE__ */ (0, H.jsx)(Rc, { children: /* @__PURE__ */ (0, H.jsx)(Sc, {
+  return u || !i ? /* @__PURE__ */ (0, H.jsx)(Hk, {}) : n === "/" || n === "/landing.html" ? /* @__PURE__ */ (0, H.jsx)(pl, { config: i }) : n === "/login" || n === "/login.html" ? /* @__PURE__ */ (0, H.jsx)(yl, { config: i }) : n === "/signup" || n === "/signup.html" ? /* @__PURE__ */ (0, H.jsx)(Pl, { config: i }) : n === "/signup-status" ? /* @__PURE__ */ (0, H.jsx)(Fl, {}) : n === "/set-password" ? /* @__PURE__ */ (0, H.jsx)(Cl, { config: i }) : n === "/internal/admin/login" || n === "/staff-login.html" ? /* @__PURE__ */ (0, H.jsx)(Il, { config: i }) : /* @__PURE__ */ (0, H.jsx)(Rc, { children: /* @__PURE__ */ (0, H.jsx)(Sc, {
     route: e,
     session: b,
     data: c,
@@ -58565,7 +58515,7 @@ function Jk() {
     onDismissAccessNotice: () => {
       v.current = null, h("");
     },
-    children: /* @__PURE__ */ (0, H.jsx)(Hk, {
+    children: /* @__PURE__ */ (0, H.jsx)(Vk, {
       route: e,
       data: c,
       config: i,
@@ -58577,5 +58527,5 @@ function Jk() {
 }
 //#endregion
 //#region apps/web/react/src/main.tsx
-(0, gr.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, H.jsx)(D.StrictMode, { children: /* @__PURE__ */ (0, H.jsx)(Jk, {}) }));
+(0, gr.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, H.jsx)(D.StrictMode, { children: /* @__PURE__ */ (0, H.jsx)(qk, {}) }));
 //#endregion

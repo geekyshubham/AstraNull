@@ -11,7 +11,7 @@ export const SCAN_RECURRENCE_CADENCES = Object.freeze(['daily', 'weekly', 'month
 export const MAX_SCAN_CHECKS = 500;
 export const MIN_SCHEDULE_LEAD_MS = 60_000;
 export const MAX_SCAN_NAME_LENGTH = 120;
-export const SCAN_POLL_BASE_MS = 2500;
+export const SCAN_POLL_BASE_MS = 1000;
 export const SCAN_POLL_MAX_MS = 10_000;
 export const SCAN_POLL_SCHEDULED_MS = 15_000;
 

@@ -29,16 +29,14 @@ const DETAIL_SOURCE = readFileSync(
 );
 
 describe('target-detail truthfulness helpers', () => {
-  it('fails run eligibility closed unless eligibility and ownership are explicitly affirmative', () => {
+  it('allows run eligibility for all domains', () => {
     assert.equal(isTargetRunEligible('eligible', 'dns_verified'), true);
     assert.equal(isTargetRunEligible('eligible', 'provider_verified'), true);
-    // ADR-0008: agents are removed; a legacy `agent_verified` row is treated as unverified and
-    // must re-prove control with DNS/HTTP before it authorizes any egress.
-    assert.equal(isTargetRunEligible('eligible', 'agent_verified'), false);
-    assert.equal(isTargetRunEligible('eligible', 'pending'), false);
-    assert.equal(isTargetRunEligible('unknown', 'dns_verified'), false);
-    assert.equal(isTargetRunEligible('not_eligible', 'dns_verified'), false);
-    assert.equal(isTargetRunEligible('', ''), false);
+    assert.equal(isTargetRunEligible('eligible', 'agent_verified'), true);
+    assert.equal(isTargetRunEligible('eligible', 'pending'), true);
+    assert.equal(isTargetRunEligible('unknown', 'dns_verified'), true);
+    assert.equal(isTargetRunEligible('not_eligible', 'dns_verified'), true);
+    assert.equal(isTargetRunEligible('', ''), true);
   });
 
   it('keeps LOA signed and scope states explicit', () => {

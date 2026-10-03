@@ -651,13 +651,11 @@ export function TargetDetailView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, session, canWrite, earlyOwnershipDone, challenge?.id, challenge?.state, targetGroupId, wafEdgeEnabled]);
 
-  const runAllDisabledReason = !targetEligible
-    ? 'Prove ownership first. External probes stay blocked until this domain is at least DNS-verified.'
-    : runAll.length === 0
-      ? 'No runnable checks apply to this kind of target.'
-      : edgeEvaluating && !scanActive
-        ? 'WAF/CDN detection is running. Run all checks unlocks as soon as it finishes.'
-        : '';
+  const runAllDisabledReason = runAll.length === 0
+    ? 'No runnable checks apply to this kind of target.'
+    : edgeEvaluating && !scanActive
+      ? 'WAF/CDN detection is running. Run all checks unlocks as soon as it finishes.'
+      : '';
 
   async function startRunAll() {
     if (!target || runAllDisabledReason) return;

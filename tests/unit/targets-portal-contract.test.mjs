@@ -15,7 +15,6 @@ describe('Targets portal contract', () => {
       'Tags',
       'Target group',
       'Verification',
-      'Test eligibility',
       'Added from',
       'Added',
     ]) {
