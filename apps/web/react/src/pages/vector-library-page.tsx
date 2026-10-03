@@ -91,7 +91,6 @@ const CAPABILITY_OPTIONS: SelectOption[] = [
 const EXECUTION_OPTIONS: SelectOption[] = [
   { value: '', label: 'All execution boundaries' },
   { value: 'safe_validation_available', label: 'Customer-safe mapping' },
-  { value: 'soc_gated_only', label: 'SOC-gated only' },
   { value: 'monitor_only', label: 'Monitor only' },
 ];
 
@@ -100,7 +99,6 @@ const TARGET_AVAILABILITY_OPTIONS: SelectOption[] = [
   { value: 'safe_runnable', label: 'Bounded check available' },
   { value: 'additional_input', label: 'Additional input required' },
   { value: 'target_not_supported', label: 'Target not supported' },
-  { value: 'soc_gated', label: 'SOC-gated only' },
   { value: 'monitor_only', label: 'Monitor only' },
   { value: 'select_target', label: 'Awaiting target selection' },
 ];
@@ -373,7 +371,7 @@ export function VectorLibraryPage({
         )}
       />
       <PageContextSummary>
-        <span className="tabular-nums">{vectors.length || 721}</span> catalog vectors · bounded checks only · SOC/high-scale vectors remain request-only
+        <span className="tabular-nums">{vectors.length || 721}</span> catalog vectors · direct validation checks
       </PageContextSummary>
       {variant === 'premium' ? (
         <dl className="vector-facts">
@@ -465,7 +463,6 @@ export function VectorLibraryPage({
             {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Select label="Mapped bounded check" value={selectedCheckId} options={checkOptions} onChange={setSelectedCheckId} /> : null}
             {detailAvailability.id === 'safe_runnable' && !canStartBoundedRun ? <div className="form-banner neutral" role="note">Your role can review this vector and its target applicability, but only owners, admins, and engineers can start bounded checks.</div> : null}
             <div className="vector-detail-actions">
-              {detailAvailability.id === 'soc_gated' ? <AnchorButton href="#runs" variant="secondary" size="sm">Open governed request workflow</AnchorButton> : null}
               {detailAvailability.id === 'monitor_only' ? <AnchorButton href="#integrations" variant="secondary" size="sm">Open telemetry integrations</AnchorButton> : null}
               <Button variant="ghost" size="sm" onClick={() => setSelectedVector(null)}>Close</Button>
               {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Button size="sm" disabled={!selectedCheckId || busy !== ''} onClick={prepareRun}>Review run</Button> : null}

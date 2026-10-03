@@ -2979,8 +2979,8 @@ function CheckDetailPage({
         actions={(
           <>
             <AnchorButton size="sm" variant="secondary" href="#checks">Checks</AnchorButton>
-            <AnchorButton size="sm" variant="default" href={safetyClass === 'soc_gated' ? '#runs' : '#test-policies'}>
-              {safetyClass === 'soc_gated' ? 'Request governed validation' : 'Schedule this check'}
+            <AnchorButton size="sm" variant="default" href="#test-policies">
+              Schedule this check
             </AnchorButton>
           </>
         )}

@@ -39,7 +39,7 @@ export interface RunsRefinedProps {
   /** RunsPageHeadActions, wired with the same gates as classic. */
   headerActions: ReactNode;
   /** RunsSocGatePanel, wired to page busy/message/error state. */
-  socGatePanel: ReactNode;
+  socGatePanel?: ReactNode;
   scanStatusFilter: string;
   scanStatusOptions: SelectOption[];
   onScanStatusFilterChange: (value: string) => void;
@@ -133,7 +133,7 @@ export function RunsRefined(props: RunsRefinedProps) {
           <p className="rf-eyebrow">Validation history</p>
           <h1>Test runs</h1>
           <p className="rf-header-description">
-            Bounded safe checks and SOC-governed requests with lifecycle state, correlated verdict, confidence when published, and sealed evidence.
+            Bounded safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence.
           </p>
         </div>
         <div className="rf-header-actions">
@@ -182,10 +182,6 @@ export function RunsRefined(props: RunsRefinedProps) {
               : `${formatNumber(scheduledScanCount)} scheduled, ${formatNumber(data.validationScans.length)} total`}
           </span>
         </div>
-      </section>
-
-      <section className="rf-governed" aria-label="Governed high-scale validation">
-        {props.socGatePanel}
       </section>
 
       {message || error ? (

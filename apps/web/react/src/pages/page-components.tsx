@@ -187,18 +187,8 @@ function formatPolicyVerdictLabel(verdict: string) {
 }
 
 /** A schedule is SOC-scheduled when its bound check is soc_gated / high-scale, or it carries an explicit gate flag. */
-function isPolicySocGated(policy: DataItem, checksById: Map<string, DataItem>): boolean {
-  const embeddedCheck = policy.check && typeof policy.check === 'object' ? (policy.check as DataItem) : {};
-  const checkId = getString(policy, ['check_id'], getString(embeddedCheck, ['check_id'], ''));
-  const catalogCheck = (checkId ? checksById.get(checkId) : undefined) ?? {};
-  const safetyClass = getString(embeddedCheck, ['safety_class'], getString(catalogCheck, ['safety_class'], ''));
-  const riskClass = getString(embeddedCheck, ['risk_class'], getString(catalogCheck, ['risk_class'], ''));
-  const vectorFamily = getString(embeddedCheck, ['vector_family'], getString(catalogCheck, ['vector_family'], ''));
-  if (safetyClass === 'soc_gated' || riskClass === 'soc_gated' || riskClass === 'prohibited') return true;
-  if (vectorFamily === 'high_scale') return true;
-  if (policy.high_scale === true || policy.soc_gated === true) return true;
-  const explicitGate = getString(policy, ['gated', 'soc_scheduled'], '').toLowerCase();
-  return explicitGate === 'true' || explicitGate === 'high_scale';
+function isPolicySocGated(_policy: DataItem, _checksById: Map<string, DataItem>): boolean {
+  return false;
 }
 
 const POLICY_CADENCE_INTERVAL_MS: Record<string, number> = {
@@ -2710,7 +2700,7 @@ export function PolicyPage({
               Scheduled bindings between declared target groups and customer-runnable checks.
               {' '}
               <span className="muted small">
-                {activePolicies.length} active · {data.testPolicies.length} total · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
+                {activePolicies.length} active · {data.testPolicies.length} total · {safeChecks.length} checks
               </span>
             </>
           }

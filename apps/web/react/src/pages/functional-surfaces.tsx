@@ -1241,7 +1241,6 @@ export function ValidationSurfacePage({
     const runHeadActions = (
       <RunsPageHeadActions
         onRefresh={() => void onRefresh()}
-        onRequestSoc={canRequestHighScale ? () => setShowSocRequestForm(true) : undefined}
         onStartSafeRun={() => { window.location.hash = '#checks'; }}
         onStartScan={canManageScans ? () => setScanLauncher({ mode: 'create', scan: null }) : undefined}
         refreshBusy={busy === 'refresh-runs'}
@@ -1249,20 +1248,7 @@ export function ValidationSurfacePage({
         safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
       />
     );
-    const runSocGatePanel = (
-      <RunsSocGatePanel
-        data={data}
-        config={config}
-        session={session}
-        onRefresh={onRefresh}
-        onMessage={setMessage}
-        onError={setError}
-        busy={busy}
-        setBusy={setBusy}
-        requestFormOpen={showSocRequestForm}
-        onRequestFormOpenChange={setShowSocRequestForm}
-      />
-    );
+    const runSocGatePanel = null;
     const validationScansTable = (
       <ValidationScansTable
         scans={visibleScans}
@@ -1374,7 +1360,7 @@ export function ValidationSurfacePage({
           route="runs"
           eyebrow="Validation history"
           title="Test runs"
-          description="Review bounded safe checks and SOC-governed requests with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
+          description="Review safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
           actions={(
             <>
               <VariantSwitch value={runsVariant} onChange={setRunsVariant} />
@@ -1385,7 +1371,6 @@ export function ValidationSurfacePage({
         <PageContextSummary>
           <span className="tabular-nums">{data.runs.length}</span>{` ${pluralize(data.runs.length, 'run')} · `}<span className="tabular-nums">{inFlightRuns.length}</span> in progress
         </PageContextSummary>
-        {runSocGatePanel}
         {inFlightRuns.length > 0 || activeScans.length > 0 ? (
           <div className="form-banner info" role="status" aria-live="polite">
             Runs in progress — live status auto-refreshes every 8s ({liveCounts}). Verdicts appear when the observation window closes.
@@ -1397,7 +1382,7 @@ export function ValidationSurfacePage({
           </div>
         ) : (
           <div className="form-banner neutral" role="note">
-            Customer-safe runs start in the vector library, where you must select the exact target group, target, vector, and mapped bounded check.
+            Direct validation runs start via validation scans above or bounded checks in the vector library.
           </div>
         )}
         <MutationFeedbackBanner message={message} error={error} neutral />

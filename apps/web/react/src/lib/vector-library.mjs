@@ -60,9 +60,9 @@ export function vectorTargetAvailability(vector, checks, target) {
   if (disposition === 'soc_gated_only') {
     return {
       id: 'soc_gated',
-      label: 'SOC-gated only',
-      detail: 'This vector cannot be launched as a customer-safe run. Request an authorized governed assessment.',
-      tone: 'warn',
+      label: 'Governed scenario',
+      detail: 'This scenario is governed and not customer-runnable directly.',
+      tone: 'muted',
       runnableChecks: [],
     };
   }

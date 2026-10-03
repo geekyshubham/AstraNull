@@ -320,7 +320,7 @@ function CreateSchedulePanel({
         <div className="rf-create-heading">
           <h2 id={headingId} ref={headingRef} tabIndex={-1}>New validation schedule</h2>
           <p>
-            Bind a customer-runnable check to one exact active target in each selected group. Groups are written one at a time, and failed bindings stay selected for retry. SOC-gated checks remain request-only.
+            Bind a customer-runnable check to one exact active target in each selected group. Groups are written one at a time, and failed bindings stay selected for retry.
           </p>
         </div>
         <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={form.onClose}>Cancel</Button>
@@ -589,7 +589,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           <p className="rf-eyebrow">Declared scope, bounded execution</p>
           <h1>Test policies</h1>
           <p className="rf-header-description">
-            Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts stay declarations until external probe evidence is recorded. High-scale scenarios stay SOC-scheduled.
+            Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts stay declarations until external probe evidence is recorded.
           </p>
         </div>
         <div className="rf-header-actions">
@@ -635,9 +635,9 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           hint={data.loadErrors.checks ? 'Check catalog unavailable' : `${props.safeChecks.length} checks bindable`}
         />
         <Stat
-          label="SOC-scheduled"
-          value={socUnavailable ? 'Unavailable' : formatNumber(props.socScheduledCount)}
-          hint={socUnavailable ? 'SOC schedule data unavailable' : props.socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
+          label="Direct schedules"
+          value={policiesUnavailable ? 'Unavailable' : formatNumber(data.testPolicies.length)}
+          hint="All active schedules run directly on cadence"
         />
       </section>
 
@@ -690,11 +690,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
         <div className="rf-footnotes">
           <p className="rf-footnote">
             <ShieldCheck size={14} aria-hidden="true" />
-            <span>
-              {props.socGatedChecks.length > 0
-                ? `${props.socGatedChecks.length} SOC-gated ${props.socGatedChecks.length === 1 ? 'check' : 'checks'} in the catalog. High-scale schedules run only when SOC schedules them.`
-                : 'High-scale schedules run only when SOC schedules them.'}
-            </span>
+            <span>Schedules execute directly according to their configured cadence.</span>
           </p>
           {!canWritePolicies ? (
             <p className="rf-footnote">
