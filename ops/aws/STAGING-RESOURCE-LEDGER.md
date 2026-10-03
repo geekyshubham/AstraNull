@@ -612,3 +612,25 @@ The pre-deploy orchestration tree is retained at `/opt/astranull-rollback-pre-ec
 Still open: `Deploy AWS` CI auto-deploy remains blocked at SSH (secrets predating the 2026-09-02
 cutover; runners not on the allow-list) — give the deploy job a reachable path (e.g. SSM) so pushes to
 `main` deploy again.
+
+## Production release 2026-10-03 (`8f5e4708` review archive & latest main)
+
+Commit `8f5e4708316439bb9605015eff1414c842574525` ("docs: archive uncommitted changes review and
+follow-up notes") was pushed to `main` and released from operator `/32` `123.252.204.182` over EC2
+Instance Connect. Before release: full `npm test` green (4,011 unit tests, 28 e2e tests, 414 integration
+tests passed), lint/safety/contract/web:typecheck/db-migrate green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `04f4ab7bac3ae738993b08c5c505890113563293f23b0b910fc8588e4621b599`, verified on host, extracted to `/opt/astranull-release-8f5e4708316439bb9605015eff1414c842574525` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:8f5e4708` and `astranull:8f5e4708316439bb9605015eff1414c842574525` → `sha256:7ed57001833a07b7a70a2c5ff94cd48f8a0b017620886162bdcdad131fb548b5` |
+| Backup | `/opt/astranull-backups/postgres-2026-10-03T08-15-37-939Z-73f785b29472.dump.enc` (+ manifest), encrypted SHA-256 `addd35f9af3b…`, dumped as `astranull_backup`, `pg_restore --list` parsed, `postgres-restore-drill --validate-only` ok, plaintext checked-deleted |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served `react-app.js` `dc5245a1…` and `react-app.css` `6bf972ea…` byte-identical to the commit; unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation; connector roles retain `schema_migrations` `SELECT` |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:cf94bcdba3091083fc907322c70fa5d1288a9221f6128ec5e8d37400c9c5118b` (`astranull:ec144753…`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-ec1447538af72ec33e7c1ecbce9f1ab46391c82d`.
