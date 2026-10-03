@@ -159,9 +159,26 @@ function familyDetectionLine(edge: DataItem | null, family: 'waf' | 'cdn', phase
     || (layerProvider ? String(layerProvider) : '')
     || (providerList.length > 0 ? String(providerList[0]) : '')
     || (family === 'cdn' && status === 'detected' && str(asItem(edge?.waf), 'vendor') ? str(asItem(edge?.waf), 'vendor') : '');
-  if (status === 'detected') return { tone: 'success' as const, text: provider ? `Detected · ${providerName(provider)}` : 'Detected', provider };
-  if (status === 'not_detected') return { tone: 'warn' as const, text: 'Not detected', provider: '' };
-  if (edge) return { tone: 'muted' as const, text: 'Inconclusive', provider: '' };
+  let evidenceSummary = '';
+  const evidence = asItem(edge?.evidence);
+  if (family === 'waf') {
+    const wafw00f = asItem(evidence?.wafw00f);
+    if (wafw00f?.detected && str(wafw00f, 'firewall')) {
+      evidenceSummary = `WAF fingerprint (${str(wafw00f, 'firewall')}) · HTTP headers`;
+    } else {
+      evidenceSummary = 'WAF response fingerprint & headers';
+    }
+  } else if (family === 'cdn') {
+    const cdncheck = asItem(evidence?.cdncheck);
+    if (cdncheck?.matched) {
+      evidenceSummary = `Anycast IP range (${providerName(provider)}) · HTTP edge headers`;
+    } else {
+      evidenceSummary = 'Edge network & response headers';
+    }
+  }
+  if (status === 'detected') return { tone: 'success' as const, text: provider ? `Detected · ${providerName(provider)}` : 'Detected', provider, evidenceSummary };
+  if (status === 'not_detected') return { tone: 'warn' as const, text: 'Not detected', provider: '', evidenceSummary: '' };
+  if (edge) return { tone: 'muted' as const, text: 'Inconclusive', provider: '', evidenceSummary: '' };
   return null;
 }
 
@@ -211,7 +228,14 @@ function LayerTile({
         {evaluating ? (
           <span className="td-evaluating"><Spinner />Evaluating with live fingerprint probes</span>
         ) : detection ? (
-          <Badge tone={detection.tone}>{detection.text}</Badge>
+          <div className="td-detect-cluster">
+            <Badge tone={detection.tone}>{detection.text}</Badge>
+            {detection.evidenceSummary ? (
+              <span className="td-detect-evidence muted small">
+                <strong>Evidence:</strong> {detection.evidenceSummary}
+              </span>
+            ) : null}
+          </div>
         ) : (
           <span className="muted small">Not evaluated yet</span>
         )}
@@ -240,8 +264,9 @@ function EvidenceDisclosure({ edge }: { edge: DataItem | null }) {
   const { layers, facts } = useMemo(() => edgeEvidenceSignals(edge), [edge]);
   if (!edge || (!layers.length && !facts.length)) return null;
   const observedAt = str(edge, 'observed_at');
+  const isDetected = str(edge, 'status') === 'detected';
   return (
-    <details className="td-evidence">
+    <details className="td-evidence" open={isDetected ? true : undefined}>
       <summary>
         <Fingerprint size={16} aria-hidden="true" />
         <span>How we found out</span>

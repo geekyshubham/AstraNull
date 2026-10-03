@@ -122,7 +122,7 @@ Version 2 ported the data but not how either tool decides. In production:
 | Queries 1.1.1.1/8.8.8.8 | Worker resolver, vetted addresses | Connection pinning and egress policy |
 | Header-name regex treated as a literal key (Shieldon never matches) | Regex applied | Matches the upstream intent |
 
-## Addendum: curated edge-platform header layers
+## Addendum 1: curated edge-platform header layers
 
 wafw00f types every header hit as a WAF and cdncheck types only addresses and CNAMEs, so edge
 platforms identified purely by response headers (Vercel, Netlify, Azure Front Door, Google Cloud
@@ -133,3 +133,33 @@ corpus, of vendor-unique header names or exact vendor `Server` tokens. Matches b
 layers with source `response_header`; they never set `waf_present`. Block-page signatures in
 `src/lib/outsideInWafScanner.mjs` were also tightened to vendor-specific phrases after bare
 substrings (`/f5/`, `/azure/`, "security policy") fingerprinted ordinary pages as WAF block pages.
+
+## Addendum 2: CNAME CDN classification parity & ASN cloud provider port (asnmap)
+
+### 1. CNAME CDN classification parity
+Upstream cdncheck's `CheckSuffix` in `other.go` returned `true, discovered, "waf", nil` even though
+the boolean return variable was named `isCDN`. AstraNull previously treated this strictly as `waf`,
+which caused domains delegating via CNAME to CloudFront (`cloudfront.net`), Akamai (`akamaiedge.net`,
+`edgekey.net`, `edgesuite.net`), Fastly (`fastly.net`), or Edgecast to be classified solely as WAF
+without a CDN layer (`cdn_detected: false`).
+- AstraNull now classifies known CDN CNAME suffixes as CDN layers (`cname_cdn_matches`), providing
+  accurate CDN detection for CNAME-based edge deployments while preserving WAF protection layers.
+- Expanded CNAME suffixes for modern edge platforms: Azure Front Door/CDN (`azureedge.net`, `azurefd.net`),
+  Bunny CDN (`b-cdn.net`), KeyCDN (`kxcdn.com`), CDN77 (`cdn77.org`, `r.worldcdn.net`), Gcore (`gcdn.co`),
+  StackPath (`hwcdn.net`), Vercel (`vercel-dns.com`), and Netlify (`netlify.app`).
+
+### 2. ASN and Cloud Provider Engine (`asnmap` port)
+While hyperscalers (AWS, GCP, Azure, Oracle Cloud) publish official CIDR JSON feeds, popular European
+and boutique cloud and hosting providers (Hetzner, DigitalOcean, OVHcloud, Vultr, Linode, Scaleway,
+Leaseweb, Contabo, Hostinger, UpCloud, Equinix Metal) do not publish synchronized official JSON ranges.
+Relying solely on cdncheck static feeds left these providers unrecognized (`cloud_hosted: false`).
+- AstraNull ports ProjectDiscovery `asnmap` semantics directly into Node.js (`src/lib/asnLookup.mjs`).
+- Authoritative BGP origin routing tables from IRR/RADB are compiled via
+  `scripts/generate-asn-cloud-data.mjs` into binary-packed hex interval tables (`src/lib/data/asnCloudData.mjs`).
+- At runtime, IP-to-ASN and cloud provider lookup executes in memory via binary search (<0.1ms),
+  requiring zero external subprocesses, zero network I/O, and zero third-party API keys.
+- Optional live network hint via Team Cymru DNS TXT mapping (`origin.asn.cymru.com`) is supported for
+  hermetic and operational resolution.
+- Target detail views, protection summaries, and probe worker metadata now cleanly surface both CDN
+  and hosting infrastructure (e.g. `AS24940 · Hetzner Online GmbH`).
+

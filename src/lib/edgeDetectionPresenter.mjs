@@ -25,6 +25,22 @@ const PROVIDER_DISPLAY_NAMES = Object.freeze({
   gcp: 'Google Cloud',
   google: 'Google Cloud',
   modsecurity: 'ModSecurity',
+  hetzner: 'Hetzner',
+  digitalocean: 'DigitalOcean',
+  ovh: 'OVHcloud',
+  vultr: 'Vultr',
+  linode: 'Linode',
+  scaleway: 'Scaleway',
+  leaseweb: 'Leaseweb',
+  contabo: 'Contabo',
+  hostinger: 'Hostinger',
+  upcloud: 'UpCloud',
+  equinix: 'Equinix Metal',
+  alibaba: 'Alibaba Cloud',
+  tencent: 'Tencent Cloud',
+  oracle: 'Oracle Cloud',
+  cachefly: 'CacheFly',
+  edgecast: 'Edgecast',
 });
 
 function asRecord(value) {
@@ -65,26 +81,47 @@ function familyPresentation(status, provider, type) {
   };
 }
 
-function layerPresentation(raw) {
+function layerPresentation(raw, evidence = {}) {
   const layer = asRecord(raw);
   const family = boundedString(layer?.family, 32).toLowerCase();
   const provider = boundedString(layer?.provider);
   if (!layer || !['cdn', 'waf', 'cloud'].includes(family) || !provider) return null;
+  const sources = stringList(layer.sources, 8);
+  if (sources.length === 0) {
+    if (Array.isArray(evidence.vendor_matches) && evidence.vendor_matches.some((m) => m?.vendor === provider)) {
+      sources.push('response_header');
+    }
+    if (family === 'waf' && (evidence.wafw00f?.detected || evidence.wafw00f?.generic?.found)) {
+      sources.push('response_fingerprint');
+    }
+    if (Array.isArray(evidence.address_matches) && evidence.address_matches.some((m) => m?.provider === provider)) {
+      sources.push('address_range');
+    }
+    if (evidence.cdncheck?.matched && evidence.cdncheck?.provider === provider) {
+      if (!sources.includes('address_range')) sources.push('address_range');
+    }
+    if (Array.isArray(evidence.cname_matches) && evidence.cname_matches.some((m) => m?.provider === provider)) {
+      sources.push('cname_suffix');
+    }
+    if (sources.length === 0) {
+      sources.push(family === 'waf' ? 'response_fingerprint' : 'address_range');
+    }
+  }
   return {
     family,
     provider,
     display_name: boundedString(layer.display_name) || null,
-    sources: stringList(layer.sources, 8),
+    sources,
     confidence: boundedNumber(layer.confidence, { max: 1 }),
-    evidence_consistency: boundedString(layer.evidence_consistency, 32) || 'single_source',
-    matched_signal_count: boundedNumber(layer.matched_signal_count),
+    evidence_consistency: boundedString(layer.evidence_consistency, 32) || (sources.length > 1 ? 'agreement' : 'single_source'),
+    matched_signal_count: boundedNumber(layer.matched_signal_count) || sources.length,
     conflicting: layer.conflicting === true,
   };
 }
 
 function presentedLayers(evidence, record) {
   const layers = (Array.isArray(evidence.layers) ? evidence.layers : [])
-    .map(layerPresentation)
+    .map((raw) => layerPresentation(raw, evidence))
     .filter(Boolean);
   if (layers.length) return layers;
 
@@ -319,11 +356,14 @@ export function presentTargetEdgeDetection(row) {
   if (cdnProvider && !cdnProviders.includes(cdnProvider)) {
     cdnProviders.push(cdnProvider);
   }
+  const cdnType = boundedString(record.cdn_type)
+    || layers.find((l) => l.family === 'cdn')?.sources?.[0]
+    || (record.cdn_status === 'detected' ? 'address_range' : '');
   const presented = {
     status: boundedString(record.status) || 'inconclusive',
     reason: boundedString(record.reason) || null,
     waf: familyPresentation(record.waf_status, record.waf_vendor, record.waf_type),
-    cdn: familyPresentation(record.cdn_status, cdnProvider, record.cdn_type),
+    cdn: familyPresentation(record.cdn_status, cdnProvider, cdnType),
     cloud: familyPresentation(
       asRecord(evidence.cloud)?.status,
       asRecord(evidence.cloud)?.provider,

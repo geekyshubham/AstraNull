@@ -297,11 +297,13 @@ export function explicitEdgeBoolean(values) {
   };
 }
 
-/** First typed provider for a family, preferring address ranges over CNAME suffixes. */
+/** First typed provider for a family, preferring address ranges over CNAME suffixes and ASN lookups. */
 export function findEdgeProviderMatch(edgeSignature, family) {
   for (const [field, discriminator, type] of [
     ['address_matches', 'family', 'address_range'],
+    ['cname_cdn_matches', 'family', 'cname_suffix'],
     ['cname_matches', 'type', 'cname_suffix'],
+    ['asn_matches', 'family', 'asn_lookup'],
   ]) {
     const values = Array.isArray(edgeSignature?.[field])
       ? edgeSignature[field].slice(0, MAX_LIST_ITEMS)
@@ -368,6 +370,34 @@ function evidenceSummary(edgeSignature) {
         provider: boundedString(match.provider),
         type: boundedString(match.type, 32),
         suffix: boundedString(match.suffix, 253),
+      };
+    }),
+    cname_cdn_matches: (Array.isArray(edgeSignature.cname_cdn_matches)
+      ? edgeSignature.cname_cdn_matches.slice(0, MAX_EVIDENCE_MATCHES)
+      : []).map((raw) => {
+      const match = asRecord(raw) ?? {};
+      return {
+        provider: boundedString(match.provider),
+        family: boundedString(match.family, 32),
+        suffix: boundedString(match.suffix, 253),
+      };
+    }),
+    asn: asRecord(edgeSignature.asn) ? {
+      asn: Number(edgeSignature.asn.asn) || null,
+      name: boundedString(edgeSignature.asn.name),
+      org: boundedString(edgeSignature.asn.org),
+      provider: boundedString(edgeSignature.asn.provider),
+      country: boundedString(edgeSignature.asn.country),
+    } : null,
+    asn_matches: (Array.isArray(edgeSignature.asn_matches)
+      ? edgeSignature.asn_matches.slice(0, MAX_EVIDENCE_MATCHES)
+      : []).map((raw) => {
+      const match = asRecord(raw) ?? {};
+      return {
+        provider: boundedString(match.provider),
+        asn: Number(match.asn) || null,
+        org: boundedString(match.org),
+        name: boundedString(match.name),
       };
     }),
     wafw00f: wafw00fSummary(edgeSignature.wafw00f),

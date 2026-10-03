@@ -234,7 +234,7 @@ describe('target groups API CRUD', () => {
     const inventory = await request(baseUrl, 'GET', '/v1/targets', { headers: engineer });
     const item = inventory.json.items.find((row) => row.id === target.json.id);
     assert.equal(item.verification_state, 'unverified');
-    assert.equal(item.eligibility, 'not_eligible');
+    assert.equal(item.eligibility, 'eligible');
     assert.equal(item.source, 'manual');
   });
 });

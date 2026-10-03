@@ -350,8 +350,10 @@ const SOURCE_COPY = Object.freeze({
   response_fingerprint: { method: 'WAF fingerprint', detail: 'Benign probe responses matched this WAF\'s fingerprint (wafw00f plugin).' },
   address_range: { method: 'IP address range', detail: 'A resolved address sits inside this provider\'s published network range.' },
   cname_suffix: { method: 'DNS CNAME', detail: 'The domain\'s CNAME chain points into this provider\'s edge.' },
+  asn_lookup: { method: 'ASN / Network routing', detail: 'A resolved address belongs to this provider\'s autonomous system (ASN).' },
   corroborated_generic_behavior: { method: 'Block behavior', detail: 'Benign attack markers were blocked with a WAF-style response; the vendor is unknown.' },
   legacy_provider_summary: { method: 'Earlier detection', detail: 'Recorded by an earlier detection run.' },
+  edge_fingerprint: { method: 'Edge signature', detail: 'External probe evidence matched this provider\'s edge signature.' },
 });
 
 /** Display name for a provider code. */
@@ -361,6 +363,9 @@ export function providerName(code, displayName = '') {
     azure: 'Microsoft Azure', azure_front_door: 'Azure Front Door', fastly: 'Fastly', gcp: 'Google Cloud', google: 'Google Cloud',
     incapsula: 'Imperva (Incapsula)', imperva: 'Imperva', sucuri: 'Sucuri', stackpath: 'StackPath', vercel: 'Vercel', netlify: 'Netlify',
     bunnycdn: 'Bunny CDN', keycdn: 'KeyCDN', gcore: 'Gcore', cdn77: 'CDN77', modsecurity: 'ModSecurity', generic: 'Unidentified WAF',
+    hetzner: 'Hetzner', digitalocean: 'DigitalOcean', ovh: 'OVHcloud', vultr: 'Vultr', linode: 'Linode', scaleway: 'Scaleway',
+    leaseweb: 'Leaseweb', contabo: 'Contabo', hostinger: 'Hostinger', upcloud: 'UpCloud', equinix: 'Equinix Metal', oracle: 'Oracle Cloud',
+    cachefly: 'CacheFly', edgecast: 'Edgecast',
   };
   return known[text(code).toLowerCase()] ?? (text(displayName) || titleCase(code) || 'Unknown provider');
 }
@@ -385,21 +390,59 @@ export function edgeEvidenceSignals(edge) {
   if (!presented) return { layers: [], facts: [] };
   const evidence = record(presented.evidence) ?? {};
   const vendorMatches = list(evidence.vendor_matches);
+  const wafw00f = record(evidence.wafw00f);
+  const cdncheck = record(evidence.cdncheck);
   const layers = list(presented.layers).map((raw) => {
     const layer = record(raw) ?? {};
+    const family = text(layer.family);
     const provider = text(layer.provider);
     const matched = vendorMatches.find((match) => text(record(match)?.vendor) === provider);
     const signals = list(record(matched)?.matched_signals).map((signal) => text(record(signal)?.signal)).filter(Boolean);
+    const rawSources = list(layer.sources).map(text).filter(Boolean);
+    const sources = [...rawSources];
+    if (sources.length === 0) {
+      if (family === 'waf' && (wafw00f?.detected || record(wafw00f?.generic)?.found)) {
+        sources.push('response_fingerprint');
+      }
+      if (signals.length > 0 || vendorMatches.some((m) => text(record(m)?.vendor) === provider)) {
+        sources.push('response_header');
+      }
+      if (family === 'cdn' && (text(cdncheck?.provider) === provider || list(evidence.address_matches).some((m) => text(record(m)?.provider) === provider))) {
+        sources.push('address_range');
+      }
+      if (list(evidence.cname_matches).some((m) => text(record(m)?.provider) === provider)) {
+        sources.push('cname_suffix');
+      }
+      if (sources.length === 0) {
+        sources.push(family === 'waf' ? 'response_fingerprint' : 'address_range');
+      }
+    }
+    const resolvedSignals = [...signals];
+    if (resolvedSignals.length === 0) {
+      if (family === 'cdn') {
+        if (cdncheck?.matched) resolvedSignals.push('ip_range');
+        if (vendorMatches.some((m) => text(record(m)?.vendor) === provider)) resolvedSignals.push('header');
+      } else if (family === 'waf') {
+        if (wafw00f?.detected) resolvedSignals.push('wafw00f_plugin');
+        if (vendorMatches.some((m) => text(record(m)?.vendor) === provider)) resolvedSignals.push('header');
+      }
+    }
+    const sourceObjects = sources.map((source) => ({
+      id: text(source),
+      ...(SOURCE_COPY[text(source)] ?? { method: titleCase(source), detail: '' }),
+    }));
+    const evidenceSummary = sourceObjects.map((s) => s.method).join(' · ');
     return {
-      family: text(layer.family),
+      family,
       provider,
       name: providerName(provider, layer.display_name),
       logo: providerLogoId(provider),
       confidence: Number.isFinite(Number(layer.confidence)) ? Math.round(Number(layer.confidence) * 100) : null,
-      agreement: text(layer.evidence_consistency),
+      agreement: text(layer.evidence_consistency) || (sources.length > 1 ? 'agreement' : 'single_source'),
       conflicting: layer.conflicting === true,
-      sources: list(layer.sources).map((source) => ({ id: text(source), ...(SOURCE_COPY[text(source)] ?? { method: titleCase(source), detail: '' }) })),
-      signals: [...new Set(signals)].slice(0, 6),
+      sources: sourceObjects,
+      signals: [...new Set(resolvedSignals)].slice(0, 6),
+      evidenceSummary,
     };
   });
   const facts = [];
@@ -407,7 +450,14 @@ export function edgeEvidenceSignals(edge) {
   if (chain.length) facts.push({ id: 'cname', label: 'CNAME chain', value: chain.join(' → ') });
   const ips = list(evidence.dns_resolved_ips ?? presented.dns_resolved_ips).map(text).filter(Boolean);
   if (ips.length) facts.push({ id: 'ips', label: 'Resolved addresses', value: ips.slice(0, 6).join(', ') });
-  const wafw00f = record(evidence.wafw00f);
+  const asn = record(evidence.asn);
+  if (asn && (asn.asn || asn.org)) {
+    facts.push({
+      id: 'asn',
+      label: 'Network / ASN',
+      value: `AS${asn.asn}${asn.name || asn.org ? ` · ${asn.name || asn.org}` : ''}`,
+    });
+  }
   if (wafw00f) {
     const firewall = text(wafw00f.firewall);
     facts.push({
@@ -418,7 +468,6 @@ export function edgeEvidenceSignals(edge) {
         : record(wafw00f.generic)?.found === true ? 'Generic WAF behavior detected' : 'No WAF plugin matched',
     });
   }
-  const cdncheck = record(evidence.cdncheck);
   if (cdncheck) {
     facts.push({
       id: 'cdncheck',

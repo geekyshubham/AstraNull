@@ -62,6 +62,7 @@ export type EvidenceLayer = {
   conflicting: boolean;
   sources: Array<{ id: string; method: string; detail: string }>;
   signals: string[];
+  evidenceSummary?: string;
 };
 
 export type EdgePhase = 'detected' | 'not_detected' | 'inconclusive' | 'error' | 'pending' | 'evaluating' | 'locked' | 'waiting' | 'no_result' | 'not_started' | string;

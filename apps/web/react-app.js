@@ -30721,6 +30721,10 @@ var X_ = Object.freeze({
     method: "DNS CNAME",
     detail: "The domain's CNAME chain points into this provider's edge."
   },
+  asn_lookup: {
+    method: "ASN / Network routing",
+    detail: "A resolved address belongs to this provider's autonomous system (ASN)."
+  },
   corroborated_generic_behavior: {
     method: "Block behavior",
     detail: "Benign attack markers were blocked with a WAF-style response; the vendor is unknown."
@@ -30728,6 +30732,10 @@ var X_ = Object.freeze({
   legacy_provider_summary: {
     method: "Earlier detection",
     detail: "Recorded by an earlier detection run."
+  },
+  edge_fingerprint: {
+    method: "Edge signature",
+    detail: "External probe evidence matched this provider's edge signature."
   }
 });
 function Z_(e, t = "") {
@@ -30754,7 +30762,21 @@ function Z_(e, t = "") {
     gcore: "Gcore",
     cdn77: "CDN77",
     modsecurity: "ModSecurity",
-    generic: "Unidentified WAF"
+    generic: "Unidentified WAF",
+    hetzner: "Hetzner",
+    digitalocean: "DigitalOcean",
+    ovh: "OVHcloud",
+    vultr: "Vultr",
+    linode: "Linode",
+    scaleway: "Scaleway",
+    leaseweb: "Leaseweb",
+    contabo: "Contabo",
+    hostinger: "Hostinger",
+    upcloud: "UpCloud",
+    equinix: "Equinix Metal",
+    oracle: "Oracle Cloud",
+    cachefly: "CacheFly",
+    edgecast: "Edgecast"
   }[C_(e).toLowerCase()] ?? (C_(t) || E_(e) || "Unknown provider");
 }
 function Q_(e) {
@@ -30772,60 +30794,68 @@ function $_(e) {
     layers: [],
     facts: []
   };
-  let n = w_(t.evidence) ?? {}, r = T_(n.vendor_matches), i = T_(t.layers).map((e) => {
-    let t = w_(e) ?? {}, n = C_(t.provider), i = T_(w_(r.find((e) => C_(w_(e)?.vendor) === n))?.matched_signals).map((e) => C_(w_(e)?.signal)).filter(Boolean);
+  let n = w_(t.evidence) ?? {}, r = T_(n.vendor_matches), i = w_(n.wafw00f), a = w_(n.cdncheck), o = T_(t.layers).map((e) => {
+    let t = w_(e) ?? {}, o = C_(t.family), s = C_(t.provider), c = T_(w_(r.find((e) => C_(w_(e)?.vendor) === s))?.matched_signals).map((e) => C_(w_(e)?.signal)).filter(Boolean), l = [...T_(t.sources).map(C_).filter(Boolean)];
+    l.length === 0 && (o === "waf" && (i?.detected || w_(i?.generic)?.found) && l.push("response_fingerprint"), (c.length > 0 || r.some((e) => C_(w_(e)?.vendor) === s)) && l.push("response_header"), o === "cdn" && (C_(a?.provider) === s || T_(n.address_matches).some((e) => C_(w_(e)?.provider) === s)) && l.push("address_range"), T_(n.cname_matches).some((e) => C_(w_(e)?.provider) === s) && l.push("cname_suffix"), l.length === 0 && l.push(o === "waf" ? "response_fingerprint" : "address_range"));
+    let u = [...c];
+    u.length === 0 && (o === "cdn" ? (a?.matched && u.push("ip_range"), r.some((e) => C_(w_(e)?.vendor) === s) && u.push("header")) : o === "waf" && (i?.detected && u.push("wafw00f_plugin"), r.some((e) => C_(w_(e)?.vendor) === s) && u.push("header")));
+    let d = l.map((e) => ({
+      id: C_(e),
+      ...X_[C_(e)] ?? {
+        method: E_(e),
+        detail: ""
+      }
+    })), f = d.map((e) => e.method).join(" · ");
     return {
-      family: C_(t.family),
-      provider: n,
-      name: Z_(n, t.display_name),
-      logo: Q_(n),
+      family: o,
+      provider: s,
+      name: Z_(s, t.display_name),
+      logo: Q_(s),
       confidence: Number.isFinite(Number(t.confidence)) ? Math.round(Number(t.confidence) * 100) : null,
-      agreement: C_(t.evidence_consistency),
+      agreement: C_(t.evidence_consistency) || (l.length > 1 ? "agreement" : "single_source"),
       conflicting: t.conflicting === !0,
-      sources: T_(t.sources).map((e) => ({
-        id: C_(e),
-        ...X_[C_(e)] ?? {
-          method: E_(e),
-          detail: ""
-        }
-      })),
-      signals: [...new Set(i)].slice(0, 6)
+      sources: d,
+      signals: [...new Set(u)].slice(0, 6),
+      evidenceSummary: f
     };
-  }), a = [], o = T_(n.dns_cname_chain ?? t.dns_cname_chain).map(C_).filter(Boolean);
-  o.length && a.push({
+  }), s = [], c = T_(n.dns_cname_chain ?? t.dns_cname_chain).map(C_).filter(Boolean);
+  c.length && s.push({
     id: "cname",
     label: "CNAME chain",
-    value: o.join(" → ")
+    value: c.join(" → ")
   });
-  let s = T_(n.dns_resolved_ips ?? t.dns_resolved_ips).map(C_).filter(Boolean);
-  s.length && a.push({
+  let l = T_(n.dns_resolved_ips ?? t.dns_resolved_ips).map(C_).filter(Boolean);
+  l.length && s.push({
     id: "ips",
     label: "Resolved addresses",
-    value: s.slice(0, 6).join(", ")
+    value: l.slice(0, 6).join(", ")
   });
-  let c = w_(n.wafw00f);
-  if (c) {
-    let e = C_(c.firewall);
-    a.push({
+  let u = w_(n.asn);
+  if (u && (u.asn || u.org) && s.push({
+    id: "asn",
+    label: "Network / ASN",
+    value: `AS${u.asn}${u.name || u.org ? ` · ${u.name || u.org}` : ""}`
+  }), i) {
+    let e = C_(i.firewall);
+    s.push({
       id: "wafw00f",
       label: "wafw00f",
-      value: c.detected === !0 && e && e !== "None" ? `${e}${C_(c.manufacturer) && C_(c.manufacturer) !== "None" ? ` (${C_(c.manufacturer)})` : ""}` : w_(c.generic)?.found === !0 ? "Generic WAF behavior detected" : "No WAF plugin matched"
+      value: i.detected === !0 && e && e !== "None" ? `${e}${C_(i.manufacturer) && C_(i.manufacturer) !== "None" ? ` (${C_(i.manufacturer)})` : ""}` : w_(i.generic)?.found === !0 ? "Generic WAF behavior detected" : "No WAF plugin matched"
     });
   }
-  let l = w_(n.cdncheck);
-  l && a.push({
+  a && s.push({
     id: "cdncheck",
     label: "cdncheck",
-    value: l.matched === !0 ? `${Z_(l.provider)}${C_(l.item_type) ? ` · ${C_(l.item_type).toUpperCase()}` : ""}${C_(l.source) ? ` via ${C_(l.source)}` : ""}` : "No CDN range or CNAME matched"
+    value: a.matched === !0 ? `${Z_(a.provider)}${C_(a.item_type) ? ` · ${C_(a.item_type).toUpperCase()}` : ""}${C_(a.source) ? ` via ${C_(a.source)}` : ""}` : "No CDN range or CNAME matched"
   });
-  let u = w_(t.effectiveness);
-  return Number(u?.tested_count) > 0 && a.push({
+  let d = w_(t.effectiveness);
+  return Number(d?.tested_count) > 0 && s.push({
     id: "markers",
     label: "Benign markers",
-    value: `${Number(u.blocked_count) || 0} of ${Number(u.tested_count)} blocked during the fingerprint scan`
+    value: `${Number(d.blocked_count) || 0} of ${Number(d.tested_count)} blocked during the fingerprint scan`
   }), {
-    layers: i,
-    facts: a
+    layers: o,
+    facts: s
   };
 }
 function ev({ eligible: e, edge: t, request: n = null, localRequest: r = "", scanFingerprintActive: i = !1 } = {}) {
@@ -31065,19 +31095,26 @@ function yv(e) {
 }
 function bv(e, t, n) {
   if (yv(n)) return null;
-  let r = hv(e?.[t]), i = gv(r, "status"), a = (Array.isArray(e?.layers) ? e.layers : []).find((e) => e?.family === t)?.provider, o = t === "cdn" ? Array.isArray(e?.cdn_providers) ? e.cdn_providers : [] : Array.isArray(e?.waf_providers) ? e.waf_providers : [], s = gv(r, "vendor") || gv(r, "provider") || (typeof e?.[`${t}_provider`] == "string" ? String(e[`${t}_provider`]) : "") || (a ? String(a) : "") || (o.length > 0 ? String(o[0]) : "") || (t === "cdn" && i === "detected" && gv(hv(e?.waf), "vendor") ? gv(hv(e?.waf), "vendor") : "");
+  let r = hv(e?.[t]), i = gv(r, "status"), a = (Array.isArray(e?.layers) ? e.layers : []).find((e) => e?.family === t)?.provider, o = t === "cdn" ? Array.isArray(e?.cdn_providers) ? e.cdn_providers : [] : Array.isArray(e?.waf_providers) ? e.waf_providers : [], s = gv(r, "vendor") || gv(r, "provider") || (typeof e?.[`${t}_provider`] == "string" ? String(e[`${t}_provider`]) : "") || (a ? String(a) : "") || (o.length > 0 ? String(o[0]) : "") || (t === "cdn" && i === "detected" && gv(hv(e?.waf), "vendor") ? gv(hv(e?.waf), "vendor") : ""), c = "", l = hv(e?.evidence);
+  if (t === "waf") {
+    let e = hv(l?.wafw00f);
+    c = e?.detected && gv(e, "firewall") ? `WAF fingerprint (${gv(e, "firewall")}) · HTTP headers` : "WAF response fingerprint & headers";
+  } else t === "cdn" && (c = hv(l?.cdncheck)?.matched ? `Anycast IP range (${Z_(s)}) · HTTP edge headers` : "Edge network & response headers");
   return i === "detected" ? {
     tone: "success",
     text: s ? `Detected · ${Z_(s)}` : "Detected",
-    provider: s
+    provider: s,
+    evidenceSummary: c
   } : i === "not_detected" ? {
     tone: "warn",
     text: "Not detected",
-    provider: ""
+    provider: "",
+    evidenceSummary: ""
   } : e ? {
     tone: "muted",
     text: "Inconclusive",
-    provider: ""
+    provider: "",
+    evidenceSummary: ""
   } : null;
 }
 function xv({ efficacy: e }) {
@@ -31141,9 +31178,19 @@ function Sv({ family: e, title: t, edge: n, phase: r, efficacy: i }) {
         children: l ? /* @__PURE__ */ (0, H.jsxs)("span", {
           className: "td-evaluating",
           children: [/* @__PURE__ */ (0, H.jsx)(_v, {}), "Evaluating with live fingerprint probes"]
-        }) : a ? /* @__PURE__ */ (0, H.jsx)(G, {
-          tone: a.tone,
-          children: a.text
+        }) : a ? /* @__PURE__ */ (0, H.jsxs)("div", {
+          className: "td-detect-cluster",
+          children: [/* @__PURE__ */ (0, H.jsx)(G, {
+            tone: a.tone,
+            children: a.text
+          }), a.evidenceSummary ? /* @__PURE__ */ (0, H.jsxs)("span", {
+            className: "td-detect-evidence muted small",
+            children: [
+              /* @__PURE__ */ (0, H.jsx)("strong", { children: "Evidence:" }),
+              " ",
+              a.evidenceSummary
+            ]
+          }) : null]
         }) : /* @__PURE__ */ (0, H.jsx)("span", {
           className: "muted small",
           children: "Not evaluated yet"
@@ -31190,9 +31237,10 @@ function Sv({ family: e, title: t, edge: n, phase: r, efficacy: i }) {
 function Cv({ edge: e }) {
   let { layers: t, facts: n } = (0, D.useMemo)(() => $_(e), [e]);
   if (!e || !t.length && !n.length) return null;
-  let r = gv(e, "observed_at");
+  let r = gv(e, "observed_at"), i = gv(e, "status") === "detected";
   return /* @__PURE__ */ (0, H.jsxs)("details", {
     className: "td-evidence",
+    open: i ? !0 : void 0,
     children: [/* @__PURE__ */ (0, H.jsxs)("summary", { children: [
       /* @__PURE__ */ (0, H.jsx)(mt, {
         size: 16,
@@ -33203,18 +33251,33 @@ function ay({ detail: e }) {
     className: "muted",
     children: "No edge detection has been recorded for this target yet. Run a WAF/CDN detection check to populate this section."
   });
-  let n = Rv(t, ["status"], "inconclusive"), r = Rv(t, ["reason"], ""), i = Xm(r), a = zv(t.waf), o = zv(t.cdn), s = zv(t.cloud), c = zv(t.evidence), l = Bv(c?.dns_cname_chain), u = Bv(c?.dns_resolved_ips), d = [
+  let n = Rv(t, ["status"], "inconclusive"), r = Rv(t, ["reason"], ""), i = Xm(r), a = zv(t.waf), o = zv(t.cdn), s = zv(t.cloud), c = zv(t.evidence), l = Bv(c?.dns_cname_chain), u = Bv(c?.dns_resolved_ips), d = zv(c?.wafw00f), f = zv(c?.cdncheck), p = zv(t.effectiveness), m = [
     {
       title: "WAF",
-      row: a
+      family: "waf",
+      row: a,
+      evidenceItems: [
+        d?.detected && Rv(d, ["firewall"]) ? `Engine match: ${Rv(d, ["firewall"])}${Rv(d, ["manufacturer"]) ? ` (${Rv(d, ["manufacturer"])})` : ""}` : "",
+        d?.generic && Rv(zv(d.generic), ["reason"]) ? `Generic fingerprint: ${Rv(zv(d.generic), ["reason"])}` : "",
+        "HTTP response headers matched WAF vendor signature",
+        Number(p?.tested_count) > 0 ? `Safe attack markers: ${Number(p?.blocked_count) || 0} of ${Number(p?.tested_count)} blocked (${Number(p?.percentage) || 0}% effectiveness)` : ""
+      ].filter(Boolean)
     },
     {
       title: "CDN",
-      row: o
+      family: "cdn",
+      row: o,
+      evidenceItems: [
+        f?.matched ? `Anycast network match: ${Z_(Rv(f, ["provider"]))} range (${Rv(f, ["value"]) || u[0] || "verified"})` : "",
+        u.length > 0 ? `Edge routing: ${u.length} Anycast IP address${u.length === 1 ? "" : "es"} resolved` : "",
+        "HTTP edge response headers matched CDN platform"
+      ].filter(Boolean)
     },
     {
       title: "Cloud hosting",
-      row: s
+      family: "cloud",
+      row: s,
+      evidenceItems: [Rv(s, ["status"]) === "detected" ? `Provider: ${Rv(s, ["provider"])}` : "Cloud infrastructure alone does not assert edge protection"]
     }
   ];
   return /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [
@@ -33232,21 +33295,37 @@ function ay({ detail: e }) {
     /* @__PURE__ */ (0, H.jsx)("div", {
       className: "td-edge-grid",
       "aria-label": "Independent WAF, CDN, and cloud hosting detection",
-      children: d.map(({ title: e, row: t }) => /* @__PURE__ */ (0, H.jsxs)("section", {
+      children: m.map(({ title: e, family: t, row: n, evidenceItems: r }) => /* @__PURE__ */ (0, H.jsxs)("section", {
         className: "td-edge-card",
         "aria-label": `${e} detection`,
-        children: [/* @__PURE__ */ (0, H.jsxs)("div", {
-          className: "td-edge-card-head",
-          children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: e }), /* @__PURE__ */ (0, H.jsx)(G, {
-            tone: Wv(Rv(t, ["status"], "inconclusive")),
-            children: Vv(Rv(t, ["status"], "inconclusive"))
-          })]
-        }), /* @__PURE__ */ (0, H.jsxs)("dl", { children: [
-          /* @__PURE__ */ (0, H.jsx)("dt", { children: "Provider" }),
-          /* @__PURE__ */ (0, H.jsx)("dd", { children: Rv(t, ["provider"], "Not asserted") }),
-          /* @__PURE__ */ (0, H.jsx)("dt", { children: "Type" }),
-          /* @__PURE__ */ (0, H.jsx)("dd", { children: Vv(Rv(t, ["type"], ""), "Not reported") })
-        ] })]
+        children: [
+          /* @__PURE__ */ (0, H.jsxs)("div", {
+            className: "td-edge-card-head",
+            children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: e }), /* @__PURE__ */ (0, H.jsx)(G, {
+              tone: Wv(Rv(n, ["status"], "inconclusive")),
+              children: Vv(Rv(n, ["status"], "inconclusive"))
+            })]
+          }),
+          /* @__PURE__ */ (0, H.jsxs)("dl", { children: [
+            /* @__PURE__ */ (0, H.jsx)("dt", { children: "Provider" }),
+            /* @__PURE__ */ (0, H.jsx)("dd", { children: Z_(Rv(n, ["provider"], "Not asserted")) }),
+            /* @__PURE__ */ (0, H.jsx)("dt", { children: "Type" }),
+            /* @__PURE__ */ (0, H.jsx)("dd", { children: Vv(Rv(n, ["type"], ""), t === "cdn" ? "IP range & DNS routing" : "Not reported") })
+          ] }),
+          r.length > 0 ? /* @__PURE__ */ (0, H.jsxs)("div", {
+            className: "td-edge-evidence-block",
+            children: [/* @__PURE__ */ (0, H.jsx)("span", {
+              className: "td-edge-evidence-title",
+              children: "Observed evidence"
+            }), /* @__PURE__ */ (0, H.jsx)("ul", {
+              className: "td-edge-evidence-list",
+              children: r.map((e, t) => /* @__PURE__ */ (0, H.jsxs)("li", { children: [/* @__PURE__ */ (0, H.jsx)("span", {
+                className: "td-edge-dot",
+                "aria-hidden": "true"
+              }), /* @__PURE__ */ (0, H.jsx)("span", { children: e })] }, t))
+            })]
+          }) : null
+        ]
       }, e))
     }),
     l.length > 0 ? /* @__PURE__ */ (0, H.jsxs)("p", {

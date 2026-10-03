@@ -311,6 +311,8 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'edge_signature.cloud_providers',
   'edge_signature.address_matches',
   'edge_signature.cname_matches',
+  'edge_signature.cname_cdn_matches',
+  'edge_signature.asn_matches',
   'edge_signature.vendor_matches',
   'edge_signature.vendor_matches.matched_signals',
   'edge_signature.best_vendor.matched_signals',

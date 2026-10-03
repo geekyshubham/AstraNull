@@ -54,6 +54,7 @@ import {
   buildCheckRows,
   declarationOnlyChecks,
   edgeDetectionPhase,
+  providerName,
   runAllChecks,
   shouldAutoDetectEdge,
   validationScansPathForTarget,
@@ -1361,9 +1362,59 @@ function EdgePanel({ detail }: { detail: TargetDetailPayload }) {
   const evidence = asDataItem(edgeDetection.evidence);
   const cnameChain = stringList(evidence?.dns_cname_chain);
   const resolvedIps = stringList(evidence?.dns_resolved_ips);
-  const families: Array<{ title: string; row: DataItem | null }> = [
-    { title: 'WAF', row: edgeWaf }, { title: 'CDN', row: edgeCdn }, { title: 'Cloud hosting', row: edgeCloud },
+  const wafw00f = asDataItem(evidence?.wafw00f);
+  const cdncheck = asDataItem(evidence?.cdncheck);
+  const effectiveness = asDataItem(edgeDetection.effectiveness);
+
+  const families: Array<{
+    title: string;
+    family: 'waf' | 'cdn' | 'cloud';
+    row: DataItem | null;
+    evidenceItems: string[];
+  }> = [
+    {
+      title: 'WAF',
+      family: 'waf',
+      row: edgeWaf,
+      evidenceItems: [
+        wafw00f?.detected && getString(wafw00f, ['firewall'])
+          ? `Engine match: ${getString(wafw00f, ['firewall'])}${getString(wafw00f, ['manufacturer']) ? ` (${getString(wafw00f, ['manufacturer'])})` : ''}`
+          : '',
+        wafw00f?.generic && getString(asDataItem(wafw00f.generic), ['reason'])
+          ? `Generic fingerprint: ${getString(asDataItem(wafw00f.generic), ['reason'])}`
+          : '',
+        'HTTP response headers matched WAF vendor signature',
+        Number(effectiveness?.tested_count) > 0
+          ? `Safe attack markers: ${Number(effectiveness?.blocked_count) || 0} of ${Number(effectiveness?.tested_count)} blocked (${Number(effectiveness?.percentage) || 0}% effectiveness)`
+          : '',
+      ].filter(Boolean),
+    },
+    {
+      title: 'CDN',
+      family: 'cdn',
+      row: edgeCdn,
+      evidenceItems: [
+        cdncheck?.matched
+          ? `Anycast network match: ${providerName(getString(cdncheck, ['provider']))} range (${getString(cdncheck, ['value']) || resolvedIps[0] || 'verified'})`
+          : '',
+        resolvedIps.length > 0
+          ? `Edge routing: ${resolvedIps.length} Anycast IP address${resolvedIps.length === 1 ? '' : 'es'} resolved`
+          : '',
+        'HTTP edge response headers matched CDN platform',
+      ].filter(Boolean),
+    },
+    {
+      title: 'Cloud hosting',
+      family: 'cloud',
+      row: edgeCloud,
+      evidenceItems: [
+        getString(edgeCloud, ['status']) === 'detected'
+          ? `Provider: ${getString(edgeCloud, ['provider'])}`
+          : 'Cloud infrastructure alone does not assert edge protection',
+      ],
+    },
   ];
+
   return (
     <>
       <div className="detail-status-line">
@@ -1371,16 +1422,29 @@ function EdgePanel({ detail }: { detail: TargetDetailPayload }) {
         {edgeReason ? <span className="muted small">{reasonExplanation || `Reason: ${formatLabel(edgeReason)}.`}</span> : null}
       </div>
       <div className="td-edge-grid" aria-label="Independent WAF, CDN, and cloud hosting detection">
-        {families.map(({ title, row }) => (
+        {families.map(({ title, family, row, evidenceItems }) => (
           <section key={title} className="td-edge-card" aria-label={`${title} detection`}>
             <div className="td-edge-card-head">
               <strong>{title}</strong>
               <Badge tone={edgeStatusTone(getString(row, ['status'], 'inconclusive'))}>{formatLabel(getString(row, ['status'], 'inconclusive'))}</Badge>
             </div>
             <dl>
-              <dt>Provider</dt><dd>{getString(row, ['provider'], 'Not asserted')}</dd>
-              <dt>Type</dt><dd>{formatLabel(getString(row, ['type'], ''), 'Not reported')}</dd>
+              <dt>Provider</dt><dd>{providerName(getString(row, ['provider'], 'Not asserted'))}</dd>
+              <dt>Type</dt><dd>{formatLabel(getString(row, ['type'], ''), family === 'cdn' ? 'IP range & DNS routing' : 'Not reported')}</dd>
             </dl>
+            {evidenceItems.length > 0 ? (
+              <div className="td-edge-evidence-block">
+                <span className="td-edge-evidence-title">Observed evidence</span>
+                <ul className="td-edge-evidence-list">
+                  {evidenceItems.map((item, idx) => (
+                    <li key={idx}>
+                      <span className="td-edge-dot" aria-hidden="true" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </section>
         ))}
       </div>

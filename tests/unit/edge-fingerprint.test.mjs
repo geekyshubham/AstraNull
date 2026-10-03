@@ -284,15 +284,15 @@ describe('cdncheck address and CNAME semantics', () => {
       { provider: 'amazon', type: 'waf', suffix: 'cloudfront.net', host: 'assets.cloudfront.net' },
     ]);
 
-    for (const [host, provider] of [
-      ['shop.akamaiedge.net', 'akamai'],
-      ['assets.cloudfront.net', 'amazon'],
+    for (const [host, provider, cdnProvider] of [
+      ['shop.akamaiedge.net', 'akamai', 'akamai'],
+      ['assets.cloudfront.net', 'amazon', 'cloudfront'],
     ]) {
       const result = classifyEdgeFingerprint({ cnameChain: [host] });
       assert.equal(result.waf_present, true);
       assert.deepEqual(result.waf_providers, [provider]);
-      assert.equal(result.cdn_detected, false);
-      assert.deepEqual(result.cdn_providers, []);
+      assert.equal(result.cdn_detected, true);
+      assert.deepEqual(result.cdn_providers, [cdnProvider]);
       assert.deepEqual(result.address_matches, []);
     }
   });
@@ -305,8 +305,8 @@ describe('cdncheck address and CNAME semantics', () => {
     const result = classifyEdgeFingerprint({ cnameChain: ['asset.edgesuite.net'] });
     assert.equal(result.waf_present, true);
     assert.deepEqual(result.waf_providers, ['akamai', 'edgecast']);
-    assert.equal(result.cdn_detected, false);
-    assert.deepEqual(result.cdn_providers, []);
+    assert.equal(result.cdn_detected, true);
+    assert.deepEqual(result.cdn_providers, ['akamai', 'edgecast']);
   });
 
   it('requires a hostname boundary and ignores IP literals for CNAME matching', () => {
@@ -329,7 +329,8 @@ describe('combined edge fingerprint', () => {
     assert.deepEqual(result.waf_providers, ['akamai', 'cloudflare']);
     assert.equal(result.cdn_detected, true);
     // `server: cloudflare` is a proxied Cloudflare edge (curated header layer) as well as a WAF hit.
-    assert.deepEqual(result.cdn_providers, ['cloudflare', 'cloudfront']);
+    // CNAME `example.com.akamaiedge.net` adds `akamai` CDN, and IP `108.138.5.5` adds `cloudfront`.
+    assert.deepEqual(result.cdn_providers, ['akamai', 'cloudflare', 'cloudfront']);
     assert.equal(result.best_vendor.vendor, 'cloudflare');
     assert.deepEqual(result.address_matches, [
       { family: 'cdn', provider: 'cloudfront' },

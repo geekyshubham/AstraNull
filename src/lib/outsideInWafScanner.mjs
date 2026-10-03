@@ -1522,6 +1522,9 @@ export async function runOutsideInWafScan(options = {}) {
         ? {
             address_matches: edgeSignature.address_matches,
             cname_matches: edgeSignature.cname_matches,
+            cname_cdn_matches: edgeSignature.cname_cdn_matches,
+            asn_matches: edgeSignature.asn_matches,
+            asn: edgeSignature.asn,
           }
         : {}),
     },

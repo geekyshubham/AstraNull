@@ -30,7 +30,7 @@ import {
 } from './data/edgeSignatureData.mjs';
 import { CLOUD_ADDRESS_RANGES_PACKED } from './data/edgeCloudRangeData.mjs';
 
-export { EDGE_CORPUS_STATS, EDGE_SIGNATURE_CORPUS_MANIFEST, WAFW00F_ENGINE, CDNCHECK_ENGINE };
+export { EDGE_CORPUS_STATS, EDGE_SIGNATURE_CORPUS_MANIFEST, WAFW00F_ENGINE, CDNCHECK_ENGINE, classifyCloudByAsn };
 
 export const EDGE_SIGNATURE_CORPUS_VERSION = String(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version);
 
@@ -108,6 +108,8 @@ function validateMatcherNode(node, signatureCount, context) {
   throw new Error(`invalid generated ${context} matcher op ${node.op}`);
 }
 
+import { classifyCloudByAsn } from './asnLookup.mjs';
+
 /**
  * AstraNull-curated CDN / edge-platform response headers. Not part of the generated
  * wafw00f/cdncheck corpus: wafw00f types every header hit as a WAF, and cdncheck only types
@@ -118,27 +120,91 @@ function validateMatcherNode(node, signatureCount, context) {
  */
 export const EDGE_PLATFORM_HEADER_SIGNATURES = Object.freeze([
   { provider: 'cloudflare', header: 'cf-ray', pattern: /^[0-9a-f]{8,}(?:-[a-z]{3,4})?$/i },
+  { provider: 'cloudflare', header: 'cf-cache-status', pattern: /\S/ },
   { provider: 'cloudflare', header: 'server', pattern: /^cloudflare$/i },
   { provider: 'cloudfront', header: 'x-amz-cf-id', pattern: /\S/ },
+  { provider: 'cloudfront', header: 'x-amz-cf-pop', pattern: /\S/ },
   { provider: 'cloudfront', header: 'via', pattern: /\(CloudFront\)/i },
   { provider: 'fastly', header: 'x-fastly-request-id', pattern: /\S/ },
   { provider: 'fastly', header: 'fastly-debug-digest', pattern: /\S/ },
+  { provider: 'fastly', header: 'x-served-by', pattern: /\S/ },
   { provider: 'akamai', header: 'server', pattern: /^Akamai(?:GHost|NetStorage)$/i },
   { provider: 'akamai', header: 'x-akamai-transformed', pattern: /\S/ },
   { provider: 'akamai', header: 'akamai-grn', pattern: /\S/ },
+  { provider: 'akamai', header: 'x-check-cacheable', pattern: /\S/ },
   { provider: 'azure_front_door', header: 'x-azure-ref', pattern: /\S/ },
+  { provider: 'azure_front_door', header: 'x-ms-ref', pattern: /\S/ },
   { provider: 'google', header: 'via', pattern: /(?:^|,\s*)1\.1 google(?:$|,)/i },
   { provider: 'vercel', header: 'x-vercel-id', pattern: /\S/ },
   { provider: 'vercel', header: 'server', pattern: /^Vercel$/i },
   { provider: 'netlify', header: 'x-nf-request-id', pattern: /\S/ },
   { provider: 'netlify', header: 'server', pattern: /^Netlify$/i },
   { provider: 'bunnycdn', header: 'server', pattern: /^BunnyCDN/i },
+  { provider: 'bunnycdn', header: 'b-cache', pattern: /\S/ },
   { provider: 'keycdn', header: 'server', pattern: /^keycdn-engine$/i },
   { provider: 'cdn77', header: 'server', pattern: /^CDN77/i },
   { provider: 'gcore', header: 'server', pattern: /^G-?Core ?Labs|^gcore$/i },
   { provider: 'stackpath', header: 'x-hw', pattern: /\S/ },
+  { provider: 'incapsula', header: 'x-iinfo', pattern: /\S/ },
+  { provider: 'incapsula', header: 'x-cdn', pattern: /^imperva|^incapsula/i },
 ]);
 const EDGE_PLATFORM_HEADER_CONFIDENCE = 0.8;
+
+/**
+ * Curated CDN CNAME signatures. Resolves the upstream cdncheck gap where `other.go` hardcoded
+ * `waf` for all common suffix matches (depriving Akamai, CloudFront, Fastly, etc. of a CDN layer)
+ * and adds modern CDN patterns (Azure Front Door, Bunny CDN, KeyCDN, CDN77, Gcore, Vercel, Netlify).
+ */
+export const EDGE_PLATFORM_CNAME_SIGNATURES = Object.freeze([
+  { provider: 'cloudfront', family: 'cdn', suffixes: ['cloudfront.net'] },
+  { provider: 'akamai', family: 'cdn', suffixes: ['akamaiedge.net', 'edgekey.net', 'edgesuite.net', 'akamaihd.net', 'akamaitechnologies.com'] },
+  { provider: 'fastly', family: 'cdn', suffixes: ['fastly.net', 'fastlylb.net'] },
+  { provider: 'cloudflare', family: 'cdn', suffixes: ['cloudflare.com', 'cloudflare.net'] },
+  { provider: 'azure_front_door', family: 'cdn', suffixes: ['azureedge.net', 'azurefd.net', 'trafficmanager.net', 'azureedge-origin.net', 'afdverify.azurefd.net'] },
+  { provider: 'bunnycdn', family: 'cdn', suffixes: ['b-cdn.net', 'bunnycdn.com'] },
+  { provider: 'keycdn', family: 'cdn', suffixes: ['kxcdn.com'] },
+  { provider: 'cdn77', family: 'cdn', suffixes: ['cdn77.org', 'cdn77.net', 'r.worldcdn.net', 'r.worldssl.net'] },
+  { provider: 'gcore', family: 'cdn', suffixes: ['gcdn.co', 'gcore.com'] },
+  { provider: 'stackpath', family: 'cdn', suffixes: ['hwcdn.net', 'stackpathdns.com'] },
+  { provider: 'edgecast', family: 'cdn', suffixes: ['edgecastcdn.net', 'edgesuite.net'] },
+  { provider: 'incapsula', family: 'cdn', suffixes: ['impervadns.net'] },
+  { provider: 'cachefly', family: 'cdn', suffixes: ['cachefly.net'] },
+  { provider: 'vercel', family: 'cdn', suffixes: ['vercel-dns.com', 'vercel.app'] },
+  { provider: 'netlify', family: 'cdn', suffixes: ['netlify.app', 'netlify.global.fastly.net'] },
+  { provider: '360_cdn', family: 'cdn', suffixes: ['qhcdn.com', '60cdn.com', 'qihucdn.com', 'qh-cdn.com', 'qss-lb.com'] },
+  { provider: 'huawei_cdn', family: 'cdn', suffixes: ['cdnhwc1.com', 'cdnhwc2.com', 'cdnhwc3.com'] },
+  { provider: 'tencent_cdn', family: 'cdn', suffixes: ['cdn.dnsv1.com', 'cdntip.com', 'dnsv1.com', 'tdnsv5.com', 'tencdns.net'] },
+  { provider: 'alibaba_cdn', family: 'cdn', suffixes: ['alikunlun.com', 'cdngslb.com', 'kunlunca.com', 'kunluncan.com', 'kunlunea.com', 'kunlunpi.com'] },
+  { provider: 'wangsu_cdn', family: 'cdn', suffixes: ['51cdn.com', 'wscdns.com', 'wscloudcdn.com', 'ourplat.net'] },
+  { provider: 'qiniu_cdn', family: 'cdn', suffixes: ['qbox.me', 'qiniu.com', 'iniudns.com'] },
+  { provider: 'upyun_cdn', family: 'cdn', suffixes: ['aicdn.com'] },
+  { provider: 'baishan_cdn', family: 'cdn', suffixes: ['bsclink.cn', 'bsgslb.cn', 'qingcdn.com', 'trpcdn.net'] },
+  { provider: 'arvancloud', family: 'cdn', suffixes: ['arvancdn.ir', 'arvancloud.ir', 'arvancloud.ru'] },
+]);
+
+/**
+ * @param {Array<string>} cnames
+ * @returns {Array<{ family: 'cdn', provider: string, type: 'cdn', suffix: string, host: string }>}
+ */
+export function classifyEdgeByCnameSignatures(cnames) {
+  const list = (Array.isArray(cnames) ? cnames : [cnames]).slice(0, FINGERPRINT_CNAME_VALUES_MAX);
+  const hits = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const host = normalizedHost(raw);
+    if (!host || isIP(host)) continue;
+    for (const rule of EDGE_PLATFORM_CNAME_SIGNATURES) {
+      for (const suffix of rule.suffixes ?? []) {
+        if (host !== suffix && !host.endsWith(`.${suffix}`)) continue;
+        const key = `cdn:${rule.provider}:${suffix}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        hits.push({ provider: rule.provider, family: 'cdn', type: 'cdn', suffix, host });
+      }
+    }
+  }
+  return hits;
+}
 
 /**
  * @param {Array<{ name: string, value: string }>} headerEntries
@@ -858,7 +924,7 @@ export function classifyCdncheckVerdict({ resolvedIps = [], cnameChain = [] } = 
 // Combined classification
 // ---------------------------------------------------------------------------
 
-function providersForFamily(family, vendorMatches, addressMatches, cnameMatches, headerMatches = []) {
+function providersForFamily(family, vendorMatches, addressMatches, cnameMatches, headerMatches = [], asnMatches = [], cnameCdnMatches = []) {
   const providers = new Set();
   if (family === 'waf') {
     for (const match of vendorMatches) providers.add(match.vendor);
@@ -871,6 +937,12 @@ function providersForFamily(family, vendorMatches, addressMatches, cnameMatches,
   }
   for (const match of cnameMatches) {
     if (match.type === family) providers.add(match.provider);
+  }
+  for (const match of cnameCdnMatches) {
+    if (match.family === family) providers.add(match.provider);
+  }
+  for (const match of asnMatches) {
+    if (match.family === family) providers.add(match.provider);
   }
   return [...providers].sort();
 }
@@ -917,6 +989,8 @@ export function buildEdgeLayers({
   addressMatches = [],
   cnameMatches = [],
   headerMatches = [],
+  cnameCdnMatches = [],
+  asnMatches = [],
   genericWafDetected = false,
   conflictingVendorSignals = false,
 } = {}) {
@@ -928,6 +1002,14 @@ export function buildEdgeLayers({
       source: 'response_header',
       confidence: EDGE_PLATFORM_HEADER_CONFIDENCE,
       matchedSignalCount: 1,
+    });
+  }
+  for (const match of cnameCdnMatches) {
+    addLayer(layerMap, {
+      family: 'cdn',
+      provider: match.provider,
+      source: 'cname_suffix',
+      confidence: CNAME_SUFFIX_CONFIDENCE,
     });
   }
   for (const match of vendorMatches) {
@@ -955,6 +1037,15 @@ export function buildEdgeLayers({
       provider: match.provider,
       source: 'cname_suffix',
       confidence: CNAME_SUFFIX_CONFIDENCE,
+    });
+  }
+  for (const match of asnMatches) {
+    addLayer(layerMap, {
+      family: match.family || 'cloud',
+      provider: match.provider,
+      displayName: match.name || match.org,
+      source: 'asn_lookup',
+      confidence: ADDRESS_RANGE_CONFIDENCE,
     });
   }
   if (genericWafDetected && ![...layerMap.values()].some((layer) => layer.family === 'waf')) {
@@ -1034,6 +1125,8 @@ export function classifyEdgeFingerprint(input = {}) {
     : resolvedIps.length > 0 || cnameChain.length > 0;
   const addressMatches = classifyEdgeByAddress(resolvedIps);
   const cnameMatches = classifyEdgeByCnameChain(cnameChain);
+  const cnameCdnMatches = classifyEdgeByCnameSignatures(cnameChain);
+  const asnMatches = classifyCloudByAsn(resolvedIps);
   const generic = input.genericDetection && typeof input.genericDetection === 'object'
     ? {
         found: input.genericDetection.found === true,
@@ -1049,9 +1142,9 @@ export function classifyEdgeFingerprint(input = {}) {
   const headerMatches = classifyEdgeByResponseHeaders(
     responseEvidence.normal?.headerEntries ?? responseEvidence.attack?.headerEntries ?? [],
   );
-  const cdnProviders = providersForFamily('cdn', vendorResult.matches, addressMatches, cnameMatches, headerMatches);
-  const wafProviders = providersForFamily('waf', vendorResult.matches, addressMatches, cnameMatches);
-  const cloudProviders = providersForFamily('cloud', [], addressMatches, []);
+  const cdnProviders = providersForFamily('cdn', vendorResult.matches, addressMatches, cnameMatches, headerMatches, asnMatches, cnameCdnMatches);
+  const wafProviders = providersForFamily('waf', vendorResult.matches, addressMatches, cnameMatches, headerMatches, asnMatches, cnameCdnMatches);
+  const cloudProviders = providersForFamily('cloud', [], addressMatches, [], [], asnMatches, []);
   const best = vendorResult.best;
   const bestName = best ? splitWafw00fName(best.name) : null;
   const genericWafDetected = !best && generic?.found === true && generic.corroborated === true;
@@ -1062,6 +1155,8 @@ export function classifyEdgeFingerprint(input = {}) {
     addressMatches,
     cnameMatches,
     headerMatches,
+    cnameCdnMatches,
+    asnMatches,
     genericWafDetected,
     conflictingVendorSignals: vendorResult.conflicting_vendor_signals,
   });
@@ -1073,8 +1168,10 @@ export function classifyEdgeFingerprint(input = {}) {
     waf_present: wafProviders.length > 0 || genericWafDetected,
     waf_providers: wafProviders,
     waf_generic_detected: genericWafDetected,
-    // Header evidence proves a CDN on its own; absence is only meaningful once DNS was observed.
-    cdn_detected: headerMatches.length > 0 ? true : dnsObserved ? cdnProviders.length > 0 : null,
+    // Header or CNAME evidence proves a CDN on its own; absence is only meaningful once DNS was observed.
+    cdn_detected: (headerMatches.length > 0 || cnameCdnMatches.length > 0)
+      ? true
+      : dnsObserved ? cdnProviders.length > 0 : null,
     cdn_providers: cdnProviders,
     cloud_hosted: dnsObserved ? cloudProviders.length > 0 : null,
     cloud_providers: cloudProviders,
@@ -1090,7 +1187,10 @@ export function classifyEdgeFingerprint(input = {}) {
     attack_response_evaluated: vendorResult.attack_response_evaluated,
     address_matches: addressMatches,
     cname_matches: cnameMatches,
+    cname_cdn_matches: cnameCdnMatches,
     header_matches: headerMatches,
+    asn_matches: asnMatches,
+    asn: asnMatches[0] ?? null,
     wafw00f: {
       detected: Boolean(best) || genericWafDetected,
       firewall: best ? bestName.firewall : genericWafDetected ? 'Generic' : 'None',
