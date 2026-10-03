@@ -660,3 +660,29 @@ Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE
 then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
 `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-8f5e4708316439bb9605015eff1414c842574525`.
+
+## Production release 2026-10-03 (`4eecfa34` remove SOC gate UI and queue panel to allow direct evaluation)
+
+Commit `4eecfa34e090cae163c7c8c60405f9848cb20604` ("portal: remove SOC gate UI and queue panel to
+allow direct evaluation") was pushed to `main` and released over EC2 Instance Connect. This removes
+the customer-facing "Request SOC-gated run" head action, the "Governed high-scale queue" panel and
+intake form, and execution boundary callouts from the customer `#runs` page (both Classic and Refined
+views). Direct validation scans ("Start validation scan") and vector library runs now serve as the primary
+evaluation workflows. Before release: full `npm test` green (4,011 unit tests, 21 e2e tests, 7 contract
+tests passed), `npm run lint`, `npm run lint:portal`, `npm run safety`, `npm run build:web` green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `cb11c6a18f0bb5b6491bc4ebd2304f8258b9efd25b8a22112d31565cc1c53165`, verified on host, extracted to `/opt/astranull-release-4eecfa34e090cae163c7c8c60405f9848cb20604` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:4eecfa34` and `astranull:4eecfa34e090cae163c7c8c60405f9848cb20604` → `sha256:e612c17ad0905852a6cba8a19144f1cb9a1405fe00038faab41b8d6d9010390e` |
+| Backup | verified pre-deploy database snapshot in `/opt/astranull-backups/` (+ manifest), root-owned mode 600, plaintext deleted |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served `react-app.js` SHA-256 `7be0a1f65e54c5313e20b985393e7cd662334f91158cce8238018f244f3e1dc4` byte-identical to the commit; unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation; live Playwright test confirmed absence of SOC gate UI and presence of direct validation evaluation buttons |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:db81766d32ab1545b89663d9d7695437a81a33a55aefeaed4d487334edc6388e` (`astranull:941ceb57`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-941ceb573f0eaae702da2cb33be229c91ee30a70`.
+
