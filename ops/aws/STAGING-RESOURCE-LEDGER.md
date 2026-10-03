@@ -579,3 +579,36 @@ the 50-check cap only on create/patch, so existing run-all scans stay individual
 chunk run-id reads, though: once listed scans carry more than 500 child runs in total (about four run-all
 scans), `GET /v1/validation-scans` on `0a4d22f8` throws, and the Test Runs and target-group scan lists fail.
 Pass a smaller `limit` until the scans age out of the list.
+
+## Production release 2026-10-03 (`ec144753` notification lifecycle review fixes)
+
+Commit `ec1447538af72ec33e7c1ecbce9f1ab46391c82d` ("Notification lifecycle review fixes and portal
+revamp surfaces (R01-R04, G05)", 166 files) was pushed to `main` and released by hand from operator
+`/32` `123.252.204.182` over EC2 Instance Connect (ephemeral key; the operator `123.252.204.182` was
+already allow-listed). The `Deploy AWS` workflow run `37099293647` failed at SSH as recorded for every
+push since the 2026-09-02 cutover: the host/key secrets predate the cutover and the runners are not on
+the SSH allow-list. Before release: full `npm test` green, lint/safety/contract/web:typecheck/
+db-migrate/schema-audit green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `beead0d4e651dae254101f56c233b8f7206dc824b92112138332865bf4cd9d0a`, verified on host, extracted to `/opt/astranull-release-ec1447538af72ec33e7c1ecbce9f1ab46391c82d` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:ec144753…` → `sha256:cf94bcdba3091083fc907322c70fa5d1288a9221f6128ec5e8d37400c9c5118b` |
+| Backup | `/opt/astranull-backups/postgres-2026-10-03T05-43-56-716Z-b703e78f0e06.dump.enc` (+ manifest), encrypted SHA-256 `8b95c1838886…`, dumped as `astranull_backup`, `pg_restore --list` parsed, `postgres-restore-drill --validate-only` ok, root-owned mode 600, plaintext checked-deleted |
+| Migrate | `migrate-postgres: ok`, head `0058` → `0062_notification_outbox_reconciliation` (applied `0059_notification_rule_lifecycle`, `0060_notification_event_outbox`, `0061_notification_delivery_claims`, `0062_notification_outbox_reconciliation`); app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served `react-app.js` `dc5245a1…` and `react-app.css` `6bf972ea…` byte-identical to the commit; unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation; connector roles retain `schema_migrations` `SELECT` |
+
+Rollback (code only; migrations `0059`–`0062` are additive — older images ignore them): from
+`/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:6745a60bfe727d841ece48e9bffef0f99ad500a9aba111ca4e846f4cff0761c4` (`astranull:b8945d13…`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build
+--force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+Do not run `migrate` with the `b8945d13` image (head stays `0062`; its grant reset would re-revoke
+connector `schema_migrations` access — re-apply `GRANT SELECT` per the `4b54df8a` note if it is run).
+The pre-deploy orchestration tree is retained at `/opt/astranull-rollback-pre-ec1447538af72ec33e7c1ecbce9f1ab46391c82d`.
+
+Still open: `Deploy AWS` CI auto-deploy remains blocked at SSH (secrets predating the 2026-09-02
+cutover; runners not on the allow-list) — give the deploy job a reachable path (e.g. SSM) so pushes to
+`main` deploy again.
