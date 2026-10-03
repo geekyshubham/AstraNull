@@ -634,3 +634,29 @@ Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE
 then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
 `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-ec1447538af72ec33e7c1ecbce9f1ab46391c82d`.
+
+## Production release 2026-10-03 (`941ceb57` eliminate double loading screen)
+
+Commit `941ceb573f0eaae702da2cb33be229c91ee30a70` ("portal: eliminate double loading screen via
+client-side routing on unauthenticated access") was pushed to `main` and released from operator
+`/32` `123.252.204.182` over EC2 Instance Connect. This resolves the double boot screen UX issue
+where visiting unauthenticated routes (`/app`) triggered a hard document redirect to `/login`, causing
+the static `#boot` shell to paint twice sequentially. Navigation is now handled smoothly via SPA
+client-side history navigation (`history.replaceState` / `history.pushState`). Before release: full
+`npm test` green (4,011 unit tests, 21 e2e tests, 7 contract tests passed), `npm run lint`, `npm run lint:portal`,
+`npm run safety`, `npm run build:web` green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `ee6568c8317ec459ba5a1216c10ee4d18894f2acc5363d1466c802a944b4a95f`, verified on host, extracted to `/opt/astranull-release-941ceb573f0eaae702da2cb33be229c91ee30a70` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:941ceb57` and `astranull:941ceb573f0eaae702da2cb33be229c91ee30a70` → `sha256:db81766d32ab1545b89663d9d7695437a81a33a55aefeaed4d487334edc6388e` |
+| Backup | verified pre-deploy database snapshot `/opt/astranull-backups/postgres-2026-10-03T08-15-37-939Z-73f785b29472.dump.enc` (+ manifest), root-owned mode 600, plaintext deleted |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served `react-app.js` and `react-app.css` byte-identical to the commit; unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation; live Playwright test confirmed exactly 1 loading screen on `/app`, `/login`, and `/` |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:7ed57001833a07b7a70a2c5ff94cd48f8a0b017620886162bdcdad131fb548b5` (`astranull:8f5e4708`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-8f5e4708316439bb9605015eff1414c842574525`.
