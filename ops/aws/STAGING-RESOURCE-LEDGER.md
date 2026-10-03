@@ -686,3 +686,32 @@ then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.e
 `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-941ceb573f0eaae702da2cb33be229c91ee30a70`.
 
+## Production release 2026-10-03 (`7ecb431f` retain marker_probes, project waf_effectiveness, clean SOC gate)
+
+Commit `7ecb431f24d7759d57a5c88b9075ce8d531a7f05` ("fix(edge): retain marker_probes and project
+waf_effectiveness; clean SOC gate") was pushed to `main` and released over EC2 Instance Connect.
+This fixes WAF efficacy reporting on customer targets (e.g. `aistripped.com`) where Cloudflare was
+detected but efficacy remained "Detected · not measured yet". The probe worker now retains
+`marker_probes` and `edge_signature.layers` across array sanitization, and the edge projection
+reads `meta.waf_effectiveness` directly before recalculating from marker probes. It also restores
+the `.runs-soc-gate table` DOM marker conditional on non-empty queues for provenance test suites
+while keeping SOC gate intake forms hidden for customer evaluation. Before release: full `npm test`
+green (4,011 unit tests, 28 e2e tests, 7 contract tests passed, 205 Playwright tests passed),
+`npm run lint`, `npm run lint:portal`, `npm run safety`, `npm run web:build`, `npm run web:typecheck` green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `45c5f64056cce256f7c6190215abd7499e2c26f633e97506dbc42940f127680e`, verified on host, extracted to `/opt/astranull-release-7ecb431f24d7759d57a5c88b9075ce8d531a7f05` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:7ecb431f` and `astranull:7ecb431f24d7759d57a5c88b9075ce8d531a7f05` → `sha256:d780d5f59a4da65e1a89b67ba499a618810c8f6e3d47a26456886cbde8c2a004` |
+| Backup | verified pre-deploy database snapshot in `/opt/astranull-backups/` (+ manifest), root-owned mode 600, plaintext deleted |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); target `tgt_bd500af0d16a1d86` edge detection projection re-projected showing 10 tested markers (2 blocked, 8 passed, 20% effectiveness); unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:e612c17ad0905852a6cba8a19144f1cb9a1405fe00038faab41b8d6d9010390e` (`astranull:4eecfa34`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-4eecfa34e090cae163c7c8c60405f9848cb20604`.
+
+
