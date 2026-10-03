@@ -714,4 +714,37 @@ then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.e
 `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-4eecfa34e090cae163c7c8c60405f9848cb20604`.
 
+## Production release 2026-10-03 (`afe6565f` address 9 vibe annotations and revamp target detail UI/UX)
+
+Commit `afe6565f04873727cd8f11cb6fb9a9d0c6969a34` ("fix(ui): address 9 vibe annotations and revamp
+target detail UI/UX") was pushed to `main` and released over EC2 Instance Connect. This addresses
+9 user vibe annotations across `/login`, `/app#runs`, and `/app#target-detail`:
+1. `/login`: Centers password reveal button inside the right edge of input box with WCAG touch target support.
+2. `/app#runs`: Fixes select dropdown z-index elevation (z-index: 100) preventing option occlusion by adjacent panels/tables.
+3. `/app#runs`: Fixes run ID cell wrapping (now `white-space: nowrap` and `min-width: 170px`) with horizontally adjustable tables.
+4. `/app#runs`: Removes the customer-safe vector library note paragraph (`p[role="note"]`).
+5. `/app#runs`: Removes the "Evidence backed" chip (`span[title*="Verdicts show only..."]`).
+6. `/app#runs`: Removes the idle auto-refresh status text (`p[role="status"]`).
+7. `/app#target-detail`: Removes benign attack markers category how text (`p.td-cat-how`).
+8. `/app#target-detail`: Removes 72 declaration-only checks note (`p.td-decl-note`).
+9. `/app#target-detail`: Revamps the target detail header with clean breadcrumb navigation (`Targets / <target>`), status chips cluster, domain metadata line, and executive KPI layout.
+
+Before release: full `npm test` green (4,011 unit tests, 28 e2e tests, 7 contract tests, 38 coarse-pointer tests passed), `npm run lint`, `npm run lint:portal`, `npm run safety`, `npm run web:build`, `npm run web:typecheck` green.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` tar.gz SHA-256 `d6fe19797da841489cab2ac5bac3c31935d5fc126fa2d9fb2b3fe07ebd628a2a`, verified on host, extracted to `/opt/astranull-release-afe6565f04873727cd8f11cb6fb9a9d0c6969a34` |
+| Image | built with `--iidfile` from the archive through `ops/aws/Dockerfile`, tagged `astranull:afe6565f` and `astranull:afe6565f04873727cd8f11cb6fb9a9d0c6969a34` → `sha256:7e53af09b1f93b1e8eb7de759dcb06282c7620f355971d35b6724f75d876db49` |
+| Backup | verified pre-deploy database snapshot in `/opt/astranull-backups/` (+ manifest), root-owned mode 600, plaintext deleted |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied incl. connector `SELECT` on `schema_migrations` |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, then connector-poll-scheduler + connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); served `react-app.js` (`fa1cdbd3...`) and `react-app.css` (`8fa4e588...`) byte-identical to the commit; live Playwright test confirmed all 9 vibe annotations resolved on `https://astranull.site`; unauthenticated `/v1/targets` and `/v1/notifications` 401; CSP/COOP/Permissions-Policy/HSTS present; 0 error-level log lines across all six services since activation |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:d780d5f59a4da65e1a89b67ba499a618810c8f6e3d47a26456886cbde8c2a004` (`astranull:7ecb431f`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner` and
+`... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-7ecb431f24d7759d57a5c88b9075ce8d531a7f05`.
+
+
 
