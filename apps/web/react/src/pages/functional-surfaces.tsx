@@ -1248,7 +1248,18 @@ export function ValidationSurfacePage({
         safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
       />
     );
-    const runSocGatePanel = null;
+    const runSocGatePanel = (
+      <RunsSocGatePanel
+        data={data}
+        config={config}
+        session={session}
+        onRefresh={onRefresh}
+        onMessage={setMessage}
+        onError={setError}
+        busy={busy}
+        setBusy={setBusy}
+      />
+    );
     const validationScansTable = (
       <ValidationScansTable
         scans={visibleScans}
@@ -1418,6 +1429,7 @@ export function ValidationSurfacePage({
             />
           </CardContent>
         </Card>
+        {runSocGatePanel}
         {runModals}
       </div>
     );

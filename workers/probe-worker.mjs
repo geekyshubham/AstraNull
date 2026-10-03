@@ -304,6 +304,8 @@ const METADATA_ARRAY_STRING_MAX = 253;
 const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'dns_cname_chain',
   'dns_resolved_ips',
+  'marker_probes',
+  'edge_signature.layers',
   'edge_signature.waf_providers',
   'edge_signature.cdn_providers',
   'edge_signature.cloud_providers',

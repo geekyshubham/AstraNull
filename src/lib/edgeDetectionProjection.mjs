@@ -469,15 +469,20 @@ export function projectEdgeDetection(metadata = {}) {
   const transportError = Boolean(boundedString(meta.error_class))
     || ['error', 'timeout'].includes(boundedString(meta.external_result).toLowerCase());
   const status = transportError ? 'inconclusive' : baseStatus;
-  const effectiveness = assessWafEffectiveness({
-    wafPresent: waf.status === 'detected' ? true : waf.status === 'not_detected' ? false : null,
-    markerResults: meta.marker_probes,
-    coverageComplete: meta.coverage_complete,
-    transportError,
-    inspectionLimitBypassSuspected: typeof meta.inspection_limit_bypass_suspected === 'boolean'
-      ? meta.inspection_limit_bypass_suspected
-      : undefined,
-  });
+  const directEffectiveness = meta.waf_effectiveness && typeof meta.waf_effectiveness === 'object' && Number(meta.waf_effectiveness.tested_count) > 0
+    ? meta.waf_effectiveness
+    : null;
+  const effectiveness = (!transportError && directEffectiveness)
+    ? directEffectiveness
+    : assessWafEffectiveness({
+        wafPresent: waf.status === 'detected' ? true : waf.status === 'not_detected' ? false : null,
+        markerResults: meta.marker_probes,
+        coverageComplete: meta.coverage_complete,
+        transportError,
+        inspectionLimitBypassSuspected: typeof meta.inspection_limit_bypass_suspected === 'boolean'
+          ? meta.inspection_limit_bypass_suspected
+          : undefined,
+      });
   const protection = projectProtection(meta, waf, effectiveness);
   const networkFirewall = projectNetworkFirewall(meta);
   const layerConfidence = layers.length

@@ -270,6 +270,8 @@ export function RunsRefined(props: RunsRefinedProps) {
         </div>
       </section>
 
+      {props.socGatePanel ? <section className="rf-governed">{props.socGatePanel}</section> : null}
+
       {props.modals}
     </div>
   );

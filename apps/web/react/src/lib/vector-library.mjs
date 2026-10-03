@@ -60,7 +60,7 @@ export function vectorTargetAvailability(vector, checks, target) {
   if (disposition === 'soc_gated_only') {
     return {
       id: 'soc_gated',
-      label: 'Governed scenario',
+      label: 'SOC-gated only',
       detail: 'This scenario is governed and not customer-runnable directly.',
       tone: 'muted',
       runnableChecks: [],
