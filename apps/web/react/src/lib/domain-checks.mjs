@@ -65,6 +65,13 @@ function list(value) {
   return Array.isArray(value) ? value : [];
 }
 
+/** Current inconclusive observations are evaluated live attempts, not invalid retained proof. */
+export function retainedCoveragePairs(pairs) {
+  return list(pairs).filter((pair) => pair?.live_external === false
+    && ['partial', 'unknown', 'stale'].includes(text(pair.state))
+    && text(record(pair.retained)?.verdict));
+}
+
 function titleCase(value) {
   return text(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
 }

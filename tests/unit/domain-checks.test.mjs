@@ -13,6 +13,7 @@ import {
   efficacySentence,
   groupRowsByCategory,
   rowProgress,
+  retainedCoveragePairs,
   runAllChecks,
   shouldAutoDetectEdge,
 } from '../../apps/web/react/src/lib/domain-checks.mjs';
@@ -20,6 +21,18 @@ import {
 const CATALOG = customerSelectableChecks(CHECK_CATALOG);
 const DOMAIN = { id: 'tgt_1', kind: 'fqdn', value: 'shop.example.com' };
 const byId = (id) => CATALOG.find((check) => check.check_id === id);
+
+it('only warns about ineligible recorded results, not current inconclusive or still-running checks', () => {
+  const pair = (id, state, verdict, live = false) => ({ check_id: id, state, live_external: live, retained: { verdict } });
+  assert.deepEqual(retainedCoveragePairs([
+    pair('current-inconclusive', 'inconclusive', 'inconclusive'),
+    pair('collecting', 'unknown', null),
+    pair('current-conclusive', 'conclusive', 'edge_protected', true),
+    pair('legacy-version', 'partial', 'edge_protected'),
+    pair('old-proof', 'stale', 'edge_protected'),
+    pair('simulated', 'unknown', 'edge_protected'),
+  ]).map((entry) => entry.check_id), ['legacy-version', 'old-proof', 'simulated']);
+});
 
 function row(rows, id) {
   return rows.find((entry) => entry.checkId === id);

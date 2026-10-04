@@ -157,6 +157,26 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expectNoBlockingAxeViolations(page, '.target-detail-view');
   });
 
+  test('current inconclusive and unfinished checks are not mislabeled as invalid retained results', async ({ page }) => {
+    await page.route(`**/v1/targets/${VERIFIED_FRESH_TARGET}`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      await route.fulfill({ response, json: { ...payload, coverage: {
+        ...payload.coverage,
+        evaluated_count: 1, inconclusive_count: 1, partial_count: 0, unknown_count: 1,
+        pairs: [
+          { check_id: 'waf.fingerprint.safe', state: 'inconclusive', live_external: false, retained: { verdict: 'inconclusive', provenance: 'external' } },
+          { check_id: 'waf.marker_rule.safe', state: 'unknown', live_external: false, retained: { verdict: null, run_status: 'collecting' } },
+        ],
+      } } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await expect(page.locator('.td-coverage')).toBeVisible();
+    await expect(page.locator('.td-retained')).toHaveCount(0);
+    await expect(page.locator('.td-count-grid')).toContainText('Inconclusive');
+  });
+
   test('a freshly onboarded verified domain does not probe on load; detection starts only after review', async ({ page }) => {
     const edgePosts = [];
     page.on('request', (request) => {

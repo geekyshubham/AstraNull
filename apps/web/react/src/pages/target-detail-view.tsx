@@ -60,6 +60,7 @@ import {
   originExposureDetail,
   originExposureStatus,
   providerFamilyRows,
+  retainedCoveragePairs,
   runAllChecks,
   targetTabFromParam,
   validationScansPathForTarget,
@@ -97,6 +98,10 @@ const PAIR_REASON_LABELS: Record<string, string> = {
   missing_check_version: 'Check version not recorded',
   missing_scenario_version: 'Scenario version not recorded',
   check_version_mismatch: 'Recorded with a different check version',
+  scenario_version_mismatch: 'Recorded with a different scenario version',
+  stale: 'Outside the coverage freshness window',
+  unfinalized: 'Run not finalized',
+  canceled: 'Run canceled',
   observation_time_unknown: 'Completion time not recorded',
   simulation: 'Simulated, no live traffic',
   internal_simulation: 'Simulated, no live traffic',
@@ -1053,7 +1058,7 @@ export function TargetDetailView({
   const recordedResults = (rowCounts.passed ?? 0) + (rowCounts.failed ?? 0) + (rowCounts.inconclusive ?? 0) + (rowCounts.observed ?? 0);
   const coverage = detail.coverage ?? null;
   const coveragePairs = Array.isArray(coverage?.pairs) ? (coverage!.pairs as DataItem[]).filter((pair) => pair && typeof pair === 'object') : [];
-  const retainedPairs = coveragePairs.filter((pair) => pair.live_external === false && asDataItem(pair.retained));
+  const retainedPairs = retainedCoveragePairs(coveragePairs);
   const liveNotes: Record<string, string> = Object.fromEntries(retainedPairs.map((pair) => [
     getString(pair, ['check_id'], ''),
     (PAIR_REASON_LABELS[getString(pair, ['pair_reason'], '')] ?? formatLabel(getString(pair, ['pair_reason'], 'not_recorded'))).toLowerCase(),
@@ -1161,7 +1166,7 @@ export function TargetDetailView({
           {retainedPairs.length ? (
             <div className="td-retained" role="note">
               <strong>Recorded, not counted as current live coverage</strong>
-              <p className="td-muted">These results exist but are simulated, manual, missing a check or scenario version, or missing a completion time. They stay visible as retained records and are not live external validation.</p>
+              <p className="td-muted">These records are simulated, manual, stale, unfinished, or lack the version, completion time, or cited evidence needed for current coverage. Current external inconclusive results count as evaluated checks.</p>
               <ul>
                 {retainedPairs.map((pair) => {
                   const retained = asDataItem(pair.retained);

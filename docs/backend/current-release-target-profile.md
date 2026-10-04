@@ -65,6 +65,8 @@ A pair is `conclusive` and `live_external: true` only when the run is `completed
 
 Freshness policies: `protection-profile.observation.v1` (7 days, `family_observation`) and `protection-profile.coverage.v1` (7 days, `target_check_pair`).
 
+The target UI's retained-result warning includes only partial, unknown, or stale pairs with an actual recorded verdict. A current external inconclusive result is already evaluated and does not appear in that warning or receive a "not live evidence" annotation. An unfinished run without a verdict stays in its running state. Genuine simulations, missing or changed versions, and old evidence remain visibly ineligible rather than being relabeled as successful live validation.
+
 Absent WAF marker rules are null. A recorded 0 stays 0. Absent origin bypass is `not_tested`. A recorded `not_exposed` stays. Finding owner is the same-tenant remediation `owner_group` when that row exists, otherwise `unassigned`. Dev-json findings, verifications, posture snapshots, connectors, validation runs, and fingerprints with a missing or different `tenant_id` do not change counts or sources.
 
 `waf_posture.fingerprint` is independent of connector access. A missing score is null and `score_status` is `not_recorded`. `waf_posture.connector` and `raw_context_yaml` are null unless the WAF posture flag and the tenant connector feature are on and the caller has `waf:connector_read`. The payload then sets `configuration_access` to `allowed` or `redacted` and `configuration_disabled_reason` to null, `feature_disabled`, or `permission_denied`. `profiles.edge` and `profiles.core_fingerprint` stay `independent`. Stored YAML is redacted for secret-like keys and token strings. The detail payload does not invent YAML.

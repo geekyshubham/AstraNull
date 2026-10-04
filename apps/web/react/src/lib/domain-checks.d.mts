@@ -1,5 +1,7 @@
 import type { DataItem } from './types';
 
+export function retainedCoveragePairs(pairs: DataItem[]): DataItem[];
+
 export type CategoryIcon = 'shield' | 'bug' | 'server' | 'globe' | 'workflow' | 'lock' | 'network' | 'dns' | 'radio' | 'waves' | 'activity' | 'bell';
 export type CheckCategory = { id: string; label: string; layer: 'waf' | 'cdn' | 'origin' | 'ops' | 'other'; icon: CategoryIcon; how: string };
 export type RowStatus = 'passed' | 'failed' | 'inconclusive' | 'observed' | 'running' | 'queued' | 'waiting' | 'blocked' | 'skipped' | 'cancelled' | 'not_run';
