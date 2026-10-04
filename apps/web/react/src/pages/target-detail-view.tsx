@@ -440,6 +440,8 @@ export function TargetDetailView({
   const [selectedCheckId, setSelectedCheckId] = useState(() => getRouteParam('check'));
   const [tab, setTabState] = useState<TargetTab>(readTab);
   const [scan, setScan] = useState<DataItem | null>(null);
+  const [scanActivity, setScanActivity] = useState<DataItem[]>([]);
+  const [selectedRunEvents, setSelectedRunEvents] = useState<DataItem[]>([]);
   const [targetRuns, setTargetRuns] = useState<DataItem[]>([]);
   const [runsError, setRunsError] = useState('');
   const [edgeLocal, setEdgeLocal] = useState<EdgeLocalState>('');
@@ -591,12 +593,25 @@ export function TargetDetailView({
         .then((value) => { setRunsError(''); return value; })
         .catch((err) => { setRunsError(apiErrorMessage(err, 'Recorded check results could not load.')); return null; }) as Promise<DataItem | null>,
     ]);
-    if (scanList && Array.isArray(scanList.items)) setScan((scanList.items[0] as DataItem | undefined) ?? null);
+    if (scanList && Array.isArray(scanList.items)) {
+      const activeScan = (scanList.items[0] as DataItem | undefined) ?? null;
+      setScan(activeScan);
+      const activeScanId = getString(activeScan, ['id'], '');
+      if (activeScanId) {
+        void requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(activeScanId)}/activity`)
+          .then((act) => {
+            if (act && Array.isArray((act as DataItem).items)) setScanActivity((act as DataItem).items as DataItem[]);
+          })
+          .catch(() => undefined);
+      }
+    }
     if (runList && Array.isArray(runList.items)) setTargetRuns(runList.items as DataItem[]);
   }, [config, session, entityId, targetGroupId]);
 
   useEffect(() => {
     setScan(null);
+    setScanActivity([]);
+    setSelectedRunEvents([]);
     setTargetRuns([]);
     setEdgeLocal('');
     setEdgeError('');
@@ -628,10 +643,16 @@ export function TargetDetailView({
     let fingerprintWasActive = fingerprintStepActive;
     const poll = async () => {
       try {
-        const next = await requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}?advance=false`) as DataItem;
+        const [next, activity] = await Promise.all([
+          requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}?advance=false`) as Promise<DataItem>,
+          requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}/activity`).catch(() => null) as Promise<DataItem | null>,
+        ]);
         if (stopped) return;
         errors = 0;
         setScan(next);
+        if (activity && Array.isArray((activity as DataItem).items)) {
+          setScanActivity((activity as DataItem).items as DataItem[]);
+        }
         const step = Array.isArray(next.steps)
           ? (next.steps as DataItem[]).find((row) => getString(row, ['check_id'], '') === EDGE_DETECTION_CHECK_ID)
           : null;
@@ -659,6 +680,34 @@ export function TargetDetailView({
     // fingerprintStepActive is read once as the starting point; the loop tracks it afterwards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, session, scanId, scanActive, loadTargetActivity]);
+
+  // Load live probe events for selected check run if available
+  useEffect(() => {
+    const runId = selectedRow?.runId;
+    if (!runId) {
+      setSelectedRunEvents([]);
+      return undefined;
+    }
+    let stopped = false;
+    const fetchRunEvents = () => {
+      requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/events`)
+        .then((res) => {
+          if (!stopped && res && Array.isArray((res as DataItem).items)) {
+            setSelectedRunEvents((res as DataItem).items as DataItem[]);
+          }
+        })
+        .catch(() => undefined);
+    };
+    fetchRunEvents();
+    if (selectedRow?.status === 'running') {
+      const timer = window.setInterval(fetchRunEvents, 2500);
+      return () => {
+        stopped = true;
+        window.clearInterval(timer);
+      };
+    }
+    return () => { stopped = true; };
+  }, [config, session, selectedRow?.runId, selectedRow?.status]);
 
   const queueEdgeDetection = useCallback(async () => {
     if (!targetGroupId) return;
@@ -994,7 +1043,6 @@ export function TargetDetailView({
             <h1 className="page-title mono">{title || 'Target'}</h1>
             {hasTarget ? (
               <div className="td-title-badges">
-                <VerifyChip state={verificationState} provenance={provenance} label={ownershipLabel(verificationState)} />
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
                   {targetEligible ? 'Validation unlocked' : 'Validation locked'}
                 </Badge>
@@ -1445,6 +1493,9 @@ export function TargetDetailView({
               onActivity={(row) => { selectCheck(row.checkId); document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' }); }}
               liveNotes={liveNotes}
               footer={declarationOnlyCount > 0 ? <p className="td-muted">{declarationOnlyCount} declaration-only checks are not listed because they send no traffic.</p> : null}
+              scanActivity={scanActivity}
+              selectedRunEvents={selectedRunEvents}
+              targetValue={targetDisplayValue(target)}
             />
             {canStartBoundedRun ? (
               <div className="td-start-bar" role="region" aria-label="Start the selected check">

@@ -107,7 +107,7 @@ test.describe('Vibe annotations verification', () => {
       await expect(page.locator('#portal-main a.td-back')).toHaveText('Targets');
       const cluster = page.locator('.td-title-cluster');
       await expect(cluster.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
-      await expect(cluster).toContainText('Domain ownership verified');
+      await expect(cluster).toContainText('Validation unlocked');
 
       // Unified workspace geometry: one column; title, then tabs, then the panel, then target facts,
       // all on the same left edge and inside the viewport.

@@ -549,6 +549,11 @@ function describeAuditAction(action, metadata = {}) {
 }
 
 function describeEvent(event) {
+  if (event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe') {
+    const activity = event.metadata?.activity ?? {};
+    return [String(activity.stage ?? 'activity').replace(/_/g, ' '), activity.method ?? activity.operation,
+      activity.status_code != null ? `HTTP ${activity.status_code}` : activity.error_class ?? activity.reason].filter(Boolean).join(': ');
+  }
   if (event.signal_type === 'probe_result') {
     const result = event.external_result ?? event.metadata?.external_result ?? 'unknown';
     return `probe result received: ${result}`;
@@ -672,6 +677,7 @@ export function buildActivityItems({ scan, steps = [], auditEntries = [], runEve
   }
   let eventOrder = 0;
   for (const event of runEvents) {
+    if (event.signal_type === 'probe_activity' && event.producer_kind !== 'signed_probe') continue;
     const step = stepByRunId.get(event.test_run_id) ?? null;
     eventOrder += 1;
     orderOf.set(event.id, [1, eventOrder]);
@@ -691,6 +697,7 @@ export function buildActivityItems({ scan, steps = [], auditEntries = [], runEve
         status_code: event.metadata?.status_code ?? event.metadata?.response_status ?? undefined,
         requests_sent: event.metadata?.safety_attestation?.requests_sent ?? undefined,
         producer_kind: event.producer_kind ?? undefined,
+        ...(event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe' ? { activity: event.metadata?.activity } : {}),
       },
     });
   }
