@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
+import { getCheckById } from '../../src/contracts/checks.mjs';
+import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
 import {
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
@@ -78,6 +80,33 @@ async function seed(pool) {
 }
 
 describe('postgres current-release target profile', () => {
+  it('groups inconclusive reasons from the stored result and nonce-bound signed evidence', { timeout: 120_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) { t.skip(availability.reason); return; }
+    await withEphemeralPostgres(async (pool) => {
+      await seed(pool);
+      const check = getCheckById('waf.enforcement.safe');
+      const stamp = deriveRunEvidenceStamp(check);
+      await pool.query(
+        `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status, completed_at, check_version, scenario_version, producer_kind, probe_external_result, correlation_json)
+         VALUES ('run_reason', $1, $2, $3, $4, 'verdicted', now(), $5, $6, 'signed_probe', 'error', '{"nonce_hash":"reason_nonce"}')`,
+        [TENANT, GROUP, TARGET, check.check_id, stamp.check_version, stamp.scenario_version],
+      );
+      for (const [id, nonce, error] of [['evt_reason', 'reason_nonce', 'unsupported_target'], ['evt_wrong_nonce', 'wrong_nonce', 'ESERVFAIL']]) {
+        await pool.query(
+          `INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, metadata_json)
+           VALUES ($1, $2, 'run_reason', 'probe_result', 'signed_probe', $3, now() + interval '1 second', $4::jsonb)`,
+          [id, TENANT, nonce, JSON.stringify({ error_class: error })],
+        );
+      }
+      await pool.query(`INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, evidence_ids) VALUES ('verdict_reason', $1, 'run_reason', 'inconclusive', ARRAY['evt_reason'])`, [TENANT]);
+      const detail = await createPortalRevampRepository(pool).getTargetDetailBundle(CTX, TARGET, {});
+      assert.equal(detail.coverage.inconclusive_count, 1);
+      assert.deepEqual(detail.coverage.inconclusive_reasons.map(r => [r.reason, r.count, r.check_ids]), [['endpoint_setup_required', 1, [check.check_id]]]);
+      assert.ok(detail.coverage.observation_only_count > 0);
+    });
+  });
+
   it('counts stored signed-run versions as live coverage without rewriting historical runs', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) { t.skip(availability.reason); return; }

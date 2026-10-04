@@ -1098,9 +1098,7 @@ describe('capability probes P0/P1', () => {
     const outcome = await probeDnssecPosture(job({
       probe_profile: { kind: 'dnssec_posture' },
     }), {
-      resolveFn: async () => {
-        throw new Error('ENODATA');
-      },
+      dnssecWireQueryFn: async () => ({ external_result: 'connected', metadata: { matching_answer_count: 0 }, requests_sent: 1 }),
     });
     assert.equal(outcome.metadata.dnssec_missing, true);
     assert.equal(outcome.external_result, 'connected');
@@ -1112,7 +1110,7 @@ describe('capability probes P0/P1', () => {
     const dnssec = await probeDnssecPosture(job({
       probe_profile: { kind: 'dnssec_posture', max_requests: 2 },
     }), {
-      resolveFn: async () => { throw transient('ESERVFAIL'); },
+      dnssecWireQueryFn: async () => ({ external_result: 'error', metadata: { error_class: 'ESERVFAIL' }, requests_sent: 1 }),
     });
     assert.equal(dnssec.external_result, 'error');
     assert.equal(dnssec.metadata.error_class, 'ESERVFAIL');

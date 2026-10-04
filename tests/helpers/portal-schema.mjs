@@ -436,6 +436,10 @@ export const TARGET_DETAIL_SHAPE = {
     runtime_launch_gates: 'string',
     scope: { target_id: 'string', plan_version: 'string' },
     ...COVERAGE_COUNTS_SHAPE,
+    observation_only_count: 'number',
+    inconclusive_reasons: [{
+      reason: 'string', label: 'string', next_step: 'string', count: 'number', check_ids: ['string'],
+    }],
     pairs: [{
       check_id: 'string',
       dimension: 'string',

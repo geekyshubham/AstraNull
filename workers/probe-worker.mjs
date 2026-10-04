@@ -1262,13 +1262,13 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
     };
   }
 
-  // Destination chokepoint. metadata_marker sends no packets, so it is exempt; every
-  // other kind egresses and must clear the classifier before any probe helper — and
-  // therefore before any connectFn/fetchFn — is touched.
+  // Destination chokepoint. Metadata markers send no packets. DNS wire/DNSSEC helpers
+  // classify and pin the authoritative nameserver after their counted NS lookup.
+  // Other helpers must clear the classifier here before transport is touched.
   let destinationPolicy = deps.destinationPolicy;
   let vettedHost = null;
   let vettedAddresses = [];
-  if (profileKind !== 'metadata_marker' && profileKind !== 'dns_wire_query') {
+  if (!['metadata_marker', 'dns_wire_query', 'dnssec_posture'].includes(profileKind)) {
     const remainingMs = deps.remainingJobTimeoutMs();
     if (remainingMs <= 0) return jobDeadlineOutcome(job);
     const configuredDnsTimeoutMs = Number(deps.destinationDnsTimeoutMs);

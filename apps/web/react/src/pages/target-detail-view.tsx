@@ -1267,6 +1267,22 @@ export function TargetDetailView({
             {cell('Partial', 'partial_count')}
             {cell('Excluded', 'excluded_count')}
           </dl>
+          {Number(coverage.observation_only_count) > 0 ? (
+            <p className="td-copy">{String(coverage.observation_only_count)} transport or liveness checks are observations only. They remain available under Validate and are excluded from conclusive coverage and Run all checks.</p>
+          ) : null}
+          {Array.isArray(coverage.inconclusive_reasons) && coverage.inconclusive_reasons.length > 0 ? (
+            <div className="td-retained" role="note">
+              <strong>Why checks are inconclusive</strong>
+              <ul>
+                {coverage.inconclusive_reasons.map((value) => {
+                  const reason = asDataItem(value);
+                  if (!reason) return null;
+                  return <li key={getString(reason, ['reason'], '')}><strong>{String(reason.count)} · {getString(reason, ['label'], 'Evidence incomplete')}</strong><p className="td-copy">{getString(reason, ['next_step'], '')}</p></li>;
+                })}
+              </ul>
+              <Button size="sm" variant="secondary" onClick={() => setTab('validate')}>Review check evidence</Button>
+            </div>
+          ) : null}
           {retainedPairs.length ? (
             <div className="td-retained" role="note">
               <strong>Recorded, not counted as current live coverage</strong>

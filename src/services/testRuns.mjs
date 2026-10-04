@@ -951,7 +951,7 @@ function finalizeVerdictIfReady(run, options = {}) {
   const probeIoObserved = probeEventHasProbeIo(probeEvent);
 
   // ADR-0008: verdicts are produced from external probe evidence only.
-  const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved });
+  const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved, probeMetadata: probeEvent?.metadata ?? probeEvent?.metadata_json });
 
   const evidenceIds = store.events
     .filter((e) => e.test_run_id === run.id)

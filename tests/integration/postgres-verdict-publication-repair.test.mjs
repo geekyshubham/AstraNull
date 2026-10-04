@@ -183,14 +183,14 @@ function buildServices(pool) {
   };
 }
 
-async function readTuple(pool, target) {
+async function readTuple(pool, target, checkId = CHECK) {
   return withTenantContext(pool, TENANT, async (client) => {
     const findings = await client.query(
       `SELECT id, status, test_run_id, verdict_id, last_verdict_id, evidence_ids
        FROM findings
        WHERE tenant_id = $1 AND target_group_id = $2 AND target_id = $3 AND check_id = $4
        ORDER BY created_at, id`,
-      [TENANT, GROUP, target, CHECK],
+      [TENANT, GROUP, target, checkId],
     );
     const audits = await client.query(
       `SELECT action, resource_type, resource_id, metadata_json
@@ -208,6 +208,32 @@ async function readTuple(pool, target) {
 }
 
 describe('postgres terminal verdict publication repair', () => {
+  it('publishes the version 2 DNSKEY absence finding once with its original evidence and audit', { timeout: 120_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) { t.skip(availability.reason); return; }
+    await withEphemeralPostgres(async pool => {
+      await seed(pool);
+      await withTenantContext(pool, TENANT, async client => {
+        await client.query(`UPDATE test_runs SET check_id = 'dns.dnssec_expensive_query.safe', check_version = '2.0.0' WHERE id = $1`, [runId('archive')]);
+        await client.query(`UPDATE events SET check_id = 'dns.dnssec_expensive_query.safe' WHERE test_run_id = $1`, [runId('archive')]);
+        await client.query(`UPDATE verdicts SET check_id = 'dns.dnssec_expensive_query.safe', verdict = 'exposed', confidence = 'external_only', explanation = 'An authoritative response contained no DNSKEY records.' WHERE id = $1`, [verdictId('archive')]);
+      });
+      const { services } = buildServices(pool);
+      await services.testRuns.maybeFinalizeRunAfterProbeIngest(CTX, runId('archive'));
+      await services.testRuns.maybeFinalizeRunAfterProbeIngest(CTX, runId('archive'));
+      const state = await readTuple(pool, TARGETS.archive, 'dns.dnssec_expensive_query.safe');
+      assert.equal(state.findings.length, 1);
+      assert.equal(state.findings[0].last_verdict_id, verdictId('archive'));
+      assert.ok(state.audits.some(row => row.action === 'finding.created'));
+      await withTenantContext(pool, TENANT, async client => {
+        await client.query(`UPDATE test_runs SET check_id = 'dns.dnssec_expensive_query.safe', check_version = '1.0.0' WHERE id = $1`, [runId('old_first_old')]);
+        await client.query(`UPDATE verdicts SET check_id = 'dns.dnssec_expensive_query.safe', verdict = 'exposed' WHERE id = $1`, [verdictId('old_first_old')]);
+      });
+      await services.testRuns.maybeFinalizeRunAfterProbeIngest(CTX, runId('old_first_old'));
+      assert.equal((await readTuple(pool, TARGETS.oldFirst, 'dns.dnssec_expensive_query.safe')).findings.length, 0);
+    });
+  });
+
   it('is chronology-safe, concurrent, and archival-safe on durable state', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {

@@ -312,6 +312,7 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
 
   let completeAnswerCount = 0;
   let soaAnswerCount = 0;
+  let matchingAnswerCount = 0;
   for (let index = 0; index < answerCount; index += 1) {
     let type;
     let rdataStart;
@@ -325,6 +326,14 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
       rdataStart = offset + 10;
       rdataEnd = rdataStart + rdlength;
       if (rdataEnd > message.length) throw new RangeError('Malformed DNS RDATA.');
+      if (expectedQuestion && owner.name === String(expectedQuestion.name).toLowerCase().replace(/\.+$/, '') && type === expectedQuestion.qtype
+        && message.readUInt16BE(offset + 2) === expectedQuestion.qclass) {
+        // DNSKEY must include flags, protocol, algorithm, and nonempty public key.
+        if (type === DNS_QTYPE_CODES.DNSKEY && (rdlength < 5 || message[rdataStart + 2] !== 3)) {
+          throw new RangeError('Malformed DNSKEY RDATA.');
+        }
+        matchingAnswerCount += 1;
+      }
       if (type === DNS_QTYPE_CODES.SOA) {
         try {
           validateSoaRdata(message, rdataStart, rdataEnd);
@@ -363,6 +372,7 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
     has_complete_answer: completeAnswerCount > 0,
     has_complete_soa: soaAnswerCount > 0,
     structure_valid: true,
+    matching_answer_count: matchingAnswerCount,
     reason: null,
   };
 }

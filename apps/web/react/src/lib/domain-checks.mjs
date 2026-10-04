@@ -9,6 +9,7 @@
 import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
 import { plainCheckName } from './plain-language.mjs';
+import { OBSERVATION_ONLY_PROBE_KINDS } from '../../../../../src/lib/probeEvidenceTiers.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
 const DECLARATION_ONLY_KIND = 'metadata_marker';
@@ -103,6 +104,9 @@ export function runAllChecks(checks, target) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
     && !checkExclusionReason(check)
     && checkSupportsTarget(check, target)
+    && tierOf(check) !== 'E2'
+    && !OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind)
+    && check.probe_profile?.kind !== 'ops_readiness'
     && !isDeclarationOnlyCheck(check));
   const unique = [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
   return unique

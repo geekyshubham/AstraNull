@@ -7,6 +7,8 @@ import {
   buildDnsQueryMessage,
   frameDnsTcpMessage,
   parseDnsResponseHeader,
+  parseDnsResponseStructure,
+  DNS_QTYPE_CODES,
 } from './dnsTcpWire.mjs';
 import { resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 import { startProbeIoAttempt } from './probeAttempt.mjs';
@@ -319,6 +321,17 @@ export async function probeDnsWireQuery(job, deps = {}) {
 
     const rcode = response.parsed?.rcode ?? null;
     const answerCount = response.parsed?.answer_count ?? 0;
+    let strictMetadata = {};
+    if (job.probe_profile?.strict_dns_answer === true) {
+      const structure = parseDnsResponseStructure(response.parsed.dns_message, {
+        expectedQuestion: { name: queryName, qtype: DNS_QTYPE_CODES[qtype], qclass: 1 },
+      });
+      if (!structure.structure_valid || !response.parsed.authoritative || truncated || rcode !== 0
+        || (answerCount > 0 && structure.matching_answer_count === 0)) {
+        return dnsOutcome(job, { ...base, rcode, error_class: structure.reason ?? 'non_definitive_dns_response' }, 'error', requestsSent, started);
+      }
+      strictMetadata = { matching_answer_count: structure.matching_answer_count };
+    }
     const randomPrefix = String(job.check_id ?? '').includes('random_prefix');
     const wildcardResponseDetected = randomPrefix && rcode === 0 && answerCount > 0;
     return dnsOutcome(job, {
@@ -332,6 +345,7 @@ export async function probeDnsWireQuery(job, deps = {}) {
       tcp_fallback_used: tcpFallbackUsed,
       wildcard_response_detected: wildcardResponseDetected,
       authoritative: Boolean(response.parsed?.authoritative),
+      ...strictMetadata,
     }, 'connected', requestsSent, started);
   } catch (error) {
     const code = error?.code ?? '';

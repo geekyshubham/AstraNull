@@ -8,6 +8,8 @@ import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibil
 import { evidenceBackedVerdict } from '../lib/targetDetailRows.mjs';
 import { approvedScenarioVersion, deriveCheckDefinitionVersion } from '../lib/checkDefinitionVersion.mjs';
 import { assessOriginReachability } from './originBindings.mjs';
+import { OBSERVATION_ONLY_PROBE_KINDS } from '../lib/probeEvidenceTiers.mjs';
+import { inconclusiveReason } from '../lib/inconclusiveReasons.mjs';
 import {
   assessComparability,
   classifyAttempt,
@@ -515,14 +517,17 @@ function coverageFrom({ target, policies, observations, catalog, nowMs }) {
     if (checkId) byCheck.set(checkId, entry);
   }
   const pairs = [];
+  const inconclusiveReasons = new Map();
   for (const check of catalog ?? CHECK_CATALOG) {
     if (!check?.check_id || !isCustomerRunnable(check)) continue;
     if (targetKindCompatibilityError(check, target)) continue;
     const declarationOnly = text(check.evidence_tier)?.toUpperCase() === 'E1'
       || check.probe_profile?.kind === 'metadata_marker'
       || check.probe_profile?.kind === 'ops_readiness';
-    const excluded = declarationOnly || checkRequiresAdditionalInput(check);
-    const exclusionReason = declarationOnly ? 'declaration_only' : 'setup_required';
+    const observationOnly = text(check.evidence_tier)?.toUpperCase() === 'E2'
+      || OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind);
+    const excluded = declarationOnly || observationOnly || checkRequiresAdditionalInput(check);
+    const exclusionReason = declarationOnly ? 'declaration_only' : observationOnly ? 'observation_only' : 'setup_required';
     const policy = policyForCheck(policies, target, check.check_id);
     const policyBinding = !policy
       ? 'no_policy'
@@ -557,6 +562,13 @@ function coverageFrom({ target, policies, observations, catalog, nowMs }) {
     }
     const entry = byCheck.get(check.check_id) ?? null;
     const outcome = pairState(entry?.run ?? null, entry?.verdict ?? null, check, nowMs);
+    if (outcome.state === 'inconclusive') {
+      const reason = inconclusiveReason({ probeKind: check.probe_profile?.kind, externalResult: entry?.run?.probe_external_result, metadata: entry?.run?.probe_metadata ?? {} });
+      const group = inconclusiveReasons.get(reason.reason) ?? { reason: reason.reason, label: reason.label, next_step: reason.next_step, count: 0, check_ids: [] };
+      group.count += 1;
+      group.check_ids.push(check.check_id);
+      inconclusiveReasons.set(reason.reason, group);
+    }
     pairs.push({
       check_id: check.check_id,
       dimension,
@@ -597,6 +609,8 @@ function coverageFrom({ target, policies, observations, catalog, nowMs }) {
       runtime_launch_gates: 'not_evaluated',
       scope: { target_id: target.id, plan_version: PLAN_VERSION },
       ...summary,
+      observation_only_count: pairs.filter((pair) => pair.exclusion_reason === 'observation_only').length,
+      inconclusive_reasons: [...inconclusiveReasons.values()].sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
       pairs,
     },
     dimensions,

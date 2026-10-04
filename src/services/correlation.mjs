@@ -4,6 +4,7 @@ import {
 } from '../lib/readinessVerdicts.mjs';
 
 export { OBSERVATION_ONLY_PROBE_KINDS, verdictSupportsReadiness };
+import { inconclusiveReason } from '../lib/inconclusiveReasons.mjs';
 
 /**
  * Correlation truth table — evidence-backed verdicts (metadata-only developer validation).
@@ -32,14 +33,14 @@ function correlateObservationOnlyVerdict(probeKind) {
   };
 }
 
-function correlateProbeFailure(externalResult, probeKind) {
+function correlateProbeFailure(externalResult, probeKind, metadata) {
   const knownKindTimedOut = externalResult === 'timeout' && typeof probeKind === 'string';
   if (!['error', 'not_run'].includes(externalResult) && !knownKindTimedOut) return null;
-  const resultLabel = externalResult === 'not_run' ? 'was not run' : `ended with ${externalResult}`;
+  const reason = inconclusiveReason({ externalResult, probeKind, metadata });
   return {
     verdict: 'inconclusive',
     confidence: 'external_only',
-    explanation: `The ${probeKind ?? 'external'} probe ${resultLabel}; transport failure or an execution deadline cannot establish protection or exposure.`,
+    explanation: reason.explanation,
     createsFinding: false,
   };
 }
@@ -52,13 +53,31 @@ export function correlateExternalOnlyVerdict({
   expectedBehavior,
   probeKind,
   probeIoObserved = false,
+  probeMetadata = {},
 }) {
   if (isObservationOnlyProbeKind(probeKind)) {
     return correlateObservationOnlyVerdict(probeKind);
   }
 
-  const probeFailure = correlateProbeFailure(externalResult, probeKind);
+  const probeFailure = correlateProbeFailure(externalResult, probeKind, probeMetadata);
   if (probeFailure) return probeFailure;
+
+  if (probeKind === 'dnssec_posture' && probeMetadata.assurance === 'authoritative_dnskey_presence_only') {
+    const count = probeMetadata.dnskey_count;
+    const configured = probeMetadata.dnssec_configured;
+    if (probeIoObserved === true && Number.isSafeInteger(count) && count >= 0
+      && configured === (count > 0) && externalResult === (configured ? 'blocked' : 'connected')) {
+      return {
+        verdict: configured ? 'protected' : 'exposed', confidence: 'external_only',
+        explanation: configured
+          ? 'An authoritative DNS response contained DNSKEY records. This confirms key presence only; delegation-chain validity and DDoS resilience were not tested.'
+          : 'An authoritative DNS response contained no DNSKEY records for the declared zone. Delegation-chain validity and DDoS resilience were not tested.',
+        createsFinding: !configured,
+        ...(!configured ? { severity: 'medium' } : {}),
+      };
+    }
+    return { verdict: 'inconclusive', confidence: 'external_only', explanation: 'DNSKEY presence metadata was incomplete or inconsistent with the attested query result.', createsFinding: false };
+  }
 
   const blocked = externalResult === 'blocked' || externalResult === 'timeout';
   const connected = externalResult === 'connected' || externalResult === 'allowed';

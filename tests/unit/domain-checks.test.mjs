@@ -45,6 +45,8 @@ describe('run-all check set for a domain', () => {
     assert.equal(runAll[0].check_id, EDGE_DETECTION_CHECK_ID);
     assert.equal(runAll[1].vector_family, 'origin');
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'metadata_marker'));
+    assert.ok(runAll.every((check) => check.evidence_tier !== 'E2'));
+    assert.ok(runAll.every((check) => check.probe_profile?.kind !== 'ops_readiness'));
     assert.ok(runAll.every((check) => check.safety_class === 'safe' && check.risk_class !== 'soc_gated'));
     assert.ok(runAll.every((check) => (check.supported_targets ?? []).includes('fqdn')));
     assert.equal(new Set(runAll.map((check) => check.check_id)).size, runAll.length);

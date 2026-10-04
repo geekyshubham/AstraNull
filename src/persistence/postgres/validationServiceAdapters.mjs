@@ -702,6 +702,12 @@ export function createPostgresValidationServices(repositories, options = {}) {
     penetrated: 'high',
     edge_exposed: 'medium',
   });
+  function findingVerdictSeverity(verdict, run) {
+    // Version 2 DNSSEC grades authoritative key presence, rather than origin reachability.
+    if (verdict.verdict === 'exposed' && run.check_id === 'dns.dnssec_expensive_query.safe'
+      && run.check_version === '2.0.0') return 'medium';
+    return FINDING_VERDICT_SEVERITY[verdict.verdict];
+  }
   const VERDICT_PUBLICATION_AUDIT_ACTIONS = Object.freeze([
     'verdict.published',
     'verdict.finalized_no_observation',
@@ -736,7 +742,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
   }
 
   async function lockedFindingPublication(ctx, verdict, run, client) {
-    const severity = FINDING_VERDICT_SEVERITY[verdict.verdict];
+    const severity = findingVerdictSeverity(verdict, run);
     if (!severity) return null;
     assertDurableVerdictRunBinding(verdict, run);
 
@@ -853,7 +859,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         : await lockedFindingPublication(publicationCtx, verdict, run, client);
       const placement = verdict.placement_confidence ?? {};
       const finalizedWithoutObservation = !opsReadiness
-        && !FINDING_VERDICT_SEVERITY[verdict.verdict];
+        && !findingVerdictSeverity(verdict, run);
 
       await appendAudit(
         publicationCtx,
@@ -1011,7 +1017,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const probeKind = check?.probe_profile?.kind ?? null;
     const probeIoObserved = probeEventHasProbeIo(probeEvent);
     // ADR-0008: verdicts are produced from external probe evidence only.
-    const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved });
+    const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved, probeMetadata: probeEvent?.metadata ?? probeEvent?.metadata_json });
 
     const evidenceIds = events.map((event) => event.id);
 

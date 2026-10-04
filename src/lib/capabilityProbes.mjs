@@ -24,6 +24,7 @@ import {
   resolveProbeRequestBudget,
 } from './probeRequestBudget.mjs';
 import { runDnsTcpAxfrQuery } from './dnsTcpAxfrSession.mjs';
+import { probeDnsWireQuery } from './dnsWireQuery.mjs';
 import {
   BENIGN_CLASS_MARKERS,
   OUTSIDE_IN_SCAN_DEFAULT_BUDGET,
@@ -2023,7 +2024,7 @@ export async function probeWafEnforcement(job, deps = {}) {
 }
 
 /**
- * P1 — DNSSEC posture via DNSKEY/DS presence.
+ * P1 — DNSSEC posture via authoritative DNSKEY presence (no chain validation).
  */
 export async function probeDnssecPosture(job, deps = {}) {
   const kind = 'dnssec_posture';
@@ -2033,53 +2034,45 @@ export async function probeDnssecPosture(job, deps = {}) {
   }
 
   deps = ensureProbeDeadline(job, deps);
-  const resolveFn = deps.resolveFn ?? dns.resolve;
-  let dnskey_count = 0;
-  let ds_count = 0;
-  let requestsSent = 0;
-  const queryBudget = resolveBoundedSequenceBudget(job, { ceiling: 2 });
-  const queries = ['DNSKEY', 'DS'].slice(0, queryBudget);
-
-  for (const recordType of queries) {
-    if (remainingProbeTimeoutMs(job, deps) <= 0) {
-      return deadlineOutcome(job, kind, deps, requestsSent, { dnskey_count, ds_count });
-    }
-    try {
-      const records = await withinRemainingProbeTime(
-        startProbeIoAttempt(
-          deps,
-          `dns_${recordType.toLowerCase()}`,
-          () => resolveFn(zone, recordType),
-          () => { requestsSent += 1; },
-        ),
-        job,
-        deps,
-      );
-      if (recordType === 'DNSKEY') dnskey_count = records?.length ?? 0;
-      if (recordType === 'DS') ds_count = records?.length ?? 0;
-    } catch (error) {
-      if (isAuthoritativeDnsNegative(error)) continue;
-      return dnsResolverFailureOutcome(job, kind, deps, requestsSent, error, {
-        dnskey_count,
-        ds_count,
-      });
-    }
+  const budget = resolveBoundedSequenceBudget(job, { ceiling: 1 });
+  if (budget < 1) return mandatoryBudgetFailure(job, kind);
+  const wire = await (deps.dnssecWireQueryFn ?? probeDnsWireQuery)({
+    ...job,
+    target: { ...job.target, value: zone },
+    constraints: { ...job.constraints, timeout_ms: remainingProbeTimeoutMs(job, deps), max_requests: 1 },
+    probe_profile: { ...job.probe_profile, dns_qtype: 'DNSKEY', dns_transport: 'udp', strict_dns_answer: true },
+  }, deps);
+  if (wire.external_result !== 'connected' || !Number.isSafeInteger(wire.metadata?.matching_answer_count) || wire.metadata.matching_answer_count < 0) {
+    return {
+      ...wire,
+      external_result: wire.external_result === 'timeout' ? 'timeout' : 'error',
+      metadata: withKind(job, kind, {
+        ...wire.metadata,
+        probe_kind: kind,
+        error_class: wire.metadata?.error_class ?? 'non_definitive_dns_response',
+      }),
+    };
   }
-
+  const dnskey_count = wire.metadata.matching_answer_count;
   const durationMs = observedProbeDurationMs(deps);
-  const dnssec_configured = dnskey_count > 0 || ds_count > 0;
+  const dnssec_configured = dnskey_count > 0;
   return {
     external_result: dnssec_configured ? 'blocked' : 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
+      query_name: zone,
+      qtype: 'DNSKEY',
+      rcode: wire.metadata.rcode ?? null,
+      response_bytes: wire.metadata.response_bytes ?? null,
       dnskey_count,
-      ds_count,
+      ds_count: null,
+      dnssec_chain_validated: false,
+      assurance: 'authoritative_dnskey_presence_only',
       dnssec_configured,
       dnssec_missing: !dnssec_configured,
-      resolver_attempts: requestsSent,
       request_counting_basis: 'logical_operations',
     }),
-    requests_sent: requestsSent,
+    requests_sent: wire.requests_sent,
     duration_ms: durationMs,
   };
 }
@@ -2978,7 +2971,7 @@ export async function probeWafEvasionMarker(job, deps = {}) {
       observation_only: externalResult === 'not_run',
       readiness_conclusion: ['blocked', 'connected'].includes(externalResult),
       ...(externalResult === 'not_run'
-        ? { not_run_reason: 'insufficient_evasion_comparison' }
+        ? { not_run_reason: 'insufficient_evasion_comparison', comparison_reason: raw?.metadata?.baseline_blocked === false ? 'baseline_marker_not_blocked' : 'comparison_incomplete' }
         : {}),
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',

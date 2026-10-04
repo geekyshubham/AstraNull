@@ -309,7 +309,12 @@ export function getTargetDetail(ctx, targetId, query = {}) {
     policies,
     observations: [...latestByCheck.values()].map((entry) => ({
       check_id: entry.run?.check_id,
-      run: entry.run ? { ...entry.run, ...runProvenance(entry.run, ctx.tenantId) } : entry.run,
+      run: entry.run ? {
+        ...entry.run, ...runProvenance(entry.run, ctx.tenantId),
+        probe_metadata: (entry.run.correlation?.nonce_hash ? (getStore().events ?? []).find((event) => event.tenant_id === ctx.tenantId
+          && event.test_run_id === entry.run.id && event.signal_type === 'probe_result'
+          && event.producer_kind === 'signed_probe' && event.nonce_hash === entry.run.correlation.nonce_hash)?.metadata : null) ?? {},
+      } : entry.run,
       verdict: entry.verdict,
     })),
   });

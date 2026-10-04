@@ -269,9 +269,9 @@ export function initialDestinationResolverAttemptsForJob(probeProfile, target) {
   if (probeProfile?.kind === 'metadata_marker') return 0;
   const host = targetLogicalHost(target);
   if (!host || isIP(host) !== 0) return 0;
-  // dns_wire_query discovers the authoritative nameserver first, then classifies
+  // DNS wire and DNSSEC posture discover the authoritative nameserver first, then classify
   // that hostname with one A and one AAAA lookup before opening UDP/TCP transport.
-  return probeProfile?.kind === 'dns_wire_query'
+  return ['dns_wire_query', 'dnssec_posture'].includes(probeProfile?.kind)
     ? RESOLVER_ATTEMPTS_PER_HOSTNAME + 1
     : RESOLVER_ATTEMPTS_PER_HOSTNAME;
 }

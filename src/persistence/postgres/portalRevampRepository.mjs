@@ -983,6 +983,7 @@ export function createPortalRevampRepository(pool) {
         const latestRuns = await client.query(
           `SELECT DISTINCT ON (r.check_id)
                   r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at, r.summary_json,
+                  r.probe_external_result, pr.metadata_json AS probe_metadata,
                   r.check_version, r.scenario_version,
                   v.id AS verdict_id, v.verdict, v.evidence_ids,
                   COALESCE(r.producer_kind, ev.producer_kind) AS producer_kind, ev.evidence_label, ev.simulation
@@ -1003,6 +1004,13 @@ export function createPortalRevampRepository(pool) {
              ORDER BY e.timestamp DESC, e.id DESC
              LIMIT 1
            ) ev ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT e.metadata_json FROM events e
+             WHERE e.tenant_id = r.tenant_id AND e.test_run_id = r.id
+               AND e.signal_type = 'probe_result' AND e.producer_kind = 'signed_probe'
+               AND e.nonce_hash = r.correlation_json->>'nonce_hash'
+             ORDER BY e.timestamp DESC, e.id DESC LIMIT 1
+           ) pr ON TRUE
            WHERE r.tenant_id = $1 AND r.target_id = $2
            ORDER BY r.check_id, COALESCE(r.started_at, r.created_at) DESC, r.id DESC`,
           [ctx.tenantId, targetId],

@@ -177,6 +177,33 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.locator('.td-count-grid')).toContainText('Inconclusive');
   });
 
+  test('coverage explains inconclusive comparisons and separates transport observations across themes and widths', async ({ page }) => {
+    await page.route(`**/v1/targets/${VERIFIED_FRESH_TARGET}`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      await route.fulfill({ response, json: { ...payload, coverage: {
+        ...payload.coverage, observation_only_count: 35,
+        inconclusive_reasons: [{ reason: 'baseline_comparison_unavailable', label: 'Blocking comparison unavailable', count: 40, check_ids: ['waf.evasion_base64_wrap.safe'], next_step: 'Review the baseline marker evidence and configure a rule that blocks that harmless marker, then rerun the comparison.' }],
+      } } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+      for (const width of [375, 1440]) {
+        await page.setViewportSize({ width, height: 950 });
+        const coverage = page.locator('.td-coverage');
+        await expect(coverage).toContainText('35 transport or liveness checks are observations only');
+        await expect(coverage).toContainText('40 · Blocking comparison unavailable');
+        await expect(coverage).toContainText('configure a rule that blocks that harmless marker');
+        await expectNoBlockingAxeViolations(page, '.td-coverage');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      }
+    }
+    await page.getByRole('button', { name: 'Review check evidence', exact: true }).click();
+    await expect(page.getByRole('tab', { name: /Validate/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
   test('a freshly onboarded verified domain does not probe on load; detection starts only after review', async ({ page }) => {
     const edgePosts = [];
     page.on('request', (request) => {
