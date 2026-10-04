@@ -106,4 +106,13 @@ describe('portal accessibility hardening', () => {
     assert.match(live, /runScreenReaderSemanticChecks\(page\)/);
     assert.doesNotMatch(live, /unauthorized \? 'fail' : 'pass'/);
   });
+
+  it('adapts live probe terminal to light theme without hardcoded dark surfaces', () => {
+    const targetCss = read('apps/web/react/src/pages/target-detail-view.css');
+    // Ensure no hardcoded black background in the terminal
+    assert.doesNotMatch(targetCss, /background:\s*#090d16/);
+    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-terminal/);
+    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-live-console-wrapper/);
+    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-term-tag\[data-tone="info"\]/);
+  });
 });

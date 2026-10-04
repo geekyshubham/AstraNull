@@ -72,6 +72,13 @@ export function LiveProbeTerminal({
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
+  // Auto-expand whenever active becomes true
+  useEffect(() => {
+    if (active) {
+      setExpanded(true);
+    }
+  }, [active]);
+
   // Filter logs based on search text and tag filter
   const filteredEntries = useMemo(() => {
     let list = entries;
@@ -151,7 +158,21 @@ export function LiveProbeTerminal({
     >
       {/* Terminal Toolbar */}
       <div className="td-terminal-toolbar">
-        <div className="td-terminal-cluster">
+        <div
+          className="td-terminal-cluster"
+          onClick={() => setExpanded((prev) => !prev)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setExpanded((prev) => !prev);
+            }
+          }}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${title}`}
+          style={{ cursor: 'pointer' }}
+        >
           <span className="td-terminal-icon" aria-hidden="true">
             <Terminal size={14} />
           </span>

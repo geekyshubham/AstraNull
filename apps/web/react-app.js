@@ -35757,7 +35757,11 @@ var XS = {
   ERROR: "danger"
 };
 function ZS({ entries: e, active: t = !1, title: n = "Live Probe Logs", subtitle: r, activeCheckLabel: i, requestsSent: a, maxRequests: o, elapsedSeconds: s, compact: c = !1, emptyMessage: l = "No execution logs recorded yet.", className: u = "", defaultExpanded: d = !0 }) {
-  let [f, p] = (0, D.useState)(!0), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)("all"), [v, y] = (0, D.useState)(!1), [b, x] = (0, D.useState)(d), [S, C] = (0, D.useState)(!1), w = (0, D.useRef)(null), T = (0, D.useMemo)(() => {
+  let [f, p] = (0, D.useState)(!0), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)("all"), [v, y] = (0, D.useState)(!1), [b, x] = (0, D.useState)(d), [S, C] = (0, D.useState)(!1), w = (0, D.useRef)(null);
+  (0, D.useEffect)(() => {
+    t && x(!0);
+  }, [t]);
+  let T = (0, D.useMemo)(() => {
     let t = e;
     if (g !== "all" && (g === "probes" ? t = t.filter((e) => [
       "probe",
@@ -35803,6 +35807,15 @@ function ZS({ entries: e, active: t = !1, title: n = "Live Probe Logs", subtitle
         className: "td-terminal-toolbar",
         children: [/* @__PURE__ */ (0, H.jsxs)("div", {
           className: "td-terminal-cluster",
+          onClick: () => x((e) => !e),
+          role: "button",
+          tabIndex: 0,
+          onKeyDown: (e) => {
+            (e.key === "Enter" || e.key === " ") && (e.preventDefault(), x((e) => !e));
+          },
+          "aria-expanded": b,
+          "aria-label": `${b ? "Collapse" : "Expand"} ${n}`,
+          style: { cursor: "pointer" },
           children: [
             /* @__PURE__ */ (0, H.jsx)("span", {
               className: "td-terminal-icon",
@@ -36584,7 +36597,7 @@ function lC({ rows: e, selectedCheckId: t, canSelect: n, onSelect: r, onInspect:
           requestsSent: j?.requestsSent,
           maxRequests: j?.maxRequests,
           className: "td-scan-terminal",
-          defaultExpanded: !1
+          defaultExpanded: !!o
         })]
       }) : null,
       s && c && !o ? /* @__PURE__ */ (0, H.jsx)("p", {

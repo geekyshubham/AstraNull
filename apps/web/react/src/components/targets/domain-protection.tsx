@@ -496,7 +496,7 @@ export function CheckQueue({
             requestsSent={current?.requestsSent}
             maxRequests={current?.maxRequests}
             className="td-scan-terminal"
-            defaultExpanded={false}
+            defaultExpanded={Boolean(scanActive)}
           />
         </div>
       ) : null}
