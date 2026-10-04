@@ -649,3 +649,187 @@
   }
 }
 
+/* Deduplicated findings & detection history drawer */
+.target-detail-view .td-finding-cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.target-detail-view .td-finding-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-finding-link {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.target-detail-view .td-finding-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.target-detail-view .td-occurrence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  background: color-mix(in oklab, var(--accent), transparent 88%);
+  color: var(--accent);
+  border: 1px solid color-mix(in oklab, var(--accent), transparent 70%);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.target-detail-view .td-finding-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-history-time-span {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.target-detail-view .td-opened-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.target-detail-view .td-opened-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.target-detail-view .td-finding-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-history-btn {
+  gap: 4px;
+  font-size: 12px;
+}
+
+/* Inline finding history drawer */
+.target-detail-view .td-finding-history-drawer {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface), var(--fg) 1.5%);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: fadeIn 150ms ease-out;
+}
+
+.target-detail-view .td-finding-history-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.target-detail-view .td-finding-history-drawer-title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.target-detail-view .td-finding-history-drawer-title svg {
+  color: var(--accent);
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.target-detail-view .td-finding-history-drawer-title h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.target-detail-view .td-finding-history-drawer-title p {
+  margin: 2px 0 0 0;
+  font-size: var(--text-xs);
+}
+
+.target-detail-view .td-finding-history-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.target-detail-view .td-finding-history-drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.target-detail-view .td-drawer-history-item {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-drawer-history-item-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-drawer-history-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.target-detail-view .td-drawer-det-id {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.target-detail-view .td-drawer-history-item-bottom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.target-detail-view .td-drawer-run-id {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.target-detail-view .td-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+

@@ -2,9 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
+  ExternalLink,
   Eye,
   FileCheck2,
+  History,
   Pencil,
   Play,
   Plus,
@@ -15,6 +19,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react';
+import { dedupeFindingsForTarget, type TargetDeduplicatedFinding } from '../lib/findings-helpers';
 import {
   CRITICALITY_VALUES,
   SERVICE_ROLES,
@@ -538,6 +543,13 @@ export function TargetDetailView({
   });
   const runsRecent = runsLive.items;
   const findings = Array.isArray(detail?.findings) ? detail!.findings : [];
+  const [expandedFindingHistoryId, setExpandedFindingHistoryId] = useState<string | null>(null);
+  const deduplicatedFindings = useMemo(() => dedupeFindingsForTarget(findings, target, checks), [findings, target, checks]);
+  const deduplicatedOpenFindings = useMemo(() => deduplicatedFindings.filter((item) => item.status === 'open'), [deduplicatedFindings]);
+  const expandedFindingHistory = useMemo(
+    () => deduplicatedFindings.find((item) => item.representativeId === expandedFindingHistoryId) ?? null,
+    [deduplicatedFindings, expandedFindingHistoryId]
+  );
   const ownershipHistory = buildOwnershipHistory(verification);
   const declaration = detail?.declaration ?? null;
   const declared = declarationSummary(declaration);
@@ -1366,25 +1378,116 @@ export function TargetDetailView({
     } },
   ];
 
-  const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'severity', label: 'Severity', render: (item) => <Badge tone={severityTone(getString(item, ['severity'], ''))}>{formatSeverityLabel(getString(item, ['severity'], 'unknown'))}</Badge> },
-    { key: 'title', label: 'Finding', render: (item) => (
-      <span className="entity-cell-stack">
-        <a href={buildDetailHref('finding-detail', getString(item, ['id'], ''))}>{plainFindingTitle(item, [target], checks)}</a>
-        <small className="mono">{getString(item, ['id'], '')}</small>
-      </span>
-    ) },
-    { key: 'state', label: 'Lifecycle', render: (item) => formatLabel(findingStatus(item)) },
-    { key: 'opened', label: 'Opened', render: (item) => formatDate(item.opened_at ?? item.created_at) },
-    { key: 'assignee', label: 'Assignee', render: (item) => getString(item, ['assignee'], '') || <span className="td-muted">Unassigned</span> },
-    { key: 'evidence', label: 'Evidence', render: (item) => {
-      const id = getString(item, ['id'], '');
-      return (
-        <Button size="sm" variant="ghost" data-focus-key={`finding-${id}`} onClick={(event) => { event.stopPropagation(); inspectFinding(item); }} aria-label={`View evidence for finding ${id}`}>
-          <Eye size={14} aria-hidden="true" />View
-        </Button>
-      );
-    } },
+  const findingColumns: TableColumn<TargetDeduplicatedFinding>[] = [
+    {
+      key: 'severity',
+      label: 'Severity',
+      render: (item) => (
+        <Badge tone={severityTone(item.severity)}>
+          {formatSeverityLabel(item.severity || 'unknown')}
+        </Badge>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Finding',
+      render: (item) => {
+        const isMulti = item.detectionCount > 1;
+        return (
+          <span className="entity-cell-stack td-finding-cell-stack">
+            <span className="td-finding-title-row">
+              <a
+                href={buildDetailHref('finding-detail', item.representativeId)}
+                className="td-finding-link"
+              >
+                {item.title}
+              </a>
+              {isMulti ? (
+                <span
+                  className="td-occurrence-badge"
+                  title={`Detected ${item.detectionCount} times across outside-in validation runs`}
+                >
+                  <History size={11} aria-hidden="true" />
+                  {item.detectionCount} detections
+                </span>
+              ) : null}
+            </span>
+            <span className="td-finding-meta-row">
+              <small className="mono">{item.representativeId}</small>
+              {isMulti && item.firstOpenedAt && item.lastOpenedAt ? (
+                <small className="td-history-time-span">
+                  Detected {item.detectionCount}× · Latest: {formatDate(item.lastOpenedAt)}
+                </small>
+              ) : null}
+            </span>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'state',
+      label: 'Lifecycle',
+      render: (item) => formatLabel(item.state || 'open'),
+    },
+    {
+      key: 'opened',
+      label: 'Opened',
+      render: (item) => (
+        <span className="td-opened-stack">
+          <span>{formatDate(item.lastOpenedAt ?? item.firstOpenedAt)}</span>
+          {item.detectionCount > 1 ? (
+            <small className="td-muted td-opened-hint">Latest of {item.detectionCount} detections</small>
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      key: 'assignee',
+      label: 'Assignee',
+      render: (item) => item.assignee || <span className="td-muted">Unassigned</span>,
+    },
+    {
+      key: 'evidence',
+      label: 'Evidence & History',
+      render: (item) => {
+        const id = item.representativeId;
+        const isMulti = item.detectionCount > 1;
+        const isExpanded = expandedFindingHistoryId === id;
+        return (
+          <div className="td-finding-row-actions">
+            <Button
+              size="sm"
+              variant="ghost"
+              data-focus-key={`finding-${id}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                inspectFinding(item.representative);
+              }}
+              aria-label={`View evidence for finding ${id}`}
+            >
+              <Eye size={14} aria-hidden="true" />View
+            </Button>
+            {isMulti ? (
+              <Button
+                size="sm"
+                variant={isExpanded ? 'secondary' : 'ghost'}
+                className="td-history-btn"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setExpandedFindingHistoryId(isExpanded ? null : id);
+                }}
+                aria-label={`Toggle detection history for finding ${id}`}
+                aria-expanded={isExpanded}
+              >
+                <History size={13} aria-hidden="true" />
+                History ({item.detectionCount})
+                {isExpanded ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+              </Button>
+            ) : null}
+          </div>
+        );
+      },
+    },
   ];
 
   const workspaceTabs = [
@@ -1521,16 +1624,109 @@ export function TargetDetailView({
             <header className="td-section-head">
               <div>
                 <h2 id="td-findings-title">Findings on this target</h2>
-                <p>{openFindings.length} open of {findings.length} recorded. Each opens the evidence that created it; later results are shown separately.</p>
+                <p>
+                  {openFindings.length} open of {findings.length} recorded.
+                  {deduplicatedFindings.length < findings.length
+                    ? ` Deduplicated into ${deduplicatedFindings.length} unique finding${deduplicatedFindings.length === 1 ? '' : 's'}.`
+                    : ''}{' '}
+                  Each opens the full detection history and evidence.
+                </p>
               </div>
             </header>
             <DataTable
               columns={findingColumns}
-              items={findings}
-              getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => (getString(item, ['id'], '') === inspectedFindingId ? { className: 'is-selected', 'aria-current': 'true' } : {})}
+              items={deduplicatedFindings}
+              getRowId={(item) => item.representativeId}
+              getRowProps={(item) => (item.representativeId === inspectedFindingId ? { className: 'is-selected', 'aria-current': 'true' } : {})}
               empty={emptyStateFromApi({ icon: TriangleAlert, meta: detail.sectionMeta?.findings })}
             />
+
+            {expandedFindingHistory ? (
+              <div
+                className="td-finding-history-drawer"
+                role="region"
+                aria-label={`Detection history for ${expandedFindingHistory.title}`}
+              >
+                <div className="td-finding-history-drawer-head">
+                  <div className="td-finding-history-drawer-title">
+                    <History size={16} aria-hidden="true" />
+                    <div>
+                      <h3>Detection history: {expandedFindingHistory.title}</h3>
+                      <p className="td-muted">
+                        {expandedFindingHistory.detectionCount} detections recorded across outside-in validation runs.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="td-finding-history-drawer-actions">
+                    <a
+                      href={buildDetailHref('finding-detail', expandedFindingHistory.representativeId)}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      <ExternalLink size={13} aria-hidden="true" /> Detailed finding page
+                    </a>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setExpandedFindingHistoryId(null)}
+                      aria-label="Close detection history"
+                    >
+                      <X size={15} aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="td-finding-history-drawer-list" role="list">
+                  {expandedFindingHistory.detections.map((detection, index) => {
+                    const detId = getString(detection, ['id'], '');
+                    const runId = getString(detection, ['test_run_id', 'testRunId'], '');
+                    const isLatest = index === 0;
+                    const isInitial = index === expandedFindingHistory.detections.length - 1 && expandedFindingHistory.detectionCount > 1;
+                    const openedDate = detection.opened_at ?? detection.created_at;
+                    const detSeverity = getString(detection, ['severity'], 'medium');
+
+                    return (
+                      <div key={detId || index} className="td-drawer-history-item" role="listitem">
+                        <div className="td-drawer-history-item-top">
+                          <span className="td-drawer-history-time">{formatDate(openedDate)}</span>
+                          {isLatest ? (
+                            <Badge tone="warn">Latest detection</Badge>
+                          ) : isInitial ? (
+                            <Badge tone="default">Initial detection</Badge>
+                          ) : (
+                            <Badge tone="default">Detection #{expandedFindingHistory.detectionCount - index}</Badge>
+                          )}
+                          <Badge tone={severityTone(detSeverity)}>{formatSeverityLabel(detSeverity)}</Badge>
+                          <span className="mono td-drawer-det-id">{detId}</span>
+                        </div>
+                        <div className="td-drawer-history-item-bottom">
+                          {runId ? (
+                            <span className="td-drawer-run-id">
+                              Run: <span className="mono">{runId}</span>
+                            </span>
+                          ) : null}
+                          <div className="td-drawer-actions">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => inspectFinding(detection)}
+                              aria-label={`View evidence for detection ${detId}`}
+                            >
+                              <Eye size={13} aria-hidden="true" /> View evidence
+                            </Button>
+                            <a
+                              href={buildDetailHref('finding-detail', detId)}
+                              className="td-inline-link"
+                            >
+                              Finding page
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
