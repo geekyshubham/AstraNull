@@ -1139,7 +1139,7 @@
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
-        <dd>fqdn, dns, ip</dd>
+        <dd>ip</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1185,7 +1185,7 @@
       <p class="desc">Low-rate declared DNS query type readiness without high QPS or resolver abuse.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>DNSKEY/DS lookup observes DNSSEC posture without sustained load.</dd>
+        <dd>One authoritative DNSKEY query records key presence only; delegation-chain validity and flood resilience remain unassessed.</dd>
         <dt>How we detect</dt>
         <dd>E3: DNSKEY/DS lookups for DNSSEC signals. Max 2 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
