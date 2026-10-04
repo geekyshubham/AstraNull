@@ -146,6 +146,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page).toHaveURL(/check=waf\.marker_rule\.safe/);
     await gapRow.getByRole('button', { name: 'View evidence' }).click();
     await expect(page.locator('.inspector-panel').getByRole('heading', { name: 'Check result' })).toBeVisible();
+    await expect(page.locator('.inspector-panel')).not.toContainText(/wafw00f|cdncheck/i);
+    await expect(page.locator('.target-detail-view')).not.toContainText(/wafw00f|cdncheck/i);
     await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.marker_rule\.safe&ev_run=run_fx_1/);
     await page.keyboard.press('Escape');
     await panel.getByRole('button', { name: /^All/ }).click();
