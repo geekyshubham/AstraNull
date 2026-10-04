@@ -1,5 +1,5 @@
 import { findingStatus as normalizeFindingStatus, isFindingOpen as lifecycleIsFindingOpen } from './finding-lifecycle.mjs';
-import { plainCheckName, plainVerdictLabel } from './plain-language.mjs';
+import { plainCheckName, plainFindingTitle, plainVerdictLabel } from './plain-language.mjs';
 import type { DataItem } from './types';
 
 export type FindingTabId = 'open' | 'target-group' | 'vector' | 'accepted-risk' | 'closed' | 'sla';
@@ -615,4 +615,117 @@ export function resolveFindingRetestAction(finding: DataItem) {
     kind: 'safe-run' as const,
     checkId,
   };
+}
+
+export type TargetDeduplicatedFinding = {
+  key: string;
+  id: string;
+  representativeId: string;
+  representative: DataItem;
+  title: string;
+  severity: string;
+  status: string;
+  state: string;
+  assignee: string;
+  firstOpenedAt: string | null;
+  lastOpenedAt: string | null;
+  firstOpenedTimestamp: number | null;
+  lastOpenedTimestamp: number | null;
+  detectionCount: number;
+  detections: DataItem[];
+  evidenceIds: string[];
+  testRunIds: string[];
+};
+
+/**
+ * Groups and deduplicates recurring finding detections on a single target into unique findings,
+ * tracking full detection history, occurrence counts, and timestamps.
+ */
+export function dedupeFindingsForTarget(
+  findings: DataItem[],
+  target: DataItem | null = null,
+  checks: DataItem[] = []
+): TargetDeduplicatedFinding[] {
+  const buckets = new Map<string, DataItem[]>();
+
+  findings.forEach((finding) => {
+    const checkId = getString(finding, ['check_id', 'check'], '').trim();
+    const ruleKey = findingRuleKey(finding);
+    const groupKey = `${checkId}::${ruleKey}` || getString(finding, ['id'], '');
+    const bucket = buckets.get(groupKey) ?? [];
+    bucket.push(finding);
+    buckets.set(groupKey, bucket);
+  });
+
+  return [...buckets.entries()].map(([key, rawMembers]) => {
+    const sorted = [...rawMembers].sort((a, b) => {
+      const timeA = parseFindingTimestamp(a.opened_at ?? a.created_at) ?? 0;
+      const timeB = parseFindingTimestamp(b.opened_at ?? b.created_at) ?? 0;
+      return timeB - timeA || String(b.id ?? '').localeCompare(String(a.id ?? ''));
+    });
+
+    const ranked = [...sorted].sort((a, b) => {
+      const openDelta = Number(isFindingOpen(b)) - Number(isFindingOpen(a));
+      if (openDelta) return openDelta;
+      const sevDelta = findingSeverityRank(a.severity) - findingSeverityRank(b.severity);
+      if (sevDelta) return sevDelta;
+      const timeA = parseFindingTimestamp(a.opened_at ?? a.created_at) ?? 0;
+      const timeB = parseFindingTimestamp(b.opened_at ?? b.created_at) ?? 0;
+      return timeB - timeA;
+    });
+
+    const lead = ranked[0] ?? sorted[0] ?? {};
+    const leadId = getString(lead, ['id'], '');
+    const worst = [...sorted].sort((a, b) => findingSeverityRank(a.severity) - findingSeverityRank(b.severity))[0] ?? lead;
+
+    let firstOpenedTimestamp: number | null = null;
+    let lastOpenedTimestamp: number | null = null;
+    let firstOpenedAt: string | null = null;
+    let lastOpenedAt: string | null = null;
+    const evidenceSet = new Set<string>();
+    const testRunSet = new Set<string>();
+
+    sorted.forEach((member) => {
+      const rawOpened = getString(member, ['opened_at', 'created_at', 'openedAt', 'createdAt'], '');
+      const parsedTime = parseFindingTimestamp(rawOpened);
+      if (parsedTime !== null) {
+        if (firstOpenedTimestamp === null || parsedTime < firstOpenedTimestamp) {
+          firstOpenedTimestamp = parsedTime;
+          firstOpenedAt = rawOpened;
+        }
+        if (lastOpenedTimestamp === null || parsedTime > lastOpenedTimestamp) {
+          lastOpenedTimestamp = parsedTime;
+          lastOpenedAt = rawOpened;
+        }
+      }
+      const evIds = Array.isArray(member.evidence_ids) ? member.evidence_ids : [];
+      evIds.forEach((id: string) => evidenceSet.add(String(id)));
+      const trId = getString(member, ['test_run_id', 'testRunId'], '');
+      if (trId) testRunSet.add(trId);
+    });
+
+    const targetList = target ? [target] : [];
+    const title = plainFindingTitle(lead, targetList, checks);
+    const status = findingStatus(lead);
+
+    return {
+      key,
+      id: leadId,
+      representativeId: leadId,
+      representative: lead,
+      title,
+      severity: getString(worst, ['severity'], 'medium'),
+      status,
+      state: status,
+      assignee: getString(lead, ['assignee', 'owner', 'rem_owner'], ''),
+      firstOpenedAt,
+      lastOpenedAt,
+      firstOpenedTimestamp,
+      lastOpenedTimestamp,
+      detectionCount: sorted.length,
+      detections: sorted,
+      evidenceIds: [...evidenceSet],
+      testRunIds: [...testRunSet],
+    };
+  });
 }

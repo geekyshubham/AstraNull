@@ -26,7 +26,8 @@ import {
   isFindingSlaBreach,
   resolveFindingRetestAction,
   normalizeSeverity,
-  findingSlaHours
+  findingSlaHours,
+  dedupeFindingsForTarget
 } from '../../apps/web/react/src/lib/findings-helpers.ts';
 import { findingGroupSlaHours } from '../../apps/web/react/src/lib/finding-groups.mjs';
 
@@ -400,6 +401,81 @@ describe('findings-helpers', () => {
       assert.equal(overdue.tone, 'danger');
       const fresh = slaFor([{ id: 'o2', title: 'Drift', status: 'open', severity: 'critical', created_at: '2026-07-05T08:00:00.000Z' }]);
       assert.equal(fresh.label, '20h left');
+    });
+  });
+
+  describe('dedupeFindingsForTarget', () => {
+    it('deduplicates multiple detections of the same finding on a target into one record with history', () => {
+      const target = { id: 'tgt_bd500af0d16a1d86', value: 'aistripped.com' };
+      const rawFindings = [
+        {
+          id: 'fnd_6e85fa5609963a64',
+          check_id: 'waf.fingerprint.safe',
+          title: 'Direct server access was found on aistripped.com',
+          severity: 'medium',
+          status: 'open',
+          created_at: '2026-10-03T18:14:00.000Z',
+          opened_at: '2026-10-03T18:14:00.000Z',
+          test_run_id: 'run_4',
+          evidence_ids: ['ev_4']
+        },
+        {
+          id: 'fnd_b1224877af2634d6',
+          check_id: 'waf.fingerprint.safe',
+          title: 'Direct server access was found on aistripped.com',
+          severity: 'medium',
+          status: 'open',
+          created_at: '2026-10-03T17:42:00.000Z',
+          opened_at: '2026-10-03T17:42:00.000Z',
+          test_run_id: 'run_3',
+          evidence_ids: ['ev_3']
+        },
+        {
+          id: 'fnd_174cff2c3836d157',
+          check_id: 'waf.fingerprint.safe',
+          title: 'Direct server access was found on aistripped.com',
+          severity: 'medium',
+          status: 'open',
+          created_at: '2026-10-03T17:23:00.000Z',
+          opened_at: '2026-10-03T17:23:00.000Z',
+          test_run_id: 'run_2',
+          evidence_ids: ['ev_2']
+        },
+        {
+          id: 'fnd_74883adf24a007ea',
+          check_id: 'waf.fingerprint.safe',
+          title: 'Direct server access was found on aistripped.com',
+          severity: 'medium',
+          status: 'open',
+          created_at: '2026-10-03T15:18:00.000Z',
+          opened_at: '2026-10-03T15:18:00.000Z',
+          test_run_id: 'run_1',
+          evidence_ids: ['ev_1']
+        }
+      ];
+
+      const deduped = dedupeFindingsForTarget(rawFindings, target);
+      assert.equal(deduped.length, 1);
+      const item = deduped[0];
+      assert.equal(item.detectionCount, 4);
+      assert.equal(item.representativeId, 'fnd_6e85fa5609963a64');
+      assert.equal(item.firstOpenedAt, '2026-10-03T15:18:00.000Z');
+      assert.equal(item.lastOpenedAt, '2026-10-03T18:14:00.000Z');
+      assert.equal(item.detections.length, 4);
+      assert.equal(item.detections[0].id, 'fnd_6e85fa5609963a64');
+      assert.equal(item.detections[3].id, 'fnd_74883adf24a007ea');
+      assert.deepEqual(item.evidenceIds.sort(), ['ev_1', 'ev_2', 'ev_3', 'ev_4']);
+      assert.deepEqual(item.testRunIds.sort(), ['run_1', 'run_2', 'run_3', 'run_4']);
+    });
+
+    it('keeps distinct finding types separated', () => {
+      const target = { id: 'tgt_1', value: 'example.com' };
+      const rawFindings = [
+        { id: 'f1', check_id: 'check.a', title: 'Direct server access was found', severity: 'medium', status: 'open' },
+        { id: 'f2', check_id: 'check.b', title: 'Missing TLS 1.3', severity: 'low', status: 'open' }
+      ];
+      const deduped = dedupeFindingsForTarget(rawFindings, target);
+      assert.equal(deduped.length, 2);
     });
   });
 });

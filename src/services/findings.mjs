@@ -19,7 +19,7 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   const existing = store.findings.find(
     (f) =>
       f.tenant_id === ctx.tenantId &&
-      f.target_group_id === run.target_group_id &&
+      (f.target_group_id ?? null) === (run.target_group_id ?? null) &&
       f.target_id === target.id &&
       f.check_id === run.check_id &&
       f.status === 'open',

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
 import { ArrowLeft, Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
+import { FindingDetectionHistory } from '../components/findings/finding-detection-history';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { readFindingLineage } from '../lib/finding-lineage.mjs';
 import { useProgressiveFindings } from '../components/findings/use-server-findings';
@@ -813,6 +814,27 @@ export function FindingDetailView({
           </CardContent>
         </Card>
       </div>
+
+      <FindingDetectionHistory
+        entity={entity}
+        entityId={entityId}
+        targetId={targetId}
+        targetDisplay={targetId ? (getString(data.targets?.find((t) => t.id === targetId), ['value', 'hostname'], '') || getString(entity, ['target_hostname', 'target_value'], targetId)) : ''}
+        checkId={checkId}
+        checks={data.checks}
+        dataFindings={data.findings}
+        config={config}
+        session={session}
+        onInspectFinding={(finding) => {
+          const id = getString(finding, ['id'], '');
+          if (!id) return;
+          openInspector({ entry: 'finding', finding_id: id, target_id: targetId || undefined, check_id: getString(finding, ['check_id'], '') || undefined }, `finding-${id}`);
+        }}
+        onInspectRun={(runId, runCheckId) => {
+          if (!runId) return;
+          openInspector({ entry: 'check_result', target_id: targetId || undefined, check_id: runCheckId || checkId, test_run_id: runId }, `run-${runId}`);
+        }}
+      />
 
       <Card>
         <CardHeader>
