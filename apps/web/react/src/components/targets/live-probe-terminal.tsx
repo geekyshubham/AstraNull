@@ -172,9 +172,9 @@ export function LiveProbeTerminal({
             </code>
           ) : null}
           {requestsSent !== null && requestsSent !== undefined ? (
-            <span className="td-terminal-stat" title="Probes dispatched">
+            <span className="td-terminal-stat" title="Recorded logical operations; probe limit excludes destination resolution">
               <strong className="tabular-nums">{requestsSent}</strong>
-              {maxRequests ? ` / ${maxRequests}` : ''} probes
+              {' operations'}{maxRequests ? ` · probe limit ${maxRequests}` : ''}
             </span>
           ) : null}
           {elapsedSeconds !== null && elapsedSeconds !== undefined && elapsedSeconds > 0 ? (

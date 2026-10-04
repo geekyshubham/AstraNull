@@ -562,7 +562,8 @@ export function TargetDetailView({
   const effectiveness = useMemo(() => markerEffectiveness(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
   const originStatus = originExposureStatus(profileInput);
   const scanActive = isScanActive(scan);
-  const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
+  const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))
+    && runAll.some((check) => getString(check, ['check_id'], '') === getString(run, ['check_id'], ''))) ?? null;
   const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
   const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId) ?? null;
   const activityRunId = activityRow?.runId || (!selectedRow ? getString(activeStandalone, ['id'], '') : '');
@@ -871,7 +872,7 @@ export function TargetDetailView({
       }) as DataItem;
       setReview(null);
       setScan(created);
-      setBanner(`Started ${runAll.length} bounded checks, one at a time. Results appear on each check as they land.`);
+      setBanner(`Queued ${runAll.length} bounded checks to run one at a time. Results appear on each check as they land.`);
     } catch (err) {
       setReview(null);
       setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'The multi-check run could not start.')));
@@ -1497,7 +1498,7 @@ export function TargetDetailView({
               selectedRunEvents={selectedRunEvents}
               targetValue={targetDisplayValue(target)}
             />
-            {canStartBoundedRun ? (
+            {canStartBoundedRun && !scanActive && !activeStandalone ? (
               <div className="td-start-bar" role="region" aria-label="Start the selected check">
                 <span className="td-start-copy">
                   {selectedRow ? <><strong>{selectedRow.name}</strong> on <span className="mono">{targetDisplayValue(target)}</span></> : 'No check selected'}

@@ -6,17 +6,25 @@ export function createProbeActivityReporter(job, sendBatch, { onStop, heartbeatM
   let closed = false;
   let sending = false;
   let stopped = false;
+  let retries = 0;
   const pending = [];
   let inFlight = Promise.resolve();
   const flush = () => {
     if (closed || stopped || sending) return inFlight;
     sending = true;
-    const items = pending.splice(0, MAX_PROBE_ACTIVITY_BATCH);
+    const items = [];
+    while (pending.length && items.length < MAX_PROBE_ACTIVITY_BATCH) {
+      const candidate = [...items, pending[0]];
+      if (Buffer.byteLength(JSON.stringify({ leased_at: job.leased_at, items: candidate })) > 28 * 1024) break;
+      items.push(pending.shift());
+    }
     inFlight = Promise.resolve().then(() => sendBatch({ leased_at: job.leased_at, items }))
       .then((response) => {
-        if ([403, 409].includes(response?.status)) { stopped = true; onStop?.(); }
+        if ([401, 403, 409].includes(response?.status)) { stopped = true; onStop?.(); }
+        else if ((response?.status >= 500 || response?.status === 429) && retries < 2) { retries += 1; pending.unshift(...items); }
+        else retries = 0;
       })
-      .catch(() => { /* A control-plane outage must not fabricate request logs or alter proof. */ })
+      .catch(() => { if (retries < 2) { retries += 1; pending.unshift(...items); } })
       .finally(() => {
         sending = false;
         if (pending.length && !closed && !stopped) flush();

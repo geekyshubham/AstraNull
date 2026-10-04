@@ -1381,6 +1381,10 @@ export async function executeProbeForJob(job, deps = {}) {
   });
   const executionDeps = {
     ...deps,
+    activityBaseUrl: job.target?.value,
+    activitySensitiveValues: [deps.probeWorkerSecret, job.nonce, ...(() => {
+      try { return [...new URL(job.target?.value).searchParams.values()]; } catch { return []; }
+    })()].filter((value) => typeof value === 'string' && value.length >= 4),
     resolveCnameFn: deps.resolveCnameFn ?? dns.resolveCname,
     rawResolve4Fn,
     rawResolve6Fn,

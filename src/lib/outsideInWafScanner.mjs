@@ -820,7 +820,7 @@ async function runBaselineGet(
     requestsSent += 1;
     const { res, bodyText, error } = await boundedRequest(
       currentUrl,
-      { method: 'GET', headers },
+      { method: 'GET', headers, activity_phase: 'baseline' },
       timeoutMs,
       deps,
     );
@@ -910,7 +910,7 @@ export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTE
   return new TextDecoder('utf-8', { fatal: false }).decode(body);
 }
 
-async function boundedRequest(url, { method = 'GET', headers = {}, body = null }, timeoutMs, deps) {
+async function boundedRequest(url, { method = 'GET', headers = {}, body = null, activity_phase }, timeoutMs, deps) {
   const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, deps));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -921,6 +921,7 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
       body,
       redirect: 'manual',
       signal: controller.signal,
+      activity_phase,
     });
     if (!res || !Number.isInteger(res.status)) {
       const error = new Error('invalid HTTP response from probe transport');
@@ -1060,7 +1061,7 @@ export async function runOutsideInWafScan(options = {}) {
   async function runGetPhase(phase, requestUrl, headers) {
     if (requestsSent >= budget) return null;
     requestsSent += 1;
-    const { res, bodyText, error } = await boundedRequest(requestUrl, { method: 'GET', headers }, timeoutMs, deps);
+    const { res, bodyText, error } = await boundedRequest(requestUrl, { method: 'GET', headers, activity_phase: phase }, timeoutMs, deps);
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
@@ -1262,6 +1263,7 @@ export async function runOutsideInWafScan(options = {}) {
     const formBody = `${randomParamName()}=${encodeURIComponent(BENIGN_CLASS_MARKERS.sqli)}`;
     const { res, bodyText, error } = await boundedRequest(url, {
       method: 'POST',
+      activity_phase: 'content_type_confusion',
       headers: {
         ...DEFAULT_BROWSER_HEADERS,
         'Content-Type': 'application/json',
@@ -1301,6 +1303,7 @@ export async function runOutsideInWafScan(options = {}) {
         'Content-Length': String(multipartBody.length),
       },
       body: multipartBody,
+      activity_phase: 'multipart_confusion',
     }, timeoutMs, deps);
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }

@@ -23,7 +23,7 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const path = '/internal/probe/jobs/job_activity/activity';
-  const body = { leased_at: at, items: [{ sequence: 1, at, stage: 'request_started', method: 'GET', url: 'https://owned.test/path?key=private' }] };
+  const body = { leased_at: at, items: [{ sequence: 1, at, stage: 'request_started', method: 'GET', url: 'https://owned.test/path?key=private', request_content_type: 'application/json', request_payload_preview: '{"marker":"inert","password":"private-password"}' }] };
   const post = (payload = body, workerId = 'worker_activity', tenantId = 'ten_demo') => request(base, 'POST', path, { body: payload,
     headers: probeWorkerAuthHeaders(workerId, { method: 'POST', path, bodyText: JSON.stringify(payload), tenantId }, SECRET) });
   try {
@@ -37,6 +37,7 @@ test('signed activity is lease-bound, immutable, tenant-scoped, read-only, and r
     const read = await request(base, 'GET', '/v1/test-runs/run_activity/activity', { headers: demoHeaders('viewer') });
     assert.equal(read.status, 200);
     assert.ok(read.json.items.some((item) => item.method === 'GET'));
+    assert.ok(read.json.items.some((item) => item.request_payload_preview?.includes('inert')));
     assert.equal(JSON.stringify(read.json).includes('private'), false);
     assert.equal(store.testRuns[0].status, 'collecting');
     assert.deepEqual({ events: store.events.length, runs: store.testRuns.length, audits: store.auditLog.length }, before);

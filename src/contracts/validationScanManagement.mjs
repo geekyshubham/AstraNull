@@ -697,7 +697,10 @@ export function buildActivityItems({ scan, steps = [], auditEntries = [], runEve
         status_code: event.metadata?.status_code ?? event.metadata?.response_status ?? undefined,
         requests_sent: event.metadata?.safety_attestation?.requests_sent ?? undefined,
         producer_kind: event.producer_kind ?? undefined,
-        ...(event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe' ? { activity: event.metadata?.activity } : {}),
+        ...(event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe' ? {
+          activity: event.metadata?.activity, vector_family: event.metadata?.vector_family,
+          probe_kind: event.metadata?.probe_kind, marker_class: event.metadata?.marker_class,
+        } : {}),
       },
     });
   }

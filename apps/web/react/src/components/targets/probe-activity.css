@@ -13,13 +13,13 @@
 .probe-activity-scroll { max-height: 440px; max-width: 100%; overflow: auto; overscroll-behavior: contain; border-block: 1px solid var(--border); }
 .probe-activity-table { border-collapse: collapse; width: 100%; min-width: 600px; table-layout: fixed; font-size: .8125rem; }
 .probe-activity-table th { background: var(--surface-sunk); text-align: left; font-weight: 500; color: var(--fg-2); position: sticky; top: 0; z-index: 1; }
-.probe-activity-table th, .probe-activity-table td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.probe-activity-table th, .probe-activity-table td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
 .probe-activity-table th:nth-child(1) { width: 155px; }
-.probe-activity-table th:nth-child(2) { width: 115px; }
+.probe-activity-table th:nth-child(2) { width: 145px; }
 .probe-activity-table th:nth-child(4) { width: 115px; }
 .probe-activity-table th:nth-child(5) { width: 44px; }
 .probe-activity-table time, .probe-activity-table code { font-family: var(--font-mono, ui-monospace, monospace); }
-.probe-activity-table code { display: block; overflow-wrap: anywhere; color: var(--fg-2); margin-top: 4px; }
+.probe-activity-table code { display: block; overflow-wrap: anywhere; color: var(--fg-2); margin-top: 4px; background: transparent; }
 .probe-activity-table small { display: block; margin-top: 4px; color: var(--fg-2); }
 .probe-activity-operation { font-weight: 500; }
 .probe-activity-expand { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; background: transparent; border: 0; color: var(--fg-2); border-radius: 4px; cursor: pointer; }
@@ -29,6 +29,9 @@
 .probe-activity-detail dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 0; }
 .probe-activity-detail dt { color: var(--fg-2); text-transform: capitalize; font-size: .75rem; }
 .probe-activity-detail dd { margin: 4px 0 0; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); }
+.probe-activity-detail [data-payload] { grid-column: 1 / -1; }
+.probe-activity-detail [data-payload] dd { white-space: pre-wrap; max-height: 260px; overflow: auto; border: 1px solid var(--border-soft); padding: 10px; border-radius: 6px; font-size: .8125rem; }
+.probe-activity-description { margin: 0 0 12px; max-width: 75ch; color: var(--fg); line-height: 1.6; }
 .probe-activity-note, .probe-activity-error { padding: 0 20px; font-size: .75rem; color: var(--fg-2); }
 .probe-activity-error { color: var(--danger); }
 .probe-activity-empty { text-align: center; padding: 28px 16px !important; color: var(--fg-2); }
@@ -38,4 +41,15 @@
   .probe-activity-status { padding-inline: 12px; }
   .probe-activity-detail dl { grid-template-columns: 1fr; }
   .probe-activity-note, .probe-activity-error { padding-inline: 12px; }
+  .probe-activity-table { display: block; min-width: 0; }
+  .probe-activity-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .probe-activity-table tbody { display: block; }
+  .probe-activity-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 1px solid var(--border); padding: 10px 12px; gap: 8px; }
+  .probe-activity-table td { border: 0; padding: 0; min-width: 0; }
+  .probe-activity-table td:nth-child(2) { text-align: right; color: var(--fg-2); font-size: .75rem; }
+  .probe-activity-table td:nth-child(3) { grid-column: 1 / -1; }
+  .probe-activity-table td:nth-child(4)::before { content: 'Response · '; color: var(--fg-2); }
+  .probe-activity-table td:nth-child(5) { justify-self: end; }
+  .probe-activity-table .probe-activity-detail { display: block; }
+  .probe-activity-expand { min-width: 44px; min-height: 36px; }
 }

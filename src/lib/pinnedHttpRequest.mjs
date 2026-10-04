@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import tls from 'node:tls';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { emitProbeActivity, activityUrl } from './probeActivity.mjs';
+import { previewRequest, previewContentType, captureResponsePayload } from './probePayloadPreview.mjs';
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5000;
 const MAX_TRANSPORT_TIMEOUT_MS = 30_000;
@@ -240,6 +241,8 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     ? (deps.httpsRequestFn ?? https.request)
     : (deps.httpRequestFn ?? http.request);
   const headers = headersWithHost(url, options.headers);
+  const commonActivity = { operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue),
+    ...(options.activity_phase ? { phase: options.activity_phase } : {}) };
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -255,14 +258,26 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
         return;
       }
       settled = true;
-      emitProbeActivity(deps, { stage: 'response_received', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), ...(Number.isInteger(res.statusCode) ? { status_code: res.statusCode } : {}), duration_ms: Date.now() - startedAt });
+      const contentType = previewContentType(res.headers?.['content-type']);
+      const responseActivity = { ...commonActivity, ...(Number.isInteger(res.statusCode) ? { status_code: res.statusCode } : {}),
+        ...(contentType ? { response_content_type: contentType } : {}) };
+      emitProbeActivity(deps, { stage: 'response_received', ...responseActivity, duration_ms: Date.now() - startedAt });
+      let body = Readable.toWeb(res);
+      if (typeof deps.onProbeActivity === 'function') {
+        const capture = captureResponsePayload(deps, responseActivity, contentType);
+        if (commonActivity.method === 'HEAD' || [204, 304].includes(res.statusCode)) capture.complete();
+        else body = body.pipeThrough(new TransformStream({
+          transform(chunk, controller) { try { capture.chunk(chunk); } catch { /* Bounded observation only. */ } controller.enqueue(chunk); },
+          flush() { capture.complete(); },
+        }));
+      }
       resolve({
         status: res.statusCode ?? 0,
         statusText: res.statusMessage ?? '',
         ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
         headers: responseHeaders(res.headers),
         url: url.href,
-        body: Readable.toWeb(res),
+        body,
         pinnedAddress: pinned.address,
       });
     });
@@ -275,7 +290,8 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     }
     if (options.body != null) req.write(options.body);
     req.end();
-    emitProbeActivity(deps, { stage: 'request_started', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), protocol: url.protocol.replace(':', ''), body_bytes: options.body == null ? 0 : Buffer.byteLength(options.body), header_names: Object.keys(headers).slice(0, 16) });
+    if (!req.destroyed && !options.signal?.aborted) emitProbeActivity(deps, { stage: 'request_started', ...commonActivity,
+      protocol: url.protocol.replace(':', ''), body_bytes: options.body == null ? 0 : Buffer.byteLength(options.body), header_names: Object.keys(headers).slice(0, 16), ...previewRequest(url.href, options, deps) });
   });
 }
 
@@ -387,7 +403,7 @@ function http2RequestHeaders(url, options) {
  * Send one bounded metadata-only request over TLS HTTP/2. The TLS socket is
  * connected to the independently classified IP literal while `:authority` and
  * TLS SNI retain the declared hostname. Response data is drained under a byte
- * cap solely so gRPC trailers can be observed; no body is retained.
+ * cap so gRPC trailers can be observed. Optional activity retains only a redacted bounded preview.
  */
 export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
   const url = assertHttpUrl(urlValue, ['https:']);
@@ -406,6 +422,8 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
   const connectFn = deps.http2ConnectFn ?? http2.connect;
   const tlsConnectFn = deps.tlsConnectFn ?? tls.connect;
   const hostname = logicalHostname(url);
+  const startedAt = Date.now();
+  const commonActivity = { operation: 'http2_request', method: options.method ?? 'GET', url: activityUrl(urlValue), protocol: 'https' };
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -415,6 +433,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
     let response = null;
     let trailers = {};
     let receivedBytes = 0;
+    let responseCapture = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -429,6 +448,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
       settled = true;
       cleanup();
       closeTransport();
+      emitProbeActivity(deps, { stage: 'attempt_failed', ...commonActivity, error_class: String(error?.code ?? error?.name ?? 'request_failed'), duration_ms: Date.now() - startedAt });
       reject(error);
     };
     const finishResolve = () => {
@@ -439,6 +459,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
       }
       settled = true;
       cleanup();
+      responseCapture?.complete();
       const result = {
         status: Number(response[':status'] ?? 0),
         headers: responseHeaders(response),
@@ -468,6 +489,10 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
       stream = session.request(requestHeaders);
       stream.once('response', (headers) => {
         response = headers;
+        const contentType = previewContentType(headers['content-type']);
+        const activity = { ...commonActivity, ...(Number(headers[':status']) >= 100 ? { status_code: Number(headers[':status']) } : {}) };
+        emitProbeActivity(deps, { stage: 'response_received', ...activity, ...(contentType ? { response_content_type: contentType } : {}), duration_ms: Date.now() - startedAt });
+        if (typeof deps.onProbeActivity === 'function') responseCapture = captureResponsePayload(deps, activity, contentType);
       });
       stream.once('trailers', (headers) => {
         trailers = headers;
@@ -476,7 +501,9 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
         receivedBytes += chunk.length;
         if (receivedBytes > responseByteLimit) {
           finishReject(Object.assign(new Error('HTTP/2 response exceeds bounded limit'), { code: 'ERESPONSETOOLARGE' }));
+          return;
         }
+        responseCapture?.chunk(chunk);
       });
       stream.once('aborted', () => {
         finishReject(Object.assign(new Error('HTTP/2 stream aborted'), { code: 'EHTTP2ABORTED' }));
@@ -498,6 +525,8 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
         Math.max(1, deadline - Date.now()),
       );
       stream.end(body);
+      emitProbeActivity(deps, { stage: 'request_started', ...commonActivity, body_bytes: body.length,
+        header_names: Object.keys(requestHeaders).filter((name) => !name.startsWith(':')).slice(0, 16), ...previewRequest(url.href, options, deps) });
     } catch (error) {
       finishReject(error);
     }

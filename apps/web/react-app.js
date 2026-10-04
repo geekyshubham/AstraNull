@@ -35263,12 +35263,25 @@ var CS = {
     "verdict",
     "VERDICT",
     "Probe finished"
+  ],
+  response_payload: [
+    "recv",
+    "PAYLOAD",
+    "Response payload captured"
+  ],
+  response_body_completed: [
+    "recv",
+    "RECV",
+    "Response body read"
   ]
 }, wS = (e) => typeof e == "string" ? e : "";
 function TS(e) {
   let t = new Date(e);
   return Number.isNaN(t.getTime()) ? "Not recorded" : t.toLocaleTimeString(void 0, {
     hour12: !1,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
     fractionalSecondDigits: 3
   });
 }
@@ -35291,21 +35304,11 @@ function DS(e, t, n, r) {
     wS(n.url),
     Number.isInteger(n.status_code) ? `HTTP ${n.status_code}` : "",
     wS(n.error_class) || wS(n.reason),
-    Number.isInteger(n.duration_ms) ? `${n.duration_ms}ms` : ""
-  ].filter(Boolean).join(" · "), c = Object.fromEntries([
-    "stage",
-    "operation",
-    "method",
-    "url",
-    "protocol",
-    "status_code",
-    "duration_ms",
-    "requests_sent",
-    "error_class",
-    "reason",
-    "body_bytes",
-    "header_names"
-  ].filter((e) => n[e] != null).map((e) => [e, n[e]]));
+    Number.isInteger(n.duration_ms) ? `${n.duration_ms}ms` : "",
+    n.phase ? `phase ${n.phase}` : "",
+    n.vector_family ? `vector ${n.vector_family}` : "",
+    n.response_content_type ? `format ${n.response_content_type}` : ""
+  ].filter(Boolean).join(" · "), c = Object.fromEntries((/* @__PURE__ */ "stage.operation.method.url.protocol.status_code.duration_ms.requests_sent.error_class.reason.body_bytes.header_names.phase.vector_family.marker_class.request_content_type.response_content_type.request_payload_preview.request_query_preview.response_payload_preview.request_payload_encoding.response_payload_encoding.request_payload_truncated.response_payload_truncated.response_bytes_observed.response_bytes_captured".split(".")).filter((e) => n[e] != null).map((e) => [e, n[e]]));
   return ES(e, t, i, a, s, {
     checkId: r?.checkId,
     checkName: r?.name,
@@ -35317,12 +35320,16 @@ function DS(e, t, n, r) {
 function OS(e, t = "target", n = []) {
   if (!e) return [];
   let r = [];
-  e.startedAt && r.push(ES(`run:${e.runId || e.checkId}:started`, e.startedAt, "init", "START", `Run started: ${e.name || e.checkId}`, { checkId: e.checkId }));
+  e.startedAt && r.push(ES(`run:${e.runId || e.checkId}:started`, e.startedAt, "init", "STATE", `Run recorded: ${e.name || e.checkId}`, { checkId: e.checkId }));
   for (let t of Array.isArray(n) ? n : []) {
     if (!e.runId || t.test_run_id !== e.runId || t.check_id !== e.checkId) continue;
     let n = wS(t.timestamp);
     if (t.signal_type === "probe_activity" && t.producer_kind === "signed_probe") {
-      let i = DS(wS(t.id), n, t.metadata?.activity, e);
+      let i = DS(wS(t.id), n, {
+        ...t.metadata?.activity,
+        vector_family: t.metadata?.vector_family,
+        marker_class: t.metadata?.marker_class
+      }, e);
       i && r.push(i);
     } else if (t.signal_type === "probe_result" && ["signed_probe", "internal_simulation"].includes(t.producer_kind)) {
       let i = t.metadata || {}, a = t.producer_kind === "internal_simulation", o = Number.isInteger(i.status_code) ? ` · HTTP ${i.status_code}` : "", s = i.safety_attestation?.requests_sent;
@@ -35343,7 +35350,11 @@ function kS(e, t = [], n = [], r = "target") {
     let n = t.find((t) => t.checkId === e.check_id);
     if (e.action === "probe_activity") {
       if (e.metadata?.producer_kind !== "signed_probe") continue;
-      let t = DS(e.id, e.at, e.metadata?.activity, n);
+      let t = DS(e.id, e.at, {
+        ...e.metadata?.activity,
+        vector_family: e.metadata?.vector_family,
+        marker_class: e.metadata?.marker_class
+      }, n);
       t && i.push(t);
       continue;
     }
@@ -35534,14 +35545,14 @@ function RS({ entries: e, active: t = !1, title: n = "Live Probe Logs", subtitle
             }) : null,
             a == null ? null : /* @__PURE__ */ (0, V.jsxs)("span", {
               className: "td-terminal-stat",
-              title: "Probes dispatched",
+              title: "Recorded logical operations; probe limit excludes destination resolution",
               children: [
                 /* @__PURE__ */ (0, V.jsx)("strong", {
                   className: "tabular-nums",
                   children: a
                 }),
-                o ? ` / ${o}` : "",
-                " probes"
+                " operations",
+                o ? ` · probe limit ${o}` : ""
               ]
             }),
             s != null && s > 0 ? /* @__PURE__ */ (0, V.jsxs)("span", {
@@ -37394,7 +37405,10 @@ var vC = {
   result_received: "Result recorded",
   run_started: "Run started",
   run_stopped: "Run stopped",
-  phase_completed: "Phase finished"
+  run_created: "Run created",
+  phase_completed: "Phase finished",
+  response_payload: "Payload captured",
+  response_body_completed: "Response body read"
 };
 function yC(e) {
   return typeof e == "string" ? e : "";
@@ -37403,13 +37417,24 @@ function bC(e) {
   let t = new Date(yC(e));
   return Number.isNaN(t.getTime()) ? "Not recorded" : t.toLocaleTimeString(void 0, {
     hour12: !1,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
     fractionalSecondDigits: 3
   });
 }
 function xC(e) {
   return e.stage === "attempt_failed" || e.error_class ? "error" : e.stage === "request_not_sent" ? "warning" : "info";
 }
-function SC({ config: e, session: t, runId: n, checkName: r, running: i, canStop: a, onStop: o, onFollowActive: s, notSent: c }) {
+function SC(e) {
+  let t = [
+    e.vector_family,
+    e.marker_class,
+    e.phase
+  ].filter(Boolean).map((e) => String(e).replaceAll("_", " ")).join(" / "), n = t ? ` Vector: ${t}.` : "";
+  return e.stage === "request_started" ? `The worker started ${yC(e.method) || "a protocol request"}${e.url ? ` to ${yC(e.url)}` : ""}.${n} ${e.body_bytes == null ? "" : `The request body contained ${String(e.body_bytes)} bytes. `}The captured query and payload preview are listed below.` : e.stage === "response_received" ? `The target returned ${e.status_code == null ? "a response with no recorded HTTP status" : `HTTP ${String(e.status_code)}`}.${n} ${e.response_content_type ? `Recorded format: ${yC(e.response_content_type)}. ` : "The response format was not recorded. "}${e.duration_ms == null ? "" : `Observed request duration: ${String(e.duration_ms)} ms.`}` : e.stage === "response_payload" || e.stage === "response_body_completed" ? `The worker ${e.stage === "response_body_completed" ? "finished reading the bounded response body" : "captured response bytes while reading the body"}.${n} ${e.response_content_type ? `Format: ${yC(e.response_content_type)}. ` : ""}${e.response_bytes_observed == null ? "" : `${String(e.response_bytes_observed)} bytes observed. `}${e.response_payload_truncated ? "The preview is partial." : "The captured preview is shown below with sensitive values redacted."}` : e.stage === "request_not_sent" ? `This operation was not sent.${n} Recorded reason: ${yC(e.reason).replaceAll("_", " ") || "not recorded"}.` : e.stage === "attempt_failed" ? `The attempted operation failed.${n} Recorded error: ${yC(e.error_class) || "not recorded"}.` : `${vC[yC(e.stage)] || yC(e.stage).replaceAll("_", " ")}.${n} The fields below are the recorded facts for this event.`;
+}
+function CC({ config: e, session: t, runId: n, checkName: r, running: i, canStop: a, onStop: o, onFollowActive: s, notSent: c }) {
   let [l, u] = (0, D.useState)(null), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(!1), [h, g] = (0, D.useState)(""), [_, v] = (0, D.useState)("all"), [y, b] = (0, D.useState)(null);
   (0, D.useEffect)(() => {
     u(null), f(""), b(null);
@@ -37508,7 +37533,7 @@ function SC({ config: e, session: t, runId: n, checkName: r, running: i, canStop
                 type: "search",
                 value: h,
                 onChange: (e) => g(e.target.value),
-                placeholder: "Search method, path, response or error"
+                placeholder: "Search requests and responses"
               })
             ]
           }),
@@ -37558,7 +37583,7 @@ function SC({ config: e, session: t, runId: n, checkName: r, running: i, canStop
         role: "status",
         "aria-live": "polite",
         children: [
-          /* @__PURE__ */ (0, V.jsx)("span", { children: l ? `${Array.isArray(l.items) ? l.items.length : 0} recorded events` : n ? "Waiting for recorded worker activity" : "No check selected" }),
+          /* @__PURE__ */ (0, V.jsx)("span", { children: l ? `${x.length} shown · ${Array.isArray(l.items) ? l.items.length : 0} recorded events` : c ? "Recorded execution decision · no request dispatched" : n ? "Waiting for recorded worker activity" : "No check selected" }),
           /* @__PURE__ */ (0, V.jsx)("span", { children: p ? "Updates paused; execution continues" : i ? "Live updates · every 2.5s" : yC(l?.status).replaceAll("_", " ") || "No execution recorded" }),
           l?.requests_sent == null ? null : /* @__PURE__ */ (0, V.jsxs)("span", { children: [String(l.requests_sent), " attested operations"] })
         ]
@@ -37575,6 +37600,7 @@ function SC({ config: e, session: t, runId: n, checkName: r, running: i, canStop
         tabIndex: 0,
         children: /* @__PURE__ */ (0, V.jsxs)("table", {
           className: "probe-activity-table",
+          role: "table",
           children: [
             /* @__PURE__ */ (0, V.jsxs)("caption", {
               className: "sr-only",
@@ -37584,87 +37610,142 @@ function SC({ config: e, session: t, runId: n, checkName: r, running: i, canStop
                 ". Query values, bodies and credential values are not shown."
               ]
             }),
-            /* @__PURE__ */ (0, V.jsx)("thead", { children: /* @__PURE__ */ (0, V.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, V.jsx)("th", {
-                scope: "col",
-                children: "Event"
-              }),
-              /* @__PURE__ */ (0, V.jsx)("th", {
-                scope: "col",
-                children: "Time"
-              }),
-              /* @__PURE__ */ (0, V.jsx)("th", {
-                scope: "col",
-                children: "Request / operation"
-              }),
-              /* @__PURE__ */ (0, V.jsx)("th", {
-                scope: "col",
-                children: "Response"
-              }),
-              /* @__PURE__ */ (0, V.jsx)("th", {
-                scope: "col",
-                children: /* @__PURE__ */ (0, V.jsx)("span", {
-                  className: "sr-only",
-                  children: "Details"
-                })
-              })
-            ] }) }),
-            /* @__PURE__ */ (0, V.jsxs)("tbody", { children: [x.map((e) => {
-              let t = yC(e.id), n = y === t, r = xC(e);
-              return /* @__PURE__ */ (0, V.jsxs)(D.Fragment, { children: [/* @__PURE__ */ (0, V.jsxs)("tr", {
-                "data-severity": r,
+            /* @__PURE__ */ (0, V.jsx)("thead", {
+              role: "rowgroup",
+              children: /* @__PURE__ */ (0, V.jsxs)("tr", {
+                role: "row",
                 children: [
-                  /* @__PURE__ */ (0, V.jsxs)("td", { children: [/* @__PURE__ */ (0, V.jsx)(W, {
-                    tone: r === "error" ? "danger" : r === "warning" ? "warn" : "default",
-                    children: vC[yC(e.stage)] ?? yC(e.stage).replaceAll("_", " ")
-                  }), e.source === "simulation" ? /* @__PURE__ */ (0, V.jsx)("small", { children: "Simulation · no target traffic" }) : null] }),
-                  /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)("time", {
-                    dateTime: yC(e.at),
-                    title: yC(e.at),
-                    children: bC(e.at)
-                  }) }),
-                  /* @__PURE__ */ (0, V.jsxs)("td", { children: [/* @__PURE__ */ (0, V.jsx)("span", {
-                    className: "probe-activity-operation",
-                    children: yC(e.method) || yC(e.operation).replaceAll("_", " ") || "Not recorded"
-                  }), e.url ? /* @__PURE__ */ (0, V.jsx)("code", { children: yC(e.url) }) : null] }),
-                  /* @__PURE__ */ (0, V.jsxs)("td", { children: [e.status_code == null ? yC(e.error_class) || yC(e.outcome) || yC(e.reason).replaceAll("_", " ") || "—" : /* @__PURE__ */ (0, V.jsxs)("strong", { children: ["HTTP ", String(e.status_code)] }), e.duration_ms == null ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: [String(e.duration_ms), " ms"] })] }),
-                  /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)("button", {
-                    className: "probe-activity-expand",
-                    "aria-label": `Details for event ${t}`,
-                    "aria-expanded": n,
-                    onClick: () => b(n ? null : t),
-                    children: n ? /* @__PURE__ */ (0, V.jsx)(Ce, { size: 16 }) : /* @__PURE__ */ (0, V.jsx)(De, { size: 16 })
-                  }) })
+                  /* @__PURE__ */ (0, V.jsx)("th", {
+                    role: "columnheader",
+                    scope: "col",
+                    children: "Event"
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("th", {
+                    role: "columnheader",
+                    scope: "col",
+                    children: "Time"
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("th", {
+                    role: "columnheader",
+                    scope: "col",
+                    children: "Request / operation"
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("th", {
+                    role: "columnheader",
+                    scope: "col",
+                    children: "Response"
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("th", {
+                    role: "columnheader",
+                    scope: "col",
+                    children: /* @__PURE__ */ (0, V.jsx)("span", {
+                      className: "sr-only",
+                      children: "Details"
+                    })
+                  })
                 ]
-              }), n ? /* @__PURE__ */ (0, V.jsx)("tr", {
-                className: "probe-activity-detail",
-                children: /* @__PURE__ */ (0, V.jsx)("td", {
-                  colSpan: 5,
-                  children: /* @__PURE__ */ (0, V.jsx)("dl", { children: Object.entries(e).filter(([e]) => ![
-                    "id",
-                    "sequence",
-                    "stage"
-                  ].includes(e)).map(([e, t]) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: e.replaceAll("_", " ") }), /* @__PURE__ */ (0, V.jsx)("dd", { children: Array.isArray(t) ? t.join(", ") : t && typeof t == "object" ? JSON.stringify(t, null, 2) : String(t ?? "Not recorded") })] }, e)) })
-                })
-              }) : null] }, t);
-            }), x.length ? null : /* @__PURE__ */ (0, V.jsx)("tr", { children: /* @__PURE__ */ (0, V.jsx)("td", {
-              colSpan: 5,
-              className: "probe-activity-empty",
-              children: h || _ !== "all" ? "No recorded events match these filters." : n ? l?.telemetry_recorded === !1 && !i ? "This run has only its final recorded summary. Per-request activity was not captured by that worker." : "No worker events have arrived yet. Planned requests are not shown as sent." : "Select a check with a run, or start a reviewed check."
-            }) })] })
+              })
+            }),
+            /* @__PURE__ */ (0, V.jsxs)("tbody", {
+              role: "rowgroup",
+              children: [x.map((e) => {
+                let t = yC(e.id), n = y === t, r = xC(e);
+                return /* @__PURE__ */ (0, V.jsxs)(D.Fragment, { children: [/* @__PURE__ */ (0, V.jsxs)("tr", {
+                  role: "row",
+                  "data-severity": r,
+                  children: [
+                    /* @__PURE__ */ (0, V.jsxs)("td", {
+                      role: "cell",
+                      "data-label": "Event",
+                      children: [/* @__PURE__ */ (0, V.jsx)(W, {
+                        tone: r === "error" ? "danger" : r === "warning" ? "warn" : "default",
+                        children: vC[yC(e.stage)] ?? yC(e.stage).replaceAll("_", " ")
+                      }), e.source === "simulation" ? /* @__PURE__ */ (0, V.jsx)("small", { children: "Simulation · no target traffic" }) : null]
+                    }),
+                    /* @__PURE__ */ (0, V.jsx)("td", {
+                      role: "cell",
+                      "data-label": "Time",
+                      children: /* @__PURE__ */ (0, V.jsx)("time", {
+                        dateTime: yC(e.at),
+                        title: yC(e.at),
+                        children: bC(e.at)
+                      })
+                    }),
+                    /* @__PURE__ */ (0, V.jsxs)("td", {
+                      role: "cell",
+                      "data-label": "Request",
+                      children: [
+                        /* @__PURE__ */ (0, V.jsx)("span", {
+                          className: "probe-activity-operation",
+                          children: yC(e.method) || yC(e.operation).replaceAll("_", " ") || "Not recorded"
+                        }),
+                        e.url ? /* @__PURE__ */ (0, V.jsx)("code", { children: yC(e.url) }) : null,
+                        /* @__PURE__ */ (0, V.jsx)("small", { children: [
+                          e.vector_family,
+                          e.marker_class,
+                          e.phase
+                        ].filter(Boolean).map((e) => String(e).replaceAll("_", " ")).join(" · ") })
+                      ]
+                    }),
+                    /* @__PURE__ */ (0, V.jsxs)("td", {
+                      role: "cell",
+                      "data-label": "Response",
+                      children: [
+                        e.status_code == null ? yC(e.error_class) || yC(e.outcome) || yC(e.reason).replaceAll("_", " ") || "—" : /* @__PURE__ */ (0, V.jsxs)("strong", { children: ["HTTP ", String(e.status_code)] }),
+                        e.response_content_type ? /* @__PURE__ */ (0, V.jsx)("small", { children: yC(e.response_content_type) }) : null,
+                        e.duration_ms == null ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: [String(e.duration_ms), " ms"] })
+                      ]
+                    }),
+                    /* @__PURE__ */ (0, V.jsx)("td", {
+                      role: "cell",
+                      "data-label": "Details",
+                      children: /* @__PURE__ */ (0, V.jsx)("button", {
+                        className: "probe-activity-expand",
+                        "aria-label": `Details for event ${t}`,
+                        "aria-expanded": n,
+                        onClick: () => b(n ? null : t),
+                        children: n ? /* @__PURE__ */ (0, V.jsx)(Ce, { size: 16 }) : /* @__PURE__ */ (0, V.jsx)(De, { size: 16 })
+                      })
+                    })
+                  ]
+                }), n ? /* @__PURE__ */ (0, V.jsx)("tr", {
+                  role: "row",
+                  className: "probe-activity-detail",
+                  children: /* @__PURE__ */ (0, V.jsxs)("td", {
+                    role: "cell",
+                    colSpan: 5,
+                    children: [/* @__PURE__ */ (0, V.jsx)("p", {
+                      className: "probe-activity-description",
+                      children: SC(e)
+                    }), /* @__PURE__ */ (0, V.jsx)("dl", { children: Object.entries(e).filter(([e, t]) => ![
+                      "id",
+                      "sequence",
+                      "stage"
+                    ].includes(e) && !(t && typeof t == "object" && !Object.keys(t).length)).map(([e, t]) => /* @__PURE__ */ (0, V.jsxs)("div", {
+                      "data-payload": e.includes("preview") || void 0,
+                      children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: e.replaceAll("_", " ") }), /* @__PURE__ */ (0, V.jsx)("dd", { children: Array.isArray(t) ? t.join(", ") : t && typeof t == "object" ? JSON.stringify(t, null, 2) : t === "" ? "(empty)" : String(t ?? "Not recorded") })]
+                    }, e)) })]
+                  })
+                }) : null] }, t);
+              }), x.length ? null : /* @__PURE__ */ (0, V.jsx)("tr", { children: /* @__PURE__ */ (0, V.jsx)("td", {
+                colSpan: 5,
+                className: "probe-activity-empty",
+                children: h || _ !== "all" ? "No recorded events match these filters." : n ? l?.telemetry_recorded === !1 && !i ? "This run has only its final recorded summary. Per-request activity was not captured by that worker." : "No worker events have arrived yet. Planned requests are not shown as sent." : "Select a check with a run, or start a reviewed check."
+              }) })]
+            })
           ]
         })
       }),
       /* @__PURE__ */ (0, V.jsxs)("p", {
         className: "probe-activity-note",
-        children: [l?.truncated ? "Showing the latest 200 events. " : "", "Observed metadata only. Query values and request/response bodies are withheld. Expand an event for its recorded details."]
+        children: [l?.truncated ? "Showing the latest 200 events. " : "", "Expand an event for the method, vector, format, status and captured payload. Previews retain up to 2 KiB; credentials and declared private query values are redacted. Non-HTTP checks show their recorded protocol fields."]
       })
     ]
   });
 }
 //#endregion
 //#region apps/web/react/src/components/evidence/use-inspector.ts
-function CC() {
+function wC() {
   let [e, t] = (0, D.useState)(() => fl(window.location.hash));
   return (0, D.useEffect)(() => {
     let e = () => {
@@ -37676,10 +37757,10 @@ function CC() {
     };
   }, []), e;
 }
-function wC() {
+function TC() {
   return (0, D.useCallback)((e, t) => vl(e, { focusKey: t }), []);
 }
-function TC(e, t) {
+function EC(e, t) {
   let n = bp(e), r = (0, D.useRef)(null);
   r.current === null && (r.current = Tp(n, t) ?? {});
   let i = (0, D.useRef)(r.current), a = (0, D.useCallback)((e) => {
@@ -37701,7 +37782,7 @@ function TC(e, t) {
     save: a
   };
 }
-function EC(e, t) {
+function DC(e, t) {
   let n = (0, D.useRef)(!1);
   (0, D.useLayoutEffect)(() => {
     !n.current && e && (n.current = !0, typeof t.scrollTop == "number" && t.scrollTop > 0 && window.scrollTo({ top: t.scrollTop }), t.focusKey && !fl(window.location.hash) && document.querySelector(`[data-focus-key="${CSS.escape(t.focusKey)}"]`)?.focus({ preventScroll: !0 }));
@@ -37709,9 +37790,9 @@ function EC(e, t) {
 }
 //#endregion
 //#region apps/web/react/src/components/evidence/use-stable-list.ts
-var DC = /* @__PURE__ */ new WeakMap();
-function OC(e) {
-  let t = DC.get(e);
+var OC = /* @__PURE__ */ new WeakMap();
+function kC(e) {
+  let t = OC.get(e);
   if (t !== void 0) return t;
   let n = "";
   try {
@@ -37719,9 +37800,9 @@ function OC(e) {
   } catch {
     n = String(Math.random());
   }
-  return DC.set(e, n), n;
+  return OC.set(e, n), n;
 }
-function kC(e, { scope: t, idOf: n, hold: r }) {
+function AC(e, { scope: t, idOf: n, hold: r }) {
   let i = (0, D.useRef)({
     scope: t,
     items: e,
@@ -37729,7 +37810,7 @@ function kC(e, { scope: t, idOf: n, hold: r }) {
   }), a = (0, D.useRef)(e);
   a.current = e;
   let [, o] = (0, D.useReducer)((e) => e + 1, 0), s = (0, D.useRef)(!1);
-  i.current.scope === t ? e !== i.current.items && (OC(e) === OC(i.current.items) || i.current.items.length === 0 || !r && !s.current ? i.current = {
+  i.current.scope === t ? e !== i.current.items && (kC(e) === kC(i.current.items) || i.current.items.length === 0 || !r && !s.current ? i.current = {
     scope: t,
     items: e,
     at: Date.now()
@@ -37773,7 +37854,7 @@ function kC(e, { scope: t, idOf: n, hold: r }) {
     apply: f
   };
 }
-function AC() {
+function jC() {
   let [e, t] = (0, D.useState)(!1), [n, r] = (0, D.useState)(!1), i = (0, D.useMemo)(() => ({
     onPointerEnter: (e) => t(!0),
     onPointerLeave: (e) => t(!1),
@@ -37790,13 +37871,13 @@ function AC() {
 }
 //#endregion
 //#region apps/web/react/src/pages/target-detail-view.tsx
-var jC = 500, MC = 4e3, NC = 18e4, PC = 15e3, FC = 20, IC = 3e4, LC = 9e5, RC = /* @__PURE__ */ new Set([
+var MC = 500, NC = 4e3, PC = 18e4, FC = 15e3, IC = 20, LC = 3e4, RC = 9e5, zC = /* @__PURE__ */ new Set([
   "pending",
   "deferred",
   "starting",
   "running",
   "collecting"
-]), zC = {
+]), BC = {
   critical: 5,
   s1: 5,
   high: 4,
@@ -37807,7 +37888,7 @@ var jC = 500, MC = 4e3, NC = 18e4, PC = 15e3, FC = 20, IC = 3e4, LC = 9e5, RC = 
   low: 2,
   s4: 2,
   info: 1
-}, BC = {
+}, VC = {
   missing_check_version: "Check version not recorded",
   missing_scenario_version: "Scenario version not recorded",
   check_version_mismatch: "Recorded with a different check version",
@@ -37822,21 +37903,21 @@ var jC = 500, MC = 4e3, NC = 18e4, PC = 15e3, FC = 20, IC = 3e4, LC = 9e5, RC = 
   customer_declaration: "Customer declaration",
   no_evidence: "No evidence cited",
   not_finalized: "Run not finalized"
-}, VC = {
+}, HC = {
   application: "Application",
   origin: "Origin lockdown",
   network: "Network and transport",
   dns: "DNS",
   operations: "Operations",
   other: "Other"
-}, HC = {
+}, UC = {
   website: "Website",
   api: "API",
   login: "Login",
   dns: "DNS service",
   network: "Network endpoint"
 };
-function UC(e, t, n = "Not reported") {
+function WC(e, t, n = "Not reported") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -37844,10 +37925,10 @@ function UC(e, t, n = "Not reported") {
   }
   return n;
 }
-function WC(e) {
+function GC(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function GC(e, t = "Not reported") {
+function KC(e, t = "Not reported") {
   let n = e.trim();
   if (!n) return t;
   let r = {
@@ -37863,7 +37944,7 @@ function GC(e, t = "Not reported") {
   let a = n.replace(/_/g, " ");
   return a.charAt(0).toUpperCase() + a.slice(1);
 }
-function KC(e) {
+function qC(e) {
   let t = e.trim().toLowerCase();
   return [
     "pass",
@@ -37889,26 +37970,26 @@ function KC(e) {
     "collecting"
   ].includes(t) ? "info" : "muted";
 }
-function qC(e) {
-  let t = zC[e.trim().toLowerCase()] ?? 0;
+function JC(e) {
+  let t = BC[e.trim().toLowerCase()] ?? 0;
   return t >= 4 ? "danger" : t === 3 ? "warn" : "muted";
 }
-function JC(e) {
+function YC(e) {
   return /agent/i.test(e) ? "Re-verify ownership" : au(e);
 }
-function YC(e) {
+function XC(e) {
   let t = Ob(e);
   return /agent/i.test(t) ? "Recorded ownership evidence" : t;
 }
-function XC(e) {
+function ZC(e) {
   let t = {
     ...e,
-    id: UC(e, ["run_id", "id"], ""),
+    id: WC(e, ["run_id", "id"], ""),
     evidence_ids: e.evidence_ids
   };
   return kg(t, []) ? Og(t) : "";
 }
-function ZC({ value: e, label: t }) {
+function QC({ value: e, label: t }) {
   let [n, r] = (0, D.useState)(!1);
   return e ? /* @__PURE__ */ (0, V.jsxs)(H, {
     size: "sm",
@@ -37930,7 +38011,7 @@ function ZC({ value: e, label: t }) {
     }), n ? "Copied" : "Copy"]
   }) : null;
 }
-function QC({ tags: e, canEdit: t, onChange: n }) {
+function $C({ tags: e, canEdit: t, onChange: n }) {
   let [r, i] = (0, D.useState)(""), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)(!1);
   async function l(e) {
     c(!0);
@@ -38008,30 +38089,30 @@ function QC({ tags: e, canEdit: t, onChange: n }) {
     }) : null]
   });
 }
-function $C(e) {
+function ew(e) {
   if (!e) return null;
-  let t = Array.isArray(e.service_roles) ? e.service_roles.map(String) : [], n = WC(e.owner), r = WC(e.criticality), i = (e, t) => {
-    let n = UC(e, ["status"], "unassigned");
+  let t = Array.isArray(e.service_roles) ? e.service_roles.map(String) : [], n = GC(e.owner), r = GC(e.criticality), i = (e, t) => {
+    let n = WC(e, ["status"], "unassigned");
     if (n === "unassigned") return {
       text: "Unassigned",
       source: ""
     };
-    let r = UC(e, [t], "");
+    let r = WC(e, [t], "");
     return {
-      text: r ? GC(r) : "Not recorded",
+      text: r ? KC(r) : "Not recorded",
       source: n === "inherited" ? "inherited from group" : "declared"
     };
-  }, a = (t) => UC(e, [t], "") === "inherited" ? "inherited from group" : "";
+  }, a = (t) => WC(e, [t], "") === "inherited" ? "inherited from group" : "";
   return {
-    purpose: UC(e, ["purpose"], ""),
+    purpose: WC(e, ["purpose"], ""),
     purposeSource: a("purpose_status"),
-    roles: t.map((e) => HC[e] ?? GC(e)),
+    roles: t.map((e) => UC[e] ?? KC(e)),
     rolesSource: a("service_roles_status"),
     owner: i(n, "label"),
     criticality: i(r, "value")
   };
 }
-function ew({ declaration: e, onCancel: t, onSave: n }) {
+function tw({ declaration: e, onCancel: t, onSave: n }) {
   let r = (0, D.useMemo)(() => jd(e), [e]), [i, a] = (0, D.useState)(r), [o, s] = (0, D.useState)(!1), [c, l] = (0, D.useState)(""), u = (0, D.useRef)(null), d = JSON.stringify(i) !== JSON.stringify(r), f = Nd(i), p = !!(f.purpose || f.owner_label);
   (0, D.useEffect)(() => {
     u.current?.focus();
@@ -38104,7 +38185,7 @@ function ew({ declaration: e, onCancel: t, onSave: n }) {
                   ...i,
                   service_roles: t.target.checked ? [...i.service_roles, e] : i.service_roles.filter((t) => t !== e)
                 })
-              }), HC[e]]
+              }), UC[e]]
             }, e))
           }),
           /* @__PURE__ */ (0, V.jsx)("span", {
@@ -38147,7 +38228,7 @@ function ew({ declaration: e, onCancel: t, onSave: n }) {
             children: "Unassigned"
           }), Ad.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
             value: e,
-            children: GC(e)
+            children: KC(e)
           }, e))]
         })]
       }),
@@ -38174,14 +38255,14 @@ function ew({ declaration: e, onCancel: t, onSave: n }) {
     ]
   });
 }
-function tw(e) {
+function nw(e) {
   return Db(Array.isArray(e?.history) ? e.history : []);
 }
-function nw() {
+function rw() {
   return Td(Qf("tab"));
 }
-function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [], wafEdgeEnabled: a = !1, onRefresh: o }) {
-  let [s, c] = (0, D.useState)(null), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(() => Qf("check")), [_, v] = (0, D.useState)(nw), [y, b] = (0, D.useState)(null), [x, S] = (0, D.useState)([]), [C, w] = (0, D.useState)([]), [T, E] = (0, D.useState)([]), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(""), [F, I] = (0, D.useState)(null), [te, re] = (0, D.useState)(!1), [ie, ae] = (0, D.useState)(null), [oe, L] = (0, D.useState)(!1), [se, ce] = (0, D.useState)(0), le = (0, D.useRef)(0), ue = (0, D.useRef)(0), de = wC(), fe = CC(), pe = (0, D.useCallback)(async () => {
+function iw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [], wafEdgeEnabled: a = !1, onRefresh: o }) {
+  let [s, c] = (0, D.useState)(null), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(() => Qf("check")), [_, v] = (0, D.useState)(rw), [y, b] = (0, D.useState)(null), [x, S] = (0, D.useState)([]), [C, w] = (0, D.useState)([]), [T, E] = (0, D.useState)([]), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(""), [F, I] = (0, D.useState)(null), [te, re] = (0, D.useState)(!1), [ie, ae] = (0, D.useState)(null), [oe, L] = (0, D.useState)(!1), [se, ce] = (0, D.useState)(0), le = (0, D.useRef)(0), ue = (0, D.useRef)(0), de = TC(), fe = wC(), pe = (0, D.useCallback)(async () => {
     let r = ue.current, i = await mS(t, n, e);
     return r === ue.current && c(i), i;
   }, [
@@ -38217,7 +38298,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     e
   ]), (0, D.useEffect)(() => {
     let e = () => {
-      v(nw());
+      v(rw());
       let e = Qf("check");
       g((t) => e && e !== t ? e : t);
     };
@@ -38231,13 +38312,13 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   function he(e) {
     g(e), $f({ check: e || null });
   }
-  let ge = s?.target ?? null, _e = s?.verification ?? null, ve = s?.ownership_challenge ?? null, ye = s?.tags ?? [], be = UC(ge, ["kind"], "unknown"), xe = UC(ge, ["eligibility"], "unknown"), Se = UC(_e, ["state"], UC(ge, ["verification_state"], "unverified")), Ce = Lb(Se, ve).done, we = _b(xe, Se) && Ce, Te = gx(ge, _e);
+  let ge = s?.target ?? null, _e = s?.verification ?? null, ve = s?.ownership_challenge ?? null, ye = s?.tags ?? [], be = WC(ge, ["kind"], "unknown"), xe = WC(ge, ["eligibility"], "unknown"), Se = WC(_e, ["state"], WC(ge, ["verification_state"], "unverified")), Ce = Lb(Se, ve).done, we = _b(xe, Se) && Ce, Te = gx(ge, _e);
   /agent/i.test(Te) && `${Se}`;
-  let Ee = UC(ge, ["target_group_id"], ""), De = UC(i.find((e) => UC(e, ["id"], "") === Ee) ?? null, ["name"], UC(ge, ["target_group_name"], Ee)), Oe = Rl(n.role), ke = Rl(n.role), Ae = (0, D.useMemo)(() => Eb(s?.runs_recent), [s?.runs_recent]), je = AC(), Me = (0, D.useCallback)((e) => UC(e, ["run_id", "id"], ""), []), Ne = kC(Ae, {
+  let Ee = WC(ge, ["target_group_id"], ""), De = WC(i.find((e) => WC(e, ["id"], "") === Ee) ?? null, ["name"], WC(ge, ["target_group_name"], Ee)), Oe = Rl(n.role), ke = Rl(n.role), Ae = (0, D.useMemo)(() => Eb(s?.runs_recent), [s?.runs_recent]), je = jC(), Me = (0, D.useCallback)((e) => WC(e, ["run_id", "id"], ""), []), Ne = AC(Ae, {
     scope: `${bp(n) || "anon"}|target|${e}`,
     idOf: Me,
     hold: je.holding || fe?.entry === "check_result"
-  }), Pe = Ne.items, Fe = Array.isArray(s?.findings) ? s.findings : [], Ie = tw(_e), Le = s?.declaration ?? null, Re = $C(Le), ze = (0, D.useMemo)(() => ge ? Xu(r, ge) : [], [r, ge]), Be = (0, D.useMemo)(() => ge ? Zu(r, ge).length : 0, [r, ge]), Ve = (0, D.useMemo)(() => od({
+  }), Pe = Ne.items, Fe = Array.isArray(s?.findings) ? s.findings : [], Ie = nw(_e), Le = s?.declaration ?? null, Re = ew(Le), ze = (0, D.useMemo)(() => ge ? Xu(r, ge) : [], [r, ge]), Be = (0, D.useMemo)(() => ge ? Zu(r, ge).length : 0, [r, ge]), Ve = (0, D.useMemo)(() => od({
     checks: ze,
     scan: y,
     runs: T
@@ -38245,26 +38326,26 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     ze,
     y,
     T
-  ]), He = (0, D.useMemo)(() => sd(Ve), [Ve]), Ue = Ve.some((e) => e.checkId === h) ? h : "", We = !!h && !Ue && Ve.length > 0, Ge = Ve.find((e) => e.checkId === Ue) ?? null, Ke = (0, D.useMemo)(() => new Map(r.map((e) => [UC(e, ["check_id", "id"], ""), Zl(UC(e, ["name", "title"], ""))])), [r]), qe = (e) => Ke.get(e) || e || "Unnamed check", Je = s?.edge_detection ?? null, Ye = s?.edge_detection_request ?? null, Xe = {
+  ]), He = (0, D.useMemo)(() => sd(Ve), [Ve]), Ue = Ve.some((e) => e.checkId === h) ? h : "", We = !!h && !Ue && Ve.length > 0, Ge = Ve.find((e) => e.checkId === Ue) ?? null, Ke = (0, D.useMemo)(() => new Map(r.map((e) => [WC(e, ["check_id", "id"], ""), Zl(WC(e, ["name", "title"], ""))])), [r]), qe = (e) => Ke.get(e) || e || "Unnamed check", Je = s?.edge_detection ?? null, Ye = s?.edge_detection_request ?? null, Xe = {
     protection_profile: s?.protection_profile ?? null,
     edge_detection: Je
   }, Ze = (0, D.useMemo)(() => bd(Xe), [s?.protection_profile, Je]), Qe = (0, D.useMemo)(() => xd(Xe), [s?.protection_profile, Je]), $e = Cd(Xe), et = mo(y), tt = T.find((e) => [
     "running",
     "collecting",
     "planned"
-  ].includes(UC(e, ["status"], ""))) ?? null, nt = Ve.find((e) => e.status === "running" && e.runId) ?? null, rt = Ge ?? nt ?? Ve.find((e) => e.runId) ?? null, it = rt?.runId || (Ge ? "" : UC(tt, ["id"], "")), at = rt ? rt.status === "running" : tt !== null, ot = UC(y, ["id"], ""), st = Array.isArray(y?.steps) ? y.steps.find((e) => UC(e, ["check_id"], "") === "waf.fingerprint.safe") ?? null : null, ct = et && RC.has(UC(st, ["status"], "")), lt = pd({
+  ].includes(WC(e, ["status"], "")) && ze.some((t) => WC(t, ["check_id"], "") === WC(e, ["check_id"], ""))) ?? null, nt = Ve.find((e) => e.status === "running" && e.runId) ?? null, rt = Ge ?? nt ?? Ve.find((e) => e.runId) ?? null, it = rt?.runId || (Ge ? "" : WC(tt, ["id"], "")), at = rt ? rt.status === "running" : tt !== null, ot = WC(y, ["id"], ""), st = Array.isArray(y?.steps) ? y.steps.find((e) => WC(e, ["check_id"], "") === "waf.fingerprint.safe") ?? null : null, ct = et && zC.has(WC(st, ["status"], "")), lt = pd({
     eligible: we,
     edge: Je,
     request: Ye,
     localRequest: A,
     scanFingerprintActive: ct
-  }), ut = lt === "evaluating", dt = UC(Ye, ["test_run_id"], ""), ft = Lb(Se, ve), mt = ft.done, gt = r.find((e) => UC(e, ["check_id", "id"], "") === "waf.fingerprint.safe") ?? null, _t = (0, D.useCallback)(async () => {
+  }), ut = lt === "evaluating", dt = WC(Ye, ["test_run_id"], ""), ft = Lb(Se, ve), mt = ft.done, gt = r.find((e) => WC(e, ["check_id", "id"], "") === "waf.fingerprint.safe") ?? null, _t = (0, D.useCallback)(async () => {
     if (!Ee) return;
-    let [r, i] = await Promise.all([B(t, n, md(Ee, e)).catch(() => null), B(t, n, `/v1/test-runs?target_id=${encodeURIComponent(e)}&limit=${jC}`).then((e) => (k(""), e)).catch((e) => (k(qo(e, "Recorded check results could not load.")), null))]);
+    let [r, i] = await Promise.all([B(t, n, md(Ee, e)).catch(() => null), B(t, n, `/v1/test-runs?target_id=${encodeURIComponent(e)}&limit=${MC}`).then((e) => (k(""), e)).catch((e) => (k(qo(e, "Recorded check results could not load.")), null))]);
     if (r && Array.isArray(r.items)) {
       let e = r.items[0] ?? null;
       b(e);
-      let i = UC(e, ["id"], "");
+      let i = WC(e, ["id"], "");
       i && B(t, n, `/v1/validation-scans/${encodeURIComponent(i)}/activity`).then((e) => {
         e && Array.isArray(e.items) && S(e.items);
       }).catch(() => void 0);
@@ -38299,7 +38380,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         let [r, s] = await Promise.all([B(t, n, `/v1/validation-scans/${encodeURIComponent(ot)}?advance=false`), B(t, n, `/v1/validation-scans/${encodeURIComponent(ot)}/activity`).catch(() => null)]);
         if (e) return;
         i = 0, b(r), s && Array.isArray(s.items) && S(s.items);
-        let c = Array.isArray(r.steps) ? r.steps.find((e) => UC(e, ["check_id"], "") === ju) : null, l = RC.has(UC(c ?? null, ["status"], ""));
+        let c = Array.isArray(r.steps) ? r.steps.find((e) => WC(e, ["check_id"], "") === ju) : null, l = zC.has(WC(c ?? null, ["status"], ""));
         if (a && !l && pe().catch(() => void 0), a = l, !mo(r)) {
           _t(), pe().catch(() => void 0), o().catch(() => void 0);
           return;
@@ -38381,10 +38462,10 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     pe
   ]);
   (0, D.useEffect)(() => {
-    if (A !== "blocked" || Je || et || le.current >= FC) return;
+    if (A !== "blocked" || Je || et || le.current >= IC) return;
     let e = window.setTimeout(() => {
       le.current += 1, vt();
-    }, PC);
+    }, FC);
     return () => window.clearTimeout(e);
   }, [
     A,
@@ -38395,12 +38476,12 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     if (!ut || Je || ct) return;
     let e = !1, t = Date.now(), n = window.setInterval(() => {
       if (!e) {
-        if (Date.now() - t > NC) {
+        if (Date.now() - t > PC) {
           window.clearInterval(n), j("");
           return;
         }
         pe().then((e) => {
-          let t = UC(e?.edge_detection_request ?? null, ["run_status"], "").toLowerCase();
+          let t = WC(e?.edge_detection_request ?? null, ["run_status"], "").toLowerCase();
           (e?.edge_detection || t && ![
             "pending",
             "planned",
@@ -38410,7 +38491,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           ].includes(t)) && (j(""), _t());
         }).catch(() => void 0);
       }
-    }, MC);
+    }, NC);
     return () => {
       e = !0, window.clearInterval(n);
     };
@@ -38424,7 +38505,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     if (lt !== "no_result" || !dt || !a) return;
     let e = !1;
     return B(t, n, `/v1/waf/edge-detection/${encodeURIComponent(dt)}`).then((t) => {
-      e || ee(UC(t, ["reason"], ""));
+      e || ee(WC(t, ["reason"], ""));
     }).catch(() => void 0), () => {
       e = !0;
     };
@@ -38435,10 +38516,10 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     dt,
     a
   ]), (0, D.useEffect)(() => {
-    if (!se || !Oe || mt || !ve?.id || UC(ve, ["state"], "") !== "pending" || !Ee) return;
+    if (!se || !Oe || mt || !ve?.id || WC(ve, ["state"], "") !== "pending" || !Ee) return;
     let e = ve.id, r = !1, i = window.setInterval(() => {
       if (!r) {
-        if (Date.now() - se > LC) {
+        if (Date.now() - se > RC) {
           window.clearInterval(i), ce(0);
           return;
         }
@@ -38448,7 +38529,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           r = !1;
         });
       }
-    }, IC);
+    }, LC);
     return () => window.clearInterval(i);
   }, [
     se,
@@ -38494,11 +38575,11 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             body: {
               target_group_id: Ee,
               target_id: e,
-              check_ids: ze.map((e) => UC(e, ["check_id"], "")).filter(Boolean),
+              check_ids: ze.map((e) => WC(e, ["check_id"], "")).filter(Boolean),
               name: `All compatible checks · ${Cb(ge)}`.slice(0, 120)
             }
           });
-          I(null), b(r), m(`Started ${ze.length} bounded checks, one at a time. Results appear on each check as they land.`);
+          I(null), b(r), m(`Queued ${ze.length} bounded checks to run one at a time. Results appear on each check as they land.`);
         } catch (e) {
           I(null), f(po(e.payload, qo(e, "The multi-check run could not start.")));
         } finally {
@@ -38555,7 +38636,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       u("verify"), f(""), m("");
       try {
         let e = await fS(t, n, Ee, ve.id);
-        e?.verified === !0 || UC(WC(e.challenge), ["state"]) === "resolved" ? (ce(0), m("Ownership proven. You can now review and start bounded checks on this target.")) : (ce(Date.now()), m("The DNS TXT record was not found yet. DNS can take a few minutes; this page re-checks every 30 seconds for 15 minutes while it stays open.")), await o(), await pe();
+        e?.verified === !0 || WC(GC(e.challenge), ["state"]) === "resolved" ? (ce(0), m("Ownership proven. You can now review and start bounded checks on this target.")) : (ce(Date.now()), m("The DNS TXT record was not found yet. DNS can take a few minutes; this page re-checks every 30 seconds for 15 minutes while it stays open.")), await o(), await pe();
       } catch (e) {
         f(e instanceof Error ? e.message : "Could not check the DNS record.");
       } finally {
@@ -38579,7 +38660,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     }, `check-evidence-${t.checkId}`);
   }
   function Mt(t) {
-    let n = UC(t, ["run_id", "id"], ""), r = UC(t, ["check_id"], "");
+    let n = WC(t, ["run_id", "id"], ""), r = WC(t, ["check_id"], "");
     n && r && de({
       entry: "check_result",
       target_id: e,
@@ -38588,12 +38669,12 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     }, `run-${n}`);
   }
   function Nt(t) {
-    let n = UC(t, ["id"], "");
+    let n = WC(t, ["id"], "");
     n && de({
       entry: "finding",
       finding_id: n,
       target_id: e,
-      check_id: UC(t, ["check_id"], "") || void 0
+      check_id: WC(t, ["check_id"], "") || void 0
     }, `finding-${n}`);
   }
   let Pt = fe?.entry === "check_result" ? fe.test_run_id ?? "" : "", Ft = fe?.entry === "finding" ? fe.finding_id ?? "" : "";
@@ -38602,7 +38683,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       className: "td-muted",
       children: [
         "Verified via ",
-        YC(_e),
+        XC(_e),
         "."
       ]
     }) : /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -38638,7 +38719,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 className: "td-dns-val",
                 children: ve.record_name
               }),
-              /* @__PURE__ */ (0, V.jsx)(ZC, {
+              /* @__PURE__ */ (0, V.jsx)(QC, {
                 value: ve.record_name,
                 label: "DNS record name"
               })
@@ -38655,7 +38736,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 className: "td-dns-val",
                 children: ve.record_value
               }),
-              /* @__PURE__ */ (0, V.jsx)(ZC, {
+              /* @__PURE__ */ (0, V.jsx)(QC, {
                 value: ve.record_value,
                 label: "DNS record value"
               })
@@ -38746,7 +38827,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 children: we ? "Validation unlocked" : "Validation locked"
               }), /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "td-kind-tag",
-                children: GC(be)
+                children: KC(be)
               })]
             }) : null]
           }),
@@ -38779,10 +38860,10 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                     "aria-hidden": "true",
                     children: "·"
                   }),
-                  /* @__PURE__ */ (0, V.jsxs)("span", { children: ["Expected: ", GC(UC(ge, ["expected_behavior", "expected"], "Not reported"))] })
+                  /* @__PURE__ */ (0, V.jsxs)("span", { children: ["Expected: ", KC(WC(ge, ["expected_behavior", "expected"], "Not reported"))] })
                 ]
               }),
-              /* @__PURE__ */ (0, V.jsx)(QC, {
+              /* @__PURE__ */ (0, V.jsx)($C, {
                 tags: ye,
                 canEdit: Oe,
                 onChange: Et
@@ -38808,8 +38889,8 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           ke && (et || tt) ? /* @__PURE__ */ (0, V.jsxs)(H, {
             variant: "danger",
             onClick: () => et ? re(!0) : ae({
-              id: UC(tt, ["id"], ""),
-              name: qe(UC(tt, ["check_id"], ""))
+              id: WC(tt, ["id"], ""),
+              name: qe(WC(tt, ["check_id"], ""))
             }),
             children: [/* @__PURE__ */ (0, V.jsx)(Hn, {
               size: 14,
@@ -38885,7 +38966,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       })]
     });
   }
-  let Rt = Fe.filter((e) => w_(e)).sort((e, t) => (zC[UC(t, ["severity"], "").toLowerCase()] ?? 0) - (zC[UC(e, ["severity"], "").toLowerCase()] ?? 0)), zt = Rt[0] ?? null, Bt = (He.passed ?? 0) + (He.failed ?? 0) + (He.inconclusive ?? 0) + (He.observed ?? 0), Vt = s.coverage ?? null, Ht = Wu(Array.isArray(Vt?.pairs) ? Vt.pairs.filter((e) => e && typeof e == "object") : []), Ut = Object.fromEntries(Ht.map((e) => [UC(e, ["check_id"], ""), (BC[UC(e, ["pair_reason"], "")] ?? GC(UC(e, ["pair_reason"], "not_recorded"))).toLowerCase()])), Wt = Array.isArray(s.protection_profile?.dimensions) ? s.protection_profile.dimensions.filter((e) => e && typeof e == "object") : [];
+  let Rt = Fe.filter((e) => w_(e)).sort((e, t) => (BC[WC(t, ["severity"], "").toLowerCase()] ?? 0) - (BC[WC(e, ["severity"], "").toLowerCase()] ?? 0)), zt = Rt[0] ?? null, Bt = (He.passed ?? 0) + (He.failed ?? 0) + (He.inconclusive ?? 0) + (He.observed ?? 0), Vt = s.coverage ?? null, Ht = Wu(Array.isArray(Vt?.pairs) ? Vt.pairs.filter((e) => e && typeof e == "object") : []), Ut = Object.fromEntries(Ht.map((e) => [WC(e, ["check_id"], ""), (VC[WC(e, ["pair_reason"], "")] ?? KC(WC(e, ["pair_reason"], "not_recorded"))).toLowerCase()])), Wt = Array.isArray(s.protection_profile?.dimensions) ? s.protection_profile.dimensions.filter((e) => e && typeof e == "object") : [];
   function Gt() {
     if (!mt) return /* @__PURE__ */ (0, V.jsxs)("section", {
       className: "td-next",
@@ -38910,7 +38991,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }), It()]
     });
     if (zt) {
-      let e = UC(zt, ["id"], "");
+      let e = WC(zt, ["id"], "");
       return /* @__PURE__ */ (0, V.jsxs)("section", {
         className: "td-next",
         "data-kind": "finding",
@@ -38928,8 +39009,8 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 children: ru(zt, [ge], r)
               }),
               /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: qC(UC(zt, ["severity"], "")),
-                children: ia(UC(zt, ["severity"], "unknown"))
+                tone: JC(WC(zt, ["severity"], "")),
+                children: ia(WC(zt, ["severity"], "unknown"))
               })
             ]
           }),
@@ -39060,7 +39141,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               children: "Check coverage"
             }), /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               "Applicable target and check pairs from the server plan (",
-              UC(Vt, ["plan_version"], "version not recorded"),
+              WC(Vt, ["plan_version"], "version not recorded"),
               ")."
             ] })] }), /* @__PURE__ */ (0, V.jsxs)("span", {
               className: "td-coverage-figure-wrap",
@@ -39097,24 +39178,24 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 children: "These records are simulated, manual, stale, unfinished, or lack the version, completion time, or cited evidence needed for current coverage. Current external inconclusive results count as evaluated checks."
               }),
               /* @__PURE__ */ (0, V.jsx)("ul", { children: Ht.map((e) => {
-                let t = WC(e.retained);
+                let t = GC(e.retained);
                 return /* @__PURE__ */ (0, V.jsxs)("li", { children: [
-                  /* @__PURE__ */ (0, V.jsx)("span", { children: qe(UC(e, ["check_id"], "")) }),
+                  /* @__PURE__ */ (0, V.jsx)("span", { children: qe(WC(e, ["check_id"], "")) }),
                   /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "td-muted",
-                    children: [" · ", BC[UC(e, ["pair_reason"], "")] ?? GC(UC(e, ["pair_reason"], "not_recorded"))]
+                    children: [" · ", VC[WC(e, ["pair_reason"], "")] ?? KC(WC(e, ["pair_reason"], "not_recorded"))]
                   }),
                   t ? /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "td-muted",
                     children: [
                       " · retained ",
-                      GC(UC(t, ["verdict"], "result")),
+                      KC(WC(t, ["verdict"], "result")),
                       ", ",
-                      UC(t, ["provenance"], "") ? `${GC(UC(t, ["provenance"], ""))} source` : "source not recorded",
+                      WC(t, ["provenance"], "") ? `${KC(WC(t, ["provenance"], ""))} source` : "source not recorded",
                       t.observed_at ? `, ${z(t.observed_at)}` : ""
                     ]
                   }) : null
-                ] }, UC(e, ["check_id"], ""));
+                ] }, WC(e, ["check_id"], ""));
               }) })
             ]
           }) : null,
@@ -39169,9 +39250,9 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                   return /* @__PURE__ */ (0, V.jsxs)("tr", { children: [
                     /* @__PURE__ */ (0, V.jsx)("th", {
                       scope: "row",
-                      children: VC[UC(e, ["id"], "")] ?? GC(UC(e, ["id"], ""))
+                      children: HC[WC(e, ["id"], "")] ?? KC(WC(e, ["id"], ""))
                     }),
-                    /* @__PURE__ */ (0, V.jsx)("td", { children: t > 0 ? GC(UC(e, ["status"], "not_recorded")) : "Not applicable" }),
+                    /* @__PURE__ */ (0, V.jsx)("td", { children: t > 0 ? KC(WC(e, ["status"], "not_recorded")) : "Not applicable" }),
                     /* @__PURE__ */ (0, V.jsx)("td", {
                       className: "tabular-nums",
                       children: t > 0 ? `${e.evaluated_count ?? 0} of ${t}` : "0 of 0"
@@ -39196,7 +39277,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                       className: "tabular-nums",
                       children: String(e.excluded_count ?? "Not recorded")
                     })
-                  ] }, UC(e, ["id"], ""));
+                  ] }, WC(e, ["id"], ""));
                 }) })
               ]
             })
@@ -39273,7 +39354,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "check",
       label: "Check",
       render: (e) => {
-        let t = UC(e, ["check_id"], "");
+        let t = WC(e, ["check_id"], "");
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "entity-cell-stack",
           children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: qe(t) }), /* @__PURE__ */ (0, V.jsx)("small", {
@@ -39287,11 +39368,11 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "status",
       label: "Lifecycle",
       render: (e) => {
-        let t = UC(e, ["status", "run_status"], "unknown");
+        let t = WC(e, ["status", "run_status"], "unknown");
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: KC(t),
+          tone: qC(t),
           title: "Recorded run lifecycle",
-          children: GC(t)
+          children: KC(t)
         });
       }
     },
@@ -39299,9 +39380,9 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "verdict",
       label: "Result",
       render: (e) => {
-        let t = XC(e), n = Array.isArray(e.evidence_ids) ? e.evidence_ids.length : 0;
+        let t = ZC(e), n = Array.isArray(e.evidence_ids) ? e.evidence_ids.length : 0;
         return t ? /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: KC(t),
+          tone: qC(t),
           title: `Technical verdict ${t}; cites ${n} evidence record${n === 1 ? "" : "s"}`,
           children: eu(t)
         }) : /* @__PURE__ */ (0, V.jsx)("span", {
@@ -39314,7 +39395,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "mode",
       label: "How it was checked",
       render: (e) => {
-        let t = su(e, r.find((t) => UC(t, ["check_id", "id"], "") === UC(e, ["check_id"], "")) ?? null);
+        let t = su(e, r.find((t) => WC(t, ["check_id", "id"], "") === WC(e, ["check_id"], "")) ?? null);
         return /* @__PURE__ */ (0, V.jsx)(W, {
           tone: t.tone,
           title: t.detail,
@@ -39331,7 +39412,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "evidence",
       label: "Evidence",
       render: (e) => {
-        let t = UC(e, ["run_id", "id"], "");
+        let t = WC(e, ["run_id", "id"], "");
         return /* @__PURE__ */ (0, V.jsxs)(H, {
           size: "sm",
           variant: "ghost",
@@ -39340,7 +39421,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           onClick: (t) => {
             t.stopPropagation(), Mt(e);
           },
-          "aria-label": `View evidence for ${qe(UC(e, ["check_id"], ""))} run ${t}`,
+          "aria-label": `View evidence for ${qe(WC(e, ["check_id"], ""))} run ${t}`,
           children: [/* @__PURE__ */ (0, V.jsx)(pt, {
             size: 14,
             "aria-hidden": "true"
@@ -39353,8 +39434,8 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "severity",
       label: "Severity",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
-        tone: qC(UC(e, ["severity"], "")),
-        children: ia(UC(e, ["severity"], "unknown"))
+        tone: JC(WC(e, ["severity"], "")),
+        children: ia(WC(e, ["severity"], "unknown"))
       })
     },
     {
@@ -39363,18 +39444,18 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "entity-cell-stack",
         children: [/* @__PURE__ */ (0, V.jsx)("a", {
-          href: Zf("finding-detail", UC(e, ["id"], "")),
+          href: Zf("finding-detail", WC(e, ["id"], "")),
           children: ru(e, [ge], r)
         }), /* @__PURE__ */ (0, V.jsx)("small", {
           className: "mono",
-          children: UC(e, ["id"], "")
+          children: WC(e, ["id"], "")
         })]
       })
     },
     {
       key: "state",
       label: "Lifecycle",
-      render: (e) => GC(C_(e))
+      render: (e) => KC(C_(e))
     },
     {
       key: "opened",
@@ -39384,7 +39465,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     {
       key: "assignee",
       label: "Assignee",
-      render: (e) => UC(e, ["assignee"], "") || /* @__PURE__ */ (0, V.jsx)("span", {
+      render: (e) => WC(e, ["assignee"], "") || /* @__PURE__ */ (0, V.jsx)("span", {
         className: "td-muted",
         children: "Unassigned"
       })
@@ -39393,7 +39474,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       key: "evidence",
       label: "Evidence",
       render: (e) => {
-        let t = UC(e, ["id"], "");
+        let t = WC(e, ["id"], "");
         return /* @__PURE__ */ (0, V.jsxs)(H, {
           size: "sm",
           variant: "ghost",
@@ -39443,7 +39524,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         tone: p.includes("not found") ? "warn" : "success",
         onDismiss: () => m("")
       }) : null,
-      oe && Re ? /* @__PURE__ */ (0, V.jsx)(ew, {
+      oe && Re ? /* @__PURE__ */ (0, V.jsx)(tw, {
         declaration: Le,
         onCancel: () => L(!1),
         onSave: Dt
@@ -39530,11 +39611,11 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                   " is not compatible with this target kind, so it is not listed. No other check was selected."
                 ]
               }) : null,
-              /* @__PURE__ */ (0, V.jsx)(SC, {
+              /* @__PURE__ */ (0, V.jsx)(CC, {
                 config: t,
                 session: n,
                 runId: it,
-                checkName: rt?.name || qe(UC(tt, ["check_id"], "")),
+                checkName: rt?.name || qe(WC(tt, ["check_id"], "")),
                 running: at,
                 canStop: ke && !!it,
                 onStop: () => ae({
@@ -39580,7 +39661,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 selectedRunEvents: C,
                 targetValue: Cb(ge)
               }),
-              ke ? /* @__PURE__ */ (0, V.jsxs)("div", {
+              ke && !et && !tt ? /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "td-start-bar",
                 role: "region",
                 "aria-label": "Start the selected check",
@@ -39633,8 +39714,8 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             }), /* @__PURE__ */ (0, V.jsx)(kh, {
               columns: Xt,
               items: Fe,
-              getRowId: (e) => UC(e, ["id"], ""),
-              getRowProps: (e) => UC(e, ["id"], "") === Ft ? {
+              getRowId: (e) => WC(e, ["id"], ""),
+              getRowProps: (e) => WC(e, ["id"], "") === Ft ? {
                 className: "is-selected",
                 "aria-current": "true"
               } : {},
@@ -39652,7 +39733,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 session: n,
                 targetId: e,
                 profile: s?.protection_profile ?? null,
-                checkName: (e) => Zl(UC(r.find((t) => UC(t, ["check_id", "id"], "") === e) ?? {}, ["name", "title"], e)),
+                checkName: (e) => Zl(WC(r.find((t) => WC(t, ["check_id", "id"], "") === e) ?? {}, ["name", "title"], e)),
                 onInspectRun: (t, n, r) => de({
                   entry: "check_result",
                   target_id: e,
@@ -39690,8 +39771,8 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                     children: /* @__PURE__ */ (0, V.jsx)(kh, {
                       columns: Yt,
                       items: Pe,
-                      getRowId: (e) => UC(e, ["run_id", "id"], ""),
-                      getRowProps: (e) => UC(e, ["run_id", "id"], "") === Pt ? {
+                      getRowId: (e) => WC(e, ["run_id", "id"], ""),
+                      getRowProps: (e) => WC(e, ["run_id", "id"], "") === Pt ? {
                         className: "is-selected",
                         "aria-current": "true"
                       } : {},
@@ -39714,13 +39795,13 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 }), Ie.length ? /* @__PURE__ */ (0, V.jsx)("ul", {
                   className: "td-observation-history",
                   children: Ie.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [/* @__PURE__ */ (0, V.jsx)(_x, {
-                    state: UC(e, ["state"], "unknown"),
-                    provenance: `Recorded transition ${UC(e, ["state"], "unknown")}`,
-                    label: JC(UC(e, ["state"], "unknown"))
+                    state: WC(e, ["state"], "unknown"),
+                    provenance: `Recorded transition ${WC(e, ["state"], "unknown")}`,
+                    label: YC(WC(e, ["state"], "unknown"))
                   }), /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "td-muted",
                     children: e.transitioned_at ? z(e.transitioned_at) : "Time not recorded"
-                  })] }, `${UC(e, ["state"], "unknown")}-${t}`))
+                  })] }, `${WC(e, ["state"], "unknown")}-${t}`))
                 }) : /* @__PURE__ */ (0, V.jsx)("p", {
                   className: "td-muted",
                   children: "No ownership transitions recorded."
@@ -39755,18 +39836,18 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 className: "mono",
                 children: Cb(ge)
               }) })] }),
-              /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Kind" }), /* @__PURE__ */ (0, V.jsx)("td", { children: GC(be) })] }),
+              /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Kind" }), /* @__PURE__ */ (0, V.jsx)("td", { children: KC(be) })] }),
               /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Declaration source" }), /* @__PURE__ */ (0, V.jsx)("td", { children: Zl(Sb(ge)) })] }),
               /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Ownership method" }), /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "mono",
-                children: YC(_e)
+                children: XC(_e)
               }) })] }),
               /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Target group" }), /* @__PURE__ */ (0, V.jsx)("td", { children: Ee ? /* @__PURE__ */ (0, V.jsx)("a", {
                 className: "td-inline-link",
                 href: Zf("target-group-detail", Ee),
                 children: De
               }) : "None" })] }),
-              s.loa ? /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Group LOA" }), /* @__PURE__ */ (0, V.jsx)("td", { children: GC(UC(s.loa, ["state"], "Not reported")) })] }) : null
+              s.loa ? /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Group LOA" }), /* @__PURE__ */ (0, V.jsx)("td", { children: KC(WC(s.loa, ["state"], "Not reported")) })] }) : null
             ] })
           })
         })]
@@ -39847,7 +39928,7 @@ function rw({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
 }
 //#endregion
 //#region apps/web/react/src/components/findings/finding-explanation-panel.tsx
-function iw(e, t, n = "") {
+function aw(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -39855,66 +39936,66 @@ function iw(e, t, n = "") {
   }
   return n;
 }
-function aw(e) {
+function ow(e) {
   return !!e && typeof e == "object" && !Array.isArray(e);
 }
-var ow = 4, sw = {
+var sw = 4, cw = {
   runId: "",
   status: "idle",
   detail: null,
   events: [],
   error: ""
 };
-function cw({ label: e = "Loading linked run evidence…" }) {
+function lw({ label: e = "Loading linked run evidence…" }) {
   return /* @__PURE__ */ (0, V.jsxs)("section", {
     className: "verdict-explanation finding-explanation-loading",
     "aria-busy": "true",
     "aria-label": e,
     children: [/* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-text finding-explanation-loading-title" }), /* @__PURE__ */ (0, V.jsx)("div", {
       className: "verdict-explanation-grid",
-      children: Array.from({ length: ow }, (e, t) => /* @__PURE__ */ (0, V.jsxs)("div", {
+      children: Array.from({ length: sw }, (e, t) => /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "verdict-explanation-item",
         children: [/* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-text" }), /* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-text skeleton-text-wide" })]
       }, t))
     })]
   });
 }
-function lw(e, t) {
+function uw(e, t) {
   if (!e || !t) return null;
-  let n = { ...t }, r = iw(e, ["remediation_template"], ""), i = iw(t, ["remediation_template"], ""), a = r || i;
+  let n = { ...t }, r = aw(e, ["remediation_template"], ""), i = aw(t, ["remediation_template"], ""), a = r || i;
   return a && (n.remediation_template = a), n;
 }
-function uw({ finding: e, config: t, session: n }) {
-  let [r, i] = (0, D.useState)(sw), [a, o] = (0, D.useState)(0), s = iw(e, ["test_run_id"], ""), c = r.runId === s ? r : {
-    ...sw,
+function dw({ finding: e, config: t, session: n }) {
+  let [r, i] = (0, D.useState)(cw), [a, o] = (0, D.useState)(0), s = aw(e, ["test_run_id"], ""), c = r.runId === s ? r : {
+    ...cw,
     runId: s,
     status: s ? "loading" : "idle"
   }, l = (0, D.useCallback)(() => {
     s && (i({
-      ...sw,
+      ...cw,
       runId: s,
       status: "loading"
     }), o((e) => e + 1));
   }, [s]);
   (0, D.useEffect)(() => {
     if (!s) {
-      i(sw);
+      i(cw);
       return;
     }
     let e = s, r = !1;
     return i({
-      ...sw,
+      ...cw,
       runId: e,
       status: "loading"
     }), Promise.all([B(t, n, `/v1/test-runs/${encodeURIComponent(e)}`), B(t, n, `/v1/test-runs/${encodeURIComponent(e)}/events`)]).then(([t, n]) => {
       if (r) return;
-      if (!aw(t)) throw Error("The linked run returned an invalid detail record.");
-      if (iw(t, ["id", "test_run_id"], "") !== e) throw Error("The linked run response did not match this finding.");
-      if (!aw(n) || !Array.isArray(n.items)) throw Error("The linked run returned an invalid event log.");
-      if (!n.items.every(aw)) throw Error("The linked run event log contained invalid records.");
+      if (!ow(t)) throw Error("The linked run returned an invalid detail record.");
+      if (aw(t, ["id", "test_run_id"], "") !== e) throw Error("The linked run response did not match this finding.");
+      if (!ow(n) || !Array.isArray(n.items)) throw Error("The linked run returned an invalid event log.");
+      if (!n.items.every(ow)) throw Error("The linked run event log contained invalid records.");
       let a = n.items;
       if (a.some((t) => {
-        let n = iw(t, ["test_run_id"], "");
+        let n = aw(t, ["test_run_id"], "");
         return n !== "" && n !== e;
       })) throw Error("The linked run event log contained records from another run.");
       i({
@@ -39926,7 +40007,7 @@ function uw({ finding: e, config: t, session: n }) {
       });
     }).catch((t) => {
       r || i({
-        ...sw,
+        ...cw,
         runId: e,
         status: "error",
         error: t instanceof Error ? t.message : "Could not load linked run evidence."
@@ -39940,7 +40021,7 @@ function uw({ finding: e, config: t, session: n }) {
     n,
     a
   ]);
-  let u = (0, D.useMemo)(() => lw(e, c.detail), [e, c.detail]);
+  let u = (0, D.useMemo)(() => uw(e, c.detail), [e, c.detail]);
   if (!e) return /* @__PURE__ */ (0, V.jsx)("p", {
     className: "muted",
     children: "Select a finding to review evidence-backed explanation."
@@ -39953,19 +40034,19 @@ function uw({ finding: e, config: t, session: n }) {
         className: "muted",
         children: "This finding does not identify an originating test run, so external probe evidence cannot be attributed."
       }),
-      iw(e, ["notes"], "") ? /* @__PURE__ */ (0, V.jsx)("div", {
+      aw(e, ["notes"], "") ? /* @__PURE__ */ (0, V.jsx)("div", {
         className: "verdict-explanation-grid",
         children: /* @__PURE__ */ (0, V.jsx)(Wg, {
           label: "Finding note (not linked run evidence)",
-          value: iw(e, ["notes"]),
+          value: aw(e, ["notes"]),
           fullWidth: !0
         })
       }) : null,
-      iw(e, ["remediation_template"], "") ? /* @__PURE__ */ (0, V.jsx)("div", {
+      aw(e, ["remediation_template"], "") ? /* @__PURE__ */ (0, V.jsx)("div", {
         className: "verdict-explanation-grid",
         children: /* @__PURE__ */ (0, V.jsx)(Wg, {
           label: "Recorded remediation",
-          value: Lg(iw(e, ["remediation_template"]), { finding: e }),
+          value: Lg(aw(e, ["remediation_template"]), { finding: e }),
           fullWidth: !0
         })
       }) : null
@@ -39999,18 +40080,18 @@ function uw({ finding: e, config: t, session: n }) {
       children: [/* @__PURE__ */ (0, V.jsx)(Wg, {
         label: "Originating run requested by finding",
         value: s
-      }), iw(e, ["notes"], "") ? /* @__PURE__ */ (0, V.jsx)(Wg, {
+      }), aw(e, ["notes"], "") ? /* @__PURE__ */ (0, V.jsx)(Wg, {
         label: "Finding note (not linked run evidence)",
-        value: iw(e, ["notes"])
+        value: aw(e, ["notes"])
       }) : null]
     })]
   });
-  if (c.status === "loading" || !u) return /* @__PURE__ */ (0, V.jsx)(cw, { label: `Loading linked run ${s} and its event evidence…` });
-  let d = iw(e, ["id"], ""), f = iw(c.detail, ["id", "test_run_id"], s), p = iw(c.detail, ["check_id"], ""), m = c.events.length, h = c.detail?.verdict, g = (typeof h == "string" ? h : iw(aw(h) ? h : null, ["verdict", "result"], "")).toLowerCase(), _ = [
+  if (c.status === "loading" || !u) return /* @__PURE__ */ (0, V.jsx)(lw, { label: `Loading linked run ${s} and its event evidence…` });
+  let d = aw(e, ["id"], ""), f = aw(c.detail, ["id", "test_run_id"], s), p = aw(c.detail, ["check_id"], ""), m = c.events.length, h = c.detail?.verdict, g = (typeof h == "string" ? h : aw(ow(h) ? h : null, ["verdict", "result"], "")).toLowerCase(), _ = [
     "open",
     "remediation_pending",
     ""
-  ].includes(iw(e, ["status", "state"], "").toLowerCase()) && [
+  ].includes(aw(e, ["status", "state"], "").toLowerCase()) && [
     "pass",
     "passed",
     "protected",
@@ -40058,7 +40139,7 @@ function uw({ finding: e, config: t, session: n }) {
             onClick: () => vl({
               entry: "finding",
               finding_id: d,
-              target_id: iw(e, ["target_id"], "") || void 0,
+              target_id: aw(e, ["target_id"], "") || void 0,
               check_id: p || void 0
             }, { focusKey: "explanation-view-evidence" }),
             disabled: !d,
@@ -40076,7 +40157,7 @@ function uw({ finding: e, config: t, session: n }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/finding-detail.ts
-function dw(e, t, n = "") {
+function fw(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -40084,38 +40165,38 @@ function dw(e, t, n = "") {
   }
   return n;
 }
-function fw(e, t) {
+function pw(e, t) {
   return t.filter((t) => {
-    let n = dw(t, ["target_id"], ""), r = Array.isArray(t.finding_ids) ? t.finding_ids.map(String) : [], i = dw(t, ["linked_finding_id"], "");
+    let n = fw(t, ["target_id"], ""), r = Array.isArray(t.finding_ids) ? t.finding_ids.map(String) : [], i = fw(t, ["linked_finding_id"], "");
     return r.includes(e) || i === e || n === e;
   });
 }
-function pw(e, t = []) {
-  let n = dw(e, ["id"], ""), r = t.find((e) => dw(e, ["finding_id"], "") === n), i = e.remediation && typeof e.remediation == "object" && !Array.isArray(e.remediation) ? e.remediation : null;
+function mw(e, t = []) {
+  let n = fw(e, ["id"], ""), r = t.find((e) => fw(e, ["finding_id"], "") === n), i = e.remediation && typeof e.remediation == "object" && !Array.isArray(e.remediation) ? e.remediation : null;
   return {
-    remAction: dw(e, ["rem_action", "remAction"], dw(i ?? r ?? {}, ["action", "rem_action"], "")),
-    remOwner: dw(e, [
+    remAction: fw(e, ["rem_action", "remAction"], fw(i ?? r ?? {}, ["action", "rem_action"], "")),
+    remOwner: fw(e, [
       "rem_owner",
       "remOwner",
       "assignee"
-    ], dw(i ?? r ?? {}, ["owner", "rem_owner"], "")),
-    remState: dw(e, [
+    ], fw(i ?? r ?? {}, ["owner", "rem_owner"], "")),
+    remState: fw(e, [
       "rem_state",
       "remState",
       "status"
-    ], dw(i ?? r ?? {}, ["state", "status"], "")),
-    remStateClass: dw(e, ["rem_state_class", "remStateClass"], dw(i ?? r ?? {}, ["state_class"], "")),
-    remSla: dw(e, [
+    ], fw(i ?? r ?? {}, ["state", "status"], "")),
+    remStateClass: fw(e, ["rem_state_class", "remStateClass"], fw(i ?? r ?? {}, ["state_class"], "")),
+    remSla: fw(e, [
       "rem_sla",
       "remSla",
       "sla"
-    ], dw(i ?? r ?? {}, ["sla"], "")),
-    remDescription: dw(e, ["rem_description", "remDescription"], dw(i ?? r ?? {}, ["description", "summary"], "")),
-    remSteps: dw(e, ["rem_steps", "remSteps"], dw(i ?? r ?? {}, ["steps"], "")),
-    actionItemId: dw(r ?? {}, ["id"], dw(e, ["waf_action_item_id", "action_item_id"], ""))
+    ], fw(i ?? r ?? {}, ["sla"], "")),
+    remDescription: fw(e, ["rem_description", "remDescription"], fw(i ?? r ?? {}, ["description", "summary"], "")),
+    remSteps: fw(e, ["rem_steps", "remSteps"], fw(i ?? r ?? {}, ["steps"], "")),
+    actionItemId: fw(r ?? {}, ["id"], fw(e, ["waf_action_item_id", "action_item_id"], ""))
   };
 }
-async function mw(e, t, n) {
+async function hw(e, t, n) {
   try {
     let r = await B(e, t, `/v1/findings/${encodeURIComponent(n)}/evidence`);
     return {
@@ -40123,7 +40204,7 @@ async function mw(e, t, n) {
       bundle: r.bundle && typeof r.bundle == "object" ? r.bundle : null,
       artifacts: Array.isArray(r.artifacts) ? r.artifacts : [],
       custody_chain: Array.isArray(r.custody_chain) ? r.custody_chain : [],
-      verify_url: dw(r, ["verify_url"], "/v1/custody/verify"),
+      verify_url: fw(r, ["verify_url"], "/v1/custody/verify"),
       meta: r.meta && typeof r.meta == "object" ? r.meta : null
     };
   } catch (e) {
@@ -40140,44 +40221,44 @@ async function mw(e, t, n) {
 }
 //#endregion
 //#region apps/web/react/src/lib/finding-lineage.mjs
-function hw(e) {
+function gw(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function gw(e, t) {
+function _w(e, t) {
   let n = e?.[t];
   return typeof n == "string" ? n : "";
 }
-function _w(e) {
-  let t = gw(e, "test_run_id");
+function vw(e) {
+  let t = _w(e, "test_run_id");
   return t ? {
     testRunId: t,
-    status: gw(e, "status"),
-    createdAt: gw(e, "created_at"),
+    status: _w(e, "status"),
+    createdAt: _w(e, "created_at"),
     finalized: typeof e?.finalized == "boolean" ? e.finalized : null,
-    reason: gw(e, "reason")
+    reason: _w(e, "reason")
   } : null;
 }
-function vw(e) {
-  let t = hw(e?.lineage), n = hw(t?.originating) ?? hw(e?.originating), r = hw(t?.latest) ?? hw(e?.latest), i = Array.isArray(t?.retests) ? t.retests : Array.isArray(e?.retests) ? e.retests : [], a = Array.isArray(t?.later_same_pair) ? t.later_same_pair : [];
+function yw(e) {
+  let t = gw(e?.lineage), n = gw(t?.originating) ?? gw(e?.originating), r = gw(t?.latest) ?? gw(e?.latest), i = Array.isArray(t?.retests) ? t.retests : Array.isArray(e?.retests) ? e.retests : [], a = Array.isArray(t?.later_same_pair) ? t.later_same_pair : [];
   return {
-    originating: _w(n),
-    retests: i.map(hw).filter((e) => gw(e, "intent") === "retest" || gw(e, "relation") === "retest").map(_w).filter(Boolean),
-    laterSamePair: a.map(hw).filter((e) => gw(e, "relation") === "later_same_pair").map(_w).filter(Boolean),
-    latest: gw(r, "test_run_id") ? {
-      testRunId: gw(r, "test_run_id"),
-      relation: gw(r, "relation"),
-      status: gw(r, "status"),
+    originating: vw(n),
+    retests: i.map(gw).filter((e) => _w(e, "intent") === "retest" || _w(e, "relation") === "retest").map(vw).filter(Boolean),
+    laterSamePair: a.map(gw).filter((e) => _w(e, "relation") === "later_same_pair").map(vw).filter(Boolean),
+    latest: _w(r, "test_run_id") ? {
+      testRunId: _w(r, "test_run_id"),
+      relation: _w(r, "relation"),
+      status: _w(r, "status"),
       finalized: typeof r.finalized == "boolean" ? r.finalized : null,
       pending: r.pending === !0,
-      completedAt: gw(r, "completed_at")
+      completedAt: _w(r, "completed_at")
     } : null,
-    closedAt: gw(e, "closed_at") || gw(t, "closed_at"),
+    closedAt: _w(e, "closed_at") || _w(t, "closed_at"),
     siblingClosure: !1
   };
 }
 //#endregion
 //#region apps/web/react/src/lib/finding-group-labels.mjs
-function yw(e, t) {
+function bw(e, t) {
   if (!e || typeof e != "object") return "";
   for (let n of t) {
     let t = e[n];
@@ -40185,15 +40266,15 @@ function yw(e, t) {
   }
   return "";
 }
-function bw(e) {
+function xw(e) {
   let t = /* @__PURE__ */ new Map();
   for (let n of Array.isArray(e) ? e : []) {
-    let e = yw(n, ["id", "target_group_id"]), r = yw(n, ["name", "display_name"]);
+    let e = bw(n, ["id", "target_group_id"]), r = bw(n, ["name", "display_name"]);
     e && r && t.set(e, r);
   }
   return t;
 }
-function xw(e, { names: t, loadError: n } = {}) {
+function Sw(e, { names: t, loadError: n } = {}) {
   let r = typeof e == "string" ? e.trim() : "";
   if (!r) return {
     state: "ungrouped",
@@ -40217,20 +40298,20 @@ function xw(e, { names: t, loadError: n } = {}) {
 }
 //#endregion
 //#region apps/web/react/src/pages/finding-detail-view.tsx
-var Sw = "finding-detail-view-styles", Cw = "\n.finding-detail-page { gap: var(--space-6); }\n.finding-detail-page > .page-head { margin-bottom: 0; }\n.finding-detail-page .finding-title-copy { min-width: 0; }\n.finding-detail-page .finding-title-copy .page-title,\n.finding-detail-page .finding-id { overflow-wrap: anywhere; word-break: break-word; }\n.finding-detail-page .finding-summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: 0; }\n.finding-detail-page .finding-summary-fact { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 2%); }\n.finding-detail-page .finding-summary-fact dt { margin-bottom: var(--space-1); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }\n.finding-detail-page .finding-summary-fact dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; word-break: break-word; }\n.finding-detail-page .finding-relations { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); }\n.finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }\n.finding-detail-page .finding-digest { display: inline-block; min-width: 0; max-width: 42ch; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }\n.finding-detail-page .finding-artifact-row { cursor: pointer; }\n.finding-detail-page .finding-summary-fact dd small { display: block; margin-top: 2px; color: var(--fg-2); }\n.finding-detail-page .finding-lineage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }\n.finding-detail-page .finding-lineage-item { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); font-size: var(--text-sm); overflow-wrap: anywhere; }\n.finding-detail-page .finding-lineage-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }\n.finding-detail-page .rule-assets-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }\n.finding-detail-page .finding-lineage-runs { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }\n.finding-detail-page .finding-lineage-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }\n.finding-detail-page .finding-custody-card .code { max-width: 100%; white-space: pre; }\n@media (max-width: 720px) {\n  .finding-detail-page .finding-summary-facts,\n  .finding-detail-page .finding-decision-ladder { grid-template-columns: minmax(0, 1fr); }\n}\n";
-function ww() {
-  if (typeof document > "u" || document.getElementById(Sw)) return;
+var Cw = "finding-detail-view-styles", ww = "\n.finding-detail-page { gap: var(--space-6); }\n.finding-detail-page > .page-head { margin-bottom: 0; }\n.finding-detail-page .finding-title-copy { min-width: 0; }\n.finding-detail-page .finding-title-copy .page-title,\n.finding-detail-page .finding-id { overflow-wrap: anywhere; word-break: break-word; }\n.finding-detail-page .finding-summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: 0; }\n.finding-detail-page .finding-summary-fact { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 2%); }\n.finding-detail-page .finding-summary-fact dt { margin-bottom: var(--space-1); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }\n.finding-detail-page .finding-summary-fact dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; word-break: break-word; }\n.finding-detail-page .finding-relations { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); }\n.finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }\n.finding-detail-page .finding-digest { display: inline-block; min-width: 0; max-width: 42ch; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }\n.finding-detail-page .finding-artifact-row { cursor: pointer; }\n.finding-detail-page .finding-summary-fact dd small { display: block; margin-top: 2px; color: var(--fg-2); }\n.finding-detail-page .finding-lineage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }\n.finding-detail-page .finding-lineage-item { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); font-size: var(--text-sm); overflow-wrap: anywhere; }\n.finding-detail-page .finding-lineage-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }\n.finding-detail-page .rule-assets-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }\n.finding-detail-page .finding-lineage-runs { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }\n.finding-detail-page .finding-lineage-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }\n.finding-detail-page .finding-custody-card .code { max-width: 100%; white-space: pre; }\n@media (max-width: 720px) {\n  .finding-detail-page .finding-summary-facts,\n  .finding-detail-page .finding-decision-ladder { grid-template-columns: minmax(0, 1fr); }\n}\n";
+function Tw() {
+  if (typeof document > "u" || document.getElementById(Cw)) return;
   let e = document.createElement("style");
-  e.id = Sw, e.textContent = Cw, document.head.appendChild(e);
+  e.id = Cw, e.textContent = ww, document.head.appendChild(e);
 }
-function Tw(e, t, n, r) {
+function Ew(e, t, n, r) {
   let i = e.trim().toLowerCase(), a = t.trim().toLowerCase(), o = !!(a && a !== "unassigned" && a !== "not reported"), s = r, c = ["accepted_risk", "closed"].includes(i);
   return [
     {
       id: "opened",
       label: "Finding opened",
       done: !0,
-      meta: `Recorded status: ${Ow(e, "Open")}`
+      meta: `Recorded status: ${kw(e, "Open")}`
     },
     {
       id: "owned",
@@ -40242,17 +40323,17 @@ function Tw(e, t, n, r) {
       id: "remediation",
       label: "Remediation linked",
       done: s,
-      meta: s ? Ow(n, "Playbook linked") : "No playbook or progressed remediation state."
+      meta: s ? kw(n, "Playbook linked") : "No playbook or progressed remediation state."
     },
     {
       id: "decision",
       label: "Decision recorded",
       done: c,
-      meta: c ? Ow(e) : "Accept risk or close after review."
+      meta: c ? kw(e) : "Accept risk or close after review."
     }
   ];
 }
-function Ew(e) {
+function Dw(e) {
   let t = e.trim().toLowerCase();
   return [
     "critical",
@@ -40269,17 +40350,17 @@ function Ew(e) {
     "s4"
   ].includes(t) ? "info" : "muted";
 }
-function Dw(e) {
+function Ow(e) {
   let t = e.trim().toLowerCase();
   return t === "closed" ? "success" : t === "accepted_risk" ? "muted" : t === "open" ? "warn" : "info";
 }
-function Ow(e, t = "Not reported") {
+function kw(e, t = "Not reported") {
   let n = e.trim();
   if (!n) return t;
   let r = n.replace(/_/g, " ");
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-function kw(e, t, n = "Not reported") {
+function Aw(e, t, n = "Not reported") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -40287,14 +40368,14 @@ function kw(e, t, n = "Not reported") {
   }
   return n;
 }
-function Aw(e) {
+function jw(e) {
   return Array.isArray(e) ? e.filter((e) => !!e && typeof e == "object" && !Array.isArray(e)) : null;
 }
-function jw(e) {
+function Mw(e) {
   let t = Number(e);
   return !Number.isFinite(t) || t <= 0 ? "Not reported" : t < 1024 ? `${t} B` : t < 1048576 ? `${(t / 1024).toFixed(1)} KB` : `${(t / 1048576).toFixed(1)} MB`;
 }
-function Mw(e, t) {
+function Nw(e, t) {
   let n = e.trim().toLowerCase();
   if (n.includes("danger")) return "danger";
   if (n.includes("warn")) return "warn";
@@ -40304,7 +40385,7 @@ function Mw(e, t) {
   let r = t.trim().toLowerCase();
   return ["resolved", "delivered"].includes(r) ? "success" : r === "accepted_risk" ? "muted" : r === "in_progress" ? "info" : ["open", "remediation_pending"].includes(r) ? "warn" : "default";
 }
-function Nw(e, t) {
+function Pw(e, t) {
   return e ? {
     className: "finding-artifact-row",
     onClick: (n) => {
@@ -40312,7 +40393,7 @@ function Nw(e, t) {
     }
   } : {};
 }
-function Pw({ loadError: e, message: t, error: n }) {
+function Fw({ loadError: e, message: t, error: n }) {
   return /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [e ? /* @__PURE__ */ (0, V.jsx)("div", {
     className: "form-banner error",
     role: "alert",
@@ -40323,9 +40404,9 @@ function Pw({ loadError: e, message: t, error: n }) {
     children: n || t
   }) : null] });
 }
-function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
-  ww();
-  let { confirm: c } = lp(), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(null), [_, v] = (0, D.useState)(0), [y, b] = (0, D.useState)([]), [x, S] = (0, D.useState)(!0), [C, w] = (0, D.useState)(""), [T, E] = (0, D.useState)(0), [O, k] = (0, D.useState)(null), [A, j] = (0, D.useState)(() => Qf("retest") === "review"), M = wC(), N = CC(), P = pw(e, n.wafActionItems), ee = ja(i, "finding:write"), F = ja(i, "test_run:start"), I = P.remSteps.split("|").map((e) => e.trim()).filter(Boolean), te = !!(P.remAction || P.remDescription || P.remSteps || P.actionItemId), re = ru(e, [...n.targets, ...y], n.checks), ie = J_(e), ae = kw(e, ["severity"], "unknown"), oe = V_(e), L = kw(e, ["assignee", "rem_owner"], "unassigned"), se = kw(e, ["target_group_id"], ""), ce = kw(e, ["target_id"], ""), le = kw(e, ["test_run_id"], ""), ue = kw(e, ["check_id"], ""), de = kw(e, ["vector_family", "vector"], ""), fe = vw(e), pe = fe.originating?.testRunId || (le === "Not reported" ? "" : le), me = kw(e, ["verdict_id"], ""), he = kw(e, ["last_verdict_id"], ""), ge = !!he && he !== me, _e = Dv(e), ve = n.checks.find((e) => kw(e, ["check_id", "id"], "") === ue) ?? null, ye = Number(ve?.probe_profile?.max_requests), be = [...n.targets, ...y].find((e) => kw(e, ["id"], "") === ce) ?? null;
+function Iw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+  Tw();
+  let { confirm: c } = lp(), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(null), [_, v] = (0, D.useState)(0), [y, b] = (0, D.useState)([]), [x, S] = (0, D.useState)(!0), [C, w] = (0, D.useState)(""), [T, E] = (0, D.useState)(0), [O, k] = (0, D.useState)(null), [A, j] = (0, D.useState)(() => Qf("retest") === "review"), M = TC(), N = wC(), P = mw(e, n.wafActionItems), ee = ja(i, "finding:write"), F = ja(i, "test_run:start"), I = P.remSteps.split("|").map((e) => e.trim()).filter(Boolean), te = !!(P.remAction || P.remDescription || P.remSteps || P.actionItemId), re = ru(e, [...n.targets, ...y], n.checks), ie = J_(e), ae = Aw(e, ["severity"], "unknown"), oe = V_(e), L = Aw(e, ["assignee", "rem_owner"], "unassigned"), se = Aw(e, ["target_group_id"], ""), ce = Aw(e, ["target_id"], ""), le = Aw(e, ["test_run_id"], ""), ue = Aw(e, ["check_id"], ""), de = Aw(e, ["vector_family", "vector"], ""), fe = yw(e), pe = fe.originating?.testRunId || (le === "Not reported" ? "" : le), me = Aw(e, ["verdict_id"], ""), he = Aw(e, ["last_verdict_id"], ""), ge = !!he && he !== me, _e = Dv(e), ve = n.checks.find((e) => Aw(e, ["check_id", "id"], "") === ue) ?? null, ye = Number(ve?.probe_profile?.max_requests), be = [...n.targets, ...y].find((e) => Aw(e, ["id"], "") === ce) ?? null;
   function Se() {
     M({
       entry: "finding",
@@ -40359,14 +40440,14 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   function Ee() {
     j(!1), $f({ retest: null });
   }
-  let De = Tw(oe, L, P.remState, te), Oe = L_(r, i, { check_id: ue }, 0, !!ue), ke = ue ? Oe.items : n.findings ?? [], Ae = ue ? Oe.complete : n.findingsMeta ? !n.findingsMeta.hasMore : !1, je = (0, D.useMemo)(() => wv(e, ke, n.targets ?? []), [
+  let De = Ew(oe, L, P.remState, te), Oe = L_(r, i, { check_id: ue }, 0, !!ue), ke = ue ? Oe.items : n.findings ?? [], Ae = ue ? Oe.complete : n.findingsMeta ? !n.findingsMeta.hasMore : !1, je = (0, D.useMemo)(() => wv(e, ke, n.targets ?? []), [
     e,
     ke,
     n.targets
   ]), Me = ov(e, n.checks), Ne = (0, D.useRef)(null), Pe = je.filter((e) => {
     let t = V_(e).toLowerCase();
     return t === "open" || t === "remediation_pending";
-  }).length, Fe = Sv(je, n.targets ?? []), Ie = je.length > 1, Le = n.loadErrors?.findings ?? "", Re = n.loadErrors?.targetGroups ?? "", ze = (0, D.useMemo)(() => bw(n.targetGroups ?? []), [n.targetGroups]), Be = !!Re && je.some((e) => xw(kw(e, ["target_group_id"], ""), {
+  }).length, Fe = Sv(je, n.targets ?? []), Ie = je.length > 1, Le = n.loadErrors?.findings ?? "", Re = n.loadErrors?.targetGroups ?? "", ze = (0, D.useMemo)(() => xw(n.targetGroups ?? []), [n.targetGroups]), Be = !!Re && je.some((e) => Sw(Aw(e, ["target_group_id"], ""), {
     names: ze,
     loadError: Re
   }).state === "unavailable");
@@ -40385,7 +40466,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     return () => window.cancelAnimationFrame(r);
   }, [t, o]), (0, D.useEffect)(() => {
     let e = !1;
-    return g(null), k(null), mw(r, i, t).then((t) => {
+    return g(null), k(null), hw(r, i, t).then((t) => {
       e || g(t);
     }), () => {
       e = !0;
@@ -40398,21 +40479,21 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   ]), (0, D.useEffect)(() => {
     let n = !1;
     b([]), w("");
-    let a = Aw(e.affected_targets) ?? Aw(e.targets);
+    let a = jw(e.affected_targets) ?? jw(e.targets);
     if (a && a.length > 0) {
       b(a), S(!1);
       return;
     }
-    let o = kw(e, ["target_group_id"], "");
+    let o = Aw(e, ["target_group_id"], "");
     if (!o) {
       S(!1);
       return;
     }
     return S(!0), B(r, i, `/v1/target-groups/${encodeURIComponent(o)}`).then((r) => {
       if (n) return;
-      let i = Aw(r.targets) ?? [], a = kw(e, ["target_id"], ""), o = fw(t, i);
-      if (a && !o.some((e) => kw(e, ["id"], "") === a)) {
-        let e = i.find((e) => kw(e, ["id"], "") === a);
+      let i = jw(r.targets) ?? [], a = Aw(e, ["target_id"], ""), o = pw(t, i);
+      if (a && !o.some((e) => Aw(e, ["id"], "") === a)) {
+        let e = i.find((e) => Aw(e, ["id"], "") === a);
         e && o.unshift(e);
       }
       b(o);
@@ -40470,8 +40551,8 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       });
       if (!o || o.ok !== !0) {
         k(!1);
-        let e = kw(o && typeof o.verification == "object" ? o.verification : {}, ["error"], "verification_failed");
-        throw Error(`Custody verification failed: ${Ow(e)}.`);
+        let e = Aw(o && typeof o.verification == "object" ? o.verification : {}, ["error"], "verification_failed");
+        throw Error(`Custody verification failed: ${kw(e)}.`);
       }
       k(!0);
     }, "Custody chain verified. The SHA-256 digest matches the sealed manifest.");
@@ -40489,42 +40570,42 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       render: (e) => /* @__PURE__ */ (0, V.jsx)(yc, {
         size: "sm",
         variant: "ghost",
-        href: Zf("target-detail", kw(e, ["id"], "")),
-        "aria-label": `Open target ${kw(e, ["value", "id"], "target")}`,
-        children: kw(e, ["value", "id"], "")
+        href: Zf("target-detail", Aw(e, ["id"], "")),
+        "aria-label": `Open target ${Aw(e, ["value", "id"], "target")}`,
+        children: Aw(e, ["value", "id"], "")
       })
     },
     {
       key: "kind",
       label: "Kind",
-      render: (e) => ql(kw(e, ["kind"], ""), "Not reported")
+      render: (e) => ql(Aw(e, ["kind"], ""), "Not reported")
     },
     {
       key: "value",
       label: "Value",
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "mono",
-        children: kw(e, ["value"], "Not reported")
+        children: Aw(e, ["value"], "Not reported")
       })
     },
     {
       key: "verification",
       label: "Verification",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(_x, {
-        state: kw(e, ["verification_state", "verification"], "unverified"),
-        provenance: kw(e, ["verification_title"], "Recorded target verification state.")
+        state: Aw(e, ["verification_state", "verification"], "unverified"),
+        provenance: Aw(e, ["verification_title"], "Recorded target verification state.")
       })
     },
     {
       key: "eligibility",
       label: "Eligibility",
-      render: (e) => ql(kw(e, ["eligibility"], ""), "Not reported")
+      render: (e) => ql(Aw(e, ["eligibility"], ""), "Not reported")
     },
     {
       key: "verdict",
       label: "Last verdict",
       render: (e) => {
-        let t = kw(e, ["last_verdict"], "");
+        let t = Aw(e, ["last_verdict"], "");
         return t ? eu(t) : "No result yet";
       }
     }
@@ -40533,7 +40614,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "asset",
       label: "Asset",
       render: (e) => {
-        let r = kw(e, ["id"], ""), i = lv(e, n.targets);
+        let r = Aw(e, ["id"], ""), i = lv(e, n.targets);
         return r === t ? /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "rule-asset-current",
           children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: i }), /* @__PURE__ */ (0, V.jsx)("small", { children: "This finding" })]
@@ -40555,15 +40636,15 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "check",
       label: "Check",
       render: (e) => {
-        let t = kw(e, ["check_id", "check"], "");
+        let t = Aw(e, ["check_id", "check"], "");
         if (!t) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "rule-asset-meta",
           children: "Not reported"
         });
-        let r = n.checks.find((e) => kw(e, ["check_id", "id"], "") === t);
+        let r = n.checks.find((e) => Aw(e, ["check_id", "id"], "") === t);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "rule-asset-stack",
-          children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Zl(kw(r ?? {}, ["name", "title"], t)) }), /* @__PURE__ */ (0, V.jsx)("small", {
+          children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Zl(Aw(r ?? {}, ["name", "title"], t)) }), /* @__PURE__ */ (0, V.jsx)("small", {
             className: "mono",
             children: t
           })]
@@ -40574,7 +40655,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "group",
       label: "Target group",
       render: (e) => {
-        let t = xw(kw(e, ["target_group_id"], ""), {
+        let t = Sw(Aw(e, ["target_group_id"], ""), {
           names: ze,
           loadError: Re
         });
@@ -40605,8 +40686,8 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       render: (e) => {
         let t = V_(e);
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: Dw(t),
-          children: Ow(t)
+          tone: Ow(t),
+          children: kw(t)
         });
       }
     },
@@ -40614,9 +40695,9 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "severity",
       label: "Severity",
       render: (e) => {
-        let t = kw(e, ["severity"], "unknown");
+        let t = Aw(e, ["severity"], "unknown");
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: Ew(t),
+          tone: Dw(t),
           children: ia(t)
         });
       }
@@ -40636,13 +40717,13 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "evidence",
       label: "Evidence",
       render: (e) => {
-        let t = kw(e, ["id"], ""), r = Array.isArray(e.evidence_ids) ? e.evidence_ids.filter(Boolean).length : 0;
+        let t = Aw(e, ["id"], ""), r = Array.isArray(e.evidence_ids) ? e.evidence_ids.filter(Boolean).length : 0;
         return t ? /* @__PURE__ */ (0, V.jsxs)(H, {
           size: "sm",
           variant: "ghost",
           "data-focus-key": `sibling-${t}`,
           "aria-label": `View the original evidence for the finding on ${lv(e, n.targets)}`,
-          onClick: () => Te(t, kw(e, ["target_id"], "")),
+          onClick: () => Te(t, Aw(e, ["target_id"], "")),
           children: [/* @__PURE__ */ (0, V.jsx)(pt, {
             size: 14,
             "aria-hidden": "true"
@@ -40658,7 +40739,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "artifact",
       label: "Artifact",
       render: (t) => {
-        let n = kw(t, ["id"], ""), r = ql(kw(t, ["kind"], ""), "Evidence artifact"), i = Array.isArray(e.evidence_ids) && e.evidence_ids.map(String).includes(n);
+        let n = Aw(t, ["id"], ""), r = ql(Aw(t, ["kind"], ""), "Evidence artifact"), i = Array.isArray(e.evidence_ids) && e.evidence_ids.map(String).includes(n);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "entity-cell-stack",
           children: [
@@ -40672,13 +40753,13 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     {
       key: "kind",
       label: "Kind",
-      render: (e) => ql(kw(e, ["kind"], ""), "Not reported")
+      render: (e) => ql(Aw(e, ["kind"], ""), "Not reported")
     },
     {
       key: "run",
       label: "Run",
       render: (e) => {
-        let t = kw(e, ["run_id"], "");
+        let t = Aw(e, ["run_id"], "");
         return t ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "mono",
           children: t
@@ -40693,8 +40774,8 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Recorded digest",
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "mono small finding-digest",
-        title: kw(e, ["sha256", "content_sha256"], "Not reported"),
-        children: kw(e, ["sha256", "content_sha256"], "Not reported")
+        title: Aw(e, ["sha256", "content_sha256"], "Not reported"),
+        children: Aw(e, ["sha256", "content_sha256"], "Not reported")
       })
     },
     {
@@ -40707,14 +40788,14 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Size",
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "num",
-        children: jw(e.size_bytes)
+        children: Mw(e.size_bytes)
       })
     },
     {
       key: "inspect",
       label: "Inspect",
       render: (e) => {
-        let t = kw(e, ["id"], "");
+        let t = Aw(e, ["id"], "");
         return t ? /* @__PURE__ */ (0, V.jsxs)(H, {
           size: "sm",
           variant: "ghost",
@@ -40730,10 +40811,10 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         }) : null;
       }
     }
-  ], Ye = h?.custody_chain ?? [], Xe = kw(h?.bundle, ["sha256"], ""), Ze = kw(h?.bundle, ["sealed_at"], ""), Qe = O === !0 ? "Verified" : O === !1 ? "Verification failed" : "Not checked", $e = [
+  ], Ye = h?.custody_chain ?? [], Xe = Aw(h?.bundle, ["sha256"], ""), Ze = Aw(h?.bundle, ["sealed_at"], ""), Qe = O === !0 ? "Verified" : O === !1 ? "Verification failed" : "Not checked", $e = [
     `finding: ${t}`,
-    `digest_kind: ${kw(h?.bundle, ["custody_schema_version"], "json-key-sorted-v1")}`,
-    ...Ye.length ? ["chain:", ...Ye.flatMap((e) => [`  - artifact: ${kw(e, ["kind", "step"], "artifact")}`, `    sha256: ${kw(e, ["sha256"], "not_recorded")}`])] : [],
+    `digest_kind: ${Aw(h?.bundle, ["custody_schema_version"], "json-key-sorted-v1")}`,
+    ...Ye.length ? ["chain:", ...Ye.flatMap((e) => [`  - artifact: ${Aw(e, ["kind", "step"], "artifact")}`, `    sha256: ${Aw(e, ["sha256"], "not_recorded")}`])] : [],
     `bundle_sha256: ${Xe || "not_recorded"}`,
     ...Ze ? [`sealed_at: ${Ze}`] : [],
     `verified: ${O === null ? "not_checked" : O}`
@@ -40762,13 +40843,13 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             /* @__PURE__ */ (0, V.jsxs)("div", {
               className: "detail-status-line",
               children: [/* @__PURE__ */ (0, V.jsx)(W, {
-                tone: Ew(ae),
+                tone: Dw(ae),
                 title: `Recorded severity: ${ia(ae)}`,
                 children: ia(ae)
               }), /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: Dw(oe),
-                title: `Recorded status: ${Ow(oe)}`,
-                children: Ow(oe)
+                tone: Ow(oe),
+                title: `Recorded status: ${kw(oe)}`,
+                children: kw(oe)
               })]
             })
           ]
@@ -40795,7 +40876,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })]
       }),
       o ? /* @__PURE__ */ (0, V.jsx)(xh, { rows: 2 }) : null,
-      /* @__PURE__ */ (0, V.jsx)(Pw, {
+      /* @__PURE__ */ (0, V.jsx)(Fw, {
         loadError: s,
         message: d,
         error: p
@@ -40820,14 +40901,14 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 }),
                 ue ? /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "finding-summary-fact",
-                  children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Zl(kw(n.checks.find((e) => kw(e, ["check_id", "id"], "") === ue) ?? {}, ["name", "title"], ue)) }), /* @__PURE__ */ (0, V.jsx)("small", {
+                  children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Zl(Aw(n.checks.find((e) => Aw(e, ["check_id", "id"], "") === ue) ?? {}, ["name", "title"], ue)) }), /* @__PURE__ */ (0, V.jsx)("small", {
                     className: "mono",
                     children: ue
                   })] })]
                 }) : null,
                 de ? /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "finding-summary-fact",
-                  children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Vector" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: Ow(de) })]
+                  children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Vector" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: kw(de) })]
                 }) : null,
                 ce ? /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "finding-summary-fact",
@@ -40998,7 +41079,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             className: "detail-status-line",
             children: [
               /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: Ew(ae),
+                tone: Dw(ae),
                 title: `Recorded severity: ${ia(ae)}`,
                 children: ia(ae)
               }),
@@ -41008,12 +41089,12 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 children: "·"
               }),
               /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: Dw(oe),
-                title: `Recorded status: ${Ow(oe)}`,
-                children: Ow(oe)
+                tone: Ow(oe),
+                title: `Recorded status: ${kw(oe)}`,
+                children: kw(oe)
               })
             ]
-          })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(uw, {
+          })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(dw, {
             finding: e,
             config: r,
             session: i
@@ -41044,7 +41125,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }),
             /* @__PURE__ */ (0, V.jsxs)("div", {
               className: "kv-list",
-              children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: kw(e, ["assignee"], "unassigned") })] }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "SLA due" }), /* @__PURE__ */ (0, V.jsxs)("strong", {
+              children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: Aw(e, ["assignee"], "unassigned") })] }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "SLA due" }), /* @__PURE__ */ (0, V.jsxs)("strong", {
                 title: "SLA derived from severity hours and created_at",
                 children: [ie ? z(ie) : "Not reported", Y_(e) ? " (breach)" : ""]
               })] })]
@@ -41064,7 +41145,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   className: "full",
                   children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, V.jsx)("input", {
                     name: "assignee",
-                    defaultValue: kw(e, ["assignee"], "")
+                    defaultValue: Aw(e, ["assignee"], "")
                   })]
                 }),
                 /* @__PURE__ */ (0, V.jsxs)("label", {
@@ -41072,7 +41153,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Notes" }), /* @__PURE__ */ (0, V.jsx)("textarea", {
                     name: "notes",
                     rows: 3,
-                    defaultValue: kw(e, ["notes"], "")
+                    defaultValue: Aw(e, ["notes"], "")
                   })]
                 }),
                 /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -41145,9 +41226,9 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       ] })] }),
                       /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Target" }), /* @__PURE__ */ (0, V.jsx)("dd", {
                         className: "mono",
-                        children: kw(be, ["value"], ce || "Not recorded")
+                        children: Aw(be, ["value"], ce || "Not recorded")
                       })] }),
-                      /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: ue ? Zl(kw(ve ?? {}, ["name", "title"], ue)) : "Not recorded" })] }),
+                      /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: ue ? Zl(Aw(ve ?? {}, ["name", "title"], ue)) : "Not recorded" })] }),
                       _e?.kind === "safe-run" ? /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Recorded as" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: "Retest of this finding (same target and check)" })] }) : null,
                       /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Upper bound" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: _e?.kind === "safe-run" ? Number.isFinite(ye) ? `${ye} requests` : "Not recorded in the catalog" : _e?.kind === "waf-validation" ? "WAF marker validation for the linked asset" : "CVE pipeline retest" })] })
                     ]
@@ -41202,7 +41283,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         }) : /* @__PURE__ */ (0, V.jsx)(kh, {
           columns: Ke,
           items: y,
-          getRowId: (e) => kw(e, ["id"], ""),
+          getRowId: (e) => Aw(e, ["id"], ""),
           empty: /* @__PURE__ */ (0, V.jsx)("span", {
             className: "muted",
             children: "No affected targets returned."
@@ -41291,8 +41372,8 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 className: "rule-assets-table",
                 columns: qe,
                 items: je,
-                getRowId: (e, t) => kw(e, ["id"], String(t)),
-                getRowProps: (e) => kw(e, ["id"], "") === t ? {
+                getRowId: (e, t) => Aw(e, ["id"], String(t)),
+                getRowProps: (e) => Aw(e, ["id"], "") === t ? {
                   className: "is-current-asset",
                   "aria-current": "true"
                 } : {},
@@ -41339,7 +41420,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       className: "rem-label",
                       children: "State"
                     }), /* @__PURE__ */ (0, V.jsx)(W, {
-                      tone: Mw(P.remStateClass, P.remState),
+                      tone: Nw(P.remStateClass, P.remState),
                       title: `Recorded remediation state: ${ql(P.remState)}`,
                       children: ql(P.remState, "Not reported")
                     })]
@@ -41444,10 +41525,10 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         }), /* @__PURE__ */ (0, V.jsx)(kh, {
           columns: Je,
           items: h.artifacts,
-          getRowId: (e) => kw(e, ["id"], ""),
+          getRowId: (e) => Aw(e, ["id"], ""),
           getRowProps: (e) => {
-            let t = Nw(kw(e, ["id"], ""), we);
-            return kw(e, ["id"], "") && N?.entry === "artifact" && N.evidence_id === kw(e, ["id"], "") ? {
+            let t = Pw(Aw(e, ["id"], ""), we);
+            return Aw(e, ["id"], "") && N?.entry === "artifact" && N.evidence_id === Aw(e, ["id"], "") ? {
               ...t,
               className: `${t.className ?? ""} is-selected`,
               "aria-current": "true"
@@ -41460,7 +41541,7 @@ function Fw({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })] }) : /* @__PURE__ */ (0, V.jsx)(G, {
           icon: ht,
           title: "No evidence artifacts.",
-          body: Jl(kw(h.meta, ["empty_reason"], "Evidence bundle contains no artifacts for this finding."))
+          body: Jl(Aw(h.meta, ["empty_reason"], "Evidence bundle contains no artifacts for this finding."))
         }) })] }),
         /* @__PURE__ */ (0, V.jsxs)(K, {
           className: "finding-custody-card",
@@ -41498,7 +41579,7 @@ function $(e, t, n = "—") {
   }
   return n;
 }
-function Iw(e, t, n = "—") {
+function Lw(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -41506,7 +41587,7 @@ function Iw(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function Lw(e, t, n = 0) {
+function Rw(e, t, n = 0) {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -41514,7 +41595,7 @@ function Lw(e, t, n = 0) {
   }
   return typeof r == "number" && Number.isFinite(r) ? r : n;
 }
-function Rw(e, t) {
+function zw(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return [];
@@ -41522,7 +41603,7 @@ function Rw(e, t) {
   }
   return Array.isArray(n) ? n : [];
 }
-function zw(e, t) {
+function Bw(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -41530,36 +41611,36 @@ function zw(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-function Bw(e) {
+function Vw(e) {
   return e.replace(/_/g, " ");
 }
-var Vw = {
+var Hw = {
   probe_result: "Probe result",
   verdict_published: "Verdict published",
   run_started: "Run started",
   run_cancelled: "Run cancelled"
 };
-function Hw(e) {
+function Uw(e) {
   let t = e.trim();
-  return t ? Vw[t] ?? Bw(t) : "Event";
+  return t ? Hw[t] ?? Vw(t) : "Event";
 }
-function Uw(e, t) {
+function Ww(e, t) {
   return Zl($(e.find((e) => $(e, ["check_id"], "") === t) ?? {}, ["name", "title"], t));
 }
-var Ww = {
+var Gw = {
   waf_posture: "WAF posture",
   external_discovery: "External discovery",
   connectors: "Connectors",
   high_scale_program: "High-scale program"
 };
-function Gw(e) {
-  let t = Lw(e, ["size_bytes"], NaN), n = Number.isFinite(t) ? t : Lw(e, ["metadata", "size_bytes"], NaN);
+function Kw(e) {
+  let t = Rw(e, ["size_bytes"], NaN), n = Number.isFinite(t) ? t : Rw(e, ["metadata", "size_bytes"], NaN);
   return !Number.isFinite(n) || n < 0 ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 }
-function Kw(e) {
+function qw(e) {
   return e.filter(([, e]) => e && e !== "—").map(([e, t]) => `${e}: ${t}`).join("\n");
 }
-function qw({ items: e }) {
+function Jw({ items: e }) {
   return e.length === 0 ? /* @__PURE__ */ (0, V.jsx)("p", {
     className: "muted",
     children: "No timeline milestones recorded for this entity."
@@ -41568,24 +41649,24 @@ function qw({ items: e }) {
     children: e.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { "aria-hidden": "true" }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: e.label }), /* @__PURE__ */ (0, V.jsx)("p", { children: z(e.at) })] })] }, `${e.label}-${t}`))
   });
 }
-var Jw = {
+var Yw = {
   scope: "Scope",
   validation: "Validation",
   posture: "Posture",
   governance: "Governance",
   staff: "Staff"
-}, Yw = 6, Xw = 4;
-function Zw(e) {
+}, Xw = 6, Zw = 4;
+function Qw(e) {
   return e.trim().toLowerCase().replace(/\s+/g, "_");
 }
-function Qw(e, t = "—") {
+function $w(e, t = "—") {
   let n = e.trim();
   if (!n) return t;
   let r = n.replace(/_/g, " ");
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-function $w(e) {
-  let t = Zw(e);
+function eT(e) {
+  let t = Qw(e);
   return t === "pass" ? "success" : [
     "fail",
     "failed",
@@ -41597,12 +41678,12 @@ function $w(e) {
     "unprotected"
   ].includes(t) ? "danger" : t === "inconclusive" ? "warn" : "info";
 }
-function eT(e) {
-  let t = Zw(e);
+function tT(e) {
+  let t = Qw(e);
   return ["critical", "high"].includes(t) ? "danger" : ["medium", "moderate"].includes(t) ? "warn" : ["low", "info"].includes(t) ? "info" : "muted";
 }
-function tT(e) {
-  let t = Zw(e);
+function nT(e) {
+  let t = Qw(e);
   return [
     "approved",
     "provisioned",
@@ -41622,8 +41703,8 @@ function tT(e) {
     "recorded"
   ].includes(t) ? "info" : "muted";
 }
-function nT(e) {
-  let t = Zw(e);
+function rT(e) {
+  let t = Qw(e);
   return ["closed", "completed"].includes(t) ? "success" : [
     "running",
     "scheduled",
@@ -41634,12 +41715,12 @@ function nT(e) {
     "submitted"
   ].includes(t) ? "warn" : ["rejected", "failed"].includes(t) ? "danger" : "muted";
 }
-function rT(e) {
-  let t = Zw(e);
+function iT(e) {
+  let t = Qw(e);
   return t === "accepted" ? "success" : t === "rejected" ? "danger" : t === "pending_review" || t === "pending" ? "warn" : "info";
 }
-function iT(e) {
-  let t = Zw(e);
+function aT(e) {
+  let t = Qw(e);
   return [
     "ready",
     "published",
@@ -41651,26 +41732,26 @@ function iT(e) {
     "draft"
   ].includes(t) ? "info" : ["failed", "error"].includes(t) ? "danger" : "muted";
 }
-function aT(e) {
-  let t = Zw(e);
+function oT(e) {
+  let t = Qw(e);
   return ["active", "trialing"].includes(t) ? "success" : ["past_due", "paused"].includes(t) ? "warn" : [
     "canceled",
     "cancelled",
     "suspended"
   ].includes(t) ? "danger" : "info";
 }
-function oT(e) {
-  let t = Zw(e);
+function sT(e) {
+  let t = Qw(e);
   return t === "active" ? "success" : t === "suspended" ? "danger" : t === "pending" ? "warn" : "muted";
 }
-function sT({ value: e, tone: t, fallback: n = "—" }) {
-  let r = Qw(e, n);
+function cT({ value: e, tone: t, fallback: n = "—" }) {
+  let r = $w(e, n);
   return /* @__PURE__ */ (0, V.jsx)(W, {
     tone: t,
     children: r
   });
 }
-function cT({ value: e, tone: t }) {
+function lT({ value: e, tone: t }) {
   let n = eu(e);
   return /* @__PURE__ */ (0, V.jsx)(W, {
     tone: t,
@@ -41678,7 +41759,7 @@ function cT({ value: e, tone: t }) {
     children: n
   });
 }
-function lT({ route: e, eyebrow: t }) {
+function uT({ route: e, eyebrow: t }) {
   let n = ic.get(e), r = n?.description?.trim();
   return /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
     /* @__PURE__ */ (0, V.jsx)("p", {
@@ -41692,10 +41773,10 @@ function lT({ route: e, eyebrow: t }) {
     }) : null
   ] });
 }
-function uT({ rows: e = Yw }) {
+function dT({ rows: e = Xw }) {
   return /* @__PURE__ */ (0, V.jsx)(V.Fragment, { children: Array.from({ length: e }, (e, t) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-text" }), /* @__PURE__ */ (0, V.jsx)("strong", { className: "skeleton skeleton-text" })] }, t)) });
 }
-var dT = {
+var fT = {
   "run-detail": {
     label: "Test runs",
     href: "#runs"
@@ -41736,7 +41817,7 @@ var dT = {
     label: "SOC console",
     href: "#internal-soc"
   }
-}, fT = [
+}, pT = [
   "run-detail",
   "check-detail",
   "policy-detail",
@@ -41748,16 +41829,16 @@ var dT = {
   "evidence-detail",
   "queue-detail"
 ];
-function pT(e, t, n, r) {
+function mT(e, t, n, r) {
   if (e === "run-detail") {
     let e = $(t, ["check_id"], "");
-    return e && r?.checks ? Uw(r.checks, e) : $(t, ["check_id"], n);
+    return e && r?.checks ? Ww(r.checks, e) : $(t, ["check_id"], n);
   }
   return e === "finding-detail" ? ru(t) : e === "queue-detail" ? $(t, [
     "objective",
     "reason",
     "id"
-  ], n) : e === "target-detail" ? $(t, ["value", "id"], n) : e === "target-group-detail" ? $(t, ["name"], n) : e === "report-detail" ? $(t, ["title"], n) : e === "tenant-detail" ? $(zw(t, ["tenant"]) ?? t, ["name"], n) : $(t, [
+  ], n) : e === "target-detail" ? $(t, ["value", "id"], n) : e === "target-group-detail" ? $(t, ["name"], n) : e === "report-detail" ? $(t, ["title"], n) : e === "tenant-detail" ? $(Bw(t, ["tenant"]) ?? t, ["name"], n) : $(t, [
     "name",
     "hostname",
     "canonical_url",
@@ -41766,8 +41847,8 @@ function pT(e, t, n, r) {
     "id"
   ], n);
 }
-function mT({ route: e, title: t, entityId: n }) {
-  let r = ic.get(e), i = dT[e], a = i?.href, o = r?.group ? Jw[r.group] ?? r.group : "Detail", s = i?.label ?? r?.label ?? "List";
+function hT({ route: e, title: t, entityId: n }) {
+  let r = ic.get(e), i = fT[e], a = i?.href, o = r?.group ? Yw[r.group] ?? r.group : "Detail", s = i?.label ?? r?.label ?? "List";
   return /* @__PURE__ */ (0, V.jsxs)("p", {
     className: "muted stack-tight detail-crumb",
     children: [
@@ -41785,29 +41866,29 @@ function mT({ route: e, title: t, entityId: n }) {
     ]
   });
 }
-var hT = /^(?:(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_|[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*){1,4}$)/;
-function gT({ route: e, entityId: t, title: n, eyebrow: r }) {
+var gT = /^(?:(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_|[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*){1,4}$)/;
+function _T({ route: e, entityId: t, title: n, eyebrow: r }) {
   return /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
     r ? /* @__PURE__ */ (0, V.jsx)("p", {
       className: "eyebrow",
       children: r
     }) : null,
-    /* @__PURE__ */ (0, V.jsx)(mT, {
+    /* @__PURE__ */ (0, V.jsx)(hT, {
       route: e,
       title: n,
       entityId: t
     }),
     /* @__PURE__ */ (0, V.jsx)("h1", { children: n }),
-    n !== t && hT.test(t) ? /* @__PURE__ */ (0, V.jsx)("p", {
+    n !== t && gT.test(t) ? /* @__PURE__ */ (0, V.jsx)("p", {
       className: "muted",
       children: /* @__PURE__ */ (0, V.jsx)("code", { children: t })
     }) : null
   ] });
 }
-function _T({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
+function vT({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "page-head",
-    children: [/* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)(gT, {
+    children: [/* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)(_T, {
       route: e,
       entityId: n,
       title: r,
@@ -41818,12 +41899,12 @@ function _T({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
     }) : null]
   });
 }
-function vT({ label: e = "Loading…", variant: t = "page" }) {
+function yT({ label: e = "Loading…", variant: t = "page" }) {
   return t === "compact" ? /* @__PURE__ */ (0, V.jsx)("div", {
     className: "kv-list",
     "aria-busy": "true",
     "aria-label": e,
-    children: /* @__PURE__ */ (0, V.jsx)(uT, { rows: 3 })
+    children: /* @__PURE__ */ (0, V.jsx)(dT, { rows: 3 })
   }) : t === "layout" ? /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "detail-layout",
     "aria-busy": "true",
@@ -41838,7 +41919,7 @@ function vT({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, V.jsx)(X, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, V.jsx)(uT, { rows: 4 })
+        children: /* @__PURE__ */ (0, V.jsx)(dT, { rows: 4 })
       })]
     }), /* @__PURE__ */ (0, V.jsxs)(K, {
       density: "compact",
@@ -41851,7 +41932,7 @@ function vT({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, V.jsx)(X, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, V.jsx)(uT, { rows: 4 })
+        children: /* @__PURE__ */ (0, V.jsx)(dT, { rows: 4 })
       })]
     })]
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -41861,7 +41942,7 @@ function vT({ label: e = "Loading…", variant: t = "page" }) {
     children: [/* @__PURE__ */ (0, V.jsx)("div", {
       className: "row-actions",
       "aria-hidden": "true",
-      children: Array.from({ length: Xw }, (e, t) => /* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-row" }, t))
+      children: Array.from({ length: Zw }, (e, t) => /* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-row" }, t))
     }), /* @__PURE__ */ (0, V.jsxs)(K, {
       density: "compact",
       children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)("span", {
@@ -41872,21 +41953,21 @@ function vT({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, V.jsx)(X, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, V.jsx)(uT, {})
+        children: /* @__PURE__ */ (0, V.jsx)(dT, {})
       })]
     })]
   });
 }
-function yT({ route: e, id: t, label: n }) {
+function bT({ route: e, id: t, label: n }) {
   let r = (n ?? t).trim();
-  return !t || t === "—" ? /* @__PURE__ */ (0, V.jsx)("strong", { children: "—" }) : fT.includes(e) ? /* @__PURE__ */ (0, V.jsx)(yc, {
+  return !t || t === "—" ? /* @__PURE__ */ (0, V.jsx)("strong", { children: "—" }) : pT.includes(e) ? /* @__PURE__ */ (0, V.jsx)(yc, {
     size: "sm",
     variant: "ghost",
     href: Zf(e, t),
     children: r
   }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: r });
 }
-function bT({ label: e, value: t, compact: n }) {
+function xT({ label: e, value: t, compact: n }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "kv-stack kv-mono-field",
     children: [/* @__PURE__ */ (0, V.jsx)("span", { children: e }), /* @__PURE__ */ (0, V.jsx)("code", {
@@ -41896,7 +41977,7 @@ function bT({ label: e, value: t, compact: n }) {
     })]
   });
 }
-function xT({ label: e, children: t }) {
+function ST({ label: e, children: t }) {
   return /* @__PURE__ */ (0, V.jsxs)("details", {
     className: "technical-disclosure",
     children: [/* @__PURE__ */ (0, V.jsxs)("summary", { children: ["Show technical ", e.toLocaleLowerCase()] }), /* @__PURE__ */ (0, V.jsx)("pre", {
@@ -41907,7 +41988,7 @@ function xT({ label: e, children: t }) {
     })]
   });
 }
-function ST({ loadError: e, error: t, message: n, successTone: r = "default", mode: i = "split", hideMessageWhenLoadError: a = !0, children: o }) {
+function CT({ loadError: e, error: t, message: n, successTone: r = "default", mode: i = "split", hideMessageWhenLoadError: a = !0, children: o }) {
   let s = r === "neutral" ? "form-banner neutral" : "form-banner";
   if (i === "combined") {
     let r = t || e || n;
@@ -41929,7 +42010,7 @@ function ST({ loadError: e, error: t, message: n, successTone: r = "default", mo
     children: [t || n, o]
   }) : null] });
 }
-function CT(e, t, n, r, i) {
+function wT(e, t, n, r, i) {
   let [a, o] = (0, D.useState)(i), [s, c] = (0, D.useState)(""), [l, u] = (0, D.useState)(e && !!r), [d, f] = (0, D.useState)(0), p = (0, D.useRef)([]), m = (0, D.useCallback)(() => new Promise((e) => {
     p.current.push(e), f((e) => e + 1);
   }), []), h = (0, D.useRef)(i);
@@ -41968,7 +42049,7 @@ function CT(e, t, n, r, i) {
     reload: m
   };
 }
-function wT(e, t, n, r, i, a, o = {}) {
+function TT(e, t, n, r, i, a, o = {}) {
   let [s, c] = (0, D.useState)(a), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(e && !!i), p = o.tenantId, m = !!o.staffSoc, h = (0, D.useRef)(a);
   return h.current = a, (0, D.useEffect)(() => {
     if (!e || !i) {
@@ -42001,8 +42082,8 @@ function wT(e, t, n, r, i, a, o = {}) {
     loading: d
   };
 }
-function TT(e) {
-  let t = e.started_at ?? e.created_at, n = Iw(e, ["verdict", "finalized_at"], "") || e.completed_at;
+function ET(e) {
+  let t = e.started_at ?? e.created_at, n = Lw(e, ["verdict", "finalized_at"], "") || e.completed_at;
   if (!t) return "—";
   if (!n) {
     let t = String(e.status ?? e.state ?? "").toLowerCase();
@@ -42011,13 +42092,13 @@ function TT(e) {
   let r = new Date(String(n)).getTime() - new Date(String(t)).getTime();
   return !Number.isFinite(r) || r < 0 ? "—" : va(Math.round(r / 1e3));
 }
-function ET(e, t) {
+function DT(e, t) {
   let n = $(t, ["period"], "");
   if (!n) return "—";
   let r = e.reportCapabilities?.periods, i = Array.isArray(r) ? r.find((e) => $(e, ["value"], "") === n) : void 0;
   return i ? $(i, ["label"], n) : n;
 }
-function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, runEventState: o, loading: s, loadError: c }) {
+function OT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, runEventState: o, loading: s, loadError: c }) {
   let [l, u] = (0, D.useState)("summary"), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(""), [_, v] = (0, D.useState)(!1), [y, b] = (0, D.useState)(!1);
   e.verdict;
   let x = o.status === "loaded" ? o.items : [], S = o.status === "loading", C = o.status === "error", w = x.filter(jg), T = w, E = n.evidence.filter((e) => $(e, ["test_run_id"], "") === t), O = n.findings.filter((e) => $(e, ["test_run_id"], "") === t), k = $(e, ["status"], ""), A = [
@@ -42056,13 +42137,13 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     },
     {
       label: "Verdict recorded",
-      at: Iw(e, ["verdict", "finalized_at"], "") || e.completed_at
+      at: Lw(e, ["verdict", "finalized_at"], "") || e.completed_at
     }
-  ].filter((e) => e.at), I = pT("run-detail", e, t, { checks: n.checks }), te = $(e, ["target_group_id"], ""), ne = $(e, ["target_id"], ""), re = $(e, ["check_id"], ""), ie = n.targetGroups.find((e) => $(e, ["id"], "") === te) ?? null, ae = te ? $(ie ?? {}, ["name"], te) : "—", oe = $(e, ["validation_mode"], "external_only"), L = kg(e, n.evidence) ? Iw(e, ["verdict", "verdict"], GT(e)) : "", se = L ? eu(L) : "No result yet", ce = O[0] ?? null, le = $(e, ["policy_id", "test_policy_id"], ""), ue = Iw(e, ["correlation", "nonce_hash"], "");
+  ].filter((e) => e.at), I = mT("run-detail", e, t, { checks: n.checks }), te = $(e, ["target_group_id"], ""), ne = $(e, ["target_id"], ""), re = $(e, ["check_id"], ""), ie = n.targetGroups.find((e) => $(e, ["id"], "") === te) ?? null, ae = te ? $(ie ?? {}, ["name"], te) : "—", oe = $(e, ["validation_mode"], "external_only"), L = kg(e, n.evidence) ? Lw(e, ["verdict", "verdict"], KT(e)) : "", se = L ? eu(L) : "No result yet", ce = O[0] ?? null, le = $(e, ["policy_id", "test_policy_id"], ""), ue = Lw(e, ["correlation", "nonce_hash"], "");
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "run-detail",
         eyebrow: "Test run evidence",
         entityId: t,
@@ -42104,20 +42185,20 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         ] })
       }),
       /* @__PURE__ */ (0, V.jsxs)(by, { children: [
-        /* @__PURE__ */ (0, V.jsx)(sT, {
+        /* @__PURE__ */ (0, V.jsx)(cT, {
           value: k,
           tone: Jv(k),
           fallback: "pending"
         }),
         " ·",
         " ",
-        oe ? Qw(oe) : "Validation mode not recorded",
+        oe ? $w(oe) : "Validation mode not recorded",
         " ·",
         " ",
         /* @__PURE__ */ (0, V.jsx)("code", { children: t })
       ] }),
-      s ? /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading run detail…" }) : null,
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      s ? /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading run detail…" }) : null,
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         loadError: c,
         error: h,
         message: p,
@@ -42145,7 +42226,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }),
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "Check",
-              value: Uw(n.checks, re),
+              value: Ww(n.checks, re),
               sub: $(e, ["vector_family"], "check"),
               icon: ht,
               tone: "muted"
@@ -42155,12 +42236,12 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               value: se,
               sub: "External-only confidence",
               icon: An,
-              tone: L ? $w(L) : "muted"
+              tone: L ? eT(L) : "muted"
             }),
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "Duration",
-              value: TT(e),
-              sub: Qw(k, "pending"),
+              value: ET(e),
+              sub: $w(k, "pending"),
               icon: N,
               tone: "muted"
             })
@@ -42205,7 +42286,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             className: "dash-grid",
             children: [/* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Verdict summary" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Stored outcome plus only the trusted signed probe events loaded for this run." })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
               className: "stack-tight",
-              children: [S ? /* @__PURE__ */ (0, V.jsx)(vT, {
+              children: [S ? /* @__PURE__ */ (0, V.jsx)(yT, {
                 label: "Loading run proof…",
                 variant: "compact"
               }) : C ? /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42216,54 +42297,54 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 events: T
               }), /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "kv-list",
-                children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Stored verdict" }), L ? /* @__PURE__ */ (0, V.jsx)(cT, {
+                children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Stored verdict" }), L ? /* @__PURE__ */ (0, V.jsx)(lT, {
                   value: L,
-                  tone: $w(L)
+                  tone: eT(L)
                 }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "No result yet" })] }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Trusted events" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: S || C ? "—" : T.length })] })]
               })]
             })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Run facts" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Recorded identifiers, declared relationships, and lifecycle timestamps for this run." })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
               className: "kv-list",
               children: [
-                /* @__PURE__ */ (0, V.jsx)(bT, {
+                /* @__PURE__ */ (0, V.jsx)(xT, {
                   label: "Run ID",
                   value: t
                 }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: k,
                   tone: Jv(k),
                   fallback: "pending"
                 })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Check" }), re ? /* @__PURE__ */ (0, V.jsx)(yT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Check" }), re ? /* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "check-detail",
                   id: re,
-                  label: Uw(n.checks, re)
+                  label: Ww(n.checks, re)
                 }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not recorded" })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), te ? /* @__PURE__ */ (0, V.jsx)(yT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), te ? /* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "target-group-detail",
                   id: te,
                   label: ae
                 }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not recorded" })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target" }), ne ? /* @__PURE__ */ (0, V.jsx)(yT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target" }), ne ? /* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "target-detail",
                   id: ne
                 }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not recorded" })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Policy" }), le ? /* @__PURE__ */ (0, V.jsx)(yT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Policy" }), le ? /* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "policy-detail",
                   id: le,
                   label: "Scheduled policy"
                 }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not scheduled by a recorded policy" })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Validation mode" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: oe ? Qw(oe) : "not recorded" })] }),
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Validation mode" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: oe ? $w(oe) : "not recorded" })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Created" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: z(e.created_at) })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Started" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: z(e.started_at) })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Completed" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: z(Iw(e, ["verdict", "finalized_at"], "") || e.completed_at) })] }),
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Completed" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: z(Lw(e, ["verdict", "finalized_at"], "") || e.completed_at) })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Initiated by" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: $(e, ["initiated_by", "created_by"], "not recorded") })] }),
-                ue ? /* @__PURE__ */ (0, V.jsx)(bT, {
+                ue ? /* @__PURE__ */ (0, V.jsx)(xT, {
                   label: "Correlation nonce hash",
                   value: ue
                 }) : null
               ]
             })] })]
-          }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Correlation matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "External-only validation: signed outside probe evidence supports edge observations for this run. Verdicts report external-only confidence." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Correlation matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "External-only validation: signed outside probe evidence supports edge observations for this run. Verdicts report external-only confidence." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading correlation evidence…",
             variant: "compact"
           }) : C ? /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42288,7 +42369,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             "."
           ] })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
             className: "stack-tight",
-            children: [/* @__PURE__ */ (0, V.jsx)(qw, { items: F }), o.status === "loaded" ? /* @__PURE__ */ (0, V.jsx)(Yg, { events: T }) : /* @__PURE__ */ (0, V.jsx)("p", {
+            children: [/* @__PURE__ */ (0, V.jsx)(Jw, { items: F }), o.status === "loaded" ? /* @__PURE__ */ (0, V.jsx)(Yg, { events: T }) : /* @__PURE__ */ (0, V.jsx)("p", {
               className: "muted",
               role: S ? "status" : void 0,
               children: S ? "Loading run event evidence…" : "Timeline event evidence unavailable."
@@ -42302,7 +42383,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           className: "tab-panel",
           children: /* @__PURE__ */ (0, V.jsx)("div", {
             className: "dash-grid",
-            children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Probe result" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Signed outside observations loaded from this run event log." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(vT, {
+            children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Probe result" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Signed outside observations loaded from this run event log." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(yT, {
               label: "Loading run event evidence…",
               variant: "compact"
             }) : C ? /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42336,7 +42417,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   "kind",
                   "signal_type"
                 ], "evidence"), r = $(e, ["content_sha256", "custody_digest"], "");
-                return /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: n }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(yT, {
+                return /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: n }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "evidence-detail",
                   id: t,
                   label: n
@@ -42359,15 +42440,15 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               children: O.map((e) => {
                 let t = $(e, ["id"], "");
                 return /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: ru(e, n.targets, n.checks) }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [
-                  /* @__PURE__ */ (0, V.jsx)(yT, {
+                  /* @__PURE__ */ (0, V.jsx)(bT, {
                     route: "finding-detail",
                     id: t,
-                    label: Qw(V_(e))
+                    label: $w(V_(e))
                   }),
                   " · ",
-                  /* @__PURE__ */ (0, V.jsx)(sT, {
+                  /* @__PURE__ */ (0, V.jsx)(cT, {
                     value: $(e, ["severity"], "unknown"),
-                    tone: eT($(e, ["severity"], "unknown")),
+                    tone: tT($(e, ["severity"], "unknown")),
                     fallback: "unknown"
                   })
                 ] })] }, t);
@@ -42380,7 +42461,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           id: "run-detail-sections-panel-raw-events",
           "aria-labelledby": "run-detail-sections-tab-raw-events",
           className: "tab-panel",
-          children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Raw events" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Read-only event records for this run. Only signed probe events contribute to the proof panels." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Raw events" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Read-only event records for this run. Only signed probe events contribute to the proof panels." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: S ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading raw run events…",
             variant: "compact"
           }) : C ? /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42391,7 +42472,7 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               {
                 key: "signal",
                 label: "Signal",
-                render: (e) => Hw($(e, ["signal_type"], "event"))
+                render: (e) => Uw($(e, ["signal_type"], "event"))
               },
               {
                 key: "producer",
@@ -42460,22 +42541,22 @@ function DT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-var OT = [
+var kT = [
   "waf_posture",
   "external_discovery",
   "connectors",
   "high_scale_program"
 ];
-function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
-  let { confirm: c } = lp(), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)("overview"), [_, v] = (0, D.useState)(t), [y, b] = (0, D.useState)(OT[0]), [x, S] = (0, D.useState)("true");
+function AT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+  let { confirm: c } = lp(), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)("overview"), [_, v] = (0, D.useState)(t), [y, b] = (0, D.useState)(kT[0]), [x, S] = (0, D.useState)("true");
   (0, D.useEffect)(() => {
     v(t);
   }, [t]);
-  let C = _, w = zw(C, ["tenant"]) ?? C, T = zw(C, ["account"]), E = zw(C, ["subscription"]), O = Rw(C, ["users"]), k = zw(C, ["signup_request"]), A = Rw(C, ["recent_tenant_audit"]), j = n.internalApprovalRequests.filter((t) => $(t, ["tenant_id"], "") === e), M = $(T, ["lifecycle_state"], "active"), N = $(E, [
+  let C = _, w = Bw(C, ["tenant"]) ?? C, T = Bw(C, ["account"]), E = Bw(C, ["subscription"]), O = zw(C, ["users"]), k = Bw(C, ["signup_request"]), A = zw(C, ["recent_tenant_audit"]), j = n.internalApprovalRequests.filter((t) => $(t, ["tenant_id"], "") === e), M = $(T, ["lifecycle_state"], "active"), N = $(E, [
     "mrr",
     "monthly_recurring_revenue",
     "amount"
-  ], "") || $(T, ["mrr", "monthly_recurring_revenue"], ""), P = zw(E, ["effective_entitlements"]);
+  ], "") || $(T, ["mrr", "monthly_recurring_revenue"], ""), P = Bw(E, ["effective_entitlements"]);
   async function ee() {
     let t = await B(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`);
     v(t);
@@ -42639,7 +42720,7 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "tenant-detail",
         eyebrow: "Staff tenant operations",
         entityId: e,
@@ -42664,9 +42745,9 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
         })] })
       }),
       /* @__PURE__ */ (0, V.jsxs)(by, { children: [
-        /* @__PURE__ */ (0, V.jsx)(sT, {
+        /* @__PURE__ */ (0, V.jsx)(cT, {
           value: M,
-          tone: oT(M)
+          tone: sT(M)
         }),
         " · plan ",
         $(E, ["plan_id"], "—"),
@@ -42684,8 +42765,8 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
         }),
         " recent audit events"
       ] }),
-      o ? /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading tenant detail…" }) : null,
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      o ? /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading tenant detail…" }) : null,
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         loadError: s,
         error: p,
         message: d,
@@ -42697,7 +42778,7 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "Lifecycle",
-              value: Qw(M, "active"),
+              value: $w(M, "active"),
               sub: "Staff account state",
               icon: An,
               tone: M === "active" ? "success" : "warn"
@@ -42705,7 +42786,7 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "Plan",
               value: $(E, ["plan_id"], "—"),
-              sub: Qw($(E, ["status"], "not recorded")),
+              sub: $w($(E, ["status"], "not recorded")),
               icon: yt,
               tone: "muted"
             }),
@@ -42755,13 +42836,13 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               className: "kv-list",
               children: [
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: $(w, ["name"]) })] }),
-                /* @__PURE__ */ (0, V.jsx)(bT, {
+                /* @__PURE__ */ (0, V.jsx)(xT, {
                   label: "Tenant ID",
                   value: e
                 }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Lifecycle" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Lifecycle" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: M,
-                  tone: oT(M)
+                  tone: sT(M)
                 })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Region" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: $(T, ["region"], "not recorded") })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Support owner" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: $(T, ["support_owner"], "unassigned") })] }),
@@ -42772,12 +42853,12 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               className: "stack-tight",
               children: [k ? /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "kv-list",
-                children: [/* @__PURE__ */ (0, V.jsx)(bT, {
+                children: [/* @__PURE__ */ (0, V.jsx)(xT, {
                   label: "Signup request",
                   value: $(k, ["id"], "not returned")
-                }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Signup state" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Signup state" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: $(k, ["state"], "recorded"),
-                  tone: tT($(k, ["state"])),
+                  tone: nT($(k, ["state"])),
                   fallback: "recorded"
                 })] })]
               }) : /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42826,9 +42907,9 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               className: "kv-list",
               children: [
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Plan" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: $(E, ["plan_id"], "not recorded") })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: $(E, ["status"], "not recorded"),
-                  tone: aT($(E, ["status"], "")),
+                  tone: oT($(E, ["status"], "")),
                   fallback: "not recorded"
                 })] }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "MRR" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: N || "not returned" })] }),
@@ -42836,7 +42917,7 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               ]
             })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Effective entitlements" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Feature access recorded for this subscription." })] }), /* @__PURE__ */ (0, V.jsx)(X, {
               className: "kv-list",
-              children: P ? OT.map((e) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Ww[e] ?? e }), /* @__PURE__ */ (0, V.jsx)(sT, {
+              children: P ? kT.map((e) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: Gw[e] ?? e }), /* @__PURE__ */ (0, V.jsx)(cT, {
                 value: P[e] === !0 ? "enabled" : "disabled",
                 tone: P[e] === !0 ? "success" : "muted"
               })] }, e)) : /* @__PURE__ */ (0, V.jsx)("p", {
@@ -42857,9 +42938,9 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
                 name: "feature",
                 value: y,
                 onChange: b,
-                options: OT.map((e) => ({
+                options: kT.map((e) => ({
                   value: e,
-                  label: Ww[e] ?? e
+                  label: Gw[e] ?? e
                 }))
               }),
               /* @__PURE__ */ (0, V.jsx)(Ic, {
@@ -42928,7 +43009,7 @@ function kT({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-function AT({ data: e, config: t, session: n }) {
+function jT({ data: e, config: t, session: n }) {
   let r = Yf(""), i = e.evidence, a = i.find((e) => $(e, ["id", "evidence_id"], "") === r) ?? null, [o, s] = (0, D.useState)(a), [c, l] = (0, D.useState)(!1), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(0), [g, _] = (0, D.useState)(null), [v, y] = (0, D.useState)({
     status: "loading",
     value: "",
@@ -42945,7 +43026,7 @@ function AT({ data: e, config: t, session: n }) {
       method: ""
     }), B(t, n, `/v1/evidence-context?entry=artifact&evidence_id=${encodeURIComponent(r)}`).then((t) => {
       if (e) return;
-      let n = zw(t, ["primary", "integrity"]);
+      let n = Bw(t, ["primary", "integrity"]);
       y({
         status: "ready",
         value: $(n ?? {}, ["status"], "not_recorded"),
@@ -42996,7 +43077,7 @@ function AT({ data: e, config: t, session: n }) {
     m
   ]), !r) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(_T, {
+    children: [/* @__PURE__ */ (0, V.jsx)(vT, {
       route: "evidence-detail",
       eyebrow: "Validation · evidence artifact",
       entityId: "",
@@ -43011,14 +43092,14 @@ function AT({ data: e, config: t, session: n }) {
   });
   if (!o && c) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "evidence-detail",
       eyebrow: "Validation · evidence artifact"
-    }), /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading evidence artifact…" })]
+    }), /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading evidence artifact…" })]
   });
   if (!o) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(_T, {
+    children: [/* @__PURE__ */ (0, V.jsx)(vT, {
       route: "evidence-detail",
       eyebrow: "Validation · evidence artifact",
       entityId: r,
@@ -43051,11 +43132,11 @@ function AT({ data: e, config: t, session: n }) {
     "kind",
     "label",
     "signal_type"
-  ], ""), j = $(o, ["produced_by", "source"], Iw(o, ["metadata", "source"], "")), M = $(o, ["test_run_id", "run_id"], ""), N = Gw(o), P = $(o, ["sealed_at"], ""), ee = $(o, ["created_at", "timestamp"], ""), F = $(o, [
+  ], ""), j = $(o, ["produced_by", "source"], Lw(o, ["metadata", "source"], "")), M = $(o, ["test_run_id", "run_id"], ""), N = Kw(o), P = $(o, ["sealed_at"], ""), ee = $(o, ["created_at", "timestamp"], ""), F = $(o, [
     "content_sha256",
     "sha256",
     "custody_digest"
-  ], Iw(o, ["metadata", "sha256"], "")), I = $(o, ["chain_position"], ""), te = $(o, ["bundle", "bundle_id"], ""), ne = $(o, ["bundle_sha256"], ""), re = (() => {
+  ], Lw(o, ["metadata", "sha256"], "")), I = $(o, ["chain_position"], ""), te = $(o, ["bundle", "bundle_id"], ""), ne = $(o, ["bundle_sha256"], ""), re = (() => {
     let t = $(o, ["finding_id"], "");
     if (t) return t;
     let n = e.findings.find((e) => {
@@ -43063,9 +43144,9 @@ function AT({ data: e, config: t, session: n }) {
       return t.includes(k) || t.includes(r);
     });
     return n ? $(n, ["id"], "") : "";
-  })(), ie = zw(o, ["payload"]) ?? zw(o, ["content"]) ?? zw(o, ["metadata"]), ae = zw(o, ["payload"]) ? "payload" : zw(o, ["content"]) ? "content" : zw(o, ["metadata"]) ? "metadata" : "", oe = ie && Object.keys(ie).length > 0 ? JSON.stringify(ie, null, 2) : "";
+  })(), ie = Bw(o, ["payload"]) ?? Bw(o, ["content"]) ?? Bw(o, ["metadata"]), ae = Bw(o, ["payload"]) ? "payload" : Bw(o, ["content"]) ? "content" : Bw(o, ["metadata"]) ? "metadata" : "", oe = ie && Object.keys(ie).length > 0 ? JSON.stringify(ie, null, 2) : "";
   v.status === "ready" && v.value;
-  let L = v.status === "loading" ? "Checking recorded verification…" : v.status === "denied" ? "Not visible to your role" : v.status === "unavailable" ? "Verification status unavailable" : v.value === "verified" ? `Verified by the server${v.verifiedAt ? ` ${z(v.verifiedAt)}` : ""}${v.method ? ` · ${v.method}` : ""}` : v.value === "not_verified" ? "Not verified: no authoritative verification succeeded" : v.value === "recorded_digest" ? "Not verified (recorded hash only)" : "Not verified (no hash or verification recorded)", se = Kw([
+  let L = v.status === "loading" ? "Checking recorded verification…" : v.status === "denied" ? "Not visible to your role" : v.status === "unavailable" ? "Verification status unavailable" : v.value === "verified" ? `Verified by the server${v.verifiedAt ? ` ${z(v.verifiedAt)}` : ""}${v.method ? ` · ${v.method}` : ""}` : v.value === "not_verified" ? "Not verified: no authoritative verification succeeded" : v.value === "recorded_digest" ? "Not verified (recorded hash only)" : "Not verified (no hash or verification recorded)", se = qw([
     ["artifact_id", k],
     ["kind", A],
     ["produced_by", j],
@@ -43074,7 +43155,7 @@ function AT({ data: e, config: t, session: n }) {
     ["size", N],
     ["recorded_at", ee ? z(ee) : ""],
     ["sealed_at", P ? z(P) : ""]
-  ]), ce = Kw([
+  ]), ce = qw([
     ["sha256", F],
     ["digest_kind", F ? vg : ""],
     ["chain_position", I],
@@ -43124,7 +43205,7 @@ function AT({ data: e, config: t, session: n }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "evidence-detail",
         eyebrow: "Validation · evidence artifact",
         entityId: k,
@@ -43163,7 +43244,7 @@ function AT({ data: e, config: t, session: n }) {
           M ? ` Recorded by run ${M}.` : ""
         ]
       }),
-      c ? /* @__PURE__ */ (0, V.jsx)(vT, {
+      c ? /* @__PURE__ */ (0, V.jsx)(yT, {
         label: "Refreshing evidence artifact…",
         variant: "compact"
       }) : null,
@@ -43181,7 +43262,7 @@ function AT({ data: e, config: t, session: n }) {
           children: "Retry"
         })]
       }) : null,
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         loadError: "",
         error: E,
         message: w
@@ -43220,13 +43301,13 @@ function AT({ data: e, config: t, session: n }) {
       })] }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "dash-grid",
-        children: [/* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Artifact record" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Recorded artifact metadata. Absent fields are omitted rather than inferred." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: se ? /* @__PURE__ */ (0, V.jsx)(xT, {
+        children: [/* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Artifact record" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Recorded artifact metadata. Absent fields are omitted rather than inferred." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: se ? /* @__PURE__ */ (0, V.jsx)(ST, {
           label: "Artifact record",
           children: se
         }) : /* @__PURE__ */ (0, V.jsx)("p", {
           className: "muted",
           children: "No artifact metadata recorded for this evidence id."
-        }) })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Supplied chain metadata & digest" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Recorded chain and digest values are shown exactly; this panel does not independently verify them." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: ce ? /* @__PURE__ */ (0, V.jsx)(xT, {
+        }) })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Supplied chain metadata & digest" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Recorded chain and digest values are shown exactly; this panel does not independently verify them." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: ce ? /* @__PURE__ */ (0, V.jsx)(ST, {
           label: "Custody and digest",
           children: ce
         }) : /* @__PURE__ */ (0, V.jsx)(G, {
@@ -43235,7 +43316,7 @@ function AT({ data: e, config: t, session: n }) {
           body: "This artifact has no sealed SHA-256 digest or bundle reference in the vault record."
         }) })] })]
       }),
-      /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Stored JSON preview" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: ae ? `Technical ${ae} record available.` : "No payload, content, or metadata record is available." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: oe ? /* @__PURE__ */ (0, V.jsx)(xT, {
+      /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Stored JSON preview" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: ae ? `Technical ${ae} record available.` : "No payload, content, or metadata record is available." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: oe ? /* @__PURE__ */ (0, V.jsx)(ST, {
         label: "Artifact JSON preview",
         children: oe
       }) : /* @__PURE__ */ (0, V.jsx)(G, {
@@ -43246,7 +43327,7 @@ function AT({ data: e, config: t, session: n }) {
     ]
   });
 }
-function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+function MT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
   let [c, l] = (0, D.useState)("overview"), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)({}), [v, y] = (0, D.useState)(""), b = [
     {
       id: "overview",
@@ -43264,7 +43345,7 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       id: "provider",
       label: "Provider checklist"
     }
-  ], x = zw(e, ["authorization_pack_status"]), S = Array.isArray(e.artifacts) ? e.artifacts : [], C = Array.isArray(e.provider_approval_checklist) ? e.provider_approval_checklist : [], w = Lv(e), T = n.targetGroups.find((t) => $(t, ["id"], "") === $(e, ["target_group_id"], "")), E = pT("queue-detail", e, t), O = Iv(e), k = ja(i, "high_scale:write");
+  ], x = Bw(e, ["authorization_pack_status"]), S = Array.isArray(e.artifacts) ? e.artifacts : [], C = Array.isArray(e.provider_approval_checklist) ? e.provider_approval_checklist : [], w = Lv(e), T = n.targetGroups.find((t) => $(t, ["id"], "") === $(e, ["target_group_id"], "")), E = mT("queue-detail", e, t), O = Iv(e), k = ja(i, "high_scale:write");
   function A(e) {
     return g[e] ?? {
       filename: "",
@@ -43319,11 +43400,11 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       d("");
     }
   }
-  let P = $(e, ["state"], "submitted"), ee = $(x ?? {}, ["overall"], "missing"), F = Iw(e, ["requested_window", "window_start"], ""), I = Iw(e, ["requested_window", "window_end"], ""), te = Iw(e, ["requested_window", "timezone"], ""), ne = Iw(e, ["scheduled_window", "window_start"], ""), re = Iw(e, ["scheduled_window", "window_end"], ""), ie = $(e, ["scope_hash"], ""), ae = Array.isArray(e.soc_approvals) ? e.soc_approvals : [], oe = zw(e, ["adapter"]) ?? zw(e, ["adapter_json"]), L = [
+  let P = $(e, ["state"], "submitted"), ee = $(x ?? {}, ["overall"], "missing"), F = Lw(e, ["requested_window", "window_start"], ""), I = Lw(e, ["requested_window", "window_end"], ""), te = Lw(e, ["requested_window", "timezone"], ""), ne = Lw(e, ["scheduled_window", "window_start"], ""), re = Lw(e, ["scheduled_window", "window_end"], ""), ie = $(e, ["scope_hash"], ""), ae = Array.isArray(e.soc_approvals) ? e.soc_approvals : [], oe = Bw(e, ["adapter"]) ?? Bw(e, ["adapter_json"]), L = [
     {
       label: "Authorization pack accepted",
       pass: ee === "accepted",
-      detail: Qw(ee, "missing")
+      detail: $w(ee, "missing")
     },
     {
       label: "Requested safe window recorded",
@@ -43344,7 +43425,7 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "queue-detail",
         eyebrow: "SOC-gated validation",
         entityId: t,
@@ -43362,21 +43443,21 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })
       }),
       /* @__PURE__ */ (0, V.jsxs)(by, { children: [
-        /* @__PURE__ */ (0, V.jsx)(sT, {
+        /* @__PURE__ */ (0, V.jsx)(cT, {
           value: P,
-          tone: nT(P),
+          tone: rT(P),
           fallback: "submitted"
         }),
         " · pack",
         " ",
-        /* @__PURE__ */ (0, V.jsx)(sT, {
+        /* @__PURE__ */ (0, V.jsx)(cT, {
           value: ee,
-          tone: rT(ee),
+          tone: iT(ee),
           fallback: "missing"
         })
       ] }),
-      o ? /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading high-scale request…" }) : null,
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      o ? /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading high-scale request…" }) : null,
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         loadError: s,
         error: m,
         message: f,
@@ -43398,14 +43479,14 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "State",
-              value: Qw(P),
+              value: $w(P),
               sub: "Governed request lifecycle",
               icon: An,
-              tone: nT(P) === "danger" ? "danger" : nT(P) === "warn" ? "warn" : nT(P) === "success" ? "success" : "info"
+              tone: rT(P) === "danger" ? "danger" : rT(P) === "warn" ? "warn" : rT(P) === "success" ? "success" : "info"
             }),
             /* @__PURE__ */ (0, V.jsx)(yy, {
               label: "Authorization",
-              value: Qw(ee, "missing"),
+              value: $w(ee, "missing"),
               sub: `${S.length} artifact records`,
               icon: ht,
               tone: ee === "accepted" ? "success" : "warn"
@@ -43449,12 +43530,12 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   title: t,
                   children: E
                 })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: P,
-                  tone: nT(P),
+                  tone: rT(P),
                   fallback: "submitted"
                 })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), $(e, ["target_group_id"], "") ? /* @__PURE__ */ (0, V.jsx)(yT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), $(e, ["target_group_id"], "") ? /* @__PURE__ */ (0, V.jsx)(bT, {
                   route: "target-group-detail",
                   id: $(e, ["target_group_id"], ""),
                   label: $(T ?? {}, ["name"], $(e, ["target_group_id"]))
@@ -43588,9 +43669,9 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   let t = $(e, ["type"]), n = $(e, ["status"], "pending_review"), r = $(e, ["content_sha256"], "");
                   return /* @__PURE__ */ (0, V.jsxs)("div", { children: [
                     /* @__PURE__ */ (0, V.jsx)("span", { children: Nv(t) }),
-                    /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(sT, {
+                    /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(cT, {
                       value: n,
-                      tone: rT(n),
+                      tone: iT(n),
                       fallback: "pending_review"
                     }), r ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [" · ", /* @__PURE__ */ (0, V.jsx)("code", {
                       className: "mono-hash",
@@ -43611,7 +43692,7 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           id: "high-scale-request-sections-panel-lifecycle",
           "aria-labelledby": "high-scale-request-sections-tab-lifecycle",
           className: "tab-panel",
-          children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Lifecycle trail" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Ordered transitions recorded for this request." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(qw, { items: w.map((e) => ({
+          children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Lifecycle trail" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Ordered transitions recorded for this request." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(Jw, { items: w.map((e) => ({
             label: e.action,
             at: e.at
           })) }) })] })
@@ -43630,9 +43711,9 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               "label",
               "provider_name",
               "requirement"
-            ], "Provider requirement") }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(sT, {
+            ], "Provider requirement") }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(cT, {
               value: $(e, ["status"], "not recorded"),
-              tone: $(e, ["status"], "") ? rT($(e, ["status"], "")) : "muted",
+              tone: $(e, ["status"], "") ? iT($(e, ["status"], "")) : "muted",
               fallback: "not recorded"
             }), $(e, ["reference_id", "approval_id"], "") ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [" · ", /* @__PURE__ */ (0, V.jsx)("code", {
               className: "mono-hash",
@@ -43644,7 +43725,7 @@ function jT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenantId: a }) {
+function NT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenantId: a }) {
   let { confirm: o } = lp(), [s, c] = (0, D.useState)("workspace"), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(null), [_, v] = (0, D.useState)([]), [y, b] = (0, D.useState)(!1), [x, S] = (0, D.useState)(""), [C, w] = (0, D.useState)(null), [T, E] = (0, D.useState)(!1), [O, k] = (0, D.useState)(""), A = r.principal === "staff" && ls(r), j = A || r.role === "soc" && r.principal !== "staff", M = String(a ?? "").trim() || $(e, ["tenant_id"], "") || r.tenant_id || void 0;
   async function P(e, t = {}) {
     return A ? Rs(n, r, e, {
@@ -43686,7 +43767,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
       u("");
     }
   }
-  let I = Array.isArray(e.artifacts) ? e.artifacts : [], te = zw(e, ["authorization_pack_status"]), ne = pT("queue-detail", e, t), re = Array.isArray(e.provider_approval_checklist) ? e.provider_approval_checklist : [], ie = Lv(e), ae = [
+  let I = Array.isArray(e.artifacts) ? e.artifacts : [], te = Bw(e, ["authorization_pack_status"]), ne = mT("queue-detail", e, t), re = Array.isArray(e.provider_approval_checklist) ? e.provider_approval_checklist : [], ie = Lv(e), ae = [
     {
       id: "workspace",
       label: "Workspace"
@@ -43717,9 +43798,9 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
       close: `Close high-scale request ${t} and finalize the test lifecycle?`
     }[e];
     if (!r || await o({
-      title: `${Qw(e)} high-scale request`,
+      title: `${$w(e)} high-scale request`,
       description: r,
-      confirmLabel: Qw(e),
+      confirmLabel: $w(e),
       confirmTone: e === "approve" || e === "schedule" || e === "start" ? "default" : "danger"
     })) {
       u(`${e}-${t}`), m(""), f("");
@@ -43799,7 +43880,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
     let e = r.principal === "staff";
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: "queue-detail",
         eyebrow: "SOC execution workspace"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -43811,7 +43892,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
       })]
     });
   }
-  let ue = $(e, ["state"], ""), de = Iw(e, ["authorization_pack_status", "overall"], "") === "accepted", fe = !!(C && $(C, ["id"], "")), pe = Iw(e, ["requested_window", "window_start"], ""), me = Iw(e, ["requested_window", "window_end"], ""), he = Iw(e, ["scheduled_window", "window_start"], ""), ge = Iw(e, ["scheduled_window", "window_end"], ""), _e = !!(he && ge), ve = !!($(e, ["scope_hash"], "") || zw(e, ["scope_confirmation"])), ye = Array.isArray(e.soc_approvals) ? e.soc_approvals.length : 0, be = nT(ue), xe = [
+  let ue = $(e, ["state"], ""), de = Lw(e, ["authorization_pack_status", "overall"], "") === "accepted", fe = !!(C && $(C, ["id"], "")), pe = Lw(e, ["requested_window", "window_start"], ""), me = Lw(e, ["requested_window", "window_end"], ""), he = Lw(e, ["scheduled_window", "window_start"], ""), ge = Lw(e, ["scheduled_window", "window_end"], ""), _e = !!(he && ge), ve = !!($(e, ["scope_hash"], "") || Bw(e, ["scope_confirmation"])), ye = Array.isArray(e.soc_approvals) ? e.soc_approvals.length : 0, be = rT(ue), xe = [
     {
       label: "Authorization pack accepted",
       pass: de
@@ -43832,22 +43913,22 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "queue-detail",
         eyebrow: "SOC execution workspace",
         entityId: t,
         title: ne
       }),
       /* @__PURE__ */ (0, V.jsxs)(by, { children: [
-        /* @__PURE__ */ (0, V.jsx)(sT, {
+        /* @__PURE__ */ (0, V.jsx)(cT, {
           value: ue,
-          tone: nT(ue),
+          tone: rT(ue),
           fallback: "submitted"
         }),
         " · tenant ",
         /* @__PURE__ */ (0, V.jsx)("code", { children: M ?? "not recorded" })
       ] }),
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         error: p,
         message: d,
         hideMessageWhenLoadError: !1
@@ -43857,14 +43938,14 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
         children: [
           /* @__PURE__ */ (0, V.jsx)(yy, {
             label: "State",
-            value: Qw(ue, "submitted"),
+            value: $w(ue, "submitted"),
             sub: "Governed lifecycle state",
             icon: An,
             tone: be === "danger" ? "danger" : be === "warn" ? "warn" : be === "success" ? "success" : "info"
           }),
           /* @__PURE__ */ (0, V.jsx)(yy, {
             label: "Pack",
-            value: Qw($(te ?? {}, ["overall"], "missing"), "missing"),
+            value: $w($(te ?? {}, ["overall"], "missing"), "missing"),
             sub: "Authorization pack review",
             icon: ht,
             tone: de ? "success" : "warn"
@@ -43918,13 +43999,13 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
         children: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Queue context" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Lifecycle actions for this request" })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
           className: "kv-list",
           children: [
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)(cT, {
               value: ue,
-              tone: nT(ue)
+              tone: rT(ue)
             })] }),
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Pack" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Pack" }), /* @__PURE__ */ (0, V.jsx)(cT, {
               value: $(te ?? {}, ["overall"], "missing"),
-              tone: rT($(te ?? {}, ["overall"], "missing")),
+              tone: iT($(te ?? {}, ["overall"], "missing")),
               fallback: "missing"
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -44052,7 +44133,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
                 children: ne
               })] }),
               /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Tenant" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: M ?? "not recorded" })] }),
-              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), $(e, ["target_group_id"], "") ? /* @__PURE__ */ (0, V.jsx)(yT, {
+              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), $(e, ["target_group_id"], "") ? /* @__PURE__ */ (0, V.jsx)(bT, {
                 route: "target-group-detail",
                 id: $(e, ["target_group_id"], "")
               }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not recorded" })] }),
@@ -44066,7 +44147,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
                 children: "Recorded"
               })] }) : null
             ]
-          })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Lifecycle" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Ordered request transitions recorded by the high-scale workflow." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(qw, { items: ie.map((e) => ({
+          })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Lifecycle" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Ordered request transitions recorded by the high-scale workflow." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(Jw, { items: ie.map((e) => ({
             label: e.action,
             at: e.at
           })) }) })] })]
@@ -44089,9 +44170,9 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
               /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "row-actions",
                 children: [
-                  /* @__PURE__ */ (0, V.jsx)(sT, {
+                  /* @__PURE__ */ (0, V.jsx)(cT, {
                     value: $(e, ["status"]),
-                    tone: rT($(e, ["status"]))
+                    tone: iT($(e, ["status"]))
                   }),
                   /* @__PURE__ */ (0, V.jsx)(H, {
                     size: "sm",
@@ -44138,9 +44219,9 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
             "provider_name",
             "label",
             "requirement"
-          ], "Provider requirement") }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(sT, {
+          ], "Provider requirement") }), /* @__PURE__ */ (0, V.jsxs)("strong", { children: [/* @__PURE__ */ (0, V.jsx)(cT, {
             value: $(e, ["status"], "not recorded"),
-            tone: $(e, ["status"], "") ? rT($(e, ["status"], "")) : "muted",
+            tone: $(e, ["status"], "") ? iT($(e, ["status"], "")) : "muted",
             fallback: "not recorded"
           }), $(e, ["reference_id", "approval_id"], "") ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [" · ", /* @__PURE__ */ (0, V.jsx)("code", {
             className: "mono-hash",
@@ -44163,12 +44244,12 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
         }), h ? /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "kv-list",
           children: [
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: Iw(h, ["adapter", "state"], $(h, ["state"], "not returned")) })] }),
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Traffic generated" }), Iw(h, ["adapter", "traffic_generated"], "") ? /* @__PURE__ */ (0, V.jsx)(W, {
-              tone: Iw(h, ["adapter", "traffic_generated"], "") === "true" ? "warn" : "muted",
-              children: Iw(h, ["adapter", "traffic_generated"], "") === "true" ? "Yes" : "No"
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: Lw(h, ["adapter", "state"], $(h, ["state"], "not returned")) })] }),
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Traffic generated" }), Lw(h, ["adapter", "traffic_generated"], "") ? /* @__PURE__ */ (0, V.jsx)(W, {
+              tone: Lw(h, ["adapter", "traffic_generated"], "") === "true" ? "warn" : "muted",
+              children: Lw(h, ["adapter", "traffic_generated"], "") === "true" ? "Yes" : "No"
             }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "not returned" })] }),
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Provider reference" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: Iw(h, ["adapter", "provider_reference"], $(h, ["provider_reference"], "not returned")) })] })
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Provider reference" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: Lw(h, ["adapter", "provider_reference"], $(h, ["provider_reference"], "not returned")) })] })
           ]
         }) : /* @__PURE__ */ (0, V.jsx)("p", {
           className: "muted",
@@ -44181,7 +44262,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
         "aria-labelledby": "soc-queue-detail-sections-tab-notes",
         className: "tab-panel",
         children: /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "SOC notes" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Thread before adding execution context." })] }), /* @__PURE__ */ (0, V.jsxs)(X, { children: [
-          y ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          y ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading SOC notes…",
             variant: "compact"
           }) : null,
@@ -44224,7 +44305,7 @@ function MT({ entity: e, entityId: t, config: n, session: r, onRefresh: i, tenan
     ]
   });
 }
-function NT(e, t) {
+function PT(e, t) {
   if (!t) return {};
   let n = () => {
     window.location.hash = `${e}?id=${encodeURIComponent(t)}`;
@@ -44240,8 +44321,8 @@ function NT(e, t) {
     }
   };
 }
-function PT(e) {
-  let t = Zw(e);
+function FT(e) {
+  let t = Qw(e);
   return [
     "pass",
     "passed",
@@ -44272,7 +44353,7 @@ function PT(e) {
     "none"
   ].includes(t) ? "muted" : "info";
 }
-var FT = {
+var IT = {
   origin: "Origin",
   path: "Path",
   l3_l4: "L3/L4",
@@ -44284,17 +44365,17 @@ var FT = {
   operations: "Operations",
   high_scale: "High-scale"
 };
-function IT(e) {
-  return e ? FT[e] ?? Bw(e) : "—";
-}
 function LT(e) {
-  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : e ? Bw(e) : "—";
+  return e ? IT[e] ?? Vw(e) : "—";
 }
 function RT(e) {
-  return `${e === 1 ? "1 probe operation" : `Up to ${e} probe operations`} + up to two DNS destination-vetting resolver operations per hostname destination`;
+  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : e ? Vw(e) : "—";
 }
 function zT(e) {
-  let t = $(e, ["safety_class"], ""), n = Iw(e, ["probe_profile", "kind"], ""), r = Lw(e, ["probe_profile", "max_requests"], NaN);
+  return `${e === 1 ? "1 probe operation" : `Up to ${e} probe operations`} + up to two DNS destination-vetting resolver operations per hostname destination`;
+}
+function BT(e) {
+  let t = $(e, ["safety_class"], ""), n = Lw(e, ["probe_profile", "kind"], ""), r = Rw(e, ["probe_profile", "max_requests"], NaN);
   if (t === "soc_gated") return {
     kind: "Request only",
     cap: "No customer execution",
@@ -44312,7 +44393,7 @@ function zT(e) {
   };
   if (Number.isFinite(r) && r > 0) return {
     kind: "Bounded live probe",
-    cap: RT(r),
+    cap: zT(r),
     profileKind: n
   };
   let i = e.max_rate;
@@ -44334,7 +44415,7 @@ function zT(e) {
     profileKind: n
   };
 }
-function BT(e) {
+function VT(e) {
   let t = (Array.isArray(e) ? e : e == null || e === "" ? [] : [e]).flatMap((e) => {
     if (typeof e == "string" || typeof e == "number") return [String(e).trim()];
     if (!e || typeof e != "object" || Array.isArray(e)) return [];
@@ -44352,11 +44433,11 @@ function BT(e) {
   }).filter(Boolean);
   return [...new Set(t)];
 }
-var VT = "Review edge protection for this vector.", HT = "The verdict follows the bounded external probe result.", UT = "Verdict when probe external_result aligns with the check default_expected_behavior.";
-function WT(e, t) {
+var HT = "Review edge protection for this vector.", UT = "The verdict follows the bounded external probe result.", WT = "Verdict when probe external_result aligns with the check default_expected_behavior.";
+function GT(e, t) {
   return t.kind === "Request only" ? e === "remediation" ? "Review authorization, declared scope, and SOC prerequisites before requesting this scenario." : e === "explanation" ? "This catalog entry describes a governed request-only scenario. It performs no customer-side execution." : "A verdict requires evidence recorded by the governed SOC workflow; this catalog entry does not execute for customers." : t.kind === "Metadata evaluation" ? e === "remediation" ? "Review the catalog inputs and recorded metadata that produced this result." : e === "explanation" ? "This check evaluates recorded metadata and performs no network I/O." : "The verdict follows the recorded metadata inputs and the catalog expected-behavior key." : t.kind === "Operations self-check" ? e === "remediation" ? "Review the failed readiness prerequisite and update the corresponding operating control." : e === "explanation" ? "This is an operations-readiness self-check, not a live outside-probe assertion." : "The verdict follows the recorded self-check result and the catalog expected-behavior key." : e === "remediation" ? "Review the recorded run evidence and declared target behavior before changing protection." : e === "explanation" ? "The verdict uses the evidence types declared for this bounded external probe." : "Compare the bounded probe evidence recorded for this check with its catalog expected-behavior key.";
 }
-function GT(e) {
+function KT(e) {
   let t = e.verdict;
   if (t && typeof t == "object" && !Array.isArray(t)) {
     let e = $(t, [
@@ -44368,7 +44449,7 @@ function GT(e) {
   }
   return $(e, ["verdict"], "");
 }
-function KT(e, t, n) {
+function qT(e, t, n) {
   let r = e.targets.length > 0, [i, a] = (0, D.useState)({
     status: "idle",
     items: []
@@ -44400,7 +44481,7 @@ function KT(e, t, n) {
     r
   ]), r ? e.targets : i.items;
 }
-function qT({ entityId: e, data: t, config: n, session: r }) {
+function JT({ entityId: e, data: t, config: n, session: r }) {
   let i = Qf("policy"), a = Qf("target"), [o, s] = (0, D.useState)({
     status: "idle",
     items: [],
@@ -44491,7 +44572,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
     a,
     u
   ]);
-  let m = KT(t, n, r), [h, g] = (0, D.useState)({
+  let m = qT(t, n, r), [h, g] = (0, D.useState)({
     id: "",
     status: "loading",
     check: null,
@@ -44510,7 +44591,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
       error: ""
     }), B(n, r, `/v1/checks/${encodeURIComponent(e)}`).then((n) => {
       if (t) return;
-      let r = zw(n, ["check"]);
+      let r = Bw(n, ["check"]);
       g(r ? {
         id: e,
         status: "found",
@@ -44574,7 +44655,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
   let x = i ? [...o.items, ...t.testPolicies].find((e) => $(e, ["id", "policy_id"], "") === i) ?? null : null, S = a ? m.find((e) => $(e, ["id"], "") === a) ?? null : null, C = i ? Zf("policy-detail", i) : a ? Zf("target-detail", a) : "#checks", w = i ? "Back to schedule" : a ? "Back to target" : "Check library";
   if (!e) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "check-detail",
       eyebrow: "Check"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -44588,16 +44669,16 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
   let T = h.id === e, E = T && h.status === "found" ? h.check : null;
   if (!E) return !T || h.status === "loading" ? /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "check-detail",
       eyebrow: "Check"
-    }), /* @__PURE__ */ (0, V.jsx)(vT, {
+    }), /* @__PURE__ */ (0, V.jsx)(yT, {
       label: "Loading check…",
       variant: "layout"
     })]
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "check-detail",
       eyebrow: "Check"
     }), h.status === "error" ? /* @__PURE__ */ (0, V.jsx)(G, {
@@ -44614,11 +44695,11 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
       actionHref: C
     })]
   });
-  let O = $(E, ["vector_family", "family"], ""), k = $(E, ["safety_class"], ""), A = zT(E), j = k === "safe", M = $(E, ["description", "summary"], ""), P = Zl($(E, [
+  let O = $(E, ["vector_family", "family"], ""), k = $(E, ["safety_class"], ""), A = BT(E), j = k === "safe", M = $(E, ["description", "summary"], ""), P = Zl($(E, [
     "name",
     "check_id",
     "id"
-  ], e)), ee = BT, F = (e) => e.replace(/_/g, " "), I = $(E, ["remediation_template", "remediation"], ""), te = $(E, ["verdict_logic"], ""), ne = $(E, ["explanation_template", "explanation"], ""), re = I === VT ? WT("remediation", A) : I, ie = te === UT ? WT("verdict", A) : te, ae = ne === HT ? WT("explanation", A) : ne, oe = $(E, ["default_expected_behavior"], ""), L = ee(E.supported_targets), se = ee(E.prerequisites), ce = ee(E.required_customer_setup), le = ee(E.evidence_required), ue = ee(E.stop_conditions), de = ee(E.exhausted_resources), fe = [
+  ], e)), ee = VT, F = (e) => e.replace(/_/g, " "), I = $(E, ["remediation_template", "remediation"], ""), te = $(E, ["verdict_logic"], ""), ne = $(E, ["explanation_template", "explanation"], ""), re = I === HT ? GT("remediation", A) : I, ie = te === WT ? GT("verdict", A) : te, ae = ne === UT ? GT("explanation", A) : ne, oe = $(E, ["default_expected_behavior"], ""), L = ee(E.supported_targets), se = ee(E.prerequisites), ce = ee(E.required_customer_setup), le = ee(E.evidence_required), ue = ee(E.stop_conditions), de = ee(E.exhausted_resources), fe = [
     {
       label: "Attack vectors",
       prefix: "ATT",
@@ -44644,13 +44725,13 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
       prefix: "ND",
       values: ee(E.non_ddos_threat_ids)
     }
-  ], pe = Lw(E, ["safety_constraints", "max_events"], 0), me = Lw(E, ["safety_constraints", "max_duration_seconds"], 0), he = Lw(E, ["safety_constraints", "max_concurrent_runs_per_target_group"], 0), ge = Iw(E, ["probe_profile", "kind"], ""), _e = Lw(E, ["probe_profile", "max_requests"], 0), ve = Lw(E, ["probe_profile", "timeout_ms"], 0), ye = [...f.items].sort((e, t) => String(t.completed_at ?? t.updated_at ?? t.created_at ?? "").localeCompare(String(e.completed_at ?? e.updated_at ?? e.created_at ?? ""))), be = ye.find((e) => kg(e, t.evidence) && GT(e)) ?? null, xe = be ? String(be.completed_at ?? be.updated_at ?? be.created_at ?? "") : "", Se = xe ? Math.floor((Date.now() - Date.parse(xe)) / 864e5) : null, Ce = be ? $(be, ["target_id"], "") : "", we = (e) => $(m.find((t) => $(t, ["id"], "") === e) ?? {}, ["value", "hostname"], e), Te = S ? Fh(S) : "", Ee = y.status === "loaded" ? y.checks.some((t) => $(t, ["check_id"], "") === e) : null, De = S ? $(S, ["target_group_id"], "") : "", Oe = `#test-policies?check=${encodeURIComponent(e)}${S && Ee && De ? `&group=${encodeURIComponent(De)}&target=${encodeURIComponent(a)}` : ""}`, ke = j && ja(r, "test_policy:write") && (!a || Ee === !0), Ae = [
+  ], pe = Rw(E, ["safety_constraints", "max_events"], 0), me = Rw(E, ["safety_constraints", "max_duration_seconds"], 0), he = Rw(E, ["safety_constraints", "max_concurrent_runs_per_target_group"], 0), ge = Lw(E, ["probe_profile", "kind"], ""), _e = Rw(E, ["probe_profile", "max_requests"], 0), ve = Rw(E, ["probe_profile", "timeout_ms"], 0), ye = [...f.items].sort((e, t) => String(t.completed_at ?? t.updated_at ?? t.created_at ?? "").localeCompare(String(e.completed_at ?? e.updated_at ?? e.created_at ?? ""))), be = ye.find((e) => kg(e, t.evidence) && KT(e)) ?? null, xe = be ? String(be.completed_at ?? be.updated_at ?? be.created_at ?? "") : "", Se = xe ? Math.floor((Date.now() - Date.parse(xe)) / 864e5) : null, Ce = be ? $(be, ["target_id"], "") : "", we = (e) => $(m.find((t) => $(t, ["id"], "") === e) ?? {}, ["value", "hostname"], e), Te = S ? Fh(S) : "", Ee = y.status === "loaded" ? y.checks.some((t) => $(t, ["check_id"], "") === e) : null, De = S ? $(S, ["target_group_id"], "") : "", Oe = `#test-policies?check=${encodeURIComponent(e)}${S && Ee && De ? `&group=${encodeURIComponent(De)}&target=${encodeURIComponent(a)}` : ""}`, ke = j && ja(r, "test_policy:write") && (!a || Ee === !0), Ae = [
     {
       key: "target",
       label: "Exact target",
       render: (e) => {
         let t = $h(e);
-        return t.targetId ? /* @__PURE__ */ (0, V.jsx)(yT, {
+        return t.targetId ? /* @__PURE__ */ (0, V.jsx)(bT, {
           route: "target-detail",
           id: t.targetId,
           label: t.targetLabel
@@ -44663,7 +44744,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
     {
       key: "cadence",
       label: "Cadence",
-      render: (e) => Qw($(e, ["cadence"], ""), "Not recorded")
+      render: (e) => $w($(e, ["cadence"], ""), "Not recorded")
     },
     {
       key: "dispatch",
@@ -44676,7 +44757,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
       label: "Target",
       render: (e) => {
         let t = $(e, ["target_id"], "");
-        return t ? /* @__PURE__ */ (0, V.jsx)(yT, {
+        return t ? /* @__PURE__ */ (0, V.jsx)(bT, {
           route: "target-detail",
           id: t,
           label: we(t)
@@ -44698,10 +44779,10 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
       key: "outcome",
       label: "Outcome",
       render: (e) => {
-        let n = kg(e, t.evidence) ? GT(e) : "";
-        return n ? /* @__PURE__ */ (0, V.jsx)(cT, {
+        let n = kg(e, t.evidence) ? KT(e) : "";
+        return n ? /* @__PURE__ */ (0, V.jsx)(lT, {
           value: n,
-          tone: PT(n)
+          tone: FT(n)
         }) : /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: [
@@ -44715,14 +44796,14 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
     {
       key: "evidence",
       label: "Evidence",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)(YT, { run: e })
+      render: (e) => /* @__PURE__ */ (0, V.jsx)(XT, { run: e })
     }
   ];
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [
       /* @__PURE__ */ (0, V.jsx)(_y, {}),
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "check-detail",
         eyebrow: "Check",
         entityId: e,
@@ -44860,7 +44941,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
               className: "stack-tight",
               children: [_e ? /* @__PURE__ */ (0, V.jsx)("p", {
                 className: "check-detail-text",
-                children: RT(_e)
+                children: zT(_e)
               }) : null, /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "row-actions",
                 children: [
@@ -44900,7 +44981,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
           ]
         })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: S ? `Latest result on ${we(a)}` : "Latest recorded result" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "A result belongs to one target at one time. It says nothing about other targets." })] }), /* @__PURE__ */ (0, V.jsx)(X, {
           className: "stack-tight",
-          children: f.status === "loading" || f.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          children: f.status === "loading" || f.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading recorded results…",
             variant: "compact"
           }) : f.status === "error" ? /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -44915,10 +44996,10 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
           }) : be ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
             /* @__PURE__ */ (0, V.jsxs)("div", {
               className: "row-actions",
-              children: [/* @__PURE__ */ (0, V.jsx)(cT, {
-                value: GT(be),
-                tone: PT(GT(be))
-              }), /* @__PURE__ */ (0, V.jsxs)("span", { children: ["on ", Ce ? /* @__PURE__ */ (0, V.jsx)(yT, {
+              children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+                value: KT(be),
+                tone: FT(KT(be))
+              }), /* @__PURE__ */ (0, V.jsxs)("span", { children: ["on ", Ce ? /* @__PURE__ */ (0, V.jsx)(bT, {
                 route: "target-detail",
                 id: Ce,
                 label: we(Ce)
@@ -44932,7 +45013,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
                 Se !== null && Se >= 30 ? ` · ${R(Se)} days old, may no longer reflect current protection` : ""
               ]
             }),
-            /* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)(YT, { run: be }) })
+            /* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)(XT, { run: be }) })
           ] }) : /* @__PURE__ */ (0, V.jsxs)("p", {
             className: "muted",
             children: [
@@ -44953,10 +45034,10 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
           columns: Ae,
           items: o.items,
           getRowId: (e) => $(e, ["id", "policy_id"], ""),
-          getRowProps: (e) => NT("policy-detail", $(e, ["id", "policy_id"], "")),
+          getRowProps: (e) => PT("policy-detail", $(e, ["id", "policy_id"], "")),
           loadError: o.status === "error" ? o.error : null,
           onRetry: () => l((e) => e + 1),
-          empty: o.status === "loading" || o.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          empty: o.status === "loading" || o.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading linked schedules…",
             variant: "compact"
           }) : /* @__PURE__ */ (0, V.jsx)(G, {
@@ -44974,10 +45055,10 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
           columns: je,
           items: ye.slice(0, 25),
           getRowId: (e) => $(e, ["id"], ""),
-          getRowProps: (e) => JT(e, `View evidence for ${we($(e, ["target_id"], ""))} at ${z(e.completed_at ?? e.updated_at ?? e.created_at)}`),
+          getRowProps: (e) => YT(e, `View evidence for ${we($(e, ["target_id"], ""))} at ${z(e.completed_at ?? e.updated_at ?? e.created_at)}`),
           loadError: f.status === "error" ? f.error : null,
           onRetry: () => d((e) => e + 1),
-          empty: f.status === "loading" || f.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(vT, {
+          empty: f.status === "loading" || f.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(yT, {
             label: "Loading recorded results…",
             variant: "compact"
           }) : /* @__PURE__ */ (0, V.jsx)(G, {
@@ -44999,8 +45080,8 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
                   className: "mono",
                   children: e
                 })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Family" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: IT(O) })] }),
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Mode" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: LT(k) })] }),
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Family" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: LT(O) })] }),
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Mode" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: RT(k) })] }),
                 ae && ie ? /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Explanation" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: ae })] }) : null
               ]
             }),
@@ -45032,7 +45113,7 @@ function qT({ entityId: e, data: t, config: n, session: r }) {
     ]
   });
 }
-function JT(e, t) {
+function YT(e, t) {
   let n = {
     entry: "check_result",
     target_id: $(e, ["target_id"], ""),
@@ -45060,7 +45141,7 @@ function JT(e, t) {
     }
   };
 }
-function YT({ run: e }) {
+function XT({ run: e }) {
   let t = {
     entry: "check_result",
     target_id: $(e, ["target_id"], ""),
@@ -45081,7 +45162,7 @@ function YT({ run: e }) {
     children: "View evidence"
   });
 }
-function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
+function ZT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
   let [a, o] = (0, D.useState)({
     message: "",
     error: ""
@@ -45135,7 +45216,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
     l
   ]), !e) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "policy-detail",
       eyebrow: "Validation schedule"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45149,7 +45230,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
   let f = t.testPolicies.find((t) => $(t, ["id", "policy_id"], "") === e) ?? null;
   if (!f) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "policy-detail",
       eyebrow: "Validation schedule"
     }), t.loadErrors.testPolicies ? /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45166,7 +45247,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
       actionHref: "#test-policies"
     })]
   });
-  let p = t.checks, m = eg(f, p), h = Qh(f, p), g = $h(f), _ = tg(f, p), v = $(f, ["timezone"], ""), y = $(f, ["cadence"], ""), b = Xh(f), x = $(f, ["expected_verdict"], ""), S = $(f, ["last_dispatched_at"], ""), C = zw(f, ["safety_policy_snapshot"]), w = _.nextRunAt ? Yh(_.nextRunAt, v) : null, T = ig(f, p), E = Kw([
+  let p = t.checks, m = eg(f, p), h = Qh(f, p), g = $h(f), _ = tg(f, p), v = $(f, ["timezone"], ""), y = $(f, ["cadence"], ""), b = Xh(f), x = $(f, ["expected_verdict"], ""), S = $(f, ["last_dispatched_at"], ""), C = Bw(f, ["safety_policy_snapshot"]), w = _.nextRunAt ? Yh(_.nextRunAt, v) : null, T = ig(f, p), E = qw([
     ["policy_id", e],
     ["target_group_id", g.groupId],
     ["target_id", g.targetId],
@@ -45192,12 +45273,12 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
     {
       label: "Active and enabled",
       status: O === "active" && f.enabled !== !1 ? "met" : "blocked",
-      detail: O ? O === "active" ? f.enabled === !1 ? "Active but disabled; the scheduler skips it." : "Active." : `${Qw(O)}. ${O === "paused" ? "Resume to dispatch again." : "This state does not dispatch."}` : "State not recorded."
+      detail: O ? O === "active" ? f.enabled === !1 ? "Active but disabled; the scheduler skips it." : "Active." : `${$w(O)}. ${O === "paused" ? "Resume to dispatch again." : "This state does not dispatch."}` : "State not recorded."
     },
     {
       label: "Automatic cadence",
       status: y && y !== "manual" ? "met" : "blocked",
-      detail: y ? y === "manual" ? "Manual cadence never dispatches automatically. Edit the schedule to choose daily, weekly, or monthly." : `${Qw(y)} in ${v || "UTC (timezone not recorded)"}.` : "Cadence not recorded."
+      detail: y ? y === "manual" ? "Manual cadence never dispatches automatically. Edit the schedule to choose daily, weekly, or monthly." : `${$w(y)} in ${v || "UTC (timezone not recorded)"}.` : "Cadence not recorded."
     },
     {
       label: "Next run recorded by the scheduler",
@@ -45214,7 +45295,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
     className: "content",
     children: [
       /* @__PURE__ */ (0, V.jsx)(_y, {}),
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "policy-detail",
         eyebrow: "Validation schedule",
         entityId: e,
@@ -45284,12 +45365,12 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
               href: T,
               children: h.name
             }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "Not recorded" })] }),
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Exact target" }), g.targetId ? /* @__PURE__ */ (0, V.jsx)(yT, {
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Exact target" }), g.targetId ? /* @__PURE__ */ (0, V.jsx)(bT, {
               route: "target-detail",
               id: g.targetId,
               label: g.targetLabel
             }) : /* @__PURE__ */ (0, V.jsx)("strong", { children: "Not recorded" })] }),
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), g.groupId ? /* @__PURE__ */ (0, V.jsx)(yT, {
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Target group" }), g.groupId ? /* @__PURE__ */ (0, V.jsx)(bT, {
               route: "target-group-detail",
               id: g.groupId,
               label: g.groupLabel
@@ -45298,7 +45379,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
         })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Timing and expectation" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Fields recorded on the schedule." })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
           className: "kv-list",
           children: [
-            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Cadence" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: y ? Qw(y) : "Not recorded" })] }),
+            /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Cadence" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: y ? $w(y) : "Not recorded" })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Timezone" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: v || "Not recorded (scheduler default UTC)" })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Safe windows" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: b.length ? Zh(f) : "None (any time)" })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Expected verdict" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: x ? `${eu(x)} (declared)` : "Not recorded" })] }),
@@ -45347,7 +45428,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
             label: "Target",
             render: (e) => {
               let t = $(e, ["target_id"], "");
-              return t ? /* @__PURE__ */ (0, V.jsx)(yT, {
+              return t ? /* @__PURE__ */ (0, V.jsx)(bT, {
                 route: "target-detail",
                 id: t,
                 label: t === g.targetId ? g.targetLabel : t
@@ -45360,7 +45441,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
           {
             key: "status",
             label: "Status",
-            render: (e) => /* @__PURE__ */ (0, V.jsx)(sT, {
+            render: (e) => /* @__PURE__ */ (0, V.jsx)(cT, {
               value: $(e, ["status"], ""),
               tone: Jv($(e, ["status"], "")),
               fallback: "Not recorded"
@@ -45370,10 +45451,10 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
             key: "outcome",
             label: "Outcome",
             render: (e) => {
-              let n = kg(e, t.evidence) ? GT(e) : "";
-              return n ? /* @__PURE__ */ (0, V.jsx)(cT, {
+              let n = kg(e, t.evidence) ? KT(e) : "";
+              return n ? /* @__PURE__ */ (0, V.jsx)(lT, {
                 value: n,
-                tone: PT(n)
+                tone: FT(n)
               }) : /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "muted",
                 children: "No evidence-backed result"
@@ -45383,15 +45464,15 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
           {
             key: "evidence",
             label: "Evidence",
-            render: (e) => /* @__PURE__ */ (0, V.jsx)(YT, { run: e })
+            render: (e) => /* @__PURE__ */ (0, V.jsx)(XT, { run: e })
           }
         ],
         items: s.items,
         getRowId: (e) => $(e, ["id"], ""),
-        getRowProps: (e) => JT(e, `View evidence for run dispatched ${z(e.started_at ?? e.created_at)}`),
+        getRowProps: (e) => YT(e, `View evidence for run dispatched ${z(e.started_at ?? e.created_at)}`),
         loadError: s.status === "error" ? s.error : null,
         onRetry: () => u((e) => e + 1),
-        empty: s.status === "loading" || s.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(vT, {
+        empty: s.status === "loading" || s.status === "idle" ? /* @__PURE__ */ (0, V.jsx)(yT, {
           label: "Loading dispatch history…",
           variant: "compact"
         }) : /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45404,11 +45485,11 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
         className: "detail-technical",
         children: [
           /* @__PURE__ */ (0, V.jsx)("summary", { children: "Technical record" }),
-          E ? /* @__PURE__ */ (0, V.jsx)(xT, {
+          E ? /* @__PURE__ */ (0, V.jsx)(ST, {
             label: "Schedule binding record",
             children: E
           }) : null,
-          C ? /* @__PURE__ */ (0, V.jsx)(xT, {
+          C ? /* @__PURE__ */ (0, V.jsx)(ST, {
             label: "Safety snapshot captured at creation",
             children: JSON.stringify(C, null, 2)
           }) : null
@@ -45417,7 +45498,7 @@ function XT({ entityId: e, data: t, config: n, session: r, onRefresh: i }) {
     ]
   });
 }
-function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
+function QT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   let [a, o] = (0, D.useState)({
     entityId: "",
     status: "loading",
@@ -45435,13 +45516,13 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     status: "loading",
     items: [],
     error: ""
-  }, d = t.targetGroups.find((e) => $(e, ["id"], "") === l) ?? null, f = t.runs.find((e) => $(e, ["id"], "") === l) ?? null, p = t.internalTenants.find((e) => $(e, ["tenant_id", "id"], "") === l) ?? null, m = t.findings.find((e) => $(e, ["id"], "") === l) ?? null, h = t.highScale.find((e) => $(e, ["id"], "") === l) ?? null, g = CT(e === "target-group-detail" && !!l, n, r, `/v1/target-groups/${encodeURIComponent(l)}`, d), _ = CT(e === "run-detail" && !!l, n, r, `/v1/test-runs/${encodeURIComponent(l)}`, f), v = CT(e === "tenant-detail" && !!l && r.principal === "staff", n, r, `/internal/admin/tenants/${encodeURIComponent(l)}`, null), y = CT(e === "finding-detail" && !!l, n, r, `/v1/findings/${encodeURIComponent(l)}`, m), b = e === "target-group-detail" ? g.reload : e === "run-detail" ? _.reload : e === "tenant-detail" ? v.reload : e === "finding-detail" ? y.reload : null, x = (0, D.useCallback)(async () => {
+  }, d = t.targetGroups.find((e) => $(e, ["id"], "") === l) ?? null, f = t.runs.find((e) => $(e, ["id"], "") === l) ?? null, p = t.internalTenants.find((e) => $(e, ["tenant_id", "id"], "") === l) ?? null, m = t.findings.find((e) => $(e, ["id"], "") === l) ?? null, h = t.highScale.find((e) => $(e, ["id"], "") === l) ?? null, g = wT(e === "target-group-detail" && !!l, n, r, `/v1/target-groups/${encodeURIComponent(l)}`, d), _ = wT(e === "run-detail" && !!l, n, r, `/v1/test-runs/${encodeURIComponent(l)}`, f), v = wT(e === "tenant-detail" && !!l && r.principal === "staff", n, r, `/internal/admin/tenants/${encodeURIComponent(l)}`, null), y = wT(e === "finding-detail" && !!l, n, r, `/v1/findings/${encodeURIComponent(l)}`, m), b = e === "target-group-detail" ? g.reload : e === "run-detail" ? _.reload : e === "tenant-detail" ? v.reload : e === "finding-detail" ? y.reload : null, x = (0, D.useCallback)(async () => {
     await Promise.all([i(), b ? b() : Promise.resolve()]);
   }, [i, b]), S = (0, D.useMemo)(() => Xf(r.tenant_id ?? "") || void 0, [
     e,
     l,
     r.tenant_id
-  ]), C = wT(e === "queue-detail" && !!l, n, r, "/v1/high-scale-requests", l, h, {
+  ]), C = TT(e === "queue-detail" && !!l, n, r, "/v1/high-scale-requests", l, h, {
     staffSoc: r.principal === "staff" && ls(r),
     tenantId: S
   }), w = e === "target-group-detail" ? g : e === "run-detail" ? _ : {
@@ -45495,7 +45576,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     l,
     n,
     r
-  ]), e === "tenant-detail") return l ? r.principal === "staff" ? /* @__PURE__ */ (0, V.jsx)(kT, {
+  ]), e === "tenant-detail") return l ? r.principal === "staff" ? /* @__PURE__ */ (0, V.jsx)(AT, {
     entityId: l,
     detail: v.detail,
     data: t,
@@ -45506,7 +45587,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: v.error
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Staff tenant operations"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45518,7 +45599,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Staff tenant operations"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45532,7 +45613,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   if (e === "finding-detail") {
     if (!l) return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: "Evidence-backed finding"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45546,11 +45627,11 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     let i = y.detail ?? m;
     return !i && y.loading ? /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: "Evidence-backed finding"
-      }), /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading finding detail…" })]
-    }) : i ? /* @__PURE__ */ (0, V.jsx)(Fw, {
+      }), /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading finding detail…" })]
+    }) : i ? /* @__PURE__ */ (0, V.jsx)(Iw, {
       entity: i,
       entityId: l,
       data: t,
@@ -45561,7 +45642,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       loadError: y.error
     }) : /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: "Evidence-backed finding"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45573,7 +45654,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       })]
     });
   }
-  if (e === "target-detail") return l ? /* @__PURE__ */ (0, V.jsx)(rw, {
+  if (e === "target-detail") return l ? /* @__PURE__ */ (0, V.jsx)(iw, {
     entityId: l,
     config: n,
     session: r,
@@ -45583,7 +45664,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     onRefresh: i
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Declared target"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45594,20 +45675,20 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       actionHref: "#target-groups"
     })]
   });
-  if (e === "check-detail") return /* @__PURE__ */ (0, V.jsx)(qT, {
+  if (e === "check-detail") return /* @__PURE__ */ (0, V.jsx)(JT, {
     entityId: l,
     data: t,
     config: n,
     session: r
   });
-  if (e === "policy-detail") return /* @__PURE__ */ (0, V.jsx)(XT, {
+  if (e === "policy-detail") return /* @__PURE__ */ (0, V.jsx)(ZT, {
     entityId: l,
     data: t,
     config: n,
     session: r,
     onRefresh: i
   });
-  if (e === "evidence-detail") return /* @__PURE__ */ (0, V.jsx)(AT, {
+  if (e === "evidence-detail") return /* @__PURE__ */ (0, V.jsx)(jT, {
     data: t,
     config: n,
     session: r
@@ -45616,7 +45697,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     let a = r.principal === "staff" && ls(r);
     if (!l) return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: a ? "SOC execution workspace" : "High-scale authorization pack"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45630,18 +45711,18 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     let o = C.detail ?? h;
     return !o && C.loading ? /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: a ? "SOC execution workspace" : "High-scale authorization pack"
-      }), /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading high-scale request…" })]
-    }) : o ? a ? /* @__PURE__ */ (0, V.jsx)(MT, {
+      }), /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading high-scale request…" })]
+    }) : o ? a ? /* @__PURE__ */ (0, V.jsx)(NT, {
       entity: o,
       entityId: l,
       config: n,
       session: r,
       onRefresh: i,
       tenantId: S || $(o, ["tenant_id"], "") || void 0
-    }) : /* @__PURE__ */ (0, V.jsx)(jT, {
+    }) : /* @__PURE__ */ (0, V.jsx)(MT, {
       entity: o,
       entityId: l,
       data: t,
@@ -45652,7 +45733,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       loadError: C.error
     }) : /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: a ? "SOC execution workspace" : "High-scale authorization pack"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45666,10 +45747,10 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   }
   if (e === "target-group-detail") return l ? !T && w.loading ? /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Declared business service"
-    }), /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading target group detail…" })]
+    }), /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading target group detail…" })]
   }) : T ? /* @__PURE__ */ (0, V.jsx)(aS, {
     entity: T,
     entityId: l,
@@ -45681,7 +45762,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: w.error
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Declared business service"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45693,7 +45774,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Declared business service"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45741,7 +45822,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     }[e];
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: t?.eyebrow ?? "Detail surface"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45755,10 +45836,10 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   }
   if (!T && w.loading) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Entity detail"
-    }), /* @__PURE__ */ (0, V.jsx)(vT, { label: "Loading entity detail…" })]
+    }), /* @__PURE__ */ (0, V.jsx)(yT, { label: "Loading entity detail…" })]
   });
   if (!T) {
     let t = { "run-detail": {
@@ -45767,7 +45848,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     } }[e];
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: e,
         eyebrow: "Entity detail"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45779,7 +45860,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       })]
     });
   }
-  return e === "run-detail" ? /* @__PURE__ */ (0, V.jsx)(DT, {
+  return e === "run-detail" ? /* @__PURE__ */ (0, V.jsx)(OT, {
     entity: T,
     entityId: l,
     data: t,
@@ -45791,7 +45872,7 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: w.error
   }) : /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: e,
       eyebrow: "Detail surface"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45803,12 +45884,12 @@ function ZT({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   });
 }
-var QT = /^[A-Za-z0-9_.:-]{1,128}$/, $T = 25;
-function eE({ data: e, config: t, session: n, runIds: r, checkedAt: i }) {
-  let a = Aa(n, "findings"), o = (0, D.useMemo)(() => [...new Set(r)].filter((e) => QT.test(e)), [r]), s = k_(t, n, (0, D.useMemo)(() => Object.fromEntries(o.map((e) => [e, {
+var $T = /^[A-Za-z0-9_.:-]{1,128}$/, eE = 25;
+function tE({ data: e, config: t, session: n, runIds: r, checkedAt: i }) {
+  let a = Aa(n, "findings"), o = (0, D.useMemo)(() => [...new Set(r)].filter((e) => $T.test(e)), [r]), s = k_(t, n, (0, D.useMemo)(() => Object.fromEntries(o.map((e) => [e, {
     status: "open",
     test_run_id: e
-  }])), [o]), 0, a && o.length > 0, $T), c = o.map((e) => ({
+  }])), [o]), 0, a && o.length > 0, eE), c = o.map((e) => ({
     id: e,
     envelope: s.pages[e] ?? null
   })), l = c.flatMap(({ envelope: e }) => e?.items ?? []), u = c.some(({ envelope: e }) => e && e.total === null), d = c.reduce((e, { envelope: t }) => e + (t?.total ?? t?.items.length ?? 0), 0), f = Math.max(0, d - l.length);
@@ -45844,10 +45925,10 @@ function eE({ data: e, config: t, session: n, runIds: r, checkedAt: i }) {
     ]
   }) : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsxs)("p", {
     className: "muted small",
-    children: [u ? `${R(l.length)} open shown; the server did not report a total for every run.` : `${R(d)} open ${d === 1 ? "finding" : "findings"} across the captured runs.`, f > 0 ? ` Showing the newest ${R($T)} per run; ${R(f)} more are on Findings.` : ""]
+    children: [u ? `${R(l.length)} open shown; the server did not report a total for every run.` : `${R(d)} open ${d === 1 ? "finding" : "findings"} across the captured runs.`, f > 0 ? ` Showing the newest ${R(eE)} per run; ${R(f)} more are on Findings.` : ""]
   }), /* @__PURE__ */ (0, V.jsx)("ul", {
     className: "report-live-list",
-    children: l.map((t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [/* @__PURE__ */ (0, V.jsx)(yT, {
+    children: l.map((t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [/* @__PURE__ */ (0, V.jsx)(bT, {
       route: "finding-detail",
       id: $(t, ["id"]),
       label: ru(t, e.targets, e.checks)
@@ -45865,7 +45946,7 @@ function eE({ data: e, config: t, session: n, runIds: r, checkedAt: i }) {
     children: "Your role cannot read findings, so current status is not shown."
   }) })] });
 }
-function tE({ data: e, config: t, session: n, onRefresh: r }) {
+function nE({ data: e, config: t, session: n, onRefresh: r }) {
   let [i, a] = (0, D.useState)(0);
   (0, D.useEffect)(() => {
     function e() {
@@ -45873,10 +45954,10 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
     }
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []);
-  let o = (0, D.useMemo)(() => Yf(""), [i]), s = e.reports.find((e) => $(e, ["id"], "") === o) ?? null, c = CT(!!o, t, n, `/v1/reports/${encodeURIComponent(o)}`, s), l = c.detail, u = Vy(t, n, r), [d] = (0, D.useState)(() => (/* @__PURE__ */ new Date()).toISOString());
+  let o = (0, D.useMemo)(() => Yf(""), [i]), s = e.reports.find((e) => $(e, ["id"], "") === o) ?? null, c = wT(!!o, t, n, `/v1/reports/${encodeURIComponent(o)}`, s), l = c.detail, u = Vy(t, n, r), [d] = (0, D.useState)(() => (/* @__PURE__ */ new Date()).toISOString());
   if (!o) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "report-detail",
       eyebrow: "Report"
     }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45889,10 +45970,10 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
   });
   if (!l && c.loading) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+    children: [/* @__PURE__ */ (0, V.jsx)(uT, {
       route: "report-detail",
       eyebrow: "Report"
-    }), /* @__PURE__ */ (0, V.jsx)(vT, {
+    }), /* @__PURE__ */ (0, V.jsx)(yT, {
       label: "Loading report…",
       variant: "layout"
     })]
@@ -45901,7 +45982,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
     let e = /forbidden|permission|403/i.test(c.error);
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, V.jsx)(lT, {
+      children: [/* @__PURE__ */ (0, V.jsx)(uT, {
         route: "report-detail",
         eyebrow: "Report"
       }), /* @__PURE__ */ (0, V.jsx)(G, {
@@ -45913,35 +45994,35 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       })]
     });
   }
-  let f = $(l, ["kind"], ""), p = zw(l, ["summary"]), m = p?.snapshot_frozen === !0, h = $(p ?? {}, ["as_of"], "") || $(p ?? {}, ["generated_at"], ""), g = Lw(l, ["summary", "readiness_score"], NaN), _ = Number.isFinite(g), v = $(p ?? {}, ["readiness_score_status"], ""), y = $(p ?? {}, ["readiness_score_reason"], ""), b = Lw(l, [
+  let f = $(l, ["kind"], ""), p = Bw(l, ["summary"]), m = p?.snapshot_frozen === !0, h = $(p ?? {}, ["as_of"], "") || $(p ?? {}, ["generated_at"], ""), g = Rw(l, ["summary", "readiness_score"], NaN), _ = Number.isFinite(g), v = $(p ?? {}, ["readiness_score_status"], ""), y = $(p ?? {}, ["readiness_score_reason"], ""), b = Rw(l, [
     "summary",
     "findings_snapshot",
     "open_total"
-  ], Lw(l, ["summary", "open_findings"], NaN)), x = Number.isFinite(b), S = Rw(l, ["summary", "readiness_factors"]), C = zw(l, ["summary", "compliance"]), w = Array.isArray(C?.frameworks) ? C.frameworks.map(String) : [], T = zw(p, ["scope"]), E = $(T ?? {}, ["mode"], ""), O = zw(T, ["period"]), k = zw(T, ["declared_members"]), A = Rw(T, ["group_refs"]), j = Array.isArray(T?.target_ids) ? T.target_ids.map(String) : [], M = zw(p, ["run_capture"]), N = zw(p, ["findings_snapshot"]), P = Rw(N, ["items"]), ee = Rw(zw(p, ["evidence_summaries"]), ["items"]), F = zw(p, ["declaration_snapshot"]), I = Rw(p, ["runs_snapshot"]), te = Array.isArray(l.run_ids) ? l.run_ids.map(String).filter(Boolean) : Array.isArray(p?.run_ids) ? p.run_ids.map(String).filter(Boolean) : [], ne = Rw(l, ["summary", "recent_runs"]), re = te.length ? te : ne.map((e) => $(e, ["id"], "")).filter(Boolean), ie = re.map((e) => {
+  ], Rw(l, ["summary", "open_findings"], NaN)), x = Number.isFinite(b), S = zw(l, ["summary", "readiness_factors"]), C = Bw(l, ["summary", "compliance"]), w = Array.isArray(C?.frameworks) ? C.frameworks.map(String) : [], T = Bw(p, ["scope"]), E = $(T ?? {}, ["mode"], ""), O = Bw(T, ["period"]), k = Bw(T, ["declared_members"]), A = zw(T, ["group_refs"]), j = Array.isArray(T?.target_ids) ? T.target_ids.map(String) : [], M = Bw(p, ["run_capture"]), N = Bw(p, ["findings_snapshot"]), P = zw(N, ["items"]), ee = zw(Bw(p, ["evidence_summaries"]), ["items"]), F = Bw(p, ["declaration_snapshot"]), I = zw(p, ["runs_snapshot"]), te = Array.isArray(l.run_ids) ? l.run_ids.map(String).filter(Boolean) : Array.isArray(p?.run_ids) ? p.run_ids.map(String).filter(Boolean) : [], ne = zw(l, ["summary", "recent_runs"]), re = te.length ? te : ne.map((e) => $(e, ["id"], "")).filter(Boolean), ie = re.map((e) => {
     let t = I.find((t) => $(t, ["id"], "") === e) ?? null, n = ne.find((t) => $(t, ["id"], "") === e) ?? null;
     return {
       id: e,
       snapshot: t ?? n,
       frozen: !!t
     };
-  }), ae = Array.isArray(p?.evidence_ids) ? p.evidence_ids.map(String).filter(Boolean) : [], oe = pT("report-detail", l, o), L = (e) => {
-    let t = Lw(e, ["included"], NaN), n = Lw(e, ["total"], NaN);
+  }), ae = Array.isArray(p?.evidence_ids) ? p.evidence_ids.map(String).filter(Boolean) : [], oe = mT("report-detail", l, o), L = (e) => {
+    let t = Rw(e, ["included"], NaN), n = Rw(e, ["total"], NaN);
     return Number.isFinite(t) ? Number.isFinite(n) ? `${R(t)} of ${R(n)}` : `${R(t)} (total not recorded)` : "Not recorded";
   }, se = T ? E === "tenant" ? "Whole workspace" : [
     A.length ? `Groups: ${A.map((e) => $(e, ["name"], $(e, ["id"], ""))).join(", ")}` : "",
     j.length ? `${R(j.length)} selected target${j.length === 1 ? "" : "s"}` : "",
     E === "runs" ? "Explicit runs" : ""
-  ].filter(Boolean).join(" · ") || E.replaceAll("_", " ") : "Not recorded (legacy report)", ce = O ? $(O, ["status"], "") === "bounded" ? `${z($(O, ["start"], ""))} to ${z($(O, ["end"], ""))}` : $(O, ["status"], "") === "unbounded" ? `All time, until ${z($(O, ["end"], ""))}` : "Not recorded" : ET(e, l) === "—" ? "Not recorded" : ET(e, l), le = _ ? null : y === "published_readiness_formula_is_tenant_wide" ? "Not included: the published readiness formula covers the whole workspace, so this scoped report has no score." : v === "unknown" ? `Not included: ${y ? y.replaceAll("_", " ") : "readiness was unavailable at generation"}.` : "No readiness score was recorded in this snapshot.", ue = [
+  ].filter(Boolean).join(" · ") || E.replaceAll("_", " ") : "Not recorded (legacy report)", ce = O ? $(O, ["status"], "") === "bounded" ? `${z($(O, ["start"], ""))} to ${z($(O, ["end"], ""))}` : $(O, ["status"], "") === "unbounded" ? `All time, until ${z($(O, ["end"], ""))}` : "Not recorded" : DT(e, l) === "—" ? "Not recorded" : DT(e, l), le = _ ? null : y === "published_readiness_formula_is_tenant_wide" ? "Not included: the published readiness formula covers the whole workspace, so this scoped report has no score." : v === "unknown" ? `Not included: ${y ? y.replaceAll("_", " ") : "readiness was unavailable at generation"}.` : "No readiness score was recorded in this snapshot.", ue = [
     {
       key: "factor",
       label: "Factor",
-      render: (e) => Qw($(e, ["label", "key"], "Factor"))
+      render: (e) => $w($(e, ["label", "key"], "Factor"))
     },
     {
       key: "score",
       label: "Score",
       render: (e) => {
-        let t = Lw(e, ["score"], NaN);
+        let t = Rw(e, ["score"], NaN);
         return Number.isFinite(t) ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "tabular-nums",
           children: t
@@ -45955,7 +46036,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       key: "weight",
       label: "Weight",
       render: (e) => {
-        let t = Lw(e, ["weight"], NaN);
+        let t = Rw(e, ["weight"], NaN);
         return Number.isFinite(t) ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "tabular-nums",
           children: t
@@ -45976,7 +46057,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Check",
       render: (t) => {
         let n = $(t.snapshot ?? {}, ["check_id"], "");
-        return n ? Uw(e.checks, n) : /* @__PURE__ */ (0, V.jsx)("span", {
+        return n ? Ww(e.checks, n) : /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: "Not recorded"
         });
@@ -45987,7 +46068,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Target",
       render: (e) => {
         let t = $(e.snapshot ?? {}, ["target_id"], "");
-        return t ? /* @__PURE__ */ (0, V.jsx)(yT, {
+        return t ? /* @__PURE__ */ (0, V.jsx)(bT, {
           route: "target-detail",
           id: t
         }) : /* @__PURE__ */ (0, V.jsx)("span", {
@@ -46001,7 +46082,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Status at capture",
       render: (e) => {
         let t = $(e.snapshot ?? {}, ["status"], "");
-        return t ? Qw(t) : /* @__PURE__ */ (0, V.jsx)("span", {
+        return t ? $w(t) : /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: "Not captured"
         });
@@ -46020,7 +46101,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Evidence",
       render: (e) => {
         let t = e.snapshot ?? {};
-        return $(t, ["target_id"], "") && $(t, ["check_id"], "") ? /* @__PURE__ */ (0, V.jsx)(YT, { run: {
+        return $(t, ["target_id"], "") && $(t, ["check_id"], "") ? /* @__PURE__ */ (0, V.jsx)(XT, { run: {
           ...t,
           id: $(e, ["id"])
         } }) : /* @__PURE__ */ (0, V.jsx)("span", {
@@ -46049,7 +46130,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
     {
       key: "status",
       label: "Status at generation",
-      render: (e) => Qw($(e, ["status"], ""), "Not recorded")
+      render: (e) => $w($(e, ["status"], ""), "Not recorded")
     },
     {
       key: "proof",
@@ -46069,7 +46150,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
     className: "content report-detail-page",
     children: [
       /* @__PURE__ */ (0, V.jsx)(_y, {}),
-      /* @__PURE__ */ (0, V.jsx)(_T, {
+      /* @__PURE__ */ (0, V.jsx)(vT, {
         route: "report-detail",
         eyebrow: `${By(f) ? `${zy(f)} mapping` : `${zy(f)} report`}`,
         entityId: o,
@@ -46109,7 +46190,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
         role: "note",
         children: "This is a legacy report: its inputs were not frozen at generation. Only the stored run references and summary values are shown; nothing is filled in from current data."
       }),
-      /* @__PURE__ */ (0, V.jsx)(ST, {
+      /* @__PURE__ */ (0, V.jsx)(CT, {
         loadError: c.error,
         error: u.error,
         message: u.message,
@@ -46149,9 +46230,9 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
                 }),
                 /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: By(f) ? "Framework mapping" : "Audience" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: C ? $(C, ["template_title"], zy(f)) : zy(f) })] }),
                 w.length ? /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Frameworks" }), /* @__PURE__ */ (0, V.jsx)("strong", { children: w.map((e) => ql(e)).join(", ") })] }) : null,
-                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(sT, {
+                /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, V.jsx)(cT, {
                   value: $(l, ["status"], ""),
-                  tone: iT($(l, ["status"], "")),
+                  tone: aT($(l, ["status"], "")),
                   fallback: "Not recorded"
                 })] })
               ]
@@ -46162,7 +46243,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
             children: [
               $(C ?? {}, ["disclaimer"], "Evidence mapping is not a certification or a statement of compliance."),
               " Protection profiles are ",
-              Iw(p, [
+              Lw(p, [
                 "sections",
                 "protection_profile",
                 "status"
@@ -46248,7 +46329,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
             children: [
               "Declarations: ",
               $(F, ["status"], "not recorded").replaceAll("_", " "),
-              Rw(F, ["items"]).length ? ` · ${R(Rw(F, ["items"]).length)} target declarations frozen` : "",
+              zw(F, ["items"]).length ? ` · ${R(zw(F, ["items"]).length)} target declarations frozen` : "",
               "."
             ]
           }) : null
@@ -46264,7 +46345,7 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
             className: "muted",
             children: "· live, not part of the report"
           })]
-        }), /* @__PURE__ */ (0, V.jsx)(eE, {
+        }), /* @__PURE__ */ (0, V.jsx)(tE, {
           data: e,
           config: t,
           session: n,
@@ -46277,13 +46358,13 @@ function tE({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/components/findings/finding-rule-card.tsx
-function nE(e, t) {
+function rE(e, t) {
   if (!e) return "";
   let n = t.find((t) => String(t.check_id ?? t.id ?? "") === e);
   return Zl((n ? String(n.name ?? n.title ?? "") : "") || e);
 }
-function rE({ group: e, checks: t, onOpen: n }) {
-  let r = Ev(e), i = e.assets.length, { shown: a, remaining: o } = Cv(e.assets, 2), s = e.checkIds.length ? e.checkIds : e.checkId ? [e.checkId] : [], c = nE(s[0] ?? "", t), l = Math.max(0, s.length - 1), u = e.members.length, d = r ? `${window.location.pathname}${window.location.search}#${r}` : "#findings", f = i === 1 ? "affected asset" : "affected assets", p = e.members.length > 1 ? `Open ${e.title}, ${ia(e.worstSeverity)}, ${i} ${f}` : `Open finding ${e.title} on ${a[0] ?? "an unrecorded asset"}, ${ia(e.worstSeverity)}`;
+function iE({ group: e, checks: t, onOpen: n }) {
+  let r = Ev(e), i = e.assets.length, { shown: a, remaining: o } = Cv(e.assets, 2), s = e.checkIds.length ? e.checkIds : e.checkId ? [e.checkId] : [], c = rE(s[0] ?? "", t), l = Math.max(0, s.length - 1), u = e.members.length, d = r ? `${window.location.pathname}${window.location.search}#${r}` : "#findings", f = i === 1 ? "affected asset" : "affected assets", p = e.members.length > 1 ? `Open ${e.title}, ${ia(e.worstSeverity)}, ${i} ${f}` : `Open finding ${e.title} on ${a[0] ?? "an unrecorded asset"}, ${ia(e.worstSeverity)}`;
   return /* @__PURE__ */ (0, V.jsxs)("a", {
     className: "finding-row-primary finding-rule-card",
     href: d,
@@ -46344,11 +46425,11 @@ function rE({ group: e, checks: t, onOpen: n }) {
 }
 //#endregion
 //#region apps/web/react/src/components/findings/findings-list.tsx
-var iE = [
+var aE = [
   12,
   24,
   48
-], aE = [
+], oE = [
   {
     value: "severity",
     label: "Worst severity"
@@ -46373,23 +46454,23 @@ var iE = [
     value: "title",
     label: "Title A to Z"
   }
-], oE = "\n.findings-surface .findings-table .data-table { min-width: 920px; }\n.findings-surface .finding-row-primary { display: flex; min-width: 250px; min-height: 44px; flex-direction: column; justify-content: center; gap: var(--space-1); border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); color: inherit; text-decoration: none; }\n.findings-surface .finding-row-primary:hover { border-color: transparent; background: color-mix(in oklab, var(--accent), transparent 94%); }\n.findings-surface .finding-row-primary:focus-visible { outline: none; box-shadow: var(--focus-ring); }\n.findings-surface .finding-row-primary .fc-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); margin: 0; }\n.findings-surface .finding-row-primary .fc-headline strong { color: var(--fg); font-size: var(--text-sm); line-height: 1.35; }\n.findings-surface .finding-row-primary .fc-meta { margin: 0; overflow-wrap: anywhere; }\n.findings-surface .finding-row-primary .fc-facets { margin: 0; }\n.findings-surface .finding-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 3px; }\n.findings-surface .finding-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }\n.findings-surface .findings-result-count { margin: 0; color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }\n@media (pointer: coarse) {\n  .findings-surface .ft-tab { min-height: 44px; }\n}\n@media (max-width: 680px) {\n  .findings-surface .ft-controls { grid-template-columns: minmax(0, 1fr); }\n  .findings-surface .ft-status { width: 100%; overflow-x: auto; }\n  .findings-surface .ft-tab { flex: 1 0 auto; justify-content: center; }\n  .findings-surface .findings-pager { align-items: stretch; flex-direction: column; }\n}\n";
-function sE(e, t, n = "") {
+], sE = "\n.findings-surface .findings-table .data-table { min-width: 920px; }\n.findings-surface .finding-row-primary { display: flex; min-width: 250px; min-height: 44px; flex-direction: column; justify-content: center; gap: var(--space-1); border: 0; border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); color: inherit; text-decoration: none; }\n.findings-surface .finding-row-primary:hover { border-color: transparent; background: color-mix(in oklab, var(--accent), transparent 94%); }\n.findings-surface .finding-row-primary:focus-visible { outline: none; box-shadow: var(--focus-ring); }\n.findings-surface .finding-row-primary .fc-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); margin: 0; }\n.findings-surface .finding-row-primary .fc-headline strong { color: var(--fg); font-size: var(--text-sm); line-height: 1.35; }\n.findings-surface .finding-row-primary .fc-meta { margin: 0; overflow-wrap: anywhere; }\n.findings-surface .finding-row-primary .fc-facets { margin: 0; }\n.findings-surface .finding-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 3px; }\n.findings-surface .finding-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }\n.findings-surface .findings-result-count { margin: 0; color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }\n@media (pointer: coarse) {\n  .findings-surface .ft-tab { min-height: 44px; }\n}\n@media (max-width: 680px) {\n  .findings-surface .ft-controls { grid-template-columns: minmax(0, 1fr); }\n  .findings-surface .ft-status { width: 100%; overflow-x: auto; }\n  .findings-surface .ft-tab { flex: 1 0 auto; justify-content: center; }\n  .findings-surface .findings-pager { align-items: stretch; flex-direction: column; }\n}\n";
+function cE(e, t, n = "") {
   for (let n of t) {
     let t = e[n];
     if (t != null && t !== "") return String(t);
   }
   return n;
 }
-function cE(e, t) {
+function lE(e, t) {
   let n = C_(e);
   return t === "all" ? !0 : t === "open" ? n === "open" : t === "closed" ? n === "closed" || n === "resolved" : t !== "accepted" || n === "accepted" || n === "accepted_risk";
 }
-function lE(e) {
+function uE(e) {
   let t = e.toLowerCase();
   return t === "closed" || t === "resolved" ? "success" : t === "accepted" || t === "accepted_risk" ? "info" : t === "open" || t === "remediation_pending" ? "warn" : "muted";
 }
-function uE(e) {
+function dE(e) {
   let t = e.toLowerCase();
   return [
     "critical",
@@ -46398,10 +46479,10 @@ function uE(e) {
     "s2"
   ].includes(t) ? "danger" : ["medium", "s3"].includes(t) ? "warn" : "muted";
 }
-function dE(e) {
+function fE(e) {
   return vv(e, (e) => z(e));
 }
-function fE({ active: e, counts: t, onChange: n }) {
+function pE({ active: e, counts: t, onChange: n }) {
   return /* @__PURE__ */ (0, V.jsx)("div", {
     className: "ft-status",
     role: "group",
@@ -46423,7 +46504,7 @@ function fE({ active: e, counts: t, onChange: n }) {
     }, r))
   });
 }
-function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i = null, onRetry: a }) {
+function mE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i = null, onRetry: a }) {
   let [o, s] = (0, D.useState)("open"), [c, l] = (0, D.useState)("all"), [u, d] = (0, D.useState)("all"), [f, p] = (0, D.useState)("all"), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)(""), [v, y] = (0, D.useState)("severity"), [b, x] = (0, D.useState)(12), [S, C] = (0, D.useState)(0);
   (0, D.useEffect)(() => {
     let e = window.setTimeout(() => _(m.trim().toLowerCase()), 250);
@@ -46439,28 +46520,28 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
     v,
     b
   ]);
-  let w = (0, D.useMemo)(() => [...new Set(e.map((e) => sE(e, [
+  let w = (0, D.useMemo)(() => [...new Set(e.map((e) => cE(e, [
     "assignee",
     "owner",
     "rem_owner"
-  ], "unassigned")))].sort(), [e]), T = (0, D.useMemo)(() => [...new Set(e.map((e) => sE(e, ["severity"], "unknown")))].sort(), [e]), E = (0, D.useMemo)(() => new Map(n.map((e) => [sE(e, ["id"], ""), sE(e, ["name", "id"], "Unnamed group")])), [n]), O = (0, D.useMemo)(() => ({
-    open: e.filter((e) => cE(e, "open")).length,
-    closed: e.filter((e) => cE(e, "closed")).length,
-    accepted: e.filter((e) => cE(e, "accepted")).length,
+  ], "unassigned")))].sort(), [e]), T = (0, D.useMemo)(() => [...new Set(e.map((e) => cE(e, ["severity"], "unknown")))].sort(), [e]), E = (0, D.useMemo)(() => new Map(n.map((e) => [cE(e, ["id"], ""), cE(e, ["name", "id"], "Unnamed group")])), [n]), O = (0, D.useMemo)(() => ({
+    open: e.filter((e) => lE(e, "open")).length,
+    closed: e.filter((e) => lE(e, "closed")).length,
+    accepted: e.filter((e) => lE(e, "accepted")).length,
     all: e.length
   }), [e]), k = (0, D.useMemo)(() => e.filter((e) => {
-    if (!cE(e, o)) return !1;
-    let i = sE(e, ["severity"], "unknown"), a = sE(e, [
+    if (!lE(e, o)) return !1;
+    let i = cE(e, ["severity"], "unknown"), a = cE(e, [
       "assignee",
       "owner",
       "rem_owner"
-    ], "unassigned"), s = sE(e, ["target_group_id"], "");
+    ], "unassigned"), s = cE(e, ["target_group_id"], "");
     return c !== "all" && i !== c || u !== "all" && a !== u || f !== "all" && s !== f ? !1 : !g || [
-      sE(e, ["id"]),
-      sE(e, ["title", "summary"]),
+      cE(e, ["id"]),
+      cE(e, ["title", "summary"]),
       ov(e, t),
       lv(e, r, n),
-      sE(e, ["check_id"]),
+      cE(e, ["check_id"]),
       a,
       s,
       E.get(s) ?? ""
@@ -46494,7 +46575,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
     {
       key: "finding",
       label: "Finding",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)(rE, {
+      render: (e) => /* @__PURE__ */ (0, V.jsx)(iE, {
         group: e,
         checks: t,
         onOpen: te
@@ -46504,7 +46585,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
       key: "severity",
       label: "Worst severity",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
-        tone: uE(e.worstSeverity),
+        tone: dE(e.worstSeverity),
         children: ia(e.worstSeverity)
       })
     },
@@ -46552,7 +46633,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
       key: "sla",
       label: "SLA",
       render: (e) => {
-        let t = dE(e);
+        let t = fE(e);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "finding-cell-stack",
           children: [/* @__PURE__ */ (0, V.jsx)(W, {
@@ -46568,15 +46649,15 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
       render: (e) => {
         let t = Object.keys(e.statusCounts), n = C_(e.members[0] ?? {});
         return e.members.length === 1 || t.length === 1 ? e.members.length === 1 ? /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: lE(n),
+          tone: uE(n),
           children: n.replaceAll("_", " ")
         }) : /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: lE(n),
+          tone: uE(n),
           children: xv(e.statusCounts)
         }) : /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "finding-cell-stack",
           children: [/* @__PURE__ */ (0, V.jsx)(W, {
-            tone: lE(n),
+            tone: uE(n),
             children: n.replaceAll("_", " ")
           }), /* @__PURE__ */ (0, V.jsx)("small", { children: xv(e.statusCounts) })]
         });
@@ -46593,11 +46674,11 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "findings-surface",
     children: [
-      /* @__PURE__ */ (0, V.jsx)("style", { children: oE }),
+      /* @__PURE__ */ (0, V.jsx)("style", { children: sE }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "findings-toolbar",
         children: [
-          /* @__PURE__ */ (0, V.jsx)(fE, {
+          /* @__PURE__ */ (0, V.jsx)(pE, {
             active: o,
             counts: O,
             onChange: s
@@ -46661,10 +46742,10 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
                   value: "all",
                   label: "All groups"
                 }, ...n.flatMap((e) => {
-                  let t = sE(e, ["id"], "");
+                  let t = cE(e, ["id"], "");
                   return t ? [{
                     value: t,
-                    label: sE(e, ["name", "id"], t)
+                    label: cE(e, ["name", "id"], t)
                   }] : [];
                 })],
                 onChange: p
@@ -46673,7 +46754,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
                 className: "ft-field",
                 label: "Sort",
                 value: v,
-                options: aE,
+                options: oE,
                 onChange: (e) => y(e)
               })
             ]
@@ -46735,7 +46816,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
             /* @__PURE__ */ (0, V.jsx)(Ic, {
               label: "Rows",
               value: String(b),
-              options: iE.map((e) => ({
+              options: aE.map((e) => ({
                 value: String(e),
                 label: String(e)
               })),
@@ -46774,7 +46855,7 @@ function pE({ findings: e, checks: t, targetGroups: n, targets: r, loadError: i 
 }
 //#endregion
 //#region apps/web/react/src/components/runs/runs-soc-gate.tsx
-function mE(e, t, n = "—") {
+function hE(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -46782,7 +46863,7 @@ function mE(e, t, n = "—") {
   }
   return n;
 }
-function hE(e, t, n = "—") {
+function gE(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -46790,26 +46871,26 @@ function hE(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function gE(e) {
+function _E(e) {
   let t = Array.isArray(e.requested_scenario_families) ? String(e.requested_scenario_families[0] ?? "") : "", n = Ov.find((e) => e.id === t), r = e.requested_limits && typeof e.requested_limits == "object" && !Array.isArray(e.requested_limits) ? e.requested_limits : {};
   return [n && typeof r[n.limit.field] == "number" ? `${r[n.limit.field]} ${n.limit.unit}` : "", typeof r.max_duration_minutes == "number" ? `${r.max_duration_minutes} minutes` : ""].filter(Boolean).join(" · ") || "—";
 }
-function _E(e, t) {
-  return mE(e.targetGroups.find((e) => mE(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
+function vE(e, t) {
+  return hE(e.targetGroups.find((e) => hE(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
 }
-function vE(e) {
+function yE(e) {
   let t = e.trim().toLowerCase();
   return t === "accepted" ? "success" : t === "missing" || !t || t === "—" ? "danger" : "warn";
 }
-function yE(e) {
-  let t = e.authorization_pack_status, n = t && typeof t == "object" && !Array.isArray(t) ? t : {}, r = mE(n, ["overall"], "missing"), i = Array.isArray(n.requirements) ? n.requirements : [], a = i.filter((e) => mE(e, ["status"], "").toLowerCase() === "accepted").length;
+function bE(e) {
+  let t = e.authorization_pack_status, n = t && typeof t == "object" && !Array.isArray(t) ? t : {}, r = hE(n, ["overall"], "missing"), i = Array.isArray(n.requirements) ? n.requirements : [], a = i.filter((e) => hE(e, ["status"], "").toLowerCase() === "accepted").length;
   return {
     overall: r,
     label: i.length > 0 && r.toLowerCase() !== "accepted" ? `${R(a)}/${R(i.length)} accepted` : r.replace(/_/g, " "),
     detail: i.length > 0 ? `${R(a)} of ${R(i.length)} required authorization artifacts accepted` : `Authorization pack status: ${r}`
   };
 }
-function bE(e) {
+function xE(e) {
   if (!Fv(e)) return {
     label: "not required",
     detail: "No provider approval requirement declared",
@@ -46821,7 +46902,7 @@ function bE(e) {
     detail: "Provider approval evidence has not been attached",
     tone: "danger"
   };
-  let n = t.map((e) => mE(e, ["status"], "missing").toLowerCase()), r = t.map((e) => mE(e, ["provider_name"], "")).filter((e) => e && e !== "—").join(", ");
+  let n = t.map((e) => hE(e, ["status"], "missing").toLowerCase()), r = t.map((e) => hE(e, ["provider_name"], "")).filter((e) => e && e !== "—").join(", ");
   if (n.every((e) => e === "accepted")) return {
     label: "accepted",
     detail: r || "All required provider approvals accepted",
@@ -46838,7 +46919,7 @@ function bE(e) {
     tone: "warn"
   };
 }
-function xE(e) {
+function SE(e) {
   let t = e.trim().toLowerCase();
   return ["approved", "scheduled"].includes(t) ? "info" : [
     "running",
@@ -46856,7 +46937,7 @@ function xE(e) {
     "canceled"
   ].includes(t) ? "success" : "muted";
 }
-function SE({ data: e, config: t, session: n }) {
+function CE({ data: e, config: t, session: n }) {
   let [r, i] = (0, D.useState)(null), a = n.principal === "staff";
   return (0, D.useEffect)(() => {
     let e = !1;
@@ -46884,7 +46965,7 @@ function SE({ data: e, config: t, session: n }) {
             key: "request",
             label: "Request",
             render: (e) => {
-              let t = mE(e, ["id"], ""), n = mE(e, [
+              let t = hE(e, ["id"], ""), n = hE(e, [
                 "objective",
                 "reason",
                 "name"
@@ -46904,7 +46985,7 @@ function SE({ data: e, config: t, session: n }) {
             key: "policy",
             label: "Policy",
             render: (e) => {
-              let t = mE(e, ["policy_id"], ""), n = mE(e, ["requested_scenario_families"], "soc_gated");
+              let t = hE(e, ["policy_id"], ""), n = hE(e, ["requested_scenario_families"], "soc_gated");
               return /* @__PURE__ */ (0, V.jsx)("span", {
                 title: t || void 0,
                 children: t ? "Scheduled policy" : ql(n)
@@ -46914,20 +46995,20 @@ function SE({ data: e, config: t, session: n }) {
           {
             key: "group",
             label: "Target group",
-            render: (t) => _E(e, mE(t, ["target_group_id"]))
+            render: (t) => vE(e, hE(t, ["target_group_id"]))
           },
           {
             key: "limits",
             label: "Governed limits",
-            render: (e) => gE(e)
+            render: (e) => _E(e)
           },
           {
             key: "pack",
             label: "Authorization pack",
             render: (e) => {
-              let t = yE(e);
+              let t = bE(e);
               return /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: vE(t.overall),
+                tone: yE(t.overall),
                 title: t.detail,
                 children: t.label
               });
@@ -46937,7 +47018,7 @@ function SE({ data: e, config: t, session: n }) {
             key: "provider",
             label: "Provider approval",
             render: (e) => {
-              let t = bE(e);
+              let t = xE(e);
               return /* @__PURE__ */ (0, V.jsx)(W, {
                 tone: t.tone,
                 title: t.detail,
@@ -46949,9 +47030,9 @@ function SE({ data: e, config: t, session: n }) {
             key: "state",
             label: "State",
             render: (e) => {
-              let t = mE(e, ["state"]);
+              let t = hE(e, ["state"]);
               return /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: xE(t),
+                tone: SE(t),
                 title: `Recorded request state: ${ql(t)}`,
                 children: ql(t)
               });
@@ -46961,7 +47042,7 @@ function SE({ data: e, config: t, session: n }) {
             key: "window",
             label: "Window",
             render: (e) => {
-              let t = hE(e, ["requested_window", "window_start"], ""), n = hE(e, ["scheduled_window", "window_start"], ""), r = n && n !== "—" ? n : t;
+              let t = gE(e, ["requested_window", "window_start"], ""), n = gE(e, ["scheduled_window", "window_start"], ""), r = n && n !== "—" ? n : t;
               return r && r !== "—" ? z(r) : "unscheduled";
             }
           }
@@ -46975,7 +47056,7 @@ function SE({ data: e, config: t, session: n }) {
     })]
   });
 }
-function CE({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, onStartScan: r, refreshBusy: i, safeRunBusy: a, safeRunDisabled: o }) {
+function wE({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, onStartScan: r, refreshBusy: i, safeRunBusy: a, safeRunDisabled: o }) {
   let s = o ? "Vector library launch is unavailable until a declared target group and customer-runnable bounded check are ready." : "";
   return /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
     r ? /* @__PURE__ */ (0, V.jsx)(H, {
@@ -47003,7 +47084,7 @@ function CE({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, onStartScan: r, 
 }
 //#endregion
 //#region apps/web/react/src/lib/checks-helpers.ts
-var wE = [
+var TE = [
   {
     id: "all",
     label: "All"
@@ -47016,14 +47097,14 @@ var wE = [
     id: "soc",
     label: "SOC"
   }
-], TE = /* @__PURE__ */ new Set([
+], EE = /* @__PURE__ */ new Set([
   "origin",
   "path",
   "l7",
   "dns",
   "l3_l4"
 ]);
-function EE(e, t, n = "") {
+function DE(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -47031,7 +47112,7 @@ function EE(e, t, n = "") {
   }
   return n;
 }
-function DE(e, t, n = "") {
+function OE(e, t, n = "") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -47039,42 +47120,42 @@ function DE(e, t, n = "") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function OE(e) {
-  let t = EE(e, ["safety_class"], "");
+function kE(e) {
+  let t = DE(e, ["safety_class"], "");
   return t === "soc_gated" || t === "soc_only";
 }
-function kE(e) {
-  return EE(e, ["safety_class"]) === "safe";
+function AE(e) {
+  return DE(e, ["safety_class"]) === "safe";
 }
-function AE(e, t) {
-  return t === "safe" ? e.filter((e) => kE(e)) : t === "soc" ? e.filter((e) => OE(e)) : e;
-}
-function jE(e) {
-  let t = EE(e, ["vector_family"]);
-  if (t === "origin") return !0;
-  let n = EE(e, ["check_id"]);
-  if (n.includes("origin_bypass") || n.includes("host_sni_bypass")) return !0;
-  let r = DE(e, ["probe_profile", "scenario_family"]);
-  return t === "waf" && r === "origin_bypass";
+function jE(e, t) {
+  return t === "safe" ? e.filter((e) => AE(e)) : t === "soc" ? e.filter((e) => kE(e)) : e;
 }
 function ME(e) {
-  let t = EE(e, ["vector_family"]);
+  let t = DE(e, ["vector_family"]);
+  if (t === "origin") return !0;
+  let n = DE(e, ["check_id"]);
+  if (n.includes("origin_bypass") || n.includes("host_sni_bypass")) return !0;
+  let r = OE(e, ["probe_profile", "scenario_family"]);
+  return t === "waf" && r === "origin_bypass";
+}
+function NE(e) {
+  let t = DE(e, ["vector_family"]);
   return t === "l7" || t === "waf";
 }
-function NE(e, t) {
+function PE(e, t) {
   if (t === "all") return e;
   if (t === "custom") return [];
   if (t === "recommended") {
-    let t = e.filter((e) => kE(e)), n = t.filter((e) => TE.has(EE(e, ["vector_family"])));
+    let t = e.filter((e) => AE(e)), n = t.filter((e) => EE.has(DE(e, ["vector_family"])));
     return (n.length ? n : t).slice(0, 20);
   }
-  return t === "origin-bypass" ? e.filter((e) => jE(e)) : t === "l3l4" ? e.filter((e) => EE(e, ["vector_family"]) === "l3_l4") : t === "dns" ? e.filter((e) => EE(e, ["vector_family"]) === "dns") : t === "l7api" ? e.filter((e) => ME(e)) : t === "protocols" ? e.filter((e) => ["protocol", "tls"].includes(EE(e, ["vector_family"]))) : t === "reflection-amplification" ? e.filter((e) => ["reflection", "amplification"].includes(EE(e, ["vector_family"]))) : t === "exploit" ? e.filter((e) => EE(e, ["vector_family"]) === "exploit") : t === "delivery-pattern" ? e.filter((e) => EE(e, ["vector_family"]) === "pattern") : t === "operations" ? e.filter((e) => EE(e, ["vector_family"]) === "operations") : t === "high-scale" ? e.filter((e) => OE(e)) : e;
+  return t === "origin-bypass" ? e.filter((e) => ME(e)) : t === "l3l4" ? e.filter((e) => DE(e, ["vector_family"]) === "l3_l4") : t === "dns" ? e.filter((e) => DE(e, ["vector_family"]) === "dns") : t === "l7api" ? e.filter((e) => NE(e)) : t === "protocols" ? e.filter((e) => ["protocol", "tls"].includes(DE(e, ["vector_family"]))) : t === "reflection-amplification" ? e.filter((e) => ["reflection", "amplification"].includes(DE(e, ["vector_family"]))) : t === "exploit" ? e.filter((e) => DE(e, ["vector_family"]) === "exploit") : t === "delivery-pattern" ? e.filter((e) => DE(e, ["vector_family"]) === "pattern") : t === "operations" ? e.filter((e) => DE(e, ["vector_family"]) === "operations") : t === "high-scale" ? e.filter((e) => kE(e)) : e;
 }
-function PE(e, t, n = "all") {
-  return NE(AE(e, n), t);
+function FE(e, t, n = "all") {
+  return PE(jE(e, n), t);
 }
-function FE(e) {
-  let t = e.filter((e) => kE(e)).length, n = e.filter((e) => OE(e)).length;
+function IE(e) {
+  let t = e.filter((e) => AE(e)).length, n = e.filter((e) => kE(e)).length;
   return {
     all: e.length,
     safe: t,
@@ -47083,7 +47164,7 @@ function FE(e) {
 }
 //#endregion
 //#region apps/web/react/src/lib/waf-helpers.ts
-var IE = [
+var LE = [
   {
     id: "overview",
     label: "Overview"
@@ -47096,15 +47177,15 @@ var IE = [
     id: "assets",
     label: "Assets"
   }
-], LE = "astranull.design-variant.", RE = "variant";
-function zE(e) {
-  return `${LE}${e}`;
-}
+], RE = "astranull.design-variant.", zE = "variant";
 function BE(e) {
+  return `${RE}${e}`;
+}
+function VE(e) {
   let t = String(e ?? "").trim().toLowerCase();
   return t === "refined" || t === "classic" ? t : null;
 }
-function VE() {
+function HE() {
   if (typeof window > "u") return {
     route: "",
     params: null
@@ -47118,66 +47199,66 @@ function VE() {
     params: null
   };
 }
-function HE(e) {
-  let { route: t, params: n } = VE();
-  return t === e ? BE(n?.get(RE)) : null;
-}
 function UE(e) {
+  let { route: t, params: n } = HE();
+  return t === e ? VE(n?.get(zE)) : null;
+}
+function WE(e) {
   try {
-    return BE(window.localStorage.getItem(zE(e)));
+    return VE(window.localStorage.getItem(BE(e)));
   } catch {
     return null;
   }
 }
-function WE(e, t) {
+function GE(e, t) {
   try {
-    window.localStorage.setItem(zE(e), t);
+    window.localStorage.setItem(BE(e), t);
   } catch {}
 }
-function GE(e, t) {
+function KE(e, t) {
   try {
     let n = window.location.hash.replace(/^#/, ""), r = n.indexOf("?");
     if (r < 0 || n.slice(0, r).replace(/^\//, "") !== e) return;
     let i = new URLSearchParams(n.slice(r + 1));
-    if (!i.has(RE) || i.get(RE) === t) return;
-    i.set(RE, t);
+    if (!i.has(zE) || i.get(zE) === t) return;
+    i.set(zE, t);
     let a = `#${n.slice(0, r)}?${i.toString()}`;
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${a}`);
   } catch {}
 }
-function KE(e) {
-  if (typeof window > "u") return "classic";
-  let t = HE(e);
-  return t ? (WE(e, t), t) : UE(e) ?? "classic";
-}
 function qE(e) {
-  let [t, n] = (0, D.useState)(() => KE(e));
+  if (typeof window > "u") return "classic";
+  let t = UE(e);
+  return t ? (GE(e, t), t) : WE(e) ?? "classic";
+}
+function JE(e) {
+  let [t, n] = (0, D.useState)(() => qE(e));
   return (0, D.useEffect)(() => {
-    n(KE(e));
+    n(qE(e));
     function t() {
-      let t = HE(e);
-      t && (WE(e, t), n(t));
+      let t = UE(e);
+      t && (GE(e, t), n(t));
     }
     return window.addEventListener("hashchange", t), () => window.removeEventListener("hashchange", t);
   }, [e]), [t, (0, D.useCallback)((t) => {
-    n(t), WE(e, t), GE(e, t);
+    n(t), GE(e, t), KE(e, t);
   }, [e])];
 }
 //#endregion
 //#region apps/web/react/src/components/ui/variant-switch.tsx
-var JE = [{
+var YE = [{
   id: "classic",
   label: "Classic"
 }, {
   id: "refined",
   label: "Refined"
 }];
-function YE({ value: e, onChange: t, label: n = "Page design", className: r }) {
+function XE({ value: e, onChange: t, label: n = "Page design", className: r }) {
   return /* @__PURE__ */ (0, V.jsx)("div", {
     className: Qi("variant-switch", r),
     role: "group",
     "aria-label": n,
-    children: JE.map((n) => {
+    children: YE.map((n) => {
       let r = n.id === e;
       return /* @__PURE__ */ (0, V.jsx)("button", {
         type: "button",
@@ -47193,7 +47274,7 @@ function YE({ value: e, onChange: t, label: n = "Page design", className: r }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/dashboard-metrics.ts
-function XE(e, t, n = "") {
+function ZE(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -47201,7 +47282,7 @@ function XE(e, t, n = "") {
   }
   return n;
 }
-function ZE(e, t) {
+function QE(e, t) {
   if (!e) return null;
   for (let n of t) {
     let t = e[n];
@@ -47209,22 +47290,22 @@ function ZE(e, t) {
   }
   return null;
 }
-function QE(e, t = 5) {
+function $E(e, t = 5) {
   return [...(Array.isArray(e.state?.recent_runs) ? e.state.recent_runs : null) ?? e.runs].slice(-t).reverse();
 }
-var $E = /* @__PURE__ */ new Set([
+var eD = /* @__PURE__ */ new Set([
   "dns_verified",
   "provider_verified",
   "user_confirmed",
   "verified"
-]), eD = /* @__PURE__ */ new Set([
+]), tD = /* @__PURE__ */ new Set([
   "pass",
   "passed",
   "protected",
   "success",
   "ok",
   "allowed_as_expected"
-]), tD = /* @__PURE__ */ new Set([
+]), nD = /* @__PURE__ */ new Set([
   "gap",
   "fail",
   "failed",
@@ -47232,25 +47313,25 @@ var $E = /* @__PURE__ */ new Set([
   "bypassable",
   "edge_exposed",
   "unprotected"
-]), nD = /* @__PURE__ */ new Set([
+]), rD = /* @__PURE__ */ new Set([
   "",
   "pending",
   "planned",
   "running",
   "collecting"
 ]);
-function rD(e) {
+function iD(e) {
   let t = e.verification;
   if (t && typeof t == "object" && !Array.isArray(t)) {
-    let e = XE(t, ["state"]);
+    let e = ZE(t, ["state"]);
     if (e) return e.toLowerCase();
   }
-  return XE(e, ["verification_state"], "unverified").toLowerCase();
-}
-function iD(e) {
-  return $E.has(rD(e));
+  return ZE(e, ["verification_state"], "unverified").toLowerCase();
 }
 function aD(e) {
+  return eD.has(iD(e));
+}
+function oD(e) {
   let t = e.tags;
   if (!Array.isArray(t)) return [];
   let n = [];
@@ -47260,77 +47341,77 @@ function aD(e) {
   }
   return n;
 }
-function oD(e) {
+function sD(e) {
   let t = e.verdict;
-  return typeof t == "string" ? t.trim().toLowerCase() : t && typeof t == "object" && !Array.isArray(t) ? XE(t, [
+  return typeof t == "string" ? t.trim().toLowerCase() : t && typeof t == "object" && !Array.isArray(t) ? ZE(t, [
     "verdict",
     "status",
     "result"
-  ]).trim().toLowerCase() : XE(e, ["verdict"]).trim().toLowerCase();
-}
-function sD(e) {
-  let t = e.trim().toLowerCase();
-  return nD.has(t) ? "none" : eD.has(t) ? "pass" : tD.has(t) ? "gap" : "review";
+  ]).trim().toLowerCase() : ZE(e, ["verdict"]).trim().toLowerCase();
 }
 function cD(e) {
-  return String(e.completed_at ?? e.started_at ?? e.created_at ?? e.updated_at ?? "");
+  let t = e.trim().toLowerCase();
+  return rD.has(t) ? "none" : tD.has(t) ? "pass" : nD.has(t) ? "gap" : "review";
 }
 function lD(e) {
-  let t = oD(e);
-  if (nD.has(t)) return !1;
-  let n = e.verdict && typeof e.verdict == "object" && !Array.isArray(e.verdict) ? e.verdict : null;
-  if (n && XE(n, ["id"]) !== "" || XE(e, ["verdict_id"]) !== "") return !0;
-  let r = ZE(e, ["evidence_count"]), i = Array.isArray(e.evidence_ids) ? e.evidence_ids : Array.isArray(n?.evidence_ids) ? n.evidence_ids : [];
-  return r !== null && r > 0 || i.length > 0 || XE(e, ["evidence_id"]) !== "";
+  return String(e.completed_at ?? e.started_at ?? e.created_at ?? e.updated_at ?? "");
 }
 function uD(e) {
+  let t = sD(e);
+  if (rD.has(t)) return !1;
+  let n = e.verdict && typeof e.verdict == "object" && !Array.isArray(e.verdict) ? e.verdict : null;
+  if (n && ZE(n, ["id"]) !== "" || ZE(e, ["verdict_id"]) !== "") return !0;
+  let r = QE(e, ["evidence_count"]), i = Array.isArray(e.evidence_ids) ? e.evidence_ids : Array.isArray(n?.evidence_ids) ? n.evidence_ids : [];
+  return r !== null && r > 0 || i.length > 0 || ZE(e, ["evidence_id"]) !== "";
+}
+function dD(e) {
   return [
     "completed",
     "verdicted",
     "finalized"
-  ].includes(XE(e, ["status"]).toLowerCase());
+  ].includes(ZE(e, ["status"]).toLowerCase());
 }
-function dD(e, t, n = {}) {
+function fD(e, t, n = {}) {
   let r = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Map();
   for (let t of e.runs) {
-    let e = XE(t, ["target_id"]);
+    let e = ZE(t, ["target_id"]);
     if (!e) continue;
-    let n = cD(t);
-    if (uD(t) || lD(t)) {
+    let n = lD(t);
+    if (dD(t) || uD(t)) {
       let r = i.get(e);
-      (!r || n.localeCompare(cD(r)) >= 0) && i.set(e, t);
+      (!r || n.localeCompare(lD(r)) >= 0) && i.set(e, t);
     }
-    if (!lD(t)) continue;
+    if (!uD(t)) continue;
     let a = r.get(e);
-    (!a || n.localeCompare(cD(a)) >= 0) && r.set(e, t);
+    (!a || n.localeCompare(lD(a)) >= 0) && r.set(e, t);
   }
   let a = /* @__PURE__ */ new Map();
   for (let t of n.openFindings ?? e.findings) {
-    let e = XE(t, ["target_id"]);
+    let e = ZE(t, ["target_id"]);
     e && w_(t) && a.set(e, (a.get(e) ?? 0) + 1);
   }
   n.openCounts?.forEach((e, t) => a.set(t, e));
   let o = e.targets.map((e) => {
-    let t = XE(e, ["id", "target_id"]), n = a.get(t) ?? 0, o = XE(e, ["target_group_id"]), s = r.get(t) ?? null, c = i.get(t) ?? null, l = s ? oD(s) : "", u = s ? c && c !== s && !lD(c) ? "earlier" : "latest" : c ? "unbacked" : "none";
+    let t = ZE(e, ["id", "target_id"]), n = a.get(t) ?? 0, o = ZE(e, ["target_group_id"]), s = r.get(t) ?? null, c = i.get(t) ?? null, l = s ? sD(s) : "", u = s ? c && c !== s && !uD(c) ? "earlier" : "latest" : c ? "unbacked" : "none";
     return {
       id: t,
-      value: XE(e, [
+      value: ZE(e, [
         "value",
         "hostname",
         "name"
       ], "Unnamed target"),
-      kind: XE(e, ["kind"], "fqdn").toLowerCase(),
+      kind: ZE(e, ["kind"], "fqdn").toLowerCase(),
       groupId: o,
-      groupName: XE(e, ["target_group_name", "target_group_id"], ""),
-      tags: aD(e),
-      verified: iD(e),
-      verificationState: rD(e),
+      groupName: ZE(e, ["target_group_name", "target_group_id"], ""),
+      tags: oD(e),
+      verified: aD(e),
+      verificationState: iD(e),
       verdict: l,
       verdictBasis: u,
-      verdictRunId: s ? XE(s, ["id"]) : "",
-      verdictStatus: sD(l) === "pass" && n > 0 ? "review" : sD(l),
+      verdictRunId: s ? ZE(s, ["id"]) : "",
+      verdictStatus: cD(l) === "pass" && n > 0 ? "review" : cD(l),
       openFindings: n,
-      lastValidatedAt: XE(e, ["last_validated_at", "last_validation_at"])
+      lastValidatedAt: ZE(e, ["last_validated_at", "last_validation_at"])
     };
   }), s = {
     gap: 0,
@@ -47340,14 +47421,14 @@ function dD(e, t, n = {}) {
   };
   return o.sort((e, t) => s[e.verdictStatus] === s[t.verdictStatus] ? e.value.localeCompare(t.value) : s[e.verdictStatus] - s[t.verdictStatus]), typeof t == "number" ? o.slice(0, t) : o;
 }
-var fD = {
+var pD = {
   critical: "Critical (S1)",
   high: "High (S2)",
   medium: "Medium (S3)",
   low: "Low or info (S4)",
   unrecorded: "Severity not recorded"
 };
-function pD(e) {
+function mD(e) {
   let t = e.trim().toLowerCase();
   return ["s1", "critical"].includes(t) ? "critical" : ["s2", "high"].includes(t) ? "high" : [
     "s3",
@@ -47359,17 +47440,17 @@ function pD(e) {
     "info"
   ].includes(t) ? "low" : "unrecorded";
 }
-var mD = {
+var hD = {
   critical: "Critical",
   high: "High",
   medium: "Medium",
   low: "Low",
   unrecorded: "Not recorded"
 };
-function hD(e) {
-  return mD[pD(e)];
-}
 function gD(e) {
+  return hD[mD(e)];
+}
+function _D(e) {
   let t = [
     "critical",
     "high",
@@ -47381,7 +47462,7 @@ function gD(e) {
     total: n,
     slices: t.map((t) => ({
       key: t,
-      label: fD[t],
+      label: pD[t],
       count: e[t] ?? 0,
       share: n > 0 ? Math.round((e[t] ?? 0) / n * 100) : 0
     }))
@@ -47389,14 +47470,14 @@ function gD(e) {
 }
 //#endregion
 //#region apps/web/react/src/pages/refined/runs-refined.tsx
-var _D = "—";
-function vD(e, t) {
-  return (0, D.isValidElement)(e) && e.type === "span" && e.props.className === "muted" && e.props.children === _D ? /* @__PURE__ */ (0, V.jsx)("span", {
+var vD = "—";
+function yD(e, t) {
+  return (0, D.isValidElement)(e) && e.type === "span" && e.props.className === "muted" && e.props.children === vD ? /* @__PURE__ */ (0, V.jsx)("span", {
     className: "rf-quiet",
     children: t
   }) : e;
 }
-function yD(e) {
+function bD(e) {
   return e.map((e) => {
     let t = e.key === "duration" ? (e) => /* @__PURE__ */ (0, V.jsx)("code", {
       className: "rf-duration",
@@ -47406,17 +47487,17 @@ function yD(e) {
       ...e,
       render: (r) => /* @__PURE__ */ (0, V.jsx)("div", {
         className: `rf-cell rf-cell-${e.key}`,
-        children: vD(t(r), n)
+        children: yD(t(r), n)
       })
     };
   });
 }
-function bD(e, t) {
+function xD(e, t) {
   return (0, D.useMemo)(() => {
     let n = 0, r = 0, i = 0;
     for (let a of e) {
       if (!kg(a, t)) continue;
-      let e = sD(Og(a));
+      let e = cD(Og(a));
       e === "pass" ? n += 1 : e === "gap" ? r += 1 : e === "review" && (i += 1);
     }
     return {
@@ -47427,8 +47508,8 @@ function bD(e, t) {
     };
   }, [e, t]);
 }
-function xD(e) {
-  let { data: t, message: n, error: r } = e, [i, a] = (0, D.useState)("history"), o = e.inFlightRunCount > 0 || e.activeScanCount > 0, s = bD(t.runs, t.evidence), c = !!t.loadErrors.runs && t.runs.length === 0, l = !!t.loadErrors.validationScans && t.validationScans.length === 0, u = t.validationScans.filter((e) => e.status === "scheduled").length, d = yD(e.runColumns), f = !e.canOpenVectorLibrary && e.startDisabledReason ? `Open the vector library once ready. ${e.startDisabledReason}` : "Customer-safe runs start in the vector library, where you select the exact target group, target, vector, and mapped bounded check.", p = !e.canOpenVectorLibrary && !!e.startDisabledReason;
+function SD(e) {
+  let { data: t, message: n, error: r } = e, [i, a] = (0, D.useState)("history"), o = e.inFlightRunCount > 0 || e.activeScanCount > 0, s = xD(t.runs, t.evidence), c = !!t.loadErrors.runs && t.runs.length === 0, l = !!t.loadErrors.validationScans && t.validationScans.length === 0, u = t.validationScans.filter((e) => e.status === "scheduled").length, d = bD(e.runColumns), f = !e.canOpenVectorLibrary && e.startDisabledReason ? `Open the vector library once ready. ${e.startDisabledReason}` : "Customer-safe runs start in the vector library, where you select the exact target group, target, vector, and mapped bounded check.", p = !e.canOpenVectorLibrary && !!e.startDisabledReason;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content refined rf-runs",
     children: [
@@ -47449,7 +47530,7 @@ function xD(e) {
           ]
         }), /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "rf-header-actions",
-          children: [/* @__PURE__ */ (0, V.jsx)(YE, {
+          children: [/* @__PURE__ */ (0, V.jsx)(XE, {
             value: e.variant,
             onChange: e.onVariantChange
           }), e.headerActions]
@@ -47671,14 +47752,14 @@ function xD(e) {
 }
 //#endregion
 //#region apps/web/react/src/components/findings/finding-card.tsx
-function SD(e, t, n = "") {
+function CD(e, t, n = "") {
   for (let n of t) {
     let t = e[n];
     if (t != null && t !== "") return String(t);
   }
   return n;
 }
-function CD(e) {
+function wD(e) {
   let t = e.trim().toLowerCase();
   return [
     "pass",
@@ -47697,8 +47778,8 @@ function CD(e) {
     "inconclusive"
   ].includes(t) ? "warn" : "info";
 }
-function wD({ finding: e, checks: t, targetGroups: n, targets: r, active: i = !1, onOpen: a }) {
-  let o = SD(e, ["id"], ""), s = ru(e, r, t), c = SD(e, ["severity"], "unknown"), l = C_(e), u = SD(e, ["verdict"], ""), d = SD(e, ["check_id", "check"], ""), f = t.find((e) => SD(e, ["check_id", "id"]) === d), p = d ? Zl(SD(f ?? {}, ["name", "title"], d)) : "", m = SD(e, ["target_group_id"], ""), h = SD(n.find((e) => SD(e, ["id"]) === m) ?? {}, ["name", "id"], m || "Ungrouped"), g = e.created_at ?? e.opened_at, _ = o ? Zf("finding-detail", o) : "#findings";
+function TD({ finding: e, checks: t, targetGroups: n, targets: r, active: i = !1, onOpen: a }) {
+  let o = CD(e, ["id"], ""), s = ru(e, r, t), c = CD(e, ["severity"], "unknown"), l = C_(e), u = CD(e, ["verdict"], ""), d = CD(e, ["check_id", "check"], ""), f = t.find((e) => CD(e, ["check_id", "id"]) === d), p = d ? Zl(CD(f ?? {}, ["name", "title"], d)) : "", m = CD(e, ["target_group_id"], ""), h = CD(n.find((e) => CD(e, ["id"]) === m) ?? {}, ["name", "id"], m || "Ungrouped"), g = e.created_at ?? e.opened_at, _ = o ? Zf("finding-detail", o) : "#findings";
   return /* @__PURE__ */ (0, V.jsxs)("a", {
     className: `finding-card finding-row-primary${i ? " is-active" : ""}`,
     href: _,
@@ -47712,7 +47793,7 @@ function wD({ finding: e, checks: t, targetGroups: n, targets: r, active: i = !1
       /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "fc-headline",
         children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: s }), u ? /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: CD(u),
+          tone: wD(u),
           title: `Recorded verdict: ${eu(u)}`,
           children: eu(u)
         }) : null]
@@ -47766,12 +47847,12 @@ function wD({ finding: e, checks: t, targetGroups: n, targets: r, active: i = !1
 }
 //#endregion
 //#region apps/web/react/src/lib/finding-groups.mjs
-var TD = Object.freeze({
+var ED = Object.freeze({
   critical: 24,
   high: 48,
   medium: 72,
   low: 168
-}), ED = 168, DD = 864e5, OD = 36e5, kD = Object.freeze({
+}), DD = 168, OD = 864e5, kD = 36e5, AD = Object.freeze({
   critical: 5,
   s1: 5,
   high: 4,
@@ -47782,11 +47863,11 @@ var TD = Object.freeze({
   low: 2,
   s4: 2,
   info: 1
-}), AD = /^Finding:\s*([a-z][a-z0-9_-]*)\s+on\s+(.+)$/i;
-function jD(e) {
+}), jD = /^Finding:\s*([a-z][a-z0-9_-]*)\s+on\s+(.+)$/i;
+function MD(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : {};
 }
-function MD(e, t) {
+function ND(e, t) {
   for (let n of t) {
     let t = e[n];
     if (t != null && typeof t != "object") {
@@ -47796,95 +47877,95 @@ function MD(e, t) {
   }
   return "";
 }
-function ND(e) {
+function PD(e) {
   if (!e) return null;
   let t = Date.parse(String(e));
   return Number.isFinite(t) ? t : null;
 }
-function PD(e) {
-  return kD[String(e ?? "").trim().toLowerCase()] ?? 0;
-}
 function FD(e) {
-  let t = String(e ?? "").trim().toLowerCase();
-  return TD[ID[t] ?? t] ?? ED;
+  return AD[String(e ?? "").trim().toLowerCase()] ?? 0;
 }
-var ID = Object.freeze({
+function ID(e) {
+  let t = String(e ?? "").trim().toLowerCase();
+  return ED[LD[t] ?? t] ?? DD;
+}
+var LD = Object.freeze({
   s1: "critical",
   s2: "high",
   s3: "medium",
   moderate: "medium",
   s4: "low"
 });
-function LD(e) {
-  let t = C_(jD(e));
+function RD(e) {
+  let t = C_(MD(e));
   return t === "open" ? "open" : t === "accepted" || t === "accepted_risk" ? "accepted" : t === "closed" || t === "resolved" ? "closed" : "other";
 }
-function RD(e) {
+function zD(e) {
   if (typeof e.verdict == "string" && e.verdict.trim()) return e.verdict.trim().toLowerCase();
-  let t = jD(e.verdict), n = MD(e, [
+  let t = MD(e.verdict), n = ND(e, [
     "outcome",
     "result",
     "reason_code"
-  ]) || MD(t, [
+  ]) || ND(t, [
     "verdict",
     "result",
     "status"
   ]);
   if (n) return n.toLowerCase();
-  let r = MD(e, [
+  let r = ND(e, [
     "title",
     "summary",
     "label"
-  ]).match(AD);
+  ]).match(jD);
   return r ? String(r[1]).toLowerCase() : "";
 }
-function zD(e) {
+function BD(e) {
   return e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function BD(e, t) {
-  let n = MD(e, [
+function VD(e, t) {
+  let n = ND(e, [
     "title",
     "summary",
     "label"
   ]);
   if (!n) return "";
-  let r = jD(e.target), i = [
-    MD(e, ["target_id"]),
-    MD(e, ["target_hostname"]),
-    MD(e, ["target_value"]),
-    MD(r, ["hostname"]),
-    MD(r, ["value"]),
-    MD(r, ["name"]),
-    MD(t ?? {}, ["hostname"]),
-    MD(t ?? {}, ["value"]),
-    MD(t ?? {}, ["name"]),
-    MD(t ?? {}, ["label"])
+  let r = MD(e.target), i = [
+    ND(e, ["target_id"]),
+    ND(e, ["target_hostname"]),
+    ND(e, ["target_value"]),
+    ND(r, ["hostname"]),
+    ND(r, ["value"]),
+    ND(r, ["name"]),
+    ND(t ?? {}, ["hostname"]),
+    ND(t ?? {}, ["value"]),
+    ND(t ?? {}, ["name"]),
+    ND(t ?? {}, ["label"])
   ].filter((e) => e.length >= 3), a = n;
-  for (let e of [...new Set(i)].sort((e, t) => t.length - e.length)) a = a.replace(RegExp(`(?<![\\w.-])${zD(e)}(?![\\w.-])`, "gi"), " ");
+  for (let e of [...new Set(i)].sort((e, t) => t.length - e.length)) a = a.replace(RegExp(`(?<![\\w.-])${BD(e)}(?![\\w.-])`, "gi"), " ");
   return a.replace(/\s+(?:on|for|at|against)\s*(?=$|[·:,;()\-])/gi, " ").replace(/\s+(?:on|for|at|against)\s*$/i, "").replace(/[\s·:,;(\-]+$/u, "").replace(/^[\s·:,;)\-]+/u, "").replace(/\(\s*\)/g, "").replace(/\s+/g, " ").trim();
 }
-function VD(e, t) {
-  return MD(e, ["vector_family", "vector"]) || MD(t ?? {}, ["vector_family"]);
+function HD(e, t) {
+  return ND(e, ["vector_family", "vector"]) || ND(t ?? {}, ["vector_family"]);
 }
-var HD = Symbol("findingGroupIndex");
-function UD(e = {}) {
-  let t = jD(e), n = /* @__PURE__ */ new Map();
+var UD = Symbol("findingGroupIndex");
+function WD(e = {}) {
+  let t = MD(e), n = /* @__PURE__ */ new Map();
   for (let e of Array.isArray(t.targets) ? t.targets : []) {
-    let t = jD(e), r = MD(t, ["id", "target_id"]);
+    let t = MD(e), r = ND(t, ["id", "target_id"]);
     r && !n.has(r) && n.set(r, t);
   }
   let r = /* @__PURE__ */ new Map();
   for (let e of Array.isArray(t.checks) ? t.checks : []) {
-    let t = jD(e), n = MD(t, ["check_id", "id"]);
+    let t = MD(e), n = ND(t, ["check_id", "id"]);
     n && !r.has(n) && r.set(n, t);
   }
   let i = /* @__PURE__ */ new Map();
   for (let e of Array.isArray(t.targetGroups) ? t.targetGroups : []) {
-    let t = jD(e), n = MD(t, ["id"]);
+    let t = MD(e), n = ND(t, ["id"]);
     n && i.set(n, t);
   }
   return Object.freeze({
-    [HD]: !0,
+    [UD]: !0,
     targetsById: n,
     checksById: r,
     groupsById: i,
@@ -47892,25 +47973,25 @@ function UD(e = {}) {
     facts: /* @__PURE__ */ new WeakMap()
   });
 }
-function WD(e) {
-  let t = jD(e);
-  return t[HD] ? t : UD(t);
-}
 function GD(e) {
+  let t = MD(e);
+  return t[UD] ? t : WD(t);
+}
+function KD(e) {
   return e === "open" ? "open" : e === "accepted" || e === "accepted_risk" ? "accepted" : e === "closed" || e === "resolved" ? "closed" : "other";
 }
-function KD(e, t, n) {
-  let r = MD(e, [
+function qD(e, t, n) {
+  let r = ND(e, [
     "title",
     "summary",
     "label"
-  ]), i = RD(e);
-  if (i && (!r || AD.test(r))) return {
+  ]), i = zD(e);
+  if (i && (!r || jD.test(r))) return {
     source: "verdict",
     issue: `v:${i}`,
     title: eu(i)
   };
-  let a = BD(e, t);
+  let a = VD(e, t);
   if (a) return {
     source: "title",
     issue: `t:${a.toLowerCase()}`,
@@ -47921,7 +48002,7 @@ function KD(e, t, n) {
     issue: `v:${i}`,
     title: eu(i)
   };
-  let o = VD(e, n);
+  let o = HD(e, n);
   return o ? {
     source: "vector",
     issue: `f:${o.toLowerCase()}`,
@@ -47932,24 +48013,24 @@ function KD(e, t, n) {
     title: ""
   };
 }
-function qD(e, t, n) {
+function JD(e, t, n) {
   if (e !== "open") return {
     state: "inactive",
     dueAt: null,
     hoursLeft: null
   };
-  let r = ND(t.created_at);
+  let r = PD(t.created_at);
   if (r === null) return {
     state: "undated",
     dueAt: null,
     hoursLeft: null
   };
-  let i = r + FD(MD(t, ["severity"]) || "low") * OD, a = Math.round((i - n) / OD);
+  let i = r + ID(ND(t, ["severity"]) || "low") * kD, a = Math.round((i - n) / kD);
   return n > i ? {
     state: "breached",
     dueAt: i,
     hoursLeft: a
-  } : i - n <= DD ? {
+  } : i - n <= OD ? {
     state: "due_soon",
     dueAt: i,
     hoursLeft: a
@@ -47959,57 +48040,57 @@ function qD(e, t, n) {
     hoursLeft: a
   };
 }
-function JD(e, t) {
+function YD(e, t) {
   let n = t.facts.get(e);
   if (n) return n;
-  let r = MD(e, ["target_id"]), i = r ? t.targetsById.get(r) ?? null : null, a = MD(e, ["check_id", "check"]), o = a ? t.checksById.get(a) ?? null : null, s = KD(e, i, o), c = C_(e), l = GD(c), u = MD(e, ["severity"]), d = {
+  let r = ND(e, ["target_id"]), i = r ? t.targetsById.get(r) ?? null : null, a = ND(e, ["check_id", "check"]), o = a ? t.checksById.get(a) ?? null : null, s = qD(e, i, o), c = C_(e), l = KD(c), u = ND(e, ["severity"]), d = {
     key: `${encodeURIComponent(a || "unknown-check")}|${encodeURIComponent(s.issue)}`,
-    id: MD(e, ["id", "finding_id"]),
+    id: ND(e, ["id", "finding_id"]),
     checkId: a,
     check: o,
     identity: s,
-    verdict: RD(e),
+    verdict: zD(e),
     status: c,
     bucket: l,
     severity: u,
-    severityRank: PD(u),
-    owner: ZD(e),
-    opened: ND(e.created_at ?? e.opened_at),
-    observed: ND(e.updated_at ?? e.last_observed_at ?? e.created_at ?? e.opened_at),
-    sla: qD(l, e, t.now),
-    asset: $D(e, i, t.groupsById)
+    severityRank: FD(u),
+    owner: QD(e),
+    opened: PD(e.created_at ?? e.opened_at),
+    observed: PD(e.updated_at ?? e.last_observed_at ?? e.created_at ?? e.opened_at),
+    sla: JD(l, e, t.now),
+    asset: eO(e, i, t.groupsById)
   };
   return t.facts.set(e, d), d;
 }
-function YD(e) {
+function XD(e) {
   return `#finding-group-detail?key=${encodeURIComponent(e)}`;
 }
-function XD(e, t = Date.now()) {
-  let n = jD(e);
-  return qD(LD(n), n, t);
+function ZD(e, t = Date.now()) {
+  let n = MD(e);
+  return JD(RD(n), n, t);
 }
-function ZD(e) {
-  return MD(e, [
+function QD(e) {
+  return ND(e, [
     "assignee",
     "owner",
     "rem_owner"
   ]);
 }
-function QD(e, t) {
+function $D(e, t) {
   return Number(t.facts.bucket === "open") - Number(e.facts.bucket === "open") || t.facts.severityRank - e.facts.severityRank || (e.facts.opened ?? 2 ** 53 - 1) - (t.facts.opened ?? 2 ** 53 - 1);
 }
-function $D(e, t, n) {
-  let r = MD(e, ["target_id"]), i = jD(e.target), a = MD(e, [
+function eO(e, t, n) {
+  let r = ND(e, ["target_id"]), i = MD(e.target), a = ND(e, [
     "title",
     "summary",
     "label"
-  ]).match(AD), o = MD(e, ["target_hostname", "target_value"]) || MD(i, ["hostname", "value"]) || MD(t ?? {}, ["hostname", "value"]) || (a ? String(a[2]).trim() : ""), s = MD(i, ["name", "label"]) || MD(t ?? {}, [
+  ]).match(jD), o = ND(e, ["target_hostname", "target_value"]) || ND(i, ["hostname", "value"]) || ND(t ?? {}, ["hostname", "value"]) || (a ? String(a[2]).trim() : ""), s = ND(i, ["name", "label"]) || ND(t ?? {}, [
     "name",
     "label",
     "display_name"
-  ]), c = MD(e, ["target_group_id"]) || MD(t ?? {}, ["target_group_id"]), l = c ? MD(n.get(c) ?? {}, ["name", "display_name"]) : "", u = s || o || r || "Target-group scope";
+  ]), c = ND(e, ["target_group_id"]) || ND(t ?? {}, ["target_group_id"]), l = c ? ND(n.get(c) ?? {}, ["name", "display_name"]) : "", u = s || o || r || "Target-group scope";
   return {
-    key: r ? `target:${r}` : o ? `host:${o.toLowerCase()}` : `scope:${c || MD(e, ["id"]) || "unknown"}`,
+    key: r ? `target:${r}` : o ? `host:${o.toLowerCase()}` : `scope:${c || ND(e, ["id"]) || "unknown"}`,
     targetId: r,
     host: o,
     name: s,
@@ -48019,10 +48100,10 @@ function $D(e, t, n) {
     resolved: !!t
   };
 }
-function eO(e) {
+function tO(e) {
   return e === null ? null : new Date(e).toISOString();
 }
-function tO(e) {
+function nO(e) {
   return {
     findingId: e.id,
     status: e.status,
@@ -48031,14 +48112,14 @@ function tO(e) {
     owner: e.owner,
     targetGroupId: e.asset.targetGroupId,
     targetGroupName: e.asset.targetGroupName,
-    openedAt: eO(e.opened),
+    openedAt: tO(e.opened),
     slaState: e.sla.state,
-    slaDueAt: eO(e.sla.dueAt),
+    slaDueAt: tO(e.sla.dueAt),
     slaHoursLeft: e.sla.hoursLeft
   };
 }
-function nO(e, t) {
-  let n = [...t].sort(QD), r = n[0]?.facts, i = r?.checkId ?? "", a = r?.check ?? null, o = i ? Zl(MD(a ?? {}, ["name", "title"]) || i) : "", s = r?.identity ?? {
+function rO(e, t) {
+  let n = [...t].sort($D), r = n[0]?.facts, i = r?.checkId ?? "", a = r?.check ?? null, o = i ? Zl(ND(a ?? {}, ["name", "title"]) || i) : "", s = r?.identity ?? {
     source: "none",
     title: ""
   }, c = r?.verdict ?? "", l = {
@@ -48048,10 +48129,10 @@ function nO(e, t) {
     other: 0
   }, u = {}, d = /* @__PURE__ */ new Map(), f = /* @__PURE__ */ new Set(), p = /* @__PURE__ */ new Set(), m = /* @__PURE__ */ new Set(), h = [], g = 0, _ = "", v = null, y = null, b = null, x = null, S = 0, C = 0, w = 0;
   for (let { facts: e } of n) {
-    l[e.bucket] += 1, u[e.status] = (u[e.status] ?? 0) + 1, e.verdict && p.add(e.verdict), e.id && h.push(e.id), e.asset.targetGroupId && m.add(e.asset.targetGroupId), e.severity && (!_ || e.severityRank > PD(_)) && (_ = e.severity), e.owner ? f.add(e.owner) : g += 1, e.opened !== null && ((v === null || e.opened < v) && (v = e.opened), (y === null || e.opened > y) && (y = e.opened)), e.observed !== null && (b === null || e.observed > b) && (b = e.observed);
+    l[e.bucket] += 1, u[e.status] = (u[e.status] ?? 0) + 1, e.verdict && p.add(e.verdict), e.id && h.push(e.id), e.asset.targetGroupId && m.add(e.asset.targetGroupId), e.severity && (!_ || e.severityRank > FD(_)) && (_ = e.severity), e.owner ? f.add(e.owner) : g += 1, e.opened !== null && ((v === null || e.opened < v) && (v = e.opened), (y === null || e.opened > y) && (y = e.opened)), e.observed !== null && (b === null || e.observed > b) && (b = e.observed);
     let t = e.sla;
     t.state === "breached" && (S += 1), t.state === "undated" ? w += 1 : t.dueAt !== null && (C += 1), t.dueAt !== null && (x === null || t.dueAt < x) && (x = t.dueAt);
-    let n = tO(e), r = d.get(e.asset.key);
+    let n = nO(e), r = d.get(e.asset.key);
     r || (r = {
       ...e.asset,
       findingId: n.findingId,
@@ -48086,8 +48167,8 @@ function nO(e, t) {
     issueSource: s.source,
     checkId: i,
     checkLabel: o,
-    checkDescription: MD(a ?? {}, ["description"]),
-    vectorFamily: n[0] ? VD(n[0].record, a) : "",
+    checkDescription: ND(a ?? {}, ["description"]),
+    vectorFamily: n[0] ? HD(n[0].record, a) : "",
     verdict: c,
     verdictLabel: c ? eu(c) : "No conclusion yet",
     verdicts: [...p],
@@ -48103,21 +48184,21 @@ function nO(e, t) {
     targetGroupIds: [...m],
     owners: [...f].sort((e, t) => e.localeCompare(t)),
     unassignedCount: g,
-    earliestOpenedAt: eO(v),
-    latestOpenedAt: eO(y),
-    lastObservedAt: eO(b),
-    nearestSlaDueAt: eO(x),
+    earliestOpenedAt: tO(v),
+    latestOpenedAt: tO(y),
+    lastObservedAt: tO(b),
+    nearestSlaDueAt: tO(x),
     slaBreachCount: S,
     hasSlaBreach: S > 0,
     openDatedCount: C,
     openUndatedCount: w
   };
 }
-function rO(e, t = {}) {
-  let n = WD(t), r = /* @__PURE__ */ new Map();
+function iO(e, t = {}) {
+  let n = GD(t), r = /* @__PURE__ */ new Map();
   for (let t of Array.isArray(e) ? e : []) {
     if (!t || typeof t != "object" || Array.isArray(t)) continue;
-    let e = t, i = JD(e, n), a = r.get(i.key);
+    let e = t, i = YD(e, n), a = r.get(i.key);
     a ? a.push({
       record: e,
       facts: i
@@ -48126,18 +48207,18 @@ function rO(e, t = {}) {
       facts: i
     }]);
   }
-  return sO([...r.entries()].map(([e, t]) => nO(e, t)), "severity");
-}
-function iO(e, t) {
-  return e ? !t || t === "all" || (e.statusCounts?.[t] ?? 0) > 0 : !1;
+  return cO([...r.entries()].map(([e, t]) => rO(e, t)), "severity");
 }
 function aO(e, t) {
+  return e ? !t || t === "all" || (e.statusCounts?.[t] ?? 0) > 0 : !1;
+}
+function oO(e, t) {
   let n = Array.isArray(e?.members) ? e.members : [];
   return !t || t === "all" ? [...n] : n.filter((e) => e.statusBucket === t);
 }
-function oO(e, t = Date.now()) {
-  let n = e?.openCount ?? 0, r = e?.slaBreachCount ?? 0, i = e?.openUndatedCount ?? 0, a = e?.openDatedCount ?? Math.max(0, n - i), o = ND(e?.nearestSlaDueAt), s = o === null ? null : Math.round((o - t) / OD), c = n === 0 ? "none" : i === 0 ? "complete" : a === 0 ? "unknown" : "partial", l = "inactive";
-  r > 0 ? l = "breached" : o === null ? n > 0 && (l = "unknown") : l = o - t <= DD ? "due_soon" : "on_track";
+function sO(e, t = Date.now()) {
+  let n = e?.openCount ?? 0, r = e?.slaBreachCount ?? 0, i = e?.openUndatedCount ?? 0, a = e?.openDatedCount ?? Math.max(0, n - i), o = PD(e?.nearestSlaDueAt), s = o === null ? null : Math.round((o - t) / kD), c = n === 0 ? "none" : i === 0 ? "complete" : a === 0 ? "unknown" : "partial", l = "inactive";
+  r > 0 ? l = "breached" : o === null ? n > 0 && (l = "unknown") : l = o - t <= OD ? "due_soon" : "on_track";
   let u = "No clock";
   return l === "breached" ? u = `${r} overdue` : c === "unknown" ? u = "SLA unknown" : c === "partial" ? u = "Partially assessed" : (l === "due_soon" || l === "on_track") && (u = "Within SLA"), {
     state: l,
@@ -48150,41 +48231,41 @@ function oO(e, t = Date.now()) {
     hoursLeft: s
   };
 }
-function sO(e, t) {
-  let n = Array.isArray(e) ? [...e] : [], r = (e, t) => ND(e) ?? t;
+function cO(e, t) {
+  let n = Array.isArray(e) ? [...e] : [], r = (e, t) => PD(e) ?? t;
   return n.sort((e, n) => {
     let i = e.title.localeCompare(n.title) || e.key.localeCompare(n.key);
-    return t === "title" ? i : t === "assets" ? n.assets.length - e.assets.length || i : t === "sla" ? r(e.nearestSlaDueAt, 2 ** 53 - 1) - r(n.nearestSlaDueAt, 2 ** 53 - 1) || i : t === "recent" ? r(n.latestOpenedAt ?? n.earliestOpenedAt, 0) - r(e.latestOpenedAt ?? e.earliestOpenedAt, 0) || i : t === "oldest" ? r(e.earliestOpenedAt, 2 ** 53 - 1) - r(n.earliestOpenedAt, 2 ** 53 - 1) || i : +(n.openCount > 0) - (e.openCount > 0) || PD(n.severity) - PD(e.severity) || n.assets.length - e.assets.length || i;
+    return t === "title" ? i : t === "assets" ? n.assets.length - e.assets.length || i : t === "sla" ? r(e.nearestSlaDueAt, 2 ** 53 - 1) - r(n.nearestSlaDueAt, 2 ** 53 - 1) || i : t === "recent" ? r(n.latestOpenedAt ?? n.earliestOpenedAt, 0) - r(e.latestOpenedAt ?? e.earliestOpenedAt, 0) || i : t === "oldest" ? r(e.earliestOpenedAt, 2 ** 53 - 1) - r(n.earliestOpenedAt, 2 ** 53 - 1) || i : +(n.openCount > 0) - (e.openCount > 0) || FD(n.severity) - FD(e.severity) || n.assets.length - e.assets.length || i;
   }), n;
 }
-function cO(e, t) {
+function lO(e, t) {
   return !t || !Array.isArray(e) ? null : e.find((e) => e.key === t) ?? null;
 }
 //#endregion
 //#region apps/web/react/src/pages/refined/findings-refined.tsx
-var lO = [], uO = [{
+var uO = [], dO = [{
   value: "all",
   label: "All severities"
 }, ...Ia.map((e) => ({
   value: e,
   label: La[e]
 }))];
-function dO(e) {
+function fO(e) {
   let t = (e ?? "").trim();
   return !t || t.toLowerCase() === "all" ? "all" : za(t);
 }
-var fO = [
+var pO = [
   "severity",
   "assets",
   "recent",
   "oldest",
   "sla",
   "title"
-], pO = "astranull.findings-refined.view", mO = [
+], mO = "astranull.findings-refined.view", hO = [
   25,
   50,
   100
-], hO = [
+], gO = [
   {
     value: "severity",
     label: "Worst severity"
@@ -48210,19 +48291,19 @@ var fO = [
     label: "Title A to Z"
   }
 ];
-function gO() {
+function _O() {
   try {
-    return window.localStorage.getItem(pO) === "all" ? "all" : "grouped";
+    return window.localStorage.getItem(mO) === "all" ? "all" : "grouped";
   } catch {
     return "grouped";
   }
 }
-function _O(e) {
+function vO(e) {
   try {
-    window.localStorage.setItem(pO, e);
+    window.localStorage.setItem(mO, e);
   } catch {}
 }
-function vO(e, t, n = "") {
+function yO(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -48230,7 +48311,7 @@ function vO(e, t, n = "") {
   }
   return n;
 }
-function yO(e) {
+function bO(e) {
   let t = e.toLowerCase();
   return [
     "critical",
@@ -48243,18 +48324,18 @@ function yO(e) {
     "s3"
   ].includes(t) ? "warn" : "muted";
 }
-function bO(e) {
-  let t = LD({ status: e });
+function xO(e) {
+  let t = RD({ status: e });
   return t === "closed" ? "success" : t === "accepted" ? "info" : t === "open" || e === "remediation_pending" ? "warn" : "muted";
 }
-function xO({ status: e }) {
-  let t = LD({ status: e }), n = t === "closed" ? Ne : t === "accepted" ? Pn : Le;
+function SO({ status: e }) {
+  let t = RD({ status: e }), n = t === "closed" ? Ne : t === "accepted" ? Pn : Le;
   return /* @__PURE__ */ (0, V.jsxs)(W, {
-    tone: bO(e),
+    tone: xO(e),
     children: [/* @__PURE__ */ (0, V.jsx)(n, { size: 12 }), e.replace(/_/g, " ")]
   });
 }
-function SO(e, t) {
+function CO(e, t) {
   return e === "breached" ? {
     label: "Overdue",
     tone: "danger",
@@ -48277,14 +48358,14 @@ function SO(e, t) {
     overdue: !1
   };
 }
-function CO({ label: e, tone: t, overdue: n }) {
+function wO({ label: e, tone: t, overdue: n }) {
   return /* @__PURE__ */ (0, V.jsxs)(W, {
     tone: t,
     children: [n ? /* @__PURE__ */ (0, V.jsx)(nr, { size: 12 }) : /* @__PURE__ */ (0, V.jsx)(Ye, { size: 12 }), e]
   });
 }
-function wO(e) {
-  let t = oO(e), n = t.undatedOpenCount > 0 ? `${t.undatedOpenCount} not dated` : "";
+function TO(e) {
+  let t = sO(e), n = t.undatedOpenCount > 0 ? `${t.undatedOpenCount} not dated` : "";
   if (t.state === "breached") return {
     badge: {
       label: e.findings.length > 1 ? `${t.breachCount} overdue` : "Overdue",
@@ -48328,7 +48409,7 @@ function wO(e) {
     hint: "No open findings"
   };
 }
-function TO({ owners: e, unassigned: t }) {
+function EO({ owners: e, unassigned: t }) {
   if (e.length === 0) return /* @__PURE__ */ (0, V.jsx)("span", {
     className: "rf-cell-muted",
     children: "Unassigned"
@@ -48343,10 +48424,10 @@ function TO({ owners: e, unassigned: t }) {
     ]
   });
 }
-function EO(e) {
+function DO(e) {
   window.location.hash = e.replace(/^#/, "");
 }
-function DO({ data: e, config: t, session: n, onRefresh: r }) {
+function OO({ data: e, config: t, session: n, onRefresh: r }) {
   let [i, a] = (0, D.useState)(""), [o, s] = (0, D.useState)(""), c = (0, D.useMemo)(() => Z_(e.findings), [e.findings]), l = (0, D.useCallback)(async () => {
     a("refresh"), s("");
     try {
@@ -48357,7 +48438,7 @@ function DO({ data: e, config: t, session: n, onRefresh: r }) {
       a("");
     }
   }, [r]);
-  return /* @__PURE__ */ (0, V.jsx)(OO, {
+  return /* @__PURE__ */ (0, V.jsx)(kO, {
     data: e,
     config: t,
     session: n,
@@ -48369,12 +48450,12 @@ function DO({ data: e, config: t, session: n, onRefresh: r }) {
     onRefresh: () => void l()
   });
 }
-function OO(e) {
-  let { data: t, message: n, error: r, session: i, config: a } = e, { initial: o, save: s } = TC(i, "findings"), c = Qf("status"), l = Qf("severity"), u = Qf("target_group_id") || Qf("target_group") || Qf("group"), d = /^[A-Za-z0-9_.:-]{1,128}$/.test(u) ? u : "", [f] = (0, D.useState)(() => !!(c || l || d)), p = f ? {
+function kO(e) {
+  let { data: t, message: n, error: r, session: i, config: a } = e, { initial: o, save: s } = EC(i, "findings"), c = Qf("status"), l = Qf("severity"), u = Qf("target_group_id") || Qf("target_group") || Qf("group"), d = /^[A-Za-z0-9_.:-]{1,128}$/.test(u) ? u : "", [f] = (0, D.useState)(() => !!(c || l || d)), p = f ? {
     ...c ? { status: c } : {},
     ...l ? { severity: l } : {},
     ...d ? { group: d } : {}
-  } : { ...o.filters ?? {} }, [m, h] = (0, D.useState)(() => o.view === "all" || o.view === "grouped" ? o.view : gO()), [g, _] = (0, D.useState)(() => AO(p.status, f)), [v, y] = (0, D.useState)(() => dO(p.severity)), [b, x] = (0, D.useState)(p.group ?? "all"), [S, C] = (0, D.useState)(p.q ?? ""), [w, T] = (0, D.useState)((p.q ?? "").trim()), [E, O] = (0, D.useState)(() => fO.includes(o.sort) ? o.sort : "severity"), [k, A] = (0, D.useState)(() => mO.includes(o.pageSize ?? 0) ? o.pageSize : 25), [j, M] = (0, D.useState)(() => f ? 1 : Math.max(1, o.page ?? 1)), [N, P] = (0, D.useState)(0), [ee, F] = (0, D.useState)(0), [I, te] = (0, D.useState)(!1), ne = CC(), { holding: re, handlers: ie } = AC(), ae = (0, D.useCallback)((e) => vO(e, ["id"]), []), oe = wC();
+  } : { ...o.filters ?? {} }, [m, h] = (0, D.useState)(() => o.view === "all" || o.view === "grouped" ? o.view : _O()), [g, _] = (0, D.useState)(() => jO(p.status, f)), [v, y] = (0, D.useState)(() => fO(p.severity)), [b, x] = (0, D.useState)(p.group ?? "all"), [S, C] = (0, D.useState)(p.q ?? ""), [w, T] = (0, D.useState)((p.q ?? "").trim()), [E, O] = (0, D.useState)(() => pO.includes(o.sort) ? o.sort : "severity"), [k, A] = (0, D.useState)(() => hO.includes(o.pageSize ?? 0) ? o.pageSize : 25), [j, M] = (0, D.useState)(() => f ? 1 : Math.max(1, o.page ?? 1)), [N, P] = (0, D.useState)(0), [ee, F] = (0, D.useState)(0), [I, te] = (0, D.useState)(!1), ne = wC(), { holding: re, handlers: ie } = jC(), ae = (0, D.useCallback)((e) => yO(e, ["id"]), []), oe = TC();
   (0, D.useEffect)(() => {
     let e = window.setTimeout(() => T(S.trim()), 250);
     return () => window.clearTimeout(e);
@@ -48385,7 +48466,7 @@ function OO(e) {
       let e = Qf("status"), t = Qf("severity"), n = Qf("target_group_id") || Qf("target_group") || Qf("group"), r = /^[A-Za-z0-9_.:-]{1,128}$/.test(n) ? n : "";
       if (!e && !t && !r) return;
       let i = `${e}|${t}|${r}`;
-      i !== L.current && (L.current = i, _(AO(e, !0)), y(dO(t)), x(r || "all"), C(""), T(""));
+      i !== L.current && (L.current = i, _(jO(e, !0)), y(fO(t)), x(r || "all"), C(""), T(""));
     }
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []), (0, D.useEffect)(() => {
@@ -48455,18 +48536,18 @@ function OO(e) {
     ...ue,
     limit: k,
     page: j
-  }, ee, m === "all"), _e = L_(a, i, ue, ee, m === "grouped"), ve = m === "all" ? ge.envelope?.items ?? lO : _e.items, ye = m === "all" ? `each|${ge.envelopePath}` : `grouped|${_e.itemsKey}|${_e.pagesRead}`, be = kC(ve, {
+  }, ee, m === "all"), _e = L_(a, i, ue, ee, m === "grouped"), ve = m === "all" ? ge.envelope?.items ?? uO : _e.items, ye = m === "all" ? `each|${ge.envelopePath}` : `grouped|${_e.itemsKey}|${_e.pagesRead}`, be = AC(ve, {
     scope: `${bp(i) || "anon"}|findings|${ye}`,
     idOf: ae,
     hold: re || !!ne
   }), xe = be.items;
   function Se(e) {
-    h(e), _O(e);
+    h(e), vO(e);
   }
   function Ce() {
     F((e) => e + 1), e.onRefresh();
   }
-  let we = (0, D.useMemo)(() => UD({
+  let we = (0, D.useMemo)(() => WD({
     targets: t.targets,
     checks: t.checks,
     targetGroups: t.targetGroups
@@ -48474,11 +48555,11 @@ function OO(e) {
     t.targets,
     t.checks,
     t.targetGroups
-  ]), Te = (0, D.useMemo)(() => m === "grouped" ? rO(xe, we) : [], [
+  ]), Te = (0, D.useMemo)(() => m === "grouped" ? iO(xe, we) : [], [
     m,
     xe,
     we
-  ]), Ee = (0, D.useMemo)(() => sO(Te, E), [Te, E]), De = _e.complete, Oe = he.envelope, ke = Oe?.items ?? lO, Ae = Ya(Oe, ke.length), je = (0, D.useMemo)(() => Z_(ke), [ke]), Me = (0, D.useMemo)(() => rO(ke, we), [ke, we]), Ne = (0, D.useMemo)(() => {
+  ]), Ee = (0, D.useMemo)(() => cO(Te, E), [Te, E]), De = _e.complete, Oe = he.envelope, ke = Oe?.items ?? uO, Ae = Ya(Oe, ke.length), je = (0, D.useMemo)(() => Z_(ke), [ke]), Me = (0, D.useMemo)(() => iO(ke, we), [ke, we]), Ne = (0, D.useMemo)(() => {
     let e = /* @__PURE__ */ new Set();
     return Me.forEach((t) => t.assets.forEach((t) => e.add(t.key))), e.size;
   }, [Me]), Pe = (0, D.useMemo)(() => {
@@ -48486,10 +48567,10 @@ function OO(e) {
       value: "all",
       label: "All groups"
     }, ...t.targetGroups.flatMap((e) => {
-      let t = vO(e, ["id"]);
+      let t = yO(e, ["id"]);
       return t ? [{
         value: t,
-        label: vO(e, ["name", "id"], t)
+        label: yO(e, ["name", "id"], t)
       }] : [];
     })];
     return b !== "all" && !e.some((e) => e.value === b) && e.push({
@@ -48497,10 +48578,10 @@ function OO(e) {
       label: `Group ${b}`
     }), e;
   }, [t.targetGroups, b]), Fe = m === "all" ? ge.envelope : _e.envelope, Ie = Fe?.total ?? null, Le = Math.max(1, ge.envelope?.pages ?? 1), Re = m === "all" ? ge.error : _e.error && _e.state === "error" ? _e.error : "", ze = m === "all" ? ge.state === "loading" && !ge.envelope : _e.state === "loading", Be = Ee.length, Ve = Math.max(1, Math.ceil(Be / k)), He = Math.min(N, Ve - 1), Ue = He * k, We = Ee.slice(Ue, Ue + k), Ge = ((ge.envelope?.page ?? j) - 1) * k;
-  EC(!!Fe && xe.length > 0, o);
+  DC(!!Fe && xe.length > 0, o);
   let Ke = ne && (ne.entry === "finding" || ne.entry === "group_member") ? ne.finding_id ?? "" : "";
   function qe(e) {
-    let t = vO(e, ["id"]);
+    let t = yO(e, ["id"]);
     if (!t) return;
     let n = `finding-${t}`;
     s({
@@ -48509,8 +48590,8 @@ function OO(e) {
     }), oe({
       entry: "finding",
       finding_id: t,
-      target_id: vO(e, ["target_id"]) || void 0,
-      check_id: vO(e, ["check_id"]) || void 0
+      target_id: yO(e, ["target_id"]) || void 0,
+      check_id: yO(e, ["check_id"]) || void 0
     }, n);
   }
   let Je = [
@@ -48521,7 +48602,7 @@ function OO(e) {
         let t = e.assets.slice(0, 3), n = e.assets.length - t.length;
         return /* @__PURE__ */ (0, V.jsxs)("a", {
           className: "rf-alert-link",
-          href: YD(e.key),
+          href: XD(e.key),
           "data-focus-key": `group-${e.key}`,
           onClick: () => s({
             selectedRowId: e.key,
@@ -48560,7 +48641,7 @@ function OO(e) {
       key: "severity",
       label: "Worst severity",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
-        tone: yO(e.severity),
+        tone: bO(e.severity),
         children: ia(e.severity)
       })
     },
@@ -48587,24 +48668,24 @@ function OO(e) {
       label: "Status",
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "rf-cell-stack",
-        children: [/* @__PURE__ */ (0, V.jsx)(xO, { status: C_(e.findings[0] ?? {}) }), e.findings.length > 1 ? /* @__PURE__ */ (0, V.jsx)("small", { children: xv(e.statusBreakdown) }) : null]
+        children: [/* @__PURE__ */ (0, V.jsx)(SO, { status: C_(e.findings[0] ?? {}) }), e.findings.length > 1 ? /* @__PURE__ */ (0, V.jsx)("small", { children: xv(e.statusBreakdown) }) : null]
       })
     },
     {
       key: "sla",
       label: "SLA",
       render: (e) => {
-        let t = wO(e);
+        let t = TO(e);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "rf-cell-stack",
-          children: [/* @__PURE__ */ (0, V.jsx)(CO, { ...t.badge }), t.hint ? /* @__PURE__ */ (0, V.jsx)("small", { children: t.hint }) : null]
+          children: [/* @__PURE__ */ (0, V.jsx)(wO, { ...t.badge }), t.hint ? /* @__PURE__ */ (0, V.jsx)("small", { children: t.hint }) : null]
         });
       }
     },
     {
       key: "owner",
       label: "Owner",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)(TO, {
+      render: (e) => /* @__PURE__ */ (0, V.jsx)(EO, {
         owners: e.owners,
         unassigned: e.owners.length ? e.unassignedCount : 0
       })
@@ -48613,12 +48694,12 @@ function OO(e) {
     {
       key: "finding",
       label: "Finding",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)(wD, {
+      render: (e) => /* @__PURE__ */ (0, V.jsx)(TD, {
         finding: e,
         checks: t.checks,
         targetGroups: t.targetGroups,
         targets: t.targets,
-        active: vO(e, ["id"]) === Ke,
+        active: yO(e, ["id"]) === Ke,
         onOpen: () => qe(e)
       })
     },
@@ -48626,9 +48707,9 @@ function OO(e) {
       key: "severity",
       label: "Severity",
       render: (e) => {
-        let t = vO(e, ["severity"], "unknown");
+        let t = yO(e, ["severity"], "unknown");
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: yO(t),
+          tone: bO(t),
           children: ia(t)
         });
       }
@@ -48644,23 +48725,23 @@ function OO(e) {
     {
       key: "status",
       label: "Status",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)(xO, { status: C_(e) })
+      render: (e) => /* @__PURE__ */ (0, V.jsx)(SO, { status: C_(e) })
     },
     {
       key: "sla",
       label: "SLA",
       render: (e) => {
-        let t = XD(e);
+        let t = ZD(e);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "rf-cell-stack",
-          children: [/* @__PURE__ */ (0, V.jsx)(CO, { ...SO(t.state, t.hoursLeft) }), t.dueAt === null ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: ["Due ", z(t.dueAt)] })]
+          children: [/* @__PURE__ */ (0, V.jsx)(wO, { ...CO(t.state, t.hoursLeft) }), t.dueAt === null ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: ["Due ", z(t.dueAt)] })]
         });
       }
     },
     {
       key: "owner",
       label: "Owner",
-      render: (e) => vO(e, [
+      render: (e) => yO(e, [
         "assignee",
         "owner",
         "rem_owner"
@@ -48677,12 +48758,12 @@ function OO(e) {
         t.target.closest("a, button") || (s({
           selectedRowId: e.key,
           focusKey: `group-${e.key}`
-        }), EO(YD(e.key)));
+        }), DO(XD(e.key)));
       }
     };
   }
   function Ze(e) {
-    let t = vO(e, ["id"]);
+    let t = yO(e, ["id"]);
     if (!t) return {};
     let n = t === Ke;
     return {
@@ -48903,7 +48984,7 @@ function OO(e) {
                   onClick: () => _("all"),
                   children: ["All", /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "rf-tab-count tabular-nums",
-                    children: kO(fe, "all")
+                    children: AO(fe, "all")
                   })]
                 }), Fa.map((e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "rf-status-group",
@@ -48918,7 +48999,7 @@ function OO(e) {
                     onClick: () => _(e),
                     children: [Pa[e], /* @__PURE__ */ (0, V.jsx)("span", {
                       className: "rf-tab-count tabular-nums",
-                      children: kO(fe, e)
+                      children: AO(fe, e)
                     })]
                   }, e))]
                 }, e.id))]
@@ -48953,7 +49034,7 @@ function OO(e) {
                   /* @__PURE__ */ (0, V.jsx)(Ic, {
                     label: "Severity",
                     value: v,
-                    options: uO,
+                    options: dO,
                     onChange: y
                   }),
                   /* @__PURE__ */ (0, V.jsx)(Ic, {
@@ -48965,7 +49046,7 @@ function OO(e) {
                   m === "grouped" ? /* @__PURE__ */ (0, V.jsx)(Ic, {
                     label: "Sort groups",
                     value: E,
-                    options: hO,
+                    options: gO,
                     onChange: (e) => O(e)
                   }) : null
                 ]
@@ -49043,7 +49124,7 @@ function OO(e) {
             }) : /* @__PURE__ */ (0, V.jsx)(kh, {
               columns: Ye,
               items: xe,
-              getRowId: (e, t) => vO(e, ["id"], `finding-${Ge + t}`),
+              getRowId: (e, t) => yO(e, ["id"], `finding-${Ge + t}`),
               getRowProps: Ze,
               loadError: Re,
               onRetry: ge.retry,
@@ -49112,7 +49193,7 @@ function OO(e) {
                 /* @__PURE__ */ (0, V.jsx)(Ic, {
                   label: "Rows",
                   value: String(k),
-                  options: mO.map((e) => ({
+                  options: hO.map((e) => ({
                     value: String(e),
                     label: String(e)
                   })),
@@ -49180,7 +49261,7 @@ function OO(e) {
                 /* @__PURE__ */ (0, V.jsx)(Ic, {
                   label: "Rows",
                   value: String(k),
-                  options: mO.map((e) => ({
+                  options: hO.map((e) => ({
                     value: String(e),
                     label: String(e)
                   })),
@@ -49210,18 +49291,18 @@ function OO(e) {
     ]
   });
 }
-function kO(e, t) {
+function AO(e, t) {
   if (e.state === "loading") return "...";
   let n = e.totals[t];
   return typeof n == "number" ? R(n) : "n/a";
 }
-function AO(e, t = !1) {
+function jO(e, t = !1) {
   return !e || e === "all" ? e === "all" || t ? "all" : "open" : Wa(e) || "open";
 }
 //#endregion
 //#region apps/web/react/src/pages/functional-surfaces.tsx
-[...IE];
-function jO(e, t, n = "—") {
+[...LE];
+function MO(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -49229,7 +49310,7 @@ function jO(e, t, n = "—") {
   }
   return n;
 }
-function MO(e, t, n = "—") {
+function NO(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -49237,7 +49318,7 @@ function MO(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-var NO = {
+var PO = {
   origin: "Origin",
   path: "Path",
   l3_l4: "L3/L4",
@@ -49249,48 +49330,48 @@ var NO = {
   operations: "Operations",
   high_scale: "High-scale"
 };
-function PO(e) {
-  return NO[e] ?? e.replace(/_/g, " ");
-}
 function FO(e) {
-  return e === "safe" ? "Customer-runnable" : e === "soc_gated" ? "SOC request-only" : e.replace(/_/g, " ");
+  return PO[e] ?? e.replace(/_/g, " ");
 }
 function IO(e) {
-  let t = e.verdict;
-  if (t && typeof t == "object" && !Array.isArray(t)) {
-    let e = jO(t, ["verdict"], "");
-    if (e) return e;
-  }
-  return jO(e, ["verdict", "verdict"], "");
+  return e === "safe" ? "Customer-runnable" : e === "soc_gated" ? "SOC request-only" : e.replace(/_/g, " ");
 }
 function LO(e) {
+  let t = e.verdict;
+  if (t && typeof t == "object" && !Array.isArray(t)) {
+    let e = MO(t, ["verdict"], "");
+    if (e) return e;
+  }
+  return MO(e, ["verdict", "verdict"], "");
+}
+function RO(e) {
   let t = /* @__PURE__ */ new Map(), n = /* @__PURE__ */ new Map();
   for (let r of e) {
-    let e = jO(r, ["check_id"], "");
+    let e = MO(r, ["check_id"], "");
     if (!e) continue;
-    let i = jO(r, ["status"], "");
+    let i = MO(r, ["status"], "");
     if (!["completed", "verdicted"].includes(i)) continue;
-    let a = IO(r);
+    let a = LO(r);
     if (!a) continue;
     let o = String(r.updated_at ?? r.completed_at ?? r.started_at ?? r.created_at ?? ""), s = n.get(e) ?? "";
     (!s || o.localeCompare(s) >= 0) && (n.set(e, o), t.set(e, {
       verdict: a,
-      runId: jO(r, ["id"], "")
+      runId: MO(r, ["id"], "")
     }));
   }
   return t;
 }
-function RO(e) {
-  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : FO(e);
-}
 function zO(e) {
-  return e === "safe" ? "success" : e === "soc_gated" ? "info" : "muted";
+  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : IO(e);
 }
 function BO(e) {
+  return e === "safe" ? "success" : e === "soc_gated" ? "info" : "muted";
+}
+function VO(e) {
   let t = e.max_rate;
   if (typeof t == "number" && Number.isFinite(t) && t > 0) return `${t} RPS`;
   if (typeof t == "string" && t.trim()) return t.replace(/_/g, " ");
-  let n = MO(e, ["probe_profile", "kind"], "");
+  let n = NO(e, ["probe_profile", "kind"], "");
   if (n === "metadata_marker" || n === "ops_readiness") return "metadata";
   let r = e.probe_profile;
   if (r && typeof r == "object" && !Array.isArray(r)) {
@@ -49299,7 +49380,7 @@ function BO(e) {
   }
   return "—";
 }
-function VO(e) {
+function HO(e) {
   let t = e.trim().toLowerCase();
   return [
     "pass",
@@ -49323,9 +49404,9 @@ function VO(e) {
     "warn",
     "warning",
     "medium"
-  ].includes(t) ? "warn" : t === "request" ? "muted" : UO(e);
+  ].includes(t) ? "warn" : t === "request" ? "muted" : WO(e);
 }
-function HO(e) {
+function UO(e) {
   return {
     planned: "Planned",
     running: "Running",
@@ -49335,26 +49416,26 @@ function HO(e) {
     failed: "Failed"
   }[e] ?? e.replace(/_/g, " ");
 }
-function UO(e) {
+function WO(e) {
   let t = e.toLowerCase();
   return t === "pass" || t === "ready" ? "success" : t === "fail" || t === "failed" ? "danger" : t === "partial" || t === "inconclusive" ? "warn" : t === "pending" || t === "—" || !t ? "muted" : "info";
 }
-function WO(e, t) {
-  return t ? jO(e.find((e) => jO(e, ["id"], "") === t) ?? {}, ["name", "title"], t) : "—";
+function GO(e, t) {
+  return t ? MO(e.find((e) => MO(e, ["id"], "") === t) ?? {}, ["name", "title"], t) : "—";
 }
-var GO = /* @__PURE__ */ new Set(["running", "collecting"]);
-function KO(e) {
-  return GO.has(e);
+var KO = /* @__PURE__ */ new Set(["running", "collecting"]);
+function qO(e) {
+  return KO.has(e);
 }
-var qO = /* @__PURE__ */ new Set([
+var JO = /* @__PURE__ */ new Set([
   "planned",
   "running",
   "collecting"
 ]);
-function JO(e) {
-  return qO.has(e);
-}
 function YO(e) {
+  return JO.has(e);
+}
+function XO(e) {
   let t = Date.parse(String(e ?? ""));
   if (!Number.isFinite(t)) return "";
   let n = Date.now() - t;
@@ -49366,14 +49447,14 @@ function YO(e) {
   let a = Math.floor(i / 60);
   return a < 24 ? `started ${a}h ago` : `started ${Math.floor(a / 24)}d ago`;
 }
-var XO = "astranull-functional-surface-styles";
-function ZO() {
-  if (typeof document > "u" || document.getElementById(XO)) return;
+var ZO = "astranull-functional-surface-styles";
+function QO() {
+  if (typeof document > "u" || document.getElementById(ZO)) return;
   let e = document.createElement("style");
-  e.id = XO, e.textContent = "\n.run-live-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 50%;\n  background: var(--info);\n  flex: none;\n  animation: astranull-run-live-pulse 1.5s ease-in-out infinite;\n}\n@keyframes astranull-run-live-pulse {\n  0%, 100% { opacity: 1; transform: scale(1); }\n  50% { opacity: 0.35; transform: scale(0.7); }\n}\n@media (prefers-reduced-motion: reduce) {\n  .run-live-dot { animation: none; opacity: 0.85; }\n}\n.catalog-filter-grid { display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: end; }\n.catalog-search-control { display: flex; min-height: 44px; align-items: center; gap: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }\n.catalog-search-control input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }\n.catalog-check-primary, .catalog-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 3px; }\n.catalog-check-primary strong { color: var(--fg); }\n.catalog-check-primary small, .catalog-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }\n.validation-catalog-table .data-table { min-width: 1040px; }\n.validation-runs-table .data-table { min-width: 1180px; }\n@media (max-width: 900px) { .catalog-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .catalog-search-field { grid-column: 1 / -1; } }\n@media (max-width: 620px) { .catalog-filter-grid { grid-template-columns: minmax(0, 1fr); } .catalog-search-field { grid-column: auto; } }\n", document.head.appendChild(e);
+  e.id = ZO, e.textContent = "\n.run-live-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 50%;\n  background: var(--info);\n  flex: none;\n  animation: astranull-run-live-pulse 1.5s ease-in-out infinite;\n}\n@keyframes astranull-run-live-pulse {\n  0%, 100% { opacity: 1; transform: scale(1); }\n  50% { opacity: 0.35; transform: scale(0.7); }\n}\n@media (prefers-reduced-motion: reduce) {\n  .run-live-dot { animation: none; opacity: 0.85; }\n}\n.catalog-filter-grid { display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: end; }\n.catalog-search-control { display: flex; min-height: 44px; align-items: center; gap: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }\n.catalog-search-control input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }\n.catalog-check-primary, .catalog-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 3px; }\n.catalog-check-primary strong { color: var(--fg); }\n.catalog-check-primary small, .catalog-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }\n.validation-catalog-table .data-table { min-width: 1040px; }\n.validation-runs-table .data-table { min-width: 1180px; }\n@media (max-width: 900px) { .catalog-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .catalog-search-field { grid-column: 1 / -1; } }\n@media (max-width: 620px) { .catalog-filter-grid { grid-template-columns: minmax(0, 1fr); } .catalog-search-field { grid-column: auto; } }\n", document.head.appendChild(e);
 }
-function QO(e, t) {
-  let n = jO(e, ["check_id"], ""), r = t.get(n);
+function $O(e, t) {
+  let n = MO(e, ["check_id"], ""), r = t.get(n);
   if (r?.verdict) {
     let e = r.verdict.trim().toLowerCase();
     return [
@@ -49393,9 +49474,9 @@ function QO(e, t) {
       "edge_exposed"
     ].includes(e) ? "gap" : e === "request" ? "request" : "review";
   }
-  return jO(e, ["safety_class"], "") === "soc_gated" ? "request" : "untested";
+  return MO(e, ["safety_class"], "") === "soc_gated" ? "request" : "untested";
 }
-var $O = [
+var ek = [
   {
     value: "all",
     label: "All families"
@@ -49444,7 +49525,7 @@ var $O = [
     value: "high-scale",
     label: "High-scale (SOC)"
   }
-], ek = [
+], tk = [
   {
     value: "all",
     label: "All statuses"
@@ -49471,7 +49552,7 @@ var $O = [
   }
 ];
 "•".repeat(32);
-function tk({ message: e, error: t, neutral: n = !1 }) {
+function nk({ message: e, error: t, neutral: n = !1 }) {
   return !e && !t ? null : /* @__PURE__ */ (0, V.jsx)("div", {
     className: t ? "form-banner error" : n ? "form-banner neutral" : "form-banner",
     role: t ? "alert" : "status",
@@ -49479,10 +49560,10 @@ function tk({ message: e, error: t, neutral: n = !1 }) {
     children: t || e
   });
 }
-function nk(e) {
+function rk(e) {
   return !!(e && e.closest("a, button"));
 }
-function rk(e, t, n) {
+function ik(e, t, n) {
   if (!t) return {};
   let r = `${e}?id=${encodeURIComponent(t)}`;
   return {
@@ -49490,31 +49571,31 @@ function rk(e, t, n) {
     style: { cursor: "pointer" },
     "aria-label": n,
     onClick: (e) => {
-      nk(e.target) || (window.location.hash = r);
+      rk(e.target) || (window.location.hash = r);
     },
     onKeyDown: (e) => {
-      (e.key === "Enter" || e.key === " ") && (nk(e.target) || (e.preventDefault(), window.location.hash = r));
+      (e.key === "Enter" || e.key === " ") && (rk(e.target) || (e.preventDefault(), window.location.hash = r));
     }
   };
 }
-function ik(e, t, n = "") {
-  return Zl(jO(e.find((e) => jO(e, ["check_id"]) === t) ?? {}, ["name"], t) || n || "View run");
+function ak(e, t, n = "") {
+  return Zl(MO(e.find((e) => MO(e, ["check_id"]) === t) ?? {}, ["name"], t) || n || "View run");
 }
-function ak(e, t = 72) {
+function ok(e, t = 72) {
   return e.length <= t ? e : `${e.slice(0, t).trimEnd()}…`;
 }
-function ok(e, t = "—") {
+function sk(e, t = "—") {
   let n = e.trim();
   return n ? n.split("_").filter(Boolean).map((e) => e.charAt(0).toUpperCase() + e.slice(1).toLowerCase()).join(" ") : t;
 }
-function sk(e, t, n = 0) {
+function ck(e, t, n = 0) {
   for (let n of t) {
     let t = e[n];
     if (typeof t == "number" && Number.isFinite(t)) return t;
   }
   return n;
 }
-function ck(e, t) {
+function lk(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -49522,7 +49603,7 @@ function ck(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-async function lk(e, t, n, r, i, a, o) {
+async function uk(e, t, n, r, i, a, o) {
   e(r), t(""), n("");
   try {
     let e = await i();
@@ -49533,19 +49614,19 @@ async function lk(e, t, n, r, i, a, o) {
     e("");
   }
 }
-function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
-  let { confirm: a } = lp(), [o, s] = qE("runs"), [c, l] = qE("findings"), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)("recommended"), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)("all"), [S, C] = (0, D.useState)("all"), [w, T] = (0, D.useState)("open"), [E, O] = (0, D.useState)(""), [k, A] = (0, D.useState)(!1), [j, M] = (0, D.useState)(!1), [P, ee] = (0, D.useState)(null), [F, I] = (0, D.useState)(() => t.evidence.length > 0), [te, ne] = (0, D.useState)(0), [re, ie] = (0, D.useState)(""), [ae, oe] = (0, D.useState)("all"), [L, se] = (0, D.useState)(!1), [ce, le] = (0, D.useState)(""), [ue, de] = (0, D.useState)(""), [fe, pe] = (0, D.useState)(null), [me, he] = (0, D.useState)("all"), ge = t.runs.filter((e) => JO(jO(e, ["status"], ""))), _e = t.validationScans.filter((e) => mo(e)), ve = Rl(r.role), ye = ja(r, "high_scale:request"), be = (0, D.useMemo)(() => FE(t.checks), [t.checks]), xe = (0, D.useMemo)(() => PE(t.checks, g, b), [
+function dk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
+  let { confirm: a } = lp(), [o, s] = JE("runs"), [c, l] = JE("findings"), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)("recommended"), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)("all"), [S, C] = (0, D.useState)("all"), [w, T] = (0, D.useState)("open"), [E, O] = (0, D.useState)(""), [k, A] = (0, D.useState)(!1), [j, M] = (0, D.useState)(!1), [P, ee] = (0, D.useState)(null), [F, I] = (0, D.useState)(() => t.evidence.length > 0), [te, ne] = (0, D.useState)(0), [re, ie] = (0, D.useState)(""), [ae, oe] = (0, D.useState)("all"), [L, se] = (0, D.useState)(!1), [ce, le] = (0, D.useState)(""), [ue, de] = (0, D.useState)(""), [fe, pe] = (0, D.useState)(null), [me, he] = (0, D.useState)("all"), ge = t.runs.filter((e) => YO(MO(e, ["status"], ""))), _e = t.validationScans.filter((e) => mo(e)), ve = Rl(r.role), ye = ja(r, "high_scale:request"), be = (0, D.useMemo)(() => IE(t.checks), [t.checks]), xe = (0, D.useMemo)(() => FE(t.checks, g, b), [
     t.checks,
     g,
     b
-  ]), Se = (0, D.useMemo)(() => LO(t.runs), [t.runs]), Ce = (0, D.useMemo)(() => {
+  ]), Se = (0, D.useMemo)(() => RO(t.runs), [t.runs]), Ce = (0, D.useMemo)(() => {
     let e = v.trim().toLowerCase();
-    return xe.filter((t) => S !== "all" && QO(t, Se) !== S ? !1 : !e || [
-      jO(t, ["check_id"], ""),
-      jO(t, ["name", "title"], ""),
-      jO(t, ["description", "summary"], ""),
-      jO(t, ["vector_family"], ""),
-      jO(t, ["evidence_tier"], "")
+    return xe.filter((t) => S !== "all" && $O(t, Se) !== S ? !1 : !e || [
+      MO(t, ["check_id"], ""),
+      MO(t, ["name", "title"], ""),
+      MO(t, ["description", "summary"], ""),
+      MO(t, ["vector_family"], ""),
+      MO(t, ["evidence_tier"], "")
     ].join(" ").toLowerCase().includes(e));
   }, [
     xe,
@@ -49557,7 +49638,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       let n = Date.parse(String(e.started_at ?? e.created_at ?? "")) || 0;
       return (Date.parse(String(t.started_at ?? t.created_at ?? "")) || 0) - n;
     });
-    return ae === "all" ? e : e.filter((e) => jO(e, ["status"], "") === ae);
+    return ae === "all" ? e : e.filter((e) => MO(e, ["status"], "") === ae);
   }, [t.runs, ae]);
   (0, D.useEffect)(() => {
     t.evidence.length > 0 && I(!0);
@@ -49601,7 +49682,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   async function Oe() {
     if (!ve) return;
     let e = ue;
-    e && (await lk(d, h, p, `finalize-${e}`, () => B(n, r, `/v1/test-runs/${e}/finalize`, { method: "POST" }), "Run finalized after observation window.", i), de(""));
+    e && (await uk(d, h, p, `finalize-${e}`, () => B(n, r, `/v1/test-runs/${e}/finalize`, { method: "POST" }), "Run finalized after observation window.", i), de(""));
   }
   async function ke() {
     d("refresh"), h(""), p("");
@@ -49614,17 +49695,17 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     }
   }
   if (e === "checks") {
-    ZO();
+    QO();
     let e = [
       {
         key: "check",
         label: "Check",
         render: (e) => {
-          let t = jO(e, ["check_id"], ""), n = Array.isArray(e.supported_targets) ? e.supported_targets.map(String) : [];
+          let t = MO(e, ["check_id"], ""), n = Array.isArray(e.supported_targets) ? e.supported_targets.map(String) : [];
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-check-primary",
             children: [
-              /* @__PURE__ */ (0, V.jsx)("strong", { children: jO(e, [
+              /* @__PURE__ */ (0, V.jsx)("strong", { children: MO(e, [
                 "name",
                 "title",
                 "check_id"
@@ -49645,20 +49726,20 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
           tone: "info",
           title: "Vector family from the check catalog",
-          children: PO(jO(e, ["vector_family"], ""))
+          children: FO(MO(e, ["vector_family"], ""))
         })
       },
       {
         key: "mode",
         label: "Mode & safety",
         render: (e) => {
-          let t = jO(e, ["safety_class"], "unknown");
+          let t = MO(e, ["safety_class"], "unknown");
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
             children: [/* @__PURE__ */ (0, V.jsx)(W, {
-              tone: zO(t),
-              children: RO(t)
-            }), /* @__PURE__ */ (0, V.jsx)("small", { children: BO(e) })]
+              tone: BO(t),
+              children: zO(t)
+            }), /* @__PURE__ */ (0, V.jsx)("small", { children: VO(e) })]
           });
         }
       },
@@ -49666,7 +49747,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "evidence",
         label: "Evidence tier",
         render: (e) => {
-          let t = jO(e, ["evidence_tier"], ""), n = Array.isArray(e.evidence_required) ? e.evidence_required.map(String) : [];
+          let t = MO(e, ["evidence_tier"], ""), n = Array.isArray(e.evidence_required) ? e.evidence_required.map(String) : [];
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
             children: [t ? /* @__PURE__ */ (0, V.jsx)(W, {
@@ -49691,12 +49772,12 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "expected",
         label: "Expected behavior",
         render: (e) => {
-          let t = jO(e, ["expected_behavior", "expected_result"], ""), n = jO(e, ["description", "summary"], "");
+          let t = MO(e, ["expected_behavior", "expected_result"], ""), n = MO(e, ["description", "summary"], "");
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
-            children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: t ? ok(t) : "Declared per target" }), n ? /* @__PURE__ */ (0, V.jsx)("small", {
+            children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: t ? sk(t) : "Declared per target" }), n ? /* @__PURE__ */ (0, V.jsx)("small", {
               title: n,
-              children: ak(n, 86)
+              children: ok(n, 86)
             }) : null]
           });
         }
@@ -49705,8 +49786,8 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "result",
         label: "Last result",
         render: (e) => {
-          let t = jO(e, ["check_id"], ""), n = Se.get(t), r = jO(e, ["safety_class"], ""), i = n?.verdict || (r === "soc_gated" ? "request" : ""), a = /* @__PURE__ */ (0, V.jsx)(W, {
-            tone: VO(i),
+          let t = MO(e, ["check_id"], ""), n = Se.get(t), r = MO(e, ["safety_class"], ""), i = n?.verdict || (r === "soc_gated" ? "request" : ""), a = /* @__PURE__ */ (0, V.jsx)(W, {
+            tone: HO(i),
             children: i ? i === "request" ? "Request required" : eu(i) : "Untested"
           });
           return n?.runId ? /* @__PURE__ */ (0, V.jsx)(yc, {
@@ -49753,7 +49834,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           }),
           " SOC request-only"
         ] }) }),
-        /* @__PURE__ */ (0, V.jsx)(tk, {
+        /* @__PURE__ */ (0, V.jsx)(nk, {
           message: f,
           error: m,
           neutral: !0
@@ -49797,13 +49878,13 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
               /* @__PURE__ */ (0, V.jsx)(Ic, {
                 label: "Vector family",
                 value: g,
-                options: $O,
+                options: ek,
                 onChange: (e) => _(e)
               }),
               /* @__PURE__ */ (0, V.jsx)(Ic, {
                 label: "Safety class",
                 value: b,
-                options: wE.map((e) => ({
+                options: TE.map((e) => ({
                   value: e.id,
                   label: `${e.label} (${be[e.id]})`
                 })),
@@ -49812,7 +49893,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
               /* @__PURE__ */ (0, V.jsx)(Ic, {
                 label: "Last verdict",
                 value: S,
-                options: ek,
+                options: tk,
                 onChange: C
               })
             ]
@@ -49820,10 +49901,10 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             className: "validation-catalog-table",
             columns: e,
             items: Ce,
-            getRowId: (e, t) => jO(e, ["check_id"], String(t)),
+            getRowId: (e, t) => MO(e, ["check_id"], String(t)),
             getRowProps: (e) => {
-              let t = jO(e, ["check_id"], "");
-              return t ? rk("check-detail", t, `Open ${t}`) : {};
+              let t = MO(e, ["check_id"], "");
+              return t ? ik("check-detail", t, `Open ${t}`) : {};
             },
             loadError: n,
             onRetry: () => void ke(),
@@ -49842,19 +49923,19 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     });
   }
   if (e === "runs") {
-    ZO();
+    QO();
     let e = [
       {
         key: "run",
         label: "Run",
         render: (e) => {
-          let t = jO(e, ["scan_id"], "");
+          let t = MO(e, ["scan_id"], "");
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
             children: [/* @__PURE__ */ (0, V.jsx)("code", {
               className: "traffic-path-label",
-              title: jO(e, ["id"]),
-              children: jO(e, ["id"])
+              title: MO(e, ["id"]),
+              children: MO(e, ["id"])
             }), t ? /* @__PURE__ */ (0, V.jsx)("a", {
               className: "scan-link small",
               href: Zf("scan-detail", t),
@@ -49868,29 +49949,29 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       {
         key: "group",
         label: "Target group",
-        render: (e) => WO(t.targetGroups, jO(e, ["target_group_id"]))
+        render: (e) => GO(t.targetGroups, MO(e, ["target_group_id"]))
       },
       {
         key: "checks",
         label: "Checks",
         render: (e) => {
-          let n = sk(e, ["check_count"], -1);
+          let n = ck(e, ["check_count"], -1);
           return n >= 0 ? /* @__PURE__ */ (0, V.jsx)("span", {
             className: "num tabular-nums",
             children: n
-          }) : ik(t.checks, jO(e, ["check_id"]), jO(e, ["id"]));
+          }) : ak(t.checks, MO(e, ["check_id"]), MO(e, ["id"]));
         }
       },
       {
         key: "mode",
         label: "Mode",
         render: (e) => {
-          let n = jO(e, ["check_id"], ""), r = t.checks.find((e) => jO(e, ["check_id"], "") === n), i = jO(r ?? {}, ["safety_class"], ""), a = jO(r ?? {}, ["evidence_tier"], "");
+          let n = MO(e, ["check_id"], ""), r = t.checks.find((e) => MO(e, ["check_id"], "") === n), i = MO(r ?? {}, ["safety_class"], ""), a = MO(r ?? {}, ["evidence_tier"], "");
           return i ? /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
             children: [/* @__PURE__ */ (0, V.jsx)(W, {
-              tone: zO(i),
-              children: RO(i)
+              tone: BO(i),
+              children: zO(i)
             }), a ? /* @__PURE__ */ (0, V.jsx)("small", { children: a }) : null]
           }) : /* @__PURE__ */ (0, V.jsx)("span", {
             className: "muted",
@@ -49902,7 +49983,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "status",
         label: "Status",
         render: (e) => {
-          let t = jO(e, ["status"], "planned"), n = KO(t), r = n ? YO(e.started_at ?? e.created_at) : "";
+          let t = MO(e, ["status"], "planned"), n = qO(t), r = n ? XO(e.started_at ?? e.created_at) : "";
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "run-status-cell",
             children: [/* @__PURE__ */ (0, V.jsxs)("span", {
@@ -49913,7 +49994,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
               }) : null, /* @__PURE__ */ (0, V.jsx)(W, {
                 tone: Jv(t),
                 title: "Recorded run lifecycle status",
-                children: HO(t)
+                children: UO(t)
               })]
             }), r ? /* @__PURE__ */ (0, V.jsx)("span", {
               className: "muted run-status-sub",
@@ -49926,16 +50007,16 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "verdict",
         label: "Verdict",
         render: (e) => {
-          let n = kg(e, t.evidence) ? IO(e) : "";
+          let n = kg(e, t.evidence) ? LO(e) : "";
           if (!n) return /* @__PURE__ */ (0, V.jsx)("span", {
             className: "muted",
             children: "No result yet"
           });
-          let r = sk(ck(e, ["verdict"]) ?? {}, ["confidence_pct", "confidence"], -1), i = r < 0 ? "" : r <= 1 ? `${Math.round(r * 100)}% confidence` : `${Math.round(r)}% confidence`;
+          let r = ck(lk(e, ["verdict"]) ?? {}, ["confidence_pct", "confidence"], -1), i = r < 0 ? "" : r <= 1 ? `${Math.round(r * 100)}% confidence` : `${Math.round(r)}% confidence`;
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "catalog-cell-stack",
             children: [/* @__PURE__ */ (0, V.jsx)(W, {
-              tone: UO(n),
+              tone: WO(n),
               title: "Evidence-backed run verdict",
               children: eu(n)
             }), i ? /* @__PURE__ */ (0, V.jsx)("small", { children: i }) : null]
@@ -49962,8 +50043,8 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "actions",
         label: "Actions",
         render: (e) => {
-          let t = jO(e, ["id"], "");
-          return !t || !JO(jO(e, ["status"], "")) || !ve ? /* @__PURE__ */ (0, V.jsx)("span", {
+          let t = MO(e, ["id"], "");
+          return !t || !YO(MO(e, ["status"], "")) || !ve ? /* @__PURE__ */ (0, V.jsx)("span", {
             className: "muted",
             children: "—"
           }) : /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -49991,19 +50072,19 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           });
         }
       }
-    ], a = t.targetGroups.length > 0 && t.checks.some((e) => jO(e, ["safety_class"]) === "safe"), c = t.targetGroups.length === 0 ? "Declare a target group first." : t.checks.some((e) => jO(e, ["safety_class"]) === "safe") ? "" : "No customer-runnable check in catalog.", l = [{
+    ], a = t.targetGroups.length > 0 && t.checks.some((e) => MO(e, ["safety_class"]) === "safe"), c = t.targetGroups.length === 0 ? "Declare a target group first." : t.checks.some((e) => MO(e, ["safety_class"]) === "safe") ? "" : "No customer-runnable check in catalog.", l = [{
       value: "all",
       label: "All statuses"
-    }, ...[...new Set(t.runs.map((e) => jO(e, ["status"], "")).filter(Boolean))].sort().map((e) => ({
+    }, ...[...new Set(t.runs.map((e) => MO(e, ["status"], "")).filter(Boolean))].sort().map((e) => ({
       value: e,
-      label: HO(e)
+      label: UO(e)
     }))], g = [{
       value: "all",
       label: "All scan statuses"
     }, ...Za.map((e) => ({
       value: e,
       label: xo(e)
-    }))], _ = me === "all" ? t.validationScans : t.validationScans.filter((e) => jO(e, ["status"], "") === me), v = [ge.length > 0 ? `${ge.length} active ${pa(ge.length, "run")}` : "", _e.length > 0 ? `${_e.length} active ${pa(_e.length, "scan")}` : ""].filter(Boolean).join(", "), y = /* @__PURE__ */ (0, V.jsx)(CE, {
+    }))], _ = me === "all" ? t.validationScans : t.validationScans.filter((e) => MO(e, ["status"], "") === me), v = [ge.length > 0 ? `${ge.length} active ${pa(ge.length, "run")}` : "", _e.length > 0 ? `${_e.length} active ${pa(_e.length, "scan")}` : ""].filter(Boolean).join(", "), y = /* @__PURE__ */ (0, V.jsx)(wE, {
       onRefresh: () => void i(),
       onStartSafeRun: () => {
         window.location.hash = "#checks";
@@ -50015,7 +50096,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       refreshBusy: u === "refresh-runs",
       safeRunBusy: !1,
       safeRunDisabled: u !== "" || !a
-    }), b = /* @__PURE__ */ (0, V.jsx)(SE, {
+    }), b = /* @__PURE__ */ (0, V.jsx)(CE, {
       data: t,
       config: n,
       session: r,
@@ -50041,11 +50122,11 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         scan: e
       }),
       onCancelled: (e) => {
-        h(""), p(`Scan ${Mo(e)} is ${xo(jO(e, ["status"], "")).toLowerCase()}.`), i(["validationScans", "runs"]);
+        h(""), p(`Scan ${Mo(e)} is ${xo(MO(e, ["status"], "")).toLowerCase()}.`), i(["validationScans", "runs"]);
       }
     }), S = (e) => {
-      let t = jO(e, ["id"], "");
-      return rk("run-detail", t, `Open ${t} detail`);
+      let t = MO(e, ["id"], "");
+      return ik("run-detail", t, `Open ${t} detail`);
     }, C = np({
       icon: N,
       title: "No test runs yet.",
@@ -50125,7 +50206,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         runsEmptyState: C,
         modals: w
       };
-      return /* @__PURE__ */ (0, V.jsx)(xD, { ...d });
+      return /* @__PURE__ */ (0, V.jsx)(SD, { ...d });
     }
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content validation-runs-page",
@@ -50135,7 +50216,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           eyebrow: "Validation history",
           title: "Test runs",
           description: "Review safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence.",
-          actions: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(YE, {
+          actions: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(XE, {
             value: o,
             onChange: s
           }), y] })
@@ -50167,7 +50248,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           role: "note",
           children: ["Open the vector library once ready — ", c]
         }) : null,
-        /* @__PURE__ */ (0, V.jsx)(tk, {
+        /* @__PURE__ */ (0, V.jsx)(nk, {
           message: f,
           error: m,
           neutral: !0
@@ -50225,7 +50306,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   }
   if (e === "findings") {
     let e = Z_(t.findings), i = t.loadErrors.findings ?? "";
-    return c === "refined" ? /* @__PURE__ */ (0, V.jsx)(OO, {
+    return c === "refined" ? /* @__PURE__ */ (0, V.jsx)(kO, {
       data: t,
       config: n,
       session: r,
@@ -50245,7 +50326,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           eyebrow: "Triage & remediate",
           title: "Findings",
           description: "Every finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path.",
-          actions: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(YE, {
+          actions: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(XE, {
             value: c,
             onChange: l
           }), /* @__PURE__ */ (0, V.jsx)(H, {
@@ -50279,7 +50360,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           }),
           " SLA breached"
         ] }) }),
-        /* @__PURE__ */ (0, V.jsx)(tk, {
+        /* @__PURE__ */ (0, V.jsx)(nk, {
           message: f,
           error: m,
           neutral: !0
@@ -50289,7 +50370,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           children: [e.slaBreachCount, " SLA breached"]
         })] }), /* @__PURE__ */ (0, V.jsx)(X, {
           className: "findings-surface-wrap",
-          children: /* @__PURE__ */ (0, V.jsx)(pE, {
+          children: /* @__PURE__ */ (0, V.jsx)(mE, {
             findings: t.findings,
             checks: t.checks,
             targetGroups: t.targetGroups,
@@ -50314,7 +50395,7 @@ function uk({ route: e, data: t, config: n, session: r, onRefresh: i }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/readiness-posture.ts
-function dk(e, t, n = "") {
+function fk(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -50322,7 +50403,7 @@ function dk(e, t, n = "") {
   }
   return n;
 }
-function fk(e) {
+function pk(e) {
   let t = e.trim().toLowerCase();
   return !t || t === "pending" || t === "planned" || t === "running" ? null : [
     "pass",
@@ -50348,7 +50429,7 @@ function fk(e) {
     "unprotected"
   ].includes(t) ? "gap" : "review";
 }
-function pk(e, t, n) {
+function mk(e, t, n) {
   let r = e?.readiness?.posture, i = typeof e?.readiness?.score == "number" ? e.readiness.score : null, a = typeof e?.readiness?.delta == "number" ? e.readiness.delta : null;
   if (r && typeof r == "object") {
     let e = Number(r.pass ?? 0), t = Number(r.review ?? 0), n = Number(r.gap ?? 0), o = Number(r.total ?? e + t + n);
@@ -50356,23 +50437,23 @@ function pk(e, t, n) {
       score: i,
       delta: a,
       total: o,
-      segments: hk(e, t, n, o)
+      segments: gk(e, t, n, o)
     };
   }
   let o = /* @__PURE__ */ new Map();
   for (let e of t) {
-    let n = dk(e, ["check_id"], "");
+    let n = fk(e, ["check_id"], "");
     if (!n) continue;
-    let r = dk(e, ["status"], "");
+    let r = fk(e, ["status"], "");
     if (!["completed", "verdicted"].includes(r)) continue;
-    let i = dk(e, ["verdict", "verdict"], mk(e));
+    let i = fk(e, ["verdict", "verdict"], hk(e));
     if (!i) continue;
-    let a = String(e.updated_at ?? e.completed_at ?? e.created_at ?? ""), s = o.get(n), c = t.find((e) => dk(e, ["check_id"]) === n && dk(e, ["verdict", "verdict"], mk(e)) === s), l = c ? String(c.updated_at ?? c.completed_at ?? c.created_at ?? "") : "";
+    let a = String(e.updated_at ?? e.completed_at ?? e.created_at ?? ""), s = o.get(n), c = t.find((e) => fk(e, ["check_id"]) === n && fk(e, ["verdict", "verdict"], hk(e)) === s), l = c ? String(c.updated_at ?? c.completed_at ?? c.created_at ?? "") : "";
     (!s || a.localeCompare(l) >= 0) && o.set(n, i);
   }
   let s = 0, c = 0, l = 0;
   for (let e of o.values()) {
-    let t = fk(e);
+    let t = pk(e);
     t === "pass" ? s += 1 : t === "review" ? c += 1 : t === "gap" && (l += 1);
   }
   let u = s + c + l > 0 ? s + c + l : n.length;
@@ -50404,14 +50485,14 @@ function pk(e, t, n) {
     score: i,
     delta: a,
     total: u,
-    segments: hk(s, c, l, u)
+    segments: gk(s, c, l, u)
   };
 }
-function mk(e) {
+function hk(e) {
   let t = e.verdict;
-  return !t || typeof t != "object" || Array.isArray(t) ? "" : dk(t, ["verdict", "status"], "");
+  return !t || typeof t != "object" || Array.isArray(t) ? "" : fk(t, ["verdict", "status"], "");
 }
-function hk(e, t, n, r) {
+function gk(e, t, n, r) {
   let i = r > 0 ? r : 1;
   return [
     {
@@ -50434,32 +50515,32 @@ function hk(e, t, n, r) {
     }
   ];
 }
-var gk = .6;
-function _k(e) {
+var _k = .6;
+function vk(e) {
   let t = {
     pass: "var(--success)",
     review: "var(--warn)",
     gap: "var(--danger)"
   }, n = "color-mix(in oklab, var(--bg), var(--fg) 6%)", r = e.filter((e) => e.count > 0), i = r.reduce((e, t) => e + t.count, 0);
   if (i <= 0) return `conic-gradient(from -90deg, ${n} 0% 100%)`;
-  let a = 100 - (r.length - 1) * gk, o = (e) => `${Math.round(e * 100) / 100}%`, s = 0, c = [];
+  let a = 100 - (r.length - 1) * _k, o = (e) => `${Math.round(e * 100) / 100}%`, s = 0, c = [];
   return r.forEach((e, l) => {
     let u = l === r.length - 1, d = u ? 100 : s + e.count / i * a;
     if (c.push(`${t[e.key]} ${o(s)} ${o(d)}`), s = d, !u) {
-      let e = s + gk;
+      let e = s + _k;
       c.push(`${n} ${o(s)} ${o(e)}`), s = e;
     }
   }), `conic-gradient(from -90deg, ${c.join(", ")})`;
 }
 //#endregion
 //#region apps/web/react/src/components/charts/readiness-posture-donut.tsx
-var vk = {
+var yk = {
   pass: "var(--success)",
   review: "var(--warn)",
   gap: "var(--danger)"
 };
-function yk({ segment: e, total: t }) {
-  let n = vk[e.key], r = `${e.label} · ${e.count} of ${ma(t, "check")} · ${e.pct}%`;
+function bk({ segment: e, total: t }) {
+  let n = yk[e.key], r = `${e.label} · ${e.count} of ${ma(t, "check")} · ${e.pct}%`;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "legend-row",
     role: "listitem",
@@ -50498,8 +50579,8 @@ function yk({ segment: e, total: t }) {
     ]
   });
 }
-function bk({ state: e, runs: t, checks: n }) {
-  let { segments: r, total: i, score: a } = pk(e, t, n), o = r.reduce((e, t) => e + t.count, 0), s = _k(r), c = r.filter((e) => e.count > 0), l = c.map((e) => `${e.label} ${ma(e.count, "check")} ${e.pct} percent`).join(". "), u = a === null ? "Readiness score unavailable" : `Readiness score ${a} out of 100`, d = o === i ? `${ma(o, "check")} correlated` : `${o} of ${ma(i, "check")} correlated`, f = [
+function xk({ state: e, runs: t, checks: n }) {
+  let { segments: r, total: i, score: a } = mk(e, t, n), o = r.reduce((e, t) => e + t.count, 0), s = vk(r), c = r.filter((e) => e.count > 0), l = c.map((e) => `${e.label} ${ma(e.count, "check")} ${e.pct} percent`).join(". "), u = a === null ? "Readiness score unavailable" : `Readiness score ${a} out of 100`, d = o === i ? `${ma(o, "check")} correlated` : `${o} of ${ma(i, "check")} correlated`, f = [
     u,
     d,
     l
@@ -50545,7 +50626,7 @@ function bk({ state: e, runs: t, checks: n }) {
         className: "gauge-legend",
         role: "list",
         "aria-label": "Readiness posture breakdown",
-        children: r.map((e) => /* @__PURE__ */ (0, V.jsx)(yk, {
+        children: r.map((e) => /* @__PURE__ */ (0, V.jsx)(bk, {
           segment: e,
           total: i
         }, e.key))
@@ -50558,18 +50639,18 @@ function bk({ state: e, runs: t, checks: n }) {
 }
 //#endregion
 //#region apps/web/react/src/components/charts/score-trend-selection.ts
-function xk(e) {
+function Sk(e) {
   return e.runId || e.key;
 }
-function Sk(e, t) {
+function Ck(e, t) {
   if (t === null || e.length === 0) return null;
-  let n = e.findIndex((e) => xk(e) === t);
+  let n = e.findIndex((e) => Sk(e) === t);
   return n >= 0 && n < e.length ? n : null;
 }
-function Ck(e, t) {
-  return t === null || !Number.isInteger(t) || t < 0 || t >= e.length ? null : xk(e[t]);
+function wk(e, t) {
+  return t === null || !Number.isInteger(t) || t < 0 || t >= e.length ? null : Sk(e[t]);
 }
-function wk(e, t, n) {
+function Tk(e, t, n) {
   if (e === "Escape") return null;
   if (n <= 0) return;
   let r = n - 1, i = t === null ? r : Math.min(Math.max(t, 0), r);
@@ -50580,22 +50661,22 @@ function wk(e, t, n) {
 }
 //#endregion
 //#region apps/web/react/src/components/charts/score-trend.tsx
-var Tk = /* @__PURE__ */ new Set([
+var Ek = /* @__PURE__ */ new Set([
   "completed",
   "verdicted",
   "finalized"
 ]);
-function Ek(e) {
+function Dk(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function Dk(e) {
+function Ok(e) {
   return typeof e == "number" && Number.isFinite(e) && e >= 0 && e <= 100 ? e : null;
 }
-function Ok(e) {
+function kk(e) {
   return typeof e == "number" && Number.isFinite(e) && e >= 0 ? e : null;
 }
-function kk(e) {
-  let t = Ek(e.summary), n = Ek(e.readiness), r = Ek(e.result), i = [
+function Ak(e) {
+  let t = Dk(e.summary), n = Dk(e.readiness), r = Dk(e.result), i = [
     e.readiness_score,
     e.readinessScore,
     t?.readiness_score,
@@ -50605,16 +50686,16 @@ function kk(e) {
     r?.readinessScore
   ];
   for (let e of i) {
-    let t = Dk(e);
+    let t = Ok(e);
     if (t !== null) return t;
   }
   return null;
 }
-function Ak(e) {
+function jk(e) {
   return e && Array.isArray(e.evidence_ids) ? e.evidence_ids : [];
 }
-function jk(e) {
-  let t = Ek(e.verdict), n = typeof e.verdict == "string" ? e.verdict : null, r = t?.verdict ?? t?.result ?? t?.status, i = n ?? (typeof r == "string" ? r : null);
+function Mk(e) {
+  let t = Dk(e.verdict), n = typeof e.verdict == "string" ? e.verdict : null, r = t?.verdict ?? t?.result ?? t?.status, i = n ?? (typeof r == "string" ? r : null);
   if (!i) return null;
   let a = i.trim().toLowerCase();
   if (!a || [
@@ -50623,10 +50704,10 @@ function jk(e) {
     "running",
     "collecting"
   ].includes(a)) return null;
-  let o = typeof e.status == "string" ? e.status.trim().toLowerCase() : "", s = Ok(e.evidence_count), c = Ak(e).length > 0 || Ak(t).length > 0 || typeof e.evidence_id == "string" && e.evidence_id.length > 0 || s !== null && s > 0;
-  return Tk.has(o) || c ? i : null;
+  let o = typeof e.status == "string" ? e.status.trim().toLowerCase() : "", s = kk(e.evidence_count), c = jk(e).length > 0 || jk(t).length > 0 || typeof e.evidence_id == "string" && e.evidence_id.length > 0 || s !== null && s > 0;
+  return Ek.has(o) || c ? i : null;
 }
-function Mk(e) {
+function Nk(e) {
   let t = e.trim().toLowerCase();
   return [
     "pass",
@@ -50656,30 +50737,30 @@ function Mk(e) {
     "misplaced_agent"
   ].includes(t) ? "warn" : "muted";
 }
-function Nk(e) {
+function Pk(e) {
   return String(e.completed_at ?? e.created_at ?? e.started_at ?? "");
 }
-function Pk(e) {
-  return Nk(e) || String(e.id ?? "");
+function Fk(e) {
+  return Pk(e) || String(e.id ?? "");
 }
-function Fk(e, t) {
+function Ik(e, t) {
   let n = String(e.id ?? "");
   return n ? `…${n.slice(-8)}` : `Run ${t + 1}`;
 }
-function Ik(e) {
+function Lk(e) {
   let t = Date.parse(e);
   return Number.isFinite(t) ? new Date(t).toLocaleDateString(void 0, {
     month: "short",
     day: "numeric"
   }) : "";
 }
-function Lk(e, t, n = `${t}s`) {
+function Rk(e, t, n = `${t}s`) {
   return e === 1 ? t : n;
 }
-function Rk(e) {
-  return e === 0 ? "No change" : `${e > 0 ? "+" : ""}${e} ${Lk(Math.abs(e), "point")}`;
+function zk(e) {
+  return e === 0 ? "No change" : `${e > 0 ? "+" : ""}${e} ${Rk(Math.abs(e), "point")}`;
 }
-function zk({ currentScore: e, points: t, categoricalOnlyCount: n }) {
+function Bk({ currentScore: e, points: t, categoricalOnlyCount: n }) {
   let r = t[0], i = t[t.length - 1], a = t.length >= 2 ? Math.round((i.value - r.value) * 10) / 10 : null;
   return /* @__PURE__ */ (0, V.jsxs)("dl", {
     className: "trend-figures",
@@ -50695,7 +50776,7 @@ function zk({ currentScore: e, points: t, categoricalOnlyCount: n }) {
         className: "trend-figure",
         children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Change across scored runs" }), /* @__PURE__ */ (0, V.jsx)("dd", {
           "data-direction": a === null ? "none" : a > 0 ? "up" : a < 0 ? "down" : "flat",
-          children: a === null ? "Needs two runs" : Rk(a)
+          children: a === null ? "Needs two runs" : zk(a)
         })]
       }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -50708,7 +50789,7 @@ function zk({ currentScore: e, points: t, categoricalOnlyCount: n }) {
     ]
   });
 }
-function Bk() {
+function Vk() {
   let e = (0, D.useRef)(null), [t, n] = (0, D.useState)(0);
   return (0, D.useEffect)(() => {
     let t = e.current;
@@ -50719,24 +50800,24 @@ function Bk() {
     return i.observe(t), () => i.disconnect();
   }, []), [e, t];
 }
-var Vk = 224, Hk = 18, Uk = 16, Wk = 36, Gk = [
+var Hk = 224, Uk = 18, Wk = 16, Gk = 36, Kk = [
   0,
   25,
   50,
   75,
   100
-], Kk = 80, qk = 148, Jk = 40, Yk = 42;
-function Xk(e, t) {
+], qk = 80, Jk = 148, Yk = 40, Xk = 42;
+function Zk(e, t) {
   if (t < 420) return e > 1 ? [0, e - 1] : [0];
   if (e <= 6) return Array.from({ length: e }, (e, t) => t);
   let n = Array.from({ length: 5 }, (t, n) => Math.round(n * (e - 1) / 4));
   return [...new Set(n)];
 }
-function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
-  let [i, a] = Bk(), [o, s] = (0, D.useState)(null), c = Sk(e, o), l = (t) => s(Ck(e, t)), u = (0, D.useId)(), d = (0, D.useId)(), f = e.length > Jk, p = e.length, m = Math.max(1, a - Wk - Uk), h = (e) => Wk + (p === 1 ? m / 2 : e * m / (p - 1)), g = (e) => Hk + (1 - e / 100) * 176, _ = e.map((e, t) => ({
+function Qk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
+  let [i, a] = Vk(), [o, s] = (0, D.useState)(null), c = Ck(e, o), l = (t) => s(wk(e, t)), u = (0, D.useId)(), d = (0, D.useId)(), f = e.length > Yk, p = e.length, m = Math.max(1, a - Gk - Wk), h = (e) => Gk + (p === 1 ? m / 2 : e * m / (p - 1)), g = (e) => Uk + (1 - e / 100) * 176, _ = e.map((e, t) => ({
     x: h(t),
     y: g(e.value)
-  })), v = _.map(({ x: e, y: t }, n) => `${n === 0 ? "M" : "L"}${e.toFixed(1)} ${t.toFixed(1)}`).join(" "), y = `${v} L${_[p - 1].x.toFixed(1)} 194 L${_[0].x.toFixed(1)} 194 Z`, b = e[0], x = e[p - 1], S = e.reduce((e, t) => t.value < e.value ? t : e, b), C = e.reduce((e, t) => t.value > e.value ? t : e, b), w = Math.round((x.value - b.value) * 10) / 10, T = w > 0 ? `up ${Rk(w).slice(1)}` : w < 0 ? `down ${Rk(w).slice(1)}` : "unchanged", E = `Latest scored run is ${x.value} of 100, ${T} from the first of ${p} scored runs. Range ${S.value} to ${C.value}.`, O = `Readiness score line chart. ${E} Use the left and right arrow keys to read each run.`;
+  })), v = _.map(({ x: e, y: t }, n) => `${n === 0 ? "M" : "L"}${e.toFixed(1)} ${t.toFixed(1)}`).join(" "), y = `${v} L${_[p - 1].x.toFixed(1)} 194 L${_[0].x.toFixed(1)} 194 Z`, b = e[0], x = e[p - 1], S = e.reduce((e, t) => t.value < e.value ? t : e, b), C = e.reduce((e, t) => t.value > e.value ? t : e, b), w = Math.round((x.value - b.value) * 10) / 10, T = w > 0 ? `up ${zk(w).slice(1)}` : w < 0 ? `down ${zk(w).slice(1)}` : "unchanged", E = `Latest scored run is ${x.value} of 100, ${T} from the first of ${p} scored runs. Range ${S.value} to ${C.value}.`, O = `Readiness score line chart. ${E} Use the left and right arrow keys to read each run.`;
   function k(t) {
     let n = t === null ? void 0 : e[t];
     return n ? `Run ${n.runId || n.label}${n.date ? `, ${n.date}` : ""}: readiness ${n.value} of 100.` : "";
@@ -50749,15 +50830,15 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
     }), l(r);
   }
   function j(e) {
-    let t = wk(e.key, c, p);
+    let t = Tk(e.key, c, p);
     t !== void 0 && (t !== null && e.preventDefault(), l(t));
   }
-  let M = c === null ? null : e[c] ?? null, N = c === null ? null : _[c] ?? null, P = N ? Math.min(Math.max(N.x - qk / 2, Wk), Math.max(Wk, a - Uk - qk)) : 0, ee = N ? N.y - Yk - 12 < 0 ? N.y + 12 : N.y - Yk - 12 : 0, F = g(Kk);
+  let M = c === null ? null : e[c] ?? null, N = c === null ? null : _[c] ?? null, P = N ? Math.min(Math.max(N.x - Jk / 2, Gk), Math.max(Gk, a - Wk - Jk)) : 0, ee = N ? N.y - Xk - 12 < 0 ? N.y + 12 : N.y - Xk - 12 : 0, F = g(qk);
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "trend",
     "data-tone": n,
     children: [
-      /* @__PURE__ */ (0, V.jsx)(zk, {
+      /* @__PURE__ */ (0, V.jsx)(Bk, {
         currentScore: t,
         points: e,
         categoricalOnlyCount: r
@@ -50778,18 +50859,18 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
         onBlur: () => l(null),
         children: a > 0 ? /* @__PURE__ */ (0, V.jsxs)("svg", {
           width: a,
-          height: Vk,
-          viewBox: `0 0 ${a} ${Vk}`,
+          height: Hk,
+          viewBox: `0 0 ${a} ${Hk}`,
           "aria-hidden": "true",
           focusable: "false",
           onPointerMove: A,
           onPointerLeave: () => l(null),
           children: [
-            Gk.map((e) => /* @__PURE__ */ (0, V.jsxs)("g", { children: [/* @__PURE__ */ (0, V.jsx)("line", {
+            Kk.map((e) => /* @__PURE__ */ (0, V.jsxs)("g", { children: [/* @__PURE__ */ (0, V.jsx)("line", {
               className: "trend-grid-line",
               "data-base": e === 0 ? "true" : void 0,
-              x1: Wk,
-              x2: a - Uk,
+              x1: Gk,
+              x2: a - Wk,
               y1: g(e),
               y2: g(e)
             }), /* @__PURE__ */ (0, V.jsx)("text", {
@@ -50801,17 +50882,17 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
             })] }, e)),
             /* @__PURE__ */ (0, V.jsx)("line", {
               className: "trend-threshold",
-              x1: Wk,
-              x2: a - Uk,
+              x1: Gk,
+              x2: a - Wk,
               y1: F,
               y2: F
             }),
             /* @__PURE__ */ (0, V.jsx)("text", {
               className: "trend-threshold-label",
-              x: a - Uk,
+              x: a - Wk,
               y: F - 6,
               textAnchor: "end",
-              children: `Ready threshold ${Kk}`
+              children: `Ready threshold ${qk}`
             }),
             /* @__PURE__ */ (0, V.jsx)("path", {
               className: "trend-area",
@@ -50825,7 +50906,7 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
               className: "trend-guide",
               x1: N.x,
               x2: N.x,
-              y1: Hk,
+              y1: Uk,
               y2: 194
             }) : null,
             _.map(({ x: t, y: n }, r) => f && r !== c && r !== p - 1 ? null : /* @__PURE__ */ (0, V.jsx)("circle", {
@@ -50835,7 +50916,7 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
               cy: n,
               r: c === r ? 5.5 : 3.5
             }, e[r].key)),
-            Xk(p, a).map((t) => /* @__PURE__ */ (0, V.jsx)("text", {
+            Zk(p, a).map((t) => /* @__PURE__ */ (0, V.jsx)("text", {
               className: "trend-axis",
               x: _[t].x,
               y: 216,
@@ -50848,8 +50929,8 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
               children: [
                 /* @__PURE__ */ (0, V.jsx)("rect", {
                   className: "trend-tip-box",
-                  width: qk,
-                  height: Yk,
+                  width: Jk,
+                  height: Xk,
                   rx: 6
                 }),
                 /* @__PURE__ */ (0, V.jsx)("text", {
@@ -50872,7 +50953,7 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
       /* @__PURE__ */ (0, V.jsxs)("p", {
         className: "trend-caption",
         id: d,
-        children: [E, r > 0 ? ` ${r} verdict-only ${Lk(r, "run")} carried no readiness score and ${r === 1 ? "is" : "are"} not plotted.` : ""]
+        children: [E, r > 0 ? ` ${r} verdict-only ${Rk(r, "run")} carried no readiness score and ${r === 1 ? "is" : "are"} not plotted.` : ""]
       }),
       /* @__PURE__ */ (0, V.jsx)("p", {
         className: "sr-only trend-live",
@@ -50908,11 +50989,11 @@ function Zk({ points: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
     ]
   });
 }
-function Qk({ point: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
+function $k({ point: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "trend",
     "data-tone": n,
-    children: [/* @__PURE__ */ (0, V.jsx)(zk, {
+    children: [/* @__PURE__ */ (0, V.jsx)(Bk, {
       currentScore: t,
       points: [e],
       categoricalOnlyCount: r
@@ -50925,25 +51006,25 @@ function Qk({ point: e, currentScore: t, tone: n, categoricalOnlyCount: r }) {
     })]
   });
 }
-var $k = {
+var eA = {
   success: "Passed",
   warn: "Needs review",
   danger: "Gap found",
   muted: "Other result"
 };
-function eA({ verdictRuns: e, currentScore: t }) {
+function tA({ verdictRuns: e, currentScore: t }) {
   let n = {
     success: 0,
     warn: 0,
     danger: 0,
     muted: 0
   };
-  for (let { verdict: t } of e) n[Mk(t)] += 1;
+  for (let { verdict: t } of e) n[Nk(t)] += 1;
   let r = Object.keys(n).filter((e) => n[e] > 0), i = e.slice(-60), a = e.length > i.length;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "trend",
     children: [
-      /* @__PURE__ */ (0, V.jsx)(zk, {
+      /* @__PURE__ */ (0, V.jsx)(Bk, {
         currentScore: t,
         points: [],
         categoricalOnlyCount: e.length
@@ -50957,11 +51038,11 @@ function eA({ verdictRuns: e, currentScore: t }) {
           }),
           /* @__PURE__ */ (0, V.jsx)("ol", {
             className: "verdict-strip",
-            "aria-label": `Verdicts for ${i.length} evidence-backed ${Lk(i.length, "run")}, oldest first`,
+            "aria-label": `Verdicts for ${i.length} evidence-backed ${Rk(i.length, "run")}, oldest first`,
             children: i.map(({ run: e, verdict: t, index: n }) => {
               let r = `Run ${String(e.id ?? n + 1)}: ${eu(t)}`;
               return /* @__PURE__ */ (0, V.jsx)("li", {
-                "data-tone": Mk(t),
+                "data-tone": Nk(t),
                 title: r,
                 children: /* @__PURE__ */ (0, V.jsx)("span", {
                   className: "sr-only",
@@ -50972,7 +51053,7 @@ function eA({ verdictRuns: e, currentScore: t }) {
           }),
           /* @__PURE__ */ (0, V.jsx)("ul", {
             className: "verdict-tally",
-            "aria-label": `Verdict tally across all ${e.length} evidence-backed ${Lk(e.length, "run")}`,
+            "aria-label": `Verdict tally across all ${e.length} evidence-backed ${Rk(e.length, "run")}`,
             children: r.map((e) => /* @__PURE__ */ (0, V.jsxs)("li", {
               "data-tone": e,
               children: [
@@ -50980,7 +51061,7 @@ function eA({ verdictRuns: e, currentScore: t }) {
                   className: "verdict-tally-swatch",
                   "aria-hidden": "true"
                 }),
-                $k[e],
+                eA[e],
                 /* @__PURE__ */ (0, V.jsx)("strong", { children: n[e] })
               ]
             }, e))
@@ -50994,15 +51075,15 @@ function eA({ verdictRuns: e, currentScore: t }) {
     ]
   });
 }
-function tA({ runs: e, currentScore: t, tone: n }) {
-  let r = [...e].sort((e, t) => Pk(e).localeCompare(Pk(t))), i = r.map((e) => ({
+function nA({ runs: e, currentScore: t, tone: n }) {
+  let r = [...e].sort((e, t) => Fk(e).localeCompare(Fk(t))), i = r.map((e) => ({
     run: e,
-    value: kk(e)
+    value: Ak(e)
   })).filter((e) => e.value !== null), a = r.map((e, t) => ({
     run: e,
-    verdict: jk(e),
+    verdict: Mk(e),
     index: t
-  })).filter((e) => e.verdict !== null), o = a.filter(({ run: e }) => kk(e) === null).length, s = Dk(t);
+  })).filter((e) => e.verdict !== null), o = a.filter(({ run: e }) => Ak(e) === null).length, s = Ok(t);
   if (i.length === 0 && a.length === 0) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "trend-empty",
     role: "status",
@@ -51011,23 +51092,23 @@ function tA({ runs: e, currentScore: t, tone: n }) {
       children: "No run history to plot yet"
     }), /* @__PURE__ */ (0, V.jsxs)("p", { children: ["No validation run has published a readiness score or an evidence-backed verdict.", s === null ? "" : ` The current published score is ${s} of 100.`] })]
   });
-  if (i.length === 0) return /* @__PURE__ */ (0, V.jsx)(eA, {
+  if (i.length === 0) return /* @__PURE__ */ (0, V.jsx)(tA, {
     verdictRuns: a,
     currentScore: s
   });
   let c = i.map(({ run: e, value: t }, n) => ({
     key: `${String(e.id ?? "run")}-${n}`,
     runId: String(e.id ?? ""),
-    label: Fk(e, n),
+    label: Ik(e, n),
     value: t,
-    date: Ik(Nk(e))
+    date: Lk(Pk(e))
   })), l = s ?? c[c.length - 1].value, u = n ?? ta(l);
-  return c.length === 1 ? /* @__PURE__ */ (0, V.jsx)(Qk, {
+  return c.length === 1 ? /* @__PURE__ */ (0, V.jsx)($k, {
     point: c[0],
     currentScore: s,
     tone: u,
     categoricalOnlyCount: o
-  }) : /* @__PURE__ */ (0, V.jsx)(Zk, {
+  }) : /* @__PURE__ */ (0, V.jsx)(Qk, {
     points: c,
     currentScore: s,
     tone: u,
@@ -51036,7 +51117,7 @@ function tA({ runs: e, currentScore: t, tone: n }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/vector-coverage.mjs
-var nA = [
+var rA = [
   {
     label: "Origin",
     keys: ["origin"]
@@ -51073,45 +51154,45 @@ var nA = [
     ]
   }
 ];
-function rA(e, t) {
+function iA(e, t) {
   let n = e[t];
   return n == null ? "" : String(n).toLowerCase();
 }
-function iA(e, t, n) {
+function aA(e, t, n) {
   let r = e[t];
   if (!r || typeof r != "object" || Array.isArray(r)) return "";
   let i = r[n];
   return i == null ? "" : String(i);
 }
-function aA(e) {
-  return String(e.check_id ?? e.checkId ?? iA(e, "check", "check_id") ?? "");
-}
 function oA(e) {
-  return String(e.target_group_id ?? e.targetGroupId ?? iA(e, "target_group", "id") ?? "");
+  return String(e.check_id ?? e.checkId ?? aA(e, "check", "check_id") ?? "");
 }
-function sA(e, t) {
+function sA(e) {
+  return String(e.target_group_id ?? e.targetGroupId ?? aA(e, "target_group", "id") ?? "");
+}
+function cA(e, t) {
   let n = [
-    rA(e, "vector_family"),
-    rA(e, "category"),
-    rA(e, "name"),
-    rA(e, "check_id")
+    iA(e, "vector_family"),
+    iA(e, "category"),
+    iA(e, "name"),
+    iA(e, "check_id")
   ].join(" ");
   return t.keys.some((e) => {
     let t = e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`).test(n);
   });
 }
-function cA(e, t) {
-  return new Set(e.filter((e) => sA(e, t)).map((e) => String(e.check_id ?? e.id ?? "")).filter(Boolean));
+function lA(e, t) {
+  return new Set(e.filter((e) => cA(e, t)).map((e) => String(e.check_id ?? e.id ?? "")).filter(Boolean));
 }
-function lA({ checkIds: e, groupId: t, testPolicies: n, runs: r, evidence: i }) {
+function uA({ checkIds: e, groupId: t, testPolicies: n, runs: r, evidence: i }) {
   if (!t || e.size === 0) return {
     status: "no-data",
     policyCount: 0,
     runCount: 0,
     evidenceCount: 0
   };
-  let a = (n) => oA(n) === t && e.has(aA(n)), o = n.filter(a).length, s = r.filter(a).length, c = i.filter(a).length, l = "none";
+  let a = (n) => sA(n) === t && e.has(oA(n)), o = n.filter(a).length, s = r.filter(a).length, c = i.filter(a).length, l = "none";
   return c > 0 ? l = "evidence" : s > 0 ? l = "run" : o > 0 && (l = "policy"), {
     status: l,
     policyCount: o,
@@ -51121,33 +51202,33 @@ function lA({ checkIds: e, groupId: t, testPolicies: n, runs: r, evidence: i }) 
 }
 //#endregion
 //#region apps/web/react/src/components/charts/vector-heatmap.tsx
-var uA = {
+var dA = {
   evidence: "success",
   run: "warn",
   policy: "warn",
   none: "danger",
   "no-data": "muted"
-}, dA = {
+}, fA = {
   evidence: "Evidence",
   run: "Run",
   policy: "Policy",
   none: "No record",
   "no-data": "No data"
 };
-function fA(e) {
+function pA(e) {
   return e.status === "no-data" ? "No checks mapped to this vector family for this target group." : `${e.evidenceCount} evidence · ${e.runCount} runs · ${e.policyCount} policies`;
 }
-function pA({ coverage: e, groupName: t, familyName: n }) {
-  let r = uA[e.status], i = fA(e);
+function mA({ coverage: e, groupName: t, familyName: n }) {
+  let r = dA[e.status], i = pA(e);
   return /* @__PURE__ */ (0, V.jsxs)("span", {
     className: `heatmap-cell heatmap-${r} matrix-cell`,
     "data-status": e.status,
     title: i,
-    "aria-label": `${t}, ${n}: ${dA[e.status]}. ${i}`,
-    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: dA[e.status] }), e.status === "no-data" ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: [e.evidenceCount, " evidence"] })]
+    "aria-label": `${t}, ${n}: ${fA[e.status]}. ${i}`,
+    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: fA[e.status] }), e.status === "no-data" ? null : /* @__PURE__ */ (0, V.jsxs)("small", { children: [e.evidenceCount, " evidence"] })]
   });
 }
-function mA() {
+function hA() {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "heatmap-legend",
     "aria-label": "Coverage status legend",
@@ -51171,7 +51252,7 @@ function mA() {
     ]
   });
 }
-function hA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i }) {
+function gA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i }) {
   let a = t;
   return a.length === 0 ? /* @__PURE__ */ (0, V.jsx)(G, {
     icon: Kn,
@@ -51198,7 +51279,7 @@ function hA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i 
                 "Vector coverage by declared target group: ",
                 a.length,
                 " groups across ",
-                nA.length,
+                rA.length,
                 " vector families."
               ]
             }),
@@ -51208,7 +51289,7 @@ function hA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i 
                 className: "heatmap-head matrix-corner",
                 children: "Target group"
               })
-            }), nA.map((e) => /* @__PURE__ */ (0, V.jsx)("th", {
+            }), rA.map((e) => /* @__PURE__ */ (0, V.jsx)("th", {
               scope: "col",
               children: /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "heatmap-head",
@@ -51223,15 +51304,15 @@ function hA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i 
                   className: "heatmap-name",
                   children: s
                 })
-              }), nA.map((t) => {
-                let c = lA({
-                  checkIds: cA(e, t),
+              }), rA.map((t) => {
+                let c = uA({
+                  checkIds: lA(e, t),
                   groupId: o,
                   testPolicies: n,
                   runs: r,
                   evidence: i
                 });
-                return /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)(pA, {
+                return /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)(mA, {
                   coverage: c,
                   groupName: s,
                   familyName: Zl(t.label)
@@ -51241,13 +51322,13 @@ function hA({ checks: e, targetGroups: t, testPolicies: n, runs: r, evidence: i 
           ]
         })
       }),
-      /* @__PURE__ */ (0, V.jsx)(mA, {})
+      /* @__PURE__ */ (0, V.jsx)(hA, {})
     ]
   });
 }
 //#endregion
 //#region src/lib/probeEvidenceTiers.mjs
-var gA = Object.freeze([
+var _A = Object.freeze([
   "metadata_marker",
   "not_run",
   "http_head",
@@ -51263,7 +51344,7 @@ var gA = Object.freeze([
   "websocket_upgrade_posture",
   "http_method_matrix",
   "http3_control_probe"
-]), _A = new Set(gA), vA = Object.freeze(/* @__PURE__ */ "ops_readiness.origin_leak_scan.host_sni_bypass.port_scan_bounded.rate_limit_sequence.waf_enforcement_probe.dnssec_posture.dns_open_recursion.dns_failover_posture.dns_axfr_leak.tls_audit.cache_abuse_probe.api_surface_scan.cors_posture_probe.bot_challenge_probe.graphql_posture_probe.outside_in_waf_scan.grpc_reflection_probe.reflection_service_probe.header_size_probe.slow_header_probe.http2_frame_probe.waf_inspection_limit_probe.waf_class_marker_probe.waf_evasion_marker_probe.l7_resource_posture_probe".split(".")), yA = new Set(vA);
+]), vA = new Set(_A), yA = Object.freeze(/* @__PURE__ */ "ops_readiness.origin_leak_scan.host_sni_bypass.port_scan_bounded.rate_limit_sequence.waf_enforcement_probe.dnssec_posture.dns_open_recursion.dns_failover_posture.dns_axfr_leak.tls_audit.cache_abuse_probe.api_surface_scan.cors_posture_probe.bot_challenge_probe.graphql_posture_probe.outside_in_waf_scan.grpc_reflection_probe.reflection_service_probe.header_size_probe.slow_header_probe.http2_frame_probe.waf_inspection_limit_probe.waf_class_marker_probe.waf_evasion_marker_probe.l7_resource_posture_probe".split(".")), bA = new Set(yA);
 Object.freeze([
   "E0",
   "E1",
@@ -51279,10 +51360,10 @@ Object.freeze([
   E4: "SOC governed",
   E5: "Monitor only"
 });
-function bA(e) {
-  return e === "metadata_marker" ? "E1" : e === "not_run" ? "E0" : _A.has(e) ? "E2" : yA.has(e) ? "E3" : "E0";
+function xA(e) {
+  return e === "metadata_marker" ? "E1" : e === "not_run" ? "E0" : vA.has(e) ? "E2" : bA.has(e) ? "E3" : "E0";
 }
-var xA = Object.freeze({
+var SA = Object.freeze({
   soc_gated: Object.freeze([
     "high_scale.application.request_only",
     "high_scale.degradation_recovery.request_only",
@@ -51442,24 +51523,24 @@ var xA = Object.freeze({
   waf_evasion_marker_probe: Object.freeze(/* @__PURE__ */ "waf.evasion_alt_charset.safe,waf.evasion_base64_wrap.safe,waf.evasion_benign_padding.safe,waf.evasion_body_gzip.safe,waf.evasion_body_nested_encoding.safe,waf.evasion_content_type_binary.safe,waf.evasion_control_char.safe,waf.evasion_css_escape.safe,waf.evasion_framing_chunk_ext.safe,waf.evasion_framing_cl_te.safe,waf.evasion_framing_h2_h1.safe,waf.evasion_framing_line_ending.safe,waf.evasion_framing_transfer_coding.safe,waf.evasion_homoglyph.safe,waf.evasion_html_entity.safe,waf.evasion_ip_representation.safe,waf.evasion_js_escape.safe,waf.evasion_json_unicode_escape.safe,waf.evasion_lexical_literal.safe,waf.evasion_lexical_operator.safe,waf.evasion_lexical_tautology.safe,waf.evasion_method_override.safe,waf.evasion_multipart_charset.safe,waf.evasion_numeric_repr.safe,waf.evasion_overlong_utf8.safe,waf.evasion_parameter_location.safe,waf.evasion_parser_header_dup.safe,waf.evasion_parser_hpp.safe,waf.evasion_parser_json_dup.safe,waf.evasion_path_matrix.safe,waf.evasion_path_suffix.safe,waf.evasion_polyglot_content.safe,waf.evasion_protocol_h3_h1.safe,waf.evasion_protocol_qpack_hpack.safe,waf.evasion_protocol_upgrade.safe,waf.evasion_protocol_version.safe,waf.evasion_struct_deep_nesting.safe,waf.evasion_struct_type_confusion.safe,waf.evasion_unicode_normalization.safe,waf.evasion_whitespace.safe,waf.evasion_xml_attribute.safe".split(",")),
   waf_inspection_limit_probe: Object.freeze(["waf.inspection_limit.safe"]),
   l7_resource_posture_probe: Object.freeze(["l7.compressed_request_decompression.posture", "l7.request_parser_size.posture"])
-}), SA = new Map(Object.entries(xA).flatMap(([e, t]) => t.map((t) => [t, e]))), CA = Object.freeze({
+}), CA = new Map(Object.entries(SA).flatMap(([e, t]) => t.map((t) => [t, e]))), wA = Object.freeze({
   E0: 0,
   E1: 1,
   E2: 2,
   E4: 3,
   E3: 4
 });
-function wA(e) {
-  let t = SA.get(e);
-  return t === "soc_gated" ? "E4" : t ? bA(t) : "E0";
+function TA(e) {
+  let t = CA.get(e);
+  return t === "soc_gated" ? "E4" : t ? xA(t) : "E0";
 }
-function TA(e = []) {
+function EA(e = []) {
   return e.reduce((e, t) => {
-    let n = wA(t);
-    return CA[n] > CA[e] ? n : e;
+    let n = TA(t);
+    return wA[n] > wA[e] ? n : e;
   }, "E0");
 }
-new Set(gA), Object.freeze({
+new Set(_A), Object.freeze({
   implemented: "A live semantic probe or inline validator establishes the mapped check evidence model.",
   partial: "Only metadata, transport/liveness, posture, or otherwise incomplete semantic evidence is implemented.",
   soc_only: "Coverage exists only through SOC-gated governed execution; no customer-runnable safe check is mapped.",
@@ -51548,7 +51629,7 @@ new Set(gA), Object.freeze({
   "recovery_drill",
   "rate_limit_evasion"
 ]);
-var EA = Object.freeze([
+var DA = Object.freeze([
   {
     id: "volumetric",
     label: "Volumetric",
@@ -52278,7 +52359,7 @@ Object.freeze([
     ]
   }
 ]);
-var DA = Object.freeze({
+var OA = Object.freeze({
   "ATT-001": Object.freeze([
     "NET-048",
     "NET-049",
@@ -52693,7 +52774,7 @@ var DA = Object.freeze({
   ]),
   "WV-006": Object.freeze(["WAF-037"]),
   "WV-007": Object.freeze(["WAF-045", "WAF-046"])
-}), OA = Object.freeze({
+}), kA = Object.freeze({
   A1a: /* @__PURE__ */ new Set([
     "ATT-001",
     "ATT-002",
@@ -52770,11 +52851,11 @@ var DA = Object.freeze({
     "ATT-174"
   ])
 });
-function kA(e) {
-  for (let [t, n] of Object.entries(OA)) if (n.has(e.id)) return t;
+function AA(e) {
+  for (let [t, n] of Object.entries(kA)) if (n.has(e.id)) return t;
   return e.exhausted_resource === "reflection" || e.exhausted_resource === "amplification" ? "A2" : e.exhausted_resource === "dns_exhaustion" ? "A3" : e.exhausted_resource === "delivery_pattern" ? "A8" : "A4a";
 }
-var AA = Object.freeze({
+var jA = Object.freeze({
   "WV-001": "integrity_attack",
   "WV-002": "integrity_attack",
   "WV-003": "integrity_attack",
@@ -52784,7 +52865,7 @@ var AA = Object.freeze({
   "WV-007": "integrity_attack",
   "WV-008": "integrity_attack"
 });
-function jA(e) {
+function MA(e) {
   return e === "E3" ? "implemented" : e === "E1" || e === "E2" ? "partial" : e === "E4" ? "soc_only" : "pending";
 }
 Object.freeze([
@@ -53161,10 +53242,10 @@ Object.freeze([
   }
 ].map((e) => ({
   ...e,
-  catalog_vector_ids: [...e.catalog_vector_ids ?? DA[e.id] ?? []],
+  catalog_vector_ids: [...e.catalog_vector_ids ?? OA[e.id] ?? []],
   evidence_tier: "E5"
 })));
-var MA = [
+var NA = [
   {
     id: "ATT-001",
     name: "UDP flood",
@@ -55505,7 +55586,7 @@ var MA = [
     notes: "needs benign per-part charset and XML attribute-value marker fixtures",
     check_ids: []
   }
-], NA = Object.freeze({
+], PA = Object.freeze({
   "ATT-028": ["high_scale.volumetric.request_only"],
   "ATT-029": ["high_scale.volumetric.request_only"],
   "ATT-030": ["high_scale.volumetric.request_only"],
@@ -55701,22 +55782,22 @@ var MA = [
   "WV-041": ["waf.offensive_combined.soc"],
   "WV-042": ["waf.offensive_combined.soc"]
 });
-function PA(e, t = []) {
-  let n = NA[e] ?? [];
+function FA(e, t = []) {
+  let n = PA[e] ?? [];
   return n.length === 0 ? t ?? [] : [.../* @__PURE__ */ new Set([...t ?? [], ...n])];
 }
-Object.freeze(MA.map((e) => {
-  let t = PA(e.id, e.check_ids), n = TA(t);
+Object.freeze(NA.map((e) => {
+  let t = FA(e.id, e.check_ids), n = EA(t);
   return {
     ...e,
     check_ids: t,
-    domain: e.domain ?? kA(e),
-    catalog_vector_ids: [...e.catalog_vector_ids ?? DA[e.id] ?? []],
+    domain: e.domain ?? AA(e),
+    catalog_vector_ids: [...e.catalog_vector_ids ?? OA[e.id] ?? []],
     evidence_tier: n,
-    coverage_status: jA(n)
+    coverage_status: MA(n)
   };
 }));
-var FA = Object.freeze([
+var IA = Object.freeze([
   {
     id: "WV-001",
     name: "SQL injection WAF validation",
@@ -56256,18 +56337,18 @@ var FA = Object.freeze([
     classification: "waf_offensive_pending"
   }
 ].map((e) => {
-  let t = PA(e.id, e.check_ids), n = TA(t);
+  let t = FA(e.id, e.check_ids), n = EA(t);
   return {
     ...e,
     check_ids: t,
     domain: e.domain ?? "A7",
-    exhausted_resource: e.exhausted_resource ?? AA[e.id],
-    catalog_vector_ids: [...e.catalog_vector_ids ?? DA[e.id] ?? []],
+    exhausted_resource: e.exhausted_resource ?? jA[e.id],
+    catalog_vector_ids: [...e.catalog_vector_ids ?? OA[e.id] ?? []],
     evidence_tier: n,
-    coverage_status: jA(n)
+    coverage_status: MA(n)
   };
 }));
-Object.freeze(FA.flatMap((e) => e.check_ids)), Object.freeze([
+Object.freeze(IA.flatMap((e) => e.check_ids)), Object.freeze([
   {
     id: "DET-016",
     title: "Add exhausted_resource schema to check catalog",
@@ -56335,7 +56416,7 @@ Object.freeze(FA.flatMap((e) => e.check_ids)), Object.freeze([
 ]);
 //#endregion
 //#region apps/web/react/src/lib/resource-matrix.mjs
-var IA = 2592e6, LA = Object.freeze(EA.map((e) => {
+var LA = 2592e6, RA = Object.freeze(DA.map((e) => {
   let t = e.scored_for_ddos_readiness === !0, n = t ? "readiness_posture" : "validation_coverage";
   return Object.freeze({
     id: e.id,
@@ -56346,14 +56427,14 @@ var IA = 2592e6, LA = Object.freeze(EA.map((e) => {
     visualization: n,
     description: t ? `${e.layer} availability pressure measured with ${e.metric} evidence; included in DDoS readiness posture.` : `${e.layer} application-security validation measured with ${e.metric}; displayed for coverage and excluded from DDoS readiness scoring.`
   });
-})), RA = /* @__PURE__ */ new Set(["completed", "verdicted"]), zA = /* @__PURE__ */ new Set([
+})), zA = /* @__PURE__ */ new Set(["completed", "verdicted"]), BA = /* @__PURE__ */ new Set([
   "pass",
   "passed",
   "protected",
   "success",
   "ok",
   "allowed_as_expected"
-]), BA = /* @__PURE__ */ new Set([
+]), VA = /* @__PURE__ */ new Set([
   "exposed",
   "unprotected",
   "gap",
@@ -56362,7 +56443,7 @@ var IA = 2592e6, LA = Object.freeze(EA.map((e) => {
   "penetrated",
   "bypassable",
   "edge_exposed"
-]), VA = /* @__PURE__ */ new Set([
+]), HA = /* @__PURE__ */ new Set([
   "",
   "pending",
   "planned",
@@ -56370,36 +56451,36 @@ var IA = 2592e6, LA = Object.freeze(EA.map((e) => {
   "running",
   "collecting"
 ]);
-function HA(e) {
+function UA(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function UA(e) {
+function WA(e) {
   return e == null ? "" : String(e).trim();
 }
-function WA(e) {
-  return UA(e.id ?? e.test_run_id);
-}
 function GA(e) {
-  return UA(e.test_run_id ?? e.testRunId);
+  return WA(e.id ?? e.test_run_id);
 }
 function KA(e) {
+  return WA(e.test_run_id ?? e.testRunId);
+}
+function qA(e) {
   if (!e) return null;
   let t = new Date(e).getTime();
   return Number.isFinite(t) ? t : null;
 }
-function qA(e, t) {
-  let n = e.map(KA).filter((e) => e !== null && e <= t);
+function JA(e, t) {
+  let n = e.map(qA).filter((e) => e !== null && e <= t);
   return n.length > 0 ? Math.max(...n) : null;
 }
-function JA(e) {
-  let t = HA(e.verdict);
-  return UA(t?.verdict ?? t?.status ?? t?.result ?? (typeof e.verdict == "string" ? e.verdict : "")).toLowerCase();
-}
 function YA(e) {
-  return VA.has(e) ? null : zA.has(e) ? "protected" : BA.has(e) ? "exposed" : "inconclusive";
+  let t = UA(e.verdict);
+  return WA(t?.verdict ?? t?.status ?? t?.result ?? (typeof e.verdict == "string" ? e.verdict : "")).toLowerCase();
 }
-function XA(e, t, n, r) {
-  return qA([
+function XA(e) {
+  return HA.has(e) ? null : BA.has(e) ? "protected" : VA.has(e) ? "exposed" : "inconclusive";
+}
+function ZA(e, t, n, r) {
+  return JA([
     t?.created_at,
     t?.verdict_at,
     ...n.flatMap((e) => [
@@ -56414,29 +56495,29 @@ function XA(e, t, n, r) {
     e.started_at
   ], r);
 }
-function ZA(e) {
+function QA(e) {
   return e.filter((e) => e.archived_at == null && e.deleted_at == null);
 }
-function QA(e) {
-  let t = Array.isArray(e.exhausted_resources) ? e.exhausted_resources.map(UA).filter(Boolean) : [];
+function $A(e) {
+  let t = Array.isArray(e.exhausted_resources) ? e.exhausted_resources.map(WA).filter(Boolean) : [];
   if (t.length > 0) return new Set(t);
-  let n = UA(e.exhausted_resource);
+  let n = WA(e.exhausted_resource);
   return new Set(n ? [n] : []);
 }
-function $A(e, t) {
-  return new Set(e.filter((e) => QA(e).has(t.id)).map((e) => UA(e.check_id ?? e.id)).filter(Boolean));
+function ej(e, t) {
+  return new Set(e.filter((e) => $A(e).has(t.id)).map((e) => WA(e.check_id ?? e.id)).filter(Boolean));
 }
-function ej({ checks: e, family: t, groupId: n, targets: r, targetInventoryLoaded: i = !0 }) {
-  let a = e.filter((e) => QA(e).has(t.id));
-  if (!i) return $A(e, t);
+function tj({ checks: e, family: t, groupId: n, targets: r, targetInventoryLoaded: i = !0 }) {
+  let a = e.filter((e) => $A(e).has(t.id));
+  if (!i) return ej(e, t);
   if (!n) return /* @__PURE__ */ new Set();
-  let o = new Set(r.filter((e) => oA(e) === n).map((e) => UA(e.kind ?? e.target_kind).toLowerCase()).filter(Boolean));
+  let o = new Set(r.filter((e) => sA(e) === n).map((e) => WA(e.kind ?? e.target_kind).toLowerCase()).filter(Boolean));
   return o.size === 0 ? /* @__PURE__ */ new Set() : new Set(a.filter((e) => {
-    let t = Array.isArray(e.supported_targets) ? e.supported_targets.map((e) => UA(e).toLowerCase()).filter(Boolean) : [];
+    let t = Array.isArray(e.supported_targets) ? e.supported_targets.map((e) => WA(e).toLowerCase()).filter(Boolean) : [];
     return t.length === 0 || t.some((e) => o.has(e));
-  }).map((e) => UA(e.check_id ?? e.id)).filter(Boolean));
+  }).map((e) => WA(e.check_id ?? e.id)).filter(Boolean));
 }
-function tj({ checkIds: e, groupId: t, runs: n, evidence: r, nowMs: i = Date.now(), freshnessWindowMs: a = IA }) {
+function nj({ checkIds: e, groupId: t, runs: n, evidence: r, nowMs: i = Date.now(), freshnessWindowMs: a = LA }) {
   let o = {
     applicableCheckCount: e.size,
     testedCheckCount: 0,
@@ -56453,22 +56534,22 @@ function tj({ checkIds: e, groupId: t, runs: n, evidence: r, nowMs: i = Date.now
   };
   let s = /* @__PURE__ */ new Map();
   for (let e of r) {
-    let t = GA(e);
+    let t = KA(e);
     if (!t) continue;
     let n = s.get(t) ?? [];
     n.push(e), s.set(t, n);
   }
   let c = /* @__PURE__ */ new Map();
   for (let r of n) {
-    let n = aA(r);
-    if (oA(r) !== t || !e.has(n) || !RA.has(UA(r.status).toLowerCase())) continue;
-    let a = YA(JA(r));
+    let n = oA(r);
+    if (sA(r) !== t || !e.has(n) || !zA.has(WA(r.status).toLowerCase())) continue;
+    let a = XA(YA(r));
     if (!a) continue;
-    let o = WA(r), l = o ? s.get(o) ?? [] : [], u = HA(r.verdict), d = UA(r.target_id ?? r.targetId), f = Array.isArray(u?.evidence_ids) ? u.evidence_ids.map(UA).filter(Boolean) : [], p = !!(u && o && UA(u.test_run_id ?? u.testRunId) === o && UA(u.check_id ?? u.checkId) === n && (!d || UA(u.target_id ?? u.targetId) === d) && f.length > 0);
+    let o = GA(r), l = o ? s.get(o) ?? [] : [], u = UA(r.verdict), d = WA(r.target_id ?? r.targetId), f = Array.isArray(u?.evidence_ids) ? u.evidence_ids.map(WA).filter(Boolean) : [], p = !!(u && o && WA(u.test_run_id ?? u.testRunId) === o && WA(u.check_id ?? u.checkId) === n && (!d || WA(u.target_id ?? u.targetId) === d) && f.length > 0);
     if (!p && l.length === 0) continue;
     let m = {
       classification: a,
-      evidenceAtMs: XA(r, p ? u : null, l, i)
+      evidenceAtMs: ZA(r, p ? u : null, l, i)
     }, h = c.get(n), g = m.classification === "exposed" ? 3 : m.classification === "inconclusive" ? 2 : 1, _ = h?.classification === "exposed" ? 3 : h?.classification === "inconclusive" ? 2 : 1;
     (!h || (m.evidenceAtMs ?? -Infinity) > (h.evidenceAtMs ?? -Infinity) || (m.evidenceAtMs ?? -Infinity) === (h.evidenceAtMs ?? -Infinity) && g > _) && c.set(n, m);
   }
@@ -56492,21 +56573,21 @@ function tj({ checkIds: e, groupId: t, runs: n, evidence: r, nowMs: i = Date.now
 }
 //#endregion
 //#region apps/web/react/src/components/charts/resource-matrix.tsx
-var nj = /* @__PURE__ */ new Set(["completed", "verdicted"]), rj = 6, ij = {
+var rj = /* @__PURE__ */ new Set(["completed", "verdicted"]), ij = 6, aj = {
   protected: "success",
   exposed: "danger",
   inconclusive: "warn",
   stale: "warn",
   not_run: "muted",
   not_applicable: "muted"
-}, aj = {
+}, oj = {
   protected: "Protected",
   exposed: "Exposed",
   inconclusive: "Inconclusive",
   stale: "Stale",
   not_run: "Not run",
   not_applicable: "Not applicable"
-}, oj = {
+}, sj = {
   protected: "Passing evidence",
   exposed: "Finding",
   inconclusive: "Inconclusive",
@@ -56514,74 +56595,74 @@ var nj = /* @__PURE__ */ new Set(["completed", "verdicted"]), rj = 6, ij = {
   not_run: "Not validated",
   not_applicable: "Not applicable"
 };
-function sj(e, t) {
-  return e.visualization === "readiness_posture" ? aj[t] : oj[t];
-}
-function cj(e) {
-  return e && typeof e == "object" && !Array.isArray(e) ? e : null;
+function cj(e, t) {
+  return e.visualization === "readiness_posture" ? oj[t] : sj[t];
 }
 function lj(e) {
-  return String(e.id ?? e.test_run_id ?? "");
+  return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
 function uj(e) {
-  let t = cj(e.check);
-  return String(e.check_id ?? e.checkId ?? t?.check_id ?? "");
+  return String(e.id ?? e.test_run_id ?? "");
 }
 function dj(e) {
-  let t = cj(e.target_group);
-  return String(e.target_group_id ?? e.targetGroupId ?? t?.id ?? "");
+  let t = lj(e.check);
+  return String(e.check_id ?? e.checkId ?? t?.check_id ?? "");
 }
 function fj(e) {
-  return String(e.test_run_id ?? e.testRunId ?? "");
+  let t = lj(e.target_group);
+  return String(e.target_group_id ?? e.targetGroupId ?? t?.id ?? "");
 }
 function pj(e) {
-  return cj(e.verdict) !== null;
+  return String(e.test_run_id ?? e.testRunId ?? "");
 }
 function mj(e) {
+  return lj(e.verdict) !== null;
+}
+function hj(e) {
   if (Array.isArray(e)) return e;
-  let t = cj(e);
+  let t = lj(e);
   if (!t || !Array.isArray(t.items)) throw Error("invalid_list_payload");
   return ea(t);
 }
-async function hj(e, t, n) {
+async function gj(e, t, n) {
   let r = [];
-  for (let i = 0; i < e.length; i += rj) {
-    let a = e.slice(i, i + rj), o = await Promise.all(a.map(async (e) => {
-      let r = cj(await B(t, n, `/v1/test-runs/${encodeURIComponent(e)}`));
-      if (!r || lj(r) !== e) throw Error("invalid_run_detail");
+  for (let i = 0; i < e.length; i += ij) {
+    let a = e.slice(i, i + ij), o = await Promise.all(a.map(async (e) => {
+      let r = lj(await B(t, n, `/v1/test-runs/${encodeURIComponent(e)}`));
+      if (!r || uj(r) !== e) throw Error("invalid_run_detail");
       return r;
     }));
     r.push(...o);
   }
   return r;
 }
-function gj(e, t) {
+function _j(e, t) {
   let n = /* @__PURE__ */ new Map(), r = [];
   for (let t of e) {
-    let e = lj(t);
+    let e = uj(t);
     e ? n.set(e, t) : r.push(t);
   }
-  for (let e of t) n.set(lj(e), e);
+  for (let e of t) n.set(uj(e), e);
   return [...r, ...n.values()];
 }
-function _j(e) {
+function vj(e) {
   return e ? `Latest evidence ${new Intl.DateTimeFormat(void 0, { dateStyle: "medium" }).format(new Date(e))}` : "No usable evidence timestamp";
 }
-function vj(e, t) {
+function yj(e, t) {
   let n = e.scoredForDdosReadiness ? "Included in DDoS readiness posture." : "Validation-only coverage; excluded from DDoS readiness scoring.";
-  return t.status === "not_applicable" ? `${Zl(e.label)}: no mapped checks support this target group's declared target kinds. ${e.description} ${n}` : t.status === "not_run" ? `${Zl(e.label)}: no stored verdict found in the loaded records for ${t.applicableCheckCount} applicable checks. ${e.description} ${n}` : `${Zl(e.label)} (${e.metric}): ${sj(e, t.status)}. ${t.testedCheckCount} of ${t.applicableCheckCount} applicable checks tested; ${t.freshCheckCount} fresh and ${t.staleCheckCount} stale. ${_j(t.latestEvidenceAt)}. ${n}`;
+  return t.status === "not_applicable" ? `${Zl(e.label)}: no mapped checks support this target group's declared target kinds. ${e.description} ${n}` : t.status === "not_run" ? `${Zl(e.label)}: no stored verdict found in the loaded records for ${t.applicableCheckCount} applicable checks. ${e.description} ${n}` : `${Zl(e.label)} (${e.metric}): ${cj(e, t.status)}. ${t.testedCheckCount} of ${t.applicableCheckCount} applicable checks tested; ${t.freshCheckCount} fresh and ${t.staleCheckCount} stale. ${vj(t.latestEvidenceAt)}. ${n}`;
 }
-function yj({ family: e, state: t }) {
-  let n = vj(e, t), r = t.status === "not_applicable" ? "0 applicable" : `${t.testedCheckCount}/${t.applicableCheckCount} tested`;
+function bj({ family: e, state: t }) {
+  let n = yj(e, t), r = t.status === "not_applicable" ? "0 applicable" : `${t.testedCheckCount}/${t.applicableCheckCount} tested`;
   return /* @__PURE__ */ (0, V.jsxs)("span", {
-    className: `heatmap-cell heatmap-${ij[t.status]} matrix-cell`,
+    className: `heatmap-cell heatmap-${aj[t.status]} matrix-cell`,
     "data-status": t.status,
     title: n,
     "aria-label": n,
-    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: sj(e, t.status) }), /* @__PURE__ */ (0, V.jsx)("small", { children: r })]
+    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: cj(e, t.status) }), /* @__PURE__ */ (0, V.jsx)("small", { children: r })]
   });
 }
-function bj({ columns: e, rows: t }) {
+function xj({ columns: e, rows: t }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "chart-skeleton",
     role: "status",
@@ -56597,7 +56678,7 @@ function bj({ columns: e, rows: t }) {
     }, t))]
   });
 }
-function xj() {
+function Sj() {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "heatmap-legend",
     "aria-label": "Matrix status legend",
@@ -56629,10 +56710,10 @@ function xj() {
     ]
   });
 }
-function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, session: a, dataLoadError: o = null, onRefresh: s }) {
-  let c = (0, D.useId)(), l = (0, D.useMemo)(() => ZA(t), [t]), u = LA.filter((e) => e.scoredForDdosReadiness).length, d = LA.length - u, f = (0, D.useMemo)(() => {
+function Cj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, session: a, dataLoadError: o = null, onRefresh: s }) {
+  let c = (0, D.useId)(), l = (0, D.useMemo)(() => QA(t), [t]), u = RA.filter((e) => e.scoredForDdosReadiness).length, d = RA.length - u, f = (0, D.useMemo)(() => {
     let t = /* @__PURE__ */ new Set();
-    for (let n of LA) for (let r of $A(e, n)) t.add(r);
+    for (let n of RA) for (let r of ej(e, n)) t.add(r);
     return t;
   }, [e]), [p, m] = (0, D.useState)(0), [h, g] = (0, D.useState)({
     status: "loading",
@@ -56661,14 +56742,14 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
     }));
     let t = new Set(l.map((e) => String(e.id ?? "")).filter(Boolean)), s = /* @__PURE__ */ new Map();
     for (let e of n) {
-      let t = lj(e);
+      let t = uj(e);
       t && s.set(t, e);
     }
     let c = /* @__PURE__ */ new Set();
     for (let r of n) {
       let n = String(r.status ?? "").toLowerCase();
-      if (!nj.has(n) || !t.has(dj(r)) || !f.has(uj(r))) continue;
-      let i = lj(r);
+      if (!rj.has(n) || !t.has(fj(r)) || !f.has(dj(r))) continue;
+      let i = uj(r);
       if (!i) return g({
         status: "error",
         targets: [],
@@ -56676,17 +56757,17 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
       }), () => {
         e = !0;
       };
-      pj(r) || c.add(i);
+      mj(r) || c.add(i);
     }
     for (let e of r) {
-      let t = fj(e);
-      t && !pj(s.get(t) ?? {}) && c.add(t);
+      let t = pj(e);
+      t && !mj(s.get(t) ?? {}) && c.add(t);
     }
-    return Promise.all([B(i, a, "/v1/targets").then(mj), hj([...c], i, a)]).then(([t, r]) => {
+    return Promise.all([B(i, a, "/v1/targets").then(hj), gj([...c], i, a)]).then(([t, r]) => {
       e || g({
         status: "ready",
         targets: t,
-        runs: gj(n, r)
+        runs: _j(n, r)
       });
     }).catch(() => {
       e || g({
@@ -56729,8 +56810,8 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
     icon: An,
     title: "No resource-exhaustion checks are mapped.",
     body: "The check catalog loaded, but none of its entries declares an exhausted-resource family."
-  }) : h.status === "loading" ? /* @__PURE__ */ (0, V.jsx)(bj, {
-    columns: LA.length,
+  }) : h.status === "loading" ? /* @__PURE__ */ (0, V.jsx)(xj, {
+    columns: RA.length,
     rows: l.length
   }) : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
     /* @__PURE__ */ (0, V.jsxs)("p", {
@@ -56759,7 +56840,7 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
             "All ",
             l.length,
             " active target groups across all ",
-            LA.length,
+            RA.length,
             " shipped exhausted-resource families. Scroll horizontally to review every family."
           ] }),
           /* @__PURE__ */ (0, V.jsx)("thead", { children: /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("th", {
@@ -56768,7 +56849,7 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
               className: "heatmap-head matrix-corner",
               children: "Target group"
             })
-          }), LA.map((e) => /* @__PURE__ */ (0, V.jsx)("th", {
+          }), RA.map((e) => /* @__PURE__ */ (0, V.jsx)("th", {
             scope: "col",
             title: e.description,
             children: /* @__PURE__ */ (0, V.jsxs)("span", {
@@ -56791,9 +56872,9 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
                 className: "heatmap-name",
                 children: String(t.name ?? t.id ?? "Declared group")
               })
-            }), LA.map((t) => {
-              let a = tj({
-                checkIds: ej({
+            }), RA.map((t) => {
+              let a = nj({
+                checkIds: tj({
                   checks: e,
                   family: t,
                   groupId: i,
@@ -56804,7 +56885,7 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
                 runs: h.runs,
                 evidence: r
               });
-              return /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)(yj, {
+              return /* @__PURE__ */ (0, V.jsx)("td", { children: /* @__PURE__ */ (0, V.jsx)(bj, {
                 family: t,
                 state: a
               }) }, `${i || n}-${t.id}`);
@@ -56813,7 +56894,7 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
         ]
       })
     }),
-    /* @__PURE__ */ (0, V.jsx)(xj, {}),
+    /* @__PURE__ */ (0, V.jsx)(Sj, {}),
     /* @__PURE__ */ (0, V.jsx)("p", {
       className: "matrix-footnote",
       children: "“Not run” or “Not validated” means no evidence-backed stored verdict was found in the bounded records currently loaded; it is not proof that no historical run exists."
@@ -56822,8 +56903,8 @@ function Sj({ checks: e, targetGroups: t, runs: n, evidence: r, config: i, sessi
 }
 //#endregion
 //#region apps/web/react/src/pages/dashboard-page.tsx
-var Cj = ["overview", "risk-trends"], wj = "astranull-dashboard-tab", Tj = "n/a";
-function Ej(e, t, n = "") {
+var wj = ["overview", "risk-trends"], Tj = "astranull-dashboard-tab", Ej = "n/a";
+function Dj(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -56831,35 +56912,35 @@ function Ej(e, t, n = "") {
   }
   return n;
 }
-function Dj(e) {
+function Oj(e) {
   if (typeof window > "u") return "";
   let t = window.location.hash.replace(/^#/, ""), n = t.includes("?") ? t.slice(t.indexOf("?") + 1) : "";
   return new URLSearchParams(n || window.location.search).get(e) ?? "";
 }
-function Oj() {
-  let e = Dj("tab");
-  if (Cj.includes(e)) return e;
+function kj() {
+  let e = Oj("tab");
+  if (wj.includes(e)) return e;
   if (typeof window < "u") {
-    let e = window.sessionStorage.getItem(wj);
-    if (e && Cj.includes(e)) return e;
+    let e = window.sessionStorage.getItem(Tj);
+    if (e && wj.includes(e)) return e;
   }
   return "overview";
 }
-function kj(e) {
+function Aj(e) {
   if (typeof window > "u") return;
-  window.sessionStorage.setItem(wj, e);
+  window.sessionStorage.setItem(Tj, e);
   let t = `${window.location.pathname}${window.location.search}#dashboard`;
   window.history.replaceState(null, "", `${t}?tab=${encodeURIComponent(e)}`);
 }
-var Aj = {
+var jj = {
   pass: "success",
   review: "warn",
   gap: "danger",
   none: "muted"
 };
-function jj(e) {
+function Mj(e) {
   let t = Date.parse(e);
-  if (!Number.isFinite(t)) return Tj;
+  if (!Number.isFinite(t)) return Ej;
   let n = Math.round(Math.max(0, Date.now() - t) / 1e3);
   if (n < 60) return `${n}s ago`;
   let r = Math.round(n / 60);
@@ -56867,7 +56948,7 @@ function jj(e) {
   let i = Math.round(r / 60);
   return i < 48 ? `${i}h ago` : `${Math.round(i / 24)}d ago`;
 }
-var Mj = [], Nj = {
+var Nj = [], Pj = {
   s1: 0,
   critical: 0,
   s2: 1,
@@ -56877,25 +56958,25 @@ var Mj = [], Nj = {
   s4: 3,
   low: 3
 };
-function Pj(e, t, n) {
+function Fj(e, t, n) {
   let r = [
-    Ej(e, ["title", "summary"]),
-    Ej(e, ["check_id"]),
-    Ej(e, ["vector_family", "category"])
-  ].join(" ").toLowerCase(), i = Ej(e, ["target_id"]), a = Ej(t.find((e) => Ej(e, ["id", "target_id"]) === i) ?? {}, ["value", "hostname"], Ej(e, ["target_hostname", "target_value"], "this target"));
+    Dj(e, ["title", "summary"]),
+    Dj(e, ["check_id"]),
+    Dj(e, ["vector_family", "category"])
+  ].join(" ").toLowerCase(), i = Dj(e, ["target_id"]), a = Dj(t.find((e) => Dj(e, ["id", "target_id"]) === i) ?? {}, ["value", "hostname"], Dj(e, ["target_hostname", "target_value"], "this target"));
   return r.includes("origin") && (r.includes("bypass") || r.includes("direct") || r.includes("penetrated")) ? `Block direct access to ${a}` : r.includes("waf") || r.includes("web firewall") ? `Review web firewall blocking for ${a}` : r.includes("dns") ? `Review DNS protection for ${a}` : r.includes("authorization") || r.includes("approval") ? `Complete SOC authorization for ${a}` : `Review ${ru(e, t, n)}`;
 }
-function Fj(e, t, n) {
+function Ij(e, t, n) {
   let r = [], i = e.targetGroups.filter((e) => e.archived_at == null), a = e.runs.some((e) => {
-    let t = Ej(e, ["status"]).toLowerCase(), n = typeof e.verdict == "string" ? e.verdict : Ej(e.verdict, ["verdict", "status"]);
+    let t = Dj(e, ["status"]).toLowerCase(), n = typeof e.verdict == "string" ? e.verdict : Dj(e.verdict, ["verdict", "status"]);
     return [
       "completed",
       "verdicted",
       "finalized"
-    ].includes(t) && sD(n) !== "none";
-  }), o = t.filter(q_).sort((e, t) => (Nj[Ej(e, ["severity"]).toLowerCase()] ?? 9) - (Nj[Ej(t, ["severity"]).toLowerCase()] ?? 9));
+    ].includes(t) && cD(n) !== "none";
+  }), o = t.filter(q_).sort((e, t) => (Pj[Dj(e, ["severity"]).toLowerCase()] ?? 9) - (Pj[Dj(t, ["severity"]).toLowerCase()] ?? 9));
   if (!n) for (let t of o.slice(0, 3)) {
-    let n = Ej(t, ["id"]), i = Ej(t, ["severity"], "unknown"), a = Pj(t, e.targets, e.checks), o = ru(t, e.targets, e.checks), s = `${hD(i)} severity`;
+    let n = Dj(t, ["id"]), i = Dj(t, ["severity"], "unknown"), a = Fj(t, e.targets, e.checks), o = ru(t, e.targets, e.checks), s = `${gD(i)} severity`;
     r.push({
       key: `finding-${n || r.length}`,
       title: a,
@@ -56908,8 +56989,8 @@ function Fj(e, t, n) {
         "high"
       ].includes(i.toLowerCase()) ? "danger" : "warn",
       findingId: n || void 0,
-      targetId: Ej(t, ["target_id"]) || void 0,
-      checkId: Ej(t, ["check_id"]) || void 0
+      targetId: Dj(t, ["target_id"]) || void 0,
+      checkId: Dj(t, ["check_id"]) || void 0
     });
   }
   return r.length < 3 && !e.loadErrors.targets && e.targets.length === 0 && r.push({
@@ -56918,7 +56999,7 @@ function Fj(e, t, n) {
     detail: "Add a domain, hostname, IP, or CIDR before any check can run.",
     href: "#targets",
     tone: "info"
-  }), r.length < 3 && !e.loadErrors.targets && e.targets.length > 0 && e.targets.every((e) => !Ij(e)) && r.push({
+  }), r.length < 3 && !e.loadErrors.targets && e.targets.length > 0 && e.targets.every((e) => !Lj(e)) && r.push({
     key: "verify-ownership",
     title: "Prove ownership on a declared target",
     detail: "Ownership must reach DNS-verified before AstraNull sends live probes.",
@@ -56932,8 +57013,8 @@ function Fj(e, t, n) {
     tone: "info"
   }), r.slice(0, 3);
 }
-function Ij(e) {
-  let t = e.verification, n = t && typeof t == "object" && !Array.isArray(t) ? Ej(t, ["state"]) : Ej(e, ["verification_state"]);
+function Lj(e) {
+  let t = e.verification, n = t && typeof t == "object" && !Array.isArray(t) ? Dj(t, ["state"]) : Dj(e, ["verification_state"]);
   return [
     "dns_verified",
     "provider_verified",
@@ -56941,8 +57022,8 @@ function Ij(e) {
     "verified"
   ].includes(n.toLowerCase());
 }
-var Lj = 100;
-function Rj({ factors: e }) {
+var Rj = 100;
+function zj({ factors: e }) {
   let t = e.filter((e) => typeof e?.score == "number" && Number.isFinite(e.score));
   return t.length === 0 ? /* @__PURE__ */ (0, V.jsx)(G, {
     icon: N,
@@ -56952,7 +57033,7 @@ function Rj({ factors: e }) {
     className: "an-factor-list",
     "data-testid": "readiness-factors",
     children: t.map((e, t) => {
-      let n = Ej(e, ["key"]), r = Xl(Ej(e, ["label", "key"], "Factor")), i = Number(e.score), a = typeof e.weight == "number" && Number.isFinite(e.weight) && e.weight > 0 ? e.weight : Lj, o = Math.min(100, Math.max(0, i / a * 100)), s = Xl(Ej(e, ["detail", "reason"])), c = `${r}: ${i} of ${a} points, from GET /v1/state readiness.factors`;
+      let n = Dj(e, ["key"]), r = Xl(Dj(e, ["label", "key"], "Factor")), i = Number(e.score), a = typeof e.weight == "number" && Number.isFinite(e.weight) && e.weight > 0 ? e.weight : Rj, o = Math.min(100, Math.max(0, i / a * 100)), s = Xl(Dj(e, ["detail", "reason"])), c = `${r}: ${i} of ${a} points, from GET /v1/state readiness.factors`;
       return /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "factor-row",
         "data-testid": "readiness-factor-row",
@@ -56989,7 +57070,7 @@ function Rj({ factors: e }) {
     })
   });
 }
-function zj({ label: e, value: t, sub: n, href: r, onActivate: i, actionLabel: a }) {
+function Bj({ label: e, value: t, sub: n, href: r, onActivate: i, actionLabel: a }) {
   let o = /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
     /* @__PURE__ */ (0, V.jsxs)("span", {
       className: "dashboard-kpi-top",
@@ -57026,7 +57107,7 @@ function zj({ label: e, value: t, sub: n, href: r, onActivate: i, actionLabel: a
     children: o
   });
 }
-function Bj(e, t, n, r, i) {
+function Vj(e, t, n, r, i) {
   let [a, o] = (0, D.useState)({ state: "loading" });
   return (0, D.useEffect)(() => {
     let i = new AbortController();
@@ -57051,7 +57132,7 @@ function Bj(e, t, n, r, i) {
     i
   ]), a;
 }
-function Vj({ family: e, result: t, onRetry: n }) {
+function Hj({ family: e, result: t, onRetry: n }) {
   let r = e === "waf" ? "WAF observations" : "CDN observations";
   if (t.state === "loading") return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "coverage-row",
@@ -57203,17 +57284,17 @@ function Vj({ family: e, result: t, onRetry: n }) {
     ]
   });
 }
-var Hj = [
+var Uj = [
   "dns_verified",
   "provider_verified",
   "user_confirmed"
 ];
-function Uj(e, t, n, r) {
+function Wj(e, t, n, r) {
   let [i, a] = (0, D.useState)(null);
   return (0, D.useEffect)(() => {
     if (!n) return;
     let r = new AbortController();
-    return a(null), Promise.all(Hj.map((n) => B(e, t, `/v1/targets?verification_state=${n}&unit=target&limit=1`, { signal: r.signal }).then((e) => {
+    return a(null), Promise.all(Uj.map((n) => B(e, t, `/v1/targets?verification_state=${n}&unit=target&limit=1`, { signal: r.signal }).then((e) => {
       let t = e?.total;
       return typeof t == "number" && Number.isFinite(t) ? t : null;
     }))).then((e) => {
@@ -57228,10 +57309,10 @@ function Uj(e, t, n, r) {
     r
   ]), n ? i : null;
 }
-function Wj(e) {
+function Gj(e) {
   return typeof e == "number" && Number.isFinite(e) && e >= 0 ? e : null;
 }
-function Gj({ waf: e, cdn: t, unit: n, onUnit: r, onRetry: i }) {
+function Kj({ waf: e, cdn: t, unit: n, onUnit: r, onRetry: i }) {
   return /* @__PURE__ */ (0, V.jsxs)("section", {
     className: "declared-coverage",
     "aria-labelledby": "declared-coverage-title",
@@ -57258,12 +57339,12 @@ function Gj({ waf: e, cdn: t, unit: n, onUnit: r, onRetry: i }) {
           })]
         })]
       }),
-      /* @__PURE__ */ (0, V.jsx)(Vj, {
+      /* @__PURE__ */ (0, V.jsx)(Hj, {
         family: "waf",
         result: e,
         onRetry: i
       }),
-      /* @__PURE__ */ (0, V.jsx)(Vj, {
+      /* @__PURE__ */ (0, V.jsx)(Hj, {
         family: "cdn",
         result: t,
         onRetry: i
@@ -57271,20 +57352,20 @@ function Gj({ waf: e, cdn: t, unit: n, onUnit: r, onRetry: i }) {
     ]
   });
 }
-function Kj({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, D.useState)(Oj), [o, s] = (0, D.useState)(!1), c = ty("dashboard").map((e) => ({
+function qj({ data: e, config: t, session: n, onRefresh: r }) {
+  let [i, a] = (0, D.useState)(kj), [o, s] = (0, D.useState)(!1), c = ty("dashboard").map((e) => ({
     id: e.id,
     label: e.label
   }));
   (0, D.useEffect)(() => {
     let e = () => {
-      let e = Oj();
+      let e = kj();
       a((t) => t === e ? t : e);
     };
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []);
   function l(e) {
-    a(e), kj(e);
+    a(e), Aj(e);
   }
   async function u() {
     s(!0), h((e) => e + 1);
@@ -57294,18 +57375,18 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       s(!1);
     }
   }
-  let d = typeof e.state?.readiness?.score == "number" ? e.state.readiness.score : null, f = Array.isArray(e.state?.readiness?.factors) ? e.state.readiness.factors : [], p = wC(), [m, h] = (0, D.useState)(0), [g, _] = (0, D.useState)("normalized_hostname"), [v, y] = (0, D.useState)(0), b = Bj(t, n, "waf", g, v), x = Bj(t, n, "cdn", g, v), S = D_(t, n, {
+  let d = typeof e.state?.readiness?.score == "number" ? e.state.readiness.score : null, f = Array.isArray(e.state?.readiness?.factors) ? e.state.readiness.factors : [], p = TC(), [m, h] = (0, D.useState)(0), [g, _] = (0, D.useState)("normalized_hostname"), [v, y] = (0, D.useState)(0), b = Vj(t, n, "waf", g, v), x = Vj(t, n, "cdn", g, v), S = D_(t, n, {
     status: "open",
     limit: 200
-  }, m), C = F_(t, n, m, 3, 8, S), w = S.envelope?.items ?? Mj, T = Ya(S.envelope, w.length), E = dD(e, 6, { openFindings: w }), O = A_(t, n, Object.fromEntries(E.map((e) => [e.id, {
+  }, m), C = F_(t, n, m, 3, 8, S), w = S.envelope?.items ?? Nj, T = Ya(S.envelope, w.length), E = fD(e, 6, { openFindings: w }), O = A_(t, n, Object.fromEntries(E.map((e) => [e.id, {
     status: "open",
     target_id: e.id
   }])), m, S.state === "ready" && !T && E.length > 0), k = (0, D.useMemo)(() => {
     if (!(T || O.state !== "ready")) return new Map(Object.entries(O.totals).flatMap(([e, t]) => typeof t == "number" ? [[e, t]] : []));
-  }, [T, O]), A = C.total === null && C.state === "loading", j = C.total === null && C.state === "error", M = Od(e.targets), P = QE(e, 6), ee = dD(e, 6, {
+  }, [T, O]), A = C.total === null && C.state === "loading", j = C.total === null && C.state === "error", M = Od(e.targets), P = $E(e, 6), ee = fD(e, 6, {
     openFindings: w,
     openCounts: k
-  }), F = Fj(e, C.priority, j || C.state === "error" && C.priority.length === 0), I = C.severity && C.total !== null ? {
+  }), F = Ij(e, C.priority, j || C.state === "error" && C.priority.length === 0), I = C.severity && C.total !== null ? {
     critical: C.severity.critical,
     high: C.severity.high,
     other: C.severity.medium + C.severity.low + C.severity.unrecorded,
@@ -57315,7 +57396,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
     high: 0,
     other: 0,
     total: 0
-  }, te = !!e.loadErrors.targets, ne = b.state === "ready" && b.payload.units && typeof b.payload.units == "object" ? b.payload.units : null, re = Wj(ne?.target_records), ie = Wj(ne?.normalized_hosts), ae = re === null || e.targets.length === re, oe = Uj(t, n, !te && !ae, v), L = re ?? e.targets.length, se = ie ?? M.distinctHosts, ce = ae ? e.targets.filter(Ij).length : oe, le = L > 0 && ce !== null ? Math.round(ce / L * 100) : null, ue = dD(e, void 0, {
+  }, te = !!e.loadErrors.targets, ne = b.state === "ready" && b.payload.units && typeof b.payload.units == "object" ? b.payload.units : null, re = Gj(ne?.target_records), ie = Gj(ne?.normalized_hosts), ae = re === null || e.targets.length === re, oe = Wj(t, n, !te && !ae, v), L = re ?? e.targets.length, se = ie ?? M.distinctHosts, ce = ae ? e.targets.filter(Lj).length : oe, le = L > 0 && ce !== null ? Math.round(ce / L * 100) : null, ue = fD(e, void 0, {
     openFindings: w,
     openCounts: k
   }), de = new Set(ue.filter((e) => e.verdictStatus !== "none").map((e) => e.id)).size, fe = [
@@ -57326,14 +57407,14 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
   ].map((e) => ({
     status: e,
     count: ue.filter((t) => t.verdictStatus === e).length
-  })), pe = te || e.loadErrors.runs || L === 0 ? null : Math.round(de / L * 100), me = Ej(e.state ?? {}, ["last_validation_at"]) || (P[0] ? String(P[0].completed_at ?? P[0].started_at ?? P[0].created_at ?? "") : "");
-  e.loadErrors.runs || me && jj(me);
+  })), pe = te || e.loadErrors.runs || L === 0 ? null : Math.round(de / L * 100), me = Dj(e.state ?? {}, ["last_validation_at"]) || (P[0] ? String(P[0].completed_at ?? P[0].started_at ?? P[0].created_at ?? "") : "");
+  e.loadErrors.runs || me && Mj(me);
   let he = cu({
     score: d,
     highPriorityFindings: I.critical + I.high,
     coveragePercent: pe,
     dataUnavailable: !!(e.error || e.loadErrors.targets || e.loadErrors.runs || e.loadErrors.evidence || j)
-  }), ge = Ej(e.tenant ?? {}, ["id", "tenant_id"]) || Ej(e.state ?? {}, ["tenant_id"]), _e = ge ? `Tenant · ${ge.toUpperCase()}` : "Tenant", ve = e.state?.kill_switch ?? null, ye = ve?.active === !0, be = Ej(ve ?? {}, ["reason"]), xe = Ej(ve ?? {}, ["updated_at"]), Se = [
+  }), ge = Dj(e.tenant ?? {}, ["id", "tenant_id"]) || Dj(e.state ?? {}, ["tenant_id"]), _e = ge ? `Tenant · ${ge.toUpperCase()}` : "Tenant", ve = e.state?.kill_switch ?? null, ye = ve?.active === !0, be = Dj(ve ?? {}, ["reason"]), xe = Dj(ve ?? {}, ["updated_at"]), Se = [
     {
       key: "target",
       label: "Target",
@@ -57362,7 +57443,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Ownership",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(_x, {
         state: e.verificationState,
-        label: Jj(e.verificationState)
+        label: Yj(e.verificationState)
       })
     },
     {
@@ -57371,9 +57452,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "posture-verdict",
         children: [/* @__PURE__ */ (0, V.jsx)(W, {
-          tone: Aj[e.verdictStatus],
+          tone: jj[e.verdictStatus],
           title: e.verdict ? `${eu(e.verdict)}${e.verdictRunId ? ` (run ${e.verdictRunId})` : ""}` : e.verdictBasis === "unbacked" ? "A run finished without a recorded verdict or evidence, so it is not counted." : "No evidence-backed verdict yet",
-          children: e.verdict ? e.openFindings > 0 && sD(e.verdict) === "pass" ? `Passed · ${e.openFindings} open` : Yj(e.verdictStatus) : e.verdictBasis === "unbacked" ? "Not recorded" : "No result"
+          children: e.verdict ? e.openFindings > 0 && cD(e.verdict) === "pass" ? `Passed · ${e.openFindings} open` : Xj(e.verdictStatus) : e.verdictBasis === "unbacked" ? "Not recorded" : "No result"
         }), e.verdictBasis === "earlier" ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "posture-verdict-note",
           children: "Earlier run; newest has no recorded verdict"
@@ -57386,9 +57467,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Run",
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "posture-target",
-        children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: Ej(e, ["target_hostname", "target_value"], Ej(e, ["check_id"], "Validation run")) }), /* @__PURE__ */ (0, V.jsx)("small", {
+        children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: Dj(e, ["target_hostname", "target_value"], Dj(e, ["check_id"], "Validation run")) }), /* @__PURE__ */ (0, V.jsx)("small", {
           className: "mono",
-          children: Ej(e, ["id"], Tj)
+          children: Dj(e, ["id"], Ej)
         })]
       })
     },
@@ -57396,13 +57477,13 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       key: "verdict",
       label: "Verdict",
       render: (e) => {
-        let t = typeof e.verdict == "string" ? e.verdict : Ej(e.verdict, [
+        let t = typeof e.verdict == "string" ? e.verdict : Dj(e.verdict, [
           "verdict",
           "status",
           "result"
-        ]), n = sD(t);
+        ]), n = cD(t);
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: Aj[n],
+          tone: jj[n],
           title: t || "No verdict",
           children: t ? eu(t) : "No result yet"
         });
@@ -57413,7 +57494,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       label: "When",
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "muted nowrap",
-        children: jj(String(e.completed_at ?? e.started_at ?? e.created_at ?? ""))
+        children: Mj(String(e.completed_at ?? e.started_at ?? e.created_at ?? ""))
       })
     }
   ];
@@ -57436,7 +57517,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
     };
   }
   function Te(e) {
-    let t = Ej(e, ["id"]), n = Ej(e, ["target_id"]), r = Ej(e, ["check_id"]);
+    let t = Dj(e, ["id"]), n = Dj(e, ["target_id"]), r = Dj(e, ["check_id"]);
     if (!t || !n || !r) return {};
     let i = () => p({
       entry: "check_result",
@@ -57449,14 +57530,14 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       role: "button",
       "data-focus-key": `dash-run-${t}`,
       style: { cursor: "pointer" },
-      "aria-label": `View evidence for ${Ej(e, ["target_hostname", "target_value"], r)} check ${r}`,
+      "aria-label": `View evidence for ${Dj(e, ["target_hostname", "target_value"], r)} check ${r}`,
       onClick: i,
       onKeyDown: (e) => {
         (e.key === "Enter" || e.key === " ") && (e.preventDefault(), i());
       }
     };
   }
-  let Ee = C.oldest.filter(q_), De = gD(C.severity ?? {
+  let Ee = C.oldest.filter(q_), De = _D(C.severity ?? {
     critical: 0,
     high: 0,
     medium: 0,
@@ -57491,19 +57572,19 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
       /* @__PURE__ */ (0, V.jsxs)(by, { children: [
         /* @__PURE__ */ (0, V.jsx)("span", {
           className: "tabular-nums",
-          children: te ? Tj : R(L)
+          children: te ? Ej : R(L)
         }),
         " ",
         `declared ${pa(L, "target")}, `,
         /* @__PURE__ */ (0, V.jsx)("span", {
           className: "tabular-nums",
-          children: te ? Tj : ce === null ? "..." : R(ce)
+          children: te ? Ej : ce === null ? "..." : R(ce)
         }),
         " ",
         "ownership verified, ",
         /* @__PURE__ */ (0, V.jsx)("span", {
           className: "tabular-nums",
-          children: e.loadErrors.evidence ? Tj : R(e.evidence.length)
+          children: e.loadErrors.evidence ? Ej : R(e.evidence.length)
         }),
         " ",
         `evidence ${pa(e.evidence.length, "record")}. High-scale tests stay SOC-gated.`
@@ -57542,9 +57623,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
           role: "group",
           "aria-label": "Readiness key metrics",
           children: [
-            /* @__PURE__ */ (0, V.jsx)(zj, {
+            /* @__PURE__ */ (0, V.jsx)(Bj, {
               label: "Readiness",
-              value: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [d ?? Tj, d === null ? null : /* @__PURE__ */ (0, V.jsx)("span", {
+              value: /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [d ?? Ej, d === null ? null : /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "unit",
                 children: "/100"
               })] }),
@@ -57560,9 +57641,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
               },
               actionLabel: "Open readiness trend"
             }),
-            /* @__PURE__ */ (0, V.jsx)(zj, {
+            /* @__PURE__ */ (0, V.jsx)(Bj, {
               label: "Declared targets",
-              value: te ? Tj : R(L),
+              value: te ? Ej : R(L),
               sub: /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "dashboard-kpi-sub",
                 children: te ? "Target data unavailable" : L === 0 ? "No targets declared yet" : `${R(se)} distinct hostnames · ${ce === null ? "ownership verified count loading" : `${R(ce)} ownership verified (${le}%)`}`
@@ -57570,9 +57651,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
               href: "#targets",
               actionLabel: "Open all declared targets"
             }),
-            /* @__PURE__ */ (0, V.jsx)(zj, {
+            /* @__PURE__ */ (0, V.jsx)(Bj, {
               label: "Ownership pending",
-              value: te ? Tj : ce === null ? "..." : R(L - ce),
+              value: te ? Ej : ce === null ? "..." : R(L - ce),
               sub: /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "dashboard-kpi-sub",
                 children: te ? "Target data unavailable" : "Locked targets: no external check can run until ownership is proven"
@@ -57580,9 +57661,9 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
               href: "#targets?verification=unverified",
               actionLabel: "Open targets with ownership pending"
             }),
-            /* @__PURE__ */ (0, V.jsx)(zj, {
+            /* @__PURE__ */ (0, V.jsx)(Bj, {
               label: "Open findings",
-              value: j ? Tj : A ? "..." : R(I.total),
+              value: j ? Ej : A ? "..." : R(I.total),
               sub: j || A ? /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "dashboard-kpi-sub",
                 children: j ? "Finding counts unavailable" : "Counting open findings"
@@ -57607,7 +57688,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
           children: [
             /* @__PURE__ */ (0, V.jsx)("div", {
               className: "dash-area-coverage",
-              children: /* @__PURE__ */ (0, V.jsx)(Gj, {
+              children: /* @__PURE__ */ (0, V.jsx)(Kj, {
                 waf: b,
                 cdn: x,
                 unit: g,
@@ -57630,7 +57711,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                     className: "dash-subhead",
                     id: "dash-posture-breakdown-title",
                     children: "Check verdicts"
-                  }), /* @__PURE__ */ (0, V.jsx)(bk, {
+                  }), /* @__PURE__ */ (0, V.jsx)(xk, {
                     state: e.state,
                     runs: e.runs,
                     checks: e.checks
@@ -57648,7 +57729,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                       className: "dash-subhead-note",
                       children: "Each factor contributes its points to the published readiness score."
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(Rj, { factors: f })
+                    /* @__PURE__ */ (0, V.jsx)(zj, { factors: f })
                   ]
                 })]
               }) })]
@@ -57672,7 +57753,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                       children: R(t)
                     }), /* @__PURE__ */ (0, V.jsx)("span", {
                       className: "posture-tally-label",
-                      children: Yj(e)
+                      children: Xj(e)
                     })]
                   }, e))
                 }) : null,
@@ -57775,7 +57856,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                 items: P,
                 loadError: e.loadErrors.runs,
                 onRetry: () => void r(),
-                getRowId: (e) => Ej(e, ["id"]),
+                getRowId: (e) => Dj(e, ["id"]),
                 getRowProps: (e) => Te(e),
                 empty: /* @__PURE__ */ (0, V.jsx)(G, {
                   icon: zt,
@@ -57805,7 +57886,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                 body: "The readiness trend appears once validation runs load.",
                 actionLabel: "Retry",
                 onAction: () => void r()
-              }) : /* @__PURE__ */ (0, V.jsx)(tA, {
+              }) : /* @__PURE__ */ (0, V.jsx)(nA, {
                 runs: e.runs,
                 currentScore: d
               }) })]
@@ -57904,7 +57985,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                   }), /* @__PURE__ */ (0, V.jsx)("ol", {
                     className: "aging-list",
                     children: Ee.map((t) => {
-                      let n = Ej(t, ["id"]), r = Ej(t, ["severity"], "unknown");
+                      let n = Dj(t, ["id"]), r = Dj(t, ["severity"], "unknown");
                       return /* @__PURE__ */ (0, V.jsx)("li", {
                         className: "aging-row",
                         children: /* @__PURE__ */ (0, V.jsxs)("a", {
@@ -57916,12 +57997,12 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                           }), /* @__PURE__ */ (0, V.jsxs)("span", {
                             className: "aging-meta",
                             children: [/* @__PURE__ */ (0, V.jsx)(W, {
-                              tone: qj(r),
+                              tone: Jj(r),
                               title: ia(r),
-                              children: hD(r)
+                              children: gD(r)
                             }), Number.isFinite(Date.parse(String(t.created_at ?? ""))) ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: `Opened ${z(t.created_at)}` }), /* @__PURE__ */ (0, V.jsx)("span", {
                               className: "aging-age",
-                              children: jj(String(t.created_at))
+                              children: Mj(String(t.created_at))
                             })] }) : /* @__PURE__ */ (0, V.jsx)("span", { children: "Open date not recorded" })]
                           })]
                         })
@@ -57931,14 +58012,14 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
                 })]
               }) })]
             }),
-            /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Vector coverage matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Coverage by vector family and declared target group." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(hA, {
+            /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Vector coverage matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Coverage by vector family and declared target group." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(gA, {
               checks: e.checks,
               targetGroups: e.targetGroups,
               testPolicies: e.testPolicies,
               runs: e.runs,
               evidence: e.evidence
             }) })] }),
-            /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Resource exhaustion matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Stored verdict posture by exhausted resource, target applicability, and 30-day evidence freshness." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(Sj, {
+            /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Resource exhaustion matrix" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Stored verdict posture by exhausted resource, target applicability, and 30-day evidence freshness." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(Cj, {
               checks: e.checks,
               targetGroups: e.targetGroups,
               runs: e.runs,
@@ -57959,7 +58040,7 @@ function Kj({ data: e, config: t, session: n, onRefresh: r }) {
     ]
   });
 }
-function qj(e) {
+function Jj(e) {
   let t = e.trim().toLowerCase();
   return [
     "s1",
@@ -57968,16 +58049,16 @@ function qj(e) {
     "high"
   ].includes(t) ? "danger" : ["s3", "medium"].includes(t) ? "warn" : "muted";
 }
-function Jj(e) {
+function Yj(e) {
   let t = e.trim().toLowerCase();
   return ["dns_verified"].includes(t) ? "DNS verified" : ["provider_verified"].includes(t) ? "Provider" : ["user_confirmed", "verified"].includes(t) ? "Verified" : t.includes("pending") || t.includes("awaiting") ? "Pending" : "Unverified";
 }
-function Yj(e) {
+function Xj(e) {
   return e === "pass" ? "Pass" : e === "gap" ? "Gap" : e === "review" ? "Review" : "No result";
 }
 //#endregion
 //#region apps/web/react/src/components/integrations/provider-setup-guides.ts
-var Xj = {
+var Zj = {
   cloudflare: {
     id: "cloudflare",
     mode: "credential",
@@ -58186,12 +58267,12 @@ var Xj = {
     }]
   }
 };
-function Zj(e) {
-  return Xj[e] ?? null;
+function Qj(e) {
+  return Zj[e] ?? null;
 }
 //#endregion
 //#region apps/web/react/src/lib/notification-channels-api.ts
-function Qj(e) {
+function $j(e) {
   if (!e || typeof e != "object" || Array.isArray(e)) return null;
   let t = e;
   return typeof t.id != "string" || typeof t.channel != "string" ? null : {
@@ -58205,7 +58286,7 @@ function Qj(e) {
     delivery_note: typeof t.delivery_note == "string" ? t.delivery_note : void 0
   };
 }
-function $j(e) {
+function eM(e) {
   if (!e || typeof e != "object" || Array.isArray(e)) return null;
   let t = e, n = (e) => typeof t[e] == "string" ? t[e] : void 0;
   return {
@@ -58217,13 +58298,13 @@ function $j(e) {
     attempted_at: typeof t.attempted_at == "string" ? t.attempted_at : null
   };
 }
-function eM(e) {
+function tM(e) {
   if (!e || typeof e != "object" || Array.isArray(e)) return null;
   let t = {};
-  for (let [n, r] of Object.entries(e)) t[n] = $j(r);
+  for (let [n, r] of Object.entries(e)) t[n] = eM(r);
   return t;
 }
-function tM(e) {
+function nM(e) {
   if (!e || typeof e != "object" || Array.isArray(e)) return null;
   let t = e, n = Number(t.limit), r = Number(t.returned);
   return !Number.isFinite(n) || n <= 0 ? null : {
@@ -58232,20 +58313,20 @@ function tM(e) {
     truncated: t.truncated === !0
   };
 }
-function nM(e) {
+function rM(e) {
   let t = e && typeof e == "object" ? e : {};
   return {
-    rules: Array.isArray(t.rules) ? t.rules.map(Qj).filter((e) => e !== null) : [],
+    rules: Array.isArray(t.rules) ? t.rules.map($j).filter((e) => e !== null) : [],
     events: Array.isArray(t.events) ? t.events : [],
-    latestDeliveries: eM(t.latest_deliveries),
-    eventsWindow: tM(t.events_window)
+    latestDeliveries: tM(t.latest_deliveries),
+    eventsWindow: nM(t.events_window)
   };
 }
-async function rM(e, t) {
-  return nM(await B(e, t, "/v1/notifications"));
+async function iM(e, t) {
+  return rM(await B(e, t, "/v1/notifications"));
 }
-async function iM(e, t, n) {
-  let r = Qj(await B(e, t, "/v1/notifications", {
+async function aM(e, t, n) {
+  let r = $j(await B(e, t, "/v1/notifications", {
     method: "POST",
     body: {
       channel: n.channel,
@@ -58257,22 +58338,22 @@ async function iM(e, t, n) {
   if (!r) throw Error("The server did not return the created channel.");
   return r;
 }
-async function aM(e, t, n, r) {
+async function oM(e, t, n, r) {
   let i = {};
   r.enabled !== void 0 && (i.enabled = r.enabled), r.triggers !== void 0 && (i.triggers = r.triggers), r.destination !== void 0 && (i.destination = r.destination);
-  let a = Qj(await B(e, t, `/v1/notifications/${encodeURIComponent(n)}`, {
+  let a = $j(await B(e, t, `/v1/notifications/${encodeURIComponent(n)}`, {
     method: "PATCH",
     body: i
   }));
   if (!a) throw Error("The server did not return the updated channel.");
   return a;
 }
-async function oM(e, t, n) {
+async function sM(e, t, n) {
   await B(e, t, `/v1/notifications/${encodeURIComponent(n)}`, { method: "DELETE" });
 }
 //#endregion
 //#region apps/web/react/src/lib/notification-channels.mjs
-var sM = 2048, cM = Object.freeze([
+var cM = 2048, lM = Object.freeze([
   Object.freeze({
     id: "slack",
     label: "Slack",
@@ -58321,7 +58402,7 @@ var sM = 2048, cM = Object.freeze([
     docsLabel: "",
     inputType: "url"
   })
-]), lM = Object.freeze([
+]), uM = Object.freeze([
   Object.freeze({
     id: "finding.high_severity",
     label: "High-severity finding",
@@ -58342,22 +58423,22 @@ var sM = 2048, cM = Object.freeze([
     label: "Report ready",
     detail: "A readiness report is generated."
   })
-]), uM = Object.freeze(["finding.high_severity", "high_scale.state_change"]), dM = /* @__PURE__ */ new Set(["hooks.slack.com", "hooks.slack-gov.com"]), fM = /[\s\u0000-\u001f\u007f]/, pM = /^[^@\s<>()[\]\\,;:"]+@[^@\s<>()[\]\\,;:"]+\.[^@\s<>()[\]\\,;:".]{2,}$/;
-function mM(e) {
-  return cM.find((t) => t.id === e) ?? null;
-}
+]), dM = Object.freeze(["finding.high_severity", "high_scale.state_change"]), fM = /* @__PURE__ */ new Set(["hooks.slack.com", "hooks.slack-gov.com"]), pM = /[\s\u0000-\u001f\u007f]/, mM = /^[^@\s<>()[\]\\,;:"]+@[^@\s<>()[\]\\,;:"]+\.[^@\s<>()[\]\\,;:".]{2,}$/;
 function hM(e) {
-  return e === "in_app" ? "In-app" : mM(e)?.label ?? String(e ?? "").replace(/_/g, " ");
+  return lM.find((t) => t.id === e) ?? null;
 }
 function gM(e) {
-  let t = lM.find((t) => t.id === e);
-  return t ? t.label : String(e ?? "").replace(/[._]/g, " ");
+  return e === "in_app" ? "In-app" : hM(e)?.label ?? String(e ?? "").replace(/_/g, " ");
 }
 function _M(e) {
+  let t = uM.find((t) => t.id === e);
+  return t ? t.label : String(e ?? "").replace(/[._]/g, " ");
+}
+function vM(e) {
   let t = e.toLowerCase();
   return t === "localhost" || t === "127.0.0.1" || t.endsWith(".invalid");
 }
-function vM(e, { allowDevHttp: t }) {
+function yM(e, { allowDevHttp: t }) {
   let n;
   try {
     n = new URL(e);
@@ -58367,13 +58448,13 @@ function vM(e, { allowDevHttp: t }) {
   return n.username || n.password ? { error: "Remove the user:password@ part. Credentials in the URL are not allowed." } : n.protocol === "https:" ? {
     url: n,
     devOnly: !1
-  } : n.protocol === "http:" && t && _M(n.hostname) ? {
+  } : n.protocol === "http:" && t && vM(n.hostname) ? {
     url: n,
     devOnly: !0
   } : { error: "Use an https:// URL. Plain http is only accepted for local development hosts." };
 }
-function yM(e, t) {
-  let n = typeof t == "string" ? t.trim() : "", r = mM(e);
+function bM(e, t) {
+  let n = typeof t == "string" ? t.trim() : "", r = hM(e);
   if (!r) return {
     ok: !1,
     error: "Choose Slack, Microsoft Teams, Email, or Webhook."
@@ -58384,26 +58465,26 @@ function yM(e, t) {
   };
   if (n.length > 2048) return {
     ok: !1,
-    error: `Keep the destination under ${sM} characters.`
+    error: `Keep the destination under ${cM} characters.`
   };
-  if (fM.test(n)) return {
+  if (pM.test(n)) return {
     ok: !1,
     error: "Remove spaces or line breaks from the destination."
   };
-  if (e === "email") return pM.test(n) ? {
+  if (e === "email") return mM.test(n) ? {
     ok: !0,
     destination: n
   } : {
     ok: !1,
     error: "Enter a single email address, such as alerts@example.com."
   };
-  let i = vM(n, { allowDevHttp: !0 });
+  let i = yM(n, { allowDevHttp: !0 });
   if ("error" in i) return {
     ok: !1,
     error: i.error
   };
   let a = i.url.hostname.toLowerCase(), o = i.devOnly ? "Plain http is accepted for local development only. Use https:// in production." : void 0;
-  return e === "slack" ? !dM.has(a) || !i.url.pathname.startsWith("/services/") ? {
+  return e === "slack" ? !fM.has(a) || !i.url.pathname.startsWith("/services/") ? {
     ok: !0,
     destination: n,
     warning: o ?? "This does not look like a Slack incoming webhook (https://hooks.slack.com/services/…). Check the URL you copied."
@@ -58423,8 +58504,8 @@ function yM(e, t) {
     destination: n
   };
 }
-function bM(e) {
-  let t = Array.isArray(e) ? e : [], n = lM.map((e) => e.id).filter((e) => t.includes(e));
+function xM(e) {
+  let t = Array.isArray(e) ? e : [], n = uM.map((e) => e.id).filter((e) => t.includes(e));
   return n.length === 0 ? {
     ok: !1,
     error: "Pick at least one event to notify on."
@@ -58433,7 +58514,7 @@ function bM(e) {
     triggers: n
   };
 }
-function xM(e, t = {}) {
+function SM(e, t = {}) {
   switch (e) {
     case "delivered_provider": return {
       label: "Delivered",
@@ -58471,15 +58552,15 @@ function xM(e, t = {}) {
     } : {
       label: "None in recent history",
       tone: "muted",
-      detail: SM(t.windowSize)
+      detail: CM(t.windowSize)
     };
   }
 }
-function SM(e) {
+function CM(e) {
   let t = Number(e);
   return `No delivery attempt for this channel appears in ${Number.isFinite(t) && t > 0 ? `the ${t} most recent notification events loaded` : "the recent notification events loaded"}. Older history is not shown here.`;
 }
-function CM(e, t = {}) {
+function wM(e, t = {}) {
   let n = t.latestDeliveries;
   if (n && typeof n == "object" && Object.prototype.hasOwnProperty.call(n, e)) {
     let t = n[e];
@@ -58494,7 +58575,7 @@ function CM(e, t = {}) {
     windowSize: t.windowSize
   };
 }
-function wM(e) {
+function TM(e) {
   let t = e && typeof e == "object" ? e : {};
   return [
     t.tenant_id,
@@ -58503,7 +58584,7 @@ function wM(e) {
     t.access_token
   ].map((e) => e == null ? "" : String(e)).join("|");
 }
-function TM() {
+function EM() {
   let e = 0, t = null;
   return {
     begin(n) {
@@ -58520,8 +58601,8 @@ function TM() {
     }
   };
 }
-function EM(e, t) {
-  let n = bM(t?.triggers);
+function DM(e, t) {
+  let n = xM(t?.triggers);
   if (!n.ok) return {
     ok: !1,
     field: "triggers",
@@ -58532,7 +58613,7 @@ function EM(e, t) {
     ok: !0,
     body: { triggers: n.triggers }
   };
-  let i = yM(e, r);
+  let i = bM(e, r);
   return i.ok ? {
     ok: !0,
     body: {
@@ -58546,7 +58627,7 @@ function EM(e, t) {
     error: i.error
   };
 }
-function DM(e) {
+function OM(e) {
   let t = /* @__PURE__ */ new Map();
   if (!Array.isArray(e)) return t;
   for (let n of e) {
@@ -58567,9 +58648,9 @@ function DM(e) {
   }
   return t;
 }
-function OM(e) {
+function kM(e) {
   let t = {};
-  for (let e of cM) t[e.id] = {
+  for (let e of lM) t[e.id] = {
     total: 0,
     enabled: 0
   };
@@ -58583,7 +58664,7 @@ function OM(e) {
   }
   return t;
 }
-var kM = "https://<your-portal>/app#notifications", AM = Object.freeze({
+var AM = "https://<your-portal>/app#notifications", jM = Object.freeze({
   event_id: "nevt_example",
   rule_id: "nrule_example",
   trigger: "finding.high_severity",
@@ -58594,21 +58675,21 @@ var kM = "https://<your-portal>/app#notifications", AM = Object.freeze({
   },
   created_at: "<ISO-8601 timestamp>"
 });
-function jM(e) {
-  let t = Object.entries(AM.metadata).map(([e, t]) => `${e}: ${t}`).join("\n");
+function MM(e) {
+  let t = Object.entries(jM.metadata).map(([e, t]) => `${e}: ${t}`).join("\n");
   return e === "slack" ? { blocks: [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${AM.trigger}*\n${AM.subject}`
+        text: `*${jM.trigger}*\n${jM.subject}`
       }
     },
     {
       type: "context",
       elements: [{
         type: "mrkdwn",
-        text: `Recorded at ${AM.created_at}`
+        text: `Recorded at ${jM.created_at}`
       }]
     },
     {
@@ -58629,13 +58710,13 @@ function jM(e) {
         body: [
           {
             type: "TextBlock",
-            text: AM.trigger,
+            text: jM.trigger,
             weight: "Bolder",
             size: "Medium"
           },
           {
             type: "TextBlock",
-            text: AM.subject,
+            text: jM.subject,
             wrap: !0
           },
           {
@@ -58645,33 +58726,33 @@ function jM(e) {
           },
           {
             type: "TextBlock",
-            text: AM.created_at,
+            text: jM.created_at,
             isSubtle: !0
           }
         ],
         actions: [{
           type: "Action.OpenUrl",
           title: "View in AstraNull",
-          url: kM
+          url: AM
         }]
       }
     }]
   } : e === "email" ? {
     to: "alerts@example.com",
-    subject: `[AstraNull] ${AM.subject}`,
+    subject: `[AstraNull] ${jM.subject}`,
     html_body: "Table with Trigger, Subject, Metadata, and Timestamp rows"
   } : {
-    event_id: AM.event_id,
-    rule_id: AM.rule_id,
-    trigger: AM.trigger,
-    subject: AM.subject,
-    metadata: { ...AM.metadata },
-    created_at: AM.created_at
+    event_id: jM.event_id,
+    rule_id: jM.rule_id,
+    trigger: jM.trigger,
+    subject: jM.subject,
+    metadata: { ...jM.metadata },
+    created_at: jM.created_at
   };
 }
 //#endregion
 //#region apps/web/react/src/components/integrations/channel-logos.tsx
-function MM() {
+function NM() {
   return /* @__PURE__ */ (0, V.jsxs)("svg", {
     viewBox: "0 0 122.8 122.8",
     "aria-hidden": "true",
@@ -58697,7 +58778,7 @@ function MM() {
     ]
   });
 }
-function NM() {
+function PM() {
   let e = `teams-tile-${(0, D.useId)().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return /* @__PURE__ */ (0, V.jsxs)("svg", {
     viewBox: "0 0 48 48",
@@ -58802,14 +58883,14 @@ function NM() {
     ]
   });
 }
-function PM({ channel: e, size: t = "md", className: n }) {
+function FM({ channel: e, size: t = "md", className: n }) {
   return /* @__PURE__ */ (0, V.jsxs)("span", {
     "aria-hidden": "true",
     className: Qi("integration-logo-well", "channel-logo", t === "sm" && "integration-logo-well-sm", n),
     "data-channel": e,
     children: [
-      e === "slack" ? /* @__PURE__ */ (0, V.jsx)(MM, {}) : null,
-      e === "teams" ? /* @__PURE__ */ (0, V.jsx)(NM, {}) : null,
+      e === "slack" ? /* @__PURE__ */ (0, V.jsx)(NM, {}) : null,
+      e === "teams" ? /* @__PURE__ */ (0, V.jsx)(PM, {}) : null,
       e === "email" ? /* @__PURE__ */ (0, V.jsx)(Yt, {
         className: "channel-glyph",
         strokeWidth: 1.75,
@@ -58827,8 +58908,8 @@ function PM({ channel: e, size: t = "md", className: n }) {
 }
 //#endregion
 //#region apps/web/react/src/components/integrations/integration-tile-styles.ts
-var FM = "\n.integration-tile-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));\n  gap: var(--space-3);\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.integration-tile {\n  display: flex;\n  min-width: 0;\n  min-height: 100%;\n  flex-direction: column;\n  gap: var(--space-3);\n  padding: var(--space-4);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-lg);\n  background: var(--proof-surface);\n  transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);\n}\n.integration-tile:hover,\n.integration-tile:focus-within {\n  border-color: var(--border-strong);\n  background: var(--surface-raised);\n}\n.integration-tile[data-connected] {\n  border-color: color-mix(in oklab, var(--success), transparent 55%);\n}\n.integration-tile-head,\n.integration-tile-footer {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.integration-identity {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-3);\n}\n.integration-logo-well {\n  display: grid;\n  width: var(--space-10);\n  height: var(--space-10);\n  flex: 0 0 var(--space-10);\n  place-items: center;\n  overflow: hidden;\n  border-radius: var(--radius-md);\n  background: color-mix(in oklab, var(--fg) 12%, var(--surface));\n  box-shadow: inset 0 0 0 1px var(--border-soft);\n  color: var(--fg-2);\n}\n.integration-logo-well-sm {\n  width: var(--space-6);\n  height: var(--space-6);\n  flex-basis: var(--space-6);\n  border-radius: var(--radius-sm);\n}\n:root[data-theme='light'] .integration-logo-well {\n  background: var(--surface);\n}\n.integration-logo-well > img,\n.integration-logo-well > svg {\n  display: block;\n}\n.integration-tile-name {\n  min-width: 0;\n}\n.integration-tile-name strong {\n  display: block;\n  color: var(--fg);\n  font-size: var(--text-sm);\n  font-weight: 600;\n  overflow-wrap: anywhere;\n}\n.integration-tile-name span {\n  color: var(--muted);\n  font-size: var(--text-xs);\n}\n.integration-tile-desc {\n  flex: 1;\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.integration-tile-footer {\n  flex-wrap: wrap;\n  margin-top: auto;\n  padding-top: var(--space-3);\n  border-top: 1px solid var(--border-soft);\n}\n.integration-tile-actions {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: flex-end;\n  gap: var(--space-2);\n}\n.integration-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: var(--space-1);\n  padding: var(--space-1) var(--space-2);\n  border-radius: var(--radius-pill);\n  font-size: var(--text-xs);\n  font-weight: 600;\n  white-space: nowrap;\n}\n.integration-chip[data-tone='positive'] {\n  background: color-mix(in oklab, var(--success), transparent 86%);\n  color: var(--success);\n}\n/* Light theme: match .badge-success so 12px chip text clears WCAG AA 4.5:1 on the pale tint. */\n:root[data-theme='light'] .integration-chip[data-tone='positive'] {\n  color: color-mix(in oklab, var(--success), var(--fg) 35%);\n}\n.integration-chip[data-tone='neutral'] {\n  background: var(--surface-sunk);\n  box-shadow: inset 0 0 0 1px var(--border-soft);\n  color: var(--fg-2);\n}\n.integration-tile .btn {\n  min-height: 44px;\n  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);\n}\n.integration-tile .btn:active:not(:disabled) {\n  transform: scale(var(--press-scale));\n}\n.integration-tile .btn:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.integration-tally {\n  color: var(--muted);\n  font-size: var(--text-xs);\n  white-space: nowrap;\n}\n@media (max-width: 640px) {\n  .integration-tile-footer {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n  .integration-tile-actions {\n    width: 100%;\n  }\n  .integration-tile-actions .btn {\n    flex: 1 1 0;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  .integration-tile,\n  .integration-tile .btn {\n    transition: none;\n  }\n  .integration-tile .btn:active:not(:disabled) {\n    transform: none;\n  }\n}\n", IM = "\n.channel-logo {\n  --brand-slack-red: oklch(58.80% 0.2216 11.49);\n  --brand-slack-blue: oklch(76.80% 0.1305 223.20);\n  --brand-slack-green: oklch(69.11% 0.1422 160.24);\n  --brand-slack-yellow: oklch(79.66% 0.1517 82.65);\n  --brand-teams-tile-1: oklch(53.91% 0.1492 276.62);\n  --brand-teams-tile-2: oklch(50.09% 0.1611 275.62);\n  --brand-teams-tile-3: oklch(43.42% 0.1684 274.11);\n  --brand-teams-deep: oklch(51.94% 0.1717 275.23);\n  --brand-teams-light: oklch(65.11% 0.1536 277.91);\n  --brand-teams-glyph: oklch(100% 0 0);\n  --brand-teams-shade: oklch(0% 0 0);\n}\n.channel-logo .channel-mark {\n  width: 56%;\n  height: 56%;\n  display: block;\n}\n.channel-logo .channel-glyph {\n  width: 50%;\n  height: 50%;\n}\n.channel-logo[data-channel='email'] .channel-glyph { color: var(--accent); }\n.channel-logo[data-channel='webhook'] .channel-glyph { color: var(--fg); }\n.channel-logo .slack-red { fill: var(--brand-slack-red); }\n.channel-logo .slack-blue { fill: var(--brand-slack-blue); }\n.channel-logo .slack-green { fill: var(--brand-slack-green); }\n.channel-logo .slack-yellow { fill: var(--brand-slack-yellow); }\n.channel-logo .teams-stop-1 { stop-color: var(--brand-teams-tile-1); }\n.channel-logo .teams-stop-2 { stop-color: var(--brand-teams-tile-2); }\n.channel-logo .teams-stop-3 { stop-color: var(--brand-teams-tile-3); }\n.channel-logo .teams-deep { fill: var(--brand-teams-deep); }\n.channel-logo .teams-light { fill: var(--brand-teams-light); }\n.channel-logo .teams-shade { fill: var(--brand-teams-shade); }\n.channel-logo .teams-glyph { fill: var(--brand-teams-glyph); }\n\n.notification-channels {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  gap: var(--space-4);\n}\n.notification-channels .nc-heading {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: flex-end;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.notification-channels .nc-heading h2 {\n  margin: 0;\n  color: var(--fg);\n  text-wrap: balance;\n}\n.notification-channels .nc-heading h2:focus:not(:focus-visible) {\n  outline: none;\n}\n.notification-channels .nc-heading p {\n  max-width: 72ch;\n  margin: var(--space-1) 0 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.notification-channels .nc-channel-cell {\n  display: inline-flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-2);\n  color: var(--fg);\n}\n.notification-channels .nc-preview {\n  color: var(--fg-2);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n  overflow-wrap: anywhere;\n}\n.notification-channels .nc-events {\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n.notification-channels .nc-footnote {\n  margin: 0;\n  color: var(--muted);\n  font-size: var(--text-xs);\n}\n.notification-channels .nc-row-actions {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 4px;\n}\n\n.notification-channels .nc-loading {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-2);\n}\n\n.nc-dialog-body {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-5);\n}\n.nc-setup h4,\n.nc-form-title {\n  margin: 0 0 var(--space-2);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  font-weight: 600;\n}\n.nc-steps {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-2);\n  margin: 0;\n  padding-left: var(--space-5);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.nc-steps li::marker {\n  color: var(--muted);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.nc-steps strong { color: var(--fg); font-weight: 600; }\n.nc-steps code,\n.nc-note code {\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.nc-note {\n  margin: var(--space-3) 0 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.nc-docs-link {\n  display: inline-flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-1);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  text-decoration: underline;\n  text-underline-offset: 3px;\n}\n.nc-docs-link:hover { color: var(--accent); }\n.nc-docs-link:focus-visible {\n  border-radius: var(--radius-sm);\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.nc-field-hint {\n  margin: 0;\n  color: var(--muted);\n  font-size: var(--text-xs);\n  line-height: 1.45;\n}\n.nc-field-error {\n  margin: 0;\n  color: var(--danger);\n  font-size: var(--text-sm);\n}\n.nc-field-warning {\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n.nc-form input[aria-invalid='true'] {\n  border-color: var(--danger);\n}\n.nc-payload {\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--proof-surface);\n}\n.nc-payload > summary {\n  display: flex;\n  min-height: 44px;\n  align-items: center;\n  padding: 0 var(--space-3);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  cursor: pointer;\n}\n.nc-payload > summary:focus-visible {\n  border-radius: var(--radius-md);\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.nc-payload pre {\n  max-height: 260px;\n  margin: 0;\n  padding: var(--space-3);\n  overflow: auto;\n  border-top: 1px solid var(--border-soft);\n  color: var(--fg-2);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n  line-height: 1.5;\n}\n\n@media (pointer: coarse) {\n  .notification-channels .btn,\n  .nc-dialog-body .btn {\n    min-height: 44px;\n  }\n}\n", LM = "Outbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.";
-function RM({ href: e, children: t }) {
+var IM = "\n.integration-tile-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));\n  gap: var(--space-3);\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.integration-tile {\n  display: flex;\n  min-width: 0;\n  min-height: 100%;\n  flex-direction: column;\n  gap: var(--space-3);\n  padding: var(--space-4);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-lg);\n  background: var(--proof-surface);\n  transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease);\n}\n.integration-tile:hover,\n.integration-tile:focus-within {\n  border-color: var(--border-strong);\n  background: var(--surface-raised);\n}\n.integration-tile[data-connected] {\n  border-color: color-mix(in oklab, var(--success), transparent 55%);\n}\n.integration-tile-head,\n.integration-tile-footer {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.integration-identity {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-3);\n}\n.integration-logo-well {\n  display: grid;\n  width: var(--space-10);\n  height: var(--space-10);\n  flex: 0 0 var(--space-10);\n  place-items: center;\n  overflow: hidden;\n  border-radius: var(--radius-md);\n  background: color-mix(in oklab, var(--fg) 12%, var(--surface));\n  box-shadow: inset 0 0 0 1px var(--border-soft);\n  color: var(--fg-2);\n}\n.integration-logo-well-sm {\n  width: var(--space-6);\n  height: var(--space-6);\n  flex-basis: var(--space-6);\n  border-radius: var(--radius-sm);\n}\n:root[data-theme='light'] .integration-logo-well {\n  background: var(--surface);\n}\n.integration-logo-well > img,\n.integration-logo-well > svg {\n  display: block;\n}\n.integration-tile-name {\n  min-width: 0;\n}\n.integration-tile-name strong {\n  display: block;\n  color: var(--fg);\n  font-size: var(--text-sm);\n  font-weight: 600;\n  overflow-wrap: anywhere;\n}\n.integration-tile-name span {\n  color: var(--muted);\n  font-size: var(--text-xs);\n}\n.integration-tile-desc {\n  flex: 1;\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.integration-tile-footer {\n  flex-wrap: wrap;\n  margin-top: auto;\n  padding-top: var(--space-3);\n  border-top: 1px solid var(--border-soft);\n}\n.integration-tile-actions {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: flex-end;\n  gap: var(--space-2);\n}\n.integration-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: var(--space-1);\n  padding: var(--space-1) var(--space-2);\n  border-radius: var(--radius-pill);\n  font-size: var(--text-xs);\n  font-weight: 600;\n  white-space: nowrap;\n}\n.integration-chip[data-tone='positive'] {\n  background: color-mix(in oklab, var(--success), transparent 86%);\n  color: var(--success);\n}\n/* Light theme: match .badge-success so 12px chip text clears WCAG AA 4.5:1 on the pale tint. */\n:root[data-theme='light'] .integration-chip[data-tone='positive'] {\n  color: color-mix(in oklab, var(--success), var(--fg) 35%);\n}\n.integration-chip[data-tone='neutral'] {\n  background: var(--surface-sunk);\n  box-shadow: inset 0 0 0 1px var(--border-soft);\n  color: var(--fg-2);\n}\n.integration-tile .btn {\n  min-height: 44px;\n  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);\n}\n.integration-tile .btn:active:not(:disabled) {\n  transform: scale(var(--press-scale));\n}\n.integration-tile .btn:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.integration-tally {\n  color: var(--muted);\n  font-size: var(--text-xs);\n  white-space: nowrap;\n}\n@media (max-width: 640px) {\n  .integration-tile-footer {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n  .integration-tile-actions {\n    width: 100%;\n  }\n  .integration-tile-actions .btn {\n    flex: 1 1 0;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  .integration-tile,\n  .integration-tile .btn {\n    transition: none;\n  }\n  .integration-tile .btn:active:not(:disabled) {\n    transform: none;\n  }\n}\n", LM = "\n.channel-logo {\n  --brand-slack-red: oklch(58.80% 0.2216 11.49);\n  --brand-slack-blue: oklch(76.80% 0.1305 223.20);\n  --brand-slack-green: oklch(69.11% 0.1422 160.24);\n  --brand-slack-yellow: oklch(79.66% 0.1517 82.65);\n  --brand-teams-tile-1: oklch(53.91% 0.1492 276.62);\n  --brand-teams-tile-2: oklch(50.09% 0.1611 275.62);\n  --brand-teams-tile-3: oklch(43.42% 0.1684 274.11);\n  --brand-teams-deep: oklch(51.94% 0.1717 275.23);\n  --brand-teams-light: oklch(65.11% 0.1536 277.91);\n  --brand-teams-glyph: oklch(100% 0 0);\n  --brand-teams-shade: oklch(0% 0 0);\n}\n.channel-logo .channel-mark {\n  width: 56%;\n  height: 56%;\n  display: block;\n}\n.channel-logo .channel-glyph {\n  width: 50%;\n  height: 50%;\n}\n.channel-logo[data-channel='email'] .channel-glyph { color: var(--accent); }\n.channel-logo[data-channel='webhook'] .channel-glyph { color: var(--fg); }\n.channel-logo .slack-red { fill: var(--brand-slack-red); }\n.channel-logo .slack-blue { fill: var(--brand-slack-blue); }\n.channel-logo .slack-green { fill: var(--brand-slack-green); }\n.channel-logo .slack-yellow { fill: var(--brand-slack-yellow); }\n.channel-logo .teams-stop-1 { stop-color: var(--brand-teams-tile-1); }\n.channel-logo .teams-stop-2 { stop-color: var(--brand-teams-tile-2); }\n.channel-logo .teams-stop-3 { stop-color: var(--brand-teams-tile-3); }\n.channel-logo .teams-deep { fill: var(--brand-teams-deep); }\n.channel-logo .teams-light { fill: var(--brand-teams-light); }\n.channel-logo .teams-shade { fill: var(--brand-teams-shade); }\n.channel-logo .teams-glyph { fill: var(--brand-teams-glyph); }\n\n.notification-channels {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  gap: var(--space-4);\n}\n.notification-channels .nc-heading {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: flex-end;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.notification-channels .nc-heading h2 {\n  margin: 0;\n  color: var(--fg);\n  text-wrap: balance;\n}\n.notification-channels .nc-heading h2:focus:not(:focus-visible) {\n  outline: none;\n}\n.notification-channels .nc-heading p {\n  max-width: 72ch;\n  margin: var(--space-1) 0 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.notification-channels .nc-channel-cell {\n  display: inline-flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-2);\n  color: var(--fg);\n}\n.notification-channels .nc-preview {\n  color: var(--fg-2);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n  overflow-wrap: anywhere;\n}\n.notification-channels .nc-events {\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n.notification-channels .nc-footnote {\n  margin: 0;\n  color: var(--muted);\n  font-size: var(--text-xs);\n}\n.notification-channels .nc-row-actions {\n  display: inline-flex;\n  flex-wrap: wrap;\n  gap: 4px;\n}\n\n.notification-channels .nc-loading {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-2);\n}\n\n.nc-dialog-body {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-5);\n}\n.nc-setup h4,\n.nc-form-title {\n  margin: 0 0 var(--space-2);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  font-weight: 600;\n}\n.nc-steps {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-2);\n  margin: 0;\n  padding-left: var(--space-5);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.nc-steps li::marker {\n  color: var(--muted);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.nc-steps strong { color: var(--fg); font-weight: 600; }\n.nc-steps code,\n.nc-note code {\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.nc-note {\n  margin: var(--space-3) 0 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.nc-docs-link {\n  display: inline-flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-1);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  text-decoration: underline;\n  text-underline-offset: 3px;\n}\n.nc-docs-link:hover { color: var(--accent); }\n.nc-docs-link:focus-visible {\n  border-radius: var(--radius-sm);\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.nc-field-hint {\n  margin: 0;\n  color: var(--muted);\n  font-size: var(--text-xs);\n  line-height: 1.45;\n}\n.nc-field-error {\n  margin: 0;\n  color: var(--danger);\n  font-size: var(--text-sm);\n}\n.nc-field-warning {\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n.nc-form input[aria-invalid='true'] {\n  border-color: var(--danger);\n}\n.nc-payload {\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--proof-surface);\n}\n.nc-payload > summary {\n  display: flex;\n  min-height: 44px;\n  align-items: center;\n  padding: 0 var(--space-3);\n  color: var(--fg);\n  font-size: var(--text-sm);\n  cursor: pointer;\n}\n.nc-payload > summary:focus-visible {\n  border-radius: var(--radius-md);\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n.nc-payload pre {\n  max-height: 260px;\n  margin: 0;\n  padding: var(--space-3);\n  overflow: auto;\n  border-top: 1px solid var(--border-soft);\n  color: var(--fg-2);\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n  line-height: 1.5;\n}\n\n@media (pointer: coarse) {\n  .notification-channels .btn,\n  .nc-dialog-body .btn {\n    min-height: 44px;\n  }\n}\n", RM = "Outbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.";
+function zM({ href: e, children: t }) {
   return /* @__PURE__ */ (0, V.jsxs)("a", {
     className: "nc-docs-link",
     href: e,
@@ -58847,7 +58928,7 @@ function RM({ href: e, children: t }) {
     ]
   });
 }
-function zM({ channel: e }) {
+function BM({ channel: e }) {
   return e.id === "slack" ? /* @__PURE__ */ (0, V.jsxs)("section", {
     className: "nc-setup",
     "aria-label": "Slack setup steps",
@@ -58892,7 +58973,7 @@ function zM({ channel: e }) {
         className: "nc-note",
         children: "Treat the URL like a password. Slack revokes webhook URLs it finds published online."
       }),
-      /* @__PURE__ */ (0, V.jsx)(RM, {
+      /* @__PURE__ */ (0, V.jsx)(zM, {
         href: e.docsUrl,
         children: e.docsLabel
       })
@@ -58933,7 +59014,7 @@ function zM({ channel: e }) {
           "."
         ]
       }),
-      /* @__PURE__ */ (0, V.jsx)(RM, {
+      /* @__PURE__ */ (0, V.jsx)(zM, {
         href: e.docsUrl,
         children: e.docsLabel
       })
@@ -59003,10 +59084,10 @@ function zM({ channel: e }) {
     ]
   });
 }
-function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
-  let a = (0, D.useId)(), o = `${a}-hint`, s = `${a}-error`, c = `${a}-warning`, l = `${a}-trigger-error`, [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)([...uM]), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(!0), [S, C] = (0, D.useState)(!1), [w, T] = (0, D.useState)(""), E = (0, D.useRef)(null), O = (0, D.useRef)(null), k = (0, D.useMemo)(() => JSON.stringify(jM(e.id), null, 2), [e.id]);
+function VM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
+  let a = (0, D.useId)(), o = `${a}-hint`, s = `${a}-error`, c = `${a}-warning`, l = `${a}-trigger-error`, [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)([...dM]), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(!0), [S, C] = (0, D.useState)(!1), [w, T] = (0, D.useState)(""), E = (0, D.useRef)(null), O = (0, D.useRef)(null), k = (0, D.useMemo)(() => JSON.stringify(MM(e.id), null, 2), [e.id]);
   function A(t) {
-    let n = yM(e.id, t);
+    let n = bM(e.id, t);
     return n.ok ? (p(""), h(n.warning ?? ""), n.destination) : (p(n.error), h(""), null);
   }
   function j(e) {
@@ -59017,14 +59098,14 @@ function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
   }
   async function N(r) {
     r.preventDefault(), T("");
-    let a = A(u), o = bM(g);
+    let a = A(u), o = xM(g);
     if (o.ok || y(o.error), !a || !o.ok) {
       a ? O.current?.focus() : E.current?.focus();
       return;
     }
     C(!0);
     try {
-      i(await iM(t, n, {
+      i(await aM(t, n, {
         channel: e.id,
         destination: a,
         triggers: o.triggers,
@@ -59051,7 +59132,7 @@ function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
     },
     children: /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "nc-dialog-body",
-      children: [/* @__PURE__ */ (0, V.jsx)(zM, { channel: e }), /* @__PURE__ */ (0, V.jsxs)("form", {
+      children: [/* @__PURE__ */ (0, V.jsx)(BM, { channel: e }), /* @__PURE__ */ (0, V.jsxs)("form", {
         className: "product-form nc-form",
         onSubmit: N,
         noValidate: !0,
@@ -59103,7 +59184,7 @@ function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
             "aria-describedby": v ? l : void 0,
             tabIndex: -1,
             disabled: S,
-            children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Notify on" }), lM.map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
+            children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Notify on" }), uM.map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
               className: "check-row",
               children: [/* @__PURE__ */ (0, V.jsx)("input", {
                 type: "checkbox",
@@ -59153,7 +59234,7 @@ function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
             children: [/* @__PURE__ */ (0, V.jsx)(jt, {
               size: 18,
               "aria-hidden": "true"
-            }), /* @__PURE__ */ (0, V.jsx)("span", { children: LM })]
+            }), /* @__PURE__ */ (0, V.jsx)("span", { children: RM })]
           }),
           w ? /* @__PURE__ */ (0, V.jsx)("p", {
             className: "form-banner error full",
@@ -59179,14 +59260,14 @@ function BM({ channel: e, config: t, session: n, onClose: r, onConnected: i }) {
     })
   });
 }
-function VM({ rule: e, config: t, session: n, onClose: r, onSaved: i }) {
-  let a = mM(e.channel), o = (0, D.useId)(), s = `${o}-hint`, c = `${o}-error`, l = `${o}-warning`, u = `${o}-trigger-error`, [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(""), [_, v] = (0, D.useState)([...e.triggers]), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)(""), T = (0, D.useRef)(null), E = (0, D.useRef)(null), O = hM(e.channel);
+function HM({ rule: e, config: t, session: n, onClose: r, onSaved: i }) {
+  let a = hM(e.channel), o = (0, D.useId)(), s = `${o}-hint`, c = `${o}-error`, l = `${o}-warning`, u = `${o}-trigger-error`, [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(""), [_, v] = (0, D.useState)([...e.triggers]), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)(""), T = (0, D.useRef)(null), E = (0, D.useRef)(null), O = gM(e.channel);
   function k(e) {
     b(""), v((t) => t.includes(e) ? t.filter((t) => t !== e) : [...t, e]);
   }
   async function A(r) {
     r.preventDefault(), w(""), m(""), b("");
-    let a = EM(e.channel, {
+    let a = DM(e.channel, {
       destination: d,
       triggers: _
     });
@@ -59196,7 +59277,7 @@ function VM({ rule: e, config: t, session: n, onClose: r, onSaved: i }) {
     }
     g(a.warning ?? ""), S(!0);
     try {
-      i(await aM(t, n, e.id, a.body));
+      i(await oM(t, n, e.id, a.body));
     } catch (e) {
       w(qo(e, `Could not update ${O}. Try again.`));
     } finally {
@@ -59271,7 +59352,7 @@ function VM({ rule: e, config: t, session: n, onClose: r, onSaved: i }) {
           "aria-describedby": y ? u : void 0,
           tabIndex: -1,
           disabled: x,
-          children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Notify on" }), lM.map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
+          children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Notify on" }), uM.map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
             className: "check-row",
             children: [/* @__PURE__ */ (0, V.jsx)("input", {
               type: "checkbox",
@@ -59311,18 +59392,18 @@ function VM({ rule: e, config: t, session: n, onClose: r, onSaved: i }) {
     })
   });
 }
-function HM({ config: e, session: t, onChanged: n, headingId: r }) {
+function UM({ config: e, session: t, onChanged: n, headingId: r }) {
   let i = (0, D.useId)(), a = r ?? i, o = Aa(t, "notifications"), s = ja(t, "notification:write"), [c, l] = (0, D.useState)("loading"), [u, d] = (0, D.useState)(""), [f, p] = (0, D.useState)([]), [m, h] = (0, D.useState)([]), [g, _] = (0, D.useState)(null), [v, y] = (0, D.useState)(null), [b, x] = (0, D.useState)(!1), [S, C] = (0, D.useState)(null), [w, T] = (0, D.useState)(null), [E, O] = (0, D.useState)(null), [k, A] = (0, D.useState)(""), [j, M] = (0, D.useState)(""), [N, P] = (0, D.useState)(""), [ee, F] = (0, D.useState)(() => {
     if (typeof window > "u") return "";
     let e = window.location.hash.replace(/^#/, ""), t = e.indexOf("?");
     return new URLSearchParams(t >= 0 ? e.slice(t + 1) : "").get("focus") ?? "";
-  }), I = (0, D.useRef)(TM()), te = wM(t), ne = (0, D.useRef)(te);
+  }), I = (0, D.useRef)(EM()), te = TM(t), ne = (0, D.useRef)(te);
   ne.current = te;
   let re = (0, D.useRef)(!1), ie = (0, D.useCallback)(async () => {
     let n = I.current.begin(te);
     re.current ? x(!0) : l("loading"), d("");
     try {
-      let r = await rM(e, t);
+      let r = await iM(e, t);
       if (!I.current.isCurrent(n, ne.current)) return;
       p(r.rules), h(r.events), _(r.latestDeliveries), y(r.eventsWindow), re.current = !0, l("ready");
     } catch (e) {
@@ -59346,7 +59427,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
       e.cancel(), x(!1);
     };
   }, [o, ie]);
-  let ae = (0, D.useMemo)(() => f.filter((e) => mM(e.channel)), [f]), oe = ee ? f.find((e) => e.id === ee) ?? null : null;
+  let ae = (0, D.useMemo)(() => f.filter((e) => hM(e.channel)), [f]), oe = ee ? f.find((e) => e.id === ee) ?? null : null;
   (0, D.useEffect)(() => {
     if (!ee || c !== "ready") return;
     let e = window.requestAnimationFrame(() => {
@@ -59359,7 +59440,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
     c,
     a
   ]);
-  let L = (0, D.useMemo)(() => OM(ae), [ae]), se = (0, D.useMemo)(() => DM(m), [m]), ce = S ? mM(S) : null, ue = v?.limit ?? (m.length || void 0);
+  let L = (0, D.useMemo)(() => kM(ae), [ae]), se = (0, D.useMemo)(() => OM(m), [m]), ce = S ? hM(S) : null, ue = v?.limit ?? (m.length || void 0);
   if (!o) return /* @__PURE__ */ (0, V.jsx)(Qv, {
     title: "Notification channels are restricted",
     body: "Your role cannot view notification channels. Ask a tenant owner or admin if you need access."
@@ -59367,16 +59448,16 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
   async function de(e) {
     C(null);
     let t = e.delivery_note ? ` ${e.delivery_note}` : "";
-    P(`${hM(e.channel)} connected (${e.destination_preview || "destination hidden"}).${t}`), await ie(), await n?.();
+    P(`${gM(e.channel)} connected (${e.destination_preview || "destination hidden"}).${t}`), await ie(), await n?.();
   }
   async function fe(e) {
-    T(null), P(`${hM(e.channel)} channel updated (${e.destination_preview || "destination hidden"}).`), await ie(), await n?.();
+    T(null), P(`${gM(e.channel)} channel updated (${e.destination_preview || "destination hidden"}).`), await ie(), await n?.();
   }
   async function pe(r) {
     M(""), P(""), A(r.id);
     try {
-      let i = await aM(e, t, r.id, { enabled: !r.enabled });
-      P(`${hM(i.channel)} channel turned ${i.enabled ? "on" : "off"}.`), await ie(), await n?.();
+      let i = await oM(e, t, r.id, { enabled: !r.enabled });
+      P(`${gM(i.channel)} channel turned ${i.enabled ? "on" : "off"}.`), await ie(), await n?.();
     } catch (e) {
       M(qo(e, `Could not turn ${r.enabled ? "off" : "on"} this channel. Try again.`));
     } finally {
@@ -59388,7 +59469,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
     if (r) {
       M(""), P(""), A(r.id);
       try {
-        await oM(e, t, r.id), O(null), P(`${hM(r.channel)} channel removed. Its delivery history is kept.`), await ie(), await n?.();
+        await sM(e, t, r.id), O(null), P(`${gM(r.channel)} channel removed. Its delivery history is kept.`), await ie(), await n?.();
       } catch (e) {
         O(null), M(qo(e, "Could not remove this channel. Try again."));
       } finally {
@@ -59402,8 +59483,8 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
     role: "region",
     "aria-labelledby": a,
     children: [
-      /* @__PURE__ */ (0, V.jsx)("style", { children: FM }),
       /* @__PURE__ */ (0, V.jsx)("style", { children: IM }),
+      /* @__PURE__ */ (0, V.jsx)("style", { children: LM }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "nc-heading",
         children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("h2", {
@@ -59438,7 +59519,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
         children: [
           oe ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
             "Showing the ",
-            hM(oe.channel),
+            gM(oe.channel),
             " channel ",
             oe.destination_preview || "",
             " from a delivery failure. It is highlighted below."
@@ -59474,7 +59555,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
       /* @__PURE__ */ (0, V.jsx)("ul", {
         className: "integration-tile-grid",
         "aria-label": "Available notification channels",
-        children: cM.map((e) => {
+        children: lM.map((e) => {
           let t = L[e.id] ?? {
             total: 0,
             enabled: 0
@@ -59487,7 +59568,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
                 className: "integration-tile-head",
                 children: [/* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "integration-identity",
-                  children: [/* @__PURE__ */ (0, V.jsx)(PM, { channel: e.id }), /* @__PURE__ */ (0, V.jsxs)("div", {
+                  children: [/* @__PURE__ */ (0, V.jsx)(FM, { channel: e.id }), /* @__PURE__ */ (0, V.jsxs)("div", {
                     className: "integration-tile-name",
                     children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: e.label }), /* @__PURE__ */ (0, V.jsx)("span", { children: e.kind })]
                   })]
@@ -59563,10 +59644,10 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
             label: "Channel",
             render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
               className: "nc-channel-cell",
-              children: [/* @__PURE__ */ (0, V.jsx)(PM, {
+              children: [/* @__PURE__ */ (0, V.jsx)(FM, {
                 channel: e.channel,
                 size: "sm"
-              }), hM(e.channel)]
+              }), gM(e.channel)]
             })
           },
           {
@@ -59582,7 +59663,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
             label: "Notifies on",
             render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
               className: "nc-events",
-              children: e.triggers.map((e) => gM(e)).join(", ") || "None"
+              children: e.triggers.map((e) => _M(e)).join(", ") || "None"
             })
           },
           {
@@ -59597,11 +59678,11 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
             key: "delivery",
             label: "Last attempt",
             render: (e) => {
-              let t = CM(e.id, {
+              let t = wM(e.id, {
                 latestDeliveries: g,
                 eventsLatest: se,
                 windowSize: ue
-              }), n = xM(t.attempt?.status, {
+              }), n = SM(t.attempt?.status, {
                 source: t.source,
                 windowSize: t.windowSize
               });
@@ -59627,7 +59708,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
             key: "actions",
             label: "Actions",
             render: (e) => {
-              let t = `${hM(e.channel)} channel ${e.destination_preview || ""}`.trim(), n = k === e.id, r = !s || !!k;
+              let t = `${gM(e.channel)} channel ${e.destination_preview || ""}`.trim(), n = k === e.id, r = !s || !!k;
               return /* @__PURE__ */ (0, V.jsxs)("span", {
                 className: "nc-row-actions",
                 children: [
@@ -59693,16 +59774,16 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
       }),
       /* @__PURE__ */ (0, V.jsx)("p", {
         className: "nc-footnote",
-        children: LM
+        children: RM
       }),
-      ce && s ? /* @__PURE__ */ (0, V.jsx)(BM, {
+      ce && s ? /* @__PURE__ */ (0, V.jsx)(VM, {
         channel: ce,
         config: e,
         session: t,
         onClose: () => C(null),
         onConnected: (e) => void de(e)
       }, ce.id) : null,
-      w && s ? /* @__PURE__ */ (0, V.jsx)(VM, {
+      w && s ? /* @__PURE__ */ (0, V.jsx)(HM, {
         rule: w,
         config: e,
         session: t,
@@ -59711,7 +59792,7 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
       }, w.id) : null,
       /* @__PURE__ */ (0, V.jsx)(ap, {
         open: !!E && s,
-        title: E ? `Remove ${hM(E.channel)} channel?` : "Remove channel?",
+        title: E ? `Remove ${gM(E.channel)} channel?` : "Remove channel?",
         description: E ? `${E.destination_preview || "This destination"} will stop receiving alerts, including pending retries. The stored destination is deleted. Delivery history stays in the ledger.` : "",
         confirmLabel: "Remove channel",
         confirmTone: "danger",
@@ -59726,10 +59807,10 @@ function HM({ config: e, session: t, onChanged: n, headingId: r }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/integrations-page-styles.ts
-var UM = "\n.integration-page .integration-directory-group { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); }\n.integration-page .integration-directory-group + .integration-directory-group { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }\n.integration-page .integration-directory-group-title { margin: 0; color: var(--fg); font-size: var(--text-sm); font-weight: 600; line-height: 1.5; }\n.integration-page .integration-directory-group-title .muted { font-weight: 400; }\n.integration-page .integration-tile-head { flex-wrap: wrap; row-gap: var(--space-2); }\n.integration-page .integration-tile-head > .badge { flex: none; white-space: nowrap; }\n.integration-discard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }\n.integration-page .integration-directory-meta {\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: var(--space-1);\n}\n.integration-page .provider-directory-footnote {\n  margin: var(--space-3) 0 0;\n}\n.integration-page .provider-guide {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-4);\n}\n.integration-page .provider-guide-facts {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));\n  gap: var(--space-3);\n  margin: 0;\n}\n.integration-page .provider-guide-facts > div {\n  min-width: 0;\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--surface-sunk);\n}\n.integration-page .provider-guide-facts dt {\n  margin-bottom: var(--space-1);\n  color: var(--muted);\n  font-size: var(--text-xs);\n  text-transform: uppercase;\n  letter-spacing: var(--tracking-caps);\n}\n.integration-page .provider-guide-facts dd {\n  margin: 0;\n  color: var(--fg);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n  overflow-wrap: anywhere;\n}\n.integration-page .provider-guide-facts code {\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.integration-page .provider-guide-section h3 {\n  margin: 0 0 var(--space-2);\n  color: var(--fg);\n  font-size: var(--text-sm);\n}\n.integration-page .provider-guide-section p {\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.integration-page .provider-guide-steps {\n  display: grid;\n  gap: var(--space-2);\n  margin: 0;\n  padding-left: var(--space-5);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.integration-page .provider-guide-links {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--space-2) var(--space-4);\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.integration-page .provider-guide-links a {\n  display: inline-flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-1);\n  color: var(--accent);\n  font-size: var(--text-sm);\n  text-decoration: underline;\n  text-underline-offset: 3px;\n}\n.integration-page .provider-guide-links a:hover {\n  color: var(--accent-hover);\n}\n.integration-page .provider-guide-links a:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n  border-radius: var(--radius-sm);\n}\n.integration-page .provider-flow-guide {\n  margin-top: var(--space-4);\n}\n.integration-page .provider-flow-guide > summary {\n  display: flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-2);\n}\n.integration-page .provider-scope-hint {\n  display: flex;\n  align-items: flex-start;\n  gap: var(--space-2);\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--surface-sunk);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.integration-page .provider-scope-hint svg {\n  flex: none;\n  margin-top: var(--space-0-5);\n  color: var(--accent);\n}\n.integration-page .integration-directory-heading,\n.integration-page .provider-flow-context,\n.integration-page .domain-result-heading {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.integration-page .connector-name-cell {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-2);\n  color: var(--fg-2);\n}\n.integration-page .integration-directory-note {\n  max-width: 72ch;\n  margin: 0;\n}\n.integration-page .kpi-cell {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  gap: var(--space-1);\n}\n.integration-page .kpi-cell-label {\n  color: var(--muted);\n  font-size: var(--text-xs);\n  text-transform: uppercase;\n  letter-spacing: var(--tracking-caps);\n}\n.integration-page .kpi-cell-value {\n  color: var(--fg);\n  font-family: var(--font-mono);\n  font-size: var(--text-xl);\n}\n.integration-page .kpi-cell-delta {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n}\n.integration-page .provider-flow-context {\n  align-items: flex-end;\n  margin-bottom: var(--space-4);\n  padding-bottom: var(--space-4);\n  border-bottom: 1px solid var(--border-soft);\n}\n.integration-page .provider-flow-context label {\n  min-width: min(100%, 260px);\n}\n.integration-page .provider-path-grid {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n  gap: var(--space-3);\n}\n.integration-page .provider-path {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  align-items: flex-start;\n  gap: var(--space-3);\n  padding: var(--space-4);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-lg);\n  background: var(--proof-surface);\n}\n.integration-page .provider-path-icon {\n  display: grid;\n  width: var(--space-10);\n  height: var(--space-10);\n  place-items: center;\n  border-radius: var(--radius-md);\n  background: var(--accent-soft);\n  color: var(--accent);\n}\n.integration-page .provider-path h3,\n.integration-page .provider-path p {\n  margin: 0;\n}\n.integration-page .provider-path h3 {\n  color: var(--fg);\n  font-size: var(--text-sm);\n}\n.integration-page .provider-path p {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n  line-height: 1.55;\n}\n.integration-page .provider-path .btn {\n  width: 100%;\n  margin-top: auto;\n}\n.integration-page .domain-provenance,\n.integration-page .domain-result {\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--proof-surface);\n}\n.integration-page .domain-provenance {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n  line-height: 1.5;\n}\n.integration-page .domain-result {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-3);\n}\n.integration-page .domain-result h3,\n.integration-page .domain-result p {\n  margin: 0;\n}\n.integration-page .domain-result h3 {\n  color: var(--fg);\n  font-size: var(--text-base);\n}\n.integration-page .domain-result p {\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n@media (max-width: 860px) {\n  .integration-page .provider-path-grid {\n    grid-template-columns: 1fr;\n  }\n}\n@media (max-width: 640px) {\n  .integration-page .integration-directory-heading,\n  .integration-page .provider-flow-context,\n  .integration-page .domain-result-heading {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n  .integration-page .provider-flow-context label {\n    width: 100%;\n  }\n  .integration-page .integration-directory-meta {\n    align-items: flex-start;\n  }\n}\n.integration-page .connector-attempt {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-1);\n}\n";
+var WM = "\n.integration-page .integration-directory-group { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); }\n.integration-page .integration-directory-group + .integration-directory-group { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }\n.integration-page .integration-directory-group-title { margin: 0; color: var(--fg); font-size: var(--text-sm); font-weight: 600; line-height: 1.5; }\n.integration-page .integration-directory-group-title .muted { font-weight: 400; }\n.integration-page .integration-tile-head { flex-wrap: wrap; row-gap: var(--space-2); }\n.integration-page .integration-tile-head > .badge { flex: none; white-space: nowrap; }\n.integration-discard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }\n.integration-page .integration-directory-meta {\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: var(--space-1);\n}\n.integration-page .provider-directory-footnote {\n  margin: var(--space-3) 0 0;\n}\n.integration-page .provider-guide {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-4);\n}\n.integration-page .provider-guide-facts {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));\n  gap: var(--space-3);\n  margin: 0;\n}\n.integration-page .provider-guide-facts > div {\n  min-width: 0;\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--surface-sunk);\n}\n.integration-page .provider-guide-facts dt {\n  margin-bottom: var(--space-1);\n  color: var(--muted);\n  font-size: var(--text-xs);\n  text-transform: uppercase;\n  letter-spacing: var(--tracking-caps);\n}\n.integration-page .provider-guide-facts dd {\n  margin: 0;\n  color: var(--fg);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n  overflow-wrap: anywhere;\n}\n.integration-page .provider-guide-facts code {\n  font-family: var(--font-mono);\n  font-size: var(--text-xs);\n}\n.integration-page .provider-guide-section h3 {\n  margin: 0 0 var(--space-2);\n  color: var(--fg);\n  font-size: var(--text-sm);\n}\n.integration-page .provider-guide-section p {\n  margin: 0;\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.integration-page .provider-guide-steps {\n  display: grid;\n  gap: var(--space-2);\n  margin: 0;\n  padding-left: var(--space-5);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.55;\n}\n.integration-page .provider-guide-links {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--space-2) var(--space-4);\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.integration-page .provider-guide-links a {\n  display: inline-flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-1);\n  color: var(--accent);\n  font-size: var(--text-sm);\n  text-decoration: underline;\n  text-underline-offset: 3px;\n}\n.integration-page .provider-guide-links a:hover {\n  color: var(--accent-hover);\n}\n.integration-page .provider-guide-links a:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n  border-radius: var(--radius-sm);\n}\n.integration-page .provider-flow-guide {\n  margin-top: var(--space-4);\n}\n.integration-page .provider-flow-guide > summary {\n  display: flex;\n  min-height: 44px;\n  align-items: center;\n  gap: var(--space-2);\n}\n.integration-page .provider-scope-hint {\n  display: flex;\n  align-items: flex-start;\n  gap: var(--space-2);\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--surface-sunk);\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n  line-height: 1.5;\n}\n.integration-page .provider-scope-hint svg {\n  flex: none;\n  margin-top: var(--space-0-5);\n  color: var(--accent);\n}\n.integration-page .integration-directory-heading,\n.integration-page .provider-flow-context,\n.integration-page .domain-result-heading {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--space-3);\n}\n.integration-page .connector-name-cell {\n  display: flex;\n  min-width: 0;\n  align-items: center;\n  gap: var(--space-2);\n  color: var(--fg-2);\n}\n.integration-page .integration-directory-note {\n  max-width: 72ch;\n  margin: 0;\n}\n.integration-page .kpi-cell {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  gap: var(--space-1);\n}\n.integration-page .kpi-cell-label {\n  color: var(--muted);\n  font-size: var(--text-xs);\n  text-transform: uppercase;\n  letter-spacing: var(--tracking-caps);\n}\n.integration-page .kpi-cell-value {\n  color: var(--fg);\n  font-family: var(--font-mono);\n  font-size: var(--text-xl);\n}\n.integration-page .kpi-cell-delta {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n}\n.integration-page .provider-flow-context {\n  align-items: flex-end;\n  margin-bottom: var(--space-4);\n  padding-bottom: var(--space-4);\n  border-bottom: 1px solid var(--border-soft);\n}\n.integration-page .provider-flow-context label {\n  min-width: min(100%, 260px);\n}\n.integration-page .provider-path-grid {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n  gap: var(--space-3);\n}\n.integration-page .provider-path {\n  display: flex;\n  min-width: 0;\n  flex-direction: column;\n  align-items: flex-start;\n  gap: var(--space-3);\n  padding: var(--space-4);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-lg);\n  background: var(--proof-surface);\n}\n.integration-page .provider-path-icon {\n  display: grid;\n  width: var(--space-10);\n  height: var(--space-10);\n  place-items: center;\n  border-radius: var(--radius-md);\n  background: var(--accent-soft);\n  color: var(--accent);\n}\n.integration-page .provider-path h3,\n.integration-page .provider-path p {\n  margin: 0;\n}\n.integration-page .provider-path h3 {\n  color: var(--fg);\n  font-size: var(--text-sm);\n}\n.integration-page .provider-path p {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n  line-height: 1.55;\n}\n.integration-page .provider-path .btn {\n  width: 100%;\n  margin-top: auto;\n}\n.integration-page .domain-provenance,\n.integration-page .domain-result {\n  padding: var(--space-3);\n  border: 1px solid var(--border-soft);\n  border-radius: var(--radius-md);\n  background: var(--proof-surface);\n}\n.integration-page .domain-provenance {\n  color: var(--fg-2);\n  font-size: var(--text-xs);\n  line-height: 1.5;\n}\n.integration-page .domain-result {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-3);\n}\n.integration-page .domain-result h3,\n.integration-page .domain-result p {\n  margin: 0;\n}\n.integration-page .domain-result h3 {\n  color: var(--fg);\n  font-size: var(--text-base);\n}\n.integration-page .domain-result p {\n  color: var(--fg-2);\n  font-size: var(--text-sm);\n}\n@media (max-width: 860px) {\n  .integration-page .provider-path-grid {\n    grid-template-columns: 1fr;\n  }\n}\n@media (max-width: 640px) {\n  .integration-page .integration-directory-heading,\n  .integration-page .provider-flow-context,\n  .integration-page .domain-result-heading {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n  .integration-page .provider-flow-context label {\n    width: 100%;\n  }\n  .integration-page .integration-directory-meta {\n    align-items: flex-start;\n  }\n}\n.integration-page .connector-attempt {\n  display: flex;\n  flex-direction: column;\n  gap: var(--space-1);\n}\n";
 //#endregion
 //#region apps/web/react/src/pages/integrations-page.tsx
-function WM({ route: e, eyebrow: t, actions: n }) {
+function GM({ route: e, eyebrow: t, actions: n }) {
   let r = ic.get(e);
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "page-head",
@@ -59746,17 +59827,17 @@ function WM({ route: e, eyebrow: t, actions: n }) {
     }) : null]
   });
 }
-function GM({ children: e }) {
+function KM({ children: e }) {
   return /* @__PURE__ */ (0, V.jsx)("p", {
     className: "page-context-summary",
     children: e
   });
 }
-function KM({ title: e, description: t, trailing: n }) {
+function qM({ title: e, description: t, trailing: n }) {
   let r = /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: e }), t ? /* @__PURE__ */ (0, V.jsx)(Y, { children: t }) : null] });
   return n ? /* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)("div", { children: r }), n] }) : /* @__PURE__ */ (0, V.jsx)(q, { children: r });
 }
-function qM({ icon: e, tone: t, children: n }) {
+function JM({ icon: e, tone: t, children: n }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: t ? `callout ${t}` : "callout",
     children: [/* @__PURE__ */ (0, V.jsx)(e, {
@@ -59765,7 +59846,7 @@ function qM({ icon: e, tone: t, children: n }) {
     }), /* @__PURE__ */ (0, V.jsx)("span", { children: n })]
   });
 }
-function JM(e, t, n = "—") {
+function YM(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -59773,7 +59854,7 @@ function JM(e, t, n = "—") {
   }
   return n;
 }
-function YM(e, t) {
+function XM(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object") return null;
@@ -59781,7 +59862,7 @@ function YM(e, t) {
   }
   return n && typeof n == "object" ? n : null;
 }
-var XM = [
+var ZM = [
   {
     value: "waf_policy",
     label: "WAF policy"
@@ -59802,7 +59883,7 @@ var XM = [
     value: "vulnerability",
     label: "Vulnerability"
   }
-], ZM = [
+], QM = [
   {
     id: "cloudflare",
     label: "Cloudflare",
@@ -59890,40 +59971,40 @@ var XM = [
     capability: "Manual metadata",
     description: "No live polling. Create a metadata-only provider record and attach operator-supplied DNS zone evidence."
   }
-], QM = /* @__PURE__ */ new Set([
+], $M = /* @__PURE__ */ new Set([
   "cloudflare",
   "akamai_edgedns",
   "namecheap",
   "godaddy",
   "ibm_ns1",
   "aws_waf"
-]), $M = /* @__PURE__ */ new Set([
+]), eN = /* @__PURE__ */ new Set([
   "block_at_edge",
   "absorb_at_origin",
   "rate_shape"
-]), eN = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
-function tN(e) {
-  return ZM.find((t) => t.id === e) ?? ZM[0];
-}
+]), tN = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
 function nN(e) {
-  let t = JM(e, ["provider"], "").toLowerCase();
-  if (t === "cloudflare") return tN("cloudflare");
-  if (t === "aws_waf") return tN("aws");
-  let n = ZM.find((e) => e.backendProvider === t && e.backendProvider !== "generic_waf");
-  if (n) return n;
-  if (t !== "generic_waf") return null;
-  let r = JM(YM(e, ["config"]) ?? YM(e, ["config_json"]) ?? {}, ["owner_hint"], "").toLowerCase();
-  return ZM.find((e) => e.backendProvider === "generic_waf" && e.id === r) ?? null;
+  return QM.find((t) => t.id === e) ?? QM[0];
 }
 function rN(e) {
-  let t = nN(e);
-  return t ? t.label : JM(e, ["provider"], "unrecorded").replaceAll("_", " ");
+  let t = YM(e, ["provider"], "").toLowerCase();
+  if (t === "cloudflare") return nN("cloudflare");
+  if (t === "aws_waf") return nN("aws");
+  let n = QM.find((e) => e.backendProvider === t && e.backendProvider !== "generic_waf");
+  if (n) return n;
+  if (t !== "generic_waf") return null;
+  let r = YM(XM(e, ["config"]) ?? XM(e, ["config_json"]) ?? {}, ["owner_hint"], "").toLowerCase();
+  return QM.find((e) => e.backendProvider === "generic_waf" && e.id === r) ?? null;
 }
 function iN(e) {
-  let t = JM(e, ["provider"], "").toLowerCase();
-  return QM.has(t) && !!JM(e, ["secret_id"], "");
+  let t = rN(e);
+  return t ? t.label : YM(e, ["provider"], "unrecorded").replaceAll("_", " ");
 }
 function aN(e) {
+  let t = YM(e, ["provider"], "").toLowerCase();
+  return $M.has(t) && !!YM(e, ["secret_id"], "");
+}
+function oN(e) {
   let t = e.trim().toLowerCase().replace(/\.$/, "");
   if (!t) return {
     hostname: "",
@@ -59960,13 +60041,13 @@ function aN(e) {
     error: ""
   };
 }
-function oN(e) {
+function sN(e) {
   let t = e.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean), n = [...new Set(t)];
   if (n.length > 16) return {
     tags: n,
     error: "At most 16 tags are allowed."
   };
-  for (let e of n) if (!eN.test(e)) return {
+  for (let e of n) if (!tN.test(e)) return {
     tags: n,
     error: `Invalid tag “${e}”. Use lowercase letters, numbers, and : _ . - (max 48 chars).`
   };
@@ -59975,16 +60056,16 @@ function oN(e) {
     error: ""
   };
 }
-var sN = "notification-channels-title";
-function cN() {
-  let e = document.getElementById(sN);
+var cN = "notification-channels-title";
+function lN() {
+  let e = document.getElementById(cN);
   e && (e.scrollIntoView({
     behavior: xc() ? "auto" : "smooth",
     block: "start"
   }), e.focus({ preventScroll: !0 }));
 }
-function lN({ provider: e }) {
-  let t = Zj(e.id);
+function uN({ provider: e }) {
+  let t = Qj(e.id);
   return t ? /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "provider-guide",
     children: [
@@ -60047,8 +60128,8 @@ function lN({ provider: e }) {
     ]
   });
 }
-function uN({ data: e, config: t, session: n, onRefresh: r }) {
-  let { confirm: i } = lp(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)(null), [l, u] = (0, D.useState)("cloudflare"), [d, f] = (0, D.useState)("connect"), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(!1), [_, v] = (0, D.useState)(!1), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)(!1), [T, E] = (0, D.useState)(!1), [O, k] = (0, D.useState)(null), [A, j] = (0, D.useState)([]), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(!1), [F, I] = (0, D.useState)(!1), [te, ne] = (0, D.useState)(""), [re, ie] = (0, D.useState)(""), [ae, oe] = (0, D.useState)(""), [L, se] = (0, D.useState)(""), ce = e.deploymentFeatures?.connectors === !0, ue = e.loadErrors.connectors, de = e.loadErrors.targetGroups, fe = Aa(n, "connectors"), me = Aa(n, "secrets"), he = ja(n, "waf:connector_write"), ge = ja(n, "target_group:write"), _e = he || ge, ve = Aa(n, "notifications"), ye = s && !e.connectors.some((e) => JM(e, ["id"], "") === JM(s, ["id"], "")) ? [s, ...e.connectors] : e.connectors, be = ye.filter((e) => JM(e, ["status"], "").toLowerCase() !== "disabled"), xe = JM(be.find((e) => JM(e, ["id"], "") === a) ?? be[0] ?? {}, ["id"], ""), Se = tN(l), Ce = y ? tN(y) : null, we = e.targetGroups, Te = we.some((e) => JM(e, ["id"], "") === p) ? p : "";
+function dN({ data: e, config: t, session: n, onRefresh: r }) {
+  let { confirm: i } = lp(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)(null), [l, u] = (0, D.useState)("cloudflare"), [d, f] = (0, D.useState)("connect"), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(!1), [_, v] = (0, D.useState)(!1), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)(!1), [T, E] = (0, D.useState)(!1), [O, k] = (0, D.useState)(null), [A, j] = (0, D.useState)([]), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(!1), [F, I] = (0, D.useState)(!1), [te, ne] = (0, D.useState)(""), [re, ie] = (0, D.useState)(""), [ae, oe] = (0, D.useState)(""), [L, se] = (0, D.useState)(""), ce = e.deploymentFeatures?.connectors === !0, ue = e.loadErrors.connectors, de = e.loadErrors.targetGroups, fe = Aa(n, "connectors"), me = Aa(n, "secrets"), he = ja(n, "waf:connector_write"), ge = ja(n, "target_group:write"), _e = he || ge, ve = Aa(n, "notifications"), ye = s && !e.connectors.some((e) => YM(e, ["id"], "") === YM(s, ["id"], "")) ? [s, ...e.connectors] : e.connectors, be = ye.filter((e) => YM(e, ["status"], "").toLowerCase() !== "disabled"), xe = YM(be.find((e) => YM(e, ["id"], "") === a) ?? be[0] ?? {}, ["id"], ""), Se = nN(l), Ce = y ? nN(y) : null, we = e.targetGroups, Te = we.some((e) => YM(e, ["id"], "") === p) ? p : "";
   function Ee(e = "cloudflare") {
     _e && (u(e), se(""), oe(""), v(!0));
   }
@@ -60089,12 +60170,12 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function Me(e) {
     if (e.preventDefault(), !ge) return;
-    let i = e.currentTarget, a = new FormData(i), o = aN(String(a.get("hostname") ?? "")), s = String(a.get("expected_behavior") ?? "").trim(), c = oN(String(a.get("tags") ?? "")), l = Te;
+    let i = e.currentTarget, a = new FormData(i), o = oN(String(a.get("hostname") ?? "")), s = String(a.get("expected_behavior") ?? "").trim(), c = sN(String(a.get("tags") ?? "")), l = Te;
     if (o.error) {
       se(o.error);
       return;
     }
-    if (!$M.has(s)) {
+    if (!eN.has(s)) {
       se("Select a supported expected behavior for this domain.");
       return;
     }
@@ -60103,7 +60184,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       return;
     }
     ie("add-single-domain"), se(""), oe(""), k(null);
-    let u = we.find((e) => JM(e, ["id"], "") === l) ?? null, d = l ? JM(u ?? {}, ["name"], l) : "the tenant default group";
+    let u = we.find((e) => YM(e, ["id"], "") === l) ?? null, d = l ? YM(u ?? {}, ["name"], l) : "the tenant default group";
     try {
       await B(t, n, "/v1/targets", {
         method: "POST",
@@ -60130,7 +60211,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function Ne(e) {
     if (e.preventDefault(), !he) return;
-    let r = e.currentTarget, a = new FormData(r), s = tN(String(a.get("provider") ?? l)), u = d === "connect";
+    let r = e.currentTarget, a = new FormData(r), s = nN(String(a.get("provider") ?? l)), u = d === "connect";
     if (u && !s.supportsCredentialPolling) {
       se(`${s.label} does not have an implemented credential polling path. Choose Manual metadata instead.`);
       return;
@@ -60205,15 +60286,15 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function Pe(e) {
     if (!he || !e) return;
-    let r = ye.find((t) => JM(t, ["id"], "") === e), i = await je(`validate-${e}`, () => B(t, n, `/v1/connectors/${encodeURIComponent(e)}/validate`, { method: "POST" }), "Configuration checked.");
+    let r = ye.find((t) => YM(t, ["id"], "") === e), i = await je(`validate-${e}`, () => B(t, n, `/v1/connectors/${encodeURIComponent(e)}/validate`, { method: "POST" }), "Configuration checked.");
     if (i && typeof i == "object") {
-      let e = JM(i, ["status"], "");
-      oe(e === "active" ? `${JM(r ?? {}, ["name"], "Connector")}: stored configuration accepted. This does not test the credential against ${rN(r ?? {})}; only a poll does.` : `${JM(r ?? {}, ["name"], "Connector")}: configuration check returned ${e || "no status"}.`);
+      let e = YM(i, ["status"], "");
+      oe(e === "active" ? `${YM(r ?? {}, ["name"], "Connector")}: stored configuration accepted. This does not test the credential against ${iN(r ?? {})}; only a poll does.` : `${YM(r ?? {}, ["name"], "Connector")}: configuration check returned ${e || "no status"}.`);
     }
   }
   async function Fe(e) {
     if (!he || !e) return;
-    let r = rN(ye.find((t) => JM(t, ["id"], "") === e) ?? {}), i = await je(`poll-${e}`, () => B(t, n, `/v1/connectors/${encodeURIComponent(e)}/poll`, {
+    let r = iN(ye.find((t) => YM(t, ["id"], "") === e) ?? {}), i = await je(`poll-${e}`, () => B(t, n, `/v1/connectors/${encodeURIComponent(e)}/poll`, {
       method: "POST",
       body: {}
     }), `${r} poll finished: bounded read-only requests were sent with the stored credential. Check Last successful sync for the outcome.`), a = i && typeof i == "object" && "snapshots" in i ? i.snapshots : null;
@@ -60221,10 +60302,10 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function Ie(e) {
     if (!he || !e) return;
-    let r = ye.find((t) => JM(t, ["id"], "") === e);
+    let r = ye.find((t) => YM(t, ["id"], "") === e);
     await i({
       title: "Disable connector",
-      description: `Disable "${JM(r ?? {}, ["name"], e)}" (${rN(r ?? {})})? Polling and new snapshots stop. Existing snapshots and audit history remain, and the stored credential is not deleted.`,
+      description: `Disable "${YM(r ?? {}, ["name"], e)}" (${iN(r ?? {})})? Polling and new snapshots stop. Existing snapshots and audit history remain, and the stored credential is not deleted.`,
       confirmLabel: "Disable connector"
     }) && await je(`disable-${e}`, () => B(t, n, `/v1/connectors/${encodeURIComponent(e)}/disable`, {
       method: "POST",
@@ -60272,7 +60353,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "name",
       label: "Connector",
       render: (e) => {
-        let t = nN(e);
+        let t = rN(e);
         return /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "connector-name-cell",
           children: [/* @__PURE__ */ (0, V.jsx)(IS, {
@@ -60280,9 +60361,9 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
             size: 20
           }), /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "stack-tight",
-            children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: JM(e, ["name", "id"]) }), /* @__PURE__ */ (0, V.jsx)("span", {
+            children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: YM(e, ["name", "id"]) }), /* @__PURE__ */ (0, V.jsx)("span", {
               className: "muted small",
-              children: rN(e)
+              children: iN(e)
             })]
           })]
         });
@@ -60292,7 +60373,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "mode",
       label: "Mode",
       render: (e) => {
-        let t = iN(e);
+        let t = aN(e);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "stack-tight",
           children: [/* @__PURE__ */ (0, V.jsx)(W, {
@@ -60309,7 +60390,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "status",
       label: "State",
       render: (e) => {
-        let t = JM(e, ["status"], "").toLowerCase(), n = {
+        let t = YM(e, ["status"], "").toLowerCase(), n = {
           active: {
             label: "Configuration accepted",
             tone: "muted"
@@ -60352,11 +60433,11 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "last_success",
       label: "Last successful sync",
       render: (e) => {
-        if (!iN(e)) return /* @__PURE__ */ (0, V.jsx)("span", {
+        if (!aN(e)) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: "Not applicable"
         });
-        let t = JM(e, ["last_success_at"], "");
+        let t = YM(e, ["last_success_at"], "");
         return t ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "mono",
           children: z(t)
@@ -60370,7 +60451,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "last_attempt",
       label: "Last attempt",
       render: (e) => {
-        if (!iN(e)) return /* @__PURE__ */ (0, V.jsx)("span", {
+        if (!aN(e)) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: "Not applicable"
         });
@@ -60378,7 +60459,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
           className: "muted",
           children: "Not recorded"
         });
-        let t = JM(e, ["last_success_at"], ""), n = JM(e, ["last_error_at"], ""), r = !!n && (!t || Date.parse(n) > Date.parse(t)), i = r ? n : t;
+        let t = YM(e, ["last_success_at"], ""), n = YM(e, ["last_error_at"], ""), r = !!n && (!t || Date.parse(n) > Date.parse(t)), i = r ? n : t;
         return i ? /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "connector-attempt",
           children: [/* @__PURE__ */ (0, V.jsx)("span", {
@@ -60398,7 +60479,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       key: "actions",
       label: "Actions",
       render: (e) => {
-        let t = JM(e, ["id"], ""), n = JM(e, ["status"], "").toLowerCase() === "disabled", r = iN(e), i = re === `validate-${t}` || re === `poll-${t}` || re === `snapshots-${t}` || re === `disable-${t}`, a = re !== "" && !i;
+        let t = YM(e, ["id"], ""), n = YM(e, ["status"], "").toLowerCase() === "disabled", r = aN(e), i = re === `validate-${t}` || re === `poll-${t}` || re === `snapshots-${t}` || re === `disable-${t}`, a = re !== "" && !i;
         return /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "row-actions row-actions--compact",
           "aria-busy": i || void 0,
@@ -60443,15 +60524,15 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
     }
   ];
   function Be(e) {
-    return !fe || ue ? null : ye.filter((t) => nN(t)?.id === e.id).length;
+    return !fe || ue ? null : ye.filter((t) => rN(t)?.id === e.id).length;
   }
-  let Ve = fe && !ue ? ZM.filter((e) => (Be(e) ?? 0) > 0).length : null, He = ZM.filter((e) => e.supportsCredentialPolling).length;
+  let Ve = fe && !ue ? QM.filter((e) => (Be(e) ?? 0) > 0).length : null, He = QM.filter((e) => e.supportsCredentialPolling).length;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content integration-page",
     children: [
-      /* @__PURE__ */ (0, V.jsx)("style", { children: FM }),
-      /* @__PURE__ */ (0, V.jsx)("style", { children: UM }),
-      /* @__PURE__ */ (0, V.jsx)(WM, {
+      /* @__PURE__ */ (0, V.jsx)("style", { children: IM }),
+      /* @__PURE__ */ (0, V.jsx)("style", { children: WM }),
+      /* @__PURE__ */ (0, V.jsx)(GM, {
         route: "integrations",
         eyebrow: "Optional provider and alert integrations",
         actions: _e ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
@@ -60489,7 +60570,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
           }) : null
         ] }) : void 0
       }),
-      /* @__PURE__ */ (0, V.jsx)(GM, { children: "Optional enrichment only · no default cloud access · customer-declared targets remain the core path" }),
+      /* @__PURE__ */ (0, V.jsx)(KM, { children: "Optional enrichment only · no default cloud access · customer-declared targets remain the core path" }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "kpi-row",
         "aria-label": "Integration inventory summary",
@@ -60503,7 +60584,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
               }),
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "kpi-cell-value",
-                children: R(ZM.length)
+                children: R(QM.length)
               }),
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "kpi-cell-delta",
@@ -60536,7 +60617,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
               }),
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "kpi-cell-value",
-                children: ue ? "—" : R(ye.filter((e) => iN(e) && JM(e, ["last_success_at"], "")).length)
+                children: ue ? "—" : R(ye.filter((e) => aN(e) && YM(e, ["last_success_at"], "")).length)
               }),
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "kpi-cell-delta",
@@ -60579,12 +60660,12 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
           })
         ]
       }),
-      /* @__PURE__ */ (0, V.jsx)(qM, {
+      /* @__PURE__ */ (0, V.jsx)(JM, {
         icon: An,
         tone: "info",
         children: "Provider access is optional. Core validation continues from customer-declared targets, and opening this directory never grants AstraNull cloud access."
       }),
-      ce ? null : /* @__PURE__ */ (0, V.jsxs)(qM, {
+      ce ? null : /* @__PURE__ */ (0, V.jsxs)(JM, {
         icon: un,
         tone: "warn",
         children: [
@@ -60622,7 +60703,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
               })]
             })
           }),
-          /* @__PURE__ */ (0, V.jsx)(lN, { provider: Ce }),
+          /* @__PURE__ */ (0, V.jsx)(uN, { provider: Ce }),
           /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "form-actions",
             children: [/* @__PURE__ */ (0, V.jsx)(H, {
@@ -60643,7 +60724,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
       }),
       ce ? fe ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsxs)(K, {
         className: "card--dense",
-        children: [/* @__PURE__ */ (0, V.jsx)(KM, {
+        children: [/* @__PURE__ */ (0, V.jsx)(qM, {
           title: "Configured connectors",
           description: "Validate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered.",
           trailing: /* @__PURE__ */ (0, V.jsx)(W, {
@@ -60665,7 +60746,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
             actions: ve ? /* @__PURE__ */ (0, V.jsxs)(H, {
               type: "button",
               variant: "secondary",
-              onClick: cN,
+              onClick: lN,
               children: [/* @__PURE__ */ (0, V.jsx)(le, {
                 size: 15,
                 "aria-hidden": "true"
@@ -60675,8 +60756,8 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
         }) })]
       }), A.length > 0 ? /* @__PURE__ */ (0, V.jsxs)(K, {
         className: "card--dense",
-        children: [/* @__PURE__ */ (0, V.jsx)(KM, {
-          title: `Snapshots for ${JM(ye.find((e) => JM(e, ["id"], "") === M) ?? {}, ["name"], "selected connector")}`,
+        children: [/* @__PURE__ */ (0, V.jsx)(qM, {
+          title: `Snapshots for ${YM(ye.find((e) => YM(e, ["id"], "") === M) ?? {}, ["name"], "selected connector")}`,
           description: "Recorded by a provider poll or a manual metadata entry. Metadata only; not proof of protection.",
           trailing: /* @__PURE__ */ (0, V.jsx)(W, {
             tone: "muted",
@@ -60690,16 +60771,16 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
               className: "support-evidence-main",
               children: [/* @__PURE__ */ (0, V.jsx)("span", {
                 className: "support-evidence-type",
-                children: JM(e, ["snapshot_kind"])
+                children: YM(e, ["snapshot_kind"])
               }), /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "support-evidence-action",
-                children: JM(e, ["display_ref"])
+                children: YM(e, ["display_ref"])
               })]
             }), /* @__PURE__ */ (0, V.jsx)("span", {
               className: "muted",
               children: z(e.observed_at ?? e.created_at)
             })]
-          }, JM(e, ["id"])))
+          }, YM(e, ["id"])))
         })]
       }) : null] }) : /* @__PURE__ */ (0, V.jsx)(Qv, { title: "Configured connectors are not available for your role." }) : null,
       /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsx)(q, { children: /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -60717,19 +60798,19 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
             children: "Optional integrations"
           }), /* @__PURE__ */ (0, V.jsx)("span", {
             className: "integration-tally",
-            children: Ve === null ? `${R(He)} with credential polling` : `${R(Ve)} of ${R(ZM.length)} providers configured`
+            children: Ve === null ? `${R(He)} with credential polling` : `${R(Ve)} of ${R(QM.length)} providers configured`
           })]
         })]
       }) }), /* @__PURE__ */ (0, V.jsxs)(X, { children: [[{
         key: "credential",
         title: "Read-only credential polling",
         note: "AstraNull polls the provider with a scoped read-only credential you store in the vault.",
-        providers: ZM.filter((e) => e.supportsCredentialPolling)
+        providers: QM.filter((e) => e.supportsCredentialPolling)
       }, {
         key: "manual",
         title: "Manual metadata only",
         note: "No credential and no polling. You record selected metadata yourself.",
-        providers: ZM.filter((e) => !e.supportsCredentialPolling)
+        providers: QM.filter((e) => !e.supportsCredentialPolling)
       }].map((e) => /* @__PURE__ */ (0, V.jsxs)("section", {
         className: "integration-directory-group",
         "aria-labelledby": `provider-group-${e.key}`,
@@ -60817,11 +60898,11 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
         className: "muted small provider-directory-footnote",
         children: "Connecting providers is read only for your role. Setup guides stay available."
       })] })] }),
-      /* @__PURE__ */ (0, V.jsx)(HM, {
+      /* @__PURE__ */ (0, V.jsx)(UM, {
         config: t,
         session: n,
         onChanged: r,
-        headingId: sN
+        headingId: cN
       }),
       /* @__PURE__ */ (0, V.jsxs)(op, {
         open: _e && _,
@@ -60847,7 +60928,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
             }), /* @__PURE__ */ (0, V.jsxs)("label", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Provider" }), /* @__PURE__ */ (0, V.jsx)("select", {
               value: l,
               onChange: (e) => u(e.target.value),
-              children: ZM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
+              children: QM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
                 value: e.id,
                 children: e.label
               }, e.id))
@@ -60941,7 +61022,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
               " ",
               Se.label,
               " setup guide"
-            ] }), /* @__PURE__ */ (0, V.jsx)(lN, { provider: Se })]
+            ] }), /* @__PURE__ */ (0, V.jsx)(uN, { provider: Se })]
           }),
           /* @__PURE__ */ (0, V.jsx)("div", {
             className: "form-actions",
@@ -60998,7 +61079,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                   name: "provider",
                   value: l,
                   onChange: (e) => u(e.target.value),
-                  children: ZM.filter((e) => d === "manual" || e.supportsCredentialPolling).map((e) => /* @__PURE__ */ (0, V.jsxs)("option", {
+                  children: QM.filter((e) => d === "manual" || e.supportsCredentialPolling).map((e) => /* @__PURE__ */ (0, V.jsxs)("option", {
                     value: e.id,
                     children: [
                       e.label,
@@ -61013,7 +61094,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                   required: !0
                 })] }),
                 d === "connect" ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
-                  Zj(Se.id) ? /* @__PURE__ */ (0, V.jsxs)("div", {
+                  Qj(Se.id) ? /* @__PURE__ */ (0, V.jsxs)("div", {
                     className: "full provider-scope-hint",
                     children: [/* @__PURE__ */ (0, V.jsx)(Nt, {
                       size: 15,
@@ -61021,7 +61102,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                     }), /* @__PURE__ */ (0, V.jsxs)("span", { children: [
                       /* @__PURE__ */ (0, V.jsx)("strong", { children: "Minimum permission:" }),
                       " ",
-                      Zj(Se.id)?.scope
+                      Qj(Se.id)?.scope
                     ] })]
                   }) : null,
                   /* @__PURE__ */ (0, V.jsxs)("label", {
@@ -61047,7 +61128,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                   })
                 ] }) : /* @__PURE__ */ (0, V.jsx)("div", {
                   className: "full",
-                  children: /* @__PURE__ */ (0, V.jsx)(qM, {
+                  children: /* @__PURE__ */ (0, V.jsx)(JM, {
                     icon: ht,
                     tone: "info",
                     children: "Manual mode never accepts provider credentials. After creation, add a normalized metadata snapshot with hashes rather than raw provider payloads."
@@ -61080,7 +61161,7 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                     /* @__PURE__ */ (0, V.jsxs)("label", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Default snapshot kind" }), /* @__PURE__ */ (0, V.jsx)("select", {
                       name: "default_snapshot_kind",
                       defaultValue: Se.backendProvider === "aws_waf" ? "waf_policy" : "dns_zone",
-                      children: XM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
+                      children: ZM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
                         value: e.value,
                         children: e.label
                       }, e.value))
@@ -61138,19 +61219,19 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                 onChange: (e) => o(e.target.value),
                 required: !0,
                 children: be.map((e) => /* @__PURE__ */ (0, V.jsxs)("option", {
-                  value: JM(e, ["id"]),
+                  value: YM(e, ["id"]),
                   children: [
-                    JM(e, ["name"]),
+                    YM(e, ["name"]),
                     " — ",
-                    rN(e)
+                    iN(e)
                   ]
-                }, JM(e, ["id"])))
+                }, YM(e, ["id"])))
               })]
             }),
             /* @__PURE__ */ (0, V.jsxs)("label", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: "Snapshot kind" }), /* @__PURE__ */ (0, V.jsx)("select", {
               name: "snapshot_kind",
               defaultValue: "dns_zone",
-              children: XM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
+              children: ZM.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
                 value: e.value,
                 children: e.label
               }, e.value))
@@ -61332,10 +61413,10 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
                       value: "",
                       children: "Tenant default group"
                     }), we.map((e) => {
-                      let t = JM(e, ["id"], "");
+                      let t = YM(e, ["id"], "");
                       return /* @__PURE__ */ (0, V.jsx)("option", {
                         value: t,
-                        children: JM(e, ["name"], t)
+                        children: YM(e, ["name"], t)
                       }, t);
                     })]
                   })]
@@ -61379,29 +61460,29 @@ function uN({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/release-evidence.ts
-var dN = /* @__PURE__ */ "third_party_security_review.migration_apply.operator_runbook_exercise.oidc_prod_auth_preflight.edge_protection.governed_adapter.provider_approval.kill_switch_drill.postgres_concurrency.dr_restore.ui_accessibility_matrix.notification_provider_config.probe_fleet_matrix.vector_safety_policy.secret_rotation_drill.observability_slo.support_readiness.evidence_snapshot_manifest.postgres_tenant_query_audit.rollback_fixforward.kms_vault_posture.control_plane_container_release.staging_e2e_matrix.compliance_legal_signoff.authorization_custody.gateway_load_abuse".split(".");
-function fN(e) {
+var fN = /* @__PURE__ */ "third_party_security_review.migration_apply.operator_runbook_exercise.oidc_prod_auth_preflight.edge_protection.governed_adapter.provider_approval.kill_switch_drill.postgres_concurrency.dr_restore.ui_accessibility_matrix.notification_provider_config.probe_fleet_matrix.vector_safety_policy.secret_rotation_drill.observability_slo.support_readiness.evidence_snapshot_manifest.postgres_tenant_query_audit.rollback_fixforward.kms_vault_posture.control_plane_container_release.staging_e2e_matrix.compliance_legal_signoff.authorization_custody.gateway_load_abuse".split(".");
+function pN(e) {
   let t = typeof e == "string" ? e.trim().toLowerCase() : "accepted";
   return t === "accepted" || t === "approved";
 }
-function pN(e = {}) {
-  return e.dry_run === !0 || e.submittable === !1 || e.collector_dry_run === !0 ? !1 : fN(e.status);
+function mN(e = {}) {
+  return e.dry_run === !0 || e.submittable === !1 || e.collector_dry_run === !0 ? !1 : pN(e.status);
 }
-function mN(e = []) {
+function hN(e = []) {
   let t = /* @__PURE__ */ new Set();
   for (let n of e) {
     let e = typeof n.kind == "string" ? n.kind : "";
-    e && pN(n) && t.add(e);
+    e && mN(n) && t.add(e);
   }
-  let n = dN.filter((e) => !t.has(e));
+  let n = fN.filter((e) => !t.has(e));
   return {
-    expected: dN.length,
+    expected: fN.length,
     recorded: t.size,
     missing: [...n],
     kindsComplete: n.length === 0 && t.size > 0
   };
 }
-function hN(e) {
+function gN(e) {
   if (!e || typeof e != "object") return null;
   for (let t of [
     "evidence_uri",
@@ -61421,7 +61502,7 @@ function hN(e) {
   }
   return null;
 }
-function gN(e) {
+function _N(e) {
   if (!e) return "No validation summary";
   if (e.ok === !0) return "Contract valid (metadata-only)";
   let t = [], n = Array.isArray(e.missing_fields) ? e.missing_fields : [], r = Array.isArray(e.forbidden_fields) ? e.forbidden_fields : [];
@@ -61429,7 +61510,7 @@ function gN(e) {
 }
 //#endregion
 //#region apps/web/react/src/pages/governance-pages.tsx
-function _N(e, t, n = "—") {
+function vN(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -61437,7 +61518,7 @@ function _N(e, t, n = "—") {
   }
   return n;
 }
-function vN(e, t) {
+function yN(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -61445,7 +61526,7 @@ function vN(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-function yN(e, t, n = "—") {
+function bN(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -61453,43 +61534,43 @@ function yN(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-var bN = [
+var xN = [
   "finding.high_severity",
   "safe_test.completed",
   "high_scale.state_change",
   "report.ready"
-], xN = {
+], SN = {
   "finding.high_severity": "High-severity finding",
   "safe_test.completed": "Safe test completed",
   "high_scale.state_change": "High-scale state change",
   "report.ready": "Report ready"
 };
-function SN(e) {
-  return xN[e] || e.split(".").map((e) => e.split("_").map((e) => e.charAt(0).toUpperCase() + e.slice(1)).join(" ")).join(" · ");
-}
 function CN(e) {
+  return SN[e] || e.split(".").map((e) => e.split("_").map((e) => e.charAt(0).toUpperCase() + e.slice(1)).join(" ")).join(" · ");
+}
+function wN(e) {
   return !e || typeof e != "object" || Array.isArray(e) ? !1 : Object.values(e).every((e) => e === null || [
     "string",
     "number",
     "boolean"
   ].includes(typeof e));
 }
-function wN(e, t) {
-  return _N(e.targetGroups.find((e) => _N(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
+function TN(e, t) {
+  return vN(e.targetGroups.find((e) => vN(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
 }
-function TN(e) {
-  return _N(e, ["id", "audit_id"], "") || [
-    _N(e, ["created_at"], ""),
-    _N(e, ["action"], ""),
-    _N(e, ["resource_type"], ""),
-    _N(e, ["resource_id"], "")
+function EN(e) {
+  return vN(e, ["id", "audit_id"], "") || [
+    vN(e, ["created_at"], ""),
+    vN(e, ["action"], ""),
+    vN(e, ["resource_type"], ""),
+    vN(e, ["resource_id"], "")
   ].join("::");
 }
-function EN(e, t) {
+function DN(e, t) {
   let n = new Blob([JSON.stringify(t, null, 2)], { type: "application/json" }), r = URL.createObjectURL(n), i = document.createElement("a");
   i.href = r, i.download = e, i.click(), URL.revokeObjectURL(r);
 }
-function DN(e, t) {
+function ON(e, t) {
   let n = t.trim();
   if (e === "in_app") return { destination: "" };
   if (e === "webhook") {
@@ -61504,27 +61585,19 @@ function DN(e, t) {
   }
   return e === "email" ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n) ? { destination: n } : { error: "Enter a valid email address before adding the rule." } : n ? { destination: n } : { error: "Enter a destination before adding the rule." };
 }
-function ON(e) {
+function kN(e) {
   if (!e || typeof e != "object") return "Action completed successfully.";
   let t = e;
   if ("active" in t) return t.active ? "Kill switch is now active for this tenant." : "Kill switch cleared; governed runs may resume when approved.";
-  let n = yN(t, ["adapter", "state"], "");
-  if (n && n !== "—") return `Adapter status: ${n}${yN(t, ["adapter", "traffic_generated"], "false") === "true" ? ", traffic generation reported" : ", no traffic generation reported"}.`;
-  let r = _N(t, ["state"], "");
+  let n = bN(t, ["adapter", "state"], "");
+  if (n && n !== "—") return `Adapter status: ${n}${bN(t, ["adapter", "traffic_generated"], "false") === "true" ? ", traffic generation reported" : ", no traffic generation reported"}.`;
+  let r = vN(t, ["state"], "");
   if (r && r !== "—") return `High-scale request updated — current state is ${r}.`;
-  let i = _N(t, ["id"], "");
-  return i && i !== "—" && _N(t, ["high_scale_request_id"], "") !== "—" ? `Post-test report saved (${i}).` : "SOC action completed successfully.";
-}
-function kN(e) {
-  return e === "admin" || e === "owner";
+  let i = vN(t, ["id"], "");
+  return i && i !== "—" && vN(t, ["high_scale_request_id"], "") !== "—" ? `Post-test report saved (${i}).` : "SOC action completed successfully.";
 }
 function AN(e) {
-  return [
-    "admin",
-    "owner",
-    "soc",
-    "auditor"
-  ].includes(String(e ?? ""));
+  return e === "admin" || e === "owner";
 }
 function jN(e) {
   return [
@@ -61535,6 +61608,14 @@ function jN(e) {
   ].includes(String(e ?? ""));
 }
 function MN(e) {
+  return [
+    "admin",
+    "owner",
+    "soc",
+    "auditor"
+  ].includes(String(e ?? ""));
+}
+function NN(e) {
   let t = e.trim().toLowerCase();
   return [
     "closed",
@@ -61553,30 +61634,30 @@ function MN(e) {
     "draft"
   ].includes(t) ? "warn" : "muted";
 }
-function NN(e) {
+function PN(e) {
   let t = e.trim().toLowerCase();
   return t === "accepted" ? "success" : t === "missing" || t === "—" || !t ? "muted" : "warn";
 }
-function PN(e) {
+function FN(e) {
   return e === !0 ? "Ready" : e === !1 ? "Not ready" : "Unknown";
 }
-function FN(e, t = "—") {
+function IN(e, t = "—") {
   let n = e.trim();
   return !n || n === "—" ? t : n.replace(/_/g, " ");
 }
-function IN(e) {
-  let t = e.trim().toLowerCase();
-  return t === "accepted" ? "Accepted" : t === "missing" || !t ? "Missing" : FN(e);
-}
 function LN(e) {
-  let t = vN(e, ["authorization_pack_status"]), n = _N(t, ["overall"], "missing"), r = Array.isArray(t?.requirements) ? t.requirements : [], i = r.filter((e) => _N(e, ["status"], "").toLowerCase() === "accepted").length;
-  return {
-    overall: n,
-    label: r.length > 0 && n.toLowerCase() !== "accepted" ? `${R(i)}/${R(r.length)} accepted` : IN(n),
-    detail: r.length > 0 ? `${R(i)} of ${R(r.length)} required artifacts accepted` : `Authorization pack status: ${IN(n)}`
-  };
+  let t = e.trim().toLowerCase();
+  return t === "accepted" ? "Accepted" : t === "missing" || !t ? "Missing" : IN(e);
 }
 function RN(e) {
+  let t = yN(e, ["authorization_pack_status"]), n = vN(t, ["overall"], "missing"), r = Array.isArray(t?.requirements) ? t.requirements : [], i = r.filter((e) => vN(e, ["status"], "").toLowerCase() === "accepted").length;
+  return {
+    overall: n,
+    label: r.length > 0 && n.toLowerCase() !== "accepted" ? `${R(i)}/${R(r.length)} accepted` : LN(n),
+    detail: r.length > 0 ? `${R(i)} of ${R(r.length)} required artifacts accepted` : `Authorization pack status: ${LN(n)}`
+  };
+}
+function zN(e) {
   if (!Fv(e)) return {
     label: "Not required",
     detail: "No provider approval requirement declared",
@@ -61588,7 +61669,7 @@ function RN(e) {
     detail: "Provider approval evidence has not been attached",
     tone: "warn"
   };
-  let n = t.map((e) => _N(e, ["status"], "missing").toLowerCase()), r = t.map((e) => _N(e, ["provider_name"], "")).filter((e) => e && e !== "—").join(", ");
+  let n = t.map((e) => vN(e, ["status"], "missing").toLowerCase()), r = t.map((e) => vN(e, ["provider_name"], "")).filter((e) => e && e !== "—").join(", ");
   if (n.every((e) => e === "accepted")) return {
     label: "Accepted",
     detail: r || "All required provider approvals accepted",
@@ -61596,20 +61677,20 @@ function RN(e) {
   };
   let i = n.find((e) => ["rejected", "expired"].includes(e));
   return i ? {
-    label: FN(i),
+    label: IN(i),
     detail: r || "Provider approval requires attention",
     tone: "danger"
   } : {
-    label: FN(n.find((e) => e !== "accepted") ?? "pending"),
+    label: IN(n.find((e) => e !== "accepted") ?? "pending"),
     detail: r || "Provider approval is not yet accepted",
     tone: "warn"
   };
 }
-function zN(e) {
+function BN(e) {
   let t = Array.isArray(e.requested_scenario_families) ? String(e.requested_scenario_families[0] ?? "") : "", n = Ov.find((e) => e.id === t), r = e.requested_limits && typeof e.requested_limits == "object" && !Array.isArray(e.requested_limits) ? e.requested_limits : {}, i = n ? r[n.limit.field] : void 0, a = n && typeof i == "number" ? `${R(i)} ${n.limit.unit}` : "", o = r.max_duration_minutes;
   return [a, typeof o == "number" ? `${R(o)} min` : ""].filter(Boolean).join(" · ") || "—";
 }
-var BN = [
+var VN = [
   {
     value: "webhook",
     label: "Webhook"
@@ -61631,7 +61712,7 @@ var BN = [
     label: "In-app"
   }
 ];
-function VN({ message: e, error: t }) {
+function HN({ message: e, error: t }) {
   return !e && !t ? null : /* @__PURE__ */ (0, V.jsx)("div", {
     className: t ? "form-banner error" : "form-banner",
     role: t ? "alert" : "status",
@@ -61639,7 +61720,7 @@ function VN({ message: e, error: t }) {
     children: t || e
   });
 }
-function HN({ children: e }) {
+function UN({ children: e }) {
   return /* @__PURE__ */ (0, V.jsx)("div", {
     className: "form-banner info",
     role: "status",
@@ -61647,7 +61728,7 @@ function HN({ children: e }) {
     children: e
   });
 }
-function UN({ titleId: e, title: t, description: n, children: r }) {
+function WN({ titleId: e, title: t, description: n, children: r }) {
   return /* @__PURE__ */ (0, V.jsxs)("section", {
     className: "operation-panel",
     "aria-labelledby": e,
@@ -61660,28 +61741,28 @@ function UN({ titleId: e, title: t, description: n, children: r }) {
     })]
   });
 }
-function WN({ label: e, children: t }) {
+function GN({ label: e, children: t }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: e }), /* @__PURE__ */ (0, V.jsx)("strong", { children: t })] });
 }
-function GN({ active: e, reason: t }) {
+function KN({ active: e, reason: t }) {
   return /* @__PURE__ */ (0, V.jsxs)(K, {
     density: "compact",
     children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Kill switch" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Read-only tenant emergency-stop status. Activation and clearance require an SOC role." })] }), /* @__PURE__ */ (0, V.jsxs)(X, {
       className: "kv-list",
-      children: [/* @__PURE__ */ (0, V.jsx)(WN, {
+      children: [/* @__PURE__ */ (0, V.jsx)(GN, {
         label: "Status",
         children: /* @__PURE__ */ (0, V.jsx)(W, {
           tone: e ? "danger" : "success",
           children: e ? "Active" : "Inactive"
         })
-      }), /* @__PURE__ */ (0, V.jsx)(WN, {
+      }), /* @__PURE__ */ (0, V.jsx)(GN, {
         label: "Reason",
         children: t
       })]
     })]
   });
 }
-function KN({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, truncated: a, downloadLabel: o, onDownload: s }) {
+function qN({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, truncated: a, downloadLabel: o, onDownload: s }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "full",
     children: [/* @__PURE__ */ (0, V.jsxs)("div", {
@@ -61715,7 +61796,7 @@ function KN({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, tr
     }) : null]
   });
 }
-function qN({ rows: e = 2 }) {
+function JN({ rows: e = 2 }) {
   return /* @__PURE__ */ (0, V.jsx)("div", {
     className: "stack-tight",
     role: "status",
@@ -61724,17 +61805,17 @@ function qN({ rows: e = 2 }) {
     children: Array.from({ length: e }, (e, t) => /* @__PURE__ */ (0, V.jsx)("span", { className: "skeleton skeleton-row" }, t))
   });
 }
-var JN = ["scheduled", "approved"], YN = [
+var YN = ["scheduled", "approved"], XN = [
   "submitted",
   "under_review",
   "pending",
   "draft"
-], XN = [
+], ZN = [
   "running",
   "executing",
   "active",
   "started"
-], ZN = [
+], QN = [
   "activate_tenant_kill_switch",
   "block_new_safe_runs",
   "cancel_active_safe_runs",
@@ -61743,10 +61824,10 @@ var JN = ["scheduled", "approved"], YN = [
   "audit_timeline_recorded",
   "clear_and_resume_guarded"
 ];
-function QN(e) {
-  return _N(e, ["state"], "").trim().toLowerCase();
+function $N(e) {
+  return vN(e, ["state"], "").trim().toLowerCase();
 }
-function $N(e, t) {
+function eP(e, t) {
   return e === 0 ? {
     tone: "muted",
     status: "No open requests"
@@ -61758,13 +61839,13 @@ function $N(e, t) {
     status: `${R(t)} pending`
   };
 }
-function eP(e, t) {
-  let n = e.filter((e) => [...YN, ...JN].includes(QN(e))), r = n.filter((e) => yN(e, ["authorization_pack_status", "overall"], "missing") === "accepted").length, i = n.filter(Fv), a = i.filter((e) => RN(e).label === "Accepted").length;
+function tP(e, t) {
+  let n = e.filter((e) => [...XN, ...YN].includes($N(e))), r = n.filter((e) => bN(e, ["authorization_pack_status", "overall"], "missing") === "accepted").length, i = n.filter(Fv), a = i.filter((e) => zN(e).label === "Accepted").length;
   return [
     {
       key: "packs",
       label: "Authorization packs reviewed",
-      ...$N(n.length, n.length - r)
+      ...eP(n.length, n.length - r)
     },
     {
       key: "providers",
@@ -61792,8 +61873,8 @@ function eP(e, t) {
     }
   ];
 }
-function tP(e) {
-  let t = _N(vN(e, ["provider_context"]), [
+function nP(e) {
+  let t = vN(yN(e, ["provider_context"]), [
     "provider_name",
     "provider",
     "name"
@@ -61801,7 +61882,7 @@ function tP(e) {
   if (t && t !== "—") return t;
   let n = Array.isArray(e.provider_approval_checklist) ? e.provider_approval_checklist : [];
   for (let e of n) {
-    let t = _N(e, [
+    let t = vN(e, [
       "provider_name",
       "provider",
       "name"
@@ -61810,7 +61891,7 @@ function tP(e) {
   }
   return "";
 }
-function nP(e) {
+function rP(e) {
   if (typeof e == "string") return {
     name: e,
     detail: "",
@@ -61819,18 +61900,18 @@ function nP(e) {
   if (e && typeof e == "object" && !Array.isArray(e)) {
     let t = e;
     return {
-      name: _N(t, [
+      name: vN(t, [
         "name",
         "contact",
         "email",
         "phone"
       ], "—"),
-      detail: _N(t, [
+      detail: vN(t, [
         "contact",
         "email",
         "phone"
       ], ""),
-      role: _N(t, ["role", "title"], "")
+      role: vN(t, ["role", "title"], "")
     };
   }
   return {
@@ -61839,9 +61920,9 @@ function nP(e) {
     role: ""
   };
 }
-function rP(e) {
+function iP(e) {
   return e.flatMap((e) => {
-    let t = _N(e, ["id"], "—"), n = tP(e), r = Array.isArray(e.emergency_contacts) ? e.emergency_contacts : [];
+    let t = vN(e, ["id"], "—"), n = nP(e), r = Array.isArray(e.emergency_contacts) ? e.emergency_contacts : [];
     return r.length === 0 ? n ? [{
       id: `${t}::provider`,
       requestId: t,
@@ -61849,7 +61930,7 @@ function rP(e) {
       contact: "—",
       role: "—"
     }] : [] : r.map((e, r) => {
-      let i = nP(e), a = i.detail && i.detail !== i.name ? `${i.name} · ${i.detail}` : i.name;
+      let i = rP(e), a = i.detail && i.detail !== i.name ? `${i.name} · ${i.detail}` : i.name;
       return {
         id: `${t}::${r}`,
         requestId: t,
@@ -61860,7 +61941,7 @@ function rP(e) {
     });
   });
 }
-var iP = [
+var aP = [
   {
     key: "request",
     label: "Request",
@@ -61894,12 +61975,12 @@ var iP = [
     render: (e) => e.role === "—" ? /* @__PURE__ */ (0, V.jsx)("span", {
       className: "muted",
       children: "—"
-    }) : FN(e.role)
+    }) : IN(e.role)
   }
 ];
-function aP(e) {
+function oP(e) {
   return e.flatMap((e) => {
-    let t = _N(e, ["id"], "—");
+    let t = vN(e, ["id"], "—");
     return Lv(e).map((e, n) => ({
       key: `${t}::${n}::${e.at}`,
       requestId: t,
@@ -61909,25 +61990,25 @@ function aP(e) {
     }));
   }).sort((e, t) => new Date(e.at).getTime() - new Date(t.at).getTime()).slice(-12);
 }
-function oP(e) {
+function sP(e) {
   return e.trim().toLowerCase().startsWith("high_scale");
 }
-function sP(e) {
-  return e.filter((e) => oP(_N(e, ["kind"], ""))).map((e) => ({
-    id: _N(e, [
+function cP(e) {
+  return e.filter((e) => sP(vN(e, ["kind"], ""))).map((e) => ({
+    id: vN(e, [
       "high_scale_request_id",
       "subject_id",
       "resource_id",
       "request_id",
       "id"
     ], "—"),
-    tenantId: _N(e, ["tenant_id"], "—"),
-    kind: _N(e, ["kind"], "—"),
-    state: _N(e, ["state"], "—"),
-    requestedAt: _N(e, ["created_at", "requested_at"], "")
+    tenantId: vN(e, ["tenant_id"], "—"),
+    kind: vN(e, ["kind"], "—"),
+    state: vN(e, ["state"], "—"),
+    requestedAt: vN(e, ["created_at", "requested_at"], "")
   })).sort((e, t) => new Date(t.requestedAt).getTime() - new Date(e.requestedAt).getTime());
 }
-var cP = [
+var lP = [
   {
     key: "tenant",
     label: "Tenant",
@@ -61949,15 +62030,15 @@ var cP = [
     label: "Kind",
     render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
       tone: "info",
-      children: FN(e.kind, "high scale")
+      children: IN(e.kind, "high scale")
     })
   },
   {
     key: "state",
     label: "State",
     render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
-      tone: MN(e.state),
-      children: FN(e.state, "Unknown")
+      tone: NN(e.state),
+      children: IN(e.state, "Unknown")
     })
   },
   {
@@ -61975,7 +62056,7 @@ var cP = [
       children: "Open"
     })
   }
-], lP = {
+], uP = {
   delivered_provider: {
     label: "Delivered",
     tone: "success",
@@ -62002,24 +62083,24 @@ var cP = [
     meaning: "Retries were exhausted. The attempt is parked until someone retries it."
   }
 };
-function uP(e) {
-  return lP[e] ?? {
+function dP(e) {
+  return uP[e] ?? {
     label: e ? e.replaceAll("_", " ") : "Outcome not recorded",
     tone: "warn",
     meaning: "The server recorded a status this page does not interpret. Treat the outcome as unknown."
   };
 }
-function dP(e) {
+function fP(e) {
   let t = window.location.hash.replace(/^#/, ""), n = t.indexOf("?");
   return new URLSearchParams(n >= 0 ? t.slice(n + 1) : "").get(e) ?? "";
 }
-function fP({ data: e, config: t, session: n, onRefresh: r }) {
-  let { confirm: i } = lp(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)(""), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(!1), [_, v] = (0, D.useState)("new"), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)("webhook"), [C, w] = (0, D.useState)(["finding.high_severity"]), [T, E] = (0, D.useState)(!0), [O, k] = (0, D.useState)(() => dP("focus")), [A, j] = (0, D.useState)("problems"), [M, N] = (0, D.useState)(null), [P, ee] = (0, D.useState)(null), F = (0, D.useRef)(null), I = kN(n.role), te = e.notificationRules ?? [], ne = (0, D.useMemo)(() => (e.notificationEvents ?? []).slice().sort((e, t) => String(t.created_at ?? "").localeCompare(String(e.created_at ?? ""))), [e.notificationEvents]), re = (0, D.useMemo)(() => ne.flatMap((e) => (Array.isArray(e.delivery_attempts) ? e.delivery_attempts : []).map((t, n) => ({
-    key: _N(t, ["id", "attempt_id"], `${_N(e, ["id"], "event")}-${n}`),
+function pP({ data: e, config: t, session: n, onRefresh: r }) {
+  let { confirm: i } = lp(), [a, o] = (0, D.useState)(""), [s, c] = (0, D.useState)(""), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(!1), [_, v] = (0, D.useState)("new"), [y, b] = (0, D.useState)(""), [x, S] = (0, D.useState)("webhook"), [C, w] = (0, D.useState)(["finding.high_severity"]), [T, E] = (0, D.useState)(!0), [O, k] = (0, D.useState)(() => fP("focus")), [A, j] = (0, D.useState)("problems"), [M, N] = (0, D.useState)(null), [P, ee] = (0, D.useState)(null), F = (0, D.useRef)(null), I = AN(n.role), te = e.notificationRules ?? [], ne = (0, D.useMemo)(() => (e.notificationEvents ?? []).slice().sort((e, t) => String(t.created_at ?? "").localeCompare(String(e.created_at ?? ""))), [e.notificationEvents]), re = (0, D.useMemo)(() => ne.flatMap((e) => (Array.isArray(e.delivery_attempts) ? e.delivery_attempts : []).map((t, n) => ({
+    key: vN(t, ["id", "attempt_id"], `${vN(e, ["id"], "event")}-${n}`),
     attempt: t,
     event: e,
-    rule: te.find((e) => _N(e, ["id"], "") === _N(t, ["rule_id"], "")) ?? null,
-    status: _N(t, ["status"], "")
+    rule: te.find((e) => vN(e, ["id"], "") === vN(t, ["rule_id"], "")) ?? null,
+    status: vN(t, ["status"], "")
   }))), [ne, te]), ie = (0, D.useMemo)(() => {
     let e = {
       delivered: 0,
@@ -62056,13 +62137,13 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function fe(e) {
     e.preventDefault();
-    let r = e.currentTarget, i = bN.filter((e) => C.includes(e));
+    let r = e.currentTarget, i = xN.filter((e) => C.includes(e));
     if (i.length === 0) {
       m("Choose at least one event to route.");
       return;
     }
     if (m(""), _ === "existing") {
-      let e = te.find((e) => _N(e, ["id"], "") === y);
+      let e = te.find((e) => vN(e, ["id"], "") === y);
       if (!e) {
         f("Choose an existing channel.");
         return;
@@ -62075,10 +62156,10 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
           triggers: r,
           enabled: T
         }
-      }), `Routed ${i.map(SN).join(", ")} to the existing ${_N(e, ["channel"])} channel ${_N(e, ["destination_preview"], "")}. Its stored destination was not changed.`) && g(!1);
+      }), `Routed ${i.map(CN).join(", ")} to the existing ${vN(e, ["channel"])} channel ${vN(e, ["destination_preview"], "")}. Its stored destination was not changed.`) && g(!1);
       return;
     }
-    let a = new FormData(r), o = x.trim(), s = DN(o, String(a.get("destination_preview") ?? ""));
+    let a = new FormData(r), o = x.trim(), s = ON(o, String(a.get("destination_preview") ?? ""));
     if ("error" in s) {
       f(s.error);
       return;
@@ -62094,7 +62175,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
     }), `Rule created ${T ? "and enabled" : "disabled"}. Nothing was sent; the first message goes out when a matching event occurs and outbound delivery is enabled.`) && (r.reset(), g(!1));
   }
   async function pe(e) {
-    let r = _N(e.attempt, ["id", "attempt_id"], "");
+    let r = vN(e.attempt, ["id", "attempt_id"], "");
     if (!r) return;
     let i = await ue(`preview-${e.key}`, () => B(t, n, "/v1/notifications/dlq/redrive", {
       method: "POST",
@@ -62105,16 +62186,16 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
     }), "Retry preview ready. Nothing was sent or changed.");
     i && N({
       key: e.key,
-      summary: pP(i)
+      summary: mP(i)
     });
   }
   async function me(e) {
-    let r = _N(e.attempt, ["id", "attempt_id"], "");
+    let r = vN(e.attempt, ["id", "attempt_id"], "");
     if (!r) return;
-    let a = _N(e.attempt, ["destination_preview"], _N(e.rule ?? {}, ["destination_preview"], "its destination"));
+    let a = vN(e.attempt, ["destination_preview"], vN(e.rule ?? {}, ["destination_preview"], "its destination"));
     await i({
       title: "Retry this delivery",
-      description: `Requeue the failed ${_N(e.attempt, ["channel"], "notification")} delivery for "${_N(e.event, ["subject"], "this event")}" to ${a}? The portal records the retry in metadata-only mode; whether a message is sent depends on your deployment's delivery configuration. If the provider did receive the original, the recipient may see a duplicate.`,
+      description: `Requeue the failed ${vN(e.attempt, ["channel"], "notification")} delivery for "${vN(e.event, ["subject"], "this event")}" to ${a}? The portal records the retry in metadata-only mode; whether a message is sent depends on your deployment's delivery configuration. If the provider did receive the original, the recipient may see a duplicate.`,
       confirmLabel: "Retry delivery",
       confirmTone: "default"
     }) && (await ue(`retry-${e.key}`, () => B(t, n, "/v1/notifications/dlq/redrive", {
@@ -62130,16 +62211,16 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       method: "POST",
       body: e === "retries" ? { dry_run: !0 } : {
         dry_run: !0,
-        attempt_ids: re.filter((e) => e.status === "provider_failed_dlq").map((e) => _N(e.attempt, ["id", "attempt_id"], "")).filter(Boolean)
+        attempt_ids: re.filter((e) => e.status === "provider_failed_dlq").map((e) => vN(e.attempt, ["id", "attempt_id"], "")).filter(Boolean)
       }
     }), "Preview ready. Nothing was sent or changed.");
     r && ee({
       kind: e,
-      summary: pP(r)
+      summary: mP(r)
     });
   }
   async function ge(e) {
-    let r = re.filter((e) => e.status === "provider_failed_dlq").map((e) => _N(e.attempt, ["id", "attempt_id"], "")).filter(Boolean);
+    let r = re.filter((e) => e.status === "provider_failed_dlq").map((e) => vN(e.attempt, ["id", "attempt_id"], "")).filter(Boolean);
     await i({
       title: e === "retries" ? "Process due retries" : "Retry all failed deliveries",
       description: e === "retries" ? `Process retries that are due now (${P?.summary ?? "see preview"})? Recorded in metadata-only mode from the portal. Recipients may see duplicates if earlier sends actually arrived.` : `Requeue ${R(r.length)} failed deliveries listed on this page? Recorded in metadata-only mode from the portal. Recipients may see duplicates if earlier sends actually arrived.`,
@@ -62158,12 +62239,12 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       key: "channel",
       label: "Channel",
       render: (e) => {
-        let t = _N(e, ["channel"]);
+        let t = vN(e, ["channel"]);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "cp-stack",
-          children: [/* @__PURE__ */ (0, V.jsx)("span", { children: BN.find((e) => e.value === t)?.label ?? FN(t) }), /* @__PURE__ */ (0, V.jsx)("span", {
+          children: [/* @__PURE__ */ (0, V.jsx)("span", { children: VN.find((e) => e.value === t)?.label ?? IN(t) }), /* @__PURE__ */ (0, V.jsx)("span", {
             className: "muted small mono",
-            children: _N(e, ["destination_preview"], "Destination hidden")
+            children: vN(e, ["destination_preview"], "Destination hidden")
           })]
         });
       }
@@ -62171,7 +62252,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
     {
       key: "triggers",
       label: "Routes",
-      render: (e) => (Array.isArray(e.triggers) ? e.triggers.map((e) => SN(String(e))).join(", ") : "") || /* @__PURE__ */ (0, V.jsx)("span", {
+      render: (e) => (Array.isArray(e.triggers) ? e.triggers.map((e) => CN(String(e))).join(", ") : "") || /* @__PURE__ */ (0, V.jsx)("span", {
         className: "muted",
         children: "No events"
       })
@@ -62188,12 +62269,12 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       key: "last",
       label: "Last attempt",
       render: (e) => {
-        let t = re.find((t) => _N(t.attempt, ["rule_id"], "") === _N(e, ["id"], ""));
+        let t = re.find((t) => vN(t.attempt, ["rule_id"], "") === vN(e, ["id"], ""));
         if (!t) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
           children: "None in loaded events"
         });
-        let n = uP(t.status);
+        let n = dP(t.status);
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "cp-stack",
           children: [/* @__PURE__ */ (0, V.jsx)(W, {
@@ -62212,7 +62293,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       render: (e) => /* @__PURE__ */ (0, V.jsx)(yc, {
         size: "sm",
         variant: "ghost",
-        href: `#integrations?focus=${encodeURIComponent(_N(e, ["id"], ""))}`,
+        href: `#integrations?focus=${encodeURIComponent(vN(e, ["id"], ""))}`,
         children: "Open channel"
       })
     }
@@ -62221,7 +62302,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       key: "status",
       label: "Outcome",
       render: (e) => {
-        let t = uP(e.status);
+        let t = dP(e.status);
         return /* @__PURE__ */ (0, V.jsx)(W, {
           tone: t.tone,
           children: t.label
@@ -62241,9 +62322,9 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Event",
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "cp-stack",
-        children: [/* @__PURE__ */ (0, V.jsx)("span", { children: SN(_N(e.event, ["trigger"])) }), /* @__PURE__ */ (0, V.jsx)("span", {
+        children: [/* @__PURE__ */ (0, V.jsx)("span", { children: CN(vN(e.event, ["trigger"])) }), /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
-          children: _N(e.event, ["subject"], "")
+          children: vN(e.event, ["subject"], "")
         })]
       })
     },
@@ -62252,13 +62333,13 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Channel",
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "cp-stack",
-        children: [/* @__PURE__ */ (0, V.jsx)("span", { children: FN(_N(e.attempt, ["channel"], ""), "Not recorded") }), /* @__PURE__ */ (0, V.jsx)("span", {
+        children: [/* @__PURE__ */ (0, V.jsx)("span", { children: IN(vN(e.attempt, ["channel"], ""), "Not recorded") }), /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small mono",
-          children: _N(e.attempt, ["destination_preview"], _N(e.rule ?? {}, ["destination_preview"], ""))
+          children: vN(e.attempt, ["destination_preview"], vN(e.rule ?? {}, ["destination_preview"], ""))
         })]
       })
     }
-  ], ye = L ? uP(L.status) : null, be = L ? _N(L.attempt, ["attempt_number"], "") : "", xe = L ? _N(L.attempt, ["max_attempts"], "") : "";
+  ], ye = L ? dP(L.status) : null, be = L ? vN(L.attempt, ["attempt_number"], "") : "", xe = L ? vN(L.attempt, ["max_attempts"], "") : "";
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content notifications-page",
     children: [
@@ -62342,7 +62423,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
           " most recent events loaded, not all history."
         ]
       }),
-      /* @__PURE__ */ (0, V.jsx)(VN, {
+      /* @__PURE__ */ (0, V.jsx)(HN, {
         message: s,
         error: l
       }),
@@ -62390,7 +62471,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
             _ === "new" ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [/* @__PURE__ */ (0, V.jsx)(Ic, {
               label: "Channel type",
               value: x,
-              options: BN.map((e) => ({
+              options: VN.map((e) => ({
                 value: e.value,
                 label: e.label
               })),
@@ -62425,8 +62506,8 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
                 value: "",
                 label: "Choose a channel"
               }, ...te.map((e) => ({
-                value: _N(e, ["id"], ""),
-                label: `${BN.find((t) => t.value === _N(e, ["channel"]))?.label ?? _N(e, ["channel"])} · ${_N(e, ["destination_preview"], "destination hidden")}`
+                value: vN(e, ["id"], ""),
+                label: `${VN.find((t) => t.value === vN(e, ["channel"]))?.label ?? vN(e, ["channel"])} · ${vN(e, ["destination_preview"], "destination hidden")}`
               }))],
               onChange: (e) => {
                 b(e), f("");
@@ -62435,7 +62516,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, V.jsxs)("fieldset", {
               className: "full",
-              children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Events to route" }), bN.filter((e) => e !== "high_scale.state_change").map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
+              children: [/* @__PURE__ */ (0, V.jsx)("legend", { children: "Events to route" }), xN.filter((e) => e !== "high_scale.state_change").map((e) => /* @__PURE__ */ (0, V.jsxs)("label", {
                 className: "check-row",
                 children: [/* @__PURE__ */ (0, V.jsx)("input", {
                   type: "checkbox",
@@ -62444,7 +62525,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
                   checked: C.includes(e),
                   onChange: () => de(e),
                   disabled: a !== ""
-                }), /* @__PURE__ */ (0, V.jsx)("span", { children: SN(e) })]
+                }), /* @__PURE__ */ (0, V.jsx)("span", { children: CN(e) })]
               }, e))]
             }),
             p ? /* @__PURE__ */ (0, V.jsx)("p", {
@@ -62520,7 +62601,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
           selectedId: O || null,
           getRowProps: (e) => ({
             tabIndex: 0,
-            "aria-label": `Inspect ${uP(e.status).label.toLowerCase()} delivery for ${SN(_N(e.event, ["trigger"]))}`,
+            "aria-label": `Inspect ${dP(e.status).label.toLowerCase()} delivery for ${CN(vN(e.event, ["trigger"]))}`,
             onClick: () => k(e.key),
             onKeyDown: (t) => {
               (t.key === "Enter" || t.key === " ") && (t.preventDefault(), k(e.key));
@@ -62547,7 +62628,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
             children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsxs)(J, { children: [
               ye.label,
               ": ",
-              SN(_N(L.event, ["trigger"]))
+              CN(vN(L.event, ["trigger"]))
             ] }), /* @__PURE__ */ (0, V.jsx)(Y, { children: ye.meaning })] }), /* @__PURE__ */ (0, V.jsx)(H, {
               size: "sm",
               variant: "ghost",
@@ -62559,38 +62640,38 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
                 /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "kv-list",
                   children: [
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Attempted",
                       children: z(L.attempt.attempted_at ?? L.attempt.created_at)
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Reason",
-                      children: _N(L.attempt, ["reason", "provider_error"], "Not recorded")
+                      children: vN(L.attempt, ["reason", "provider_error"], "Not recorded")
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Attempt",
                       children: be ? `${be}${xe ? ` of ${xe}` : ""}` : "Not recorded"
                     }),
-                    /* @__PURE__ */ (0, V.jsxs)(WN, {
+                    /* @__PURE__ */ (0, V.jsxs)(GN, {
                       label: "Event",
                       children: [
-                        _N(L.event, ["subject"], "Not recorded"),
+                        vN(L.event, ["subject"], "Not recorded"),
                         " · ",
                         z(L.event.created_at)
                       ]
                     }),
-                    /* @__PURE__ */ (0, V.jsxs)(WN, {
+                    /* @__PURE__ */ (0, V.jsxs)(GN, {
                       label: "Channel",
                       children: [
-                        FN(_N(L.attempt, ["channel"], ""), "Not recorded"),
+                        IN(vN(L.attempt, ["channel"], ""), "Not recorded"),
                         " ",
                         /* @__PURE__ */ (0, V.jsx)("span", {
                           className: "mono muted",
-                          children: _N(L.attempt, ["destination_preview"], "")
+                          children: vN(L.attempt, ["destination_preview"], "")
                         })
                       ]
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Rule",
                       children: L.rule ? `${L.rule.enabled === !1 ? "Disabled" : "Enabled"} · routes ${Array.isArray(L.rule.triggers) ? L.rule.triggers.length : 0} event types` : "Rule removed or not recorded"
                     })
@@ -62601,7 +62682,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
                   children: L.rule ? /* @__PURE__ */ (0, V.jsx)(yc, {
                     size: "sm",
                     variant: "secondary",
-                    href: `#integrations?focus=${encodeURIComponent(_N(L.rule, ["id"], ""))}`,
+                    href: `#integrations?focus=${encodeURIComponent(vN(L.rule, ["id"], ""))}`,
                     children: "Fix channel configuration"
                   }) : null
                 }),
@@ -62641,7 +62722,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
                 }) : L.status === "provider_retry_scheduled" ? /* @__PURE__ */ (0, V.jsx)("p", {
                   className: "muted small",
                   children: "A retry is already scheduled. No manual retry is offered, to avoid sending twice."
-                }) : lP[L.status] ? null : /* @__PURE__ */ (0, V.jsx)("p", {
+                }) : uP[L.status] ? null : /* @__PURE__ */ (0, V.jsx)("p", {
                   className: "form-banner neutral",
                   children: "The outcome is unknown, so retry is not offered. Retrying an attempt that may have been delivered risks a duplicate; check the destination first."
                 })
@@ -62670,7 +62751,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
       }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(kh, {
         columns: _e,
         items: te,
-        getRowId: (e) => _N(e, ["id"], ""),
+        getRowId: (e) => vN(e, ["id"], ""),
         empty: /* @__PURE__ */ (0, V.jsx)(G, {
           icon: se,
           title: "No routing rules.",
@@ -62686,7 +62767,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
         description: "Preview first. Live actions apply to every matching attempt and can produce duplicates if earlier sends arrived."
       }), /* @__PURE__ */ (0, V.jsxs)(X, {
         className: "stack-tight",
-        children: [/* @__PURE__ */ (0, V.jsxs)(UN, {
+        children: [/* @__PURE__ */ (0, V.jsxs)(WN, {
           titleId: "notification-retries-title",
           title: "Due retries",
           description: P?.kind === "retries" ? `Preview: ${P.summary}` : "Process retries whose scheduled time has passed.",
@@ -62705,7 +62786,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
             onClick: () => void ge("retries"),
             children: "Process due retries"
           })]
-        }), /* @__PURE__ */ (0, V.jsxs)(UN, {
+        }), /* @__PURE__ */ (0, V.jsxs)(WN, {
           titleId: "notification-failed-title",
           title: "Failed deliveries",
           description: P?.kind === "failed" ? `Preview: ${P.summary}` : `${R(ie.failed)} failed attempt${ie.failed === 1 ? "" : "s"} on this page.`,
@@ -62729,7 +62810,7 @@ function fP({ data: e, config: t, session: n, onRefresh: r }) {
     ]
   });
 }
-function pP(e) {
+function mP(e) {
   let t = [];
   for (let [n, r] of [
     ["due_count", "due"],
@@ -62746,7 +62827,7 @@ function pP(e) {
   }
   return typeof e.delivery_mode == "string" && t.push(`mode ${e.delivery_mode.replaceAll("_", " ")}`), t.length ? t.join(" · ") : "the server returned no counts";
 }
-var mP = 50, hP = {
+var hP = 50, gP = {
   target: "target-detail",
   target_group: "target-group-detail",
   finding: "finding-detail",
@@ -62754,52 +62835,52 @@ var mP = 50, hP = {
   test_policy: "policy-detail",
   evidence: "evidence-detail"
 };
-function gP(e) {
+function _P(e) {
   return String(e.timestamp ?? e.created_at ?? "");
 }
-function _P(e, t) {
+function vP(e, t) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(e)) return NaN;
   let [n, r, i] = e.split("-").map(Number);
   return (t ? new Date(n, r - 1, i, 23, 59, 59, 999) : new Date(n, r - 1, i, 0, 0, 0, 0)).getTime();
 }
-function vP(e) {
+function yP(e) {
   let t = window.location.hash.replace(/^#/, ""), n = t.indexOf("?");
   return new URLSearchParams(n >= 0 ? t.slice(n + 1) : "").get(e) ?? "";
 }
-function yP() {
+function bP() {
   let e = fl(window.location.hash);
-  return e?.entry === "audit" && e.audit_id ? e.audit_id : vP("event");
+  return e?.entry === "audit" && e.audit_id ? e.audit_id : yP("event");
 }
-var bP = {
+var xP = {
   actor: "",
   action: "",
   resource: "",
   since: "",
   until: ""
 };
-function xP() {
+function SP() {
   return {
-    actor: vP("actor"),
-    action: vP("category"),
-    resource: vP("resource"),
-    since: /^\d{4}-\d{2}-\d{2}$/.test(vP("from")) ? vP("from") : "",
-    until: /^\d{4}-\d{2}-\d{2}$/.test(vP("to")) ? vP("to") : ""
+    actor: yP("actor"),
+    action: yP("category"),
+    resource: yP("resource"),
+    since: /^\d{4}-\d{2}-\d{2}$/.test(yP("from")) ? yP("from") : "",
+    until: /^\d{4}-\d{2}-\d{2}$/.test(yP("to")) ? yP("to") : ""
   };
 }
-function SP(e, t, n = mP) {
+function CP(e, t, n = hP) {
   let r = new URLSearchParams();
   e.actor.trim() && r.set("actor", e.actor.trim()), e.action.trim() && r.set("action", e.action.trim()), e.resource.trim() && r.set("resource", e.resource.trim());
-  let i = _P(e.since, !1), a = _P(e.until, !0);
+  let i = vP(e.since, !1), a = vP(e.until, !0);
   return Number.isFinite(i) && r.set("since", new Date(i).toISOString()), Number.isFinite(a) && r.set("until", new Date(a).toISOString()), t && r.set("cursor", t), r.set("limit", String(n)), `/v1/audit-log?${r.toString()}`;
 }
-function CP({ data: e, session: t, config: n, onRefresh: r }) {
-  let i = AN(t.role), [a, o] = (0, D.useState)(xP), [s, c] = (0, D.useState)(xP), [l, u] = (0, D.useState)([""]), [d, f] = (0, D.useState)(0), [p, m] = (0, D.useState)({
+function wP({ data: e, session: t, config: n, onRefresh: r }) {
+  let i = jN(t.role), [a, o] = (0, D.useState)(SP), [s, c] = (0, D.useState)(SP), [l, u] = (0, D.useState)([""]), [d, f] = (0, D.useState)(0), [p, m] = (0, D.useState)({
     status: "loading",
     items: [],
     total: null,
     nextCursor: "",
     error: ""
-  }), [h, g] = (0, D.useState)(yP), [_, v] = (0, D.useState)({
+  }), [h, g] = (0, D.useState)(bP), [_, v] = (0, D.useState)({
     id: "",
     status: "idle",
     entry: null
@@ -62815,7 +62896,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
   }
   (0, D.useEffect)(() => {
     function e() {
-      let e = yP();
+      let e = bP();
       e && g(e);
     }
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
@@ -62837,14 +62918,14 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
       error: ""
     })), (async () => {
       try {
-        let n = await B(await j(), t, SP(s, A));
+        let n = await B(await j(), t, CP(s, A));
         if (e) return;
         let r = Array.isArray(n?.items) ? n.items : [], i = typeof n?.total == "number" ? n.total : null;
         m({
           status: "ready",
           items: r,
           total: i,
-          nextCursor: _N(n, ["next_cursor"], ""),
+          nextCursor: vN(n, ["next_cursor"], ""),
           error: ""
         });
       } catch (t) {
@@ -62868,9 +62949,9 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
     d
   ]);
   let M = [...p.items].sort((e, t) => {
-    let n = Date.parse(gP(e)), r = Date.parse(gP(t));
+    let n = Date.parse(_P(e)), r = Date.parse(_P(t));
     return (Number.isFinite(r) ? r : 0) - (Number.isFinite(n) ? n : 0);
-  }), N = h ? M.find((e) => TN(e) === h) ?? null : null;
+  }), N = h ? M.find((e) => EN(e) === h) ?? null : null;
   (0, D.useEffect)(() => {
     if (!i || !h || N || p.status === "loading" || _.id === h && _.status !== "idle" && y === 0) return;
     let e = !1;
@@ -62882,8 +62963,8 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
       try {
         let n = await B(await j(), t, `/v1/audit-log/${encodeURIComponent(h)}`);
         if (e) return;
-        let r = vN(n, ["entry"]);
-        v(r && _N(r, ["id"], "") === h ? {
+        let r = yN(n, ["entry"]);
+        v(r && vN(r, ["id"], "") === h ? {
           id: h,
           status: "found",
           entry: r
@@ -62928,15 +63009,15 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
     }), u([""]);
   }
   function I() {
-    o(bP), c(bP), u([""]), E("");
+    o(xP), c(xP), u([""]), E("");
   }
-  let te = Object.values(s).some(Boolean), ne = (e) => [...new Set(M.map((t) => _N(t, [e], "")).filter((e) => e && e !== "—"))].sort();
+  let te = Object.values(s).some(Boolean), ne = (e) => [...new Set(M.map((t) => vN(t, [e], "")).filter((e) => e && e !== "—"))].sort();
   function re(e) {
-    let t = _N(e, ["entry_hash"], "");
+    let t = vN(e, ["entry_hash"], "");
     return !t || t === "—" ? "" : t.length <= 12 ? t : `${t.slice(0, 6)}…${t.slice(-4)}`;
   }
   function ie(e) {
-    let t = _N(e, ["resource_type"], ""), n = _N(e, ["resource_id"], ""), r = fa(t);
+    let t = vN(e, ["resource_type"], ""), n = vN(e, ["resource_id"], ""), r = fa(t);
     return r ? /* @__PURE__ */ (0, V.jsx)("span", {
       title: n === "—" ? void 0 : n,
       children: r
@@ -62954,14 +63035,14 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
       label: `Time (${k})`,
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "mono",
-        children: gP(e) ? z(gP(e)) : "Not recorded"
+        children: _P(e) ? z(_P(e)) : "Not recorded"
       })
     },
     {
       key: "actor",
       label: "Actor",
       render: (e) => {
-        let t = _N(e, ["actor_user_id"], ""), n = _N(e, ["actor_role"], "");
+        let t = vN(e, ["actor_user_id"], ""), n = vN(e, ["actor_role"], "");
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "cp-stack",
           children: [/* @__PURE__ */ (0, V.jsx)("span", { children: t && t !== "—" ? t : "Not recorded" }), /* @__PURE__ */ (0, V.jsx)("span", {
@@ -62974,7 +63055,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
     {
       key: "action",
       label: "Action",
-      render: (e) => /* @__PURE__ */ (0, V.jsx)("span", { children: la(_N(e, ["action"])) })
+      render: (e) => /* @__PURE__ */ (0, V.jsx)("span", { children: la(vN(e, ["action"])) })
     },
     {
       key: "resource",
@@ -62988,7 +63069,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
         let t = re(e);
         return t ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "mono muted",
-          title: _N(e, ["entry_hash"]),
+          title: vN(e, ["entry_hash"]),
           children: t
         }) : /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted",
@@ -62996,7 +63077,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
         });
       }
     }
-  ], oe = P ? hP[_N(P, ["resource_type"], "")] : "", L = P ? _N(P, ["resource_id"], "") : "", se = l.length, ce = p.total === null ? "total not returned" : `${R(p.total)} matching`;
+  ], oe = P ? gP[vN(P, ["resource_type"], "")] : "", L = P ? vN(P, ["resource_id"], "") : "", se = l.length, ce = p.total === null ? "total not returned" : `${R(p.total)} matching`;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content audit-page",
     children: [
@@ -63183,10 +63264,10 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
             tabIndex: -1,
             "aria-label": "Selected audit event",
             className: "audit-event-detail",
-            children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: la(_N(P, ["action"])) }), /* @__PURE__ */ (0, V.jsxs)(Y, { children: [
-              gP(P) ? z(gP(P)) : "Time not recorded",
+            children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: la(vN(P, ["action"])) }), /* @__PURE__ */ (0, V.jsxs)(Y, { children: [
+              _P(P) ? z(_P(P)) : "Time not recorded",
               " · ",
-              ql(_N(P, ["resource_type"], "resource"))
+              ql(vN(P, ["resource_type"], "resource"))
             ] })] }), /* @__PURE__ */ (0, V.jsx)(H, {
               size: "sm",
               variant: "ghost",
@@ -63202,59 +63283,59 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
                 /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "kv-list",
                   children: [
-                    /* @__PURE__ */ (0, V.jsxs)(WN, {
+                    /* @__PURE__ */ (0, V.jsxs)(GN, {
                       label: "Actor",
                       children: [
-                        _N(P, ["actor_user_id"], "Not recorded"),
+                        vN(P, ["actor_user_id"], "Not recorded"),
                         " (",
-                        ql(_N(P, ["actor_role"], "role not recorded")),
+                        ql(vN(P, ["actor_role"], "role not recorded")),
                         ")"
                       ]
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Resource",
-                      children: fa(_N(P, ["resource_type"], "")) || (oe && L && L !== "—" ? /* @__PURE__ */ (0, V.jsx)("a", {
+                      children: fa(vN(P, ["resource_type"], "")) || (oe && L && L !== "—" ? /* @__PURE__ */ (0, V.jsx)("a", {
                         className: "cp-link",
                         href: Zf(oe, L),
                         children: L
                       }) : L || "Not recorded")
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Event time",
-                      children: gP(P) ? z(gP(P)) : "Not recorded"
+                      children: _P(P) ? z(_P(P)) : "Not recorded"
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Event ID",
                       children: /* @__PURE__ */ (0, V.jsx)("span", {
                         className: "cp-mono-wrap",
-                        children: _N(P, ["id"], "Not recorded")
+                        children: vN(P, ["id"], "Not recorded")
                       })
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Sequence",
-                      children: _N(P, ["sequence"], "Not recorded")
+                      children: vN(P, ["sequence"], "Not recorded")
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Recorded hash",
                       children: /* @__PURE__ */ (0, V.jsx)("span", {
                         className: "cp-mono-wrap",
-                        children: _N(P, ["entry_hash"], "Not recorded")
+                        children: vN(P, ["entry_hash"], "Not recorded")
                       })
                     }),
-                    /* @__PURE__ */ (0, V.jsx)(WN, {
+                    /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Previous hash",
                       children: /* @__PURE__ */ (0, V.jsx)("span", {
                         className: "cp-mono-wrap",
-                        children: _N(P, ["prev_hash"], "Not recorded")
+                        children: vN(P, ["prev_hash"], "Not recorded")
                       })
                     }),
-                    P.metadata && typeof P.metadata == "object" && !Array.isArray(P.metadata) && CN(P.metadata) ? Object.entries(P.metadata).map(([e, t]) => /* @__PURE__ */ (0, V.jsx)(WN, {
+                    P.metadata && typeof P.metadata == "object" && !Array.isArray(P.metadata) && wN(P.metadata) ? Object.entries(P.metadata).map(([e, t]) => /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: ql(e),
                       children: t === null ? "Not recorded" : String(t)
-                    }, e)) : P.metadata && typeof P.metadata == "object" ? /* @__PURE__ */ (0, V.jsx)(WN, {
+                    }, e)) : P.metadata && typeof P.metadata == "object" ? /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Recorded change",
                       children: "Structured; open the technical record below."
-                    }) : /* @__PURE__ */ (0, V.jsx)(WN, {
+                    }) : /* @__PURE__ */ (0, V.jsx)(GN, {
                       label: "Recorded change",
                       children: "No metadata recorded"
                     })
@@ -63270,7 +63351,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
                     size: "sm",
                     variant: "secondary",
                     onClick: () => {
-                      let e = `${window.location.origin}${window.location.pathname}#audit?event=${encodeURIComponent(_N(P, ["id"], ""))}`;
+                      let e = `${window.location.origin}${window.location.pathname}#audit?event=${encodeURIComponent(vN(P, ["id"], ""))}`;
                       navigator.clipboard.writeText(e).then(() => w("Event link copied.")).catch(() => w("Copy failed; select the event ID above."));
                     },
                     children: "Copy event link"
@@ -63281,8 +63362,8 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
                   })]
                 }),
                 P.metadata && typeof P.metadata == "object" ? (() => {
-                  let e = JSON.stringify(P.metadata, null, 2), t = _N(P, ["id", "audit_id"], "audit-entry");
-                  return /* @__PURE__ */ (0, V.jsx)(KN, {
+                  let e = JSON.stringify(P.metadata, null, 2), t = vN(P, ["id", "audit_id"], "audit-entry");
+                  return /* @__PURE__ */ (0, V.jsx)(qN, {
                     panelId: "audit-raw-metadata-panel",
                     expanded: x,
                     onToggle: () => S((e) => !e),
@@ -63293,7 +63374,7 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
                     code: e.slice(0, 1800),
                     truncated: e.length > 1800,
                     downloadLabel: "Download full metadata",
-                    onDownload: () => EN(`audit-metadata-${t}.json`, P.metadata)
+                    onDownload: () => DN(`audit-metadata-${t}.json`, P.metadata)
                   });
                 })() : null
               ]
@@ -63309,16 +63390,16 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
             columns: ae,
             items: M,
             selectedId: h || null,
-            getRowId: (e) => TN(e),
+            getRowId: (e) => EN(e),
             getRowProps: (e) => {
-              let t = TN(e), n = fa(_N(e, ["resource_type"], "")) ?? _N(e, ["resource_id", "resource_type"], "unknown resource");
+              let t = EN(e), n = fa(vN(e, ["resource_type"], "")) ?? vN(e, ["resource_id", "resource_type"], "unknown resource");
               return {
                 onClick: () => g(t),
                 onKeyDown: (e) => {
                   (e.key === "Enter" || e.key === " ") && (e.preventDefault(), g(t));
                 },
                 tabIndex: 0,
-                "aria-label": `Inspect ${la(_N(e, ["action"], "audit event"))} on ${n}`
+                "aria-label": `Inspect ${la(vN(e, ["action"], "audit event"))} on ${n}`
               };
             },
             empty: te ? /* @__PURE__ */ (0, V.jsx)(G, {
@@ -63376,22 +63457,22 @@ function CP({ data: e, session: t, config: n, onRefresh: r }) {
     ]
   });
 }
-function wP(e, t) {
-  let n = _N(e, ["status"], "").toLowerCase(), r = vN(e, ["validation"]) ?? null, i = Array.isArray(r?.missing_fields) ? r.missing_fields.map(String) : [], a = Array.isArray(r?.forbidden_fields) ? r.forbidden_fields.map(String) : [];
+function TP(e, t) {
+  let n = vN(e, ["status"], "").toLowerCase(), r = yN(e, ["validation"]) ?? null, i = Array.isArray(r?.missing_fields) ? r.missing_fields.map(String) : [], a = Array.isArray(r?.forbidden_fields) ? r.forbidden_fields.map(String) : [];
   return {
-    key: _N(e, ["id"], `${_N(e, ["kind"], "record")}-${t}`),
+    key: vN(e, ["id"], `${vN(e, ["kind"], "record")}-${t}`),
     item: e,
-    kind: _N(e, ["kind"], "unknown"),
+    kind: vN(e, ["kind"], "unknown"),
     accepted: n === "accepted" || n === "approved",
     acceptance: n || "not recorded",
     validity: r ? r.ok === !0 ? "valid" : "invalid" : "not_recorded",
     missingFields: i,
     forbiddenFields: a,
-    custodyUri: hN(vN(e, ["evidence"]) ?? e.evidence) ?? ""
+    custodyUri: gN(yN(e, ["evidence"]) ?? e.evidence) ?? ""
   };
 }
-function TP({ data: e, session: t }) {
-  let [n, r] = (0, D.useState)(""), [i, a] = (0, D.useState)(""), [o, s] = (0, D.useState)(""), [c, l] = (0, D.useState)("all"), u = jN(t.role), d = e.releaseAttestation, f = mN(e.releaseEvidence), p = e.releaseEvidence.slice().sort((e, t) => new Date(String(t.created_at ?? "")).getTime() - new Date(String(e.created_at ?? "")).getTime()).map(wP), m = p.filter((e) => e.accepted && e.validity === "invalid"), h = new Set(p.filter((e) => e.accepted && e.validity === "valid").map((e) => e.kind)), g = c === "problems" ? p.filter((e) => !e.accepted || e.validity !== "valid") : p, _ = p.find((e) => e.key === i) ?? null, v = yN(d, ["signoff_status"], ""), y = f.missing.filter((e) => `${e} ${ql(e)}`.toLowerCase().includes(o.trim().toLowerCase())), b = [{
+function EP({ data: e, session: t }) {
+  let [n, r] = (0, D.useState)(""), [i, a] = (0, D.useState)(""), [o, s] = (0, D.useState)(""), [c, l] = (0, D.useState)("all"), u = MN(t.role), d = e.releaseAttestation, f = hN(e.releaseEvidence), p = e.releaseEvidence.slice().sort((e, t) => new Date(String(t.created_at ?? "")).getTime() - new Date(String(e.created_at ?? "")).getTime()).map(TP), m = p.filter((e) => e.accepted && e.validity === "invalid"), h = new Set(p.filter((e) => e.accepted && e.validity === "valid").map((e) => e.kind)), g = c === "problems" ? p.filter((e) => !e.accepted || e.validity !== "valid") : p, _ = p.find((e) => e.key === i) ?? null, v = bN(d, ["signoff_status"], ""), y = f.missing.filter((e) => `${e} ${ql(e)}`.toLowerCase().includes(o.trim().toLowerCase())), b = [{
     key: "kind",
     label: "Required kind",
     render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
@@ -63419,7 +63500,7 @@ function TP({ data: e, session: t }) {
       label: "Attached",
       render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
         tone: "muted",
-        children: e.accepted ? "Accepted" : FN(e.acceptance, "Not recorded")
+        children: e.accepted ? "Accepted" : IN(e.acceptance, "Not recorded")
       })
     },
     {
@@ -63460,7 +63541,7 @@ function TP({ data: e, session: t }) {
     return {
       exported_at: (/* @__PURE__ */ new Date()).toISOString(),
       tenant_id: t.tenant_id ?? e.state?.tenant_id ?? "unknown",
-      profile: yN(d, ["profile"], "not recorded"),
+      profile: bN(d, ["profile"], "not recorded"),
       coverage: f,
       accepted_invalid: m.map((e) => ({
         kind: e.kind,
@@ -63471,14 +63552,14 @@ function TP({ data: e, session: t }) {
       records: p.map((e) => ({
         kind: e.kind,
         status: e.acceptance,
-        validation: gN(vN(e.item, ["validation"]) ?? null),
+        validation: _N(yN(e.item, ["validation"]) ?? null),
         custody_uri: e.custodyUri || null
       }))
     };
   }
   function C() {
     let n = [
-      `Release evidence gap ledger · workspace ${t.tenant_id ?? e.state?.tenant_id ?? "unknown"} · profile ${yN(d, ["profile"], "not recorded")}`,
+      `Release evidence gap ledger · workspace ${t.tenant_id ?? e.state?.tenant_id ?? "unknown"} · profile ${bN(d, ["profile"], "not recorded")}`,
       `Accepted records cover ${f.recorded} of ${f.expected} required kinds; ${h.size} of those kinds have a contract-valid record.`,
       f.missing.length > 0 ? `Missing kinds (${f.missing.length}): ${f.missing.join(", ")}.` : "No required kind is missing an accepted record.",
       m.length > 0 ? `Accepted but failing contract validation (${m.length}): ${m.map((e) => e.kind).join(", ")}.` : "No accepted record fails contract validation.",
@@ -63532,7 +63613,7 @@ function TP({ data: e, session: t }) {
             ] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [
               /* @__PURE__ */ (0, V.jsx)("dt", { children: "External signoff" }),
-              /* @__PURE__ */ (0, V.jsx)("dd", { children: v ? FN(v) : "Not recorded" }),
+              /* @__PURE__ */ (0, V.jsx)("dd", { children: v ? IN(v) : "Not recorded" }),
               /* @__PURE__ */ (0, V.jsxs)("dd", {
                 className: "release-dimension-hint",
                 children: ["Operator attestation", d?.checked_at || d?.created_at ? ` checked ${z(d?.checked_at ?? d?.created_at)}` : ", time not recorded"]
@@ -63540,15 +63621,15 @@ function TP({ data: e, session: t }) {
             ] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [
               /* @__PURE__ */ (0, V.jsx)("dt", { children: "Profile" }),
-              /* @__PURE__ */ (0, V.jsx)("dd", { children: yN(d, ["profile"], "Not recorded") }),
+              /* @__PURE__ */ (0, V.jsx)("dd", { children: bN(d, ["profile"], "Not recorded") }),
               /* @__PURE__ */ (0, V.jsxs)("dd", {
                 className: "release-dimension-hint",
-                children: ["Production-ready flag: ", PN(d?.production_ready)]
+                children: ["Production-ready flag: ", FN(d?.production_ready)]
               })
             ] })
           ]
         }),
-        n ? /* @__PURE__ */ (0, V.jsx)(HN, { children: n }) : null,
+        n ? /* @__PURE__ */ (0, V.jsx)(UN, { children: n }) : null,
         e.loadErrors.releaseEvidence ? /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "form-banner error",
           role: "alert",
@@ -63620,21 +63701,21 @@ function TP({ data: e, session: t }) {
                   /* @__PURE__ */ (0, V.jsxs)("div", {
                     className: "kv-list",
                     children: [
-                      /* @__PURE__ */ (0, V.jsx)(WN, {
+                      /* @__PURE__ */ (0, V.jsx)(GN, {
                         label: "Attached",
-                        children: _.accepted ? "Accepted into the inventory" : FN(_.acceptance, "Not recorded")
+                        children: _.accepted ? "Accepted into the inventory" : IN(_.acceptance, "Not recorded")
                       }),
-                      /* @__PURE__ */ (0, V.jsx)(WN, {
+                      /* @__PURE__ */ (0, V.jsx)(GN, {
                         label: "Contract validity",
                         children: _.validity === "valid" ? "Valid against the evidence contract (metadata only)" : _.validity === "invalid" ? "Fails the evidence contract" : "Not validated"
                       }),
-                      /* @__PURE__ */ (0, V.jsx)(WN, {
+                      /* @__PURE__ */ (0, V.jsx)(GN, {
                         label: "Custody",
                         children: _.custodyUri ? "Reference recorded; not verified here" : "No custody reference"
                       }),
-                      /* @__PURE__ */ (0, V.jsx)(WN, {
+                      /* @__PURE__ */ (0, V.jsx)(GN, {
                         label: "Release",
-                        children: _N(_.item, ["release_id", "id"], "Not recorded")
+                        children: vN(_.item, ["release_id", "id"], "Not recorded")
                       })
                     ]
                   }),
@@ -63702,7 +63783,7 @@ function TP({ data: e, session: t }) {
             }), /* @__PURE__ */ (0, V.jsx)(H, {
               size: "sm",
               variant: "ghost",
-              onClick: () => EN(`release-evidence-gap-ledger-${t.tenant_id ?? "tenant"}.json`, S()),
+              onClick: () => DN(`release-evidence-gap-ledger-${t.tenant_id ?? "tenant"}.json`, S()),
               children: "Download JSON"
             })]
           })
@@ -63754,10 +63835,10 @@ function TP({ data: e, session: t }) {
     ]
   });
 }
-function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i = !1 }) {
+function DP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i = !1 }) {
   let a = i && n.principal === "staff", { confirm: o } = lp(), [s, c] = (0, D.useState)(""), [l, u] = (0, D.useState)(!1), [d, f] = (0, D.useState)(""), [p, m] = (0, D.useState)(""), [h, g] = (0, D.useState)(""), [_, v] = (0, D.useState)(""), [y, b] = (0, D.useState)(!1), [x, S] = (0, D.useState)(""), [C, w] = (0, D.useState)(() => Xf(n.tenant_id ?? "").trim());
   function T(e, t = "") {
-    g(JSON.stringify(e, null, 2)), v(ON(e)), b(!1), S(t);
+    g(JSON.stringify(e, null, 2)), v(kN(e)), b(!1), S(t);
   }
   let E = a ? n.principal === "staff" && ls(n) : n.role === "soc" && n.principal !== "staff", O = C || String(n.tenant_id ?? "").trim(), [k, A] = (0, D.useState)({
     items: [],
@@ -63824,10 +63905,10 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       key: "id",
       label: "Request",
       render: (e) => {
-        let t = _N(e, ["id"], "");
+        let t = vN(e, ["id"], "");
         return /* @__PURE__ */ (0, V.jsx)("span", {
           title: t || void 0,
-          children: _N(e, [
+          children: vN(e, [
             "objective",
             "reason",
             "name"
@@ -63839,25 +63920,25 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       key: "state",
       label: "State",
       render: (e) => {
-        let t = _N(e, ["state"]);
+        let t = vN(e, ["state"]);
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: MN(t),
-          children: FN(t, "Unknown")
+          tone: NN(t),
+          children: IN(t, "Unknown")
         });
       }
     },
     {
       key: "target",
       label: "Target group",
-      render: (t) => wN(e, _N(t, ["target_group_id"]))
+      render: (t) => TN(e, vN(t, ["target_group_id"]))
     },
     {
       key: "pack",
       label: "Pack",
       render: (e) => {
-        let t = LN(e);
+        let t = RN(e);
         return /* @__PURE__ */ (0, V.jsx)(W, {
-          tone: NN(t.overall),
+          tone: PN(t.overall),
           title: t.detail,
           children: t.label
         });
@@ -63868,14 +63949,14 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       label: "Governed limits",
       render: (e) => /* @__PURE__ */ (0, V.jsx)("span", {
         className: "mono",
-        children: zN(e)
+        children: BN(e)
       })
     },
     {
       key: "provider",
       label: "Provider approval",
       render: (e) => {
-        let t = RN(e);
+        let t = zN(e);
         return /* @__PURE__ */ (0, V.jsx)(W, {
           tone: t.tone,
           title: t.detail,
@@ -63887,7 +63968,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       key: "actions",
       label: "Actions",
       render: (e) => {
-        let t = _N(e, ["id"], ""), n = QN(e), r = yN(e, ["authorization_pack_status", "overall"], "").toLowerCase() === "accepted", i = a && !O ? "Select an execution tenant before approving this request." : ["submitted", "under_review"].includes(n) ? r ? "" : "Every required authorization artifact and provider approval must be accepted first." : "Quick approval is available only while a request is submitted or under review.", o = `quick-approve-reason-${t}`;
+        let t = vN(e, ["id"], ""), n = $N(e), r = bN(e, ["authorization_pack_status", "overall"], "").toLowerCase() === "accepted", i = a && !O ? "Select an execution tenant before approving this request." : ["submitted", "under_review"].includes(n) ? r ? "" : "Every required authorization artifact and provider approval must be accepted first." : "Quick approval is available only while a request is submitted or under review.", o = `quick-approve-reason-${t}`;
         return /* @__PURE__ */ (0, V.jsxs)("div", {
           className: "stack-tight",
           children: [
@@ -63929,9 +64010,9 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       close: `Close high-scale request ${e} and finalize the test lifecycle?`
     }[t];
     if (i && !await o({
-      title: `${FN(t)} high-scale request`,
+      title: `${IN(t)} high-scale request`,
       description: i,
-      confirmLabel: FN(t),
+      confirmLabel: IN(t),
       confirmTone: t === "approve" || t === "schedule" || t === "start" ? "default" : "danger"
     })) return null;
     c(`${t}-${e}`), m(""), f("");
@@ -63986,12 +64067,12 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       c("");
     }
   }
-  let ie = !!(e.state?.kill_switch?.active ?? e.state?.kill_switch?.enabled), ae = _N(e.state?.kill_switch, ["reason"], "tenant-scoped emergency stop"), oe = e.highScale.filter((e) => JN.includes(QN(e))).length, L = e.highScale.filter((e) => YN.includes(QN(e))).length, se = e.highScale.filter((e) => XN.includes(QN(e))).length, ce = Number(e.state?.open_findings ?? e.findings.filter(w_).length) || 0, le = eP(e.highScale, {
+  let ie = !!(e.state?.kill_switch?.active ?? e.state?.kill_switch?.enabled), ae = vN(e.state?.kill_switch, ["reason"], "tenant-scoped emergency stop"), oe = e.highScale.filter((e) => YN.includes($N(e))).length, L = e.highScale.filter((e) => XN.includes($N(e))).length, se = e.highScale.filter((e) => ZN.includes($N(e))).length, ce = Number(e.state?.open_findings ?? e.findings.filter(w_).length) || 0, le = tP(e.highScale, {
     killSwitchActive: ie,
     runningCount: se,
     openFindings: ce
-  }), ue = rP(e.highScale), de = aP(e.highScale), fe = a ? sP(k.items) : [], pe = a && !O, me = pe ? "Select an execution tenant before activating the kill switch." : ie ? "The tenant kill switch is already active." : s && s !== "kill-on" ? "Another SOC action is in progress." : "", he = pe ? "Select an execution tenant before clearing the kill switch." : ie ? s && s !== "kill-off" ? "Another SOC action is in progress." : "" : "The tenant kill switch is already clear.", ge = new Set(fe.map((e) => e.tenantId).filter((e) => e && e !== "—")).size, _e = (0, D.useMemo)(() => {
-    let e = new Map(k.tenants.map((e) => [_N(e, ["tenant_id"], ""), _N(e, ["name"], "")])), t = fe.map((e) => e.tenantId).filter((e) => e && e !== "—");
+  }), ue = iP(e.highScale), de = oP(e.highScale), fe = a ? cP(k.items) : [], pe = a && !O, me = pe ? "Select an execution tenant before activating the kill switch." : ie ? "The tenant kill switch is already active." : s && s !== "kill-on" ? "Another SOC action is in progress." : "", he = pe ? "Select an execution tenant before clearing the kill switch." : ie ? s && s !== "kill-off" ? "Another SOC action is in progress." : "" : "The tenant kill switch is already clear.", ge = new Set(fe.map((e) => e.tenantId).filter((e) => e && e !== "—")).size, _e = (0, D.useMemo)(() => {
+    let e = new Map(k.tenants.map((e) => [vN(e, ["tenant_id"], ""), vN(e, ["name"], "")])), t = fe.map((e) => e.tenantId).filter((e) => e && e !== "—");
     return [{
       value: "",
       label: "Select execution tenant…"
@@ -64111,7 +64192,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         }),
         " open findings"
       ] }),
-      /* @__PURE__ */ (0, V.jsx)(VN, {
+      /* @__PURE__ */ (0, V.jsx)(HN, {
         message: d,
         error: p
       }),
@@ -64124,13 +64205,13 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
             children: [
               /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "kv-list",
-                children: [/* @__PURE__ */ (0, V.jsx)(WN, {
+                children: [/* @__PURE__ */ (0, V.jsx)(GN, {
                   label: "Status",
                   children: /* @__PURE__ */ (0, V.jsx)(W, {
                     tone: ie ? "danger" : "success",
                     children: ie ? "Armed" : "Clear"
                   })
-                }), /* @__PURE__ */ (0, V.jsx)(WN, {
+                }), /* @__PURE__ */ (0, V.jsx)(GN, {
                   label: "Reason",
                   children: ae
                 })]
@@ -64166,11 +64247,11 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
                 className: "disclosure",
                 children: [/* @__PURE__ */ (0, V.jsxs)("summary", { children: [
                   "Validated emergency-stop sequence · ",
-                  ZN.length,
+                  QN.length,
                   " custody-recorded steps"
                 ] }), /* @__PURE__ */ (0, V.jsx)("div", {
                   className: "timeline-list",
-                  children: ZN.map((e) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { "aria-hidden": "true" }), /* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)("strong", {
+                  children: QN.map((e) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { "aria-hidden": "true" }), /* @__PURE__ */ (0, V.jsx)("div", { children: /* @__PURE__ */ (0, V.jsx)("strong", {
                     className: "mono",
                     children: e
                   }) })] }, e))
@@ -64182,7 +64263,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
           density: "compact",
           children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Go / No-Go" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Pre-flight gates computed from the current governed queue and tenant safety state." })] }), /* @__PURE__ */ (0, V.jsx)(X, {
             className: "kv-list",
-            children: le.map((e) => /* @__PURE__ */ (0, V.jsx)(WN, {
+            children: le.map((e) => /* @__PURE__ */ (0, V.jsx)(GN, {
               label: e.label,
               children: /* @__PURE__ */ (0, V.jsx)(W, {
                 tone: e.tone,
@@ -64193,7 +64274,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         })]
       }),
       a ? /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Cross-tenant execution" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Governed high-scale requests across all customer tenants, read from the audited staff SOC queue. Open a request for the full lifecycle workspace." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(kh, {
-        columns: cP,
+        columns: lP,
         items: fe,
         getRowId: (e) => `${e.tenantId}:${e.id}`,
         loadError: k.error,
@@ -64211,7 +64292,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
           items: e.highScale,
           loadError: e.loadErrors.highScale,
           onRetry: () => void r(),
-          empty: l ? /* @__PURE__ */ (0, V.jsx)(qN, {}) : /* @__PURE__ */ (0, V.jsx)(G, {
+          empty: l ? /* @__PURE__ */ (0, V.jsx)(JN, {}) : /* @__PURE__ */ (0, V.jsx)(G, {
             icon: An,
             title: "No high-scale requests.",
             body: "Customer requests appear here after intake and authorization-pack review."
@@ -64227,7 +64308,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         }) : /* @__PURE__ */ (0, V.jsx)("div", {
           className: "timeline-list",
           children: de.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("span", { children: t + 1 }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsxs)("strong", { children: [
-            FN(e.action),
+            IN(e.action),
             " · ",
             /* @__PURE__ */ (0, V.jsx)("span", {
               className: "mono",
@@ -64239,7 +64320,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
             e.by
           ] })] })] }, e.key))
         }) })] }), /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Provider contacts" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Provider and emergency contacts declared on governed high-scale requests." })] }), /* @__PURE__ */ (0, V.jsx)(X, { children: /* @__PURE__ */ (0, V.jsx)(kh, {
-          columns: iP,
+          columns: aP,
           items: ue,
           getRowId: (e) => e.id,
           empty: /* @__PURE__ */ (0, V.jsx)(G, {
@@ -64299,7 +64380,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         body: a ? "Sign in with a staff soc_analyst or soc_lead role to use the governed high-scale execution console." : "Switch the workspace role to soc to use the governed high-scale execution console.",
         actionLabel: a ? "Open staff login" : void 0,
         actionHref: a ? "/internal/admin/login" : void 0
-      }), /* @__PURE__ */ (0, V.jsx)(GN, {
+      }), /* @__PURE__ */ (0, V.jsx)(KN, {
         active: ie,
         reason: ae
       })]
@@ -64308,7 +64389,7 @@ function EP({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
 }
 //#endregion
 //#region apps/web/react/src/components/targets/target-cohort.tsx
-var DP = 50, OP = {
+var OP = 50, kP = {
   q: "Search",
   target_group_id: "Target group",
   verification_state: "Ownership",
@@ -64322,12 +64403,12 @@ var DP = 50, OP = {
   family_status: "Observation",
   freshness: "Freshness",
   has_open_finding: "Open finding"
-}, kP = {
+}, AP = {
   waf: "WAF",
   cdn: "CDN",
   dns_verified: "DNS verified",
   provider_verified: "Provider verified"
-}, AP = {
+}, jP = {
   detected: {
     label: "Detected",
     tone: "default"
@@ -64361,18 +64442,18 @@ var DP = 50, OP = {
     tone: "muted"
   }
 };
-function jP(e, t) {
+function MP(e, t) {
   let n = e?.[t];
   return typeof n == "string" ? n : typeof n == "number" ? String(n) : "";
 }
-function MP(e) {
+function NP(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function NP(e) {
+function PP(e) {
   let t = e.replace(/_/g, " ");
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
-var PP = {
+var FP = {
   state: "loading",
   items: [],
   total: null,
@@ -64387,14 +64468,14 @@ var PP = {
   nextCursor: "",
   message: ""
 };
-function FP(e) {
+function IP(e) {
   let t = Number(e);
   return e == null || e === "" || !Number.isFinite(t) ? null : t;
 }
-function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
-  let [a, o] = (0, D.useState)([""]), [s, c] = (0, D.useState)(PP), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(0), p = (0, D.useRef)(""), m = a.length - 1, h = a[m], g = JSON.stringify(e), _ = (0, D.useCallback)((t, n) => {
+function LP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
+  let [a, o] = (0, D.useState)([""]), [s, c] = (0, D.useState)(FP), [l, u] = (0, D.useState)(""), [d, f] = (0, D.useState)(0), p = (0, D.useRef)(""), m = a.length - 1, h = a[m], g = JSON.stringify(e), _ = (0, D.useCallback)((t, n) => {
     let r = new URLSearchParams(e);
-    return r.set("limit", String(DP)), n ? r.set("cursor", n) : t && p.current && r.set("cohort_version", p.current), `/v1/targets?${r.toString()}`;
+    return r.set("limit", String(OP)), n ? r.set("cursor", n) : t && p.current && r.set("cohort_version", p.current), `/v1/targets?${r.toString()}`;
   }, [g]);
   (0, D.useEffect)(() => {
     p.current = "", o([""]), u("");
@@ -64409,28 +64490,28 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
       try {
         let i = await B(t, n, _(a, h), { signal: r.signal });
         if (r.signal.aborted) return;
-        let o = MP(i.page), s = FP(o?.total ?? i.total), l = Array.isArray(o?.items) ? o.items : Array.isArray(i.items) ? i.items : [];
+        let o = NP(i.page), s = IP(o?.total ?? i.total), l = Array.isArray(o?.items) ? o.items : Array.isArray(i.items) ? i.items : [];
         if (s === null && i.complete !== !1) {
           c({
-            ...PP,
+            ...FP,
             state: "unsupported",
             message: "This server did not return a total for these filters, so no cohort list is shown."
           });
           return;
         }
-        p.current = jP(i, "cohort_version"), c({
+        p.current = MP(i, "cohort_version"), c({
           state: "ready",
           items: l,
           total: s,
           complete: i.complete !== !1,
-          unit: jP(i, "unit") || e.unit || "target",
+          unit: MP(i, "unit") || e.unit || "target",
           units: {
-            targetRecords: FP(MP(i.units)?.target_records),
-            normalizedHosts: FP(MP(i.units)?.normalized_hosts)
+            targetRecords: IP(NP(i.units)?.target_records),
+            normalizedHosts: IP(NP(i.units)?.normalized_hosts)
           },
-          asOf: jP(i, "as_of"),
-          cohortVersion: jP(i, "cohort_version"),
-          nextCursor: jP(o, "next_cursor") || jP(i, "next_cursor"),
+          asOf: MP(i, "as_of"),
+          cohortVersion: MP(i, "cohort_version"),
+          nextCursor: MP(o, "next_cursor") || MP(i, "next_cursor"),
           message: ""
         });
       } catch (e) {
@@ -64446,7 +64527,7 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
         }
         let n = e instanceof Error ? e.message : "The cohort could not load.";
         c({
-          ...PP,
+          ...FP,
           state: t.action === "unsupported" ? "unsupported" : t.action === "denied" ? "denied" : "error",
           message: t.action === "unsupported" ? `The server rejected these filters (${t.reason}). No list is shown and the full inventory is not substituted.` : n
         });
@@ -64461,14 +64542,14 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
     _,
     e.unit
   ]);
-  let v = (0, D.useMemo)(() => new Map(r.map((e) => [jP(e, "id"), e])), [r]), y = s.unit === "hostname", b = m * DP, x = [
+  let v = (0, D.useMemo)(() => new Map(r.map((e) => [MP(e, "id"), e])), [r]), y = s.unit === "hostname", b = m * OP, x = [
     {
       key: "target",
       label: y ? "Hostname" : "Target",
       render: (e) => {
-        let t = MP(e.analytics), n = Array.isArray(t?.target_ids) ? t.target_ids.map(String) : [jP(e, "id")], r = FP(t?.member_count) ?? n.length, i = y && jP(t, "host_key") || jP(e, "value");
+        let t = NP(e.analytics), n = Array.isArray(t?.target_ids) ? t.target_ids.map(String) : [MP(e, "id")], r = IP(t?.member_count) ?? n.length, i = y && MP(t, "host_key") || MP(e, "value");
         if (r <= 1) {
-          let t = n[0] || jP(e, "id");
+          let t = n[0] || MP(e, "id");
           return /* @__PURE__ */ (0, V.jsxs)("span", {
             className: "cohort-target",
             children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: i }), /* @__PURE__ */ (0, V.jsx)(yc, {
@@ -64492,22 +64573,22 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
                 return /* @__PURE__ */ (0, V.jsxs)("li", { children: [
                   /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "mono",
-                    children: jP(t, "value") || e
+                    children: MP(t, "value") || e
                   }),
                   t ? /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "muted small",
                     children: [
                       " · ",
-                      jP(t, "kind"),
+                      MP(t, "kind"),
                       " · ",
-                      jP(t, "target_group_name") || jP(t, "target_group_id")
+                      MP(t, "target_group_name") || MP(t, "target_group_id")
                     ]
                   }) : null,
                   /* @__PURE__ */ (0, V.jsx)(yc, {
                     size: "sm",
                     variant: "ghost",
                     href: Zf("target-detail", e),
-                    "aria-label": `Open declared target ${jP(t, "value") || e}`,
+                    "aria-label": `Open declared target ${MP(t, "value") || e}`,
                     children: "Open"
                   })
                 ] }, e);
@@ -64525,14 +64606,14 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
       key: "ownership",
       label: "Ownership",
       render: (e) => {
-        let t = FP(MP(e.analytics)?.member_count) ?? 1;
+        let t = IP(NP(e.analytics)?.member_count) ?? 1;
         if (y && t > 1) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
           children: "Per declared target"
         });
-        let n = MP(e.verification);
+        let n = NP(e.verification);
         return /* @__PURE__ */ (0, V.jsx)(_x, {
-          state: jP(e, "verification_state") || "unverified",
+          state: MP(e, "verification_state") || "unverified",
           provenance: gx(e, n)
         });
       }
@@ -64541,10 +64622,10 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
       key: e,
       label: e === "waf" ? "WAF" : "CDN",
       render: (t) => {
-        let n = MP(t.analytics), r = jP(MP(MP(n?.families)?.[e]), "bucket") || jP(MP(MP(MP(t.protection_profile)?.families)?.[e]), "status") || "not_recorded", i = AP[r] ?? {
-          label: NP(r),
+        let n = NP(t.analytics), r = MP(NP(NP(n?.families)?.[e]), "bucket") || MP(NP(NP(NP(t.protection_profile)?.families)?.[e]), "status") || "not_recorded", i = jP[r] ?? {
+          label: PP(r),
           tone: "muted"
-        }, a = MP(n?.family_disagreement)?.[e] === !0;
+        }, a = NP(n?.family_disagreement)?.[e] === !0;
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "cohort-cell",
           children: [/* @__PURE__ */ (0, V.jsx)(W, {
@@ -64558,7 +64639,7 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
       key: "validated",
       label: "Last validation",
       render: (e) => {
-        let t = FP(MP(e.analytics)?.member_count) ?? 1;
+        let t = IP(NP(e.analytics)?.member_count) ?? 1;
         return y && t > 1 ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
           children: "Per declared target"
@@ -64578,11 +64659,11 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
       key: "group",
       label: "Target group",
       render: (e) => {
-        let t = FP(MP(e.analytics)?.member_count) ?? 1;
+        let t = IP(NP(e.analytics)?.member_count) ?? 1;
         return y && t > 1 ? /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
           children: "Per declared target"
-        }) : jP(e, "target_group_name") || jP(e, "target_group_id") || /* @__PURE__ */ (0, V.jsx)("span", {
+        }) : MP(e, "target_group_name") || MP(e, "target_group_id") || /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
           children: "Not recorded"
         });
@@ -64604,10 +64685,10 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
           children: [Object.entries(e).filter(([e]) => e !== "unit").map(([e, t]) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [
             /* @__PURE__ */ (0, V.jsx)("span", {
               className: "cohort-filter-key",
-              children: OP[e] ?? NP(e)
+              children: kP[e] ?? PP(e)
             }),
             " ",
-            kP[t] ?? NP(t)
+            AP[t] ?? PP(t)
           ] }, e)), /* @__PURE__ */ (0, V.jsxs)("li", { children: [
             /* @__PURE__ */ (0, V.jsx)("span", {
               className: "cohort-filter-key",
@@ -64699,7 +64780,7 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
         className: "cohort-table",
         columns: x,
         items: s.items,
-        getRowId: (e, t) => `${jP(MP(e.analytics), "host_key") || jP(e, "id")}-${t}`,
+        getRowId: (e, t) => `${MP(NP(e.analytics), "host_key") || MP(e, "id")}-${t}`,
         empty: /* @__PURE__ */ (0, V.jsx)(G, {
           icon: Kn,
           title: "No targets match these filters",
@@ -64728,7 +64809,7 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
               }),
               s.total === null ? null : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [" of ", /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: Math.max(1, Math.ceil(s.total / DP))
+                children: Math.max(1, Math.ceil(s.total / OP))
               })] })
             ]
           }),
@@ -64746,7 +64827,7 @@ function IP({ filters: e, config: t, session: n, inventory: r, onClear: i }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/targets-page.tsx
-var LP = "\n.targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }\n.targets-page .targets-summary-cell { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); background: var(--surface); }\n.targets-page .targets-summary-cell span { color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-summary-cell small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }\n.targets-page .target-primary-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }\n.targets-page .target-unknown { color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-summary-cell strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-xl); font-variant-numeric: tabular-nums; }\n.targets-page .targets-intake { border-color: color-mix(in oklab, var(--accent), transparent 70%); }\n.targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }\n.targets-page .targets-intake-form label { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); color: var(--fg); font-size: var(--text-sm); font-weight: 500; }\n.targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }\n.targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(4, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }\n.targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }\n.targets-page .targets-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }\n.targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-filter select { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); padding: 8px 10px; }\n.targets-page .targets-result-count { margin: 0 0 var(--space-3); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }\n.targets-page .target-primary { display: flex; min-width: 220px; align-items: center; gap: var(--space-3); }\n.targets-page .target-primary-icon, .targets-page .provider-mark { display: inline-grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }\n.targets-page .target-primary-copy, .targets-page .source-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }\n.targets-page a.target-primary-copy { border-radius: var(--radius-sm); color: inherit; text-decoration: none; }\n.targets-page a.target-primary-copy:hover strong { color: var(--accent); }\n.targets-page a.target-primary-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }\n.targets-page .target-primary-copy strong { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }\n.targets-page .target-primary-copy span, .targets-page .source-cell small { color: var(--muted); font-size: var(--text-xs); }\n.targets-page .provider-line { display: flex; min-width: 170px; align-items: center; gap: var(--space-2); }\n.targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }\n/* Actions stay on one line; the table scrolls horizontally inside its region instead of stacking buttons into tall rows. */\n.targets-page .target-row-actions { display: flex; flex-wrap: nowrap; gap: var(--space-2); width: max-content; }\n.targets-page .target-tag-chips { display: flex; flex-wrap: wrap; gap: var(--space-1-5); }\n.targets-page .targets-intake-tags { grid-column: 1 / -1; }\n.targets-page .field-error { color: var(--danger); font-size: var(--text-xs); }\n.targets-page .target-row-actions .btn { min-height: 34px; }\n.targets-page .targets-table-wrap .data-table { min-width: 1180px; }\n@media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }\n@media (max-width: 900px) {\n  .targets-page .target-row-actions .btn { min-height: 44px; }\n}\n@media (max-width: 1000px) { .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-intake-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }\n@media (max-width: 620px) { .targets-page .targets-intake-form, .targets-page .targets-toolbar { grid-template-columns: 1fr; } .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-summary-cell { padding: var(--space-3); } .targets-page .targets-summary-cell small { display: none; } .targets-page .targets-search { grid-column: auto; } .targets-page .targets-intake-form .btn { width: 100%; } }\n", RP = [
+var RP = "\n.targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }\n.targets-page .targets-summary-cell { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); background: var(--surface); }\n.targets-page .targets-summary-cell span { color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-summary-cell small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }\n.targets-page .target-primary-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }\n.targets-page .target-unknown { color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-summary-cell strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-xl); font-variant-numeric: tabular-nums; }\n.targets-page .targets-intake { border-color: color-mix(in oklab, var(--accent), transparent 70%); }\n.targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }\n.targets-page .targets-intake-form label { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); color: var(--fg); font-size: var(--text-sm); font-weight: 500; }\n.targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }\n.targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(4, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }\n.targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }\n.targets-page .targets-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }\n.targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }\n.targets-page .targets-filter select { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); padding: 8px 10px; }\n.targets-page .targets-result-count { margin: 0 0 var(--space-3); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }\n.targets-page .target-primary { display: flex; min-width: 220px; align-items: center; gap: var(--space-3); }\n.targets-page .target-primary-icon, .targets-page .provider-mark { display: inline-grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }\n.targets-page .target-primary-copy, .targets-page .source-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }\n.targets-page a.target-primary-copy { border-radius: var(--radius-sm); color: inherit; text-decoration: none; }\n.targets-page a.target-primary-copy:hover strong { color: var(--accent); }\n.targets-page a.target-primary-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }\n.targets-page .target-primary-copy strong { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }\n.targets-page .target-primary-copy span, .targets-page .source-cell small { color: var(--muted); font-size: var(--text-xs); }\n.targets-page .provider-line { display: flex; min-width: 170px; align-items: center; gap: var(--space-2); }\n.targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }\n/* Actions stay on one line; the table scrolls horizontally inside its region instead of stacking buttons into tall rows. */\n.targets-page .target-row-actions { display: flex; flex-wrap: nowrap; gap: var(--space-2); width: max-content; }\n.targets-page .target-tag-chips { display: flex; flex-wrap: wrap; gap: var(--space-1-5); }\n.targets-page .targets-intake-tags { grid-column: 1 / -1; }\n.targets-page .field-error { color: var(--danger); font-size: var(--text-xs); }\n.targets-page .target-row-actions .btn { min-height: 34px; }\n.targets-page .targets-table-wrap .data-table { min-width: 1180px; }\n@media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }\n@media (max-width: 900px) {\n  .targets-page .target-row-actions .btn { min-height: 44px; }\n}\n@media (max-width: 1000px) { .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-intake-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }\n@media (max-width: 620px) { .targets-page .targets-intake-form, .targets-page .targets-toolbar { grid-template-columns: 1fr; } .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-summary-cell { padding: var(--space-3); } .targets-page .targets-summary-cell small { display: none; } .targets-page .targets-search { grid-column: auto; } .targets-page .targets-intake-form .btn { width: 100%; } }\n", zP = [
   {
     value: "fqdn",
     label: "FQDN / hostname"
@@ -64771,32 +64852,32 @@ var LP = "\n.targets-page .targets-summary { display: grid; grid-template-column
     value: "canary",
     label: "Canary endpoint"
   }
-], zP = 16, BP = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
-function VP(e) {
+], BP = 16, VP = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
+function HP(e) {
   let t = /* @__PURE__ */ new Set(), n = [];
   for (let r of e.split(",")) {
     let e = r.trim().toLowerCase();
     if (e) {
-      if (!BP.test(e)) return {
+      if (!VP.test(e)) return {
         tags: n,
         error: `Invalid tag "${e}": use a–z, 0–9, and : _ . - (max 48 chars, no leading symbol).`
       };
       t.has(e) || (t.add(e), n.push(e));
     }
   }
-  return n.length > zP ? {
+  return n.length > BP ? {
     tags: n,
-    error: `At most ${zP} tags are allowed per target.`
+    error: `At most ${BP} tags are allowed per target.`
   } : {
     tags: n,
     error: ""
   };
 }
-function HP() {
+function UP() {
   let e = window.location.hash.replace(/^#/, ""), t = new URLSearchParams(e.includes("?") ? e.slice(e.indexOf("?") + 1) : "");
   return t.delete("verification"), zd(t);
 }
-var UP = [
+var WP = [
   ...Fd,
   "search",
   "group",
@@ -64804,12 +64885,12 @@ var UP = [
   "verification_state",
   "role"
 ];
-function WP(e) {
+function GP(e) {
   if (Array.isArray(e.tags)) return e.tags.filter((e) => typeof e == "string");
   let t = e.metadata && typeof e.metadata == "object" && !Array.isArray(e.metadata) ? e.metadata : null;
   return t && Array.isArray(t.tags) ? t.tags.filter((e) => typeof e == "string") : [];
 }
-function GP(e, t, n = "—") {
+function KP(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -64817,10 +64898,10 @@ function GP(e, t, n = "—") {
   }
   return n;
 }
-function KP(e) {
-  return GP(e.verification && typeof e.verification == "object" && !Array.isArray(e.verification) ? e.verification : null, ["state"], GP(e, ["verification_state"], "unverified"));
-}
 function qP(e) {
+  return KP(e.verification && typeof e.verification == "object" && !Array.isArray(e.verification) ? e.verification : null, ["state"], KP(e, ["verification_state"], "unverified"));
+}
+function JP(e) {
   return [
     "dns_verified",
     "provider_verified",
@@ -64828,24 +64909,24 @@ function qP(e) {
     "verified"
   ].includes(e.trim().toLowerCase());
 }
-function JP(e) {
-  let t = e.metadata && typeof e.metadata == "object" && !Array.isArray(e.metadata) ? e.metadata : null, n = GP(e, ["import_integration", "import_source"], "");
-  return n && n !== "—" ? n : GP(t, [
+function YP(e) {
+  let t = e.metadata && typeof e.metadata == "object" && !Array.isArray(e.metadata) ? e.metadata : null, n = KP(e, ["import_integration", "import_source"], "");
+  return n && n !== "—" ? n : KP(t, [
     "source_app",
     "app",
     "source"
-  ], GP(e, ["source"], "manual"));
-}
-function YP(e) {
-  let t = GP(e, ["kind"], "unknown").toLowerCase(), n = GP(e, ["value"], "");
-  return t === "fqdn" || t === "hostname" || t === "domain" ? "Hostname" : t === "ip" ? n.includes(":") ? "IPv6" : "IPv4" : t === "cidr" ? "CIDR" : t.replace(/_/g, " ");
+  ], KP(e, ["source"], "manual"));
 }
 function XP(e) {
+  let t = KP(e, ["kind"], "unknown").toLowerCase(), n = KP(e, ["value"], "");
+  return t === "fqdn" || t === "hostname" || t === "domain" ? "Hostname" : t === "ip" ? n.includes(":") ? "IPv6" : "IPv4" : t === "cidr" ? "CIDR" : t.replace(/_/g, " ");
+}
+function ZP(e) {
   let t = e.trim().toLowerCase().replace(/[\s-]+/g, "_");
   return t.includes("cloudflare") ? "cloudflare" : t.includes("route53") || t.includes("route_53") ? "route53" : t.includes("godaddy") ? "godaddy" : t.includes("namecheap") ? "namecheap" : t.includes("hetzner") || t === "hdns" ? "hetzner_dns" : t.includes("google") || t === "gcp" ? "gcp" : t.includes("azure") ? "azure" : t.includes("aws") ? "aws" : t || "manual";
 }
-function ZP({ source: e }) {
-  let t = XP(e), n = t === "cloudflare" ? Ze : t === "route53" ? bn : t === "hetzner_dns" ? On : [
+function QP({ source: e }) {
+  let t = ZP(e), n = t === "cloudflare" ? Ze : t === "route53" ? bn : t === "hetzner_dns" ? On : [
     "gcp",
     "azure",
     "aws"
@@ -64856,28 +64937,28 @@ function ZP({ source: e }) {
     children: /* @__PURE__ */ (0, V.jsx)(n, { size: 15 })
   });
 }
-function QP({ data: e, config: t, session: n, onRefresh: r }) {
-  let { confirm: i } = lp(), { initial: a, save: o } = TC(n, "targets"), s = Qf("verification"), c = {
+function $P({ data: e, config: t, session: n, onRefresh: r }) {
+  let { confirm: i } = lp(), { initial: a, save: o } = EC(n, "targets"), s = Qf("verification"), c = {
     ...a.filters ?? {},
     ...s ? { verification: s } : {}
-  }, [l, u] = (0, D.useState)(HP);
+  }, [l, u] = (0, D.useState)(UP);
   (0, D.useEffect)(() => {
-    let e = () => u(HP());
+    let e = () => u(UP());
     return window.addEventListener("hashchange", e), window.addEventListener("popstate", e), () => {
       window.removeEventListener("hashchange", e), window.removeEventListener("popstate", e);
     };
   }, []);
-  let [d, f] = (0, D.useState)(c.q ?? ""), [p, m] = (0, D.useState)(c.verification ?? "all"), [h, g] = (0, D.useState)(c.group ?? "all"), [_, v] = (0, D.useState)(c.kind ?? "all"), [y, b] = (0, D.useState)(c.tag ?? "all"), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)("fqdn"), [T, E] = (0, D.useState)(""), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(""), [F, I] = (0, D.useState)(""), te = ja(n, "target_group:write"), ne = Array.isArray(e.targets) ? e.targets : [], re = Array.isArray(e.targetGroups) ? e.targetGroups : [], ie = VP(T), ae = VP(A), oe = (0, D.useMemo)(() => [...new Set(ne.flatMap((e) => WP(e)))].sort(), [ne]), L = (0, D.useMemo)(() => {
+  let [d, f] = (0, D.useState)(c.q ?? ""), [p, m] = (0, D.useState)(c.verification ?? "all"), [h, g] = (0, D.useState)(c.group ?? "all"), [_, v] = (0, D.useState)(c.kind ?? "all"), [y, b] = (0, D.useState)(c.tag ?? "all"), [x, S] = (0, D.useState)(!1), [C, w] = (0, D.useState)("fqdn"), [T, E] = (0, D.useState)(""), [O, k] = (0, D.useState)(""), [A, j] = (0, D.useState)(""), [M, N] = (0, D.useState)(""), [P, ee] = (0, D.useState)(""), [F, I] = (0, D.useState)(""), te = ja(n, "target_group:write"), ne = Array.isArray(e.targets) ? e.targets : [], re = Array.isArray(e.targetGroups) ? e.targetGroups : [], ie = HP(T), ae = HP(A), oe = (0, D.useMemo)(() => [...new Set(ne.flatMap((e) => GP(e)))].sort(), [ne]), L = (0, D.useMemo)(() => {
     let e = d.trim().toLowerCase();
     return ne.filter((t) => {
-      let n = KP(t).toLowerCase();
-      if (p === "verified" && !qP(n) || p === "unverified" && qP(n)) return !1;
-      let r = GP(t, ["target_group_id"], ""), i = GP(t, ["kind"], "unknown").toLowerCase();
-      return h !== "all" && r !== h || _ !== "all" && i !== _ || y !== "all" && !WP(t).includes(y) ? !1 : !e || [
-        GP(t, ["value"], ""),
-        GP(t, ["target_group_name", "target_group_id"], ""),
-        WP(t).join(" "),
-        JP(t)
+      let n = qP(t).toLowerCase();
+      if (p === "verified" && !JP(n) || p === "unverified" && JP(n)) return !1;
+      let r = KP(t, ["target_group_id"], ""), i = KP(t, ["kind"], "unknown").toLowerCase();
+      return h !== "all" && r !== h || _ !== "all" && i !== _ || y !== "all" && !GP(t).includes(y) ? !1 : !e || [
+        KP(t, ["value"], ""),
+        KP(t, ["target_group_name", "target_group_id"], ""),
+        GP(t).join(" "),
+        YP(t)
       ].some((t) => t.toLowerCase().includes(e));
     });
   }, [
@@ -64887,9 +64968,9 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
     h,
     _,
     y
-  ]), se = ne.filter((e) => qP(KP(e))).length, ce = ne.length - se, le = (0, D.useMemo)(() => Od(ne), [ne]), ue = !!d.trim() || p !== "all" || h !== "all" || _ !== "all" || y !== "all";
+  ]), se = ne.filter((e) => JP(qP(e))).length, ce = ne.length - se, le = (0, D.useMemo)(() => Od(ne), [ne]), ue = !!d.trim() || p !== "all" || h !== "all" || _ !== "all" || y !== "all";
   function de() {
-    $f(Object.fromEntries(UP.map((e) => [e, null]))), u(null);
+    $f(Object.fromEntries(WP.map((e) => [e, null]))), u(null);
   }
   (0, D.useEffect)(() => {
     o({ filters: {
@@ -64906,7 +64987,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
     h,
     _,
     y
-  ]), EC(e.loaded && L.length > 0, a);
+  ]), DC(e.loaded && L.length > 0, a);
   function fe() {
     f(""), m("all"), g("all"), v("all"), b("all");
   }
@@ -64916,7 +64997,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
       focusKey: `target-${e}`
     });
   }
-  let me = [...new Set(ne.map((e) => GP(e, ["kind"], "unknown").toLowerCase()).filter(Boolean))].sort();
+  let me = [...new Set(ne.map((e) => KP(e, ["kind"], "unknown").toLowerCase()).filter(Boolean))].sort();
   async function he(e) {
     if (e.preventDefault(), !te) return;
     let i = new FormData(e.currentTarget), a = String(i.get("value") ?? "").trim(), s = String(i.get("expected_behavior") ?? "block_at_edge"), c = String(i.get("target_group_id") ?? "").trim();
@@ -64924,7 +65005,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
       I("Target value is required.");
       return;
     }
-    let { tags: l, error: u } = VP(T);
+    let { tags: l, error: u } = HP(T);
     if (u) {
       I(u);
       return;
@@ -64941,7 +65022,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
       let i = await B(t, n, "/v1/targets", {
         method: "POST",
         body: e
-      }), u = GP(i, ["id"], ""), d = GP(i, ["target_group_id"], c);
+      }), u = KP(i, ["id"], ""), d = KP(i, ["target_group_id"], c);
       u && d && C === "fqdn" && await B(t, n, `/v1/target-groups/${encodeURIComponent(d)}/dns-ownership/issue`, {
         method: "POST",
         body: { target_id: u }
@@ -64956,11 +65037,11 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
     }
   }
   function ge(e) {
-    k(GP(e, ["id"], "")), j(WP(e).join(", ")), ee(""), I("");
+    k(KP(e, ["id"], "")), j(GP(e).join(", ")), ee(""), I("");
   }
   async function _e(e) {
     if (e.preventDefault(), !te || !O) return;
-    let { tags: i, error: a } = VP(A);
+    let { tags: i, error: a } = HP(A);
     if (a) {
       I(a);
       return;
@@ -64979,7 +65060,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function ve(e) {
     if (!te) return;
-    let a = GP(e, ["id"], ""), o = GP(e, ["target_group_id"], ""), s = GP(e, ["value"], a);
+    let a = KP(e, ["id"], ""), o = KP(e, ["target_group_id"], ""), s = KP(e, ["value"], a);
     if (a && o && await i({
       title: "Remove declared target",
       description: `Remove ${s} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`,
@@ -64998,7 +65079,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content targets-page",
     children: [
-      /* @__PURE__ */ (0, V.jsx)("style", { children: LP }),
+      /* @__PURE__ */ (0, V.jsx)("style", { children: RP }),
       /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "page-head",
         children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [
@@ -65032,7 +65113,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
         role: "alert",
         children: F
       }) : null,
-      l ? /* @__PURE__ */ (0, V.jsx)(IP, {
+      l ? /* @__PURE__ */ (0, V.jsx)(LP, {
         filters: l,
         config: t,
         session: n,
@@ -65093,7 +65174,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               name: "kind",
               value: C,
               onChange: (e) => w(e.target.value),
-              children: RP.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
+              children: zP.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
                 value: e.value,
                 children: e.label
               }, e.value))
@@ -65129,9 +65210,9 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                 value: "",
                 children: "Default (auto)"
               }), re.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
-                value: GP(e, ["id"], ""),
-                children: GP(e, ["name", "id"], "Unnamed group")
-              }, GP(e, ["id"], "")))]
+                value: KP(e, ["id"], ""),
+                children: KP(e, ["name", "id"], "Unnamed group")
+              }, KP(e, ["id"], "")))]
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("label", {
               className: "targets-intake-tags",
@@ -65157,7 +65238,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                     "Comma-separated. ",
                     ie.tags.length,
                     "/",
-                    zP,
+                    BP,
                     " valid."
                   ]
                 })
@@ -65229,10 +65310,10 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                   value: "all",
                   children: "All groups"
                 }), re.flatMap((e) => {
-                  let t = GP(e, ["id"], "");
+                  let t = KP(e, ["id"], "");
                   return t ? [/* @__PURE__ */ (0, V.jsx)("option", {
                     value: t,
-                    children: GP(e, ["name", "id"], t)
+                    children: KP(e, ["name", "id"], t)
                   }, t)] : [];
                 })]
               })]
@@ -65247,7 +65328,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                   children: "All kinds"
                 }), me.map((e) => /* @__PURE__ */ (0, V.jsx)("option", {
                   value: e,
-                  children: YP({ kind: e })
+                  children: XP({ kind: e })
                 }, e))]
               })]
             }),
@@ -65289,13 +65370,13 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               key: "target",
               label: "Target",
               render: (e) => {
-                let t = GP(e, ["id"], ""), n = GP(e, ["value"], t), r = qP(KP(e));
+                let t = KP(e, ["id"], ""), n = KP(e, ["value"], t), r = JP(qP(e));
                 return /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "target-primary",
                   children: [/* @__PURE__ */ (0, V.jsx)("span", {
                     className: "target-primary-icon",
                     "aria-hidden": "true",
-                    children: GP(e, ["kind"], "fqdn") === "ip" ? /* @__PURE__ */ (0, V.jsx)(On, { size: 16 }) : /* @__PURE__ */ (0, V.jsx)(st, { size: 16 })
+                    children: KP(e, ["kind"], "fqdn") === "ip" ? /* @__PURE__ */ (0, V.jsx)(On, { size: 16 }) : /* @__PURE__ */ (0, V.jsx)(st, { size: 16 })
                   }), /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "target-primary-copy",
                     children: [
@@ -65303,7 +65384,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                         title: n,
                         children: n
                       }),
-                      /* @__PURE__ */ (0, V.jsx)("span", { children: YP(e) }),
+                      /* @__PURE__ */ (0, V.jsx)("span", { children: XP(e) }),
                       /* @__PURE__ */ (0, V.jsx)("span", {
                         className: "target-primary-actions",
                         children: /* @__PURE__ */ (0, V.jsx)(yc, {
@@ -65327,7 +65408,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               render: (e) => {
                 let t = e.verification && typeof e.verification == "object" && !Array.isArray(e.verification) ? e.verification : null;
                 return /* @__PURE__ */ (0, V.jsx)(_x, {
-                  state: KP(e),
+                  state: qP(e),
                   provenance: gx(e, t)
                 });
               }
@@ -65354,7 +65435,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               key: "tags",
               label: "Tags",
               render: (e) => {
-                let t = WP(e);
+                let t = GP(e);
                 return t.length === 0 ? /* @__PURE__ */ (0, V.jsx)("span", {
                   className: "muted",
                   children: "—"
@@ -65373,20 +65454,20 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               render: (e) => /* @__PURE__ */ (0, V.jsx)(yc, {
                 size: "sm",
                 variant: "ghost",
-                href: Zf("target-group-detail", GP(e, ["target_group_id"], "")),
-                children: GP(e, ["target_group_name", "target_group_id"], "—")
+                href: Zf("target-group-detail", KP(e, ["target_group_id"], "")),
+                children: KP(e, ["target_group_name", "target_group_id"], "—")
               })
             },
             {
               key: "source",
               label: "Added from",
               render: (e) => {
-                let t = JP(e);
+                let t = YP(e);
                 return /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "provider-line",
-                  children: [/* @__PURE__ */ (0, V.jsx)(ZP, { source: t }), /* @__PURE__ */ (0, V.jsxs)("span", {
+                  children: [/* @__PURE__ */ (0, V.jsx)(QP, { source: t }), /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "source-cell",
-                    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: t.replace(/_/g, " ") }), /* @__PURE__ */ (0, V.jsx)("small", { children: GP(e, ["source"], "manual") })]
+                    children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: t.replace(/_/g, " ") }), /* @__PURE__ */ (0, V.jsx)("small", { children: KP(e, ["source"], "manual") })]
                   })]
                 });
               }
@@ -65403,7 +65484,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
               key: "actions",
               label: "Manage",
               render: (e) => {
-                let t = GP(e, ["id"], "");
+                let t = KP(e, ["id"], "");
                 return /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "target-row-actions",
                   children: [
@@ -65415,7 +65496,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                       size: "sm",
                       variant: "secondary",
                       onClick: () => ge(e),
-                      "aria-label": `Edit tags for ${GP(e, ["value"], t)}`,
+                      "aria-label": `Edit tags for ${KP(e, ["value"], t)}`,
                       children: "Edit tags"
                     }) : null,
                     te ? /* @__PURE__ */ (0, V.jsxs)(H, {
@@ -65423,7 +65504,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                       variant: "danger",
                       loading: M === `remove-${t}`,
                       onClick: () => void ve(e),
-                      "aria-label": `Remove target ${GP(e, ["value"], t)}`,
+                      "aria-label": `Remove target ${KP(e, ["value"], t)}`,
                       children: [/* @__PURE__ */ (0, V.jsx)(Xn, { size: 13 }), " Remove"]
                     }) : null
                   ]
@@ -65432,7 +65513,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
             }
           ],
           items: L,
-          getRowId: (e, t) => GP(e, ["id"], String(t)),
+          getRowId: (e, t) => KP(e, ["id"], String(t)),
           loadError: e.loadErrors.targets,
           onRetry: () => void r(),
           empty: /* @__PURE__ */ (0, V.jsx)(G, {
@@ -65480,7 +65561,7 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
                   "Comma-separated. ",
                   ae.tags.length,
                   "/",
-                  zP,
+                  BP,
                   " valid."
                 ]
               })
@@ -65507,12 +65588,12 @@ function QP({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/vector-library-page.tsx
-var $P = 25, eF = 100, tF = /* @__PURE__ */ new Set([
+var eF = 25, tF = 100, nF = /* @__PURE__ */ new Set([
   "owner",
   "admin",
   "engineer"
 ]);
-function nF(e, t, n = "") {
+function rF(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -65520,36 +65601,36 @@ function nF(e, t, n = "") {
   }
   return n;
 }
-function rF(e) {
+function iF(e) {
   return Array.isArray(e) ? e : [];
 }
-function iF(e) {
+function aF(e) {
   return e.replaceAll("_", " ").replace(/\b\w/g, (e) => e.toUpperCase());
 }
-function aF(e) {
-  return `${nF(e, [
+function oF(e) {
+  return `${rF(e, [
     "value",
     "hostname",
     "id"
-  ], "Unnamed target")} · ${iF(nF(e, ["kind"], "target"))}`;
+  ], "Unnamed target")} · ${aF(rF(e, ["kind"], "target"))}`;
 }
-var oF = null;
-function sF(e, t, n) {
-  if (oF?.key === n) return oF.promise;
+var sF = null;
+function cF(e, t, n) {
+  if (sF?.key === n) return sF.promise;
   let r = (async () => {
-    let n = await B(e, t, `/v1/vectors?limit=${eF}&offset=0`), r = rF(n.items), i = n.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : {}, a = Number(i.total ?? r.length), o = [];
-    for (let e = eF; e < a; e += eF) o.push(e);
-    let s = await Promise.all(o.map((n) => B(e, t, `/v1/vectors?limit=${eF}&offset=${n}`)));
-    return [...r, ...s.flatMap((e) => rF(e.items))];
+    let n = await B(e, t, `/v1/vectors?limit=${tF}&offset=0`), r = iF(n.items), i = n.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : {}, a = Number(i.total ?? r.length), o = [];
+    for (let e = tF; e < a; e += tF) o.push(e);
+    let s = await Promise.all(o.map((n) => B(e, t, `/v1/vectors?limit=${tF}&offset=${n}`)));
+    return [...r, ...s.flatMap((e) => iF(e.items))];
   })();
-  return oF = {
+  return sF = {
     key: n,
     promise: r
   }, r.catch(() => {
-    oF?.promise === r && (oF = null);
+    sF?.promise === r && (sF = null);
   }), r;
 }
-var cF = [
+var lF = [
   {
     value: "",
     label: "Any evidence level"
@@ -65574,7 +65655,7 @@ var cF = [
     value: "monitor_only",
     label: "Monitor only (E5)"
   }
-], lF = [
+], uF = [
   {
     value: "",
     label: "Any execution boundary"
@@ -65587,7 +65668,7 @@ var cF = [
     value: "monitor_only",
     label: "Monitor only"
   }
-], uF = [
+], dF = [
   {
     value: "",
     label: "Any fit"
@@ -65609,15 +65690,15 @@ var cF = [
     label: "Monitor only"
   }
 ];
-function dF() {
+function fF() {
   let e = Number(Qf("page"));
   return Number.isInteger(e) && e > 1 ? e - 1 : 0;
 }
-function fF({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, D.useState)([]), [o, s] = (0, D.useState)(!0), [c, l] = (0, D.useState)(""), [u, d] = (0, D.useState)(() => Qf("q")), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)(""), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(dF), [S, C] = (0, D.useState)([]), [w, T] = (0, D.useState)("loading"), [E, O] = (0, D.useState)(""), [k, A] = (0, D.useState)(() => Qf("target")), [j, M] = (0, D.useState)(""), [N, P] = (0, D.useState)(null), [ee, F] = (0, D.useState)(""), [I, te] = (0, D.useState)(null), [ne, re] = (0, D.useState)(""), [ie, ae] = (0, D.useState)(null), [oe, L] = (0, D.useState)(""), [se, ce] = (0, D.useState)(0), [le, ue] = (0, D.useState)(0), [fe, pe] = (0, D.useState)(!1), me = tF.has(String(n.role ?? "").trim().toLowerCase());
+function pF({ data: e, config: t, session: n, onRefresh: r }) {
+  let [i, a] = (0, D.useState)([]), [o, s] = (0, D.useState)(!0), [c, l] = (0, D.useState)(""), [u, d] = (0, D.useState)(() => Qf("q")), [f, p] = (0, D.useState)(""), [m, h] = (0, D.useState)(""), [g, _] = (0, D.useState)(""), [v, y] = (0, D.useState)(""), [b, x] = (0, D.useState)(fF), [S, C] = (0, D.useState)([]), [w, T] = (0, D.useState)("loading"), [E, O] = (0, D.useState)(""), [k, A] = (0, D.useState)(() => Qf("target")), [j, M] = (0, D.useState)(""), [N, P] = (0, D.useState)(null), [ee, F] = (0, D.useState)(""), [I, te] = (0, D.useState)(null), [ne, re] = (0, D.useState)(""), [ie, ae] = (0, D.useState)(null), [oe, L] = (0, D.useState)(""), [se, ce] = (0, D.useState)(0), [le, ue] = (0, D.useState)(0), [fe, pe] = (0, D.useState)(!1), me = nF.has(String(n.role ?? "").trim().toLowerCase());
   (0, D.useEffect)(() => {
     let e = !1;
-    return s(!0), l(""), sF(t, n, `${n.tenant_id ?? ""}:${n.user_id ?? ""}:${le}`).then((t) => {
+    return s(!0), l(""), cF(t, n, `${n.tenant_id ?? ""}:${n.user_id ?? ""}:${le}`).then((t) => {
       e || a(t);
     }).catch((t) => {
       e || l(qo(t, "Vector library could not be loaded."));
@@ -65634,7 +65715,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
     let e = !1;
     return T("loading"), O(""), B(t, n, "/v1/targets").then((t) => {
       if (e) return;
-      let n = rF(t?.items).filter((e) => e.deleted_at == null && e.archived_at == null);
+      let n = iF(t?.items).filter((e) => e.deleted_at == null && e.archived_at == null);
       C(n), T("loaded");
     }).catch((t) => {
       e || (O(qo(t, "Declared targets could not be loaded.")), T("error"));
@@ -65656,18 +65737,18 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
     u,
     b
   ]);
-  let he = S.find((e) => nF(e, ["id"]) === k) ?? null, ge = nF(he, ["target_group_id"]), _e = nF(e.targetGroups.find((e) => nF(e, ["id"]) === ge) ?? null, ["name"], nF(he, ["target_group_name"], ge)), ve = !!k && w === "loaded" && !he, ye = j.trim().toLowerCase(), be = ye ? S.filter((e) => `${aF(e)} ${nF(e, ["target_group_name"])} ${nF(e, ["id"])}`.toLowerCase().includes(ye)) : S, xe = [{
+  let he = S.find((e) => rF(e, ["id"]) === k) ?? null, ge = rF(he, ["target_group_id"]), _e = rF(e.targetGroups.find((e) => rF(e, ["id"]) === ge) ?? null, ["name"], rF(he, ["target_group_name"], ge)), ve = !!k && w === "loaded" && !he, ye = j.trim().toLowerCase(), be = ye ? S.filter((e) => `${oF(e)} ${rF(e, ["target_group_name"])} ${rF(e, ["id"])}`.toLowerCase().includes(ye)) : S, xe = [{
     value: "",
     label: w === "loading" ? "Loading declared targets…" : "No target (browse the catalog)"
   }, ...(he && !be.includes(he) ? [he] : []).concat(be).slice(0, 200).map((e) => ({
-    value: nF(e, ["id"]),
-    label: aF(e),
-    description: nF(e, ["target_group_name"]) ? `in ${nF(e, ["target_group_name"])}` : void 0
-  }))], Se = e.checks.filter((e) => nF(e, ["safety_class"]) === "safe"), [Ce, we] = (0, D.useState)({
+    value: rF(e, ["id"]),
+    label: oF(e),
+    description: rF(e, ["target_group_name"]) ? `in ${rF(e, ["target_group_name"])}` : void 0
+  }))], Se = e.checks.filter((e) => rF(e, ["safety_class"]) === "safe"), [Ce, we] = (0, D.useState)({
     targetId: "",
     status: "loading",
     checks: []
-  }), Ee = he ? nF(he, ["id"]) : "";
+  }), Ee = he ? rF(he, ["id"]) : "";
   (0, D.useEffect)(() => {
     if (!Ee) return;
     let e = Ee, r = !1;
@@ -65679,7 +65760,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       r || we({
         targetId: e,
         status: "loaded",
-        checks: rF(t?.checks)
+        checks: iF(t?.checks)
       });
     }).catch(() => {
       r || we({
@@ -65695,7 +65776,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
     n,
     Ee
   ]);
-  let Oe = Ee && Ce.targetId === Ee ? Ce : null, ke = Oe?.status === "loaded" ? Oe.checks.filter((e) => nF(e, ["safety_class"]) === "safe") : [], Ae = (0, D.useMemo)(() => gu(i, {
+  let Oe = Ee && Ce.targetId === Ee ? Ce : null, ke = Oe?.status === "loaded" ? Oe.checks.filter((e) => rF(e, ["safety_class"]) === "safe") : [], Ae = (0, D.useMemo)(() => gu(i, {
     query: u,
     section: f,
     capability: m,
@@ -65723,17 +65804,17 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
     v,
     je
   ]);
-  let Ne = Math.max(1, Math.ceil(Ae.length / $P)), Pe = Math.min(b, Ne - 1), Fe = Ae.slice(Pe * $P, (Pe + 1) * $P), Ie = [{
+  let Ne = Math.max(1, Math.ceil(Ae.length / eF)), Pe = Math.min(b, Ne - 1), Fe = Ae.slice(Pe * eF, (Pe + 1) * eF), Ie = [{
     value: "",
     label: "All catalog sections"
-  }, ...[...new Set(i.map((e) => nF(e, ["section"])).filter(Boolean))].sort().map((e) => ({
+  }, ...[...new Set(i.map((e) => rF(e, ["section"])).filter(Boolean))].sort().map((e) => ({
     value: e,
     label: e
   }))], Le = [
     f ? `Section: ${f}` : "",
-    m ? `Evidence: ${cF.find((e) => e.value === m)?.label ?? m}` : "",
-    g ? `Execution: ${lF.find((e) => e.value === g)?.label ?? g}` : "",
-    v ? `Fit: ${uF.find((e) => e.value === v)?.label ?? v}` : "",
+    m ? `Evidence: ${lF.find((e) => e.value === m)?.label ?? m}` : "",
+    g ? `Execution: ${uF.find((e) => e.value === g)?.label ?? g}` : "",
+    v ? `Fit: ${dF.find((e) => e.value === v)?.label ?? v}` : "",
     u.trim() ? `Search: “${u.trim()}”` : ""
   ].filter(Boolean);
   function Re() {
@@ -65761,7 +65842,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       return;
     }
     if (!N || !he || !ge) return;
-    let t = hu(N, e.checks, he), n = t.runnableChecks.find((e) => nF(e, ["check_id"]) === ee);
+    let t = hu(N, e.checks, he), n = t.runnableChecks.find((e) => rF(e, ["check_id"]) === ee);
     if (!n) {
       L("Select one mapped customer-safe check before continuing.");
       return;
@@ -65778,7 +65859,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       return;
     }
     if (!I || !he || !ge) return;
-    let e = nF(I.check, ["check_id"]);
+    let e = rF(I.check, ["check_id"]);
     re("start-run"), L(""), ae(null);
     try {
       await B(t, n, "/v1/test-runs", {
@@ -65789,7 +65870,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
           check_id: e
         }
       }), ae({
-        text: `Bounded check ${Zl(nF(I.check, ["name", "check_id"]))} started on ${nF(he, ["value"], k)}. Its result and evidence are recorded on the target.`,
+        text: `Bounded check ${Zl(rF(I.check, ["name", "check_id"]))} started on ${rF(he, ["value"], k)}. Its result and evidence are recorded on the target.`,
         targetId: k
       }), te(null), await r();
     } catch (e) {
@@ -65805,22 +65886,22 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "vector-primary",
         children: [
-          /* @__PURE__ */ (0, V.jsx)("strong", { children: Zl(nF(e, ["canonical_name"], "Unnamed vector")) }),
+          /* @__PURE__ */ (0, V.jsx)("strong", { children: Zl(rF(e, ["canonical_name"], "Unnamed vector")) }),
           /* @__PURE__ */ (0, V.jsx)("code", {
             className: "traffic-path-label",
-            children: nF(e, ["vector_id"], "No ID")
+            children: rF(e, ["vector_id"], "No ID")
           }),
           /* @__PURE__ */ (0, V.jsxs)("small", { children: [
-            nF(e, ["family"]),
+            rF(e, ["family"]),
             " · ",
-            nF(e, ["protocol_service"])
+            rF(e, ["protocol_service"])
           ] })
         ]
       })
     },
     {
       key: "target",
-      label: he ? `Fit for ${nF(he, ["value"], "target")}` : "Fit for target",
+      label: he ? `Fit for ${rF(he, ["value"], "target")}` : "Fit for target",
       render: (t) => {
         if (!he) return /* @__PURE__ */ (0, V.jsx)("span", {
           className: "muted small",
@@ -65847,7 +65928,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
             tone: t.tone,
             children: t.label
           }), /* @__PURE__ */ (0, V.jsxs)("small", { children: [
-            nF(e, ["evidence_tier"]),
+            rF(e, ["evidence_tier"]),
             " · ",
             t.detail
           ] })]
@@ -65859,7 +65940,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       label: "What it evaluates",
       render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
         className: "vector-cell-stack",
-        children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: nF(e, ["targeted_resource_or_assumption"], "Not recorded") }), /* @__PURE__ */ (0, V.jsx)("small", { children: nF(e, ["intended_detection_goal"]) })]
+        children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: rF(e, ["targeted_resource_or_assumption"], "Not recorded") }), /* @__PURE__ */ (0, V.jsx)("small", { children: rF(e, ["intended_detection_goal"]) })]
       })
     },
     {
@@ -65869,20 +65950,20 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
         size: "sm",
         variant: "secondary",
         onClick: () => Be(e),
-        "aria-label": `Review ${nF(e, ["vector_id"])}`,
+        "aria-label": `Review ${rF(e, ["vector_id"])}`,
         children: "Review"
       })
     }
   ], Ge = N ? hu(N, e.checks, he) : null, Ke = N ? mu(N.evidence_capability) : null, qe = N && Ge ? _u(N, Ge) : null, Je = N ? [...new Set([
     ...Array.isArray(N.semantic_safe_check_ids) ? N.semantic_safe_check_ids : [],
     ...Array.isArray(N.mapped_check_ids) ? N.mapped_check_ids : [],
-    ...(Ge?.runnableChecks ?? []).map((e) => nF(e, ["check_id"]))
+    ...(Ge?.runnableChecks ?? []).map((e) => rF(e, ["check_id"]))
   ].map(String).filter(Boolean))] : [], Ye = [{
     value: "",
     label: "Select a mapped bounded check"
   }, ...(Ge?.runnableChecks ?? []).map((e) => ({
-    value: nF(e, ["check_id"]),
-    label: `${Zl(nF(e, [
+    value: rF(e, ["check_id"]),
+    label: `${Zl(rF(e, [
       "name",
       "title",
       "check_id"
@@ -65939,7 +66020,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "vector-fact-hint",
-              children: he ? `Runnable checks supporting ${iF(nF(he, ["kind"], "this kind"))}` : "Choose a target below"
+              children: he ? `Runnable checks supporting ${aF(rF(he, ["kind"], "this kind"))}` : "Choose a target below"
             })
           ] }),
           /* @__PURE__ */ (0, V.jsxs)("div", { children: [
@@ -66038,7 +66119,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
               children: [/* @__PURE__ */ (0, V.jsx)(Kn, {
                 size: 18,
                 "aria-hidden": "true"
-              }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: he ? aF(he) : "Browsing without a target" }), /* @__PURE__ */ (0, V.jsx)("p", {
+              }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: he ? oF(he) : "Browsing without a target" }), /* @__PURE__ */ (0, V.jsx)("p", {
                 className: "muted",
                 children: he ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
                   "In ",
@@ -66083,7 +66164,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
               }), /* @__PURE__ */ (0, V.jsx)(Ic, {
                 label: "Fit for target",
                 value: v,
-                options: uF,
+                options: dF,
                 onChange: y,
                 disabled: !he,
                 hint: he ? void 0 : "Choose a target first"
@@ -66124,13 +66205,13 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
                 /* @__PURE__ */ (0, V.jsx)(Ic, {
                   label: "Evidence level",
                   value: m,
-                  options: cF,
+                  options: lF,
                   onChange: h
                 }),
                 /* @__PURE__ */ (0, V.jsx)(Ic, {
                   label: "Execution boundary",
                   value: g,
-                  options: lF,
+                  options: uF,
                   onChange: _
                 })
               ]
@@ -66142,7 +66223,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
               className: "vector-library-table",
               columns: We,
               items: Fe,
-              getRowId: (e) => nF(e, ["vector_id"]),
+              getRowId: (e) => rF(e, ["vector_id"]),
               loadError: c,
               onRetry: () => ue((e) => e + 1),
               empty: i.length > 0 ? /* @__PURE__ */ (0, V.jsx)(G, {
@@ -66168,9 +66249,9 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
                   " of ",
                   Ne,
                   " · rows ",
-                  Pe * $P + 1,
+                  Pe * eF + 1,
                   "-",
-                  Math.min((Pe + 1) * $P, Ae.length),
+                  Math.min((Pe + 1) * eF, Ae.length),
                   " of ",
                   Ae.length
                 ]
@@ -66202,8 +66283,8 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
       }),
       /* @__PURE__ */ (0, V.jsx)(op, {
         open: !!N,
-        title: N ? Zl(nF(N, ["canonical_name"], nF(N, ["vector_id"]))) : "Vector detail",
-        description: N ? `${nF(N, ["vector_id"])} · ${nF(N, ["section"])} · ${nF(N, ["family"])}` : void 0,
+        title: N ? Zl(rF(N, ["canonical_name"], rF(N, ["vector_id"]))) : "Vector detail",
+        description: N ? `${rF(N, ["vector_id"])} · ${rF(N, ["section"])} · ${rF(N, ["family"])}` : void 0,
         onClose: () => P(null),
         wide: !0,
         children: N && Ge && Ke ? /* @__PURE__ */ (0, V.jsxs)("div", {
@@ -66213,15 +66294,15 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
             children: [
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "What it checks" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["intended_detection_goal"], "Not recorded") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "What it checks" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["intended_detection_goal"], "Not recorded") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Why it matters" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["failure_means"], "Not recorded") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Why it matters" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["failure_means"], "Not recorded") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Expected protection" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["expected_controls"], "Not recorded") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Expected protection" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["expected_controls"], "Not recorded") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
@@ -66236,26 +66317,26 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block full",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "How the exposure works" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["how_it_works"], "Not recorded") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "How the exposure works" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["how_it_works"], "Not recorded") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Defensive indicators" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["defensive_indicators"], "Not recorded") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Defensive indicators" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["defensive_indicators"], "Not recorded") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block",
-                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Scope boundary" }), /* @__PURE__ */ (0, V.jsx)("p", { children: nF(N, ["boundaries", "out_of_scope_reason"], "No additional boundary recorded.") })]
+                children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Scope boundary" }), /* @__PURE__ */ (0, V.jsx)("p", { children: rF(N, ["boundaries", "out_of_scope_reason"], "No additional boundary recorded.") })]
               }),
               /* @__PURE__ */ (0, V.jsxs)("section", {
                 className: "vector-detail-block full",
                 children: [/* @__PURE__ */ (0, V.jsx)("h4", { children: "Mapped checks" }), Je.length ? /* @__PURE__ */ (0, V.jsx)("ul", {
                   className: "vector-mapped-checks",
                   children: Je.map((t) => {
-                    let n = e.checks.find((e) => nF(e, ["check_id"]) === t);
+                    let n = e.checks.find((e) => rF(e, ["check_id"]) === t);
                     return /* @__PURE__ */ (0, V.jsxs)("li", { children: [
                       n ? /* @__PURE__ */ (0, V.jsx)("a", {
                         href: Xe(t),
-                        children: Zl(nF(n, ["name"], t))
+                        children: Zl(rF(n, ["name"], t))
                       }) : /* @__PURE__ */ (0, V.jsx)("span", { children: t }),
                       /* @__PURE__ */ (0, V.jsx)("code", {
                         className: "traffic-path-label",
@@ -66285,7 +66366,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
                   size: 18,
                   "aria-hidden": "true"
                 }), /* @__PURE__ */ (0, V.jsxs)("div", { children: [
-                  /* @__PURE__ */ (0, V.jsx)("strong", { children: he ? aF(he) : "Browsing without a target" }),
+                  /* @__PURE__ */ (0, V.jsx)("strong", { children: he ? oF(he) : "Browsing without a target" }),
                   /* @__PURE__ */ (0, V.jsx)(W, {
                     tone: Ge.tone,
                     children: Ge.label
@@ -66343,7 +66424,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               /* @__PURE__ */ (0, V.jsx)("strong", { children: "Exact target:" }),
               " ",
-              aF(he),
+              oF(he),
               " ",
               /* @__PURE__ */ (0, V.jsx)("code", { children: k })
             ] }),
@@ -66355,18 +66436,18 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               /* @__PURE__ */ (0, V.jsx)("strong", { children: "Check:" }),
               " ",
-              Zl(nF(I.check, [
+              Zl(rF(I.check, [
                 "name",
                 "title",
                 "check_id"
               ])),
               " ",
-              /* @__PURE__ */ (0, V.jsx)("code", { children: nF(I.check, ["check_id"]) })
+              /* @__PURE__ */ (0, V.jsx)("code", { children: rF(I.check, ["check_id"]) })
             ] }),
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               /* @__PURE__ */ (0, V.jsx)("strong", { children: "Catalog vector:" }),
               " ",
-              nF(I.vector, ["vector_id"])
+              rF(I.vector, ["vector_id"])
             ] }),
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               /* @__PURE__ */ (0, V.jsx)("strong", { children: "Evidence limit:" }),
@@ -66390,7 +66471,7 @@ function fF({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/scan-detail-view.tsx
-function pF(e, t, n = "") {
+function mF(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -66398,17 +66479,17 @@ function pF(e, t, n = "") {
   }
   return n;
 }
-function mF(e) {
+function hF(e) {
   return e && typeof e == "object" && !Array.isArray(e) ? e : null;
 }
-function hF(e) {
+function gF(e) {
   return Array.isArray(e) ? e : [];
 }
-function gF(e, t) {
+function _F(e, t) {
   let n = Number(e?.[t]);
   return Number.isFinite(n) ? n : 0;
 }
-function _F(e) {
+function vF(e) {
   return {
     scanId: e,
     scan: null,
@@ -66419,10 +66500,10 @@ function _F(e) {
     lastRefreshedAt: ""
   };
 }
-function vF(e, t, n) {
-  let [r, i] = (0, D.useState)(() => _F(n)), [a, o] = (0, D.useState)(0), s = (0, D.useRef)(Kf(n)), c = (0, D.useRef)(null), l = (0, D.useRef)("");
+function yF(e, t, n) {
+  let [r, i] = (0, D.useState)(() => vF(n)), [a, o] = (0, D.useState)(0), s = (0, D.useRef)(Kf(n)), c = (0, D.useRef)(null), l = (0, D.useRef)("");
   (0, D.useEffect)(() => {
-    s.current.activate(n), c.current = null, l.current = "", i(_F(n));
+    s.current.activate(n), c.current = null, l.current = "", i(vF(n));
   }, [n]), (0, D.useEffect)(() => {
     if (!n) return;
     let r, a = !1, o = s.current;
@@ -66431,9 +66512,9 @@ function vF(e, t, n) {
       try {
         let [f, p] = await Promise.all([B(e, t, `/v1/validation-scans/${encodeURIComponent(n)}`), B(e, t, d)]);
         if (a || !o.isCurrent(s)) return;
-        let m = hF(p.items);
-        pF(p, ["cursor"]) && (c.current = pF(p, ["cursor"]));
-        let h = pF(f, ["status"]);
+        let m = gF(p.items);
+        mF(p, ["cursor"]) && (c.current = mF(p, ["cursor"]));
+        let h = mF(f, ["status"]);
         l.current = h, i((e) => ({
           scanId: n,
           scan: f,
@@ -66493,8 +66574,8 @@ function vF(e, t, n) {
     refresh: u
   };
 }
-function yF({ step: e }) {
-  let t = pF(e, ["status"]), n = pF(e, ["error_code"]) || pF(e, ["skip_reason"]);
+function bF({ step: e }) {
+  let t = mF(e, ["status"]), n = mF(e, ["error_code"]) || mF(e, ["skip_reason"]);
   return /* @__PURE__ */ (0, V.jsxs)("span", {
     className: "scan-cell-stack",
     children: [
@@ -66519,29 +66600,29 @@ function yF({ step: e }) {
     ]
   });
 }
-function bF({ step: e }) {
-  let t = mF(e.verdict);
+function xF({ step: e }) {
+  let t = hF(e.verdict);
   if (!t) return /* @__PURE__ */ (0, V.jsx)("span", {
     className: "muted",
     children: "No verdict yet"
   });
-  let n = pF(t, ["confidence"]);
+  let n = mF(t, ["confidence"]);
   return /* @__PURE__ */ (0, V.jsxs)("span", {
     className: "scan-cell-stack",
     children: [
-      /* @__PURE__ */ (0, V.jsx)("strong", { children: fo(pF(t, ["verdict"], "unknown")) }),
+      /* @__PURE__ */ (0, V.jsx)("strong", { children: fo(mF(t, ["verdict"], "unknown")) }),
       n ? /* @__PURE__ */ (0, V.jsxs)("small", {
         className: "muted",
         children: ["Confidence ", fo(n).toLowerCase()]
       }) : null,
-      pF(t, ["severity"]) ? /* @__PURE__ */ (0, V.jsxs)("small", {
+      mF(t, ["severity"]) ? /* @__PURE__ */ (0, V.jsxs)("small", {
         className: "muted",
-        children: ["Severity ", pF(t, ["severity"])]
+        children: ["Severity ", mF(t, ["severity"])]
       }) : null
     ]
   });
 }
-function xF({ items: e, loading: t }) {
+function SF({ items: e, loading: t }) {
   return /* @__PURE__ */ (0, V.jsxs)(K, { children: [/* @__PURE__ */ (0, V.jsxs)(q, { children: [/* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)(J, { children: "Activity log" }), /* @__PURE__ */ (0, V.jsx)(Y, { children: "Metadata only: no request or response bodies are recorded. Entries are shown in recorded time order." })] }), /* @__PURE__ */ (0, V.jsxs)(W, {
     tone: "muted",
     children: [
@@ -66562,12 +66643,12 @@ function xF({ items: e, loading: t }) {
       className: "activity-log",
       "aria-label": "Scan activity",
       children: e.map((e) => {
-        let t = mF(e.metadata), n = pF(e, ["kind"], "event"), r = pF(e, ["test_run_id"]), i = pF(e, ["check_id"]);
+        let t = hF(e.metadata), n = mF(e, ["kind"], "event"), r = mF(e, ["test_run_id"]), i = mF(e, ["check_id"]);
         return /* @__PURE__ */ (0, V.jsxs)("li", {
           className: "activity-log-item",
           children: [/* @__PURE__ */ (0, V.jsx)("time", {
             className: "activity-log-time",
-            dateTime: pF(e, ["at"]),
+            dateTime: mF(e, ["at"]),
             children: z(e.at)
           }), /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "activity-log-body",
@@ -66579,7 +66660,7 @@ function xF({ items: e, loading: t }) {
                 children: n
               }), /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "activity-log-summary",
-                children: fo(pF(e, ["summary"], pF(e, ["action"])))
+                children: fo(mF(e, ["summary"], mF(e, ["action"])))
               })]
             }), /* @__PURE__ */ (0, V.jsxs)("div", {
               className: "activity-log-meta",
@@ -66593,9 +66674,9 @@ function xF({ items: e, loading: t }) {
                   href: Zf("run-detail", r),
                   children: ["Run ", r]
                 }) : null,
-                pF(e, ["actor_role"]) ? /* @__PURE__ */ (0, V.jsxs)("span", {
+                mF(e, ["actor_role"]) ? /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "muted small",
-                  children: ["by ", pF(e, ["actor_role"])]
+                  children: ["by ", mF(e, ["actor_role"])]
                 }) : null,
                 t ? Object.entries(t).filter(([, e]) => e != null && typeof e != "object").map(([e, t]) => /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "activity-log-chip",
@@ -66616,13 +66697,13 @@ function xF({ items: e, loading: t }) {
     }) : null
   ] })] });
 }
-function SF({ config: e, session: t, onRefresh: n }) {
+function CF({ config: e, session: t, onRefresh: n }) {
   let [r, i] = (0, D.useState)(0);
   (0, D.useEffect)(() => {
     let e = () => i((e) => e + 1);
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []);
-  let a = (0, D.useMemo)(() => Yf(""), [r]), o = vF(e, t, a), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)(""), d = o.scan, f = pF(d, ["status"]), p = mF(d?.summary), m = hF(d?.steps), h = hF(d?.excluded), g = mo(d), _ = vo(d), v = _o(d), y = Rl(t.role), b = pF(d, ["target_group_id"]), x = d ? g ? `Scan ${xo(f).toLowerCase()}. Refreshing every ${Math.round(io / 1e3)} seconds. ${gF(p, "completed")} of ${gF(p, "total")} steps complete.` : _ ? `Scan scheduled. Checking for dispatch every ${Math.round(oo / 1e3)} seconds.` : `Scan ${xo(f).toLowerCase()}. Live updates stopped.` : "";
+  let a = (0, D.useMemo)(() => Yf(""), [r]), o = yF(e, t, a), [s, c] = (0, D.useState)(!1), [l, u] = (0, D.useState)(""), d = o.scan, f = mF(d, ["status"]), p = hF(d?.summary), m = gF(d?.steps), h = gF(d?.excluded), g = mo(d), _ = vo(d), v = _o(d), y = Rl(t.role), b = mF(d, ["target_group_id"]), x = d ? g ? `Scan ${xo(f).toLowerCase()}. Refreshing every ${Math.round(io / 1e3)} seconds. ${_F(p, "completed")} of ${_F(p, "total")} steps complete.` : _ ? `Scan scheduled. Checking for dispatch every ${Math.round(oo / 1e3)} seconds.` : `Scan ${xo(f).toLowerCase()}. Live updates stopped.` : "";
   return a ? o.status === "missing" ? /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content",
     children: [/* @__PURE__ */ (0, V.jsx)(vy, {
@@ -66683,9 +66764,9 @@ function SF({ config: e, session: t, onRefresh: n }) {
         " ",
         /* @__PURE__ */ (0, V.jsx)("code", { children: a }),
         " · created by ",
-        pF(d, ["created_by"], "unknown"),
+        mF(d, ["created_by"], "unknown"),
         " (",
-        pF(d, ["created_by_role"], "role not recorded"),
+        mF(d, ["created_by_role"], "role not recorded"),
         ") · ",
         z(d.created_at)
       ] }) : null,
@@ -66742,8 +66823,8 @@ function SF({ config: e, session: t, onRefresh: n }) {
           " ",
           z(d.completed_at),
           d.abort_reason ? ` · aborted: ${fo(d.abort_reason)}` : "",
-          d.cancel_reason ? ` · reason: ${pF(d, ["cancel_reason"])}` : "",
-          d.cancelled_by ? ` · cancelled by ${pF(d, ["cancelled_by"])}` : "",
+          d.cancel_reason ? ` · reason: ${mF(d, ["cancel_reason"])}` : "",
+          d.cancelled_by ? ` · cancelled by ${mF(d, ["cancelled_by"])}` : "",
           d.next_occurrence_at && d.recurrence ? ` · next occurrence ${z(d.next_occurrence_at)}` : ""
         ]
       }) : null,
@@ -66763,54 +66844,54 @@ function SF({ config: e, session: t, onRefresh: n }) {
             children: [
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "completed")
+                children: _F(p, "completed")
               }),
               " of ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "total")
+                children: _F(p, "total")
               }),
               " steps complete",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "running")
+                children: _F(p, "running")
               }),
               " running",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "deferred")
+                children: _F(p, "deferred")
               }),
               " deferred",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "pending")
+                children: _F(p, "pending")
               }),
               " pending",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "verdicted")
+                children: _F(p, "verdicted")
               }),
               " verdicted",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "denied")
+                children: _F(p, "denied")
               }),
               " denied",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "skipped")
+                children: _F(p, "skipped")
               }),
               " skipped",
               " · ",
               /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "tabular-nums",
-                children: gF(p, "cancelled")
+                children: _F(p, "cancelled")
               }),
               " cancelled"
             ]
@@ -66847,14 +66928,14 @@ function SF({ config: e, session: t, onRefresh: n }) {
               render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                 className: "scan-cell-stack",
                 children: [
-                  /* @__PURE__ */ (0, V.jsx)("strong", { children: pF(e, ["check_name", "check_id"]) }),
+                  /* @__PURE__ */ (0, V.jsx)("strong", { children: mF(e, ["check_name", "check_id"]) }),
                   /* @__PURE__ */ (0, V.jsx)("code", {
                     className: "check-picker-row-id",
-                    children: pF(e, ["check_id"])
+                    children: mF(e, ["check_id"])
                   }),
                   /* @__PURE__ */ (0, V.jsx)("small", {
                     className: "muted",
-                    children: [pF(e, ["section_label"]), pF(e, ["evidence_tier"])].filter(Boolean).join(" · ") || "Section not recorded"
+                    children: [mF(e, ["section_label"]), mF(e, ["evidence_tier"])].filter(Boolean).join(" · ") || "Section not recorded"
                   })
                 ]
               })
@@ -66864,16 +66945,16 @@ function SF({ config: e, session: t, onRefresh: n }) {
               label: "Target",
               render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                 className: "scan-cell-stack",
-                children: [/* @__PURE__ */ (0, V.jsx)("span", { children: pF(e, ["target_value", "target_id"]) }), /* @__PURE__ */ (0, V.jsx)("small", {
+                children: [/* @__PURE__ */ (0, V.jsx)("span", { children: mF(e, ["target_value", "target_id"]) }), /* @__PURE__ */ (0, V.jsx)("small", {
                   className: "muted",
-                  children: pF(e, ["target_kind"], "kind not recorded")
+                  children: mF(e, ["target_kind"], "kind not recorded")
                 })]
               })
             },
             {
               key: "status",
               label: "Status",
-              render: (e) => /* @__PURE__ */ (0, V.jsx)(yF, { step: e })
+              render: (e) => /* @__PURE__ */ (0, V.jsx)(bF, { step: e })
             },
             {
               key: "request",
@@ -66887,7 +66968,7 @@ function SF({ config: e, session: t, onRefresh: n }) {
               key: "response",
               label: "Response",
               render: (e) => {
-                let t = mF(e.response);
+                let t = hF(e.response);
                 return /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "scan-cell-stack",
                   children: [/* @__PURE__ */ (0, V.jsx)("span", {
@@ -66911,13 +66992,13 @@ function SF({ config: e, session: t, onRefresh: n }) {
             {
               key: "verdict",
               label: "Verdict",
-              render: (e) => /* @__PURE__ */ (0, V.jsx)(bF, { step: e })
+              render: (e) => /* @__PURE__ */ (0, V.jsx)(xF, { step: e })
             },
             {
               key: "run",
               label: "Run",
               render: (e) => {
-                let t = pF(e, ["test_run_id"]);
+                let t = mF(e, ["test_run_id"]);
                 return t ? /* @__PURE__ */ (0, V.jsx)(yc, {
                   size: "sm",
                   variant: "ghost",
@@ -66932,7 +67013,7 @@ function SF({ config: e, session: t, onRefresh: n }) {
             }
           ],
           items: m,
-          getRowId: (e) => pF(e, ["step_id"]),
+          getRowId: (e) => mF(e, ["step_id"]),
           empty: /* @__PURE__ */ (0, V.jsx)("p", {
             className: "muted",
             children: "This scan has no planned steps."
@@ -66950,19 +67031,19 @@ function SF({ config: e, session: t, onRefresh: n }) {
             children: h.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [
               /* @__PURE__ */ (0, V.jsx)("code", {
                 className: "check-picker-row-id",
-                children: pF(e, ["check_id"])
+                children: mF(e, ["check_id"])
               }),
               " on ",
-              pF(e, ["target_id"]),
+              mF(e, ["target_id"]),
               ": ",
-              fo(pF(e, ["reason"])),
-              pF(e, ["target_kind"]) ? ` (target kind ${pF(e, ["target_kind"])}` : "",
-              Array.isArray(e.supported_targets) && e.supported_targets.length ? `, supports ${e.supported_targets.map(String).join(", ")})` : pF(e, ["target_kind"]) ? ")" : ""
-            ] }, `${pF(e, ["check_id"])}-${pF(e, ["target_id"])}-${t}`))
+              fo(mF(e, ["reason"])),
+              mF(e, ["target_kind"]) ? ` (target kind ${mF(e, ["target_kind"])}` : "",
+              Array.isArray(e.supported_targets) && e.supported_targets.length ? `, supports ${e.supported_targets.map(String).join(", ")})` : mF(e, ["target_kind"]) ? ")" : ""
+            ] }, `${mF(e, ["check_id"])}-${mF(e, ["target_id"])}-${t}`))
           })]
         }) : null]
       })] }) : null,
-      d ? /* @__PURE__ */ (0, V.jsx)(xF, {
+      d ? /* @__PURE__ */ (0, V.jsx)(SF, {
         items: o.activity,
         loading: o.status === "loading"
       }) : null,
@@ -66972,7 +67053,7 @@ function SF({ config: e, session: t, onRefresh: n }) {
         session: t,
         onClose: () => c(!1),
         onCancelled: (e) => {
-          c(!1), u(`Scan ${Mo(e)} is ${xo(pF(e, ["status"])).toLowerCase()}.`), o.refresh(), n(["validationScans", "runs"]);
+          c(!1), u(`Scan ${Mo(e)} is ${xo(mF(e, ["status"])).toLowerCase()}.`), o.refresh(), n(["validationScans", "runs"]);
         }
       })
     ]
@@ -66994,7 +67075,7 @@ function SF({ config: e, session: t, onRefresh: n }) {
 }
 //#endregion
 //#region apps/web/react/src/pages/refined/finding-group-detail.tsx
-var CF = [
+var wF = [
   {
     id: "all",
     label: "All",
@@ -67015,23 +67096,23 @@ var CF = [
     label: "Closed",
     statuses: "resolved or closed"
   }
-], wF = "#findings";
-function TF() {
+], TF = "#findings";
+function EF() {
   let e = window.location.hash.replace(/^#/, ""), t = e.indexOf("?");
   return t >= 0 ? new URLSearchParams(e.slice(t + 1)).get("key") ?? "" : "";
 }
-function EF(e) {
+function DF(e) {
   return typeof e == "string" ? e.trim() : "";
 }
-function DF({ data: e, config: t, session: n, onRefresh: r }) {
-  let i = CC(), a = wC(), [o, s] = (0, D.useState)(TF), [c, l] = (0, D.useState)("all"), [u, d] = (0, D.useState)(!1), [f, p] = (0, D.useState)("");
+function OF({ data: e, config: t, session: n, onRefresh: r }) {
+  let i = wC(), a = TC(), [o, s] = (0, D.useState)(EF), [c, l] = (0, D.useState)("all"), [u, d] = (0, D.useState)(!1), [f, p] = (0, D.useState)("");
   (0, D.useEffect)(() => {
-    let e = () => s(TF());
+    let e = () => s(EF());
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []), (0, D.useEffect)(() => {
     l("all");
   }, [o]);
-  let m = Xa(o), [h, g] = (0, D.useState)(0), _ = L_(t, n, m ? { check_id: m } : {}, h, !!o), v = cO((0, D.useMemo)(() => rO(_.items, {
+  let m = Xa(o), [h, g] = (0, D.useState)(0), _ = L_(t, n, m ? { check_id: m } : {}, h, !!o), v = lO((0, D.useMemo)(() => iO(_.items, {
     targets: e.targets,
     checks: e.checks,
     targetGroups: e.targetGroups
@@ -67053,10 +67134,10 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
         "accepted",
         "closed"
       ].forEach((n) => {
-        iO(t, n) && (e[n] += 1);
+        aO(t, n) && (e[n] += 1);
       });
     }), e;
-  }, [v]), w = (0, D.useMemo)(() => (v?.assets ?? []).filter((e) => iO(e, c)), [v, c]), T = (0, D.useMemo)(() => w.flatMap((e) => aO(e, c).filter((e) => e.findingId).map((t) => ({
+  }, [v]), w = (0, D.useMemo)(() => (v?.assets ?? []).filter((e) => aO(e, c)), [v, c]), T = (0, D.useMemo)(() => w.flatMap((e) => oO(e, c).filter((e) => e.findingId).map((t) => ({
     ref: {
       entry: "group_member",
       finding_id: t.findingId,
@@ -67087,13 +67168,13 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
       d(!1);
     }
   }
-  let A = v?.findings.find((e) => String(e.id ?? "") === v.representativeId) ?? v?.findings[0] ?? null, j = A ? pw(A, e.wafActionItems ?? []) : null, M = v ? tu(v.verdict) : "", N = A ? EF(A.notes) : "", P = v ? oO(v) : null, ee = P ? [P.nearestDueAt ? `Earliest due ${z(P.nearestDueAt)}` : P.undatedOpenCount > 0 ? "" : "No open SLA due date", P.undatedOpenCount > 0 ? `${P.undatedOpenCount} open ${pa(P.undatedOpenCount, "finding")} not dated` : ""].filter(Boolean).join(", ") : "";
+  let A = v?.findings.find((e) => String(e.id ?? "") === v.representativeId) ?? v?.findings[0] ?? null, j = A ? mw(A, e.wafActionItems ?? []) : null, M = v ? tu(v.verdict) : "", N = A ? DF(A.notes) : "", P = v ? sO(v) : null, ee = P ? [P.nearestDueAt ? `Earliest due ${z(P.nearestDueAt)}` : P.undatedOpenCount > 0 ? "" : "No open SLA due date", P.undatedOpenCount > 0 ? `${P.undatedOpenCount} open ${pa(P.undatedOpenCount, "finding")} not dated` : ""].filter(Boolean).join(", ") : "";
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content refined rf-finding-group",
     children: [
       /* @__PURE__ */ (0, V.jsxs)("a", {
         className: "rf-back-link",
-        href: wF,
+        href: TF,
         children: [/* @__PURE__ */ (0, V.jsx)(ne, {
           size: 16,
           "aria-hidden": "true"
@@ -67113,7 +67194,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
               className: "rf-alert-meta",
               children: [
                 /* @__PURE__ */ (0, V.jsx)(W, {
-                  tone: yO(v.severity || "unknown"),
+                  tone: bO(v.severity || "unknown"),
                   children: ia(v.severity || "unknown")
                 }),
                 v.checkLabel ? /* @__PURE__ */ (0, V.jsxs)("span", {
@@ -67391,7 +67472,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                 className: "rf-segmented",
                 role: "group",
                 "aria-label": "Affected target status filter",
-                children: CF.map((e) => /* @__PURE__ */ (0, V.jsxs)("button", {
+                children: wF.map((e) => /* @__PURE__ */ (0, V.jsxs)("button", {
                   type: "button",
                   "aria-pressed": c === e.id,
                   title: `Targets with a finding that is ${e.statuses}`,
@@ -67406,9 +67487,9 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, V.jsxs)("p", {
               className: "rf-result-count",
               children: [
-                CF.find((e) => e.id === c)?.label,
+                wF.find((e) => e.id === c)?.label,
                 " counts targets with a finding that is ",
-                CF.find((e) => e.id === c)?.statuses,
+                wF.find((e) => e.id === c)?.statuses,
                 y ? "" : ", among members read so far",
                 ". View evidence opens each target's own original proof beside this list; Previous and Next step through the targets shown. A pass on one target never resolves another."
               ]
@@ -67453,7 +67534,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                     render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                       className: "rf-cell-stack",
                       children: [
-                        /* @__PURE__ */ (0, V.jsx)(xO, { status: e.status }),
+                        /* @__PURE__ */ (0, V.jsx)(SO, { status: e.status }),
                         e.members.length > 1 ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [
                           e.members.length,
                           " findings: ",
@@ -67467,7 +67548,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                     key: "severity",
                     label: "Severity",
                     render: (e) => /* @__PURE__ */ (0, V.jsx)(W, {
-                      tone: yO(e.severity || "unknown"),
+                      tone: bO(e.severity || "unknown"),
                       children: ia(e.severity || "unknown")
                     })
                   },
@@ -67476,7 +67557,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                     label: "SLA",
                     render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                       className: "rf-cell-stack",
-                      children: [/* @__PURE__ */ (0, V.jsx)(CO, { ...SO(e.slaState, e.slaHoursLeft) }), e.slaDueAt ? /* @__PURE__ */ (0, V.jsxs)("small", { children: ["Due ", z(e.slaDueAt)] }) : null]
+                      children: [/* @__PURE__ */ (0, V.jsx)(wO, { ...CO(e.slaState, e.slaHoursLeft) }), e.slaDueAt ? /* @__PURE__ */ (0, V.jsxs)("small", { children: ["Due ", z(e.slaDueAt)] }) : null]
                     })
                   },
                   {
@@ -67493,7 +67574,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                     render: (e) => /* @__PURE__ */ (0, V.jsxs)("span", {
                       className: "rf-row-actions",
                       children: [
-                        aO(e, c).filter((e) => e.findingId).map((t, n, r) => /* @__PURE__ */ (0, V.jsxs)(H, {
+                        oO(e, c).filter((e) => e.findingId).map((t, n, r) => /* @__PURE__ */ (0, V.jsxs)(H, {
                           size: "sm",
                           variant: t.findingId === E ? "default" : "secondary",
                           "data-focus-key": `member-${t.findingId}`,
@@ -67505,7 +67586,7 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
                             "aria-hidden": "true"
                           }), r.length > 1 ? `View ${t.status.replace(/_/g, " ")} evidence` : "View evidence"]
                         }, t.findingId)),
-                        aO(e, c).filter((e) => e.findingId).slice(0, 1).map((t) => /* @__PURE__ */ (0, V.jsx)(yc, {
+                        oO(e, c).filter((e) => e.findingId).slice(0, 1).map((t) => /* @__PURE__ */ (0, V.jsx)(yc, {
                           size: "sm",
                           variant: "ghost",
                           href: Zf("finding-detail", t.findingId),
@@ -67543,14 +67624,14 @@ function DF({ data: e, config: t, session: n, onRefresh: r }) {
         title: "This finding group is unavailable.",
         body: o ? "No finding on the server matches this group key. The group may have closed or changed since the link was shared. No other group was substituted." : "This link has no group key. Open a finding group from the findings list.",
         actionLabel: "Open findings",
-        actionHref: wF
+        actionHref: TF
       })
     ]
   });
 }
 //#endregion
 //#region apps/web/react/src/pages/router.tsx
-var OF = /* @__PURE__ */ new Set([
+var kF = /* @__PURE__ */ new Set([
   "target-group-detail",
   "target-detail",
   "run-detail",
@@ -67560,15 +67641,15 @@ var OF = /* @__PURE__ */ new Set([
   "policy-detail",
   "tenant-detail",
   "queue-detail"
-]), kF = /* @__PURE__ */ new Set(["runs"]);
-function AF(e) {
+]), AF = /* @__PURE__ */ new Set(["runs"]);
+function jF(e) {
   return `Loading ${e.replaceAll("-", " ")}`;
 }
-function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating: a }) {
+function MF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating: a }) {
   return a ? /* @__PURE__ */ (0, V.jsx)(xh, {
     rows: 4,
-    label: AF(e)
-  }) : e === "not-found" ? /* @__PURE__ */ (0, V.jsx)(ph, { kind: "not-found" }) : e === "dashboard" ? /* @__PURE__ */ (0, V.jsx)(Kj, {
+    label: jF(e)
+  }) : e === "not-found" ? /* @__PURE__ */ (0, V.jsx)(ph, { kind: "not-found" }) : e === "dashboard" ? /* @__PURE__ */ (0, V.jsx)(qj, {
     data: t,
     config: n,
     session: r,
@@ -67578,23 +67659,23 @@ function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "targets" ? /* @__PURE__ */ (0, V.jsx)(QP, {
+  }) : e === "targets" ? /* @__PURE__ */ (0, V.jsx)($P, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : OF.has(e) ? /* @__PURE__ */ (0, V.jsx)(ZT, {
+  }) : kF.has(e) ? /* @__PURE__ */ (0, V.jsx)(QT, {
     route: e,
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "finding-group-detail" ? /* @__PURE__ */ (0, V.jsx)(DF, {
+  }) : e === "finding-group-detail" ? /* @__PURE__ */ (0, V.jsx)(OF, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "scan-detail" ? /* @__PURE__ */ (0, V.jsx)(SF, {
+  }) : e === "scan-detail" ? /* @__PURE__ */ (0, V.jsx)(CF, {
     data: t,
     config: n,
     session: r,
@@ -67604,23 +67685,23 @@ function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "checks" ? /* @__PURE__ */ (0, V.jsx)(fF, {
+  }) : e === "checks" ? /* @__PURE__ */ (0, V.jsx)(pF, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "findings" ? /* @__PURE__ */ (0, V.jsx)(DO, {
+  }) : e === "findings" ? /* @__PURE__ */ (0, V.jsx)(OO, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : kF.has(e) ? /* @__PURE__ */ (0, V.jsx)(uk, {
+  }) : AF.has(e) ? /* @__PURE__ */ (0, V.jsx)(dk, {
     route: e,
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "integrations" ? /* @__PURE__ */ (0, V.jsx)(uN, {
+  }) : e === "integrations" ? /* @__PURE__ */ (0, V.jsx)(dN, {
     data: t,
     config: n,
     session: r,
@@ -67630,22 +67711,22 @@ function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "report-detail" ? /* @__PURE__ */ (0, V.jsx)(tE, {
+  }) : e === "report-detail" ? /* @__PURE__ */ (0, V.jsx)(nE, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "notifications" ? /* @__PURE__ */ (0, V.jsx)(fP, {
+  }) : e === "notifications" ? /* @__PURE__ */ (0, V.jsx)(pP, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "audit" ? /* @__PURE__ */ (0, V.jsx)(CP, {
+  }) : e === "audit" ? /* @__PURE__ */ (0, V.jsx)(wP, {
     data: t,
     session: r,
     config: n,
     onRefresh: i
-  }) : e === "release-evidence" ? /* @__PURE__ */ (0, V.jsx)(TP, {
+  }) : e === "release-evidence" ? /* @__PURE__ */ (0, V.jsx)(EP, {
     data: t,
     session: r
   }) : e === "support" ? /* @__PURE__ */ (0, V.jsx)($y, {
@@ -67655,7 +67736,7 @@ function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
   }) : e === "subscription" ? /* @__PURE__ */ (0, V.jsx)(sb, {
     data: t,
     config: n
-  }) : e === "internal-soc" ? /* @__PURE__ */ (0, V.jsx)(EP, {
+  }) : e === "internal-soc" ? /* @__PURE__ */ (0, V.jsx)(DP, {
     data: t,
     config: n,
     session: r,
@@ -67685,10 +67766,10 @@ function jF({ route: e, data: t, config: n, session: r, onRefresh: i, hydrating:
 }
 //#endregion
 //#region apps/web/react/src/App.tsx
-function MF() {
+function NF() {
   return null;
 }
-function NF(e) {
+function PF(e) {
   return [
     "/",
     "/landing.html",
@@ -67702,7 +67783,7 @@ function NF(e) {
     "/staff-login.html"
   ].includes(e);
 }
-function PF(e, t) {
+function FF(e, t) {
   if (e.principal !== "staff" || !ls(e) || t !== "internal-soc" && t !== "queue-detail") return e;
   let n = Xf(e.tenant_id ?? "").trim();
   return {
@@ -67710,32 +67791,32 @@ function PF(e, t) {
     tenant_id: n || void 0
   };
 }
-function FF(e) {
+function IF(e) {
   return e.principal === "staff" ? us(e) : "dashboard";
 }
-function IF(e, t) {
+function LF(e, t) {
   return pc(e?.role, t, {
     principal: e?.principal,
     staffRole: e?.staff_role
   });
 }
-function LF(e, t) {
+function RF(e, t) {
   let n = is(e, window.location.pathname);
   return !n.startsWith("/") || n.startsWith("//") || ns(window.location.pathname) === "staff" ? n : qp(n, {
     hash: window.location.hash,
     reason: t
   });
 }
-function RF() {
+function zF() {
   let [e, t] = (0, D.useState)(() => sc()), [n, r] = (0, D.useState)(() => window.location.pathname), [i, a] = (0, D.useState)(null), [o, s] = (0, D.useState)(() => hs()), [c, l] = (0, D.useState)(ec), [u, d] = (0, D.useState)(!0), [f, p] = (0, D.useState)(null), m = (0, D.useRef)(!1), h = (0, D.useRef)(null), g = (0, D.useRef)(Kf(e));
   g.current.activate(e);
   let _ = (0, D.useMemo)(() => o ?? {}, [o]), v = bp(o);
   (0, D.useEffect)(() => {
     Ep(v);
   }, [v]);
-  let y = IF(o, e), b = (0, D.useCallback)(async (e, t, n, r = {}) => {
+  let y = LF(o, e), b = (0, D.useCallback)(async (e, t, n, r = {}) => {
     if (!e) return;
-    let i = PF(t, n);
+    let i = FF(t, n);
     await qf({
       gate: g.current,
       routeKey: n,
@@ -67753,8 +67834,8 @@ function RF() {
       onSettled: () => p((e) => e === n ? null : e)
     });
   }, []), x = (0, D.useCallback)(() => {
-    if (_s(), s(null), NF(window.location.pathname)) return;
-    let e = LF(ns(window.location.pathname) === "staff" ? i?.staffLoginPath : i?.loginUrl, "session_expired");
+    if (_s(), s(null), PF(window.location.pathname)) return;
+    let e = RF(ns(window.location.pathname) === "staff" ? i?.staffLoginPath : i?.loginUrl, "session_expired");
     if (e.startsWith("/") && !e.startsWith("//")) {
       window.history.replaceState(null, "", e), r(window.location.pathname);
       return;
@@ -67771,8 +67852,8 @@ function RF() {
     m.current = !0;
     async function e() {
       let e = await Ts(ns(window.location.pathname));
-      if (e.redirectToLogin && !NF(window.location.pathname)) {
-        let t = LF(e.loginUrl, null);
+      if (e.redirectToLogin && !PF(window.location.pathname)) {
+        let t = RF(e.loginUrl, null);
         if (t.startsWith("/") && !t.startsWith("//")) history.replaceState(null, "", t), r(window.location.pathname);
         else {
           window.location.replace(t);
@@ -67780,15 +67861,15 @@ function RF() {
         }
       }
       let n = e.config, i = e.session;
-      if (i && os(i) && !NF(window.location.pathname)) {
+      if (i && os(i) && !PF(window.location.pathname)) {
         _s(), s(null);
         let e = ns(window.location.pathname) === "staff" ? n?.staffLoginPath : n?.loginUrl;
-        window.location.replace(LF(e, "session_expired"));
+        window.location.replace(RF(e, "session_expired"));
         return;
       }
-      if (a(n), s(i), i && Os(), !NF(window.location.pathname) && i) {
+      if (a(n), s(i), i && Os(), !PF(window.location.pathname) && i) {
         let e = sc();
-        t(e), IF(i, e) && (await b(n, i, e), h.current = e);
+        t(e), LF(i, e) && (await b(n, i, e), h.current = e);
       }
       d(!1);
     }
@@ -67806,7 +67887,7 @@ function RF() {
         principal: n?.principal ?? _.principal,
         staff_role: n?.staff_role ?? _.staff_role
       };
-      g.current.activate(e), IF(i, e) && h.current !== e && p(e), t(e), r(window.location.pathname);
+      g.current.activate(e), LF(i, e) && h.current !== e && p(e), t(e), r(window.location.pathname);
     }
     return window.addEventListener("hashchange", e), window.addEventListener("popstate", e), () => {
       window.removeEventListener("hashchange", e), window.removeEventListener("popstate", e);
@@ -67827,7 +67908,7 @@ function RF() {
   }, []), (0, D.useEffect)(() => {
     if (!i || u) return;
     let t = hs();
-    t && vs(t) !== vs(o) && (s(t), IF(t, e) && b(i, t, e, { force: !0 }));
+    t && vs(t) !== vs(o) && (s(t), LF(t, e) && b(i, t, e, { force: !0 }));
   }, [
     e,
     n,
@@ -67836,7 +67917,7 @@ function RF() {
     b,
     o
   ]), (0, D.useEffect)(() => {
-    !u && i && o && (NF(n) || IF(o, e) && h.current !== e && (h.current = e, p(e), b(i, o, e)));
+    !u && i && o && (PF(n) || LF(o, e) && h.current !== e && (h.current = e, p(e), b(i, o, e)));
   }, [
     e,
     u,
@@ -67846,7 +67927,7 @@ function RF() {
     b
   ]);
   function S(n) {
-    g.current.activate(n), n !== e && h.current !== n && IF(o, n) && p(n), t(n);
+    g.current.activate(n), n !== e && h.current !== n && LF(o, n) && p(n), t(n);
   }
   function C(t) {
     if (i?.authMode !== "dev-headers") return;
@@ -67856,7 +67937,7 @@ function RF() {
       principal: "customer",
       role: t
     };
-    gs(n), s(n), IF(n, e) && b(i, n, e, { force: !0 });
+    gs(n), s(n), LF(n, e) && b(i, n, e, { force: !0 });
   }
   let w = (0, D.useCallback)(async (t) => {
     if (!i) return;
@@ -67865,7 +67946,7 @@ function RF() {
       x();
       return;
     }
-    vs(n) !== vs(o) && s(n), IF(n, e) && await b(i, n, e, t ? { datasets: t } : { force: !0 });
+    vs(n) !== vs(o) && s(n), LF(n, e) && await b(i, n, e, t ? { datasets: t } : { force: !0 });
   }, [
     i,
     o,
@@ -67873,7 +67954,7 @@ function RF() {
     e,
     x
   ]);
-  return u || !i ? /* @__PURE__ */ (0, V.jsx)(MF, {}) : n === "/" || n === "/landing.html" ? /* @__PURE__ */ (0, V.jsx)(Fm, { config: i }) : n === "/login" || n === "/login.html" ? /* @__PURE__ */ (0, V.jsx)(Rm, { config: i }) : n === "/signup" || n === "/signup.html" ? /* @__PURE__ */ (0, V.jsx)(uh, { config: i }) : n === "/signup-status" ? /* @__PURE__ */ (0, V.jsx)(dh, { config: i }) : n === "/set-password" ? /* @__PURE__ */ (0, V.jsx)(Ym, { config: i }) : n === "/internal/admin/login" || n === "/staff-login.html" ? /* @__PURE__ */ (0, V.jsx)(vh, { config: i }) : /* @__PURE__ */ (0, V.jsxs)(cp, { children: [/* @__PURE__ */ (0, V.jsx)(Uc, {
+  return u || !i ? /* @__PURE__ */ (0, V.jsx)(NF, {}) : n === "/" || n === "/landing.html" ? /* @__PURE__ */ (0, V.jsx)(Fm, { config: i }) : n === "/login" || n === "/login.html" ? /* @__PURE__ */ (0, V.jsx)(Rm, { config: i }) : n === "/signup" || n === "/signup.html" ? /* @__PURE__ */ (0, V.jsx)(uh, { config: i }) : n === "/signup-status" ? /* @__PURE__ */ (0, V.jsx)(dh, { config: i }) : n === "/set-password" ? /* @__PURE__ */ (0, V.jsx)(Ym, { config: i }) : n === "/internal/admin/login" || n === "/staff-login.html" ? /* @__PURE__ */ (0, V.jsx)(vh, { config: i }) : /* @__PURE__ */ (0, V.jsxs)(cp, { children: [/* @__PURE__ */ (0, V.jsx)(Uc, {
     route: e,
     session: _,
     data: c,
@@ -67881,7 +67962,7 @@ function RF() {
     onRoleChange: C,
     onRefresh: () => void w(),
     showRoleSwitcher: i.authMode === "dev-headers" && _.principal !== "staff",
-    children: y ? /* @__PURE__ */ (0, V.jsx)(jF, {
+    children: y ? /* @__PURE__ */ (0, V.jsx)(MF, {
       route: e,
       data: c,
       config: i,
@@ -67892,8 +67973,8 @@ function RF() {
       kind: "access-denied",
       requestedLabel: ic.get(e)?.label,
       role: (_.principal === "staff" ? _.staff_role : _.role) ?? "",
-      homeHref: `#${FF(_)}`,
-      homeLabel: `Go to ${ic.get(FF(_))?.label ?? "home"}`
+      homeHref: `#${IF(_)}`,
+      homeLabel: `Go to ${ic.get(IF(_))?.label ?? "home"}`
     })
   }), o ? /* @__PURE__ */ (0, V.jsx)(Wf, {
     config: i,
@@ -67904,5 +67985,5 @@ function RF() {
 }
 //#endregion
 //#region apps/web/react/src/main.tsx
-(0, yr.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, V.jsx)(D.StrictMode, { children: /* @__PURE__ */ (0, V.jsx)(RF, {}) }));
+(0, yr.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, V.jsx)(D.StrictMode, { children: /* @__PURE__ */ (0, V.jsx)(zF, {}) }));
 //#endregion

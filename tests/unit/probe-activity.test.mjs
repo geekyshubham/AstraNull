@@ -43,19 +43,37 @@ test('activity read keeps unsigned claims out, preserves zero, and does not cons
   assert.equal(zero.requests_sent, 0);
 });
 
-test('pinned HTTP logs come from real transport starts and responses and contain no raw payload', async () => {
-  const server = http.createServer((_req, res) => { res.writeHead(418, { 'set-cookie': 'private=value' }); res.end('private response body'); });
+test('pinned HTTP logs capture actual method, MIME format, redacted payloads, and preserve the original response', async () => {
+  const body = JSON.stringify({ marker: 'astranull-inert', password: 'private-password' });
+  const responseBody = JSON.stringify({ message: 'Request blocked', token: 'private-token' });
+  let received;
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    received = Buffer.concat(chunks).toString();
+    res.writeHead(418, { 'content-type': 'application/json', 'set-cookie': 'private=value' }); res.end(responseBody);
+  });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const logs = [];
-    const result = await pinnedFetch(`http://127.0.0.1:${server.address().port}/probe?secret=hidden`, { method: 'POST', body: 'private request body', headers: { authorization: 'Bearer secret' } },
+    const result = await pinnedFetch(`http://127.0.0.1:${server.address().port}/probe?secret=hidden`, { method: 'POST', body, headers: { authorization: 'Bearer secret', 'content-type': 'application/json' } },
       { destinationPolicy: { allowLoopback: true, allowPrivate: false }, onProbeActivity: (item) => logs.push(item) });
-    await result.body.cancel();
-    assert.deepEqual(logs.map((item) => item.stage), ['request_started', 'response_received']);
+    const actualBody = await new Response(result.body).text();
+    assert.equal(received, body);
+    assert.equal(actualBody, responseBody);
+    assert.deepEqual(logs.map((item) => item.stage), ['request_started', 'response_received', 'response_payload', 'response_body_completed']);
     assert.equal(logs[0].method, 'POST');
-    assert.equal(logs[0].body_bytes, Buffer.byteLength('private request body'));
+    assert.equal(logs[0].body_bytes, Buffer.byteLength(body));
+    assert.equal(logs[0].request_content_type, 'application/json');
+    assert.match(logs[0].request_payload_preview, /astranull-inert/);
+    assert.equal(JSON.parse(logs[0].request_payload_preview).password, '[redacted]');
     assert.equal(logs[1].status_code, 418);
-    assert.equal(/hidden|Bearer secret|private request body|private response body|private=value/.test(JSON.stringify(logs)), false);
+    assert.equal(logs[1].response_content_type, 'application/json');
+    assert.equal(JSON.parse(logs[3].response_payload_preview).message, 'Request blocked');
+    assert.equal(JSON.parse(logs[3].response_payload_preview).token, '[redacted]');
+    assert.equal(logs[3].response_payload_truncated, false);
+    assert.equal(logs[3].response_bytes_observed, Buffer.byteLength(responseBody));
+    assert.equal(/hidden|Bearer secret|private-password|private-token|private=value/.test(JSON.stringify(logs)), false);
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
 

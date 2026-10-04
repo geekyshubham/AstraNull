@@ -8,11 +8,13 @@ const STAGES = {
   request_not_sent: ['warn', 'WARN', 'Not sent'],
   phase_completed: ['recv', 'RECV', 'Phase finished'],
   probe_completed: ['verdict', 'VERDICT', 'Probe finished'],
+  response_payload: ['recv', 'PAYLOAD', 'Response payload captured'],
+  response_body_completed: ['recv', 'RECV', 'Response body read'],
 };
 const safeText = (value) => typeof value === 'string' ? value : '';
 function time(at) {
   const value = new Date(at);
-  return Number.isNaN(value.getTime()) ? 'Not recorded' : value.toLocaleTimeString(undefined, { hour12: false, fractionalSecondDigits: 3 });
+  return Number.isNaN(value.getTime()) ? 'Not recorded' : value.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
 }
 function entry(id, at, level, tag, message, extra = {}) {
   return { id, timestamp: safeText(at), timeDisplay: time(at), level, tag, message, ...extra };
@@ -22,8 +24,11 @@ function activityLog(id, at, data, row) {
   const [level, tag, label] = STAGES[data.stage];
   const message = [label, safeText(data.method) || safeText(data.operation).replaceAll('_', ' '), safeText(data.url),
     Number.isInteger(data.status_code) ? `HTTP ${data.status_code}` : '', safeText(data.error_class) || safeText(data.reason),
-    Number.isInteger(data.duration_ms) ? `${data.duration_ms}ms` : ''].filter(Boolean).join(' · ');
-  const detail = Object.fromEntries(['stage', 'operation', 'method', 'url', 'protocol', 'status_code', 'duration_ms', 'requests_sent', 'error_class', 'reason', 'body_bytes', 'header_names']
+    Number.isInteger(data.duration_ms) ? `${data.duration_ms}ms` : '', data.phase ? `phase ${data.phase}` : '',
+    data.vector_family ? `vector ${data.vector_family}` : '', data.response_content_type ? `format ${data.response_content_type}` : ''].filter(Boolean).join(' · ');
+  const detail = Object.fromEntries(['stage', 'operation', 'method', 'url', 'protocol', 'status_code', 'duration_ms', 'requests_sent', 'error_class', 'reason', 'body_bytes', 'header_names',
+    'phase', 'vector_family', 'marker_class', 'request_content_type', 'response_content_type', 'request_payload_preview', 'request_query_preview', 'response_payload_preview',
+    'request_payload_encoding', 'response_payload_encoding', 'request_payload_truncated', 'response_payload_truncated', 'response_bytes_observed', 'response_bytes_captured']
     .filter((key) => data[key] != null).map((key) => [key, data[key]]));
   return entry(id, at, level, tag, message, { checkId: row?.checkId, checkName: row?.name,
     detail: JSON.stringify(detail, null, 2),
@@ -33,12 +38,12 @@ function activityLog(id, at, data, row) {
 export function generateCheckProbeLogs(row, _targetValue = 'target', runEvents = []) {
   if (!row) return [];
   const result = [];
-  if (row.startedAt) result.push(entry(`run:${row.runId || row.checkId}:started`, row.startedAt, 'init', 'START', `Run started: ${row.name || row.checkId}`, { checkId: row.checkId }));
+  if (row.startedAt) result.push(entry(`run:${row.runId || row.checkId}:started`, row.startedAt, 'init', 'STATE', `Run recorded: ${row.name || row.checkId}`, { checkId: row.checkId }));
   for (const event of Array.isArray(runEvents) ? runEvents : []) {
     if (!row.runId || event.test_run_id !== row.runId || event.check_id !== row.checkId) continue;
     const at = safeText(event.timestamp);
     if (event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe') {
-      const log = activityLog(safeText(event.id), at, event.metadata?.activity, row);
+      const log = activityLog(safeText(event.id), at, { ...event.metadata?.activity, vector_family: event.metadata?.vector_family, marker_class: event.metadata?.marker_class }, row);
       if (log) result.push(log);
     } else if (event.signal_type === 'probe_result' && ['signed_probe', 'internal_simulation'].includes(event.producer_kind)) {
       const metadata = event.metadata || {};
@@ -64,7 +69,7 @@ export function buildScanLiveLogs(_scan, rows = [], activityItems = [], _targetV
     const row = rows.find((record) => record.checkId === item.check_id);
     if (item.action === 'probe_activity') {
       if (item.metadata?.producer_kind !== 'signed_probe') continue;
-      const log = activityLog(item.id, item.at, item.metadata?.activity, row);
+      const log = activityLog(item.id, item.at, { ...item.metadata?.activity, vector_family: item.metadata?.vector_family, marker_class: item.metadata?.marker_class }, row);
       if (log) result.push(log);
       continue;
     }

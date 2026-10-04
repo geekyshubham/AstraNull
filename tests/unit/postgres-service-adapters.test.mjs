@@ -643,7 +643,8 @@ describe('postgres validation service adapters', () => {
       'getFinding',
       'patchFinding',
     ]);
-    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 10);
+    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 11);
+    assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('getRunActivity'));
     assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('registerRunTerminalHook'));
   });
 
@@ -3155,6 +3156,7 @@ describe('postgres probe job service adapters', () => {
     assert.deepEqual(POSTGRES_PROBE_JOB_SERVICE_METHODS, [
       'listPendingProbeJobsForWorker',
       'ingestProbeResult',
+      'ingestProbeActivity',
     ]);
   });
 
