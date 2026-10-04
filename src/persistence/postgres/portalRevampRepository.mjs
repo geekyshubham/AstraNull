@@ -983,8 +983,9 @@ export function createPortalRevampRepository(pool) {
         const latestRuns = await client.query(
           `SELECT DISTINCT ON (r.check_id)
                   r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at, r.summary_json,
+                  r.check_version, r.scenario_version,
                   v.id AS verdict_id, v.verdict, v.evidence_ids,
-                  ev.producer_kind, ev.evidence_label, ev.simulation
+                  COALESCE(r.producer_kind, ev.producer_kind) AS producer_kind, ev.evidence_label, ev.simulation
            FROM test_runs r
            LEFT JOIN LATERAL (
              SELECT id, verdict, evidence_ids FROM verdicts

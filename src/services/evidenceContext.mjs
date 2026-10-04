@@ -23,6 +23,7 @@
 import { requirePermission } from '../rbac.mjs';
 import { redactObject, redactString } from '../lib/redact.mjs';
 import { scrubAgentPlacementText } from '../lib/outsideInEvidence.mjs';
+import { presentProductDetectionEvidence } from '../lib/productDetectionEvidence.mjs';
 import { getStore } from '../store.mjs';
 import * as findings from './findings.mjs';
 import * as testRuns from './testRuns.mjs';
@@ -1255,7 +1256,7 @@ function envelope(snapshot, fields) {
     body.latest_same_check = fields.latest_same_check ?? null;
   }
   if (missingEvidenceIds.length) body.missing_evidence_ids = missingEvidenceIds;
-  return { status: 200, body: redactObject(body, 0, { omitSensitiveKeys: true }) };
+  return { status: 200, body: presentProductDetectionEvidence(redactObject(body, 0, { omitSensitiveKeys: true })) };
 }
 
 function snapshotScore(summary) {

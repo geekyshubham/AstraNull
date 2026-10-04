@@ -1766,7 +1766,7 @@ export function TargetGroupDetailView({
                 className={runnable ? undefined : 'is-locked'}
                 disabled={!id || !runnable || busy === `edge-detect-${id}` || removing}
                 title={runnable
-                  ? 'Queue bounded WAF/CDN detection (wafw00f + cdncheck). Only signed probe-worker results count as edge evidence; simulation runs never do.'
+                  ? 'Queue bounded AstraNull WAF/CDN detection. Only signed probe-worker results count as edge evidence; simulation runs never do.'
                   : edgeDetectionLockedReason(targetVerificationState(item))}
                 aria-describedby={runnable || !id ? undefined : `edge-lock-${id}`}
                 loading={busy === `edge-detect-${id}`}

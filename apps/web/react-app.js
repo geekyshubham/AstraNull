@@ -17245,7 +17245,7 @@ var rd = Object.freeze({
   },
   response_fingerprint: {
     method: "WAF fingerprint",
-    detail: "Benign probe responses matched this WAF's fingerprint (wafw00f plugin)."
+    detail: "AstraNull matched benign probe responses against this WAF's fingerprint."
   },
   address_range: {
     method: "IP address range",
@@ -33299,7 +33299,7 @@ function Qx({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               variant: "ghost",
               className: n ? void 0 : "is-locked",
               disabled: !t || !n || l === `edge-detect-${t}` || i,
-              title: n ? "Queue bounded WAF/CDN detection (wafw00f + cdncheck). Only signed probe-worker results count as edge evidence; simulation runs never do." : wb(Hx(e)),
+              title: n ? "Queue bounded AstraNull WAF/CDN detection. Only signed probe-worker results count as edge evidence; simulation runs never do." : wb(Hx(e)),
               "aria-describedby": n || !t ? void 0 : `edge-lock-${t}`,
               loading: l === `edge-detect-${t}`,
               onClick: () => void $t(e),

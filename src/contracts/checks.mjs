@@ -729,12 +729,12 @@ export const CHECK_CATALOG = [
     name: 'Outside-In WAF Scanner (Safe)',
     vector_family: 'waf',
     description:
-      'Bounded outside-in scan: wafw00f plugin evaluation over destination-pinned benign HTTP probes, cdncheck CDN/WAF/cloud classification from the vetted addresses and a counted CNAME chain, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.',
+      'Bounded AstraNull outside-in scan: WAF fingerprint evaluation over destination-pinned benign HTTP probes, CDN/WAF/cloud classification from vetted addresses and a counted CNAME chain, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, and a posture report.',
     supported_targets: ['url', 'fqdn', 'ip'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_fingerprint_probe'],
     evidence_required: ['probe_result'],
     verdict_logic:
-      'Up to thirteen bounded GET/POST/HEAD probes plus up to three CNAME lookups fingerprint the edge (wafw00f + cdncheck), validate plain and evasion-class markers, test content-type confusion and origin bypass, and emit posture (external probe evidence only).',
+      'Up to thirteen bounded GET/POST/HEAD probes plus up to three CNAME lookups use AstraNull edge fingerprinting, validate plain and evasion-class markers, test content-type confusion and origin bypass, and emit posture (external probe evidence only).',
     probe_profile: {
       kind: 'outside_in_waf_scan',
       max_requests: 16,

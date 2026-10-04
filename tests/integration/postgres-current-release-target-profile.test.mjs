@@ -78,6 +78,38 @@ async function seed(pool) {
 }
 
 describe('postgres current-release target profile', () => {
+  it('counts stored signed-run versions as live coverage without rewriting historical runs', { timeout: 120_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) { t.skip(availability.reason); return; }
+    await withEphemeralPostgres(async (pool) => {
+      await seed(pool);
+      const portal = createPortalRevampRepository(pool);
+      await pool.query(
+        `INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, confidence, evidence_ids)
+         VALUES ('verdict_profile_live', $1, 'run_target_profile', 'edge_exposed', 'external_only', ARRAY['evidence_profile_live'])`,
+        [TENANT],
+      );
+      const pairFor = async () => (await portal.getTargetDetailBundle(CTX, TARGET, {})).coverage.pairs
+        .find((pair) => pair.check_id === 'waf.fingerprint.safe');
+      assert.equal((await pairFor()).pair_reason, 'missing_check_version');
+      await pool.query(
+        `UPDATE test_runs SET check_version = '1.0.0', scenario_version = 'fingerprint', producer_kind = 'signed_probe',
+           completed_at = now() WHERE id = 'run_target_profile'`,
+      );
+      const live = await pairFor();
+      assert.equal(live.state, 'conclusive');
+      assert.equal(live.provenance, 'external');
+      assert.equal(live.live_external, true);
+      assert.equal(live.retained.check_version, '1.0.0');
+      assert.equal(live.retained.scenario_version, 'fingerprint');
+      await pool.query(`UPDATE test_runs SET producer_kind = 'internal_simulation' WHERE id = 'run_target_profile'`);
+      assert.equal((await pairFor()).live_external, false);
+      assert.equal((await pairFor()).pair_reason, 'internal_simulation');
+      await pool.query(`UPDATE test_runs SET producer_kind = 'signed_probe', scenario_version = 'old-scenario' WHERE id = 'run_target_profile'`);
+      assert.equal((await pairFor()).pair_reason, 'scenario_version_mismatch');
+    });
+  });
+
   it('round-trips declarations under RLS and derives the profile from recorded rows', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {

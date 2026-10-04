@@ -160,14 +160,14 @@ Each product catalog entry should contain:
 
 Unknown vendors must still produce `waf_present` or `cdn_detected` with explicit confidence limits.
 
-## Ported edge signature corpus (wafw00f + cdncheck)
+## Ported edge signature corpus (AstraNull WAF fingerprint + AstraNull edge classifier)
 
 Beyond the versioned product catalog, AstraNull vendors a generated edge signature corpus:
 
-- **WAF vendors:** 172 vendor signature sets ported from wafw00f plugin data (188 passive
+- **WAF vendors:** 172 vendor signature sets ported from AstraNull WAF fingerprint plugin data (188 passive
   header/cookie signatures decidable from one ordinary GET; 330 block-page signatures evaluated
   only against block evidence an authorized bounded check already captured).
-- **Address + CNAME:** cdncheck CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
+- **Address + CNAME:** AstraNull edge classifier CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
   suffixes remain available to isolated helper tests and future separately governed collectors.
   Signed `waf.fingerprint.safe` jobs do **not** run standalone CNAME/A/AAAA or TLS hint collectors:
   those operations are not independently signed, pre-reserved, counted, deadline-bounded, and

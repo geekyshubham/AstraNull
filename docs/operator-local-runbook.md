@@ -389,7 +389,7 @@ ASTRANULL_NO_PERSIST=1 npm start
 ### Real probe results locally (signed worker)
 
 `npm run dev:api` uses in-process probe simulation, so WAF/CDN edge detection reports
-`simulation_not_detection` (inconclusive) by design. To get real wafw00f/cdncheck results, run
+`simulation_not_detection` (inconclusive) by design. To get real AstraNull WAF fingerprint/AstraNull edge classifier results, run
 the API in signed-worker mode and start the reference worker against it. Both need the same
 secret (32+ characters, from your shell, never committed):
 

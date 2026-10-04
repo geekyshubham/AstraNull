@@ -347,7 +347,7 @@ export function efficacySentence(efficacy) {
 
 const SOURCE_COPY = Object.freeze({
   response_header: { method: 'HTTP response header', detail: 'An edge platform header in the HTTP response matched this provider.' },
-  response_fingerprint: { method: 'WAF fingerprint', detail: 'Benign probe responses matched this WAF\'s fingerprint (wafw00f plugin).' },
+  response_fingerprint: { method: 'WAF fingerprint', detail: 'AstraNull matched benign probe responses against this WAF\'s fingerprint.' },
   address_range: { method: 'IP address range', detail: 'A resolved address sits inside this provider\'s published network range.' },
   cname_suffix: { method: 'DNS CNAME', detail: 'The domain\'s CNAME chain points into this provider\'s edge.' },
   asn_lookup: { method: 'ASN / Network routing', detail: 'A resolved address belongs to this provider\'s autonomous system (ASN).' },
@@ -390,8 +390,8 @@ export function edgeEvidenceSignals(edge) {
   if (!presented) return { layers: [], facts: [] };
   const evidence = record(presented.evidence) ?? {};
   const vendorMatches = list(evidence.vendor_matches);
-  const wafw00f = record(evidence.wafw00f);
-  const cdncheck = record(evidence.cdncheck);
+  const wafw00f = record(evidence.waf_fingerprint) ?? record(evidence.wafw00f);
+  const cdncheck = record(evidence.edge_classifier) ?? record(evidence.cdncheck);
   const layers = list(presented.layers).map((raw) => {
     const layer = record(raw) ?? {};
     const family = text(layer.family);
@@ -436,8 +436,8 @@ export function edgeEvidenceSignals(edge) {
   if (wafw00f) {
     const firewall = text(wafw00f.firewall);
     facts.push({
-      id: 'wafw00f',
-      label: 'wafw00f',
+      id: 'waf_fingerprint',
+      label: 'AstraNull WAF fingerprint',
       value: wafw00f.detected === true && firewall && firewall !== 'None'
         ? `${firewall}${text(wafw00f.manufacturer) && text(wafw00f.manufacturer) !== 'None' ? ` (${text(wafw00f.manufacturer)})` : ''}`
         : record(wafw00f.generic)?.found === true ? 'Generic WAF behavior detected' : 'No WAF plugin matched',
@@ -445,8 +445,8 @@ export function edgeEvidenceSignals(edge) {
   }
   if (cdncheck) {
     facts.push({
-      id: 'cdncheck',
-      label: 'cdncheck',
+      id: 'edge_classifier',
+      label: 'AstraNull edge classifier',
       value: cdncheck.matched === true
         ? `${providerName(cdncheck.provider)}${text(cdncheck.item_type) ? ` · ${text(cdncheck.item_type).toUpperCase()}` : ''}${text(cdncheck.source) ? ` via ${text(cdncheck.source)}` : ''}`
         : 'No CDN range or CNAME matched',

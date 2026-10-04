@@ -194,7 +194,7 @@ export const EDGE_DETECTION_SHAPE = {
     cname_matches: [{ provider: 'string', type: 'string', suffix: 'string' }],
     dns_cname_chain: ['string'],
     dns_resolved_ips: ['string'],
-    wafw00f: [{
+    waf_fingerprint: [{
       detected: 'boolean',
       firewall: 'string',
       manufacturer: 'string',
@@ -206,7 +206,7 @@ export const EDGE_DETECTION_SHAPE = {
         reason: ['string', 'null'],
       }, 'null'],
     }, 'null'],
-    cdncheck: [{
+    edge_classifier: [{
       matched: 'boolean',
       provider: ['string', 'null'],
       item_type: ['string', 'null'],

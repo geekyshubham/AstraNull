@@ -3,6 +3,8 @@
  * Runtime-agnostic: accepts either the in-memory record or a mapped Postgres row.
  */
 
+import { presentProductDetectionEvidence } from './productDetectionEvidence.mjs';
+
 const PROVIDER_DISPLAY_NAMES = Object.freeze({
   amazon: 'Amazon',
   aws: 'AWS',
@@ -399,5 +401,5 @@ export function presentTargetEdgeDetection(row) {
     presented.waf.status,
   );
   presented.network_firewall = networkFirewallPresentation(evidence.network_firewall);
-  return { ...presented, ...buildPlainLanguageSummary(presented) };
+  return presentProductDetectionEvidence({ ...presented, ...buildPlainLanguageSummary(presented) });
 }

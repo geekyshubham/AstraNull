@@ -168,7 +168,8 @@ describe('edge evidence and detection phase', () => {
     assert.equal(layers[0].logo, 'cloudflare');
     assert.equal(layers[0].confidence, 92);
     assert.deepEqual(layers[0].sources.map((source) => source.method), ['DNS CNAME', 'IP address range']);
-    assert.deepEqual(facts.map((fact) => fact.id), ['cname', 'ips', 'wafw00f', 'cdncheck']);
+    assert.deepEqual(facts.map((fact) => fact.id), ['cname', 'ips', 'waf_fingerprint', 'edge_classifier']);
+    assert.equal(/wafw00f|cdncheck/i.test(JSON.stringify(facts)), false);
     assert.match(facts[0].value, /→/);
   });
 

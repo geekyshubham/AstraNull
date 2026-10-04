@@ -73,7 +73,7 @@ Implementation status: `GET /v1/waf/coverage` returns status counts in developer
 ## Edge detection API (hostname → WAF/CDN)
 
 One governed passive path for "is this host behind a WAF/CDN?" — built on the ported
-wafw00f + cdncheck signature corpus (`src/lib/edgeFingerprint.mjs`, ADR-0005).
+AstraNull WAF fingerprint + AstraNull edge classifier signature corpus (`src/lib/edgeFingerprint.mjs`, ADR-0005).
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
@@ -86,7 +86,7 @@ Behavior contract:
 - Passive signature tier only: block-page signatures are never evaluated here and no marker or
   attack traffic is sent. The result is detection, never a validation verdict.
 - DNS metadata: bounded CNAME chain (≤4 hops) plus A/AAAA; address/CNAME classification carries
-  per-signal provenance against the cdncheck corpus.
+  per-signal provenance against the AstraNull edge classifier corpus.
 - Metadata-only: header values and body text never appear in the response or the audit record;
   audits `waf.edge_detection_ran` with booleans, vendor key, and counts.
 - Stateless — works identically in dev-json and Postgres modes; feature-gated by
