@@ -2,6 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import { presentTargetEdgeDetection } from '../../src/lib/edgeDetectionPresenter.mjs';
+import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
 import {
   normalizeDeclarationInput,
   presentTargetDeclaration,
@@ -351,6 +352,42 @@ describe('protection profile derivation', () => {
     tenant_id: ctx.tenantId,
     target_group_id: 'tg_profile',
   };
+
+  it('uses the same catalog version derivation as run creation and distinguishes missing and changed versions', () => {
+    const check = { check_id: 'waf.digest', vector_family: 'waf', supported_targets: ['fqdn'], probe_profile: { scenario_family: 'marker' } };
+    const stamp = deriveRunEvidenceStamp(check, {}, { probeMode: 'signed-worker', scenarioVersion: 'marker' });
+    const coverageFor = (overrides) => deriveProtectionProfile({
+      now: NOW, target, catalog: [check], observations: [{
+        check_id: check.check_id,
+        run: { id: 'run_digest', status: 'verdicted', completed_at: FRESH, ...stamp, ...overrides },
+        verdict: { verdict: 'edge_exposed', evidence_ids: ['ev_digest'] },
+      }],
+    }).coverage.pairs[0];
+    assert.equal(coverageFor({}).state, 'conclusive');
+    assert.equal(coverageFor({}).live_external, true);
+    assert.equal(coverageFor({ check_version: null }).pair_reason, 'missing_check_version');
+    assert.equal(coverageFor({ check_version: 'older-version' }).pair_reason, 'check_version_mismatch');
+    assert.equal(coverageFor({ scenario_version: null }).pair_reason, 'missing_scenario_version');
+    assert.equal(coverageFor({ scenario_version: 'different-scenario' }).pair_reason, 'scenario_version_mismatch');
+    assert.equal(coverageFor({ producer_kind: 'internal_simulation' }).live_external, false);
+  });
+
+  it('excludes declarations and control-plane readiness from the live external coverage denominator', () => {
+    const checks = [
+      { check_id: 'declaration.tier', evidence_tier: 'E1' },
+      { check_id: 'declaration.marker', probe_profile: { kind: 'metadata_marker' } },
+      { check_id: 'declaration.ops', probe_profile: { kind: 'ops_readiness' } },
+      { check_id: 'external.safe', evidence_tier: 'E3' },
+    ].map((check) => ({ vector_family: 'l7', supported_targets: ['fqdn'], ...check }));
+    const { coverage } = deriveProtectionProfile({ now: NOW, target, catalog: checks });
+    assert.equal(coverage.applicable_count, 1);
+    assert.equal(coverage.not_run_count, 1);
+    assert.equal(coverage.excluded_count, 3);
+    for (const pair of coverage.pairs.filter((pair) => pair.state === 'excluded')) {
+      assert.equal(pair.exclusion_reason, 'declaration_only');
+      assert.equal(pair.live_external, false);
+    }
+  });
 
   it('keeps the five families independent and does not copy WAF onto CDN or cloud onto origin', () => {
     const presented = presentTargetEdgeDetection({

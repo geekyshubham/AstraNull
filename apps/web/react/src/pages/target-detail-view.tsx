@@ -43,6 +43,7 @@ import { emptyStateFromApi } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Tabs } from '../components/ui/tabs';
+import { Toast } from '../components/ui/toast';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { requestJson } from '../lib/api';
 import { prefersReducedMotion } from '../lib/motion';
@@ -1305,7 +1306,13 @@ export function TargetDetailView({
     <div className="content target-detail-view">
       {renderHeader()}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-      {banner && !error ? <div className="form-banner" role="status">{banner}</div> : null}
+      {banner && !error ? (
+        <Toast
+          message={banner}
+          tone={banner.includes('not found') ? 'warn' : 'success'}
+          onDismiss={() => setBanner('')}
+        />
+      ) : null}
       {editingContext && declared ? (
         <DeclarationEditor declaration={declaration} onCancel={() => setEditingContext(false)} onSave={saveDeclaration} />
       ) : null}

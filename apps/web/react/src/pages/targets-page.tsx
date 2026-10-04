@@ -22,6 +22,7 @@ import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { EmptyState } from '../components/ui/empty-state';
+import { Toast } from '../components/ui/toast';
 import { FormModal, useConfirmModal } from '../lib/crud-ui';
 import { canonicalCohortFilters, COHORT_FILTER_KEYS, inventoryUnits } from '../lib/domain-checks.mjs';
 import { TargetCohortList } from '../components/targets/target-cohort';
@@ -513,7 +514,13 @@ export function TargetsPage({
         </div>
       </div>
 
-      {message ? <div className="form-banner" role="status">{message}</div> : null}
+      {message && !error ? (
+        <Toast
+          message={message}
+          tone="success"
+          onDismiss={() => setMessage('')}
+        />
+      ) : null}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
 
       {cohort ? (

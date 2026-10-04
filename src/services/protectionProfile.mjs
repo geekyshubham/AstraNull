@@ -6,6 +6,7 @@
 import { CHECK_CATALOG, checkRequiresAdditionalInput, isCustomerRunnable } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { evidenceBackedVerdict } from '../lib/targetDetailRows.mjs';
+import { approvedScenarioVersion, deriveCheckDefinitionVersion } from '../lib/checkDefinitionVersion.mjs';
 import { assessOriginReachability } from './originBindings.mjs';
 import {
   assessComparability,
@@ -427,12 +428,15 @@ function retainedFacts(run, verdict, provenance, observedAt) {
 }
 
 function versionGapFor(check, run, verdict) {
-  const catalogVersion = text(check?.version);
+  const catalogVersion = deriveCheckDefinitionVersion(check).check_version;
   const recordedCheck = recordedText(run, verdict, 'check_version');
-  if (!catalogVersion || recordedCheck !== catalogVersion) return 'missing_check_version';
-  const scenario = text(check?.probe_profile?.scenario) ?? text(check?.probe_profile?.scenario_family);
+  if (!recordedCheck) return 'missing_check_version';
+  if (!catalogVersion || recordedCheck !== catalogVersion) return 'check_version_mismatch';
+  const scenario = approvedScenarioVersion(check);
   if (!scenario) return null;
-  if (!recordedText(run, verdict, 'scenario_version')) return 'missing_scenario_version';
+  const recordedScenario = recordedText(run, verdict, 'scenario_version');
+  if (!recordedScenario) return 'missing_scenario_version';
+  if (recordedScenario !== scenario) return 'scenario_version_mismatch';
   return null;
 }
 
@@ -514,7 +518,11 @@ function coverageFrom({ target, policies, observations, catalog, nowMs }) {
   for (const check of catalog ?? CHECK_CATALOG) {
     if (!check?.check_id || !isCustomerRunnable(check)) continue;
     if (targetKindCompatibilityError(check, target)) continue;
-    const excluded = checkRequiresAdditionalInput(check);
+    const declarationOnly = text(check.evidence_tier)?.toUpperCase() === 'E1'
+      || check.probe_profile?.kind === 'metadata_marker'
+      || check.probe_profile?.kind === 'ops_readiness';
+    const excluded = declarationOnly || checkRequiresAdditionalInput(check);
+    const exclusionReason = declarationOnly ? 'declaration_only' : 'setup_required';
     const policy = policyForCheck(policies, target, check.check_id);
     const policyBinding = !policy
       ? 'no_policy'
@@ -534,13 +542,13 @@ function coverageFrom({ target, policies, observations, catalog, nowMs }) {
         dimension,
         state: 'excluded',
         prior_state: null,
-        exclusion_reason: 'setup_required',
+        exclusion_reason: exclusionReason,
         last_run_id: null,
         observed_at: null,
         freshness: 'not_applicable',
         provenance: 'not_recorded',
         live_external: false,
-        pair_reason: 'setup_required',
+        pair_reason: exclusionReason,
         retained: null,
         policy_id: policy?.id ?? null,
         ...launch,
