@@ -1,4 +1,5 @@
 import { requestJson } from './api';
+import { apiErrorMessage } from './error-messages';
 import type { DataItem, PortalConfig, Session } from './types';
 
 export type OwnershipChallenge = {
@@ -20,6 +21,12 @@ export type TargetDetailPayload = {
   waf_posture: DataItem | null;
   edge_detection: DataItem | null;
   edge_detection_request?: DataItem | null;
+  /** Additive server contract; null until the backend records it. */
+  protection_profile?: DataItem | null;
+  /** Applicable check-target pair coverage; null until the backend reports it. */
+  coverage?: DataItem | null;
+  /** Typed declaration on the target; null when absent or unsupported. */
+  declaration?: DataItem | null;
   checks_applied: DataItem[];
   runs_recent: DataItem[];
   findings: DataItem[];
@@ -35,6 +42,8 @@ export type TargetDetailPayload = {
     waf: DataItem | null;
   };
   error?: string;
+  /** HTTP status of a failed detail read, so 404, 403 and other failures stay distinct. */
+  status?: number;
   loading: boolean;
 };
 
@@ -212,6 +221,8 @@ export async function populateTargetDetail(
     const wafPosture = asRecord(payload.waf_posture);
     const edgeDetection = asRecord(payload.edge_detection);
     const edgeDetectionRequest = asRecord(payload.edge_detection_request);
+    const protectionProfile = asRecord(payload.protection_profile);
+    const coverage = asRecord(payload.coverage);
     const checksApplied = Array.isArray(payload.checks_applied) ? payload.checks_applied as DataItem[] : [];
     const runsRecent = Array.isArray(payload.runs_recent) ? payload.runs_recent as DataItem[] : [];
     const findings = Array.isArray(payload.findings) ? payload.findings as DataItem[] : [];
@@ -250,6 +261,9 @@ export async function populateTargetDetail(
       waf_posture: wafPosture,
       edge_detection: edgeDetection,
       edge_detection_request: edgeDetectionRequest,
+      protection_profile: protectionProfile,
+      coverage,
+      declaration: asRecord(target.declaration),
       checks_applied: checksApplied,
       runs_recent: runsRecent,
       findings,
@@ -262,16 +276,109 @@ export async function populateTargetDetail(
       loading: false,
     };
   } catch (err) {
-    const apiErr = err as Error & { payload?: DataItem };
-    const payload = asRecord(apiErr.payload);
-    const payloadMeta = asRecord(payload?.meta);
-    const emptyReason = getString(payloadMeta, ['empty_reason'])
-      || getString(payload, ['error'])
-      || (err instanceof Error ? err.message : '');
+    const apiErr = err as Error & { payload?: DataItem; status?: number };
+    const status = typeof apiErr.status === 'number' ? apiErr.status : 0;
+    const payloadMeta = asRecord(asRecord(apiErr.payload)?.meta);
+    // A server-written empty reason is shown only for a 4xx; a 5xx or network failure uses the safe
+    // copy from requestJson, so raw server text never reaches the page.
+    const emptyReason = (status >= 400 && status < 500 ? getString(payloadMeta, ['empty_reason']) : '')
+      || apiErrorMessage(err, 'Target details could not load.');
     return {
       ...empty,
       meta: emptyReason ? { empty_reason: emptyReason } : null,
       error: emptyReason,
+      status: typeof apiErr.status === 'number' ? apiErr.status : undefined,
     };
   }
+}
+
+export { SERVICE_ROLES, CRITICALITY_VALUES, declarationDraftFrom, declarationPatchBody } from './domain-checks.mjs';
+export type { ServiceRole, CriticalityValue, DeclarationDraft } from './domain-checks.mjs';
+import { declarationPatchBody, type DeclarationDraft } from './domain-checks.mjs';
+
+export async function patchTargetDeclaration(
+  config: PortalConfig,
+  session: Session,
+  targetId: string,
+  initial: DeclarationDraft,
+  draft: DeclarationDraft,
+) {
+  return requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`, {
+    method: 'PATCH',
+    body: { declaration: declarationPatchBody(initial, draft) },
+  }) as Promise<DataItem>;
+}
+
+export type ObservationHistory =
+  | { state: 'ready'; items: DataItem[]; nextCursor: string; comparison: DataItem | null }
+  | { state: 'unavailable'; message: string; code: string }
+  | { state: 'unsupported' };
+
+function errorCode(err: unknown) {
+  const payload = (err as { payload?: unknown })?.payload;
+  return payload && typeof payload === 'object' ? getString(payload as DataItem, ['error']) : '';
+}
+
+/**
+ * The route is not usable on this server yet: a bare 404 (no code, or the router's not_found), or
+ * a 503 `postgres_route_not_wired` while the service is not connected.
+ */
+function routeMissing(err: unknown) {
+  const status = (err as { status?: number })?.status;
+  const code = errorCode(err);
+  return (status === 404 && (!code || code === 'not_found')) || (status === 503 && code === 'postgres_route_not_wired');
+}
+
+/**
+ * One newest-first page of retained observations for one target. `cursor` is the server's opaque
+ * `next_cursor`; a missing route is reported as unsupported, never faked.
+ */
+export async function fetchTargetObservations(
+  config: PortalConfig,
+  session: Session,
+  targetId: string,
+  signal?: AbortSignal,
+  options: { cursor?: string; family?: string; limit?: number } = {},
+): Promise<ObservationHistory> {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
+  if (options.family) params.set('family', options.family);
+  if (options.cursor) params.set('cursor', options.cursor);
+  try {
+    const payload = await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}/observations?${params.toString()}`, { signal }) as DataItem;
+    const items = Array.isArray(payload.items) ? payload.items as DataItem[] : [];
+    const comparison = payload.comparison && typeof payload.comparison === 'object' && !Array.isArray(payload.comparison) ? payload.comparison as DataItem : null;
+    return { state: 'ready', items, nextCursor: getString(payload, ['next_cursor']), comparison };
+  } catch (err) {
+    if (routeMissing(err)) return { state: 'unsupported' };
+    return { state: 'unavailable', code: errorCode(err), message: err instanceof Error ? err.message : 'Observation history could not load.' };
+  }
+}
+
+export type OriginBindingList =
+  | { state: 'ready'; items: DataItem[] }
+  | { state: 'unsupported' }
+  | { state: 'unavailable'; message: string; code: string };
+
+/** Declared origin relations that involve this target. Reads never write or start anything. */
+export async function fetchTargetOriginBindings(config: PortalConfig, session: Session, targetId: string, signal?: AbortSignal): Promise<OriginBindingList> {
+  try {
+    const payload = await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}/origin-bindings`, { signal }) as DataItem;
+    const items = (Array.isArray(payload.items) ? payload.items as DataItem[] : [])
+      .filter((item) => getString(item, ['protected_target_id']) === targetId || getString(item, ['origin_target_id']) === targetId);
+    return { state: 'ready', items };
+  } catch (err) {
+    if (routeMissing(err)) return { state: 'unsupported' };
+    return { state: 'unavailable', code: errorCode(err), message: err instanceof Error ? err.message : 'Origin relations could not load.' };
+  }
+}
+
+/** Records a declared relation between two existing targets. Scope fields are optional choices inside the declaration. */
+export function createOriginBinding(config: PortalConfig, session: Session, body: { protected_target_id: string; origin_target_id: string; scope: { port?: number; path?: string } }) {
+  const payload: DataItem = { protected_target_id: body.protected_target_id, origin_target_id: body.origin_target_id };
+  if (Object.keys(body.scope).length) payload.scope = body.scope;
+  return requestJson(config, session, '/v1/origin-bindings', { method: 'POST', body: payload }) as Promise<DataItem>;
+}
+
+export function archiveOriginBinding(config: PortalConfig, session: Session, bindingId: string) {
+  return requestJson(config, session, `/v1/origin-bindings/${encodeURIComponent(bindingId)}/archive`, { method: 'POST' }) as Promise<DataItem>;
 }

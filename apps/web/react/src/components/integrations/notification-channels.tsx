@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react';
+import type { HTMLAttributes } from 'react';
 import { BellRing, CircleCheck, CircleDashed, ExternalLink, Info, Pencil, Plus, Power, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -474,6 +475,12 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
   const [busyRuleId, setBusyRuleId] = useState('');
   const [actionError, setActionError] = useState('');
   const [message, setMessage] = useState('');
+  const [focusRuleId, setFocusRuleId] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const hash = window.location.hash.replace(/^#/, '');
+    const index = hash.indexOf('?');
+    return new URLSearchParams(index >= 0 ? hash.slice(index + 1) : '').get('focus') ?? '';
+  });
 
   // Latest-request-wins: an older or other-session response never overwrites newer state (F04).
   const guardRef = useRef(createLatestRequestGuard());
@@ -529,6 +536,18 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
   }, [canRead, load]);
 
   const connectorRules = useMemo(() => rules.filter((rule) => findNotificationChannel(rule.channel)), [rules]);
+  const focusRule = focusRuleId ? rules.find((rule) => rule.id === focusRuleId) ?? null : null;
+
+  useEffect(() => {
+    if (!focusRuleId || loadState !== 'ready') return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>(`[data-row-id="${CSS.escape(focusRuleId)}"]`);
+      const heading = document.getElementById(headingId);
+      (row ?? heading)?.scrollIntoView({ block: 'center' });
+      heading?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusRuleId, loadState, headingId]);
   const summary = useMemo(() => summarizeChannelRules(connectorRules), [connectorRules]);
   const latestByRule = useMemo(() => latestAttemptByRule(events), [events]);
   const active = activeChannel ? findNotificationChannel(activeChannel) : null;
@@ -619,12 +638,12 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
     },
     {
       key: 'enabled',
-      label: 'State',
-      render: (rule) => <Badge tone={rule.enabled ? 'success' : 'muted'}>{rule.enabled ? 'On' : 'Off'}</Badge>
+      label: 'Sending',
+      render: (rule) => <Badge tone="muted">{rule.enabled ? 'Enabled' : 'Disabled'}</Badge>
     },
     {
       key: 'delivery',
-      label: 'Last delivery',
+      label: 'Last attempt',
       render: (rule) => {
         const resolved = resolveRuleLatestDelivery(rule.id, {
           latestDeliveries,
@@ -645,8 +664,8 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
     },
     {
       key: 'created',
-      label: 'Connected',
-      render: (rule) => (rule.created_at ? formatDate(rule.created_at) : 'Unknown')
+      label: 'Added',
+      render: (rule) => (rule.created_at ? formatDate(rule.created_at) : 'Not recorded')
     },
     {
       key: 'actions',
@@ -713,7 +732,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
       <div className="nc-heading">
         <div>
           <h2 id={headingId} className="card-title" tabIndex={-1}>Notification channels</h2>
-          <p>Send readiness alerts to Slack, Microsoft Teams, email, or your own endpoint. Channels only receive redacted event summaries; they never get access to your infrastructure.</p>
+          <p>Destinations for readiness alerts. A configured channel is not proof of delivery: check its last attempt. Routing rules and failed deliveries are managed on <a href="#notifications">Notifications</a>.</p>
         </div>
         <Button
           size="sm"
@@ -729,6 +748,14 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
         </Button>
       </div>
 
+      {focusRuleId ? (
+        <p className="form-banner neutral nc-focus-banner" role="status">
+          {focusRule
+            ? <>Showing the {notificationChannelLabel(focusRule.channel)} channel {focusRule.destination_preview || ''} from a delivery failure. It is highlighted below.</>
+            : loadState === 'ready' ? 'The channel from that delivery failure no longer exists; it may have been removed.' : 'Loading the channel from that delivery failure…'}
+          {' '}<button type="button" className="rf-link-button" onClick={() => setFocusRuleId('')}>Clear</button>
+        </p>
+      ) : null}
       {message ? <p className="form-banner" role="status">{message}</p> : null}
       {actionError ? <p className="form-banner error" role="alert">{actionError}</p> : null}
       {refreshing ? <p className="sr-only" role="status">Refreshing notification channels</p> : null}
@@ -752,13 +779,13 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
                     <span>{channel.kind}</span>
                   </div>
                 </div>
-                {connected ? <Badge tone="success">{`${formatNumber(counts.total)} configured`}</Badge> : null}
+                {connected ? <Badge tone="muted">{`${formatNumber(counts.total)} configured`}</Badge> : null}
               </div>
               <p className="integration-tile-desc">{channel.description}</p>
               <div className="integration-tile-footer">
                 <span className="integration-chip" data-tone={connected && counts.enabled > 0 ? 'positive' : 'neutral'}>
                   {connected ? <CircleCheck size={13} aria-hidden="true" /> : <CircleDashed size={13} aria-hidden="true" />}
-                  {connected ? `${formatNumber(counts.enabled)} of ${formatNumber(counts.total)} on` : 'Not connected'}
+                  {connected ? `${formatNumber(counts.enabled)} of ${formatNumber(counts.total)} enabled` : 'Not configured'}
                 </span>
                 <div className="integration-tile-actions">
                   <Button
@@ -794,6 +821,8 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
           columns={columns}
           items={connectorRules}
           getRowId={(rule) => rule.id}
+          selectedId={focusRuleId || null}
+          getRowProps={(rule) => ({ 'data-row-id': rule.id }) as HTMLAttributes<HTMLTableRowElement>}
           loadError={loadState === 'error' ? loadError : null}
           onRetry={() => void load()}
           empty={

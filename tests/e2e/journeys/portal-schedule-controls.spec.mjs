@@ -129,47 +129,44 @@ test.describe('schedule form controls', () => {
     });
   });
 
-  test('picker Escape stays inside the dialog and Select stays bounded at 360x740 with keyboard navigation', async ({ page }) => {
+  test('picker Escape stays inside the create panel and Select stays in the viewport at 360x740 with keyboard navigation', async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 740 });
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
 
-    await page.getByRole('button', { name: 'Create schedule', exact: true }).first().click();
-    const dialog = page.locator('dialog.form-modal[open]');
-    await expect(dialog).toBeVisible();
+    const createButton = page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' });
+    await createButton.click();
+    const panel = page.locator('section.rf-create');
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('heading', { name: 'New validation schedule' })).toBeFocused();
 
-    const pickerTrigger = dialog.locator('.tg-picker-trigger');
+    const pickerTrigger = panel.locator('.tg-picker-trigger');
     await pickerTrigger.click();
-    await expect(dialog.locator('.tg-picker-menu')).toBeVisible();
+    await expect(panel.locator('.tg-picker-menu')).toBeVisible();
     await pickerTrigger.press('Escape');
-    await expect(dialog.locator('.tg-picker-menu')).toBeHidden();
-    await expect(dialog).toBeVisible();
+    await expect(panel.locator('.tg-picker-menu')).toBeHidden();
+    await expect(panel).toBeVisible();
     await expect(pickerTrigger).toBeFocused();
 
-    const expectedTrigger = dialog.getByRole('button', { name: 'Expected verdict', exact: true });
+    const expectedTrigger = panel.getByRole('button', { name: 'Expected verdict', exact: true });
     await expectedTrigger.scrollIntoViewIfNeeded();
     await expectedTrigger.click();
-    const expectedMenu = dialog.getByRole('listbox', { name: 'Expected verdict', exact: true });
+    const expectedMenu = panel.getByRole('listbox', { name: 'Expected verdict', exact: true });
     await expect(expectedMenu).toBeVisible();
     await page.waitForTimeout(250);
-
-    const [menuBox, bodyBox] = await Promise.all([
-      expectedMenu.boundingBox(),
-      dialog.locator('.form-modal-body').boundingBox(),
-    ]);
+    const menuBox = await expectedMenu.boundingBox();
     expect(menuBox).not.toBeNull();
-    expect(bodyBox).not.toBeNull();
-    expect(menuBox.y).toBeGreaterThanOrEqual(Math.max(8, bodyBox.y) - 1);
-    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(
-      Math.min(740 - 8, bodyBox.y + bodyBox.height) + 1,
-    );
+    expect(menuBox.y).toBeGreaterThanOrEqual(8 - 1);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(740 - 8 + 1);
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(360 + 1);
 
     await expectedTrigger.press('Escape');
-    await expect(dialog).toBeVisible();
-    const cadenceTrigger = dialog.getByRole('button', { name: 'Cadence', exact: true });
+    await expect(expectedMenu).toBeHidden();
+    await expect(panel).toBeVisible();
+    const cadenceTrigger = panel.getByRole('button', { name: 'Cadence', exact: true });
     await cadenceTrigger.focus();
     await cadenceTrigger.press('ArrowDown');
-    const cadenceMenu = dialog.getByRole('listbox', { name: 'Cadence', exact: true });
+    const cadenceMenu = panel.getByRole('listbox', { name: 'Cadence', exact: true });
     await expect(cadenceMenu).toBeVisible();
     await expect(cadenceMenu.getByRole('option', { name: 'Weekly', exact: true })).toBeFocused();
     await page.keyboard.press('End');
@@ -177,36 +174,54 @@ test.describe('schedule form controls', () => {
     await expect(cadenceMenu).toBeHidden();
     await expect(cadenceTrigger).toContainText('Monthly');
     await expect(cadenceTrigger).toBeFocused();
+
+    await expect(panel.locator('.rf-readiness')).toContainText('Select a check to continue.');
+    await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+    await panel.getByRole('button', { name: 'Cancel' }).first().click();
+    await expect(panel).toHaveCount(0);
+    await expect(createButton).toBeFocused();
   });
 
   test('global schedule offers only compatible exact targets, explains empty compatibility, and clears on check change', async ({ page }) => {
+    const writes = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/v1/') && request.method() !== 'GET') writes.push(request.method());
+    });
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
-    await page.getByRole('button', { name: 'Create schedule', exact: true }).first().click();
-    const dialog = page.locator('dialog.form-modal[open]');
+    await page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' }).click();
+    const panel = page.locator('section.rf-create');
 
-    await chooseCustomSelect(dialog, 'Check', URL_ONLY_CHECK);
-    const pickerTrigger = dialog.locator('.tg-picker-trigger');
+    await panel.getByLabel('Find a check').fill('URL-Only');
+    await expect(panel.getByText(/1 of \d+ runnable checks match/)).toBeVisible();
+    await chooseCustomSelect(panel, 'Check', URL_ONLY_CHECK);
+    const pickerTrigger = panel.locator('.tg-picker-trigger');
     await pickerTrigger.click();
-    const picker = dialog.locator('.tg-picker-menu');
+    const picker = panel.locator('.tg-picker-menu');
     await picker.getByRole('option', { name: /edge-checkout/ }).click();
     await picker.getByRole('option', { name: /api-ip-only/ }).click();
     await pickerTrigger.press('Escape');
 
-    const edgeTarget = dialog.getByRole('button', { name: 'edge-checkout exact target', exact: true });
+    const edgeTarget = panel.getByRole('button', { name: 'edge-checkout exact target', exact: true });
     await expect(edgeTarget).toBeEnabled({ timeout: 10_000 });
+    await expect(edgeTarget).toContainText('Select exact target');
     await edgeTarget.click();
-    const edgeOptions = dialog.getByRole('listbox', { name: 'edge-checkout exact target', exact: true });
+    const edgeOptions = panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true });
     await expect(edgeOptions.getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ })).toBeVisible();
     await expect(edgeOptions.getByRole('option', { name: /^checkout\.acme\.com/ })).toHaveCount(0);
     await edgeOptions.getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ }).click();
 
-    await expect(dialog.getByText(/api-ip-only has no exact target compatible with URL-Only Schedule Probe/)).toBeVisible();
-    await chooseCustomSelect(dialog, 'Check', HOST_CHECK);
+    await expect(panel.getByText(/api-ip-only has no exact target compatible with URL-Only Schedule Probe/)).toBeVisible();
+    await expect(panel.locator('.rf-readiness')).toContainText('Select one exact active target for every selected group.');
+    await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+
+    await panel.getByLabel('Find a check').fill('');
+    await chooseCustomSelect(panel, 'Check', HOST_CHECK);
     await expect(edgeTarget).toContainText('Select exact target');
     await edgeTarget.click();
-    await expect(dialog.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /^checkout\.acme\.com/ })).toBeVisible();
-    await expect(dialog.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ })).toHaveCount(0);
+    await expect(panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /^checkout\.acme\.com/ })).toBeVisible();
+    await expect(panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ })).toHaveCount(0);
+    expect(writes).toEqual([]);
   });
 
   test('target-group schedule filters exact targets and clears an incompatible selection', async ({ page }) => {

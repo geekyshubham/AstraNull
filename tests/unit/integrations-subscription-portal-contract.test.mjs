@@ -231,11 +231,29 @@ describe('Subscription portal annotations', () => {
     assert.match(subscription, /Source snapshot/);
     assert.match(subscription, /source timestamp not provided/);
     assert.match(subscription, /> Refresh\s*<\/Button>/);
-    assert.match(subscription, /Effective access \(authoritative\)/);
-    assert.match(subscription, /enabledLabel="Included" disabledLabel="Not included"/);
-    assert.match(subscription, /enabledLabel="Enabled" disabledLabel="Disabled"/);
+    assert.match(subscription, /title="Feature access"/);
+    assert.match(subscription, /label: 'Access',/);
+    assert.match(subscription, /value=\{item\.effective_enabled\} enabledLabel="Available" disabledLabel="Unavailable"/);
+    assert.match(subscription, /item\.plan_enabled === true \? 'Included in plan' : item\.plan_enabled === false \? 'Not in plan' : 'Plan inclusion not recorded'/);
+    assert.match(subscription, /Source: \{source\}/);
     assert.match(subscription, /CheckCircle2 : value === false \? CircleMinus : CircleHelp/);
+    assert.match(SOURCE, /const label = value === true \? enabledLabel : value === false \? disabledLabel : 'Not recorded';/);
     assert.doesNotMatch(subscription, /subscription-entitlement-pill|Entitlement breakdown/);
+  });
+
+  it('keeps feature access separate from configured or working integrations', () => {
+    assert.match(subscription, /label: 'What access does not mean'/);
+    assert.match(subscription, /Available does not mean it is configured or working/);
+    assert.match(SOURCE, /connectors: 'Not that a provider is connected; set one up in Integrations\.'/);
+    assert.match(SOURCE, /high_scale_program: 'Not self-service\. Only SOC can approve and run high-scale validation\.'/);
+  });
+
+  it('never presents unknown usage or limits as zero or unlimited and states units and windows', () => {
+    assert.match(subscription, /Unit: checks · window: last 60 minutes/);
+    assert.match(subscription, /usage not measured \(not zero\)/);
+    assert.match(subscription, /limit not recorded \(not unlimited\)/);
+    assert.match(subscription, /Progress is unavailable until both usage and a plan limit are recorded/);
+    assert.doesNotMatch(subscription, /high_scale_requests_per_month|High-scale requests/);
   });
 
   it('keeps subscription styling token-scoped', () => {

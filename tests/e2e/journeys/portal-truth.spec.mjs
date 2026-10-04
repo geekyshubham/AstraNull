@@ -11,6 +11,7 @@ import {
   gotoPortalRoute,
   gotoPublicPortalRoute,
   injectPortalDevHeadersSession,
+  PORTAL_SESSION,
 } from '../../helpers/portal-playwright-session.mjs';
 
 async function openCheck(page, checkId) {
@@ -18,6 +19,16 @@ async function openCheck(page, checkId) {
     entityIds: { 'check-detail': checkId },
   });
   await expect(page.locator('h1').first()).toBeVisible();
+}
+
+async function openCheckTechnicalDetails(page) {
+  const disclosure = page.locator('details.detail-technical');
+  await expect(disclosure).not.toHaveAttribute('open', '');
+  const summary = disclosure.locator('summary', { hasText: 'Technical details' });
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  await expect(disclosure).toHaveAttribute('open', '');
+  return disclosure;
 }
 
 async function openTechnicalProbeEvidence(page) {
@@ -42,8 +53,11 @@ test.describe('portal truth surfaces', () => {
     await openCheck(page, 'l3.icmp_flood.readiness');
     await expect(page.getByText('Metadata evaluation', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('No network I/O', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('ATT-002', { exact: true })).toBeVisible();
-    await expect(page.getByText('volumetric', { exact: true })).toBeVisible();
+    await expect(page.getByText('ATT-002', { exact: true })).toBeHidden();
+    let technical = await openCheckTechnicalDetails(page);
+    await expect(technical.getByText('ATT-002', { exact: true })).toBeVisible();
+    await expect(technical.getByText('volumetric', { exact: true })).toBeVisible();
+    await expect(technical.getByText('l3.icmp_flood.readiness', { exact: true })).toBeVisible();
 
     await openCheck(page, 'ops.runbook_contact_validation.safe');
     await expect(page.getByText('Operations self-check', { exact: true }).first()).toBeVisible();
@@ -56,7 +70,9 @@ test.describe('portal truth surfaces', () => {
     await openCheck(page, 'waf.offensive_sqli.soc');
     await expect(page.getByText('Request only', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('No customer execution', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('WV-001', { exact: true })).toBeVisible();
+    technical = await openCheckTechnicalDetails(page);
+    await expect(technical.getByText('WV-001', { exact: true })).toBeVisible();
+    await expect(technical.getByText('No ATT identifiers recorded.', { exact: true })).toBeVisible();
   });
 
   test('run detail excludes public_api evidence lookalikes and refuses positive placement', async ({ page }) => {
@@ -352,8 +368,29 @@ test.describe('portal truth surfaces', () => {
     await injectPortalDevHeadersSession(page);
     await page.goto(`${getPortalPlaywrightBaseUrl()}/app#not-a-real-route`, { waitUntil: 'networkidle' });
 
-    await expect(page.getByText('Portal route not found.', { exact: true })).toBeVisible();
+    const unavailable = page.locator('[data-unavailable-kind="not-found"]');
+    await expect(unavailable.getByRole('heading', { level: 1, name: 'This page is unavailable.' })).toBeVisible();
+    await expect(unavailable.locator('.public-unavailable-requested code')).toHaveText(/not-a-real-route/);
     await expect(page.locator('main h1').filter({ hasText: /^Dashboard$/ })).toHaveCount(0);
+    expect(new URL(page.url()).hash).toBe('#not-a-real-route');
+  });
+
+  test('a denied deep link stays on its address with a persistent notice and loads none of its data', async ({ page }) => {
+    const auditRequests = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/v1/audit')) auditRequests.push(request.url());
+    });
+    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, user_id: 'usr_viewer', role: 'viewer' });
+    await page.goto(`${getPortalPlaywrightBaseUrl()}/app#audit`, { waitUntil: 'networkidle' });
+
+    const denied = page.locator('[data-unavailable-kind="access-denied"]');
+    await expect(denied.getByRole('heading', { level: 1, name: 'You do not have access to this page.' })).toBeVisible();
+    await expect(denied).toContainText('the viewer role');
+    await expect(denied.getByRole('link', { name: /^Go to / })).toHaveAttribute('href', '#dashboard');
+    await page.waitForTimeout(9_000);
+    await expect(denied).toBeVisible();
+    expect(new URL(page.url()).hash).toBe('#audit');
+    expect(auditRequests).toEqual([]);
   });
 
 });

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AnchorButton, Button } from '../ui/button';
+import { Button } from '../ui/button';
 import { ExplanationField, VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
-import { buildDetailHref } from '../../lib/route-params';
+import { openEvidenceInspector } from '../../lib/evidence-inspector.mjs';
 import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 
@@ -224,6 +224,10 @@ export function FindingExplanationPanel({
   const linkedRunId = getString(visibleRunEvidence.detail, ['id', 'test_run_id'], testRunId);
   const runCheckId = getString(visibleRunEvidence.detail, ['check_id'], '');
   const eventCount = visibleRunEvidence.events.length;
+  const runVerdictRaw = visibleRunEvidence.detail?.verdict;
+  const runVerdict = (typeof runVerdictRaw === 'string' ? runVerdictRaw : getString(isDataItem(runVerdictRaw) ? runVerdictRaw : null, ['verdict', 'result'], '')).toLowerCase();
+  const findingOpen = ['open', 'remediation_pending', ''].includes(getString(finding, ['status', 'state'], '').toLowerCase());
+  const contradicts = findingOpen && ['pass', 'passed', 'protected', 'allowed_as_expected'].includes(runVerdict);
 
   return (
     <div className="finding-explanation-panel">
@@ -235,10 +239,21 @@ export function FindingExplanationPanel({
           <ExplanationField label="Run check" value={runCheckId || 'Not recorded on linked run'} />
           <ExplanationField label="Run event records" value={`${eventCount} loaded from linked run`} />
         </div>
+        {contradicts ? (
+          <p className="form-banner" role="note">
+            The originating run records a passing verdict while this finding is still open. The records disagree; review the evidence before deciding. Nothing here was replaced by a later result.
+          </p>
+        ) : null}
         <div className="row-actions">
-          <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', linkedRunId)}>
-            Open linked run
-          </AnchorButton>
+          <Button
+            size="sm"
+            variant="ghost"
+            data-focus-key="explanation-view-evidence"
+            onClick={() => openEvidenceInspector({ entry: 'finding', finding_id: findingId, target_id: getString(finding, ['target_id'], '') || undefined, check_id: runCheckId || undefined }, { focusKey: 'explanation-view-evidence' })}
+            disabled={!findingId}
+          >
+            View original evidence
+          </Button>
         </div>
       </section>
       <VerdictExplanationPanel

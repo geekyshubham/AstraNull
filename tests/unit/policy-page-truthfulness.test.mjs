@@ -10,6 +10,14 @@ const TARGET_GROUP_SOURCE = readFileSync(
   new URL('../../apps/web/react/src/pages/target-group-detail-view.tsx', import.meta.url),
   'utf8',
 );
+const REFINED_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/pages/refined/policies-refined.tsx', import.meta.url),
+  'utf8',
+);
+const CREATE_PANEL_SOURCE = REFINED_SOURCE.slice(
+  REFINED_SOURCE.indexOf('function CreateSchedulePanel('),
+  REFINED_SOURCE.indexOf('function readStateFilter('),
+);
 const policyStart = SOURCE.indexOf('export function PolicyPage(');
 const policyEnd = SOURCE.indexOf('export function SupportPage(', policyStart);
 const POLICY_SOURCE = SOURCE.slice(policyStart, policyEnd);
@@ -18,16 +26,28 @@ const TARGET_GROUP_SCHEDULE_SOURCE = TARGET_GROUP_SOURCE.match(
 )?.[0] ?? '';
 
 assert.ok(policyStart >= 0 && policyEnd > policyStart, 'PolicyPage source block must be discoverable');
+assert.ok(CREATE_PANEL_SOURCE.length > 0, 'single create-schedule panel source must be discoverable');
 assert.ok(TARGET_GROUP_SCHEDULE_SOURCE, 'target-group schedule form source must be discoverable');
 
 describe('Policy page truthfulness contract', () => {
   it('does not inject a hidden default safe window from the collapsed optional section', () => {
-    const safeWindowDetails = POLICY_SOURCE.match(/<details className="full">[\s\S]*?<\/details>/)?.[0] ?? '';
-    assert.ok(safeWindowDetails, 'optional safe-window details must render');
+    const safeWindowDetails = CREATE_PANEL_SOURCE.match(/<details className="rf-disclosure full">[\s\S]*?<\/details>/)?.[0] ?? '';
+    assert.ok(safeWindowDetails, 'optional safe-window details must render in the single create panel');
     assert.doesNotMatch(safeWindowDetails, /defaultValue="(?:Mon|02:00|04:00|UTC)"/);
-    assert.match(POLICY_SOURCE, /const hasSafeWindow = safeWindowValues\.some\(Boolean\)/);
+    assert.match(safeWindowDetails, /name="safe_window_day" value=\{form\.windowDay\}/);
+    assert.match(safeWindowDetails, /<input name="safe_window_start" type="time" \/>/);
+    assert.match(safeWindowDetails, /<input name="safe_window_end" type="time" \/>/);
+    assert.match(POLICY_SOURCE, /const \[policyWindowDay, setPolicyWindowDay\] = useState\(''\);/);
+    assert.match(POLICY_SOURCE, /const hasSafeWindow = \[day, start, end\]\.some\(Boolean\)/);
     assert.match(POLICY_SOURCE, /hasSafeWindow && !safeWindowValues\.every\(Boolean\)/);
     assert.match(POLICY_SOURCE, /const safe_windows = hasSafeWindow \? \[\{ day, start, end, timezone \}\] : \[\]/);
+  });
+
+  it('shows the schedule timezone as a visible, validated field instead of a hidden default', () => {
+    assert.match(CREATE_PANEL_SOURCE, /<span>Schedule timezone \(IANA\)<\/span>/);
+    assert.match(CREATE_PANEL_SOURCE, /aria-invalid=\{!timezoneValid \|\| undefined\}/);
+    assert.match(CREATE_PANEL_SOURCE, /!timezoneValid \|\| busy !== ''/);
+    assert.match(POLICY_SOURCE, /if \(!isValidTimezone\(timezone\)\)/);
   });
 
   it('does not expose unsupported event-driven or event-trigger controls', () => {
@@ -79,13 +99,29 @@ describe('Policy page truthfulness contract', () => {
   it('requires one explicit active target per selected group and displays immutable target identity', () => {
     assert.match(POLICY_SOURCE, /`\/v1\/target-groups\/\$\{encodeURIComponent\(targetGroupId\)\}`/);
     assert.match(POLICY_SOURCE, /target\.deleted_at == null && target\.archived_at == null/);
-    assert.match(POLICY_SOURCE, /Choose one exact active target per group/);
-    assert.match(POLICY_SOURCE, /Ambiguous groups are never assigned a target automatically/);
+    assert.match(CREATE_PANEL_SOURCE, /then one exact target in each\. Targets are never assigned automatically, and the bound identity cannot change after creation\./);
     assert.doesNotMatch(POLICY_SOURCE, /setPolicyTargetGroupIds\(\[groupId\]\)/);
     assert.match(POLICY_SOURCE, /const policyBindingsReady = policyTargetGroupIds\.length > 0/);
-    assert.match(POLICY_SOURCE, /!policyBindingsReady \|\| busy !== ''/);
-    assert.match(POLICY_SOURCE, /label: 'Exact target'/);
-    assert.match(POLICY_SOURCE, /buildDetailHref\('target-detail', targetId\)/);
-    assert.match(POLICY_SOURCE, /targetKind} · \{targetId\}/);
+    assert.match(CREATE_PANEL_SOURCE, /const submitDisabled = noGroups \|\| noChecks \|\| !form\.checkId \|\| !form\.bindingsReady/);
+    assert.match(REFINED_SOURCE, /label: 'Exact target'/);
+    assert.match(REFINED_SOURCE, /buildDetailHref\('target-detail', target\.targetId\)/);
+    assert.match(REFINED_SOURCE, /description: `\$\{effectivePolicyTargetKind\(target\)\.replace\(\/_\/g, ' '\)\} · \$\{targetId\}`/);
+    assert.match(CREATE_PANEL_SOURCE, /Exactly these records are written/);
+  });
+
+  it('carries a caller target only when it is the exact, compatible target in the named group', () => {
+    assert.match(POLICY_SOURCE, /getHashQueryParam\('check'\)/);
+    assert.match(POLICY_SOURCE, /getHashQueryParam\('target'\)/);
+    assert.match(POLICY_SOURCE, /preferredTargetId && targets\.some\(\s*\(target\) => getString\(target, \['id'\], ''\) === preferredTargetId && isPolicyTargetCompatible\(preferredCheck, target\)/);
+    assert.doesNotMatch(POLICY_SOURCE, /targets\[0\]/);
+    assert.match(POLICY_SOURCE, /if \(!policyCheckId && safeChecks\.length === 1\) setPolicyCheckId/);
+  });
+
+  it('keeps the bound target, group, and check out of schedule edits', () => {
+    const editDialog = REFINED_SOURCE.slice(REFINED_SOURCE.indexOf('export function ScheduleEditDialog('), REFINED_SOURCE.indexOf('export function ScheduleActions('));
+    assert.match(editDialog, /aria-label="Immutable binding"/);
+    for (const field of ['target_id', 'target_group_id', 'check_id']) {
+      assert.doesNotMatch(editDialog, new RegExp(`changed\\.${field}`));
+    }
   });
 });

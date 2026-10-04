@@ -2,7 +2,6 @@ import { findingStatus } from '../../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem } from '../../lib/types';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
-// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainFindingTitle, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { Badge } from '../ui/badge';
 
@@ -55,7 +54,9 @@ export function FindingCard({
     <a
       className={`finding-card finding-row-primary${active ? ' is-active' : ''}`}
       href={href}
-      aria-label={`Open finding ${title}, ${formatSeverityLabel(severity)}, ${state}`}
+      data-focus-key={id ? `finding-${id}` : undefined}
+      aria-current={active ? 'true' : undefined}
+      aria-label={`${onOpen ? 'View evidence for finding' : 'Open finding'} ${title}, ${formatSeverityLabel(severity)}, ${state}`}
       onClick={(event) => {
         if (!id || !onOpen) return;
         event.preventDefault();

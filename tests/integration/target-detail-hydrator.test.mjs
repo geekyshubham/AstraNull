@@ -38,7 +38,46 @@ describe('target detail hydrator (FT-TD-01..07)', () => {
     assert.equal(res.json.counts.runs_total, 1);
     assert.equal(res.json.loa.id, PORTAL_BASELINE_IDS.loaId);
     assert.equal(res.json.waf_posture.vendor, 'cloudflare');
+    // The posture is the recorded synthetic config on the tenant-owned asset, and
+    // origin status stays truthful under the new binding contract: no binding is
+    // proven from plain IP reachability, so origin is not_tested/none here.
     assert.equal(res.json.waf_posture.posture, 'protected');
+  });
+
+  it('FT-TD-01b ignores tenantless and foreign WAF posture child rows for the same asset id', async () => {
+    const { getStore } = await import('../../src/store.mjs');
+    const store = getStore();
+    const snapshots = store.wafPostureSnapshots;
+    const intrudingAt = '2026-12-01T00:00:00.000Z';
+    const tenantless = {
+      id: 'wps_unstamped_probe',
+      waf_asset_id: 'wa_checkout_1',
+      state: 'unprotected',
+      posture: 'unprotected',
+      observed_at: intrudingAt,
+    };
+    const foreign = {
+      id: 'wps_foreign_probe',
+      tenant_id: PORTAL_BASELINE_IDS.tenantBId,
+      waf_asset_id: 'wa_checkout_1',
+      state: 'unprotected',
+      posture: 'unprotected',
+      observed_at: intrudingAt,
+    };
+    snapshots.push(tenantless, foreign);
+    try {
+      // Both intruders are newer than the owned snapshot, so a missing tenant
+      // stamp or a borrowed foreign row would flip the posture. Neither may.
+      const res = await request(baseUrl, 'GET', `/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, {
+        headers: ownerHeaders(),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.json.waf_posture.posture, 'protected');
+      assert.equal(res.json.waf_posture.vendor, 'cloudflare');
+    } finally {
+      snapshots.splice(snapshots.indexOf(tenantless), 1);
+      snapshots.splice(snapshots.indexOf(foreign), 1);
+    }
   });
 
   it('FT-TD-02 verification history oldest→newest; pending has no source_ref', async () => {

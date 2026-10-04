@@ -423,19 +423,47 @@ describe('react portal route access', () => {
     const bootStart = APP_SOURCE.indexOf('async function boot()');
     const bootEnd = APP_SOURCE.indexOf("boot().catch", bootStart);
     const boot = APP_SOURCE.slice(bootStart, bootEnd);
-    const fallback = boot.indexOf('fallbackRouteForSession(nextSession)');
-    const authorize = boot.indexOf('canAccessRoute(nextSession.role, requestedBootRoute');
-    const redirect = boot.indexOf('window.history.replaceState');
     const route = boot.indexOf('setRoute(bootRoute)');
+    const authorize = boot.indexOf('routeAllowedFor(nextSession, bootRoute)');
     const hydrate = boot.indexOf('await refresh(nextConfig, nextSession, bootRoute)');
     const reveal = boot.indexOf('setLoading(false)');
 
-    assert.ok(fallback >= 0, 'boot must select an authorized role-specific fallback');
-    assert.ok(fallback < authorize, 'the fallback must be available to the route authorization decision');
-    assert.ok(authorize < redirect, 'authorization must decide whether the hash is replaced');
-    assert.ok(redirect < route, 'an unauthorized deep-link must point at its authorized fallback before route state changes');
-    assert.ok(route < hydrate, 'fallback route state must be selected before any route fetch');
-    assert.ok(hydrate < reveal, 'the authorized route must hydrate before route-specific rendering is revealed');
-    assert.doesNotMatch(boot, /refresh\(nextConfig, nextSession, requestedBootRoute\)/);
+    assert.ok(route >= 0, 'boot keeps the requested route as route state');
+    assert.ok(authorize > route, 'boot authorizes the requested route against the session');
+    assert.ok(hydrate > authorize, 'route data is fetched only inside the authorization branch');
+    assert.ok(reveal > hydrate, 'an authorized route hydrates before route-specific rendering is revealed');
+    assert.match(boot.slice(authorize, hydrate), /^routeAllowedFor\(nextSession, bootRoute\)\) \{\s*$/m);
+    assert.doesNotMatch(boot, /history\.replaceState\([^)]*fallbackRouteForSession/, 'a denied deep link is not silently rewritten to a healthy page');
+  });
+
+  it('keeps a denied route on its own address with a persistent access-denied page and no hydration', () => {
+    assert.match(APP_SOURCE, /function routeAllowedFor\([^)]*\)[^{]*\{\s*return canAccessRoute\(session\?\.role, route, \{ principal: session\?\.principal, staffRole: session\?\.staff_role \}\);/);
+    assert.match(APP_SOURCE, /const routeAllowed = routeAllowedFor\(session, route\);/);
+    assert.match(APP_SOURCE, /\{routeAllowed \? \(\s*<RouteView/);
+    assert.match(APP_SOURCE, /<PortalUnavailablePage\s+kind="access-denied"/);
+    assert.match(APP_SOURCE, /homeHref=\{`#\$\{fallbackRouteForSession\(activeSession\)\}`\}/, 'the denied page links to the role home instead of redirecting');
+    assert.doesNotMatch(APP_SOURCE, /setTimeout\([^)]*(?:fallbackRouteForSession|location\.hash)/, 'no timed fallback redirect');
+
+    const refreshCalls = [...APP_SOURCE.matchAll(/(?:await |void )refresh\(/g)].map((match) => match.index);
+    assert.ok(refreshCalls.length >= 5, 'every hydration path is covered');
+    for (const index of refreshCalls) {
+      const preceding = APP_SOURCE.slice(Math.max(0, index - 400), index);
+      assert.match(preceding, /routeAllowedFor\(/, `refresh at offset ${index} is gated on route access`);
+    }
+    const hashChange = APP_SOURCE.slice(APP_SOURCE.indexOf('function onHashChange()'), APP_SOURCE.indexOf("window.addEventListener('hashchange'"));
+    assert.match(hashChange, /if \(routeAllowedFor\(accessSession, nextRoute\) && lastHydratedRoute\.current !== nextRoute\) setHydratingRoute\(nextRoute\);/);
+  });
+
+  it('preserves sign-in intent only through the public safe-return sanitizer', () => {
+    const helper = APP_SOURCE.slice(APP_SOURCE.indexOf('function loginDestinationWithIntent('), APP_SOURCE.indexOf('export default function App()'));
+    assert.match(helper, /resolveLoginDestination\(candidate, window\.location\.pathname\)/);
+    assert.match(helper, /if \(!dest\.startsWith\('\/'\) \|\| dest\.startsWith\('\/\/'\)\) return dest;/, 'external identity providers own their own return flow');
+    assert.match(helper, /portalSurface\(window\.location\.pathname\) === 'staff'\) return dest;/, 'staff routes never become a customer return target');
+    assert.match(helper, /buildLoginReturnUrl\(dest, \{ hash: window\.location\.hash, reason \}\)/);
+    assert.doesNotMatch(helper, /encodeURIComponent\(window\.location\.hash\)|\+ window\.location\.hash/, 'the raw hash is never appended');
+    const bootStart = APP_SOURCE.indexOf('async function boot()');
+    const boot = APP_SOURCE.slice(bootStart, APP_SOURCE.indexOf('boot().catch', bootStart));
+    assert.match(boot, /loginDestinationWithIntent\(gate\.loginUrl, null\)/);
+    assert.match(boot, /loginDestinationWithIntent\(candidate, 'session_expired'\)/);
   });
 });

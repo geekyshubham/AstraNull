@@ -12,6 +12,13 @@ import {
 } from '../../lib/connectorProviders/domainInventory.mjs';
 import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../../lib/ownershipPolicy.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
+import {
+  DeclarationValidationError,
+  mergeStoredDeclaration,
+  normalizeDeclarationInput,
+  presentGroupDeclaration,
+  presentTargetDeclaration,
+} from '../../lib/targetDeclarations.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { runMetadataRetentionInTransaction } from './retentionRepository.mjs';
@@ -26,6 +33,21 @@ function toIso(value) {
 function asObject(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value;
   return {};
+}
+
+function readDeclarationPatch(body) {
+  if (body?.declaration === undefined) return { patch: null, error: null };
+  try {
+    return { patch: normalizeDeclarationInput(body.declaration), error: null };
+  } catch (error) {
+    if (error instanceof DeclarationValidationError) return { patch: null, error: error.toResponse() };
+    throw error;
+  }
+}
+
+function storedDeclarationJson(current, patch) {
+  if (!patch || Object.keys(patch).length === 0) return null;
+  return mergeStoredDeclaration(current, patch);
 }
 
 function mapTenantRow(row) {
@@ -102,9 +124,13 @@ function mapTargetGroupRow(row) {
     validation_mode: row.validation_mode ?? 'external_only',
     ownership_status: row.ownership_status ?? 'unverified',
     dns_ownership: row.dns_ownership ?? null,
+    declaration: presentGroupDeclaration(row.declaration_json),
     // Only the list query selects these summary columns; other callers omit them entirely.
     ...(row.target_count === undefined ? {} : { target_count: Number(row.target_count) }),
     ...(row.loa_state === undefined ? {} : { loa_state: row.loa_state ?? 'required' }),
+    ...(row.open_findings_count === undefined
+      ? {}
+      : { open_findings_count: Number(row.open_findings_count) }),
   };
 }
 
@@ -247,6 +273,7 @@ function mapTargetRow(row) {
   const metadata = asObject(row.metadata_json);
   if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
   mapped.tags = targetTagsFromRecord(mapped);
+  mapped.declaration = presentTargetDeclaration(row.declaration_json, row.group_declaration_json);
   return mapped;
 }
 
@@ -407,9 +434,10 @@ export function createCoreCatalogRepository(pool, options = {}) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value,
-                  t.expected_behavior, t.metadata_json, t.created_at,
+                  t.expected_behavior, t.metadata_json, t.declaration_json, t.created_at,
                   tg.name AS target_group_name, tg.environment_id,
                   tg.expected_behavior_default, tg.ownership_status,
+                  tg.declaration_json AS group_declaration_json,
                   environment.name AS environment_name,
                   verification.state AS verification_state,
                   verification.source_kind AS verification_source_kind,
@@ -434,6 +462,37 @@ export function createCoreCatalogRepository(pool, options = {}) {
       });
     },
 
+    /** One active target. No metadata blob and no evidence context. */
+    async getTarget(ctx, id) {
+      if (!ctx?.tenantId || !id) return null;
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
+                  t.declaration_json, tg.declaration_json AS group_declaration_json
+           FROM targets t
+           JOIN target_groups tg
+             ON tg.id = t.target_group_id AND tg.tenant_id = t.tenant_id
+           WHERE t.tenant_id = $1
+             AND t.id = $2
+             AND t.deleted_at IS NULL
+             AND tg.deleted_at IS NULL
+             AND tg.archived_at IS NULL`,
+          [ctx.tenantId, id],
+        );
+        const row = rows[0];
+        if (!row) return null;
+        return {
+          id: row.id,
+          tenant_id: row.tenant_id,
+          target_group_id: row.target_group_id,
+          kind: row.kind,
+          value: row.value,
+          normalized_value: row.normalized_value ?? null,
+          declaration: presentTargetDeclaration(row.declaration_json, row.group_declaration_json),
+        };
+      });
+    },
+
     async listTargetGroups(ctx, options = {}) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const archivedOnly = options.archived === true;
@@ -444,9 +503,10 @@ export function createCoreCatalogRepository(pool, options = {}) {
           `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
                   tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
                   tg.safety_policy, tg.deleted_at, tg.deleted_by, tg.archived_at,
-                  tg.validation_mode, tg.ownership_status, tg.dns_ownership, tg.created_at,
+                  tg.validation_mode, tg.ownership_status, tg.dns_ownership, tg.declaration_json, tg.created_at,
                   COALESCE(tc.target_count, 0) AS target_count,
-                  loa.state AS loa_state
+                  loa.state AS loa_state,
+                  COALESCE(fc.open_findings_count, 0) AS open_findings_count
            FROM target_groups tg
            LEFT JOIN (
              SELECT target_group_id, COUNT(*)::int AS target_count
@@ -454,6 +514,33 @@ export function createCoreCatalogRepository(pool, options = {}) {
              WHERE tenant_id = $1 AND deleted_at IS NULL
              GROUP BY target_group_id
            ) tc ON tc.target_group_id = tg.id
+            LEFT JOIN (
+              -- Same predicate as the findings list group membership
+              -- (docs/backend/current-release-findings.md): stored group OR a
+              -- non-deleted member target in the group. Counts the exact open
+              -- lifecycle only (lower(btrim(f.status)) = 'open'), matching
+              -- the portal isFindingOpen contract and the status=open link;
+              -- in_progress is the UI Active bucket, not the open count, and
+              -- closure statuses never count. One grouped aggregate, not a
+              -- query per group, and never a capped page.
+              SELECT fk.group_key, COUNT(*)::int AS open_findings_count
+              FROM (
+                SELECT f.id, f.target_group_id AS group_key
+                FROM findings f
+                WHERE f.tenant_id = $1
+                  AND lower(btrim(f.status)) = 'open'
+                  AND f.target_group_id IS NOT NULL
+                UNION
+                SELECT f.id, member.target_group_id AS group_key
+                FROM findings f
+                JOIN targets member
+                  ON member.tenant_id = f.tenant_id AND member.id = f.target_id AND member.deleted_at IS NULL
+                WHERE f.tenant_id = $1
+                  AND lower(btrim(f.status)) = 'open'
+                  AND member.target_group_id IS NOT NULL
+              ) fk
+              GROUP BY fk.group_key
+            ) fc ON fc.group_key = tg.id
            LEFT JOIN LATERAL (
              SELECT state
              FROM loa_signatures
@@ -479,7 +566,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
             `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
                     tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
                     tg.safety_policy, tg.archived_at, tg.validation_mode,
-                    tg.ownership_status, tg.dns_ownership, tg.created_at
+                    tg.ownership_status, tg.dns_ownership, tg.declaration_json, tg.created_at
              FROM target_groups tg
              WHERE tg.id = $1 AND tg.tenant_id = $2
                AND tg.deleted_at IS NULL AND tg.archived_at IS NULL`,
@@ -489,7 +576,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
           if (!group) return null;
           const targets = await client.query(
             `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
-                    t.expected_behavior, t.metadata_json, t.created_at,
+                    t.expected_behavior, t.metadata_json, t.declaration_json, t.created_at,
                     verification.state AS verification_state
              FROM targets t
              LEFT JOIN target_verification_current verification
@@ -498,7 +585,11 @@ export function createCoreCatalogRepository(pool, options = {}) {
              ORDER BY t.created_at`,
             [id, ctx.tenantId],
           );
-          const mapped = targets.rows.map(mapTargetRow);
+          const groupStored = rows[0].declaration_json;
+          const mapped = targets.rows.map((targetRow) => mapTargetRow({
+            ...targetRow,
+            group_declaration_json: groupStored,
+          }));
           return { ...group, targets: mapped, target_count: mapped.length };
         });
       }
@@ -509,7 +600,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
           `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
                   tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
                   tg.safety_policy, tg.archived_at, tg.validation_mode,
-                  tg.ownership_status, tg.dns_ownership, tg.created_at,
+                  tg.ownership_status, tg.dns_ownership, tg.declaration_json, tg.created_at,
                   loa.state AS loa_state,
                   loa.signer_name AS loa_signer_name,
                   loa.signed_at AS loa_signed_at,
@@ -586,7 +677,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         // round trips. `uniq_target_edge_detection_target` guarantees at most one row per target.
         const targets = await client.query(
           `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
-                  t.expected_behavior, t.metadata_json, t.created_at,
+                  t.expected_behavior, t.metadata_json, t.declaration_json, t.created_at,
                   verification.state AS verification_state,
                   edge.detection AS edge_detection
            FROM targets t
@@ -601,8 +692,9 @@ export function createCoreCatalogRepository(pool, options = {}) {
            ORDER BY t.created_at`,
           [id, ctx.tenantId],
         );
+        const groupStored = row.declaration_json;
         const detailTargets = targets.rows.map((targetRow) => ({
-          ...mapDetailTargetRow(targetRow),
+          ...mapDetailTargetRow({ ...targetRow, group_declaration_json: groupStored }),
           edge_detection: presentTargetEdgeDetection(targetRow.edge_detection ?? null),
         }));
         return {
@@ -613,6 +705,9 @@ export function createCoreCatalogRepository(pool, options = {}) {
     },
 
     async createTargetGroup(ctx, body = {}, options = {}) {
+      const declared = readDeclarationPatch(body);
+      if (declared.error) return declared.error;
+      const declarationJson = storedDeclarationJson({}, declared.patch) ?? {};
       const id = options.id ?? newId('tg');
       const now = options.now ?? new Date().toISOString();
       const settings = body.settings_json && typeof body.settings_json === 'object' ? { ...body.settings_json } : null;
@@ -644,17 +739,17 @@ export function createCoreCatalogRepository(pool, options = {}) {
             `INSERT INTO target_groups (
                id, tenant_id, environment_id, name, description, expected_behavior_default,
                timezone, safe_test_windows, safety_policy, settings_json, validation_mode, ownership_status,
-               dns_ownership, created_at
+               dns_ownership, declaration_json, created_at
              )
-             VALUES ($1, $2, NULL, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, 'unverified', NULL, $11::timestamptz)
+             VALUES ($1, $2, NULL, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, 'unverified', NULL, $11::jsonb, $12::timestamptz)
              RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
                        timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
-                       dns_ownership, created_at`,
+                       dns_ownership, declaration_json, created_at`,
             [
               id, ctx.tenantId, record.name, record.description,
               record.expected_behavior_default, record.timezone, JSON.stringify(record.safe_test_windows),
               JSON.stringify(record.safety_policy), record.settings_json ? JSON.stringify(record.settings_json) : null,
-              record.validation_mode, now,
+              record.validation_mode, JSON.stringify(declarationJson), now,
             ],
           );
           await appendMutationAudit(auditRepository, client, ctx, {
@@ -663,6 +758,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
             resource_id: id,
             metadata: { changed_fields: ['name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
           }, now);
+          if (storedDeclarationJson({}, declared.patch)) {
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target_group.declaration_updated',
+              resource_type: 'target_group',
+              resource_id: id,
+              metadata: { changed_fields: ['declaration'] },
+            }, now);
+          }
           return mapTargetGroupRow(rows[0]);
         } catch (error) {
           if (error?.code === '23505') return { error: 'target_group_exists', status: 409 };
@@ -672,6 +775,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
     },
 
     async addTarget(ctx, groupId, body = {}, options = {}) {
+      const declared = readDeclarationPatch(body);
+      const declarationJson = declared.error ? {} : (storedDeclarationJson({}, declared.patch) ?? {});
       const id = options.id ?? newId('target');
       const now = options.now ?? new Date().toISOString();
       let normalized;
@@ -683,11 +788,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
       return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
-          `SELECT id FROM target_groups
+          `SELECT id, declaration_json FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [groupId, ctx.tenantId],
         );
         if (!groupResult.rows[0]) return null;
+        if (declared.error) return declared.error;
         const duplicate = await client.query(
           `SELECT id FROM targets
            WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
@@ -701,12 +807,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
           const { rows } = await client.query(
             `INSERT INTO targets (
                id, tenant_id, target_group_id, kind, value, normalized_value,
-               expected_behavior, metadata_json, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+               expected_behavior, metadata_json, declaration_json, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz)
              RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
-                       expected_behavior, metadata_json, created_at`,
+                       expected_behavior, metadata_json, declaration_json, created_at`,
             [id, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
-              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), now],
+              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), JSON.stringify(declarationJson), now],
           );
           await client.query(
             `UPDATE target_groups
@@ -725,6 +831,15 @@ export function createCoreCatalogRepository(pool, options = {}) {
               dropped_untrusted_fields: normalized.dropped_fields,
             },
           }, now);
+          if (storedDeclarationJson({}, declared.patch)) {
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target.declaration_updated',
+              resource_type: 'target',
+              resource_id: id,
+              metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
+            }, now);
+          }
+          rows[0].group_declaration_json = groupResult.rows[0].declaration_json;
           return mapTargetRow(rows[0]);
         } catch (error) {
           if (error?.code === '23505') return { error: 'target_exists', status: 409 };
@@ -801,12 +916,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
         const existing = await client.query(
           `SELECT id, tenant_id, environment_id, name, description, expected_behavior_default,
                   timezone, safe_test_windows, safety_policy, archived_at, deleted_at, validation_mode,
-                  ownership_status, dns_ownership, created_at
+                  ownership_status, dns_ownership, declaration_json, created_at
            FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [id, ctx.tenantId],
         );
         if (!existing.rows[0]) return null;
+        const declared = readDeclarationPatch(body);
+        if (declared.error) return declared.error;
         const current = existing.rows[0];
         if (body.safe_test_windows !== undefined && !Array.isArray(body.safe_test_windows)) {
           return { error: 'invalid_target_group', status: 400, field: 'safe_test_windows' };
@@ -839,6 +956,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
         if (body.safe_test_windows !== undefined) add('safe_test_windows', JSON.stringify(body.safe_test_windows), '::jsonb');
         if (body.safety_policy !== undefined) add('safety_policy', JSON.stringify(normalizeSafetyPolicy(body.safety_policy)), '::jsonb');
         if (body.validation_mode !== undefined) add('validation_mode', 'external_only');
+        const nextDeclaration = storedDeclarationJson(current.declaration_json, declared.patch);
+        if (nextDeclaration) {
+          sets.push(`declaration_json = $${n++}::jsonb`);
+          params.push(JSON.stringify(nextDeclaration));
+          changedFields.push('declaration');
+        }
         if (sets.length === 0) return mapTargetGroupRow(current);
 
         params.push(id, ctx.tenantId);
@@ -851,7 +974,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
                AND deleted_at IS NULL AND archived_at IS NULL
              RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
                        timezone, safe_test_windows, safety_policy, archived_at, validation_mode,
-                       ownership_status, dns_ownership, created_at`,
+                       ownership_status, dns_ownership, declaration_json, created_at`,
             params,
           );
           if (!rows[0]) return null;
@@ -859,6 +982,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
             action: 'target_group.updated', resource_type: 'target_group', resource_id: id,
             metadata: { changed_fields: changedFields },
           }, now);
+          if (changedFields.includes('declaration')) {
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target_group.declaration_updated',
+              resource_type: 'target_group',
+              resource_id: id,
+              metadata: { changed_fields: ['declaration'] },
+            }, now);
+          }
           return mapTargetGroupRow(rows[0]);
         } catch (error) {
           if (error?.code === '23505') return { error: 'target_group_exists', status: 409 };
@@ -926,7 +1057,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
       const now = options.now ?? new Date().toISOString();
       return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
-          `SELECT id FROM target_groups
+          `SELECT id, declaration_json FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [groupId, ctx.tenantId],
         );
@@ -934,13 +1065,16 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
         const existing = await client.query(
           `SELECT id, tenant_id, target_group_id, kind, value, normalized_value,
-                  expected_behavior, metadata_json, created_at
+                  expected_behavior, metadata_json, declaration_json, created_at
            FROM targets
            WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL`,
           [targetId, ctx.tenantId, groupId],
         );
         if (!existing.rows[0]) return null;
+        const declared = readDeclarationPatch(body);
+        if (declared.error) return declared.error;
         const current = existing.rows[0];
+        current.group_declaration_json = groupResult.rows[0].declaration_json;
         let normalized;
         try {
           normalized = normalizeTargetInput(body, { current });
@@ -997,6 +1131,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
           if (body.metadata !== undefined || body.metadata_json !== undefined) changedFields.push('metadata');
         }
         if (body.expected_behavior !== undefined) add('expected_behavior', body.expected_behavior ?? null);
+        const nextDeclaration = storedDeclarationJson(current.declaration_json, declared.patch);
+        if (nextDeclaration) {
+          sets.push(`declaration_json = $${n++}::jsonb`);
+          params.push(JSON.stringify(nextDeclaration));
+          changedFields.push('declaration');
+        }
         if (sets.length === 0) return mapTargetRow(current);
 
         params.push(targetId, ctx.tenantId, groupId);
@@ -1009,7 +1149,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
              WHERE id = $${idParam} AND tenant_id = $${tenantParam}
                AND target_group_id = $${groupParam} AND deleted_at IS NULL
              RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
-                       expected_behavior, metadata_json, created_at`,
+                       expected_behavior, metadata_json, declaration_json, created_at`,
             params,
           );
           if (!rows[0]) return null;
@@ -1017,6 +1157,15 @@ export function createCoreCatalogRepository(pool, options = {}) {
             action: 'target.updated', resource_type: 'target', resource_id: targetId,
             metadata: { target_group_id: groupId, changed_fields: changedFields, dropped_untrusted_fields: normalized.dropped_fields },
           }, now);
+          if (changedFields.includes('declaration')) {
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target.declaration_updated',
+              resource_type: 'target',
+              resource_id: targetId,
+              metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
+            }, now);
+          }
+          rows[0].group_declaration_json = current.group_declaration_json;
           return mapTargetRow(rows[0]);
         } catch (error) {
           if (error?.code === '23505') return { error: 'target_exists', status: 409 };
@@ -1030,6 +1179,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
      * (and lazily creates) the tenant default group inside the same advisory-locked transaction.
      */
     async createTargetDirect(ctx, body = {}, options = {}) {
+      const declared = readDeclarationPatch(body);
+      const declarationJson = declared.error ? {} : (storedDeclarationJson({}, declared.patch) ?? {});
       const now = options.now ?? new Date().toISOString();
       let normalized;
       try {
@@ -1043,16 +1194,20 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
       return withCatalogMutation(pool, ctx, async (client) => {
         let groupId = explicitGroupId;
+        let groupDeclaration = {};
         if (groupId) {
           const groupResult = await client.query(
-            `SELECT id FROM target_groups
+            `SELECT id, declaration_json FROM target_groups
              WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
             [groupId, ctx.tenantId],
           );
           if (!groupResult.rows[0]) return { error: 'target_group_not_found', status: 404 };
+          if (declared.error) return declared.error;
+          groupDeclaration = groupResult.rows[0].declaration_json ?? {};
         } else {
+          if (declared.error) return declared.error;
           const existing = await client.query(
-            `SELECT id FROM target_groups
+            `SELECT id, declaration_json FROM target_groups
              WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
                AND settings_json->>'default_scope' = 'true'
              ORDER BY created_at
@@ -1061,6 +1216,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
           );
           if (existing.rows[0]) {
             groupId = existing.rows[0].id;
+            groupDeclaration = existing.rows[0].declaration_json ?? {};
           } else {
             groupId = options.defaultGroupId ?? newId('tg');
             const expectedBehaviorDefault = body.expected_behavior ?? 'block_at_edge';
@@ -1096,12 +1252,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
           const { rows } = await client.query(
             `INSERT INTO targets (
                id, tenant_id, target_group_id, kind, value, normalized_value,
-               expected_behavior, metadata_json, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+               expected_behavior, metadata_json, declaration_json, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz)
              RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
-                       expected_behavior, metadata_json, created_at`,
+                       expected_behavior, metadata_json, declaration_json, created_at`,
             [id, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
-              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), now],
+              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), JSON.stringify(declarationJson), now],
           );
           await client.query(
             `UPDATE target_groups SET ownership_status = 'unverified'
@@ -1116,6 +1272,15 @@ export function createCoreCatalogRepository(pool, options = {}) {
               dropped_untrusted_fields: normalized.dropped_fields,
             },
           }, now);
+          if (storedDeclarationJson({}, declared.patch)) {
+            await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target.declaration_updated',
+              resource_type: 'target',
+              resource_id: id,
+              metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
+            }, now);
+          }
+          rows[0].group_declaration_json = groupDeclaration;
           return mapTargetRow(rows[0]);
         } catch (error) {
           if (error?.code === '23505') return { error: 'target_exists', status: 409 };
@@ -1138,6 +1303,11 @@ export function createCoreCatalogRepository(pool, options = {}) {
       const patchBody = {
         ...(body.tags !== undefined ? { tags: body.tags } : {}),
         ...(body.expected_behavior !== undefined ? { expected_behavior: body.expected_behavior } : {}),
+        ...(body.declaration !== undefined ? { declaration: body.declaration } : {}),
+        ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+        ...(body.metadata_json !== undefined ? { metadata_json: body.metadata_json } : {}),
+        ...(body.kind !== undefined ? { kind: body.kind } : {}),
+        ...(body.value !== undefined ? { value: body.value } : {}),
       };
       return this.patchTarget(ctx, groupRow.target_group_id, targetId, patchBody, options);
     },

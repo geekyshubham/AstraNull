@@ -3,6 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
 import {
   EVIDENCE_SHAPE,
+  FINDING_LINEAGE_SHAPE,
   TARGET_DETAIL_SHAPE,
   validateListEnvelope,
   validateShape,
@@ -89,6 +90,13 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     assert.equal(live.status, 200);
     assertConforms('live target-detail', live.json, TARGET_DETAIL_SHAPE);
     assert.equal(live.json.target?.id, PORTAL_BASELINE_IDS.targetId);
+    assert.equal(live.json.target.declaration.purpose_status === 'declared'
+      || live.json.target.declaration.purpose_status === 'inherited'
+      || live.json.target.declaration.purpose_status === 'unassigned', true);
+    assert.equal(live.json.protection_profile.origin.binding_id, null);
+    assert.ok(['not_tested', 'unknown'].includes(live.json.protection_profile.origin.status));
+    assert.equal(typeof live.json.coverage.unknown_count, 'number');
+    assert.equal(typeof live.json.coverage.partial_count, 'number');
     assert.equal(live.json.edge_detection?.test_run_id, PORTAL_BASELINE_IDS.readinessRunId);
     assert.equal(live.json.edge_detection?.waf?.provider, 'cloudflare');
     assert.ok(typeof live.json.counts?.runs_total === 'number');
@@ -126,6 +134,52 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     assert.ok(malformedResult.issues.some((issue) => issue.startsWith('$.target.tags[1]')));
   });
 
+  it('FT-SHAPE-01c history read fields stay explicit arrays on profile and coverage', async () => {
+    const live = await liveGet(`/v1/targets/${PORTAL_BASELINE_IDS.targetId}`);
+    assert.equal(live.status, 200);
+    for (const parent of ['protection_profile', 'coverage']) {
+      for (const key of ['retained_family_states', 'comparable_changes', 'origin_bindings']) {
+        assert.ok(Array.isArray(live.json[parent][key]), `${parent}.${key}`);
+      }
+    }
+
+    const accepted = structuredClone(live.json);
+    accepted.protection_profile.comparable_changes = [{
+      family: 'waf',
+      previous_id: 'obs_prev',
+      observation_id: 'obs_next',
+      comparable: true,
+      reason: null,
+      change: 'changed',
+      direction: 'appeared',
+    }];
+    assert.equal(validateShape(accepted, TARGET_DETAIL_SHAPE).ok, true);
+
+    const unknown = structuredClone(accepted);
+    unknown.protection_profile.retained_family_states = [{
+      family: 'waf',
+      last_successful: { id: 'obs_1', cookie: 'session' },
+      latest_failed_attempt: null,
+      fresh_negative: false,
+      provider_loss: false,
+    }];
+    const unknownResult = validateShape(unknown, TARGET_DETAIL_SHAPE);
+    assert.equal(unknownResult.ok, false);
+    assert.ok(unknownResult.issues.some((issue) => issue.includes('undocumented field') || issue.includes('missing required field')));
+
+    const loose = structuredClone(live.json);
+    loose.coverage.origin_bindings = { id: 'obind_1' };
+    const looseResult = validateShape(loose, TARGET_DETAIL_SHAPE);
+    assert.equal(looseResult.ok, false);
+    assert.ok(looseResult.issues.some((issue) => issue.startsWith('$.coverage.origin_bindings')));
+
+    const missing = structuredClone(live.json);
+    delete missing.coverage.retained_family_states;
+    const missingResult = validateShape(missing, TARGET_DETAIL_SHAPE);
+    assert.equal(missingResult.ok, false);
+    assert.ok(missingResult.issues.includes('$.coverage.retained_family_states: missing required field'));
+  });
+
   it('FT-SHAPE-02 GET /v1/findings/:id/evidence conforms to evidence schema', async () => {
     const live = await liveGet(`/v1/findings/${PORTAL_BASELINE_IDS.findingId}/evidence`);
     assert.equal(live.status, 200);
@@ -133,6 +187,23 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     assertConforms('live evidence', live.json, EVIDENCE_SHAPE);
     assert.ok(live.json.bundle?.id);
     assert.ok(live.json.artifacts?.length > 0);
+  });
+
+  it('FT-SHAPE-02b finding detail exposes the strict retest lineage with latest status/finalized/completed_at', async () => {
+    const live = await liveGet(`/v1/findings/${PORTAL_BASELINE_IDS.findingId}`);
+    assert.equal(live.status, 200);
+    assert.ok(live.json.lineage && typeof live.json.lineage === 'object', 'lineage is always present');
+    assertConforms('live finding lineage', live.json.lineage, FINDING_LINEAGE_SHAPE);
+    // The latest attempt is explicit: an unfinalized run stays pending and can never
+    // advance remediation on its own.
+    const latest = live.json.lineage.latest;
+    if (latest) {
+      for (const key of ['test_run_id', 'relation', 'status', 'finalized', 'completed_at', 'pending', 'can_advance_remediation']) {
+        assert.ok(Object.hasOwn(latest, key), `latest.${key} must be explicit`);
+      }
+      assert.equal(latest.finalized, Boolean(latest.completed_at != null || ['completed', 'verdicted'].includes(latest.status)));
+      assert.equal(latest.can_advance_remediation, false);
+    }
   });
 
   it('FT-SHAPE-03 GET /v1/waf/coverage/summary conforms to summary schema', async () => {

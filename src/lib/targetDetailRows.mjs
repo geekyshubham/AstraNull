@@ -1,5 +1,8 @@
+import { isConnectorsEnabledForTenant, loadRuntimeConfig } from '../config.mjs';
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
+import { roleHasPermission } from '../contracts/roles.mjs';
+import { redactString } from './redact.mjs';
 import { WAF_EDGE_DETECTION_CHECK_ID } from './edgeDetection.mjs';
 
 const NON_PUBLISHED_VERDICTS = new Set(['', 'none', 'unknown', 'pending', 'planned', 'queued', 'running', 'collecting']);
@@ -24,6 +27,12 @@ export function evidenceBackedVerdict(verdict) {
   const value = String(verdict?.verdict ?? '').trim();
   if (NON_PUBLISHED_VERDICTS.has(value.toLowerCase())) return null;
   return verdictEvidenceIds(verdict).length > 0 ? value : null;
+}
+
+/** Remediation owner when a row recorded one. Never a hardcoded team name. */
+export function remediationOwnerGroup(ownerGroup) {
+  const value = typeof ownerGroup === 'string' ? ownerGroup.trim() : '';
+  return value || 'unassigned';
 }
 
 export function recentRunRow(run, verdict = null) {
@@ -105,6 +114,84 @@ export function edgeDetectionRequestRow(latestByCheck) {
     run_status: String(run.status ?? '').trim() || 'unknown',
     started_at: runStartedAt(run),
     completed_at: toIso(run.completed_at),
+  };
+}
+
+const YAML_SECRET_LINE = /^(\s*)([A-Za-z0-9_-]*(?:secret|token|password|credential|api_key|private_key)[A-Za-z0-9_-]*)\s*:\s*\S/i;
+
+/** Missing score stays null. A recorded 0 stays 0. */
+export function fingerprintMeasure(score) {
+  if (score == null || score === '') return { score: null, score_status: 'not_recorded' };
+  const number = Number(score);
+  if (!Number.isFinite(number)) return { score: null, score_status: 'not_recorded' };
+  return { score: number, score_status: 'recorded' };
+}
+
+function redactStoredYaml(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return redactString(value).split('\n').map((line) => (
+    YAML_SECRET_LINE.test(line) ? line.replace(/:.*/, ': [redacted]') : line
+  )).join('\n');
+}
+
+function connectorConfigAllowed(ctx) {
+  try {
+    const config = loadRuntimeConfig();
+    const enabled = config.featureFlags?.wafPostureEnabled === true
+      && isConnectorsEnabledForTenant(config, ctx?.tenantId);
+    if (!enabled) return { allowed: false, reason: 'feature_disabled' };
+    if (!roleHasPermission(ctx?.role, 'waf:connector_read')) {
+      return { allowed: false, reason: 'permission_denied' };
+    }
+    if (Array.isArray(ctx?.scopes)) {
+      const scopeOk = ctx.scopes.includes('*') || ctx.scopes.includes('waf:connector_read');
+      if (!scopeOk) return { allowed: false, reason: 'permission_denied' };
+    }
+    return { allowed: true, reason: null };
+  } catch {
+    return { allowed: false, reason: 'feature_disabled' };
+  }
+}
+
+/**
+ * Core fingerprint and marker fields stay. Connector config and stored YAML are
+ * returned only when the connector feature is on and the caller has waf:connector_read.
+ * Stored strings are re-read here and secret-bearing lines are redacted.
+ */
+export function presentWafPosture(posture, ctx) {
+  if (!posture) return null;
+  const access = connectorConfigAllowed(ctx);
+  const measure = posture.fingerprint ? fingerprintMeasure(posture.fingerprint.score) : null;
+  const connector = posture.connector && typeof posture.connector === 'object'
+    ? {
+      id: posture.connector.id ?? null,
+      state: posture.connector.state ?? posture.connector.status ?? 'unknown',
+      last_polled_at: posture.connector.last_polled_at ?? null,
+    }
+    : null;
+  return {
+    asset_id: posture.asset_id,
+    vendor: posture.vendor ?? 'generic',
+    posture: posture.posture ?? 'unknown',
+    drift_reason: posture.drift_reason ?? null,
+    validation: posture.validation ?? null,
+    fingerprint: posture.fingerprint
+      ? {
+        signature: posture.fingerprint.signature ?? null,
+        score: measure.score,
+        score_status: measure.score_status,
+      }
+      : null,
+    marker_rules: posture.marker_rules ?? null,
+    origin_bypass: posture.origin_bypass ?? { state: 'not_tested', last_checked_at: null },
+    connector: access.allowed ? connector : null,
+    raw_context_yaml: access.allowed ? redactStoredYaml(posture.raw_context_yaml) : null,
+    configuration_access: access.allowed ? 'allowed' : 'redacted',
+    configuration_disabled_reason: access.reason,
+    profiles: {
+      edge: 'independent',
+      core_fingerprint: 'independent',
+    },
   };
 }
 

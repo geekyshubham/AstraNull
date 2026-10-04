@@ -26,7 +26,7 @@ async function chooseFirstRealOption(scope, label) {
   await options.nth(1).click();
 }
 
-test.describe('721-vector library workflow', () => {
+test.describe('target-first check library workflow', () => {
   test.beforeAll(async () => {
     const { baseUrl: apiBaseUrl } = await startPortalPlaywrightServer();
     vite = await createViteServer({
@@ -68,8 +68,11 @@ test.describe('721-vector library workflow', () => {
     });
 
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await expect(page.getByRole('heading', { name: 'Vector library' })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText('721 catalog vectors')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Check library' })).toBeVisible({ timeout: 20_000 });
+    const counts = page.getByLabel('Catalog and check counts');
+    await expect(counts.locator('div').filter({ hasText: 'Catalog vectors' }).locator('dd').first()).toHaveText('721', { timeout: 20_000 });
+    await expect(counts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText('No target');
+    await expect(page.locator('.design-variant-switch')).toHaveCount(0);
     await expect(page.locator('.vector-library-table tbody tr')).toHaveCount(25, { timeout: 20_000 });
     expect(vectorReads).toHaveLength(8);
     const axe = await new AxeBuilder({ page }).include('.vector-library-page').analyze();
@@ -79,11 +82,12 @@ test.describe('721-vector library workflow', () => {
     expect(uniqueVectorReads.every((value) => new URLSearchParams(value).get('limit') === '100')).toBe(true);
     await expect(page.getByText(/Page 1 of 29/)).toBeVisible();
 
-    await chooseFirstRealOption(page, 'Declared target group');
-    await chooseFirstRealOption(page, 'Exact target');
-    await expect(page.getByText('Exact target selected')).toBeVisible();
+    await chooseFirstRealOption(page, 'Target');
+    await expect(page.getByText('Target selected', { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/#checks\?target=/);
+    await expect(counts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(/^\d+$/);
 
-    const search = page.getByPlaceholder('ID, name, protocol, exposure, control…');
+    const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
     await search.fill('APP-001');
     const appRow = page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-001' });
     await expect(appRow).toHaveCount(1);
@@ -91,9 +95,12 @@ test.describe('721-vector library workflow', () => {
     await appRow.getByRole('button', { name: 'Review' }).click();
 
     const detail = page.locator('dialog.form-modal[open]');
-    await expect(detail).toContainText('What failure means');
-    await expect(detail).toContainText('Control that should prevent it');
+    await expect(detail).toContainText('What it checks');
+    await expect(detail).toContainText('Why it matters');
+    await expect(detail).toContainText('Expected protection');
     await expect(detail).toContainText('Semantic-safe evidence');
+    await expect(detail.getByRole('heading', { name: 'Mapped checks' })).toBeVisible();
+    await expect(detail.getByRole('link').first()).toHaveAttribute('href', new RegExp(`#check-detail\\?id=[^&]+&target=${PORTAL_BASELINE_IDS.targetId}`));
     await expect(detail.getByRole('button', { name: 'Review run' })).toBeDisabled();
     await chooseFirstRealOption(detail, 'Mapped bounded check');
     await detail.getByRole('button', { name: 'Review run' }).click();
@@ -101,6 +108,7 @@ test.describe('721-vector library workflow', () => {
     const confirm = page.locator('dialog.modal-confirm[open]');
     await expect(confirm).toContainText(PORTAL_BASELINE_IDS.targetId);
     await expect(confirm).toContainText('Evidence limit:');
+    await expect(confirm).toContainText('rechecked by the server before anything is sent');
     expect(runBodies).toHaveLength(0);
     await confirm.getByRole('button', { name: 'Start bounded check' }).click();
     await expect.poll(() => runBodies.length).toBe(1);
@@ -109,6 +117,7 @@ test.describe('721-vector library workflow', () => {
       target_id: PORTAL_BASELINE_IDS.targetId,
     });
     expect(runBodies[0].check_id).toBeTruthy();
+    await expect(page.getByRole('status').filter({ hasText: 'started on' })).toBeVisible();
   });
 
   test('keeps SOC-governed and monitor-only vectors non-runnable', async ({ page }) => {
@@ -118,7 +127,7 @@ test.describe('721-vector library workflow', () => {
       if (request.method() === 'POST' && /\/v1\/test-runs$/.test(request.url())) runPosts.push(request.url());
     });
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    const search = page.getByPlaceholder('ID, name, protocol, exposure, control…');
+    const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
 
     await search.fill('NET-016');
     await page.locator('.vector-library-table tbody tr').filter({ hasText: 'NET-016' }).getByRole('button', { name: 'Review' }).click();
@@ -138,12 +147,12 @@ test.describe('721-vector library workflow', () => {
   });
 
 
-  test('clears stale exact scope when the selected group disappears on refresh', async ({ page }) => {
+  test('clears a stale target on refresh without substituting another target', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
-    let removeGroups = false;
-    await page.route('**/v1/target-groups', async (route) => {
+    let removeTargets = false;
+    await page.route('**/v1/targets', async (route) => {
       const response = await route.fetch();
-      if (!removeGroups || route.request().method() !== 'GET') return route.fulfill({ response });
+      if (!removeTargets || route.request().method() !== 'GET') return route.fulfill({ response });
       const payload = await response.json();
       await route.fulfill({
         response,
@@ -152,21 +161,30 @@ test.describe('721-vector library workflow', () => {
       });
     });
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await chooseFirstRealOption(page, 'Declared target group');
-    await chooseFirstRealOption(page, 'Exact target');
-    await expect(page.getByText('Exact target selected')).toBeVisible();
+    await chooseFirstRealOption(page, 'Target');
+    await expect(page.getByText('Target selected', { exact: true })).toBeVisible();
 
-    removeGroups = true;
+    removeTargets = true;
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Declared target group', exact: true })).toContainText('Select a declared target group');
-    await expect(page.getByRole('button', { name: 'Exact target', exact: true })).toContainText('Select an exact target');
-    await expect(page.getByText('No exact target selected')).toBeVisible();
+    await expect(page.getByText(/from the link is not visible in this workspace\. No other target was substituted\./)).toBeVisible();
+    await expect(page.locator('.vector-target-note')).toContainText('Browsing without a target');
+    await expect(page.getByRole('button', { name: 'Target', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Clear target' }).click();
+    await expect(page).not.toHaveURL(/target=/);
+  });
+
+  test('restores the target, search, and page from a shared address', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}&q=AMP&page=2`, { waitUntil: 'networkidle' });
+    await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com', { timeout: 20_000 });
+    await expect(page.getByPlaceholder('Name, ID, protocol, exposure, control')).toHaveValue('AMP');
+    await expect(page.getByText(/^Page 2 of /)).toBeVisible();
   });
 
   test('restores focus to Review after detail closes by button or Escape', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await page.getByPlaceholder('ID, name, protocol, exposure, control…').fill('APP-003');
+    await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill('APP-003');
     const review = page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-003' }).getByRole('button', { name: 'Review' });
     await review.click();
     let detail = page.locator('dialog.form-modal[open]');
@@ -188,9 +206,9 @@ test.describe('721-vector library workflow', () => {
       if (request.method() === 'POST' && /\/v1\/test-runs$/.test(request.url())) runPosts.push(request.url());
     });
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await chooseFirstRealOption(page, 'Declared target group');
-    await chooseFirstRealOption(page, 'Exact target');
-    const search = page.getByPlaceholder('ID, name, protocol, exposure, control…');
+    await chooseFirstRealOption(page, 'Target');
+    await expect(page.getByLabel('Catalog and check counts')).toContainText('Review only');
+    const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
     await search.fill('APP-001');
     await page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-001' }).getByRole('button', { name: 'Review' }).click();
     const detail = page.locator('dialog.form-modal[open]');

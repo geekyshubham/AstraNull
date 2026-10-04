@@ -93,12 +93,14 @@ test.describe('finding-count truth from current React source', () => {
     const targetGroupsOpen = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
     await expect(targetGroupsOpen.locator('.kpi-value')).toHaveText(String(expectedOpenFindings));
     const checkoutRow = page.getByRole('row').filter({ hasText: 'edge-checkout' });
-    await expect(checkoutRow.locator('td[data-label="Open"]')).toHaveText(String(expectedOpenFindings));
+    await expect(page.getByRole('columnheader', { name: 'Open findings' })).toBeVisible();
+    await expect(checkoutRow.locator('td[data-label="Open findings"]')).toHaveText(String(expectedOpenFindings));
 
     await gotoPortalRoute(page, 'findings', sourceBaseUrl);
-    await expect(page.locator('.page-context-summary')).toContainText(`${expectedOpenFindings} open`);
+    const findingSummary = page.getByRole('region', { name: 'Finding summary' });
+    await expect(findingSummary.locator('.rf-stat').filter({ has: page.locator('.rf-stat-label', { hasText: /^Open$/ }) }).locator('.rf-stat-value')).toHaveText(String(expectedOpenFindings));
     const openFilter = page.getByRole('group', { name: 'Finding status filters' }).getByRole('button', { name: /^Open/ });
-    await expect(openFilter.locator('.ft-count')).toHaveText(String(expectedOpenFindings));
+    await expect(openFilter.locator('.rf-tab-count')).toHaveText(String(expectedOpenFindings));
 
     await gotoPortalRoute(page, 'finding-detail', sourceBaseUrl, {
       entityIds: { 'finding-detail': expectedOpenFindingId }

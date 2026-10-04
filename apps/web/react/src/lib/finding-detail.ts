@@ -70,7 +70,7 @@ export async function populateFindingEvidence(
       artifacts: [],
       custody_chain: [],
       verify_url: '/v1/custody/verify',
-      meta: { empty_reason: 'Evidence bundle not available for this finding.' },
+      meta: null,
       error: err instanceof Error ? err.message : 'Evidence request failed.'
     };
   }

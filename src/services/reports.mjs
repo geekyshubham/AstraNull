@@ -20,38 +20,163 @@ import {
   buildComplianceMapping,
   buildHtmlComplianceSection,
   buildMarkdownComplianceSection,
-  buildReportComplianceSummary,
-  normalizeReportKind,
-  normalizeReportPeriod,
 } from '../contracts/complianceReports.mjs';
+import {
+  MAX_CAPTURED_RUNS,
+  MAX_DECLARED_MEMBERS,
+  MAX_SNAPSHOT_EVIDENCE,
+  MAX_SNAPSHOT_FINDINGS,
+  asArray,
+  buildGeneratedReportRecord,
+  compareNewest,
+  isActiveGroup,
+  isActiveTarget,
+  parseReportCreateBody,
+  readinessExportText,
+  reportExportSources,
+  reportPeriodBounds,
+  rowInstantMs,
+  runInstantMs,
+  withinPeriod,
+} from '../lib/reportSnapshot.mjs';
+
+export {
+  MAX_CAPTURED_RUNS,
+  MAX_DECLARED_MEMBERS,
+  MAX_REPORT_SCOPE_IDS,
+  MAX_SNAPSHOT_EVIDENCE,
+  MAX_SNAPSHOT_FINDINGS,
+  buildGeneratedReportRecord,
+  parseReportCreateBody,
+  readinessExportText,
+  reportExportSources,
+  reportPeriodBounds,
+  worldFromListSamples,
+} from '../lib/reportSnapshot.mjs';
+
+function decorateMember(target, group) {
+  return {
+    id: target.id,
+    target_group_id: target.target_group_id ?? null,
+    kind: target.kind ?? null,
+    value: target.value ?? null,
+    deleted_at: target.deleted_at ?? null,
+    declaration: target.declaration ?? target.declaration_json ?? {},
+    group_declaration: group?.declaration ?? group?.declaration_json ?? {},
+  };
+}
+
+/**
+ * In-memory world for the dev store. Postgres `readReportGenerationWorld` returns the same shape.
+ * @param {Record<string, unknown[]>} store
+ */
+export function loadDevReportWorld(store, tenantId, parsed, bounds) {
+  const targets = asArray(store.targets).filter((row) => row.tenant_id === tenantId);
+  const groups = asArray(store.targetGroups).filter((row) => row.tenant_id === tenantId);
+  const groupById = new Map(groups.map((row) => [row.id, row]));
+  const runs = asArray(store.testRuns).filter((row) => row.tenant_id === tenantId);
+  const findings = asArray(store.findings).filter((row) => row.tenant_id === tenantId);
+  const verdicts = asArray(store.verdicts).filter((row) => row.tenant_id === tenantId);
+  const evidence = asArray(store.evidenceVault).filter((row) => row.tenant_id === tenantId);
+
+  const foundTargets = parsed.targetIds
+    ? parsed.targetIds.map((id) => targets.find((row) => row.id === id)).filter(Boolean)
+    : null;
+  const foundGroups = parsed.targetGroupIds
+    ? parsed.targetGroupIds.map((id) => groups.find((row) => row.id === id)).filter(Boolean)
+    : null;
+  const foundRuns = parsed.runIds
+    ? parsed.runIds.map((id) => runs.find((row) => row.id === id)).filter(Boolean)
+    : null;
+
+  let memberPool;
+  if (parsed.targetIds) {
+    memberPool = (foundTargets ?? []).filter((row) => isActiveTarget(row));
+  } else if (parsed.targetGroupIds) {
+    const wanted = new Set(parsed.targetGroupIds);
+    memberPool = targets.filter((row) => isActiveTarget(row) && wanted.has(row.target_group_id) && isActiveGroup(groupById.get(row.target_group_id)));
+  } else {
+    memberPool = targets.filter((row) => isActiveTarget(row) && isActiveGroup(groupById.get(row.target_group_id)));
+  }
+  const memberTotal = memberPool.length;
+  const memberRows = parsed.targetIds || parsed.targetGroupIds
+    ? memberPool
+    : memberPool.slice().sort((left, right) => String(left.id).localeCompare(String(right.id))).slice(0, MAX_DECLARED_MEMBERS);
+
+  const scopeTargetIds = parsed.targetIds
+    ? new Set(parsed.targetIds)
+    : parsed.targetGroupIds
+      ? new Set(memberPool.map((row) => row.id))
+      : null;
+  const scopeGroupIds = parsed.targetGroupIds ? new Set(parsed.targetGroupIds) : null;
+  const inRunScope = (run) => {
+    if (scopeTargetIds && !scopeTargetIds.has(run.target_id)) return false;
+    if (scopeGroupIds && !scopeGroupIds.has(run.target_group_id)) return false;
+    return true;
+  };
+  const scopedRuns = parsed.runIds ? foundRuns ?? [] : runs.filter(inRunScope);
+  const windowedRuns = parsed.runIds
+    ? scopedRuns
+    : scopedRuns.filter((run) => withinPeriod(runInstantMs(run), bounds) === true);
+  const includedRuns = parsed.runIds
+    ? []
+    : windowedRuns.slice().sort(compareNewest(runInstantMs)).slice(0, MAX_CAPTURED_RUNS);
+
+  const inFindingScope = (finding) => {
+    if (scopeTargetIds && !scopeTargetIds.has(finding.target_id)) return false;
+    if (scopeGroupIds && !scopeGroupIds.has(finding.target_group_id)) return false;
+    if (parsed.runIds && !parsed.runIds.includes(finding.test_run_id)) return false;
+    return true;
+  };
+  const scopedFindings = findings.filter(inFindingScope);
+  const windowedFindings = scopedFindings.filter((finding) => withinPeriod(rowInstantMs(finding, ['created_at']), bounds) === true);
+  const includedFindings = windowedFindings
+    .slice()
+    .sort(compareNewest((finding) => rowInstantMs(finding, ['created_at'])))
+    .slice(0, MAX_SNAPSHOT_FINDINGS);
+
+  const includedRunIds = new Set((parsed.runIds ? parsed.runIds : includedRuns.map((run) => run.id)));
+  const includedVerdicts = verdicts.filter((verdict) => includedRunIds.has(verdict.test_run_id));
+  const evidencePool = evidence.filter((row) => includedRunIds.has(row.test_run_id));
+
+  return {
+    legacy: false,
+    found_targets: foundTargets,
+    found_groups: foundGroups,
+    found_runs: foundRuns,
+    members: memberRows.map((row) => decorateMember(row, groupById.get(row.target_group_id))),
+    member_total: memberTotal,
+    runs: includedRuns,
+    run_total: parsed.runIds ? parsed.runIds.length : windowedRuns.length,
+    run_total_unwindowed: parsed.runIds ? parsed.runIds.length : scopedRuns.length,
+    findings: includedFindings,
+    finding_total: windowedFindings.length,
+    finding_total_unwindowed: scopedFindings.length,
+    open_finding_total: windowedFindings.filter((finding) => finding.status === 'open').length,
+    verdicts: includedVerdicts,
+    evidence: evidencePool.slice(0, MAX_SNAPSHOT_EVIDENCE),
+    evidence_total: evidencePool.length,
+  };
+}
 
 export function createReport(ctx, body) {
+  const parsed = parseReportCreateBody(body);
+  if (!parsed.ok) return parsed.error;
+  const now = new Date().toISOString();
   const store = getStore();
-  const readiness = computeReadiness(ctx.tenantId);
-  const runs = store.testRuns.filter((r) => r.tenant_id === ctx.tenantId).slice(-10);
-  const findings = store.findings.filter((f) => f.tenant_id === ctx.tenantId && f.status === 'open');
-  const id = newId('report');
-  const reportKind = normalizeReportKind(body.kind);
-  const reportPeriod = normalizeReportPeriod(body.period);
-  const report = {
-    id,
-    tenant_id: ctx.tenantId,
-    kind: reportKind,
-    title: body.title ?? 'AstraNull Readiness Summary',
-    status: 'ready',
-    period: reportPeriod,
-    summary: {
-      readiness_score: readiness.score,
-      readiness_factors: readiness.factors,
-      open_findings: findings.length,
-      recent_runs: runs.map((r) => ({ id: r.id, status: r.status, check_id: r.check_id })),
-      compliance: buildReportComplianceSummary(reportKind),
-      period: reportPeriod,
-    },
-    run_ids: runs.map((r) => r.id),
-    created_at: new Date().toISOString(),
-    created_by: ctx.userId,
-  };
+  const world = loadDevReportWorld(store, ctx.tenantId, parsed.value, reportPeriodBounds(parsed.value.period, now));
+  const readiness = parsed.value.explicit ? null : computeReadiness(ctx.tenantId);
+  const built = buildGeneratedReportRecord({
+    ctx,
+    parsed: parsed.value,
+    world,
+    readiness,
+    now,
+    id: newId('report'),
+    readinessSource: 'published_tenant_formula',
+  });
+  if (!built.ok) return built.error;
+  const report = built.record;
   store.reports.push(report);
   audit({
     tenant_id: ctx.tenantId,
@@ -59,15 +184,15 @@ export function createReport(ctx, body) {
     actor_role: ctx.role,
     action: 'report.generated',
     resource_type: 'report',
-    resource_id: id,
+    resource_id: report.id,
   });
   persistStore();
   emitNotificationIfSubscribed(ctx, {
     trigger: 'report.ready',
     subject: `Report ready: ${report.title}`,
-    metadata: { report_id: id, kind: reportKind },
+    metadata: { report_id: report.id, kind: report.kind },
   });
-  return report;
+  return projectReport(report);
 }
 
 /** Reports stored before `period` existed must still read back with an explicit null. */
@@ -92,11 +217,16 @@ export function listReports(ctx, options = {}) {
 }
 
 function buildExportPayload(ctx, report) {
+  const frozen = reportExportSources(report);
   const store = getStore();
-  const runs = (report.run_ids ?? [])
-    .map((rid) => store.testRuns.find((r) => r.id === rid && r.tenant_id === ctx.tenantId))
-    .filter(Boolean);
-  const verdicts = runs.map((r) => store.verdicts.find((v) => v.test_run_id === r.id)).filter(Boolean);
+  const runs = frozen.frozen
+    ? frozen.runs
+    : (report.run_ids ?? [])
+      .map((rid) => store.testRuns.find((r) => r.id === rid && r.tenant_id === ctx.tenantId))
+      .filter(Boolean);
+  const verdicts = frozen.frozen
+    ? frozen.verdicts
+    : runs.map((r) => store.verdicts.find((v) => v.test_run_id === r.id)).filter(Boolean);
   const hs = store.highScaleRequests.filter((h) => h.tenant_id === ctx.tenantId);
   const socNotes = hs.flatMap((h) => listSocNotes(ctx, h.id) ?? []);
   const complianceMapping = buildComplianceMapping(report.kind);
@@ -112,8 +242,8 @@ function buildExportPayload(ctx, report) {
     runs: runs.map((r) => ({
       id: r.id,
       check_id: r.check_id,
-      vector_family: getCheckById(r.check_id)?.vector_family,
-      safety_class: getCheckById(r.check_id)?.safety_class,
+      vector_family: r.vector_family ?? getCheckById(r.check_id)?.vector_family,
+      safety_class: r.safety_class ?? getCheckById(r.check_id)?.safety_class,
       status: r.status,
     })),
     // EVIDENCE-01 / ADR-0008: customer-facing export must read as external-probe only. Drop the
@@ -226,7 +356,7 @@ th{background:#f4f4f4}
 <body>
 <h1>${escapeHtml(payload.title)}</h1>
 <p class="muted">AstraNull readiness report · kind: ${escapeHtml(payload.kind)} · metadata-only export</p>
-<p>Readiness score: <span class="score">${escapeHtml(String(payload.summary?.readiness_score ?? 'n/a'))}</span></p>
+<p>Readiness score: <span class="score">${escapeHtml(readinessExportText(payload.summary))}</span></p>
 <p>Open findings: ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
 <h2>Recent runs</h2>
 <table><thead><tr><th>Run</th><th>Check</th><th>Vector</th><th>Status</th></tr></thead><tbody>${runs || '<tr><td colspan="4">None</td></tr>'}</tbody></table>
@@ -276,7 +406,7 @@ export function exportReport(ctx, id, format) {
     const lines = [
       `# ${payload.title}`,
       '',
-      `Readiness score: **${payload.summary?.readiness_score ?? 'n/a'}**`,
+      `Readiness score: **${readinessExportText(payload.summary)}**`,
       '',
       '## Recent runs',
       ...(payload.runs ?? []).map(

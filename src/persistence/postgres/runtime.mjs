@@ -12,6 +12,7 @@ import {
   runMigrations,
 } from './migrations.mjs';
 import { createCoreCatalogRepository } from './coreCatalogRepository.mjs';
+import { readDeclaredHostAnalytics } from './declaredHostAnalyticsRepository.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
 import { createPasswordAuthRepository } from './passwordAuthRepository.mjs';
@@ -64,6 +65,8 @@ import { createPostgresTestPolicyServices } from './testPolicyServiceAdapters.mj
 import { createPostgresTestPolicyRepository } from './testPolicyRepository.mjs';
 import { createPostgresValidationScanRepository } from './validationScanRepository.mjs';
 import { createPostgresValidationScanServices } from './validationScanServiceAdapters.mjs';
+import { createTargetHistoryRepository } from './targetHistoryRepository.mjs';
+import { createPostgresTargetHistoryServices } from './targetHistoryServiceAdapters.mjs';
 import { resolveProbeDispatchConfig } from '../../config.mjs';
 import { createPostgresSubscriptionServices } from './subscriptionServiceAdapters.mjs';
 import { createPostgresCvePipelineServices } from './cvePipelineServiceAdapters.mjs';
@@ -364,6 +367,12 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       dnsOwnershipBase,
       portalRevampServices.portalDns,
     );
+    // Kept beside the frozen repository key list. History reads fail closed in the
+    // HTTP layer when this service is absent; there is no dev-json substitute.
+    const targetHistory = createPostgresTargetHistoryServices({
+      repository: createTargetHistoryRepository(pool),
+      audit: repositories.audit,
+    });
     const services = {
       ...catalogServices,
       ...authServices,
@@ -417,6 +426,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       },
       ownershipVerification,
       dnsOwnership,
+      targetHistory,
       loa: portalRevampServices.loa,
       targetDetail: portalRevampServices.targetDetail,
       remediation: portalRevampServices.remediation,
@@ -428,11 +438,17 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       },
       targetGroups: {
         ...catalogServices.targetGroups,
+        getTarget: (ctx, id) => repositories.coreCatalog.getTarget(ctx, id),
         restoreArchived: portalRevampServices.portalTargetGroups.restoreArchived.bind(
           portalRevampServices.portalTargetGroups,
         ),
         bulkImportTargets: portalRevampServices.portalTargetGroups.bulkImportTargets.bind(
           portalRevampServices.portalTargetGroups,
+        ),
+      },
+      declaredHostAnalytics: {
+        readDeclaredHostAnalytics: (ctx, query, readOptions = {}) => (
+          readDeclaredHostAnalytics(pool, ctx.tenantId, query, readOptions)
         ),
       },
       audit: repositories.audit,

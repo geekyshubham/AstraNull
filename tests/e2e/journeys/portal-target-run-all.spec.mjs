@@ -13,12 +13,14 @@ import {
 } from '../../helpers/portal-playwright-session.mjs';
 
 /**
- * FT-DOMAIN-01 — target (domain) page: Run all checks, live per-check status, automatic WAF/CDN
- * detection with an evaluating state, the evidence behind it, and WAF/CDN efficacy.
+ * FT-DOMAIN-01 (current release) — target workspace: recorded WAF/CDN attribution per family, the
+ * evidence behind it, per-check status with evidence in place, no probe on page load, ownership
+ * gating, and a reviewed multi-check start with live progress and stop.
  *
  * Runs against the real in-process dev-json backend. Only the verdict-bearing payloads that the
  * simulation runtime cannot produce (signed edge fingerprints, exposed/protected verdicts) are
- * layered onto real responses.
+ * layered onto real responses. The server protection profile is removed in those overrides so the
+ * page reads the legacy edge observation, family by family.
  */
 
 const VERIFIED_FRESH_TARGET = 'tgt_checkout_2';
@@ -87,7 +89,7 @@ async function expectNoBlockingAxeViolations(page, selector) {
   expect(blocking.map((violation) => `${violation.id}: ${violation.help}`)).toEqual([]);
 }
 
-test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)', () => {
+test.describe('target workspace: recorded attribution, checks and reviewed runs (FT-DOMAIN-01)', () => {
   test.beforeEach(async () => {
     await startPortalPlaywrightServer();
   });
@@ -96,11 +98,11 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await stopPortalPlaywrightServer();
   });
 
-  test('shows detected edge, how it was found, per-check status, and efficacy from verdicts', async ({ page }) => {
+  test('shows recorded per-family attribution, its sources, and per-check status with evidence in place', async ({ page }) => {
     await page.route(`**/v1/targets/${VERIFIED_FRESH_TARGET}`, async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
-      await route.fulfill({ response, json: { ...payload, edge_detection: EDGE_DETECTION } });
+      await route.fulfill({ response, json: { ...payload, edge_detection: EDGE_DETECTION, protection_profile: null } });
     });
     await page.route('**/v1/validation-scans?*', async (route) => {
       const response = await route.fetch();
@@ -114,37 +116,38 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
 
-    const hero = page.locator('.td-edge-hero');
-    await expect(hero.getByText('Edge detected')).toBeVisible();
-    const waf = hero.locator('.td-shield').filter({ hasText: 'Web application firewall' });
-    const cdn = hero.locator('.td-shield').filter({ hasText: 'CDN and edge network' });
-    await expect(waf.getByText('Detected · Cloudflare')).toBeVisible();
-    await expect(cdn.getByText('Detected · Cloudflare')).toBeVisible();
-    // One WAF check reached the application: the WAF is only partly protecting.
-    await expect(waf.locator('.td-shield-verdict')).toContainText('Partially protecting');
-    await expect(waf).toContainText('Blocked 1 of 2 tested attack classes');
-    await expect(waf.locator('.td-shield-gaps')).toContainText('WAF Marker Rule Posture');
-    await expect(cdn.locator('.td-shield-verdict')).toContainText('Detected · not measured yet');
+    const observations = page.locator('.td-observations');
+    const wafRow = observations.locator('.td-provider-row').filter({ hasText: 'WAF' }).first();
+    const cdnRow = observations.locator('.td-provider-row').filter({ hasText: /^CDN/ });
+    await expect(wafRow).toContainText('Detected');
+    await expect(wafRow).toContainText('Cloudflare');
+    await expect(wafRow).toContainText('WAF fingerprint');
+    await expect(cdnRow).toContainText('Cloudflare');
+    await expect(cdnRow).toContainText('IP address range');
+    await expect(cdnRow).toContainText('DNS CNAME');
+    // Origin hosting and DNS are never borrowed from the edge vendor.
+    await expect(observations.locator('.td-provider-row').filter({ hasText: 'Origin hosting' })).toContainText('Unknown');
+    await expect(observations.locator('.td-provider-row').filter({ hasText: 'DNS provider' })).toContainText('Unknown');
+    // Detection is not efficacy: only recorded marker counts appear, no client-side protection label.
+    await expect(observations.locator('.td-effectiveness')).toContainText('3 blocked');
+    await expect(page.locator('.target-detail-view')).not.toContainText(/Partially protecting|Protecting|Sources agree/);
 
-    await hero.locator('.td-evidence > summary').click();
-    const evidence = hero.locator('.td-evidence-body');
-    await expect(evidence.getByText('DNS CNAME')).toBeVisible();
-    await expect(evidence.getByText('IP address range')).toBeVisible();
-    await expect(evidence.getByText('WAF fingerprint')).toBeVisible();
-    await expect(evidence).toContainText('pay.acme.com.cdn.cloudflare.net');
-    await expect(evidence).toContainText('Cloudflare (Cloudflare Inc.)');
-
+    await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
-    await expect(panel.getByRole('button', { name: /^Exposed/ })).toBeVisible();
-    await panel.getByRole('button', { name: /^Exposed/ }).click();
-    const exposedRow = panel.locator('.td-check[data-status="failed"]');
-    await expect(exposedRow).toHaveCount(1);
-    await exposedRow.locator('summary').click();
-    await expect(exposedRow).toContainText('How it works');
-    await expect(exposedRow).toContainText('What it sends');
-    await expect(exposedRow).toContainText('HTTP 200');
-    await expect(exposedRow).toContainText('the edge did not block traffic before origin');
-    await expect(exposedRow.getByRole('link', { name: 'Open run evidence' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: /^Gap found/ })).toBeVisible();
+    await panel.getByRole('button', { name: /^Gap found/ }).click();
+    const gapRow = panel.locator('.td-check[data-status="failed"]');
+    await expect(gapRow).toHaveCount(1);
+    await gapRow.locator('.td-check-summary').click();
+    await expect(gapRow).toContainText('How it works');
+    await expect(gapRow).toContainText('Upper bound');
+    await expect(gapRow).toContainText('HTTP 200');
+    await expect(gapRow).toContainText('the edge did not block traffic before origin');
+    await expect(page).toHaveURL(/check=waf\.marker_rule\.safe/);
+    await gapRow.getByRole('button', { name: 'View evidence' }).click();
+    await expect(page.locator('.inspector-panel').getByRole('heading', { name: 'Check result' })).toBeVisible();
+    await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.marker_rule\.safe&ev_run=run_fx_1/);
+    await page.keyboard.press('Escape');
     await panel.getByRole('button', { name: /^All/ }).click();
     await expect(panel.locator('.td-cat').filter({ hasText: 'Origin exposure' })).toBeVisible();
 
@@ -152,7 +155,7 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await expectNoBlockingAxeViolations(page, '.target-detail-view');
   });
 
-  test('a freshly onboarded verified domain starts WAF/CDN detection immediately and shows Evaluating', async ({ page }) => {
+  test('a freshly onboarded verified domain does not probe on load; detection starts only after review', async ({ page }) => {
     const edgePosts = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && request.url().includes('/v1/waf/edge-detection')) edgePosts.push(request.postDataJSON());
@@ -160,16 +163,26 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
 
+    const observations = page.locator('.td-observations');
+    await expect(observations).toContainText('It starts only when someone chooses Detect WAF and CDN');
+    await page.waitForTimeout(800);
+    expect(edgePosts, 'opening a target never starts a probe').toEqual([]);
+
+    await observations.getByRole('button', { name: 'Detect WAF and CDN' }).click();
+    let dialog = page.locator('dialog.modal-confirm[open]');
+    await expect(dialog).toContainText('One bounded fingerprint run against this exact target');
+    await expect(dialog).toContainText('It identifies providers only');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    expect(edgePosts, 'cancelling the review sends nothing').toEqual([]);
+
+    await observations.getByRole('button', { name: 'Detect WAF and CDN' }).click();
+    dialog = page.locator('dialog.modal-confirm[open]');
+    await dialog.getByRole('button', { name: 'Start detection' }).click();
     await expect.poll(() => edgePosts.length).toBe(1);
     expect(edgePosts[0]).toEqual({ target_group_id: PORTAL_BASELINE_IDS.targetGroupId, target_id: VERIFIED_FRESH_TARGET });
-    const hero = page.locator('.td-edge-hero');
-    await expect(hero.getByText('Evaluating', { exact: true })).toBeVisible();
-    await expect(hero.locator('.td-evaluating').first()).toContainText('Evaluating with live fingerprint probes');
-    // Run all waits for the detection run to finish rather than colliding with it.
-    await expect(page.locator('.td-head-actions').getByRole('button', { name: 'Run all checks' })).toBeDisabled();
   });
 
-  test('an unverified domain never probes: detection and Run all wait for ownership', async ({ page }) => {
+  test('an unverified domain never probes: detection and runs wait for ownership', async ({ page }) => {
     const posts = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && /\/v1\/(waf\/edge-detection|validation-scans|test-runs)/.test(request.url())) posts.push(request.url());
@@ -177,27 +190,24 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': UNVERIFIED_TARGET } });
 
-    const hero = page.locator('.td-edge-hero');
-    await expect(hero.getByText('Waiting for ownership')).toBeVisible();
-    await expect(hero).toContainText('Detection starts automatically as soon as ownership is proven');
-    await expect(page.locator('.td-head-actions').getByRole('button', { name: 'Run all checks' })).toBeDisabled();
+    // The ownership step leads the overview when the domain is not yet verified.
+    await expect(page.locator('.td-next[data-kind="ownership"]')).toContainText('Prove ownership to unlock validation');
+    await expect(page.locator('.td-observations')).toContainText('Detection is available once ownership is proven');
+    await expect(page.locator('.td-observations').getByRole('button', { name: /Detect/ })).toHaveCount(0);
+
+    await page.getByRole('tab', { name: /Validate/ }).click();
     await expect(page.locator('.td-checks')).toContainText('Prove ownership first');
-    // The ownership ladder leads when the domain is not yet verified.
-    const order = await page.evaluate(() => {
-      const validate = [...document.querySelectorAll('.card-title')].findIndex((node) => node.textContent === 'Validate this target');
-      const edge = [...document.querySelectorAll('.card-title')].findIndex((node) => node.textContent === 'Edge protection');
-      return { validate, edge };
-    });
-    expect(order.validate).toBeLessThan(order.edge);
+    await expect(page.locator('.td-checks').getByRole('button', { name: /^Review all/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Review and start' })).toBeDisabled();
     await page.waitForTimeout(500);
     expect(posts).toEqual([]);
   });
 
-  test('Run all checks confirms the plan, starts one scan for the exact domain, and shows live progress', async ({ page }) => {
+  test('review all confirms the plan, starts one scan for the exact domain, and shows live progress', async ({ page }) => {
     await page.route(`**/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
-      await route.fulfill({ response, json: { ...payload, edge_detection: EDGE_DETECTION } });
+      await route.fulfill({ response, json: { ...payload, edge_detection: EDGE_DETECTION, protection_profile: null } });
     });
     const scanBodies = [];
     page.on('request', (request) => {
@@ -206,12 +216,14 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
 
-    await page.locator('.td-head-actions').getByRole('button', { name: 'Run all checks' }).click();
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const panel = page.locator('.td-checks');
+    await panel.getByRole('button', { name: /^Review all/ }).click();
     const dialog = page.locator('dialog.modal-confirm[open]');
-    await expect(dialog).toContainText(/Run all \d+ checks on checkout\.acme\.com\?/);
-    await expect(dialog).toContainText('WAF/CDN detection and origin exposure run first');
-    await expect(dialog).toContainText('declaration-only checks are skipped');
-    await dialog.getByRole('button', { name: 'Run all checks' }).click();
+    await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
+    await expect(dialog).toContainText('one at a time inside your safe-run limits');
+    await expect(dialog).toContainText('The server re-checks ownership');
+    await dialog.getByRole('button', { name: 'Start all checks' }).click();
 
     await expect.poll(() => scanBodies.length).toBe(1);
     const body = scanBodies[0];
@@ -220,16 +232,14 @@ test.describe('domain page: run all checks and WAF/CDN efficacy (FT-DOMAIN-01)',
     expect(body.check_ids[0]).toBe('waf.fingerprint.safe');
     expect(body.check_ids.length).toBeGreaterThan(50);
 
-    const panel = page.locator('.td-checks');
     await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: Outside-In WAF Scanner/);
     await expect(panel.getByRole('button', { name: 'Stop run' })).toBeVisible();
     await expect(panel.locator('.td-check[data-status="running"]')).toHaveCount(1);
-    await expect(page.locator('.td-head-actions')).toContainText('Running all checks');
 
     await panel.getByRole('button', { name: 'Stop run' }).click();
     const stop = page.locator('dialog.modal-confirm[open]');
     await stop.getByRole('button', { name: /Stop/ }).last().click();
-    await expect(page.getByText('Run all checks stopped. Finished results are kept.')).toBeVisible();
-    await expect(page.locator('.td-head-actions').getByRole('button', { name: 'Run all checks' })).toBeVisible();
+    await expect(page.getByText('Multi-check run stopped. Finished results are kept.')).toBeVisible();
+    await expect(panel.getByRole('button', { name: /^Review all/ })).toBeVisible();
   });
 });

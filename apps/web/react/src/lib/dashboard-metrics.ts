@@ -108,15 +108,23 @@ function runTimestamp(run: DataItem): string {
   return String(run.completed_at ?? run.started_at ?? run.created_at ?? run.updated_at ?? '');
 }
 
-function evidenceBacked(run: DataItem): boolean {
+/**
+ * A run result counts only when it names its recorded verdict or evidence. A completed status or a
+ * bare verdict string on the run row is not a recorded verdict.
+ */
+export function evidenceBacked(run: DataItem): boolean {
   const verdict = runVerdictString(run);
   if (PENDING_VERDICTS.has(verdict)) return false;
-  const status = getString(run, ['status']).toLowerCase();
-  if (['completed', 'verdicted', 'finalized'].includes(status)) return true;
-  const count = getNumber(run, ['evidence_count']);
   const nested = run.verdict && typeof run.verdict === 'object' && !Array.isArray(run.verdict) ? (run.verdict as DataItem) : null;
+  if (nested && getString(nested, ['id']) !== '') return true;
+  if (getString(run, ['verdict_id']) !== '') return true;
+  const count = getNumber(run, ['evidence_count']);
   const ids = Array.isArray(run.evidence_ids) ? run.evidence_ids : Array.isArray(nested?.evidence_ids) ? (nested!.evidence_ids as unknown[]) : [];
   return (count !== null && count > 0) || ids.length > 0 || getString(run, ['evidence_id']) !== '';
+}
+
+function runFinished(run: DataItem): boolean {
+  return ['completed', 'verdicted', 'finalized'].includes(getString(run, ['status']).toLowerCase());
 }
 
 export type TargetPostureRow = {
@@ -130,6 +138,9 @@ export type TargetPostureRow = {
   verificationState: string;
   verdict: string;
   verdictStatus: EvidenceStatus;
+  /** `latest`: newest finished run is backed. `earlier`: a newer finished run has no recorded verdict, so an earlier backed one is shown. `unbacked`: only unbacked finished runs. */
+  verdictBasis: 'latest' | 'earlier' | 'unbacked' | 'none';
+  verdictRunId: string;
   /** Open findings recorded against this exact target. */
   openFindings: number;
   lastValidatedAt: string;
@@ -141,30 +152,49 @@ export type TargetPostureRow = {
  * target group's run (DASH-01/DASH-02). An un-probed target reports "No result" so the
  * dashboard cannot imply a never-tested target was validated (external-evidence-only).
  */
-export function buildTargetPostureRows(data: PortalData, limit?: number): TargetPostureRow[] {
+export function buildTargetPostureRows(
+  data: PortalData,
+  limit?: number,
+  options: {
+    /** Open findings to count per target; defaults to the loaded page. */
+    openFindings?: DataItem[];
+    /** Exact server open counts per target id; win over `openFindings` for those targets. */
+    openCounts?: ReadonlyMap<string, number>;
+  } = {}
+): TargetPostureRow[] {
   const latestByTarget = new Map<string, DataItem>();
+  const newestFinishedByTarget = new Map<string, DataItem>();
   for (const run of data.runs) {
-    if (!evidenceBacked(run)) continue;
     const targetId = getString(run, ['target_id']);
     if (!targetId) continue;
     const stamp = runTimestamp(run);
+    if (runFinished(run) || evidenceBacked(run)) {
+      const newest = newestFinishedByTarget.get(targetId);
+      if (!newest || stamp.localeCompare(runTimestamp(newest)) >= 0) newestFinishedByTarget.set(targetId, run);
+    }
+    if (!evidenceBacked(run)) continue;
     const prev = latestByTarget.get(targetId);
     if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByTarget.set(targetId, run);
   }
 
   const openFindingsByTarget = new Map<string, number>();
-  for (const finding of data.findings) {
+  for (const finding of options.openFindings ?? data.findings) {
     const targetId = getString(finding, ['target_id']);
     if (!targetId || !isFindingOpen(finding)) continue;
     openFindingsByTarget.set(targetId, (openFindingsByTarget.get(targetId) ?? 0) + 1);
   }
+  options.openCounts?.forEach((count, targetId) => openFindingsByTarget.set(targetId, count));
 
   const rows = data.targets.map((target) => {
     const id = getString(target, ['id', 'target_id']);
     const openFindings = openFindingsByTarget.get(id) ?? 0;
     const groupId = getString(target, ['target_group_id']);
     const run = latestByTarget.get(id) ?? null;
+    const newest = newestFinishedByTarget.get(id) ?? null;
     const verdict = run ? runVerdictString(run) : '';
+    const verdictBasis: TargetPostureRow['verdictBasis'] = run
+      ? (newest && newest !== run && !evidenceBacked(newest) ? 'earlier' : 'latest')
+      : newest ? 'unbacked' : 'none';
     return {
       id,
       value: getString(target, ['value', 'hostname', 'name'], 'Unnamed target'),
@@ -175,6 +205,8 @@ export function buildTargetPostureRows(data: PortalData, limit?: number): Target
       verified: isTargetVerified(target),
       verificationState: targetVerificationState(target),
       verdict,
+      verdictBasis,
+      verdictRunId: run ? getString(run, ['id']) : '',
       // A passing run does not settle a target that still has open findings.
       verdictStatus: classifyVerdict(verdict) === 'pass' && openFindings > 0 ? 'review' : classifyVerdict(verdict),
       openFindings,
@@ -357,7 +389,7 @@ export function severityKey(raw: string): SeverityKey {
   const key = raw.trim().toLowerCase();
   if (['s1', 'critical'].includes(key)) return 'critical';
   if (['s2', 'high'].includes(key)) return 'high';
-  if (['s3', 'medium'].includes(key)) return 'medium';
+  if (['s3', 'medium', 'moderate'].includes(key)) return 'medium';
   if (['s4', 'low', 'info'].includes(key)) return 'low';
   return 'unrecorded';
 }
@@ -397,4 +429,19 @@ const SEVERITY_SHORT_LABEL: Record<SeverityKey, string> = {
 /** One-word severity for compact rows; keeps "S1"-style codes out of dense lists. */
 export function severityShortLabel(raw: string): string {
   return SEVERITY_SHORT_LABEL[severityKey(raw)];
+}
+
+/** The same split from exact server counts per bucket (for example `status=open&severity=...` totals). */
+export function severityDistributionFromCounts(counts: Record<SeverityKey, number>): { slices: SeveritySlice[]; total: number } {
+  const order: SeverityKey[] = ['critical', 'high', 'medium', 'low', 'unrecorded'];
+  const total = order.reduce((sum, key) => sum + (counts[key] ?? 0), 0);
+  return {
+    total,
+    slices: order.map((key) => ({
+      key,
+      label: SEVERITY_SLICE_LABEL[key],
+      count: counts[key] ?? 0,
+      share: total > 0 ? Math.round(((counts[key] ?? 0) / total) * 100) : 0
+    }))
+  };
 }

@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-04",
+  "local_implementation": "complete",
+  "local_technical_verification": "passed",
+  "root": "/Users/checkred_admin/.codex/worktrees/current-release-recovery/astranull",
+  "head": "e34ccd2783df1edfa40d3d44bf232f368fe61ab5",
+  "frontend": "Claude Code / claude-opus-5-5 / High; Design & Taste, UI/UX Pro Max, Impeccable, interaction-design",
+  "backend": "OpenCode Go / opencode-go/glm-5.3-flash / high; initial Grok4.7 superseded by user",
+  "independent": {
+    "unit_node_e2e": 4318,
+    "integration": 433,
+    "strict_contract": 9,
+    "enabled_dev_pg_scale": 14,
+    "last_affected_browser_with_scale": 39,
+    "last_affected_frontend_units": 115,
+    "failures": 0,
+    "skips": 0,
+    "build_type_lint_portal_safety": "pass"
+  },
+  "worker_full_browser_before_final_dock": {
+    "pass": 351,
+    "fail": 0,
+    "skip": 1,
+    "note": "Gated scale case later enabled and passed in final independent39. Full set not repeated after focused dock/count changes."
+  },
+  "human_gates": {
+    "G1": "rendered candidate pending approval",
+    "G3": "not run"
+  },
+  "not_exercised": [
+    "production deployment",
+    "live provider/probe/notification exercises",
+    "Postgres-mode browser suite",
+    "screen-reader sessions"
+  ],
+  "no_commit_stage_push_deploy": true,
+  "handoff_preserved_files": 165
+}

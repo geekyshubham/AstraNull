@@ -129,6 +129,8 @@ describe('staff home routing', () => {
     assert.match(publicPages, /staffHomePath\(/);
     const app = read('apps/web/react/src/App.tsx');
     assert.match(app, /staffHomeRoute\(/);
-    assert.match(app, /setAccessNotice\(routeDeniedNotice\(/);
+    assert.match(app, /function fallbackRouteForSession\([^)]*\)[^{]*\{\s*return session\.principal === 'staff' \? staffHomeRoute\(session\) : 'dashboard';/);
+    assert.match(app, /<PortalUnavailablePage\s+kind="access-denied"[\s\S]*?homeHref=\{`#\$\{fallbackRouteForSession\(activeSession\)\}`\}/, 'a denied route keeps its address and offers the role home');
+    assert.doesNotMatch(app, /replaceState\([^)]*'#admin'|location\.hash\s*=\s*'#?admin'/, 'never forces the admin console');
   });
 });

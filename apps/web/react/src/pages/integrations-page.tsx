@@ -379,6 +379,10 @@ export function IntegrationPage({
   const [showAddDomain, setShowAddDomain] = useState(false);
   const [domainResult, setDomainResult] = useState<{ hostname: string; groupName: string } | null>(null);
   const [snapshots, setSnapshots] = useState<DataItem[]>([]);
+  const [snapshotsConnectorId, setSnapshotsConnectorId] = useState('');
+  const [connectorDraftDirty, setConnectorDraftDirty] = useState(false);
+  const [domainDraftDirty, setDomainDraftDirty] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState<'' | 'connector' | 'domain'>('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -441,10 +445,28 @@ export function IntegrationPage({
     setMessage('');
   }
 
-  function closeAddDomain() {
+  function closeAddDomain(force = false) {
     if (busy === 'add-single-domain') return;
+    if (!force && domainDraftDirty && !domainResult) {
+      setConfirmDiscard('domain');
+      return;
+    }
+    setConfirmDiscard('');
+    setDomainDraftDirty(false);
     setShowAddDomain(false);
     setDomainResult(null);
+    setError('');
+  }
+
+  function closeCreateConnector(force = false) {
+    if (busy === 'create-connector') return;
+    if (!force && connectorDraftDirty) {
+      setConfirmDiscard('connector');
+      return;
+    }
+    setConfirmDiscard('');
+    setConnectorDraftDirty(false);
+    setShowCreateConnector(false);
     setError('');
   }
 
@@ -520,6 +542,7 @@ export function IntegrationPage({
         `${hostnameResult.hostname} was added to ${resolvedGroupName}. No provider credentials or inventory discovery were used. Ownership remains unverified.`,
       );
       setDomainResult({ hostname: hostnameResult.hostname, groupName: resolvedGroupName });
+      setDomainDraftDirty(false);
       formElement.reset();
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not add the declared domain.'));
@@ -616,10 +639,11 @@ export function IntegrationPage({
         setSelectedConnectorId(String(created.connector.id));
       }
       formElement.reset();
+      setConnectorDraftDirty(false);
       setShowCreateConnector(false);
       return created;
     }, credentialSetup
-      ? 'Read-only connector created. Validate it before requesting a provider poll.'
+      ? 'Read-only connector created. Its credential has not been used yet; check the configuration, then poll explicitly when ready.'
       : 'Manual metadata connector created without provider credentials.');
 
     if (createdResult && connectorSetupMode === 'manual') {
@@ -630,19 +654,36 @@ export function IntegrationPage({
 
   async function validateConnector(id: string) {
     if (!canWriteConnectors || !id) return;
-    await runAction(`validate-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/validate`, { method: 'POST' }), 'Connector validation completed.');
+    const connector = connectorRecords.find((item) => getString(item, ['id'], '') === id);
+    const result = await runAction(`validate-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/validate`, { method: 'POST' }), 'Configuration checked.');
+    if (result && typeof result === 'object') {
+      const status = getString(result as DataItem, ['status'], '');
+      setMessage(status === 'active'
+        ? `${getString(connector ?? {}, ['name'], 'Connector')}: stored configuration accepted. This does not test the credential against ${formatConnectorProvider(connector ?? {})}; only a poll does.`
+        : `${getString(connector ?? {}, ['name'], 'Connector')}: configuration check returned ${status || 'no status'}.`);
+    }
   }
 
   async function pollConnector(id: string) {
     if (!canWriteConnectors || !id) return;
-    const result = await runAction(`poll-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/poll`, { method: 'POST', body: {} }), 'Connector poll requested.');
+    const connector = connectorRecords.find((item) => getString(item, ['id'], '') === id);
+    const providerLabel = formatConnectorProvider(connector ?? {});
+    const result = await runAction(`poll-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/poll`, { method: 'POST', body: {} }), `${providerLabel} poll finished: bounded read-only requests were sent with the stored credential. Check Last successful sync for the outcome.`);
     const nextSnapshots = result && typeof result === 'object' && 'snapshots' in result ? (result as { snapshots?: DataItem[] }).snapshots : null;
-    if (Array.isArray(nextSnapshots)) setSnapshots(nextSnapshots);
+    if (Array.isArray(nextSnapshots)) {
+      setSnapshots(nextSnapshots);
+      setSnapshotsConnectorId(id);
+    }
   }
 
   async function disableConnector(id: string) {
     if (!canWriteConnectors || !id) return;
-    if (!await confirm({ title: 'Disable connector', description: 'Disable this connector? Deliveries through it will stop.', confirmLabel: 'Disable connector' })) return;
+    const connector = connectorRecords.find((item) => getString(item, ['id'], '') === id);
+    if (!await confirm({
+      title: 'Disable connector',
+      description: `Disable "${getString(connector ?? {}, ['name'], id)}" (${formatConnectorProvider(connector ?? {})})? Polling and new snapshots stop. Existing snapshots and audit history remain, and the stored credential is not deleted.`,
+      confirmLabel: 'Disable connector'
+    })) return;
     await runAction(`disable-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/disable`, { method: 'POST', body: { reason: 'Disabled from integrations page.' } }), 'Connector disabled.');
   }
 
@@ -651,6 +692,7 @@ export function IntegrationPage({
     const result = await runAction(`snapshots-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/snapshots`), 'Connector snapshots loaded.');
     const items = result && typeof result === 'object' && 'items' in result ? (result as { items?: DataItem[] }).items : null;
     setSnapshots(Array.isArray(items) ? items : []);
+    setSnapshotsConnectorId(id);
     setSelectedConnectorId(id);
   }
 
@@ -716,24 +758,60 @@ export function IntegrationPage({
     },
     {
       key: 'mode',
-      label: 'Capability',
+      label: 'Mode',
       render: (item) => {
         const hasCredentialPoll = connectorHasCredentialPoll(item);
-        return <Badge tone={hasCredentialPoll ? 'success' : 'muted'}>{hasCredentialPoll ? 'Credential polling' : 'Manual metadata'}</Badge>;
+        return (
+          <span className="stack-tight">
+            <Badge tone="muted">{hasCredentialPoll ? 'Credential polling' : 'Manual metadata'}</Badge>
+            <span className="muted small">{hasCredentialPoll ? 'Vault credential reference recorded' : 'No credential; provider never contacted'}</span>
+          </span>
+        );
       },
     },
     {
       key: 'status',
-      label: 'Status',
+      label: 'State',
       render: (item) => {
-        const status = getString(item, ['status']);
-        return <Badge tone={status === 'active' ? 'success' : status === 'error' ? 'danger' : 'muted'}>{status}</Badge>;
+        const status = getString(item, ['status'], '').toLowerCase();
+        const meaning: Record<string, { label: string; tone: 'success' | 'warn' | 'danger' | 'muted' | 'info' }> = {
+          active: { label: 'Configuration accepted', tone: 'muted' },
+          degraded: { label: 'Last poll incomplete', tone: 'warn' },
+          error: { label: 'Error', tone: 'danger' },
+          revoked: { label: 'Credential revoked', tone: 'danger' },
+          disabled: { label: 'Disabled', tone: 'muted' },
+          validating: { label: 'Checking', tone: 'muted' },
+          polling: { label: 'Polling', tone: 'muted' },
+        };
+        const entry = meaning[status] ?? { label: status ? status.replaceAll('_', ' ') : 'Not recorded', tone: 'muted' as const };
+        return <Badge tone={entry.tone}>{entry.label}</Badge>;
       },
     },
-    { key: 'last_poll', label: 'Last poll', render: (item) => formatDate(item.last_polled_at ?? item.last_success_at ?? item.last_poll_at) },
-    { key: 'poll_errors', label: 'Poll errors', render: (item) => getOptionalNumber(item, ['consecutive_failures', 'poll_error_count', 'error_count']) ?? <span className="muted">—</span> },
-    { key: 'secret', label: 'Secret ref', render: (item) => getString(item, ['secret_id'], 'none — manual only') },
-    { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
+    {
+      key: 'last_success',
+      label: 'Last successful sync',
+      render: (item) => {
+        if (!connectorHasCredentialPoll(item)) return <span className="muted">Not applicable</span>;
+        const at = getString(item, ['last_success_at'], '');
+        return at ? <span className="mono">{formatDate(at)}</span> : <span className="muted">Never</span>;
+      },
+    },
+    { key: 'last_attempt', label: 'Last attempt', render: (item) => {
+      if (!connectorHasCredentialPoll(item)) return <span className="muted">Not applicable</span>;
+      // Failures are only known when the API records them; otherwise the latest attempt is unknown.
+      if (!Object.prototype.hasOwnProperty.call(item, 'last_error_at')) return <span className="muted">Not recorded</span>;
+      const success = getString(item, ['last_success_at'], '');
+      const failure = getString(item, ['last_error_at'], '');
+      const failed = Boolean(failure) && (!success || Date.parse(failure) > Date.parse(success));
+      const at = failed ? failure : success;
+      if (!at) return <span className="muted">Not recorded</span>;
+      return (
+        <span className="connector-attempt">
+          <span className="mono">{formatDate(at)}</span>
+          <span className="muted small">{failed ? 'Failed' : 'Succeeded'}</span>
+        </span>
+      );
+    } },
     {
       key: 'actions',
       label: 'Actions',
@@ -746,14 +824,14 @@ export function IntegrationPage({
         const rowBlocked = busy !== '' && !rowBusy;
         return (
           <div className="row-actions row-actions--compact" aria-busy={rowBusy || undefined}>
-            {canWriteConnectors ? <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void validateConnector(id)}>Validate</Button> : null}
+            {canWriteConnectors ? <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} title="Checks the stored configuration. Does not contact the provider." onClick={() => void validateConnector(id)}>Check configuration</Button> : null}
             {canWriteConnectors ? (
               <Button
                 size="sm"
                 variant="secondary"
                 loading={busy === `poll-${id}`}
                 disabled={rowBlocked || isDisabled || !canPoll}
-                title={canPoll ? 'Request a bounded read-only provider poll.' : 'Live polling is unavailable; use a manual metadata snapshot.'}
+                title={canPoll ? 'Sends bounded read-only requests to the provider with the stored credential. No write calls.' : 'Manual metadata connectors never poll; add a snapshot instead.'}
                 onClick={() => void pollConnector(id)}
               >
                 Poll
@@ -783,7 +861,7 @@ export function IntegrationPage({
       <style>{INTEGRATIONS_PAGE_STYLES}</style>
       <PageHeader
         route="integrations"
-        eyebrow="DNS & edge integrations"
+        eyebrow="Optional provider and alert integrations"
         actions={canAddIntegration ? (
           <>
             {canWriteIntegrationTargets ? (
@@ -823,9 +901,9 @@ export function IntegrationPage({
               <span className="kpi-cell-delta">{connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`}</span>
             </div>
             <div className="kpi-cell">
-              <span className="kpi-cell-label">Snapshots</span>
-              <span className="kpi-cell-value">{connectorsLoadError ? '—' : formatNumber(snapshots.length)}</span>
-              <span className="kpi-cell-delta">Normalized metadata only</span>
+              <span className="kpi-cell-label">Synced successfully</span>
+              <span className="kpi-cell-value">{connectorsLoadError ? '—' : formatNumber(connectorRecords.filter((connector) => connectorHasCredentialPoll(connector) && getString(connector, ['last_success_at'], '')).length)}</span>
+              <span className="kpi-cell-delta">Credential connectors with a recorded successful poll</span>
             </div>
           </>
         ) : (
@@ -857,83 +935,6 @@ export function IntegrationPage({
           {error || message}
         </div>
       )}
-
-      <Card>
-        <CardHeader>
-          <div className="integration-directory-heading">
-            <div>
-              <CardTitle id="provider-directory-title">Provider directory</CardTitle>
-              <CardDescription className="integration-directory-note">
-                Choose an implemented read-only connector, a manual metadata record, or declare one domain directly. Opening a provider never grants AstraNull cloud access. Each card links a least-privilege setup guide.
-              </CardDescription>
-            </div>
-            <div className="integration-directory-meta">
-              <Badge tone="info">Optional integrations</Badge>
-              <span className="integration-tally">
-                {connectedProviderCount === null
-                  ? `${formatNumber(credentialProviderCount)} with credential polling`
-                  : `${formatNumber(connectedProviderCount)} of ${formatNumber(PROVIDER_DIRECTORY.length)} providers connected`}
-              </span>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <ul className="integration-tile-grid" aria-labelledby="provider-directory-title">
-            {PROVIDER_DIRECTORY.map((provider) => {
-              const count = providerConnectorCount(provider);
-              const credentialPath = provider.supportsCredentialPolling;
-              const connected = count !== null && count > 0;
-              return (
-                <li key={provider.id} className="integration-tile" data-connected={connected || undefined}>
-                  <div className="integration-tile-head">
-                    <div className="integration-identity">
-                      <span className="integration-logo-well">
-                        <ProviderLogo provider={provider.logo} size={28} />
-                      </span>
-                      <div className="integration-tile-name">
-                        <strong>{provider.label}</strong>
-                        <span>{provider.capability}</span>
-                      </div>
-                    </div>
-                    {connected ? <Badge tone="success">{`${formatNumber(count ?? 0)} configured`}</Badge> : null}
-                  </div>
-                  <p className="integration-tile-desc">{provider.description}</p>
-                  <div className="integration-tile-footer">
-                    <span className="integration-chip" data-tone={credentialPath ? 'positive' : 'neutral'}>
-                      {credentialPath ? <KeyRound size={13} aria-hidden="true" /> : <FileCheck2 size={13} aria-hidden="true" />}
-                      {credentialPath ? 'Credential polling' : 'Manual metadata'}
-                    </span>
-                    <div className="integration-tile-actions">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Setup guide for ${provider.label}`}
-                        onClick={() => setGuideProviderId(provider.id)}
-                      >
-                        <BookOpen size={14} aria-hidden="true" /> Setup guide
-                      </Button>
-                      {canAddIntegration ? (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          disabled={busy !== ''}
-                          aria-label={`${credentialPath ? 'Connect' : 'Add'} ${provider.label}`}
-                          onClick={() => openProviderFlow(provider.id)}
-                        >
-                          {credentialPath ? 'Connect' : 'Add manually'}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {!canAddIntegration ? (
-            <p className="muted small provider-directory-footnote">Connecting providers is read only for your role. Setup guides stay available.</p>
-          ) : null}
-        </CardContent>
-      </Card>
 
       <FormModal
         open={guideProvider !== null}
@@ -996,7 +997,7 @@ export function IntegrationPage({
                     icon={PlugZap}
                     title="No connectors configured yet"
                     body={canAddIntegration
-                      ? 'Add an optional read-only provider from the directory above, or keep using declared domains and manual evidence. To hear about findings in Slack, Teams, email, or a webhook, set up a notification channel.'
+                      ? 'Add an optional read-only provider from the directory below, or keep using declared domains and manual evidence. To hear about findings in Slack, Teams, email, or a webhook, set up a notification channel.'
                       : 'An owner or admin can add an optional read-only provider. Declared domains and manual evidence keep working without provider access.'}
                     actionLabel={canAddIntegration ? 'Add provider' : undefined}
                     actionVariant="default"
@@ -1014,8 +1015,8 @@ export function IntegrationPage({
           {snapshots.length > 0 ? (
             <Card className="card--dense">
               <PanelCardHeader
-                title="Loaded connector snapshots"
-                description="Recorded by a supported provider check or manual metadata entry."
+                title={`Snapshots for ${getString(connectorRecords.find((connector) => getString(connector, ['id'], '') === snapshotsConnectorId) ?? {}, ['name'], 'selected connector')}`}
+                description="Recorded by a provider poll or a manual metadata entry. Metadata only; not proof of protection."
                 trailing={<Badge tone="muted">{snapshots.length}</Badge>}
               />
               <CardContent className="support-evidence-list">
@@ -1033,6 +1034,91 @@ export function IntegrationPage({
           ) : null}
         </>
       )}
+
+      <Card>
+        <CardHeader>
+          <div className="integration-directory-heading">
+            <div>
+              <CardTitle id="provider-directory-title">Provider directory</CardTitle>
+              <CardDescription className="integration-directory-note">
+                Choose an implemented read-only connector, a manual metadata record, or declare one domain directly. Opening a provider never grants AstraNull cloud access. Each card links a least-privilege setup guide.
+              </CardDescription>
+            </div>
+            <div className="integration-directory-meta">
+              <Badge tone="info">Optional integrations</Badge>
+              <span className="integration-tally">
+                {connectedProviderCount === null
+                  ? `${formatNumber(credentialProviderCount)} with credential polling`
+                  : `${formatNumber(connectedProviderCount)} of ${formatNumber(PROVIDER_DIRECTORY.length)} providers configured`}
+              </span>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {([
+            { key: 'credential', title: 'Read-only credential polling', note: 'AstraNull polls the provider with a scoped read-only credential you store in the vault.', providers: PROVIDER_DIRECTORY.filter((provider) => provider.supportsCredentialPolling) },
+            { key: 'manual', title: 'Manual metadata only', note: 'No credential and no polling. You record selected metadata yourself.', providers: PROVIDER_DIRECTORY.filter((provider) => !provider.supportsCredentialPolling) },
+          ]).map((group) => (
+          <section key={group.key} className="integration-directory-group" aria-labelledby={`provider-group-${group.key}`}>
+            <h3 id={`provider-group-${group.key}`} className="integration-directory-group-title">{group.title} <span className="muted small">· {group.note}</span></h3>
+          <ul className="integration-tile-grid" aria-labelledby={`provider-group-${group.key}`}>
+            {group.providers.map((provider) => {
+              const count = providerConnectorCount(provider);
+              const credentialPath = provider.supportsCredentialPolling;
+              const connected = count !== null && count > 0;
+              return (
+                <li key={provider.id} className="integration-tile" data-connected={connected || undefined}>
+                  <div className="integration-tile-head">
+                    <div className="integration-identity">
+                      <span className="integration-logo-well">
+                        <ProviderLogo provider={provider.logo} size={28} />
+                      </span>
+                      <div className="integration-tile-name">
+                        <strong>{provider.label}</strong>
+                        <span>{provider.capability}</span>
+                      </div>
+                    </div>
+                    {connected ? <Badge tone="muted">{`${formatNumber(count ?? 0)} configured`}</Badge> : null}
+                  </div>
+                  <p className="integration-tile-desc">{provider.description}</p>
+                  <div className="integration-tile-footer">
+                    <span className="integration-chip" data-tone={credentialPath ? 'positive' : 'neutral'}>
+                      {credentialPath ? <KeyRound size={13} aria-hidden="true" /> : <FileCheck2 size={13} aria-hidden="true" />}
+                      {credentialPath ? 'Credential polling' : 'Manual metadata'}
+                    </span>
+                    <div className="integration-tile-actions">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Setup guide for ${provider.label}`}
+                        onClick={() => setGuideProviderId(provider.id)}
+                      >
+                        <BookOpen size={14} aria-hidden="true" /> Setup guide
+                      </Button>
+                      {canAddIntegration ? (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={busy !== ''}
+                          aria-label={`${credentialPath ? 'Connect' : 'Add'} ${provider.label}`}
+                          onClick={() => openProviderFlow(provider.id)}
+                        >
+                          {credentialPath ? 'Connect' : 'Add manually'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          </section>
+          ))}
+          {!canAddIntegration ? (
+            <p className="muted small provider-directory-footnote">Connecting providers is read only for your role. Setup guides stay available.</p>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <NotificationChannelsPanel
         config={config}
@@ -1121,10 +1207,19 @@ export function IntegrationPage({
               ? 'Creates a vault-backed connector for the implemented bounded metadata poller. Validate it before the first poll.'
               : 'Creates a metadata-only connector. No cloud credential or provider access is requested.'}
             wide
-            onClose={() => setShowCreateConnector(false)}
+            onClose={() => closeCreateConnector()}
           >
             {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-            <form className="product-form" onSubmit={handleCreateConnector} aria-busy={busy === 'create-connector' || undefined}>
+            {confirmDiscard === 'connector' ? (
+              <div className="form-banner neutral integration-discard" role="alert">
+                <span>Discard this connector setup? Any credential you typed is cleared and never stored.</span>
+                <span className="row-actions">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setConfirmDiscard('')}>Keep editing</Button>
+                  <Button type="button" size="sm" variant="danger" onClick={() => closeCreateConnector(true)}>Discard</Button>
+                </span>
+              </div>
+            ) : null}
+            <form className="product-form" onSubmit={handleCreateConnector} onInput={() => setConnectorDraftDirty(true)} aria-busy={busy === 'create-connector' || undefined}>
               <fieldset disabled={busy !== ''}>
                 <label>
                   <span>Provider</span>
@@ -1155,6 +1250,8 @@ export function IntegrationPage({
                       <textarea
                         name="secret"
                         rows={4}
+                        autoComplete="off"
+                        spellCheck={false}
                         placeholder={selectedCreateProvider.credentialExample ?? (selectedCreateProvider.backendProvider === 'aws_waf' ? 'Read-only AWS credential JSON' : 'Read-only provider credential JSON')}
                       />
                     </label>
@@ -1202,7 +1299,7 @@ export function IntegrationPage({
                   </label>
                 </details>
                 <div className="form-actions full">
-                  <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowCreateConnector(false)}>Cancel</Button>
+                  <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => closeCreateConnector()}>Cancel</Button>
                   <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">
                     {connectorSetupMode === 'connect' ? 'Create read-only connector' : 'Create manual connector'}
                   </Button>
@@ -1287,9 +1384,18 @@ export function IntegrationPage({
         title="Add single domain"
         description="Declare one hostname as a target. This is not provider discovery and does not grant cloud access."
         wide
-        onClose={closeAddDomain}
+        onClose={() => closeAddDomain()}
       >
         {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+        {confirmDiscard === 'domain' ? (
+          <div className="form-banner neutral integration-discard" role="alert">
+            <span>Discard this domain? Nothing has been declared yet.</span>
+            <span className="row-actions">
+              <Button type="button" size="sm" variant="secondary" onClick={() => setConfirmDiscard('')}>Keep editing</Button>
+              <Button type="button" size="sm" variant="danger" onClick={() => closeAddDomain(true)}>Discard</Button>
+            </span>
+          </div>
+        ) : null}
         {domainResult ? (
           <div className="domain-result">
             <div className="domain-result-heading">
@@ -1302,11 +1408,11 @@ export function IntegrationPage({
             <p>Provenance: manual customer declaration in the AstraNull portal. No provider credentials, account inventory, or automatic discovery were used.</p>
             <div className="form-actions">
               <AnchorButton href="#targets" variant="secondary">View target inventory</AnchorButton>
-              <Button type="button" onClick={closeAddDomain}>Done</Button>
+              <Button type="button" onClick={() => closeAddDomain(true)}>Done</Button>
             </div>
           </div>
         ) : (
-          <form className="product-form" onSubmit={handleAddSingleDomain} aria-busy={busy === 'add-single-domain' || undefined}>
+          <form className="product-form" onSubmit={handleAddSingleDomain} onInput={() => setDomainDraftDirty(true)} aria-busy={busy === 'add-single-domain' || undefined}>
             <fieldset disabled={busy === 'add-single-domain'}>
               <label className="full">
                 <span>Hostname</span>
@@ -1356,7 +1462,7 @@ export function IntegrationPage({
                 <strong>Recorded provenance:</strong> manual customer declaration via AstraNull Integrations; provider access: none. The target starts unverified and cannot receive external probes until ownership is proven.
               </div>
               <div className="form-actions full">
-                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={closeAddDomain}>Cancel</Button>
+                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => closeAddDomain()}>Cancel</Button>
                 <Button type="submit" loading={busy === 'add-single-domain'} disabled={busy !== ''}>Add declared domain</Button>
               </div>
             </fieldset>

@@ -37,6 +37,9 @@ const RESERVED_METADATA_KEYS = new Set([
   'deleted_by',
   'audit',
   'audit_log',
+  // Typed declaration is its own column. Metadata must not set or grant it.
+  'declaration',
+  'declaration_json',
 ]);
 
 function normalizedKey(value) {

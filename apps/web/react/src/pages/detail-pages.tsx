@@ -13,18 +13,31 @@ import { Tabs } from '../components/ui/tabs';
 import { buildApiHeaders, isStaffSocRole, requestJson, requestSocJson } from '../lib/api';
 import { apiErrorMessage, humanizeErrorCode } from '../lib/error-messages';
 import { ROUTE_BY_ID } from '../lib/navigation';
-import { buildDetailHref, getRouteEntityId, getRouteTenantId } from '../lib/route-params';
+import { buildDetailHref, getRouteEntityId, getRouteParam, getRouteTenantId, openEvidenceInspector } from '../lib/route-params';
+import {
+  describeScheduleDispatch,
+  formatSafeWindowList,
+  formatScheduleInstant,
+  ScheduleActions,
+  scheduleCheck,
+  scheduleCheckHref,
+  scheduleDisplayName,
+  scheduleSafeWindows,
+  ScheduleStateBadge,
+  scheduleTarget
+} from './refined/policies-refined';
 import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatDate, formatDurationSeconds, formatSeverityLabel, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
+import { formatDate, formatDurationSeconds, formatNumber, formatSeverityLabel, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
 import { hasEvidenceBackedVerdict } from '../lib/run-verdict';
 import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
+import { useFindingPages } from '../components/findings/use-server-findings';
 import { ConfirmModal, formatMutationSuccessMessage, useConfirmModal } from '../lib/crud-ui';
 import { RunTimelineViz, TrafficPathPanel, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
 import {
   isSignedProbeEvidenceEvent,
 } from '../lib/verdict-explanation';
-import { findingSlaDueAt, findingStatus, isFindingOpen, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
+import { findingSlaDueAt, findingStatus, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
 import {
   authorizationArtifactPurpose,
   authorizationArtifactTitle,
@@ -39,7 +52,19 @@ import {
 import { routeTabs } from '../lib/prototype-manifest';
 import { ReadinessGauge } from '../components/charts/readiness-gauge';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
-import { MetricCard, PageContextSummary } from './page-components';
+import {
+  CustomerPageStyles,
+  MetricCard,
+  PageContextSummary,
+  REPORT_FORMAT_FALLBACK_OPTIONS,
+  ReportExportMenu,
+  ReportExportResult,
+  reportKindIsFramework,
+  reportKindLabel,
+  reportOptionsFromCapabilities,
+  useReportExport
+} from './page-components';
+import { effectivePolicyTargetKind, isPolicyTargetCompatible } from '../components/policies/target-group-picker';
 import { TargetGroupDetailView as TargetGroupDetailViewRevamp } from './target-group-detail-view';
 import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
@@ -391,12 +416,16 @@ const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }
   'report-detail': { label: 'Reports', href: '#reports' },
   'tenant-detail': { label: 'Admin console', href: '#admin' },
   'finding-detail': { label: 'Findings', href: '#findings' },
-  'evidence-detail': { label: 'Evidence vault', href: '#evidence' },
+  'evidence-detail': { label: 'Findings', href: '#findings' },
+  'check-detail': { label: 'Check library', href: '#checks' },
+  'policy-detail': { label: 'Validation schedules', href: '#test-policies' },
   'queue-detail': { label: 'SOC console', href: '#internal-soc' }
 };
 
 const DETAIL_LINK_ROUTES: RouteId[] = [
   'run-detail',
+  'check-detail',
+  'policy-detail',
   'target-group-detail',
   'target-detail',
   'tenant-detail',
@@ -1568,6 +1597,34 @@ function EvidenceDetailView({
   const [entity, setEntity] = useState<DataItem | null>(initialFallback);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [loadErrorKind, setLoadErrorKind] = useState<'' | 'not_found' | 'denied' | 'unavailable'>('');
+  const [reloadTick, setReloadTick] = useState(0);
+  const [localDigest, setLocalDigest] = useState<{ value: string; at: string } | null>(null);
+  const [integrityState, setIntegrityState] = useState<{ status: 'loading' | 'ready' | 'denied' | 'unavailable'; value: string; verifiedAt: string; method: string }>({ status: 'loading', value: '', verifiedAt: '', method: '' });
+  const [integrityReload, setIntegrityReload] = useState(0);
+
+  useEffect(() => {
+    if (!entityId) return undefined;
+    let cancelled = false;
+    setIntegrityState({ status: 'loading', value: '', verifiedAt: '', method: '' });
+    requestJson(config, session, `/v1/evidence-context?entry=artifact&evidence_id=${encodeURIComponent(entityId)}`)
+      .then((payload) => {
+        if (cancelled) return;
+        const integrity = getNestedItem(payload as DataItem, ['primary', 'integrity']);
+        setIntegrityState({
+          status: 'ready',
+          value: getString(integrity ?? {}, ['status'], 'not_recorded'),
+          verifiedAt: getString(integrity ?? {}, ['verified_at'], ''),
+          method: getString(integrity ?? {}, ['method'], '')
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setIntegrityState({ status: status === 403 ? 'denied' : 'unavailable', value: '', verifiedAt: '', method: '' });
+      });
+    return () => { cancelled = true; };
+  }, [entityId, config, session, integrityReload]);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -1582,6 +1639,8 @@ function EvidenceDetailView({
     setEntity(localFallback);
     setLoading(true);
     setLoadError('');
+    setLoadErrorKind('');
+    setLocalDigest(null);
     requestJson(config, session, `/v1/evidence/${encodeURIComponent(entityId)}`)
       .then((payload) => {
         if (cancelled) return;
@@ -1591,11 +1650,11 @@ function EvidenceDetailView({
       })
       .catch((err) => {
         if (cancelled) return;
-        if (localFallback) {
-          setEntity(localFallback);
-        } else {
-          setLoadError(err instanceof Error ? err.message : 'Evidence artifact unavailable.');
-        }
+        const text = err instanceof Error ? err.message : 'Evidence artifact unavailable.';
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setLoadErrorKind(status === 404 || /not.?found/i.test(text) ? 'not_found' : status === 403 || /forbidden|permission/i.test(text) ? 'denied' : 'unavailable');
+        setLoadError(text);
+        setEntity(localFallback);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1603,7 +1662,7 @@ function EvidenceDetailView({
     return () => {
       cancelled = true;
     };
-  }, [entityId, config, session, evidenceList]);
+  }, [entityId, config, session, evidenceList, reloadTick]);
 
   if (!entityId) {
     return (
@@ -1643,13 +1702,31 @@ function EvidenceDetailView({
           entityId={entityId}
           title="Evidence artifact"
         />
-        <EmptyState
-          icon={ShieldCheck}
-          title="Evidence artifact not found."
-          body={loadError || 'The requested artifact is missing or outside this tenant scope.'}
-          actionLabel="Open findings"
-          actionHref="#findings"
-        />
+        {loadErrorKind === 'unavailable' ? (
+          <EmptyState
+            icon={TriangleAlert}
+            title="Evidence artifact unavailable."
+            body={`${loadError} The artifact may still exist; this is a read failure, not missing evidence.`}
+            actionLabel="Retry"
+            onAction={() => setReloadTick((count) => count + 1)}
+          />
+        ) : loadErrorKind === 'denied' ? (
+          <EmptyState
+            icon={ShieldCheck}
+            title="Evidence access required."
+            body="Your role cannot read evidence artifacts (evidence:read). No alternative source is used."
+            actionLabel="Open findings"
+            actionHref="#findings"
+          />
+        ) : (
+          <EmptyState
+            icon={ShieldCheck}
+            title="Evidence artifact not found."
+            body={`No artifact with ID ${entityId} is visible in this workspace. It may have expired under retention or belong to another tenant.`}
+            actionLabel="Open findings"
+            actionHref="#findings"
+          />
+        )}
       </div>
     );
   }
@@ -1661,7 +1738,6 @@ function EvidenceDetailView({
   const sizeLabel = formatEvidenceSize(entity);
   const sealedAtRaw = getString(entity, ['sealed_at'], '');
   const recordedAtRaw = getString(entity, ['created_at', 'timestamp'], '');
-  const verified = getString(entity, ['verified'], '');
   const sha256 = getString(entity, ['content_sha256', 'sha256', 'custody_digest'], getNestedString(entity, ['metadata', 'sha256'], ''));
   const chainPosition = getString(entity, ['chain_position'], '');
   const bundle = getString(entity, ['bundle', 'bundle_id'], '');
@@ -1675,10 +1751,6 @@ function EvidenceDetailView({
       return ids.includes(artifactId) || ids.includes(entityId);
     });
     if (byEvidence) return getString(byEvidence, ['id'], '');
-    if (runId) {
-      const byRun = data.findings.find((finding) => getString(finding, ['test_run_id'], '') === runId);
-      if (byRun) return getString(byRun, ['id'], '');
-    }
     return '';
   })();
 
@@ -1686,15 +1758,20 @@ function EvidenceDetailView({
   const payloadSource = getNestedItem(entity, ['payload']) ? 'payload' : getNestedItem(entity, ['content']) ? 'content' : getNestedItem(entity, ['metadata']) ? 'metadata' : '';
   const payloadJson = displayedPayload && Object.keys(displayedPayload).length > 0 ? JSON.stringify(displayedPayload, null, 2) : '';
 
-  let custodyLabel = 'Metadata only';
-  let custodyTone: 'success' | 'info' | 'muted' = 'muted';
-  if (verified === 'true' || verified === 'verified') {
-    custodyLabel = 'Verified';
-    custodyTone = 'success';
-  } else if (sha256) {
-    custodyLabel = 'Digest recorded';
-    custodyTone = 'info';
-  }
+  const serverVerified = integrityState.status === 'ready' && integrityState.value === 'verified';
+  const serverVerificationLabel = integrityState.status === 'loading'
+    ? 'Checking recorded verification…'
+    : integrityState.status === 'denied'
+      ? 'Not visible to your role'
+      : integrityState.status === 'unavailable'
+        ? 'Verification status unavailable'
+        : integrityState.value === 'verified'
+          ? `Verified by the server${integrityState.verifiedAt ? ` ${formatDate(integrityState.verifiedAt)}` : ''}${integrityState.method ? ` · ${integrityState.method}` : ''}`
+          : integrityState.value === 'not_verified'
+            ? 'Not verified: no authoritative verification succeeded'
+            : integrityState.value === 'recorded_digest'
+              ? 'Not verified (recorded hash only)'
+              : 'Not verified (no hash or verification recorded)';
 
   const artifactRecord = evidenceCodeBlock([
     ['artifact_id', artifactId],
@@ -1705,7 +1782,6 @@ function EvidenceDetailView({
     ['size', sizeLabel],
     ['recorded_at', recordedAtRaw ? formatDate(recordedAtRaw) : ''],
     ['sealed_at', sealedAtRaw ? formatDate(sealedAtRaw) : ''],
-    ['verified', verified]
   ]);
 
   const custodyRecord = evidenceCodeBlock([
@@ -1729,7 +1805,6 @@ function EvidenceDetailView({
     if (sizeLabel) payload.size = sizeLabel;
     if (recordedAtRaw) payload.recorded_at = recordedAtRaw;
     if (sealedAtRaw) payload.sealed_at = sealedAtRaw;
-    if (verified) payload.verified = verified;
     if (sha256) payload.content_sha256 = sha256;
     if (chainPosition) payload.chain_position = chainPosition;
     if (bundle) payload.bundle = bundle;
@@ -1751,7 +1826,8 @@ function EvidenceDetailView({
       const manifest = await buildEvidenceCustodyManifest(displayedPayload, session.tenant_id);
       const recomputed = getString(manifest as DataItem, ['content_sha256'], '');
       if (recomputed) {
-        setMessage(`Locally computed ${CUSTODY_CONTENT_CANONICALIZATION} digest ${recomputed} over the displayed JSON only. The recorded artifact digest may cover different sealed bytes, so no comparison or server verification was performed.`);
+        setLocalDigest({ value: recomputed, at: new Date().toISOString() });
+        setMessage(`Locally computed ${CUSTODY_CONTENT_CANONICALIZATION} digest over the JSON shown on this page only. The recorded artifact digest may cover different sealed bytes, so no comparison or server verification was performed.`);
       } else {
         setError('No displayed sealed contents are available for local digest recomputation. No server verification request was made.');
       }
@@ -1788,23 +1864,58 @@ function EvidenceDetailView({
         actions={(
           <>
             {findingId ? (
-              <AnchorButton size="sm" variant="secondary" href={buildDetailHref('finding-detail', findingId)}>← Finding</AnchorButton>
+              <AnchorButton size="sm" variant="secondary" href={buildDetailHref('finding-detail', findingId)}>Back to finding</AnchorButton>
             ) : null}
-            <Button size="sm" variant="ghost" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void recomputeDigest()}>Recompute digest</Button>
-            <Button size="sm" variant="default" loading={busy === 'export'} disabled={busy !== ''} onClick={() => void exportArtifact()}>Export artifact</Button>
+            <Button size="sm" variant="ghost" loading={busy === 'verify'} disabled={busy !== '' || !payloadJson} onClick={() => void recomputeDigest()}>Compute local digest</Button>
+            <Button size="sm" variant="secondary" loading={busy === 'export'} disabled={busy !== ''} onClick={() => void exportArtifact()}>Export artifact JSON</Button>
           </>
         )}
       />
-      <p className="muted small">Recorded evidence artifact with optional digest fields and a technical JSON preview. No custody or server verification is inferred.</p>
+      <CustomerPageStyles />
+      <p className="muted small">One recorded artifact. {findingId
+        ? 'It is referenced by the finding linked above.'
+        : data.findingsMeta && !data.findingsMeta.hasMore
+          ? 'No finding references this artifact explicitly.'
+          : `No finding among the ${formatNumber(data.findings.length)} newest loaded findings references this artifact; older findings were not checked.`}{runId ? ` Recorded by run ${runId}.` : ''}</p>
       {loading ? <DetailLoadingPlaceholder label="Refreshing evidence artifact…" variant="compact" /> : null}
-      <DetailStatusBanners loadError={loadError} error={error} message={message} />
+      {loadError && entity ? (
+        <div className="form-banner error row-actions" role="alert">
+          <span>Refresh failed: {loadError} Showing the copy loaded earlier in this session.</span>
+          <Button size="sm" variant="secondary" onClick={() => setReloadTick((count) => count + 1)}>Retry</Button>
+        </div>
+      ) : null}
+      <DetailStatusBanners loadError="" error={error} message={message} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Integrity</CardTitle>
+          <CardDescription>Each state is separate. A recorded hash alone does not prove custody.</CardDescription>
+        </CardHeader>
+        <CardContent className="kv-list">
+          <div><span>Recorded hash</span><strong className="cp-mono-wrap">{sha256 || 'Not recorded'}</strong></div>
+          <div><span>Locally computed (this page)</span><strong className="cp-mono-wrap">{localDigest ? `${localDigest.value} · ${formatDate(localDigest.at)}, over displayed JSON only` : 'Not computed'}</strong></div>
+          <div>
+            <span>Server verification</span>
+            <strong>
+              {serverVerificationLabel}
+              {integrityState.status === 'unavailable' ? <> <button type="button" className="rf-link-button" onClick={() => setIntegrityReload((count) => count + 1)}>Retry</button></> : null}
+            </strong>
+          </div>
+          {sealedAtRaw ? <div><span>Sealed</span><strong>{formatDate(sealedAtRaw)}</strong></div> : null}
+        </CardContent>
+      </Card>
 
-      <div className="metric-grid four">
-        <MetricCard label="Kind" value={plainCodeLabel(kind, 'Not reported')} sub="Artifact classification" icon={FileCheck2} tone="info" />
-        <MetricCard label="Run" value={runId || '—'} sub="Originating test run" icon={Activity} tone="muted" />
-        <MetricCard label="Size" value={sizeLabel || '—'} sub="Recorded size field" icon={FileText} tone="muted" />
-        <MetricCard label="Digest" value={custodyLabel} sub={sha256 ? 'Digest method recorded' : 'No digest recorded'} icon={ShieldCheck} tone={custodyTone} />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Artifact</CardTitle>
+          <CardDescription>Recorded fields only.</CardDescription>
+        </CardHeader>
+        <CardContent className="kv-list">
+          <div><span>Kind</span><strong>{plainCodeLabel(kind, 'Not recorded')}</strong></div>
+          <div><span>Recorded by run</span><strong className="cp-mono-wrap">{runId || 'Not recorded'}</strong></div>
+          <div><span>Size</span><strong>{sizeLabel || 'Not recorded'}</strong></div>
+          <div><span>Recorded</span><strong>{recordedAtRaw ? formatDate(recordedAtRaw) : 'Not recorded'}</strong></div>
+        </CardContent>
+      </Card>
 
       <div className="dash-grid">
         <Card>
@@ -1818,11 +1929,7 @@ function EvidenceDetailView({
             ) : (
               <p className="muted">No artifact metadata recorded for this evidence id.</p>
             )}
-            {runId ? (
-              <div className="row-actions">
-                <DetailEntityLink route="run-detail" id={runId} label="Open originating run" />
-              </div>
-            ) : null}
+
           </CardContent>
         </Card>
         <Card>
@@ -1849,7 +1956,7 @@ function EvidenceDetailView({
           {payloadJson ? (
             <DetailCodeBlock label="Artifact JSON preview">{payloadJson}</DetailCodeBlock>
           ) : (
-            <EmptyState icon={FileText} title="No JSON preview available." body="This artifact has no object-valued payload, content, or metadata record." />
+            <EmptyState icon={FileText} title="Metadata-only artifact." body="No payload or content is retained for this artifact, which is expected for metadata-only retention. This does not indicate corruption." />
           )}
         </CardContent>
       </Card>
@@ -2774,6 +2881,28 @@ function formatPolicySafeWindow(policy: DataItem) {
   return getString(policy, ['safe_window', 'window'], '—');
 }
 
+/** Declared targets for labels and caller context; routes that do not preload them fetch once. */
+function useDeclaredTargets(data: PortalData, config: PortalConfig, session: Session) {
+  const preloaded = data.targets.length > 0;
+  const [state, setState] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'error'; items: DataItem[] }>({ status: 'idle', items: [] });
+  useEffect(() => {
+    if (preloaded) return undefined;
+    let cancelled = false;
+    setState({ status: 'loading', items: [] });
+    requestJson(config, session, '/v1/targets')
+      .then((payload) => {
+        if (cancelled) return;
+        const items = payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)
+          ? (payload as { items: DataItem[] }).items
+          : [];
+        setState({ status: 'loaded', items });
+      })
+      .catch(() => { if (!cancelled) setState({ status: 'error', items: [] }); });
+    return () => { cancelled = true; };
+  }, [config, session, preloaded]);
+  return preloaded ? data.targets : state.items;
+}
+
 function CheckDetailPage({
   entityId,
   data,
@@ -2785,11 +2914,15 @@ function CheckDetailPage({
   config: PortalConfig;
   session: Session;
 }) {
+  const callerPolicyId = getRouteParam('policy');
+  const callerTargetId = getRouteParam('target');
   const [linkedPolicyState, setLinkedPolicyState] = useState<{
     status: 'idle' | 'loading' | 'loaded' | 'error';
     items: DataItem[];
     error: string;
   }>({ status: 'idle', items: [], error: '' });
+  const [policyReload, setPolicyReload] = useState(0);
+  const [runReload, setRunReload] = useState(0);
 
   useEffect(() => {
     if (!entityId) {
@@ -2802,11 +2935,11 @@ function CheckDetailPage({
       .then((payload) => {
         if (cancelled) return;
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Array.isArray((payload as { items?: unknown }).items)) {
-          throw new Error('Invalid test-policy list response.');
+          throw new Error('Invalid schedule list response.');
         }
         const items = (payload as { items: unknown[] }).items;
         if (!items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
-          throw new Error('Invalid test-policy records.');
+          throw new Error('Invalid schedule records.');
         }
         setLinkedPolicyState({
           status: 'loaded',
@@ -2816,23 +2949,23 @@ function CheckDetailPage({
       })
       .catch((err) => {
         if (!cancelled) {
-          setLinkedPolicyState({ status: 'error', items: [], error: err instanceof Error ? err.message : 'Could not load linked policies.' });
+          setLinkedPolicyState({ status: 'error', items: [], error: err instanceof Error ? err.message : 'Could not load linked schedules.' });
         }
       });
     return () => { cancelled = true; };
-  }, [config, session, entityId]);
+  }, [config, session, entityId, policyReload]);
 
-  // The shared runs dataset is only the tenant's newest page, so a check whose runs are older
-  // would read "No runs yet". Fetch this check's own runs.
-  const [checkRunState, setCheckRunState] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'error'; items: DataItem[] }>({ status: 'idle', items: [] });
+  // The shared runs dataset is only the newest page; fetch this check's own runs (and the caller target's).
+  const [checkRunState, setCheckRunState] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'error'; items: DataItem[]; error: string }>({ status: 'idle', items: [], error: '' });
   useEffect(() => {
     if (!entityId) {
-      setCheckRunState({ status: 'idle', items: [] });
+      setCheckRunState({ status: 'idle', items: [], error: '' });
       return;
     }
     let cancelled = false;
-    setCheckRunState({ status: 'loading', items: [] });
-    requestJson(config, session, `/v1/test-runs?check_id=${encodeURIComponent(entityId)}&limit=25`)
+    setCheckRunState({ status: 'loading', items: [], error: '' });
+    const targetQuery = callerTargetId ? `&target_id=${encodeURIComponent(callerTargetId)}` : '';
+    requestJson(config, session, `/v1/test-runs?check_id=${encodeURIComponent(entityId)}${targetQuery}&limit=25`)
       .then((payload) => {
         if (cancelled) return;
         const items = payload && typeof payload === 'object' && !Array.isArray(payload)
@@ -2841,42 +2974,110 @@ function CheckDetailPage({
         if (!Array.isArray(items) || !items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
           throw new Error('Invalid test-run list response.');
         }
-        setCheckRunState({ status: 'loaded', items: items as DataItem[] });
+        setCheckRunState({ status: 'loaded', items: (items as DataItem[]).filter((run) => getString(run, ['check_id'], '') === entityId), error: '' });
       })
-      .catch(() => {
-        if (!cancelled) setCheckRunState({ status: 'error', items: [] });
+      .catch((err) => {
+        if (!cancelled) setCheckRunState({ status: 'error', items: [], error: err instanceof Error ? err.message : 'Recorded results could not be loaded.' });
       });
     return () => { cancelled = true; };
-  }, [config, session, entityId]);
+  }, [config, session, entityId, callerTargetId, runReload]);
+
+  const declaredTargets = useDeclaredTargets(data, config, session);
+  const [exactCheck, setExactCheck] = useState<{ id: string; status: 'loading' | 'found' | 'not_found' | 'error'; check: DataItem | null; error: string }>({ id: '', status: 'loading', check: null, error: '' });
+  const [exactCheckTick, setExactCheckTick] = useState(0);
+  const [compatibility, setCompatibility] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'not_found' | 'error'; checks: DataItem[] }>({ status: 'idle', checks: [] });
+
+  useEffect(() => {
+    if (!entityId) return undefined;
+    let cancelled = false;
+    setExactCheck({ id: entityId, status: 'loading', check: null, error: '' });
+    requestJson(config, session, `/v1/checks/${encodeURIComponent(entityId)}`)
+      .then((payload) => {
+        if (cancelled) return;
+        const found = getNestedItem(payload as DataItem, ['check']);
+        setExactCheck(found ? { id: entityId, status: 'found', check: found, error: '' } : { id: entityId, status: 'not_found', check: null, error: '' });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setExactCheck({ id: entityId, status: status === 404 ? 'not_found' : 'error', check: null, error: err instanceof Error ? err.message : 'Check could not be loaded.' });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, entityId, exactCheckTick]);
+
+  useEffect(() => {
+    if (!callerTargetId) {
+      setCompatibility({ status: 'idle', checks: [] });
+      return undefined;
+    }
+    let cancelled = false;
+    setCompatibility({ status: 'loading', checks: [] });
+    requestJson(config, session, `/v1/targets/${encodeURIComponent(callerTargetId)}/compatible-checks`)
+      .then((payload) => {
+        if (cancelled) return;
+        const checks = Array.isArray((payload as DataItem)?.checks) ? (payload as DataItem).checks as DataItem[] : [];
+        setCompatibility({ status: 'loaded', checks });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCompatibility({ status: Number((err as { status?: unknown })?.status ?? 0) === 404 ? 'not_found' : 'error', checks: [] });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, callerTargetId]);
+  const callerPolicy = callerPolicyId
+    ? [...linkedPolicyState.items, ...data.testPolicies].find((item) => getString(item, ['id', 'policy_id'], '') === callerPolicyId) ?? null
+    : null;
+  const callerTarget = callerTargetId ? declaredTargets.find((item) => getString(item, ['id'], '') === callerTargetId) ?? null : null;
+  const callerBackHref = callerPolicyId ? buildDetailHref('policy-detail', callerPolicyId) : callerTargetId ? buildDetailHref('target-detail', callerTargetId) : '#checks';
+  const callerBackLabel = callerPolicyId ? 'Back to schedule' : callerTargetId ? 'Back to target' : 'Check library';
 
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="check-detail" eyebrow="Validation" />
+        <DetailPageIntro route="check-detail" eyebrow="Check" />
         <EmptyState
           icon={FileCheck2}
           title="No check selected."
-          body="Open a check from the list with ?id= or use the Detail link on #checks."
-          actionLabel="Open checks"
+          body="This address does not name a check. Choose one from the check library."
+          actionLabel="Open check library"
           actionHref="#checks"
         />
       </div>
     );
   }
 
-  const check = data.checks.find((item) => getString(item, ['check_id', 'id'], '') === entityId) ?? null;
+  const exactReady = exactCheck.id === entityId;
+  const check = exactReady && exactCheck.status === 'found' ? exactCheck.check : null;
 
   if (!check) {
+    if (!exactReady || exactCheck.status === 'loading') {
+      return (
+        <div className="content">
+          <DetailPageIntro route="check-detail" eyebrow="Check" />
+          <DetailLoadingPlaceholder label="Loading check…" variant="layout" />
+        </div>
+      );
+    }
     return (
       <div className="content">
-        <DetailPageIntro route="check-detail" eyebrow="Validation" />
-        <EmptyState
-          icon={FileCheck2}
-          title="Check not found."
-          body="This check id is not present in the workspace check catalog."
-          actionLabel="Open checks"
-          actionHref="#checks"
-        />
+        <DetailPageIntro route="check-detail" eyebrow="Check" />
+        {exactCheck.status === 'error' ? (
+          <EmptyState
+            icon={TriangleAlert}
+            title="Check could not be loaded."
+            body={`${exactCheck.error} Check ${entityId} may still exist; nothing else is shown in its place.`}
+            actionLabel="Retry"
+            onAction={() => setExactCheckTick((count) => count + 1)}
+          />
+        ) : (
+          <EmptyState
+            icon={FileCheck2}
+            title="Check not found."
+            body={`No check with ID ${entityId} is in the catalog. It may have been removed or renamed; no other check is substituted.`}
+            actionLabel={callerBackLabel === 'Check library' ? 'Open check library' : callerBackLabel}
+            actionHref={callerBackHref}
+          />
+        )}
       </div>
     );
   }
@@ -2884,21 +3085,9 @@ function CheckDetailPage({
   const family = getString(check, ['vector_family', 'family'], '');
   const safetyClass = getString(check, ['safety_class'], '');
   const execution = checkExecutionSemantics(check);
-  const description = getString(check, ['description', 'summary'], 'No check-specific description is recorded in the catalog.');
-  const checkRuns = checkRunState.status === 'loaded' ? checkRunState.items : data.runs;
-  const latest = latestCheckVerdict(checkRuns, data.evidence, entityId);
-  const method = getString(check, ['method'], safetyClass === 'safe' ? `${execution.kind} · ${execution.cap}` : 'governed · SOC-scheduled');
+  const customerRunnable = safetyClass === 'safe';
+  const description = getString(check, ['description', 'summary'], '');
   const title = plainCheckName(getString(check, ['name', 'check_id', 'id'], entityId));
-  const definition = [
-    `check_id: ${entityId}`,
-    `family: ${family || '—'}`,
-    `mode: ${formatCheckModeLabel(safetyClass)}`,
-    `execution_kind: ${execution.kind}`,
-    `execution_cap: ${execution.cap}`,
-    `method: ${method}`,
-    `last_verdict: ${latest ? latest.verdict : 'none'}`
-  ].join('\n');
-
   const toList = catalogValueList;
   const humanize = (value: string) => value.replace(/_/g, ' ');
   const recordedRemediation = getString(check, ['remediation_template', 'remediation'], '');
@@ -2919,124 +3108,269 @@ function CheckDetailPage({
   const customerSetup = toList(check.required_customer_setup);
   const evidenceRequired = toList(check.evidence_required);
   const stopConditions = toList(check.stop_conditions);
-  const attackVectorIds = toList(check.attack_vector_ids);
   const pluralResources = toList(check.exhausted_resources);
-  const exhaustedResources = pluralResources.length > 0 ? pluralResources : toList(check.exhausted_resource);
-  const deliveryPatterns = toList(check.delivery_patterns);
-  const wafVulnerabilityIds = toList(check.waf_vulnerability_ids);
-  const nonDdosThreatIds = toList(check.non_ddos_threat_ids);
   const taxonomyRows = [
-    { label: 'Attack vectors', prefix: 'ATT', values: attackVectorIds },
-    { label: 'Exhausted resources', prefix: 'Resource', values: exhaustedResources },
-    { label: 'Delivery patterns', prefix: 'Pattern', values: deliveryPatterns },
-    { label: 'WAF vulnerabilities', prefix: 'WV', values: wafVulnerabilityIds },
-    { label: 'Non-DDoS threats', prefix: 'ND', values: nonDdosThreatIds }
+    { label: 'Attack vectors', prefix: 'ATT', values: toList(check.attack_vector_ids) },
+    { label: 'Exhausted resources', prefix: 'Resource', values: pluralResources.length > 0 ? pluralResources : toList(check.exhausted_resource) },
+    { label: 'Delivery patterns', prefix: 'Pattern', values: toList(check.delivery_patterns) },
+    { label: 'WAF vulnerabilities', prefix: 'WV', values: toList(check.waf_vulnerability_ids) },
+    { label: 'Non-DDoS threats', prefix: 'ND', values: toList(check.non_ddos_threat_ids) }
   ];
   const maxEvents = getNestedNumber(check, ['safety_constraints', 'max_events'], 0);
   const maxDuration = getNestedNumber(check, ['safety_constraints', 'max_duration_seconds'], 0);
   const maxConcurrent = getNestedNumber(check, ['safety_constraints', 'max_concurrent_runs_per_target_group'], 0);
-  const probeProfile = getNestedItem(check, ['probe_profile']);
-  const probeKind = probeProfile ? getString(probeProfile, ['kind'], '') : '';
+  const probeKind = getNestedString(check, ['probe_profile', 'kind'], '');
   const probeRequests = getNestedNumber(check, ['probe_profile', 'max_requests'], 0);
-  const recentCheckRuns = [...checkRuns]
-    .filter((run) => getString(run, ['check_id'], '') === entityId)
-    .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')))
-    .slice(0, 8);
+  const probeTimeout = getNestedNumber(check, ['probe_profile', 'timeout_ms'], 0);
+
+  const recordedRuns = [...checkRunState.items]
+    .sort((left, right) => String(right.completed_at ?? right.updated_at ?? right.created_at ?? '').localeCompare(String(left.completed_at ?? left.updated_at ?? left.created_at ?? '')));
+  const latestResult = recordedRuns.find((run) => hasEvidenceBackedVerdict(run, data.evidence) && runVerdictValue(run)) ?? null;
+  const latestAt = latestResult ? String(latestResult.completed_at ?? latestResult.updated_at ?? latestResult.created_at ?? '') : '';
+  const latestAgeDays = latestAt ? Math.floor((Date.now() - Date.parse(latestAt)) / 86_400_000) : null;
+  const latestTargetId = latestResult ? getString(latestResult, ['target_id'], '') : '';
+  const targetLabel = (targetId: string) => {
+    const match = declaredTargets.find((item) => getString(item, ['id'], '') === targetId);
+    return getString(match ?? {}, ['value', 'hostname'], targetId);
+  };
+  const callerTargetKind = callerTarget ? effectivePolicyTargetKind(callerTarget) : '';
+  const callerCompatible = compatibility.status === 'loaded'
+    ? compatibility.checks.some((candidate) => getString(candidate, ['check_id'], '') === entityId)
+    : null;
+  const callerGroupId = callerTarget ? getString(callerTarget, ['target_group_id'], '') : '';
+  const scheduleHref = `#test-policies?check=${encodeURIComponent(entityId)}${callerTarget && callerCompatible && callerGroupId ? `&group=${encodeURIComponent(callerGroupId)}&target=${encodeURIComponent(callerTargetId)}` : ''}`;
+  const canSchedule = customerRunnable && sessionHasPermission(session, 'test_policy:write') && (!callerTargetId || callerCompatible === true);
+
   const policyColumns: TableColumn<DataItem>[] = [
-    { key: 'policy', label: 'Policy', render: (item) => { const policyId = getString(item, ['id', 'policy_id'], ''); return <span title={policyId || undefined}>{getString(item, ['name', 'title'], 'Scheduled policy')}</span>; } },
-    { key: 'group', label: 'Target group', render: (item) => {
-      const groupId = getString(item, ['target_group_id'], '');
-      return groupId ? <DetailEntityLink route="target-group-detail" id={groupId} label={getNestedString(item, ['target_group', 'name'], groupId)} /> : '—';
+    { key: 'target', label: 'Exact target', render: (item) => {
+      const target = scheduleTarget(item);
+      return target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <span className="muted">No exact target</span>;
     } },
-    { key: 'target', label: 'Target', render: (item) => {
-      const targetId = getString(item, ['target_id'], '');
-      return targetId ? <DetailEntityLink route="target-detail" id={targetId} label={getNestedString(item, ['target', 'value'], targetId)} /> : '—';
-    } },
-    { key: 'cadence', label: 'Cadence', render: (item) => formatStatusLabel(getString(item, ['cadence'], 'manual')) },
-    { key: 'state', label: 'State', render: (item) => <StatusBadge value={getString(item, ['state'], 'not recorded')} tone={lifecycleBadgeTone(getString(item, ['state'], ''))} fallback="not recorded" /> }
+    { key: 'cadence', label: 'Cadence', render: (item) => formatStatusLabel(getString(item, ['cadence'], ''), 'Not recorded') },
+    { key: 'dispatch', label: 'Dispatch', render: (item) => <ScheduleStateBadge dispatch={describeScheduleDispatch(item, data.checks)} /> }
   ];
   const checkRunColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (item) => <code className="mono-hash">{getString(item, ['id'], '—')}</code> },
-    { key: 'group', label: 'Target group', render: (item) => {
-      const groupId = getString(item, ['target_group_id'], '');
-      return groupId ? <DetailEntityLink route="target-group-detail" id={groupId} /> : '—';
+    { key: 'target', label: 'Target', render: (item) => {
+      const runTargetId = getString(item, ['target_id'], '');
+      return runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={targetLabel(runTargetId)} /> : <span className="muted">Not recorded</span>;
     } },
-    { key: 'lifecycle', label: 'Lifecycle', render: (item) => <StatusBadge value={getString(item, ['status'], 'pending')} tone={runStatusBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" /> },
-    { key: 'outcome', label: 'Verdict', render: (item) => {
+    { key: 'observed', label: 'Observed', render: (item) => <span className="mono">{formatDate(item.completed_at ?? item.updated_at ?? item.created_at)}</span> },
+    { key: 'outcome', label: 'Outcome', render: (item) => {
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
-      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
+      return outcome
+        ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} />
+        : <span className="muted">{['planned', 'running', 'collecting'].includes(getString(item, ['status'], '')) ? 'In progress' : 'No evidence-backed result'}</span>;
     } },
-    { key: 'recorded', label: 'Recorded', render: (item) => formatDate(item.updated_at ?? item.created_at) }
+    { key: 'evidence', label: 'Evidence', render: (item) => <RunEvidenceButton run={item} /> }
   ];
 
   return (
     <div className="content">
+      <CustomerPageStyles />
       <DetailPageHeader
         route="check-detail"
-        eyebrow="Validation"
+        eyebrow="Check"
         entityId={entityId}
         title={title}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#checks">Checks</AnchorButton>
-            <AnchorButton size="sm" variant="default" href="#test-policies">
-              Schedule this check
-            </AnchorButton>
+            <AnchorButton size="sm" variant="secondary" href={callerBackHref}>{callerBackLabel}</AnchorButton>
+            {canSchedule ? (
+              <AnchorButton size="sm" variant="default" href={scheduleHref}>
+                {callerTarget ? `Schedule on ${targetLabel(callerTargetId)}` : 'Schedule this check'}
+              </AnchorButton>
+            ) : null}
           </>
         )}
       />
-      <p className="check-detail-lead">{description}</p>
-      <div className="metric-grid four">
-        <MetricCard label="Family" value={formatCheckFamilyLabel(family)} sub="Vector family" icon={Network} tone="info" />
-        <MetricCard label="Mode" value={formatCheckModeLabel(safetyClass)} sub={safetyClass === 'soc_gated' ? 'SOC request-only' : 'Customer-runnable'} icon={ShieldCheck} tone={safetyClass === 'soc_gated' ? 'warn' : 'success'} />
-        <MetricCard label="Execution" value={execution.kind} sub={execution.cap} icon={Activity} tone="muted" />
-        <MetricCard label="Last verdict" value={latest ? plainVerdictLabel(latest.verdict) : 'None'} sub={latest ? 'From most recent run' : 'No runs yet'} icon={FileCheck2} tone={latest ? (outcomeBadgeTone(latest.verdict) === 'danger' ? 'danger' : outcomeBadgeTone(latest.verdict) === 'warn' ? 'warn' : 'success') : 'muted'} />
+      {callerPolicyId || callerTargetId ? (
+        <div className="form-banner neutral check-caller-context" role="note">
+          {callerPolicyId ? (
+            <span>Opened from schedule <a href={buildDetailHref('policy-detail', callerPolicyId)}>{callerPolicy ? scheduleDisplayName(callerPolicy, data.checks) : callerPolicyId}</a>.</span>
+          ) : null}
+          {callerTargetId ? (
+            callerTarget ? (
+              <span>
+                {' '}Target <strong className="mono">{targetLabel(callerTargetId)}</strong> ({callerTargetKind.replace(/_/g, ' ') || 'kind not recorded'}):{' '}
+                {compatibility.status === 'loading' ? 'checking compatibility…'
+                  : compatibility.status === 'error' ? 'compatibility could not be loaded, so scheduling from here is not offered.'
+                    : compatibility.status === 'not_found' ? 'this target is not visible in this workspace.'
+                      : callerCompatible ? 'this check is compatible with it (launch gates are evaluated only when a run starts).' : `not compatible; this check runs on ${supportedTargets.join(', ') || 'no declared kind'}.`}
+                {' '}Recorded results below are for this target only.
+              </span>
+            ) : <span> Target {callerTargetId} is not visible in this workspace; results are not filtered by it.</span>
+          ) : null}
+        </div>
+      ) : null}
+      {!customerRunnable ? (
+        <div className="form-banner neutral" role="note">
+          {safetyClass === 'soc_gated'
+            ? 'This catalog entry is SOC-governed. It cannot be started or scheduled by customers in this release.'
+            : 'This check is not marked customer-runnable, so it cannot be scheduled.'}
+        </div>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>What this check does</CardTitle>
+          <CardDescription>{description || 'No check-specific description is recorded in the catalog.'}</CardDescription>
+        </CardHeader>
+        <CardContent className="check-explainer">
+          <div>
+            <p className="check-fact-label">What is sent</p>
+            <p className="check-detail-text"><strong>{execution.kind}</strong>{probeKind ? <span className="muted"> · {plainCodeLabel(probeKind)}</span> : null}</p>
+            <p className="check-detail-text">{execution.cap}</p>
+            {probeTimeout ? <p className="muted small">{formatNumber(probeTimeout)} ms timeout</p> : null}
+          </div>
+          <div>
+            <p className="check-fact-label">What is observed</p>
+            <p className="check-detail-text">
+              {evidenceRequired.length ? evidenceRequired.map(humanize).join(', ') : 'Evidence types not recorded in the catalog.'}
+            </p>
+          </div>
+          <div>
+            <p className="check-fact-label">How it is evaluated</p>
+            <p className="check-detail-text">
+              {verdictLogic || explanation || 'Evaluation rule not recorded.'}
+              {expectedBehavior ? <> Expected behavior: <strong title={expectedBehavior}>{plainCodeLabel(expectedBehavior).toLowerCase()}</strong>.</> : null}
+            </p>
+          </div>
+          <p className="muted small full">A bounded check proves one recorded behavior on one target. It does not establish volumetric capacity or protection for other targets.</p>
+        </CardContent>
+      </Card>
+
+      <div className="dash-grid">
+        <Card>
+          <CardHeader>
+            <CardTitle>Where it can run</CardTitle>
+            <CardDescription>Catalog compatibility, not permission to run now. Ownership and rate gates apply at start.</CardDescription>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div>
+              <p className="check-fact-label">Target kinds</p>
+              {supportedTargets.length ? <div className="row-actions">{supportedTargets.map((kind) => <Badge key={kind} tone="muted">{humanize(kind)}</Badge>)}</div> : <p className="muted">Not recorded</p>}
+            </div>
+            <div>
+              <p className="check-fact-label">Required setup</p>
+              {customerSetup.length || prerequisites.length
+                ? <ul className="check-detail-list">{[...customerSetup, ...prerequisites].map((item) => <li key={item}>{humanize(item)}</li>)}</ul>
+                : <p className="muted">None recorded</p>}
+            </div>
+            <div>
+              <p className="check-fact-label">Safety bounds</p>
+              {maxEvents || maxDuration || maxConcurrent || probeRequests ? (
+                <div className="stack-tight">
+                  {probeRequests ? <p className="check-detail-text">{checkProbeOperationBoundLabel(probeRequests)}</p> : null}
+                  <div className="row-actions">
+                  {maxEvents ? <Badge tone="muted">max {maxEvents} events</Badge> : null}
+                  {maxDuration ? <Badge tone="muted">max {maxDuration}s</Badge> : null}
+                  {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent per group</Badge> : null}
+                  </div>
+                </div>
+              ) : <p className="muted">Not recorded</p>}
+            </div>
+            {stopConditions.length ? (
+              <div>
+                <p className="check-fact-label">Stops when</p>
+                <ul className="check-detail-list">{stopConditions.map((item) => <li key={item}>{humanize(item)}</li>)}</ul>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{callerTarget ? `Latest result on ${targetLabel(callerTargetId)}` : 'Latest recorded result'}</CardTitle>
+            <CardDescription>A result belongs to one target at one time. It says nothing about other targets.</CardDescription>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            {checkRunState.status === 'loading' || checkRunState.status === 'idle' ? (
+              <DetailLoadingPlaceholder label="Loading recorded results…" variant="compact" />
+            ) : checkRunState.status === 'error' ? (
+              <div className="form-banner error row-actions" role="alert">
+                <span>Results unavailable: {checkRunState.error}</span>
+                <Button size="sm" variant="secondary" onClick={() => setRunReload((count) => count + 1)}>Retry</Button>
+              </div>
+            ) : latestResult ? (
+              <>
+                <div className="row-actions">
+                  <VerdictBadge value={runVerdictValue(latestResult)} tone={outcomeBadgeTone(runVerdictValue(latestResult))} />
+                  <span>on {latestTargetId ? <DetailEntityLink route="target-detail" id={latestTargetId} label={targetLabel(latestTargetId)} /> : 'an unrecorded target'}</span>
+                </div>
+                <p className="muted small">
+                  Observed {formatDate(latestAt)}{latestAgeDays !== null && latestAgeDays >= 30 ? ` · ${formatNumber(latestAgeDays)} days old, may no longer reflect current protection` : ''}
+                </p>
+                <div><RunEvidenceButton run={latestResult} /></div>
+              </>
+            ) : (
+              <p className="muted">No evidence-backed result recorded{callerTarget ? ' for this target' : ''}. Not checked is not a pass.</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
+
       {remediation ? (
         <Card>
           <CardHeader>
-            <CardTitle>Remediation</CardTitle>
-            <CardDescription>Recommended action when this check surfaces a gap.</CardDescription>
+            <CardTitle>If this check reports a gap</CardTitle>
+            <CardDescription>Catalog guidance for this check; inspect the specific result's evidence first.</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="check-detail-text">{remediation}</p>
           </CardContent>
         </Card>
       ) : null}
-      {verdictLogic || explanation || expectedBehavior ? (
+
+      <div className="stack">
         <Card>
           <CardHeader>
-            <CardTitle>Detection logic and verdict path</CardTitle>
-            <CardDescription>Catalog-recorded evidence and verdict rules for this check.</CardDescription>
+            <CardTitle>Schedules running this check</CardTitle>
+            <CardDescription>Schedules bound to this exact check ID.</CardDescription>
           </CardHeader>
-          <CardContent className="stack">
-            {verdictLogic ? (
-              <div>
-                <p className="check-fact-label">Verdict logic</p>
-                <p className="check-detail-text">{verdictLogic}</p>
-              </div>
-            ) : null}
-            {explanation ? (
-              <div>
-                <p className="check-fact-label">Explanation</p>
-                <p className="check-detail-text">{explanation}</p>
-              </div>
-            ) : null}
-            {expectedBehavior ? (
-              <div>
-                <p className="check-fact-label">Expected behavior catalog key</p>
-                <span className="traffic-path-label" title={expectedBehavior}>{plainCodeLabel(expectedBehavior)}</span>
-              </div>
-            ) : null}
+          <CardContent>
+            <DataTable
+              columns={policyColumns}
+              items={linkedPolicyState.items}
+              getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
+              getRowProps={(item) => detailRowNavProps('policy-detail', getString(item, ['id', 'policy_id'], ''))}
+              loadError={linkedPolicyState.status === 'error' ? linkedPolicyState.error : null}
+              onRetry={() => setPolicyReload((count) => count + 1)}
+              empty={linkedPolicyState.status === 'loading' || linkedPolicyState.status === 'idle'
+                ? <DetailLoadingPlaceholder label="Loading linked schedules…" variant="compact" />
+                : <EmptyState icon={ClipboardList} title="No schedules run this check." body="Nothing dispatches this check automatically." actionLabel={canSchedule ? 'Schedule this check' : undefined} actionHref={canSchedule ? scheduleHref : undefined} />}
+            />
           </CardContent>
         </Card>
-      ) : null}
-      <Card>
-        <CardHeader>
-          <CardTitle>Taxonomy mappings</CardTitle>
-          <CardDescription>Catalog identifiers recorded for this check. Values are shown as stored, without broadening or truncation.</CardDescription>
-        </CardHeader>
-        <CardContent className="stack">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recorded results</CardTitle>
+            <CardDescription>Up to 25 recent runs of this check{callerTarget ? ' on this target' : ''}. Select one to see its evidence here.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={checkRunColumns}
+              items={recordedRuns.slice(0, 25)}
+              getRowId={(item) => getString(item, ['id'], '')}
+              getRowProps={(item) => checkResultInspectorRowProps(item, `View evidence for ${targetLabel(getString(item, ['target_id'], ''))} at ${formatDate(item.completed_at ?? item.updated_at ?? item.created_at)}`)}
+              loadError={checkRunState.status === 'error' ? checkRunState.error : null}
+              onRetry={() => setRunReload((count) => count + 1)}
+              empty={checkRunState.status === 'loading' || checkRunState.status === 'idle'
+                ? <DetailLoadingPlaceholder label="Loading recorded results…" variant="compact" />
+                : <EmptyState icon={Activity} title="No recorded runs." body={callerTarget ? 'This check has not run on this target.' : 'This check has not run in this workspace.'} />}
+            />
+          </CardContent>
+        </Card>
+      </div>
+
+      <details className="detail-technical">
+        <summary>Technical details</summary>
+        <div className="stack">
+          <div className="kv-list">
+            <div><span>Check ID</span><strong className="mono">{entityId}</strong></div>
+            <div><span>Family</span><strong>{formatCheckFamilyLabel(family)}</strong></div>
+            <div><span>Mode</span><strong>{formatCheckModeLabel(safetyClass)}</strong></div>
+            {explanation && verdictLogic ? <div><span>Explanation</span><strong>{explanation}</strong></div> : null}
+          </div>
+          <p className="muted small">Catalog identifiers recorded for this check. Values are shown as stored, without broadening or truncation.</p>
           {taxonomyRows.map((row) => (
             <div key={row.label}>
               <p className="check-fact-label">{row.label}</p>
@@ -3047,124 +3381,53 @@ function CheckDetailPage({
               ) : <p className="muted">No {row.prefix} identifiers recorded.</p>}
             </div>
           ))}
-        </CardContent>
-      </Card>
-      {supportedTargets.length || prerequisites.length || customerSetup.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Requirements &amp; scope</CardTitle>
-            <CardDescription>What must be declared and placed before this check can run.</CardDescription>
-          </CardHeader>
-          <CardContent className="stack">
-            {supportedTargets.length ? (
-              <div>
-                <p className="check-fact-label">Supported targets</p>
-                <div className="row-actions">{supportedTargets.map((target) => <Badge key={target} tone="muted">{target}</Badge>)}</div>
-              </div>
-            ) : null}
-            {customerSetup.length ? (
-              <div>
-                <p className="check-fact-label">Required customer setup</p>
-                <ul className="check-detail-list">{customerSetup.map((item) => <li key={item}>{humanize(item)}</li>)}</ul>
-              </div>
-            ) : null}
-            {prerequisites.length ? (
-              <div>
-                <p className="check-fact-label">Prerequisites</p>
-                <ul className="check-detail-list">{prerequisites.map((item) => <li key={item}>{humanize(item)}</li>)}</ul>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-      {evidenceRequired.length || stopConditions.length || maxEvents || maxDuration || probeKind ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Evidence &amp; safety bounds</CardTitle>
-            <CardDescription>How the run is governed and what evidence a verdict requires.</CardDescription>
-          </CardHeader>
-          <CardContent className="stack">
-            {evidenceRequired.length ? (
-              <div>
-                <p className="check-fact-label">Evidence required</p>
-                <div className="row-actions">{evidenceRequired.map((item) => <Badge key={item} tone="info">{humanize(item)}</Badge>)}</div>
-              </div>
-            ) : null}
-            {maxEvents || maxDuration || maxConcurrent ? (
-              <div>
-                <p className="check-fact-label">Safety bounds</p>
-                <div className="row-actions">
-                  {maxEvents ? <Badge tone="muted">max {maxEvents} events</Badge> : null}
-                  {maxDuration ? <Badge tone="muted">max {maxDuration}s</Badge> : null}
-                  {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent / group</Badge> : null}
-                </div>
-              </div>
-            ) : null}
-            {probeKind ? (
-              <div>
-                <p className="check-fact-label">Probe profile</p>
-                <div className="row-actions">
-                  <span className="traffic-path-label" title={probeKind}>{plainCodeLabel(probeKind)}</span>
-                  {probeRequests ? <Badge tone="muted">{checkProbeOperationBoundLabel(probeRequests)}</Badge> : null}
-                </div>
-              </div>
-            ) : null}
-            {stopConditions.length ? (
-              <div>
-                <p className="check-fact-label">Stop conditions</p>
-                <ul className="check-detail-list">{stopConditions.map((item) => <li key={item}>{humanize(item)}</li>)}</ul>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-      <div className="dash-grid">
-        <Card>
-          <CardHeader>
-            <CardTitle>Scheduled policies</CardTitle>
-            <CardDescription>Test policies explicitly linked to this catalog check.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={policyColumns}
-              items={linkedPolicyState.items}
-              getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
-              getRowProps={(item) => detailRowNavProps('policy-detail', getString(item, ['id', 'policy_id'], ''))}
-              loadError={linkedPolicyState.status === 'error' ? linkedPolicyState.error : null}
-              empty={linkedPolicyState.status === 'loading'
-                ? <DetailLoadingPlaceholder label="Loading linked policies…" variant="compact" />
-                : <EmptyState icon={ClipboardList} title="No linked policies." body="No active policy is explicitly linked to this check." actionLabel="Open test policies" actionHref="#test-policies" />}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent run evidence</CardTitle>
-            <CardDescription>Latest loaded runs explicitly linked to this check.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={checkRunColumns}
-              items={recentCheckRuns}
-              getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => detailRowNavProps('run-detail', getString(item, ['id'], ''))}
-              empty={<EmptyState icon={Activity} title="No runs for this check." body="No loaded run is explicitly linked to this check." actionLabel="Open test runs" actionHref="#runs" />}
-            />
-          </CardContent>
-        </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Definition</CardTitle>
-          <CardDescription>
-            {latest ? <>last run <DetailEntityLink route="run-detail" id={latest.runId} /></> : 'No runs recorded for this check yet.'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DetailCodeBlock label="Check definition">{definition}</DetailCodeBlock>
-        </CardContent>
-      </Card>
+        </div>
+      </details>
     </div>
+  );
+}
+
+/** Row activation that opens the shared evidence inspector for one exact check result. */
+function checkResultInspectorRowProps(run: DataItem, label: string): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+  const ref = {
+    entry: 'check_result' as const,
+    target_id: getString(run, ['target_id'], ''),
+    check_id: getString(run, ['check_id'], ''),
+    test_run_id: getString(run, ['id', 'test_run_id', 'run_id'], '')
+  };
+  if (!ref.target_id || !ref.check_id || !ref.test_run_id) return {};
+  const open = () => { openEvidenceInspector(ref, { focusKey: ref.test_run_id }); };
+  return {
+    tabIndex: 0,
+    style: { cursor: 'pointer' },
+    'aria-label': label,
+    'data-focus-key': ref.test_run_id,
+    onClick: (event) => {
+      if ((event.target as HTMLElement).closest('a, button')) return;
+      open();
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    }
+  } as Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
+}
+
+function RunEvidenceButton({ run }: { run: DataItem }) {
+  const ref = {
+    entry: 'check_result' as const,
+    target_id: getString(run, ['target_id'], ''),
+    check_id: getString(run, ['check_id'], ''),
+    test_run_id: getString(run, ['id', 'test_run_id', 'run_id'], '')
+  };
+  if (!ref.target_id || !ref.check_id || !ref.test_run_id) return <span className="muted small">Target or check not recorded</span>;
+  return (
+    <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector(ref, { focusKey: ref.test_run_id })}>
+      View evidence
+    </Button>
   );
 }
 
@@ -3172,26 +3435,32 @@ function PolicyDetailPage({
   entityId,
   data,
   config,
-  session
+  session,
+  onRefresh
 }: {
   entityId: string;
   data: PortalData;
   config: PortalConfig;
   session: Session;
+  onRefresh: () => Promise<void>;
 }) {
+  const [feedback, setFeedback] = useState<{ message: string; error: string }>({ message: '', error: '' });
   const [runRelationState, setRunRelationState] = useState<{
     status: 'idle' | 'loading' | 'loaded' | 'error';
     items: DataItem[];
     error: string;
-  }>({ status: 'idle', items: [], error: '' });
+    scanned: number;
+  }>({ status: 'idle', items: [], error: '', scanned: 0 });
+  const [historyReload, setHistoryReload] = useState(0);
+  const canWrite = sessionHasPermission(session, 'test_policy:write');
 
   useEffect(() => {
     if (!entityId) {
-      setRunRelationState({ status: 'idle', items: [], error: '' });
+      setRunRelationState({ status: 'idle', items: [], error: '', scanned: 0 });
       return;
     }
     let cancelled = false;
-    setRunRelationState({ status: 'loading', items: [], error: '' });
+    setRunRelationState((current) => ({ ...current, status: 'loading', error: '' }));
     requestJson(config, session, '/v1/test-runs?limit=100')
       .then((payload) => {
         if (cancelled) return;
@@ -3205,25 +3474,25 @@ function PolicyDetailPage({
         const policyRuns = (items as DataItem[])
           .filter((run) => getString(run, ['policy_id', 'test_policy_id'], '') === entityId)
           .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')));
-        setRunRelationState({ status: 'loaded', items: policyRuns, error: '' });
+        setRunRelationState({ status: 'loaded', items: policyRuns, error: '', scanned: items.length });
       })
       .catch((err) => {
         if (!cancelled) {
-          setRunRelationState({ status: 'error', items: [], error: err instanceof Error ? err.message : 'Could not load policy runs.' });
+          setRunRelationState({ status: 'error', items: [], error: err instanceof Error ? err.message : 'Could not load dispatch history.', scanned: 0 });
         }
       });
     return () => { cancelled = true; };
-  }, [config, session, entityId]);
+  }, [config, session, entityId, historyReload]);
 
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="policy-detail" eyebrow="Validation" />
+        <DetailPageIntro route="policy-detail" eyebrow="Validation schedule" />
         <EmptyState
           icon={ClipboardList}
-          title="No policy selected."
-          body="Open a policy from the list with ?id= or use the Detail link on #test-policies."
-          actionLabel="Open test policies"
+          title="No schedule selected."
+          body="This address does not name a schedule. Open one from the validation schedule list."
+          actionLabel="Open validation schedules"
           actionHref="#test-policies"
         />
       </div>
@@ -3235,125 +3504,181 @@ function PolicyDetailPage({
   if (!policy) {
     return (
       <div className="content">
-        <DetailPageIntro route="policy-detail" eyebrow="Validation" />
-        <EmptyState
-          icon={ClipboardList}
-          title="Policy not found."
-          body="This policy id is not present in your workspace test policies."
-          actionLabel="Open test policies"
-          actionHref="#test-policies"
-        />
+        <DetailPageIntro route="policy-detail" eyebrow="Validation schedule" />
+        {data.loadErrors.testPolicies ? (
+          <EmptyState
+            icon={TriangleAlert}
+            title="Schedules could not be loaded."
+            body={`${data.loadErrors.testPolicies} Schedule ${entityId} may still exist; nothing is shown in its place.`}
+            actionLabel="Retry"
+            onAction={() => void onRefresh()}
+          />
+        ) : (
+          <EmptyState
+            icon={ClipboardList}
+            title="Schedule not found."
+            body={`No schedule with ID ${entityId} is visible in this workspace. It may belong to another tenant or never existed.`}
+            actionLabel="Open validation schedules"
+            actionHref="#test-policies"
+          />
+        )}
       </div>
     );
   }
 
-  const targetGroupNested = getNestedItem(policy, ['target_group']);
-  const targetNested = getNestedItem(policy, ['target']);
-  const targetGroupId = getString(policy, ['target_group_id'], getString(targetGroupNested ?? {}, ['id'], ''));
-  const targetGroupLabel = getString(targetGroupNested ?? {}, ['name', 'id'], targetGroupId || '—');
-  const targetId = getString(policy, ['target_id'], getString(targetNested ?? {}, ['id'], ''));
-  const targetLabel = getString(targetNested ?? {}, ['value', 'hostname', 'id'], targetId || '—');
-  const cadence = getString(policy, ['cadence'], 'not recorded');
-  const safeWindow = formatPolicySafeWindow(policy);
-  const expected = getString(policy, ['expected_verdict'], 'not recorded');
-  const owner = getString(policy, ['owner', 'created_by'], 'not recorded');
-  const checkNested = getNestedItem(policy, ['check']);
-  const checkId = getString(policy, ['check_id'], getString(checkNested ?? {}, ['check_id', 'id'], ''));
-  const linkedCheck = data.checks.find((item) => getString(item, ['check_id', 'id'], '') === checkId) ?? checkNested;
-  const gated = policy.soc_gated === true || getString(linkedCheck ?? {}, ['safety_class'], '') === 'soc_gated';
-  const state = getString(policy, ['state'], 'not recorded');
-  const enabled = policy.enabled === true;
-  const nextRunAt = getString(policy, ['next_run_at'], '');
+  const checks = data.checks;
+  const title = scheduleDisplayName(policy, checks);
+  const check = scheduleCheck(policy, checks);
+  const target = scheduleTarget(policy);
+  const dispatch = describeScheduleDispatch(policy, checks);
+  const timezone = getString(policy, ['timezone'], '');
+  const cadence = getString(policy, ['cadence'], '');
+  const windows = scheduleSafeWindows(policy);
+  const expected = getString(policy, ['expected_verdict'], '');
   const lastDispatchedAt = getString(policy, ['last_dispatched_at'], '');
-  const lastRunId = getString(policy, ['last_run_id'], '');
   const safetySnapshot = getNestedItem(policy, ['safety_policy_snapshot']);
-  const title = getString(policy, ['name', 'title', 'id', 'policy_id'], entityId);
+  const next = dispatch.nextRunAt ? formatScheduleInstant(dispatch.nextRunAt, timezone) : null;
+  const checkHref = scheduleCheckHref(policy, checks);
   const binding = evidenceCodeBlock([
     ['policy_id', entityId],
-    ['target_group_id', targetGroupId],
-    ['target_id', targetId],
-    ['check_id', checkId],
+    ['target_group_id', target.groupId],
+    ['target_id', target.targetId],
+    ['check_id', check.checkId],
     ['cadence', cadence],
-    ['timezone', getString(policy, ['timezone'], '')],
-    ['safe_window', safeWindow === '—' ? '' : safeWindow],
+    ['timezone', timezone],
     ['expected_verdict', expected],
-    ['state', state],
+    ['state', getString(policy, ['state'], '')],
     ['enabled', policy.enabled === undefined ? '' : String(policy.enabled)],
+    ['next_run_at', getString(policy, ['next_run_at'], '')],
     ['schedule_revision', getString(policy, ['schedule_revision'], '')]
   ]);
-  const dispatchGates = [
-    { label: 'Exact target binding recorded', pass: Boolean(targetGroupId && targetId), detail: targetId ? 'Exact target linked' : 'Target is missing' },
-    { label: 'Catalog check resolved', pass: Boolean(linkedCheck && checkId), detail: checkId ? checkDisplayName(data.checks, checkId) : 'Check is missing' },
-    { label: 'Customer-runnable check', pass: Boolean(linkedCheck) && !gated, detail: gated ? 'SOC-governed request required' : getString(linkedCheck ?? {}, ['safety_class'], 'not returned') },
-    { label: 'Policy active and enabled', pass: state === 'active' && enabled, detail: `${state}; enabled=${policy.enabled === undefined ? 'not returned' : String(policy.enabled)}` },
-    { label: 'Safe window recorded', pass: safeWindow !== '—', detail: safeWindow === '—' ? 'No safe window returned' : safeWindow }
+  const state = getString(policy, ['state'], '');
+  const gates: Array<{ label: string; status: 'met' | 'blocked' | 'info'; detail: string }> = [
+    {
+      label: 'Exact target bound',
+      status: target.targetId ? 'met' : 'blocked',
+      detail: target.targetId ? `${target.targetLabel}${target.groupLabel ? ` in ${target.groupLabel}` : ''}` : 'Legacy schedule without an exact target. Create a new schedule bound to one target.'
+    },
+    {
+      label: 'Check available and customer-runnable',
+      status: !check.checkId || (checks.length > 0 && !check.inCatalog) || getString(check.record, ['safety_class'], '') === 'soc_gated' ? 'blocked' : 'met',
+      detail: !check.checkId
+        ? 'The schedule does not record a check.'
+        : checks.length > 0 && !check.inCatalog
+          ? `Check ${check.checkId} is not in the current catalog.`
+          : getString(check.record, ['safety_class'], '') === 'soc_gated'
+            ? 'SOC-governed check; it cannot dispatch from a customer schedule.'
+            : check.name
+    },
+    {
+      label: 'Active and enabled',
+      status: state === 'active' && policy.enabled !== false ? 'met' : 'blocked',
+      detail: !state
+        ? 'State not recorded.'
+        : state === 'active'
+          ? policy.enabled === false ? 'Active but disabled; the scheduler skips it.' : 'Active.'
+          : `${formatStatusLabel(state)}. ${state === 'paused' ? 'Resume to dispatch again.' : 'This state does not dispatch.'}`
+    },
+    {
+      label: 'Automatic cadence',
+      status: cadence && cadence !== 'manual' ? 'met' : 'blocked',
+      detail: !cadence ? 'Cadence not recorded.' : cadence === 'manual' ? 'Manual cadence never dispatches automatically. Edit the schedule to choose daily, weekly, or monthly.' : `${formatStatusLabel(cadence)} in ${timezone || 'UTC (timezone not recorded)'}.`
+    },
+    {
+      label: 'Next run recorded by the scheduler',
+      status: dispatch.nextRunAt ? 'met' : dispatch.bucket === 'blocked' && state === 'active' && cadence !== 'manual' ? 'blocked' : 'info',
+      detail: next ? `${next.primary} ${next.zone}` : dispatch.reason
+    },
+    {
+      label: 'Safe window',
+      status: 'info',
+      detail: windows.length === 0 ? 'No window: runs can start any time on the cadence.' : `Runs start only within ${formatSafeWindowList(policy)}.`
+    }
   ];
   const runColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (run) => <code className="mono-hash">{getString(run, ['id'], '—')}</code> },
-    { key: 'status', label: 'Status', render: (run) => <StatusBadge value={getString(run, ['status'], 'pending')} tone={runStatusBadgeTone(getString(run, ['status'], 'pending'))} fallback="pending" /> },
-    { key: 'outcome', label: 'Verdict', render: (run) => {
-      const outcome = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
-      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
+    { key: 'recorded', label: 'Dispatched', render: (run) => <span className="mono">{formatDate(run.started_at ?? run.created_at)}</span> },
+    { key: 'target', label: 'Target', render: (run) => {
+      const runTargetId = getString(run, ['target_id'], '');
+      return runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={runTargetId === target.targetId ? target.targetLabel : runTargetId} /> : <span className="muted">Not recorded</span>;
     } },
-    { key: 'scheduled', label: 'Recorded', render: (run) => formatDate(run.updated_at ?? run.created_at) }
+    { key: 'status', label: 'Status', render: (run) => <StatusBadge value={getString(run, ['status'], '')} tone={runStatusBadgeTone(getString(run, ['status'], ''))} fallback="Not recorded" /> },
+    { key: 'outcome', label: 'Outcome', render: (run) => {
+      const outcome = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
+      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No evidence-backed result</span>;
+    } },
+    { key: 'evidence', label: 'Evidence', render: (run) => <RunEvidenceButton run={run} /> }
   ];
 
   return (
     <div className="content">
+      <CustomerPageStyles />
       <DetailPageHeader
         route="policy-detail"
-        eyebrow="Validation policy"
+        eyebrow="Validation schedule"
         entityId={entityId}
         title={title}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#test-policies">Test policies</AnchorButton>
-            {targetId ? (
-              <AnchorButton size="sm" variant="default" href={buildDetailHref('target-detail', targetId)}>Open exact target</AnchorButton>
-            ) : targetGroupId ? (
-              <AnchorButton size="sm" variant="default" href={buildDetailHref('target-group-detail', targetGroupId)}>Open target group</AnchorButton>
-            ) : null}
+            <AnchorButton size="sm" variant="ghost" href="#test-policies">All schedules</AnchorButton>
+            <ScheduleActions
+              policy={policy}
+              checks={checks}
+              config={config}
+              session={session}
+              canWrite={canWrite}
+              onChanged={async (message) => {
+                setFeedback({ message, error: '' });
+                await onRefresh();
+                setHistoryReload((count) => count + 1);
+              }}
+              onError={(error) => setFeedback({ message: '', error })}
+            />
           </>
         )}
       />
-      <PageContextSummary>
-        <StatusBadge value={state} tone={lifecycleBadgeTone(state)} fallback="not recorded" /> ·{' '}
-        {checkId ? <DetailEntityLink route="check-detail" id={checkId} label={checkDisplayName(data.checks, checkId)} /> : 'check not recorded'}
-      </PageContextSummary>
-      <div className="metric-grid four">
-        <MetricCard label="State" value={formatStatusLabel(state, 'not recorded')} sub={enabled ? 'enabled' : policy.enabled === false ? 'disabled' : 'enabled flag not returned'} icon={ShieldCheck} tone={state === 'active' && enabled ? 'success' : 'warn'} />
-        <MetricCard label="Cadence" value={formatStatusLabel(cadence)} sub={safeWindow === '—' ? 'No safe window returned' : safeWindow} icon={Activity} tone="info" />
-        <MetricCard label="Next eligible" value={nextRunAt ? formatDate(nextRunAt) : '—'} sub="Recorded next-run time" icon={ClipboardList} tone={nextRunAt ? 'info' : 'muted'} />
-        <MetricCard label="Last dispatched" value={lastDispatchedAt ? formatDate(lastDispatchedAt) : '—'} sub={lastRunId ? 'Linked to the latest run' : 'No previous run recorded'} icon={FileCheck2} tone={lastDispatchedAt ? 'muted' : 'muted'} />
-      </div>
+      {feedback.message || feedback.error ? (
+        <div className={feedback.error ? 'form-banner error' : 'form-banner neutral'} role={feedback.error ? 'alert' : 'status'}>{feedback.error || feedback.message}</div>
+      ) : null}
+      {!canWrite ? <p className="muted small">Read only. Editing, pausing, or archiving requires the test_policy:write permission.</p> : null}
+      <Card className="schedule-dispatch-card">
+        <CardHeader>
+          <CardTitle>Will this schedule run?</CardTitle>
+          <CardDescription>From the recorded schedule only. Configuration is not execution proof; gates are rechecked at dispatch.</CardDescription>
+        </CardHeader>
+        <CardContent className="stack-tight">
+          <div className="row-actions">
+            <ScheduleStateBadge dispatch={dispatch} />
+            <span>{dispatch.reason}</span>
+          </div>
+          <div className="kv-list">
+            <div><span>Next run</span><strong>{next ? <>{next.primary} <span className="muted">{next.zone}</span></> : 'No next run recorded'}</strong></div>
+            {next?.viewer ? <div><span>In your timezone</span><strong>{next.viewer}</strong></div> : null}
+            <div><span>Last dispatched</span><strong>{lastDispatchedAt ? formatDate(lastDispatchedAt) : 'Never dispatched'}</strong></div>
+          </div>
+        </CardContent>
+      </Card>
       <div className="dash-grid">
         <Card>
           <CardHeader>
-            <CardTitle>Immutable binding</CardTitle>
-            <CardDescription>Exact target group, target, and check identifiers captured by this policy.</CardDescription>
+            <CardTitle>Bound target and check</CardTitle>
+            <CardDescription>Immutable after creation. A different target or check needs a new schedule.</CardDescription>
           </CardHeader>
-          <CardContent className="stack-tight">
-            <div className="kv-list">
-              <div><span>Target group</span>{targetGroupId ? <DetailEntityLink route="target-group-detail" id={targetGroupId} label={targetGroupLabel} /> : <strong>not recorded</strong>}</div>
-              <div><span>Exact target</span>{targetId ? <DetailEntityLink route="target-detail" id={targetId} label={targetLabel} /> : <strong>not recorded</strong>}</div>
-              <div><span>Check</span>{checkId ? <DetailEntityLink route="check-detail" id={checkId} label={checkDisplayName(data.checks, checkId)} /> : <strong>not recorded</strong>}</div>
-            </div>
-            {binding ? <DetailCodeBlock label="Policy binding record">{binding}</DetailCodeBlock> : null}
+          <CardContent className="kv-list">
+            <div><span>Check</span>{checkHref ? <a href={checkHref}>{check.name}</a> : <strong>Not recorded</strong>}</div>
+            <div><span>Exact target</span>{target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <strong>Not recorded</strong>}</div>
+            <div><span>Target group</span>{target.groupId ? <DetailEntityLink route="target-group-detail" id={target.groupId} label={target.groupLabel} /> : <strong>Not recorded</strong>}</div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Schedule facts</CardTitle>
-            <CardDescription>Scheduler fields returned with this policy; eligibility is still rechecked at dispatch.</CardDescription>
+            <CardTitle>Timing and expectation</CardTitle>
+            <CardDescription>Fields recorded on the schedule.</CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
-            <div><span>Cadence</span><strong>{formatStatusLabel(cadence)}</strong></div>
-            <div><span>Safe window</span><strong>{safeWindow}</strong></div>
-            <div><span>Timezone</span><strong>{getString(policy, ['timezone'], 'not recorded')}</strong></div>
-            <div><span>Expected verdict</span><StatusBadge value={expected} tone={outcomeBadgeTone(expected)} fallback="not recorded" /></div>
-            <div><span>Max concurrent runs</span><strong>{getString(policy, ['max_concurrent_runs'], 'not returned')}</strong></div>
-            <div><span>Event trigger</span><strong>{getString(policy, ['event_trigger'], 'not returned')}</strong></div>
-            <div><span>Owner / creator</span><strong>{owner}</strong></div>
+            <div><span>Cadence</span><strong>{cadence ? formatStatusLabel(cadence) : 'Not recorded'}</strong></div>
+            <div><span>Timezone</span><strong>{timezone || 'Not recorded (scheduler default UTC)'}</strong></div>
+            <div><span>Safe windows</span><strong>{windows.length ? formatSafeWindowList(policy) : 'None (any time)'}</strong></div>
+            <div><span>Expected verdict</span><strong>{expected ? `${plainVerdictLabel(expected)} (declared)` : 'Not recorded'}</strong></div>
             <div><span>Created</span><strong>{formatDate(policy.created_at)}</strong></div>
             <div><span>Updated</span><strong>{formatDate(policy.updated_at)}</strong></div>
           </CardContent>
@@ -3362,49 +3687,48 @@ function PolicyDetailPage({
       <Card>
         <CardHeader>
           <CardTitle>Dispatch gates</CardTitle>
-          <CardDescription>Ordered checks derived from this policy record. Runtime ownership, scope, and concurrency checks still execute server-side.</CardDescription>
+          <CardDescription>What must hold for the scheduler to dispatch. Ownership, rate, and concurrency are still checked server-side at dispatch.</CardDescription>
         </CardHeader>
         <CardContent>
-          <ul className="placement-gates" aria-label="Policy dispatch gates">
-            {dispatchGates.map((gate) => (
+          <ul className="placement-gates" aria-label="Schedule dispatch gates">
+            {gates.map((gate) => (
               <li key={gate.label}>
-                <ShieldCheck size={14} aria-hidden="true" />
+                {gate.status === 'blocked' ? <TriangleAlert size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
                 <span>{gate.label}<span className="muted small"> · {plainInlineText(gate.detail)}</span></span>
-                <Badge tone={gate.pass ? 'success' : 'warn'}>{gate.pass ? 'recorded' : 'missing'}</Badge>
+                <Badge tone={gate.status === 'met' ? 'success' : gate.status === 'blocked' ? 'warn' : 'muted'}>
+                  {gate.status === 'met' ? 'Met' : gate.status === 'blocked' ? 'Blocks dispatch' : 'Info'}
+                </Badge>
               </li>
             ))}
           </ul>
         </CardContent>
       </Card>
-      {safetySnapshot ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Safety policy snapshot</CardTitle>
-            <CardDescription>Catalog and target-group safety fields captured when this policy was created.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DetailCodeBlock label="Policy safety snapshot">{JSON.stringify(safetySnapshot, null, 2)}</DetailCodeBlock>
-          </CardContent>
-        </Card>
-      ) : null}
       <Card>
         <CardHeader>
           <CardTitle>Dispatch history</CardTitle>
-          <CardDescription>Recent runs explicitly linked to this policy. A similar group or check name alone does not establish that link.</CardDescription>
+          <CardDescription>
+            Runs that record this schedule ID, searched within {runRelationState.scanned ? `the ${formatNumber(runRelationState.scanned)} most recent run${runRelationState.scanned === 1 ? '' : 's'}` : 'the most recent runs'} returned. Select a run to inspect its evidence here.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <DataTable
             columns={runColumns}
             items={runRelationState.items}
             getRowId={(run) => getString(run, ['id'], '')}
-            getRowProps={(run) => detailRowNavProps('run-detail', getString(run, ['id'], ''))}
+            getRowProps={(run) => checkResultInspectorRowProps(run, `View evidence for run dispatched ${formatDate(run.started_at ?? run.created_at)}`)}
             loadError={runRelationState.status === 'error' ? runRelationState.error : null}
-            empty={runRelationState.status === 'loading'
-              ? <DetailLoadingPlaceholder label="Loading exact policy run relationships…" variant="compact" />
-              : <EmptyState icon={Activity} title="No exact policy runs returned." body="The bounded recent-run response contains no record with this policy id." actionLabel="Open test runs" actionHref="#runs" />}
+            onRetry={() => setHistoryReload((count) => count + 1)}
+            empty={runRelationState.status === 'loading' || runRelationState.status === 'idle'
+              ? <DetailLoadingPlaceholder label="Loading dispatch history…" variant="compact" />
+              : <EmptyState icon={Activity} title="No dispatches recorded." body={lastDispatchedAt ? 'The schedule records a dispatch, but its run is outside the returned recent-run window.' : 'This schedule has not dispatched a run yet.'} />}
           />
         </CardContent>
       </Card>
+      <details className="detail-technical">
+        <summary>Technical record</summary>
+        {binding ? <DetailCodeBlock label="Schedule binding record">{binding}</DetailCodeBlock> : null}
+        {safetySnapshot ? <DetailCodeBlock label="Safety snapshot captured at creation">{JSON.stringify(safetySnapshot, null, 2)}</DetailCodeBlock> : null}
+      </details>
     </div>
   );
 }
@@ -3648,7 +3972,7 @@ export function DetailRoutePage({
   }
 
   if (route === 'policy-detail') {
-    return <PolicyDetailPage entityId={entityId} data={data} config={config} session={session} />;
+    return <PolicyDetailPage entityId={entityId} data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
 
   if (route === 'evidence-detail') {
@@ -3891,6 +4215,58 @@ type ReportCoverageRow = {
   verdict: string;
 };
 
+const RUN_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+const LIVE_RUN_FINDINGS_LIMIT = 25;
+
+/** Open findings now linked to a report's captured runs: one exact server predicate per run, never the loaded page. */
+function ReportLiveOpenFindings({ data, config, session, runIds, checkedAt }: { data: PortalData; config: PortalConfig; session: Session; runIds: string[]; checkedAt: string }) {
+  const readable = canReadDataset(session, 'findings');
+  const validRunIds = useMemo(() => [...new Set(runIds)].filter((id) => RUN_ID_PATTERN.test(id)), [runIds]);
+  const entries = useMemo(() => Object.fromEntries(validRunIds.map((id) => [id, { status: 'open', test_run_id: id }])), [validRunIds]);
+  const live = useFindingPages(config, session, entries, 0, readable && validRunIds.length > 0, LIVE_RUN_FINDINGS_LIMIT);
+  const perRun = validRunIds.map((id) => ({ id, envelope: live.pages[id] ?? null }));
+  const rows = perRun.flatMap(({ envelope }) => envelope?.items ?? []);
+  const unknownTotal = perRun.some(({ envelope }) => envelope && envelope.total === null);
+  const total = perRun.reduce((sum, { envelope }) => sum + (envelope?.total ?? envelope?.items.length ?? 0), 0);
+  const hidden = Math.max(0, total - rows.length);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Findings from captured runs that are open now</CardTitle>
+        <CardDescription>Checked {formatDate(checkedAt)} with an open-status server read per captured run. Use it for remediation follow-up; it does not rewrite the report.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!readable ? (
+          <p className="muted">Your role cannot read findings, so current status is not shown.</p>
+        ) : validRunIds.length === 0 ? (
+          <p className="muted">This report records no captured run, so no current finding is linked to it.</p>
+        ) : live.state === 'loading' ? (
+          <p className="muted" role="status">Reading open findings for {formatNumber(validRunIds.length)} captured {validRunIds.length === 1 ? 'run' : 'runs'}.</p>
+        ) : live.state === 'error' ? (
+          <p className="form-banner error" role="alert">Current findings unavailable: {live.error}</p>
+        ) : rows.length === 0 ? (
+          <p className="muted">No open finding comes from the {formatNumber(validRunIds.length)} captured {validRunIds.length === 1 ? 'run' : 'runs'}.</p>
+        ) : (
+          <>
+            <p className="muted small">
+              {unknownTotal ? `${formatNumber(rows.length)} open shown; the server did not report a total for every run.` : `${formatNumber(total)} open ${total === 1 ? 'finding' : 'findings'} across the captured runs.`}
+              {hidden > 0 ? ` Showing the newest ${formatNumber(LIVE_RUN_FINDINGS_LIMIT)} per run; ${formatNumber(hidden)} more are on Findings.` : ''}
+            </p>
+            <ul className="report-live-list">
+              {rows.map((finding) => (
+                <li key={getString(finding, ['id'])}>
+                  <DetailEntityLink route="finding-detail" id={getString(finding, ['id'])} label={plainFindingTitle(finding, data.targets, data.checks)} />
+                  <span className="muted small"> · {formatSeverityLabel(getString(finding, ['severity'], ''))} · run {getString(finding, ['test_run_id'])}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ReportDetailPage({
   data,
   config,
@@ -3902,10 +4278,6 @@ export function ReportDetailPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [preview, setPreview] = useState<ReportExportPreview | null>(null);
   const [reportQueryTick, setReportQueryTick] = useState(0);
   useEffect(() => {
     function onHashChange() {
@@ -3924,102 +4296,18 @@ export function ReportDetailPage({
     reportFallback
   );
   const report = reportDetail.detail;
-
-  useEffect(() => {
-    setPreview(null);
-    setMessage('');
-    setError('');
-  }, [entityId]);
-
-  async function runReportAction<T>(label: string, action: () => Promise<T>, success: string) {
-    setBusy(label);
-    setError('');
-    setMessage('');
-    try {
-      const result = await action();
-      setMessage(success);
-      return result;
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Report action failed.'));
-      return null;
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function exportReport(reportId: string, format: 'json' | 'markdown' | 'html') {
-    if (!reportId) return;
-    await runReportAction(`export-${reportId}-${format}`, async () => {
-      const headers = buildApiHeaders(config, session);
-      const response = await fetch(`/v1/reports/${encodeURIComponent(reportId)}/export?format=${format}`, { headers });
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(String(payload?.message ?? '').trim() || humanizeErrorCode(payload?.error) || `Export returned ${response.status}`);
-      }
-      if (format === 'json' || contentType.includes('application/json')) {
-        const exported = await response.json();
-        const custody = getNestedItem(exported, ['custody']);
-        const payload = getNestedItem(exported, ['payload']);
-        let verification: DataItem | null = null;
-        if (custody && payload) {
-          const verified = await requestJson(config, session, '/v1/custody/verify', {
-            method: 'POST',
-            body: { payload, custody }
-          });
-          verification = getNestedItem(verified as DataItem, ['verification']) ?? verified as DataItem;
-        }
-                setPreview({
-          reportId,
-          format,
-          title: getNestedString(payload, ['title'], getString(report, ['title', 'id'], reportId)),
-          contentSha256: getString(custody ?? {}, ['content_sha256'], ''),
-          artifactId: getString(custody ?? {}, ['artifact_id'], ''),
-          schemaVersion: getString(custody ?? {}, ['schema_version'], ''),
-          verification
-        });
-        // The export is returned inline; hand the operator the file as the list page does.
-        triggerJsonDownload(`${reportId}.json`, exported);
-        await onRefresh();
-        return exported;
-      }
-      const textPayload = await response.text();
-      setPreview({
-        reportId,
-        format,
-        title: getString(report, ['title', 'id'], reportId),
-        textPreview: textPayload.slice(0, 900)
-      });
-      triggerTextDownload(`${reportId}.${format === 'markdown' ? 'md' : format}`, textPayload, format === 'markdown' ? 'text/markdown' : 'text/html');
-      await onRefresh();
-      return textPayload;
-    }, `Report exported as ${format}.`);
-  }
-
-  async function copyCustodyDigest() {
-    const digest = preview?.contentSha256 ?? '';
-    if (!digest) {
-      setError('No custody digest available yet — export JSON to compute it first.');
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(digest);
-      setError('');
-      setMessage('Export digest copied to clipboard.');
-    } catch {
-      setError('Clipboard unavailable — copy the digest from the custody preview manually.');
-    }
-  }
+  const exporter = useReportExport(config, session, onRefresh);
+  const [liveCheckedAt] = useState(() => new Date().toISOString());
 
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
+        <DetailPageIntro route="report-detail" eyebrow="Report" />
         <EmptyState
           icon={FileText}
           title="No report selected."
-          body="Open a report from the Reports list with ?id= or use the Detail link on #reports."
-          actionLabel="Open Reports"
+          body="This address does not name a report. Open one from the report list."
+          actionLabel="Open reports"
           actionHref="#reports"
         />
       </div>
@@ -4029,207 +4317,266 @@ export function ReportDetailPage({
   if (!report && reportDetail.loading) {
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
-        <DetailLoadingPlaceholder label="Loading report detail…" variant="layout" />
+        <DetailPageIntro route="report-detail" eyebrow="Report" />
+        <DetailLoadingPlaceholder label="Loading report…" variant="layout" />
       </div>
     );
   }
 
   if (!report) {
+    const denied = /forbidden|permission|403/i.test(reportDetail.error);
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
+        <DetailPageIntro route="report-detail" eyebrow="Report" />
         <EmptyState
-          icon={FileText}
-          title="Report not found."
-          body={reportDetail.error || 'The requested report is missing or outside this tenant scope.'}
-          actionLabel="Open Reports"
+          icon={denied ? TriangleAlert : FileText}
+          title={denied ? 'Report access required.' : reportDetail.error && !/not.?found|404/i.test(reportDetail.error) ? 'Report could not be loaded.' : 'Report not found.'}
+          body={denied
+            ? 'Your role cannot read reports in this workspace.'
+            : reportDetail.error && !/not.?found|404/i.test(reportDetail.error)
+              ? `${reportDetail.error} No other report is shown in its place.`
+              : `No report with ID ${entityId} is visible in this workspace.`}
+          actionLabel="Open reports"
           actionHref="#reports"
         />
       </div>
     );
   }
 
-  const verificationOk = preview?.verification ? getString(preview.verification, ['ok'], '') : '';
+  const kind = getString(report, ['kind'], '');
+  const summary = getNestedItem(report, ['summary']);
+  const frozen = summary?.snapshot_frozen === true;
+  const asOf = getString(summary ?? {}, ['as_of'], '') || getString(summary ?? {}, ['generated_at'], '');
   const readinessScore = getNestedNumber(report, ['summary', 'readiness_score'], NaN);
   const hasReadinessScore = Number.isFinite(readinessScore);
-  const openFindings = getNestedNumber(report, ['summary', 'open_findings'], NaN);
+  const readinessStatus = getString(summary ?? {}, ['readiness_score_status'], '');
+  const readinessReason = getString(summary ?? {}, ['readiness_score_reason'], '');
+  const openFindings = getNestedNumber(report, ['summary', 'findings_snapshot', 'open_total'], getNestedNumber(report, ['summary', 'open_findings'], NaN));
   const hasOpenFindings = Number.isFinite(openFindings);
   const readinessFactors = getNestedArray(report, ['summary', 'readiness_factors']);
-  const readinessFactorStatus = getNestedItem(report, ['summary', 'readiness_factors']);
+  const compliance = getNestedItem(report, ['summary', 'compliance']);
+  const frameworks = Array.isArray(compliance?.frameworks) ? (compliance!.frameworks as unknown[]).map(String) : [];
+  const scope = getNestedItem(summary, ['scope']);
+  const scopeMode = getString(scope ?? {}, ['mode'], '');
+  const periodBounds = getNestedItem(scope, ['period']);
+  const declaredMembers = getNestedItem(scope, ['declared_members']);
+  const groupRefs = getNestedArray(scope, ['group_refs']);
+  const scopeTargetIds = Array.isArray(scope?.target_ids) ? (scope!.target_ids as unknown[]).map(String) : [];
+  const runCapture = getNestedItem(summary, ['run_capture']);
+  const findingsSnapshot = getNestedItem(summary, ['findings_snapshot']);
+  const snapshotFindings = getNestedArray(findingsSnapshot, ['items']);
+  const evidenceSummaries = getNestedItem(summary, ['evidence_summaries']);
+  const evidenceItems = getNestedArray(evidenceSummaries, ['items']);
+  const declarationSnapshot = getNestedItem(summary, ['declaration_snapshot']);
+  const runsSnapshot = getNestedArray(summary, ['runs_snapshot']);
   const explicitRunIds = Array.isArray(report.run_ids)
     ? (report.run_ids as unknown[]).map(String).filter(Boolean)
-    : [];
-  const summaryRunIds = getNestedArray(report, ['summary', 'recent_runs'])
-    .map((run) => getString(run, ['id'], ''))
-    .filter(Boolean);
-  const reportRunIds = new Set([...explicitRunIds, ...summaryRunIds]);
-  const reportRuns = data.runs.filter((run) => reportRunIds.has(getString(run, ['id'], '')));
-  const missingReportRunCount = Math.max(0, reportRunIds.size - reportRuns.length);
-  const coverageGroupIds = [...new Set(reportRuns.map((run) => getString(run, ['target_group_id'], '')).filter(Boolean))];
-
-  const coverageRows: ReportCoverageRow[] = coverageGroupIds.map((groupId) => {
-    const group = data.targetGroups.find((item) => getString(item, ['id'], '') === groupId);
-    const groupRuns = reportRuns.filter((run) => getString(run, ['target_group_id'], '') === groupId);
-    const groupRunIds = new Set(groupRuns.map((run) => getString(run, ['id'], '')).filter(Boolean));
-    const groupOpenFindings = data.findings.filter(
-      (finding) => groupRunIds.has(getString(finding, ['test_run_id'], '')) && isFindingOpen(finding)
-    );
-    const latestRun = [...groupRuns]
-      .filter((run) => hasEvidenceBackedVerdict(run, data.evidence))
-      .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')))[0];
-    return {
-      id: groupId,
-      name: getString(group ?? {}, ['name'], groupId),
-      runs: groupRuns.length,
-      openFindings: groupOpenFindings.length,
-      verdict: latestRun ? runVerdictValue(latestRun) : ''
-    };
+    : Array.isArray(summary?.run_ids) ? (summary!.run_ids as unknown[]).map(String).filter(Boolean) : [];
+  const summaryRuns = getNestedArray(report, ['summary', 'recent_runs']);
+  const capturedRunIds = explicitRunIds.length ? explicitRunIds : summaryRuns.map((run) => getString(run, ['id'], '')).filter(Boolean);
+  const capturedRows: DataItem[] = capturedRunIds.map((runId) => {
+    const snapshotRow = runsSnapshot.find((run) => getString(run, ['id'], '') === runId) ?? null;
+    const legacyRow = summaryRuns.find((run) => getString(run, ['id'], '') === runId) ?? null;
+    return { id: runId, snapshot: snapshotRow ?? legacyRow, frozen: Boolean(snapshotRow) } as DataItem;
   });
-  const coverageColumns: TableColumn<ReportCoverageRow>[] = [
-    { key: 'surface', label: 'Surface', render: (item) => <code>{item.name}</code> },
-    { key: 'runs', label: 'Snapshot runs loaded', render: (item) => <span className="tabular-nums">{item.runs}</span> },
-    { key: 'findings', label: 'Currently open linked findings', render: (item) => <span className="tabular-nums">{item.openFindings}</span> },
-    { key: 'verdict', label: 'Last evidence-backed verdict', render: (item) => item.verdict ? <VerdictBadge value={item.verdict} tone={outcomeBadgeTone(item.verdict)} /> : <span className="muted">No result yet</span> }
-  ];
+  const capturedEvidenceIds = Array.isArray(summary?.evidence_ids) ? (summary!.evidence_ids as unknown[]).map(String).filter(Boolean) : [];
+  const reportTitle = detailEntityTitle('report-detail', report, entityId);
+  const countText = (item: DataItem | null) => {
+    const included = getNestedNumber(item, ['included'], NaN);
+    const total = getNestedNumber(item, ['total'], NaN);
+    if (!Number.isFinite(included)) return 'Not recorded';
+    return Number.isFinite(total) ? `${formatNumber(included)} of ${formatNumber(total)}` : `${formatNumber(included)} (total not recorded)`;
+  };
+  const scopeText = !scope
+    ? 'Not recorded (legacy report)'
+    : scopeMode === 'tenant'
+      ? 'Whole workspace'
+      : [
+        groupRefs.length ? `Groups: ${groupRefs.map((group) => getString(group, ['name'], getString(group, ['id'], ''))).join(', ')}` : '',
+        scopeTargetIds.length ? `${formatNumber(scopeTargetIds.length)} selected target${scopeTargetIds.length === 1 ? '' : 's'}` : '',
+        scopeMode === 'runs' ? 'Explicit runs' : ''
+      ].filter(Boolean).join(' · ') || scopeMode.replaceAll('_', ' ');
+  const periodText = periodBounds
+    ? getString(periodBounds, ['status'], '') === 'bounded'
+      ? `${formatDate(getString(periodBounds, ['start'], ''))} to ${formatDate(getString(periodBounds, ['end'], ''))}`
+      : getString(periodBounds, ['status'], '') === 'unbounded' ? `All time, until ${formatDate(getString(periodBounds, ['end'], ''))}` : 'Not recorded'
+    : reportPeriodDisplay(data, report) === '—' ? 'Not recorded' : reportPeriodDisplay(data, report);
+  const readinessNote = hasReadinessScore
+    ? null
+    : readinessReason === 'published_readiness_formula_is_tenant_wide'
+      ? 'Not included: the published readiness formula covers the whole workspace, so this scoped report has no score.'
+      : readinessStatus === 'unknown'
+        ? `Not included: ${readinessReason ? readinessReason.replaceAll('_', ' ') : 'readiness was unavailable at generation'}.`
+        : 'No readiness score was recorded in this snapshot.';
   const factorColumns: TableColumn<DataItem>[] = [
     { key: 'factor', label: 'Factor', render: (factor) => formatStatusLabel(getString(factor, ['label', 'key'], 'Factor')) },
     { key: 'score', label: 'Score', render: (factor) => {
       const score = getNestedNumber(factor, ['score'], NaN);
-      return Number.isFinite(score) ? <span className="tabular-nums">{score}</span> : <span className="muted">not returned</span>;
+      return Number.isFinite(score) ? <span className="tabular-nums">{score}</span> : <span className="muted">Not recorded</span>;
     } },
-    { key: 'weight', label: 'Weight / scale', render: (factor) => {
+    { key: 'weight', label: 'Weight', render: (factor) => {
       const weight = getNestedNumber(factor, ['weight'], NaN);
-      return Number.isFinite(weight) ? <span className="tabular-nums">{weight}</span> : <span className="muted">not returned</span>;
+      return Number.isFinite(weight) ? <span className="tabular-nums">{weight}</span> : <span className="muted">Not recorded</span>;
     } },
-    { key: 'detail', label: 'Recorded basis', render: (factor) => getString(factor, ['detail', 'reason'], 'not returned') }
+    { key: 'detail', label: 'Recorded basis', render: (factor) => getString(factor, ['detail', 'reason'], 'Not recorded') }
   ];
-
-  const reportTitle = detailEntityTitle('report-detail', report, entityId);
+  const runColumns: TableColumn<DataItem>[] = [
+    { key: 'check', label: 'Check', render: (row) => {
+      const checkId = getString((row.snapshot as DataItem | null) ?? {}, ['check_id'], '');
+      return checkId ? checkDisplayName(data.checks, checkId) : <span className="muted">Not recorded</span>;
+    } },
+    { key: 'target', label: 'Target', render: (row) => {
+      const targetId = getString((row.snapshot as DataItem | null) ?? {}, ['target_id'], '');
+      return targetId ? <DetailEntityLink route="target-detail" id={targetId} /> : <span className="muted">Not recorded</span>;
+    } },
+    { key: 'status', label: 'Status at capture', render: (row) => {
+      const status = getString((row.snapshot as DataItem | null) ?? {}, ['status'], '');
+      return status ? formatStatusLabel(status) : <span className="muted">Not captured</span>;
+    } },
+    { key: 'run', label: 'Run ID', render: (row) => <code className="mono-hash">{getString(row, ['id'])}</code> },
+    { key: 'evidence', label: 'Evidence', render: (row) => {
+      const snap = (row.snapshot as DataItem | null) ?? {};
+      return getString(snap, ['target_id'], '') && getString(snap, ['check_id'], '')
+        ? <RunEvidenceButton run={{ ...snap, id: getString(row, ['id']) }} />
+        : <span className="muted small">Target or check not captured</span>;
+    } }
+  ];
+  const findingColumns: TableColumn<DataItem>[] = [
+    { key: 'title', label: 'Finding at generation', render: (item) => <span className="cp-stack"><span>{getString(item, ['title'], 'Untitled finding')}</span><span className="mono muted small">{getString(item, ['id'])}</span></span> },
+    { key: 'severity', label: 'Severity', render: (item) => formatSeverityLabel(getString(item, ['severity'], '')) },
+    { key: 'status', label: 'Status at generation', render: (item) => formatStatusLabel(getString(item, ['status'], ''), 'Not recorded') },
+    { key: 'proof', label: 'Proof', render: (item) => <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector({ entry: 'finding', finding_id: getString(item, ['id']) }, { focusKey: getString(item, ['id']) })}>View evidence</Button> }
+  ];
+  const formatOptions = reportOptionsFromCapabilities(data.reportCapabilities, 'formats', REPORT_FORMAT_FALLBACK_OPTIONS);
 
   return (
-    <div className="content">
+    <div className="content report-detail-page">
+      <CustomerPageStyles />
       <DetailPageHeader
         route="report-detail"
-        eyebrow="Report detail"
+        eyebrow={`${reportKindIsFramework(kind) ? `${reportKindLabel(kind)} mapping` : `${reportKindLabel(kind)} report`}`}
         entityId={entityId}
         title={reportTitle}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#reports">Reports</AnchorButton>
-            <Button size="sm" variant="default" loading={busy === `export-${entityId}-json`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'json')}>Export JSON</Button>
+            <AnchorButton size="sm" variant="ghost" href="#reports">All reports</AnchorButton>
+            <Button size="sm" variant="secondary" onClick={() => openEvidenceInspector({ entry: 'report', report_id: entityId })}>View snapshot evidence</Button>
+            <ReportExportMenu reportId={entityId} title={reportTitle} formats={formatOptions} exporter={exporter} />
           </>
         )}
       />
       <PageContextSummary>
-        <StatusBadge value={getString(report, ['status'], 'not recorded')} tone={reportStatusBadgeTone(getString(report, ['status'], ''))} fallback="not recorded" /> ·{' '}
-        {reportPeriodDisplay(data, report)} · <code>{entityId}</code>
+        Snapshot {asOf ? `frozen ${formatDate(asOf)}` : `created ${formatDate(report.created_at)} (snapshot time not recorded)`} · {scopeText}
       </PageContextSummary>
-      <DetailStatusBanners loadError={reportDetail.error} error={error} message={message} mode="combined" />
-      {reportDetail.loading ? (
-        <DetailLoadingPlaceholder label="Loading report detail…" variant="layout" />
-      ) : (
-      <>
-      <div className="metric-grid four">
-        <MetricCard label="Readiness" value={hasReadinessScore ? readinessScore : '—'} sub={hasReadinessScore ? 'Recorded score out of 100' : 'Score not returned'} icon={ShieldCheck} tone={hasReadinessScore ? scoreTone(readinessScore) : 'muted'} />
-        <MetricCard label="Status" value={formatStatusLabel(getString(report, ['status'], 'not recorded'))} sub="Report delivery state" icon={FileCheck2} tone={reportStatusBadgeTone(getString(report, ['status'], '')) === 'success' ? 'success' : 'muted'} />
-        <MetricCard label="Open findings" value={hasOpenFindings ? openFindings : '—'} sub="Recorded at report generation" icon={TriangleAlert} tone={hasOpenFindings && openFindings > 0 ? 'danger' : 'muted'} />
-        <MetricCard label="Generated" value={formatDate(report.created_at)} sub="Report snapshot timestamp" icon={ClipboardList} tone="muted" />
-      </div>
-      <div className="detail-layout">
+      {!frozen ? (
+        <div className="form-banner neutral" role="note">This is a legacy report: its inputs were not frozen at generation. Only the stored run references and summary values are shown; nothing is filled in from current data.</div>
+      ) : null}
+      <DetailStatusBanners loadError={reportDetail.error} error={exporter.error} message={exporter.message} mode="combined" />
+      <ReportExportResult exporter={exporter} />
+
+      <section className="report-snapshot" aria-labelledby="report-snapshot-heading">
+        <h2 id="report-snapshot-heading" className="report-section-title">At generation <span className="muted">· fixed snapshot</span></h2>
+        <div className="report-snapshot-grid">
+          <Card>
+            <CardHeader>
+              <CardTitle>Scope and period</CardTitle>
+              <CardDescription>Exactly what this report covers, as recorded.</CardDescription>
+            </CardHeader>
+            <CardContent className="kv-list">
+              <div><span>Scope</span><strong>{scopeText}</strong></div>
+              <div><span>Period</span><strong>{periodText}</strong></div>
+              <div><span>Declared targets captured</span><strong>{countText(declaredMembers)}</strong></div>
+              <div><span>Runs captured</span><strong>{runCapture ? `${countText(runCapture)}${getString(runCapture, ['limit'], '') ? `, most recent ${getString(runCapture, ['limit'], '')}` : ''}` : `${formatNumber(capturedRunIds.length)} (total not recorded)`}</strong></div>
+              <div><span>Findings captured</span><strong>{findingsSnapshot ? countText(findingsSnapshot) : 'Not recorded'}</strong></div>
+              <div><span>Open findings at generation</span><strong>{hasOpenFindings ? openFindings : 'Not recorded'}</strong></div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Readiness at {asOf ? formatDate(asOf) : 'generation'}</CardTitle>
+              <CardDescription>Values recorded in the report. They do not change when current results change.</CardDescription>
+            </CardHeader>
+            <CardContent className="kv-list report-summary-layout">
+              {hasReadinessScore ? <ReadinessGauge score={readinessScore} /> : <p className="cp-note">{readinessNote}</p>}
+              <div><span>{reportKindIsFramework(kind) ? 'Framework mapping' : 'Audience'}</span><strong>{compliance ? getString(compliance, ['template_title'], reportKindLabel(kind)) : reportKindLabel(kind)}</strong></div>
+              {frameworks.length ? <div><span>Frameworks</span><strong>{frameworks.map((framework) => plainCodeLabel(framework)).join(', ')}</strong></div> : null}
+              <div><span>Status</span><StatusBadge value={getString(report, ['status'], '')} tone={reportStatusBadgeTone(getString(report, ['status'], ''))} fallback="Not recorded" /></div>
+            </CardContent>
+          </Card>
+        </div>
+        <p className="cp-note">{getString(compliance ?? {}, ['disclaimer'], 'Evidence mapping is not a certification or a statement of compliance.')} Protection profiles are {getNestedString(summary, ['sections', 'protection_profile', 'status'], 'not_included') === 'included' ? 'included' : 'not included in this report'}.</p>
+        {readinessFactors.length ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Score factors in this snapshot</CardTitle>
+              <CardDescription>As recorded; not recalculated from current data.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataTable columns={factorColumns} items={readinessFactors} getRowId={(factor) => getString(factor, ['key', 'label'], JSON.stringify(factor))} empty={null} />
+            </CardContent>
+          </Card>
+        ) : null}
         <Card>
           <CardHeader>
-            <CardTitle>Report summary</CardTitle>
-            <CardDescription>Readiness and delivery status for this generated report.</CardDescription>
+            <CardTitle>Runs captured by this report ({formatNumber(capturedRunIds.length)})</CardTitle>
+            <CardDescription>Every stored run reference, in recorded order{frozen ? ', with the details frozen at generation' : ''}. Evidence opens beside this page.</CardDescription>
           </CardHeader>
-          <CardContent className="kv-list report-summary-layout">
-            {hasReadinessScore ? <ReadinessGauge score={readinessScore} /> : <p className="muted">No readiness score was returned in this report snapshot.</p>}
-            <div><span>Status</span><StatusBadge value={getString(report, ['status'], 'ready')} tone={reportStatusBadgeTone(getString(report, ['status'], 'ready'))} fallback="ready" /></div>
-            <div><span>Open findings</span><strong>{hasOpenFindings ? openFindings : 'not returned'}</strong></div>
-            <div><span>Kind</span><strong>{getString(report, ['kind'])}</strong></div>
-            <div><span>Period</span><strong>{reportPeriodDisplay(data, report)}</strong></div>
-            <div><span>Created</span><strong>{formatDate(report.created_at)}</strong></div>
-            <div><span>Report ID</span><strong><code>{entityId}</code></strong></div>
+          <CardContent>
+            <DataTable
+              columns={runColumns}
+              items={capturedRows}
+              getRowId={(row) => getString(row, ['id'], '')}
+              empty={<EmptyState icon={Target} title="No run references recorded." body="This report did not capture any run IDs." />}
+            />
           </CardContent>
         </Card>
-        <Card className="detail-primary">
+        {findingsSnapshot ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Findings captured ({countText(findingsSnapshot)})</CardTitle>
+              <CardDescription>Lifecycle as it was at generation. Current status is shown separately below.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={findingColumns}
+                items={snapshotFindings}
+                getRowId={(item) => getString(item, ['id'], '')}
+                empty={<EmptyState icon={TriangleAlert} title="No findings in scope at generation." body="No finding matched this report's scope and period." />}
+              />
+            </CardContent>
+          </Card>
+        ) : null}
+        <Card>
           <CardHeader>
-            <CardTitle>Export digest verification</CardTitle>
-            <CardDescription>Digest metadata from an explicit JSON export plus the response from /v1/custody/verify when returned.</CardDescription>
+            <CardTitle>Evidence references ({formatNumber(capturedEvidenceIds.length)})</CardTitle>
+            <CardDescription>Every evidence ID the snapshot references. Opening one shows its recorded integrity; a reference is not verification.</CardDescription>
           </CardHeader>
-          <CardContent className={preview?.contentSha256 || preview?.textPreview ? 'kv-list' : ''}>
-            {!preview ? (
-              <EmptyState icon={FileCheck2} title="No export verification yet." body="Use Export JSON to generate an export, inspect its returned manifest, and request server verification." />
-            ) : preview?.contentSha256 ? (
-              <>
-                <DetailKvMonoField label="Artifact" value={preview.artifactId ?? '—'} compact />
-                <DetailKvMonoField label="Content digest (SHA-256)" value={preview.contentSha256} compact />
-                <DetailKvField label="Schema">{preview.schemaVersion ?? '—'}</DetailKvField>
-                <div><span>Verification</span><StatusBadge value={verificationOk === 'true' ? 'verified' : verificationOk === 'false' ? 'failed' : 'not returned'} tone={verificationOk === 'true' ? 'success' : verificationOk === 'false' ? 'danger' : 'muted'} fallback="not returned" /></div>
-                <div className="row-actions">
-                  <Button size="sm" variant="ghost" disabled={!preview.contentSha256} onClick={() => void copyCustodyDigest()}>Copy export digest</Button>
-                </div>
-              </>
-            ) : preview?.textPreview ? (
-              <>
-                <p className="muted">JSON custody export unavailable — showing truncated {preview.format} preview (first 900 characters).</p>
-                <DetailCodeBlock label="Report export preview">{preview.textPreview}</DetailCodeBlock>
-              </>
-            ) : null}
+          <CardContent>
+            {capturedEvidenceIds.length === 0 ? <p className="muted">{summary ? 'No evidence references were captured.' : 'Not recorded (legacy report).'}</p> : (
+              <ul className="report-live-list">
+                {capturedEvidenceIds.map((evidenceId) => {
+                  const known = evidenceItems.find((item) => getString(item, ['id'], '') === evidenceId);
+                  return (
+                    <li key={evidenceId} className="row-actions">
+                      <code className="mono-hash">{evidenceId}</code>
+                      {known ? <span className="muted small">{getString(known, ['label'], '')}</span> : null}
+                      <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector({ entry: 'artifact', evidence_id: evidenceId }, { focusKey: evidenceId })}>View evidence</Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </CardContent>
         </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Readiness factor snapshot</CardTitle>
-          <CardDescription>Factors captured inside this report summary. Scores and weights are shown as returned without renormalization.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={factorColumns}
-            items={readinessFactors}
-            getRowId={(factor) => getString(factor, ['key', 'label'], JSON.stringify(factor))}
-            empty={<EmptyState icon={Activity} title="No factor array in this report." body={getString(readinessFactorStatus ?? {}, ['detail', 'status'], 'The report summary does not include a readiness-factor list.')} />}
-          />
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Run coverage in report snapshot</CardTitle>
-          <CardDescription>Relationships are limited to runs captured by this report and still present in the loaded records. Finding counts reflect current exact-run relationships, not historical totals from report generation.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={coverageColumns}
-            items={coverageRows}
-            getRowId={(item) => item.id}
-            getRowProps={(item) => detailRowNavProps('target-group-detail', item.id)}
-            empty={<EmptyState icon={Target} title="No snapshot run relationships loaded." body="This report has no loaded runs linked to a target group, or those runs are outside the current list window." />}
-          />
-          {missingReportRunCount > 0 ? <p className="muted small">{missingReportRunCount} report run ID{missingReportRunCount === 1 ? '' : 's'} are not present in the currently loaded run list.</p> : null}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Export formats</CardTitle>
-          <CardDescription>Export this report as JSON, Markdown, or HTML. JSON exports include custody manifests for verification.</CardDescription>
-        </CardHeader>
-        <CardContent className="stack-tight">
-          <div className="row-actions">
-            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-json`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'json')}>Export JSON</Button>
-            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-markdown`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'markdown')}>Export Markdown</Button>
-            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-html`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'html')}>Export HTML</Button>
-            <AnchorButton size="sm" variant="ghost" href="#reports">Back to reports</AnchorButton>
-          </div>
-          {/*
-            PDF export is intentionally out of scope for this slice: backend `src/services/reports.mjs`
-            supports json|markdown|html only. Immutable PDF rendering and signing remain a release-gate boundary.
-          */}
-          <p className="muted">PDF export is not available in this slice; backend report exports support JSON, Markdown, and HTML only.</p>
-        </CardContent>
-      </Card>
-      </>
-      )}
+        {declarationSnapshot ? (
+          <p className="muted small">Declarations: {getString(declarationSnapshot, ['status'], 'not recorded').replaceAll('_', ' ')}{getNestedArray(declarationSnapshot, ['items']).length ? ` · ${formatNumber(getNestedArray(declarationSnapshot, ['items']).length)} target declarations frozen` : ''}.</p>
+        ) : null}
+      </section>
+
+      <section className="report-live" aria-labelledby="report-live-heading">
+        <h2 id="report-live-heading" className="report-section-title">Current status <span className="muted">· live, not part of the report</span></h2>
+        <ReportLiveOpenFindings data={data} config={config} session={session} runIds={capturedRunIds} checkedAt={liveCheckedAt} />
+      </section>
     </div>
   );
 }

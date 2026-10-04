@@ -1,9 +1,20 @@
+import { randomBytes } from 'node:crypto';
+import { prepareObservation } from '../../services/targetHistory.mjs';
+import { presentFindingLineage } from '../../services/retestLineage.mjs';
+import { createTargetHistoryRepository, writeObservation } from './targetHistoryRepository.mjs';
+import {
+  findingListGroupSql,
+  findingListQSql,
+  findingSeverityClassSql,
+  parseFindingListQuery,
+} from '../../lib/findingList.mjs';
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, scan_id, scan_step_id,
   check_id, created_by, initiated_by, risk_class, safety_class, vector_family, status, probe_external_result, awaiting_external_probe,
   remediation_template, safety_constraints, correlation_json, collection_deadline_at, started_at,
-  completed_at, summary_json, created_at`;
+  completed_at, summary_json, created_at, check_version, scenario_version, producer_kind,
+  origin_binding_id, retest_of_finding_id, expected_behavior_json, provenance_json`;
 
 const EVENT_COLUMNS = `id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
   signal_type, producer_kind, nonce_hash, timestamp, metadata_json, ingested_at`;
@@ -15,7 +26,11 @@ const VERDICT_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, verdic
 
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
-  created_at, updated_at`;
+  created_at, updated_at, closed_at`;
+
+const HISTORY_TIME_SKIPS = new Set([
+  'before_declaration', 'future_timestamp', 'declaration_time_unknown', 'invalid_timestamp',
+]);
 
 /**
  * Marks whether `createVerdictIfAbsent` actually inserted the verdict row it returned.
@@ -82,6 +97,19 @@ function normalizeRunEventsListLimit(limit) {
   return normalizeBoundedLimit(limit, DEFAULT_RUN_EVENTS_LIST_LIMIT, MAX_RUN_EVENTS_LIST_LIMIT);
 }
 
+const MAX_EVENT_ID_LOOKUP = 32;
+
+function normalizeEventLookupIds(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(item) || ids.includes(item)) continue;
+    ids.push(item);
+    if (ids.length >= MAX_EVENT_ID_LOOKUP) break;
+  }
+  return ids;
+}
+
 function normalizeRunIdBatch(runIds, label) {
   if (!Array.isArray(runIds)) return [];
   const unique = [];
@@ -146,7 +174,22 @@ function mapTestRunRow(row) {
     completed_at: row.completed_at == null ? null : toIso(row.completed_at),
     summary: asObject(row.summary_json),
     created_at: toIso(row.created_at),
+    check_version: row.check_version ?? null,
+    scenario_version: row.scenario_version ?? null,
+    producer_kind: row.producer_kind ?? null,
+    origin_binding_id: row.origin_binding_id ?? null,
+    retest_of_finding_id: row.retest_of_finding_id ?? null,
+    expected_behavior: expectedBehaviorValue(row),
+    expected_behavior_json: row.expected_behavior_json ?? null,
+    provenance_json: row.provenance_json ?? null,
   };
+}
+
+function expectedBehaviorValue(row) {
+  const json = row?.expected_behavior_json;
+  if (json && typeof json === 'object' && typeof json.value === 'string') return json.value;
+  if (typeof row?.expected_behavior === 'string') return row.expected_behavior;
+  return null;
 }
 
 function mapEventRow(row) {
@@ -223,7 +266,31 @@ function mapFindingRow(row) {
     assignee: row.assignee ?? null,
     created_at: toIso(row.created_at),
     updated_at: row.updated_at == null ? null : toIso(row.updated_at),
+    closed_at: row.closed_at == null ? null : toIso(row.closed_at),
   };
+}
+
+function findingCustomerListWhere(tenantId, query) {
+  const params = [tenantId];
+  const conditions = [];
+  let nextIndex = 2;
+  const add = (sql, value) => {
+    conditions.push(sql);
+    params.push(value);
+    nextIndex += 1;
+  };
+  if (query.target_group_id) add(findingListGroupSql(`$${nextIndex}`), query.target_group_id);
+  if (query.target_id) add(`f.target_id = $${nextIndex}`, query.target_id);
+  if (query.test_run_id) add(`f.test_run_id = $${nextIndex}`, query.test_run_id);
+  if (query.check_id) add(`f.check_id = $${nextIndex}`, query.check_id);
+  // Stored status is NOT NULL but still trimmed and lowered, matching the
+  // effective-row-status read used by the dev store for legacy state rows.
+  if (query.status) add(`lower(btrim(f.status)) = $${nextIndex}`, query.status);
+  // Severity matches the canonical class of the recorded token, so S1..S4,
+  // moderate, and case variants are the same class for queries and rows.
+  if (query.severity != null) add(`${findingSeverityClassSql()} = $${nextIndex}`, query.severity_class);
+  if (query.q) add(findingListQSql(`$${nextIndex}`), query.q);
+  return { conditions, params, nextIndex };
 }
 
 /**
@@ -371,17 +438,41 @@ export function createValidationEvidenceRepository(pool) {
       const summaryJson = JSON.stringify(asObject(record.summary ?? record.summary_json));
 
       return withTenantContext(pool, tenantId, async (client) => {
+        if (record.retest_of_finding_id) {
+          const finding = await client.query(
+            `SELECT id, target_id, check_id FROM findings WHERE tenant_id = $1 AND id = $2`,
+            [tenantId, record.retest_of_finding_id],
+          );
+          const row = finding.rows[0];
+          if (!row) return { error: 'unknown_finding', status: 404 };
+          if (row.target_id !== record.target_id || row.check_id !== record.check_id) {
+            return { error: 'pair_mismatch', status: 409 };
+          }
+        }
+        if (record.origin_binding_id) {
+          const binding = await client.query(
+            `SELECT id, status, origin_target_id FROM origin_bindings WHERE tenant_id = $1 AND id = $2`,
+            [tenantId, record.origin_binding_id],
+          );
+          const row = binding.rows[0];
+          if (!row || row.status !== 'active' || row.origin_target_id !== record.target_id) {
+            return { error: 'origin_binding_invalid', status: 409 };
+          }
+        }
         const { rows } = await client.query(
           `INSERT INTO test_runs (
              id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, scan_id, scan_step_id,
              check_id, created_by, initiated_by,
              risk_class, safety_class, vector_family, status, probe_external_result,
              awaiting_external_probe, remediation_template, safety_constraints, correlation_json,
-             collection_deadline_at, started_at, completed_at, summary_json, created_at
+             collection_deadline_at, started_at, completed_at, summary_json, created_at,
+             check_version, scenario_version, producer_kind, origin_binding_id, retest_of_finding_id,
+             expected_behavior_json, provenance_json
            )
            VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb,
-             $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::jsonb, $25::timestamptz
+             $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::jsonb, $25::timestamptz,
+             $26, $27, $28, $29, $30, $31::jsonb, $32::jsonb
            )
            RETURNING ${TEST_RUN_COLUMNS}`,
           [
@@ -410,9 +501,35 @@ export function createValidationEvidenceRepository(pool) {
             record.completed_at ?? null,
             summaryJson,
             record.created_at,
+            record.check_version ?? null,
+            record.scenario_version ?? null,
+            record.producer_kind ?? null,
+            record.origin_binding_id ?? null,
+            record.retest_of_finding_id ?? null,
+            record.expected_behavior_json == null ? null : JSON.stringify(record.expected_behavior_json),
+            record.provenance_json == null ? null : JSON.stringify(record.provenance_json),
           ],
         );
-        return mapTestRunRow(rows[0]);
+        const run = mapTestRunRow(rows[0]);
+        if (record.retest_of_finding_id) {
+          await client.query(
+            `INSERT INTO finding_retest_lineage (
+               id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_by, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'retest', 'retest', $7, $8::timestamptz)
+             ON CONFLICT (tenant_id, finding_id, test_run_id) DO NOTHING`,
+            [
+              record.lineage_id ?? `rtln_${randomBytes(8).toString('hex')}`,
+              tenantId,
+              record.retest_of_finding_id,
+              record.id,
+              record.target_id,
+              record.check_id,
+              record.created_by ?? null,
+              record.created_at,
+            ],
+          );
+        }
+        return run;
       });
     },
 
@@ -658,8 +775,40 @@ export function createValidationEvidenceRepository(pool) {
     },
 
     async listRunEvents(ctx, runId, options = {}) {
-      const boundedLimit = normalizeRunEventsListLimit(options.limit);
+      const lookupIds = normalizeEventLookupIds(options.ids);
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        if (lookupIds) {
+          if (lookupIds.length === 0) return [];
+          const params = [ctx.tenantId, runId, lookupIds];
+          const conditions = [
+            'tenant_id = $1',
+            'test_run_id = $2',
+            '(id = ANY($3::text[]) OR event_id = ANY($3::text[]))',
+          ];
+          let paramIndex = 4;
+          if (typeof options.target_id === 'string' && options.target_id !== '') {
+            conditions.push(`target_id = $${paramIndex}`);
+            params.push(options.target_id);
+            paramIndex += 1;
+          }
+          if (typeof options.check_id === 'string' && options.check_id !== '') {
+            conditions.push(`check_id = $${paramIndex}`);
+            params.push(options.check_id);
+            paramIndex += 1;
+          }
+          params.push(lookupIds.length);
+          const { rows } = await client.query(
+            `SELECT ${EVENT_COLUMNS}
+             FROM events
+             WHERE ${conditions.join(' AND ')}
+             ORDER BY timestamp
+             LIMIT $${paramIndex}`,
+            params,
+          );
+          return rows.map(mapEventRow);
+        }
+
+        const boundedLimit = normalizeRunEventsListLimit(options.limit);
         const params = [ctx.tenantId, runId];
         const conditions = ['tenant_id = $1', 'test_run_id = $2'];
         let paramIndex = 3;
@@ -892,6 +1041,7 @@ export function createValidationEvidenceRepository(pool) {
              AND authoritative_run.id = $5
              AND authoritative_run.target_group_id = $3
              AND authoritative_run.target_id = $4
+             AND ($20::timestamptz IS NULL OR authoritative_target.created_at <= $20::timestamptz)
            ON CONFLICT (tenant_id, target_id) DO UPDATE SET
              test_run_id = EXCLUDED.test_run_id,
              status = EXCLUDED.status,
@@ -1021,6 +1171,32 @@ export function createValidationEvidenceRepository(pool) {
           [ctx.tenantId, id],
         );
         return mapEvidenceRow(rows[0] ?? null);
+      });
+    },
+
+    /** Current raw edge row. Family columns stay separate; callers must not copy waf_vendor onto CDN. */
+    async getTargetEdgeDetection(ctx, targetId) {
+      if (!ctx?.tenantId || !targetId) return null;
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT id, tenant_id, target_group_id, target_id, test_run_id, status, reason,
+                  waf_status, waf_vendor, waf_type, waf_providers,
+                  cdn_status, cdn_provider, cdn_type, cdn_providers,
+                  confidence, conflicting_vendor_signals, corpus_version, evidence_json, observed_at
+           FROM target_edge_detections
+           WHERE tenant_id = $1 AND target_id = $2
+           LIMIT 1`,
+          [ctx.tenantId, targetId],
+        );
+        const row = rows[0];
+        if (!row) return null;
+        return {
+          ...row,
+          evidence_json: asObject(row.evidence_json),
+          observed_at: toIso(row.observed_at),
+          waf_providers: Array.isArray(row.waf_providers) ? row.waf_providers : [],
+          cdn_providers: Array.isArray(row.cdn_providers) ? row.cdn_providers : [],
+        };
       });
     },
 
@@ -1462,6 +1638,15 @@ export function createValidationEvidenceRepository(pool) {
           params.push(asStringArray(patch.evidence_ids));
           paramIndex += 1;
         }
+        if (patch.closed_at !== undefined) {
+          if (patch.closed_at === null) {
+            sets.push('closed_at = NULL');
+          } else {
+            sets.push(`closed_at = COALESCE(closed_at, $${paramIndex}::timestamptz)`);
+            params.push(patch.closed_at);
+            paramIndex += 1;
+          }
+        }
         if (patch.updated_at !== undefined) {
           sets.push(`updated_at = $${paramIndex}::timestamptz`);
           params.push(patch.updated_at);
@@ -1510,49 +1695,103 @@ export function createValidationEvidenceRepository(pool) {
     },
 
     async listFindings(ctx, options = {}) {
+      if (options?.forUpdate === true) {
+        return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+          const params = [ctx.tenantId];
+          const conditions = ['tenant_id = $1'];
+          let paramIndex = 2;
+          if (options.target_group_id != null && options.target_group_id !== '') {
+            conditions.push(`target_group_id = $${paramIndex}`);
+            params.push(options.target_group_id);
+            paramIndex += 1;
+          }
+          if (options.target_id != null && options.target_id !== '') {
+            conditions.push(`target_id = $${paramIndex}`);
+            params.push(options.target_id);
+            paramIndex += 1;
+          }
+          if (options.test_run_id != null && options.test_run_id !== '') {
+            conditions.push(`test_run_id = $${paramIndex}`);
+            params.push(options.test_run_id);
+            paramIndex += 1;
+          }
+          if (options.check_id != null && options.check_id !== '') {
+            conditions.push(`check_id = $${paramIndex}`);
+            params.push(options.check_id);
+            paramIndex += 1;
+          }
+          const { rows } = await client.query(
+            `SELECT ${FINDING_COLUMNS}
+             FROM findings
+             WHERE ${conditions.join(' AND ')}
+             ORDER BY created_at DESC, id DESC FOR UPDATE`,
+            params,
+          );
+          return rows.map(mapFindingRow);
+        });
+      }
+
+      const query = parseFindingListQuery(options, { paginate: false });
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
-        const params = [ctx.tenantId];
-        const conditions = ['tenant_id = $1'];
-        let paramIndex = 2;
+        const built = findingCustomerListWhere(ctx.tenantId, query);
+        const filterSql = built.conditions.length > 0
+          ? ` AND ${built.conditions.join(' AND ')}`
+          : '';
+        const params = built.params.slice();
+        let sql = `SELECT ${FINDING_COLUMNS}
+           FROM findings f
+           WHERE f.tenant_id = $1${filterSql}
+           ORDER BY f.created_at DESC, f.id DESC`;
+        if (query.limit != null) {
+          params.push(query.limit);
+          sql += ` LIMIT $${built.nextIndex}`;
+          if (query.offset > 0) {
+            params.push(query.offset);
+            sql += ` OFFSET $${built.nextIndex + 1}`;
+          }
+        }
+        const { rows } = await client.query(sql, params);
+        return rows.map(mapFindingRow);
+      });
+    },
 
-        if (options.target_group_id != null && options.target_group_id !== '') {
-          conditions.push(`target_group_id = $${paramIndex}`);
-          params.push(options.target_group_id);
-          paramIndex += 1;
-        }
-        if (options.target_id != null && options.target_id !== '') {
-          conditions.push(`target_id = $${paramIndex}`);
-          params.push(options.target_id);
-          paramIndex += 1;
-        }
-        if (options.test_run_id != null && options.test_run_id !== '') {
-          conditions.push(`test_run_id = $${paramIndex}`);
-          params.push(options.test_run_id);
-          paramIndex += 1;
-        }
-        if (options.check_id != null && options.check_id !== '') {
-          conditions.push(`check_id = $${paramIndex}`);
-          params.push(options.check_id);
-          paramIndex += 1;
-        }
-
-        const limit = Number(options.limit);
-        let limitClause = '';
-        if (Number.isFinite(limit) && limit > 0) {
-          params.push(Math.floor(limit));
-          limitClause = ` LIMIT $${paramIndex}`;
-          paramIndex += 1;
-        }
-        const lockClause = options.forUpdate === true ? ' FOR UPDATE' : '';
-
+    async listFindingsPage(ctx, options = {}) {
+      const query = parseFindingListQuery(options, { paginate: true });
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const built = findingCustomerListWhere(ctx.tenantId, query);
+        const filterSql = built.conditions.length > 0
+          ? ` AND ${built.conditions.join(' AND ')}`
+          : '';
+        const params = built.params.slice();
+        params.push(query.limit, query.offset);
+        const limitParam = built.nextIndex;
+        const offsetParam = built.nextIndex + 1;
+        // Count and page in one statement so a concurrent commit between two
+        // statements cannot move the total away from the page rows: everything
+        // below reads one READ COMMITTED statement snapshot.
         const { rows } = await client.query(
-          `SELECT ${FINDING_COLUMNS}
-           FROM findings
-           WHERE ${conditions.join(' AND ')}
-           ORDER BY created_at DESC, id DESC${limitClause}${lockClause}`,
+          `WITH page AS (
+             SELECT ${FINDING_COLUMNS}
+             FROM findings f
+             WHERE f.tenant_id = $1${filterSql}
+             ORDER BY f.created_at DESC, f.id DESC
+             LIMIT $${limitParam} OFFSET $${offsetParam}
+           ),
+           total AS (
+             SELECT COUNT(*)::int AS total
+             FROM findings f
+             WHERE f.tenant_id = $1${filterSql}
+           )
+           SELECT total.total, page.*
+           FROM total
+           LEFT JOIN page ON TRUE`,
           params,
         );
-        return rows.map(mapFindingRow);
+        const total = Number(rows[0]?.total ?? 0);
+        return {
+          items: rows.filter((row) => row.id != null).map(mapFindingRow),
+          total,
+        };
       });
     },
 
@@ -1566,6 +1805,130 @@ export function createValidationEvidenceRepository(pool) {
         );
         return mapFindingRow(rows[0] ?? null);
       });
+    },
+
+    async readFindingLineage(ctx, findingId) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const finding = await client.query(
+          `SELECT ${FINDING_COLUMNS} FROM findings WHERE tenant_id = $1 AND id = $2`,
+          [ctx.tenantId, findingId],
+        );
+        const mapped = mapFindingRow(finding.rows[0] ?? null);
+        if (!mapped) return null;
+        const lineage = await client.query(
+          `SELECT id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_at
+           FROM finding_retest_lineage WHERE tenant_id = $1 AND finding_id = $2`,
+          [ctx.tenantId, findingId],
+        );
+        const runs = await client.query(
+          `SELECT id, tenant_id, target_id, check_id, status, created_at
+           FROM test_runs
+           WHERE tenant_id = $1 AND target_id = $2 AND check_id = $3`,
+          [ctx.tenantId, mapped.target_id ?? null, mapped.check_id ?? null],
+        );
+        const siblings = await client.query(
+          `SELECT id, target_id, status, closed_at FROM findings
+           WHERE tenant_id = $1 AND check_id = $2 AND id <> $3`,
+          [ctx.tenantId, mapped.check_id ?? null, findingId],
+        );
+        return presentFindingLineage({
+          finding: mapped,
+          runs: runs.rows,
+          lineage: lineage.rows,
+          siblings: siblings.rows,
+        });
+      });
+    },
+
+    async loadOriginBindingProof(ctx, bindingId) {
+      const history = createTargetHistoryRepository(pool);
+      const binding = await history.getBinding(ctx, bindingId);
+      if (!binding) {
+        return {
+          binding: null,
+          targets: [],
+          targetVerifications: [],
+          wafConnectors: [],
+          wafConnectorSnapshots: [],
+        };
+      }
+      const context = await history.loadBindingContext(ctx, [binding.origin_target_id, binding.protected_target_id]);
+      return { binding, ...context };
+    },
+
+    /**
+     * Append accepted observations on the caller transaction when one is supplied.
+     * A mismatched origin binding id is dropped. Time and idempotency results are returned
+     * to the caller; this method does not move the edge current row.
+     */
+    async appendAcceptedEdgeHistory(ctx, spec = {}, options = {}) {
+      const write = async (client) => {
+        const targetRes = await client.query(
+          `SELECT id, tenant_id, target_group_id, kind, value, port, deleted_at, declaration_json,
+                  created_at
+           FROM targets
+           WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`,
+          [ctx.tenantId, spec.target_id],
+        );
+        const target = targetRes.rows[0];
+        if (!target) return { skipped: 'unknown_target', rows: [] };
+        target.created_at = toIso(target.created_at);
+        let binding = null;
+        let originBindingId = spec.origin_binding_id ?? null;
+        if (originBindingId) {
+          const bindingRes = await client.query(
+            `SELECT id, tenant_id, origin_target_id, status, created_at
+             FROM origin_bindings WHERE tenant_id = $1 AND id = $2`,
+            [ctx.tenantId, originBindingId],
+          );
+          const row = bindingRes.rows[0] ?? null;
+          if (!row || row.status !== 'active' || row.origin_target_id !== target.id) {
+            if (spec.require_binding) return { skipped: 'binding_target_mismatch', rows: [] };
+            originBindingId = null;
+          } else {
+            binding = { ...row, created_at: toIso(row.created_at) };
+          }
+        } else if (spec.require_binding) {
+          return { skipped: 'binding_target_mismatch', rows: [] };
+        }
+        const rows = [];
+        for (const family of spec.families ?? []) {
+          const familyBindingId = family.origin_binding_id === undefined ? originBindingId : family.origin_binding_id;
+          const prepared = prepareObservation({
+            ...family,
+            target_id: target.id,
+            origin_binding_id: familyBindingId,
+          }, {
+            tenantId: ctx.tenantId,
+            target,
+            binding: familyBindingId ? binding : null,
+            serverDerived: true,
+            now: spec.now,
+          });
+          if (prepared.error) {
+            rows.push(prepared);
+            if (prepared.error === 'idempotency_conflict') {
+              return { error: 'idempotency_conflict', status: 409, rows };
+            }
+            if (HISTORY_TIME_SKIPS.has(prepared.error)) {
+              return { skipped: prepared.error, rows };
+            }
+            continue;
+          }
+          const written = await writeObservation(client, {
+            ...prepared.record,
+            id: family.id ?? `obs_${randomBytes(8).toString('hex')}`,
+            created_at: toIso(spec.now ?? new Date()),
+          });
+          if (written?.error === 'idempotency_conflict') {
+            return { error: 'idempotency_conflict', status: 409, rows: [...rows, written] };
+          }
+          rows.push(written);
+        }
+        return { rows };
+      };
+      if (options.client) return write(options.client);
+      return withTenantContext(pool, ctx.tenantId, write);
     },
   };
 }

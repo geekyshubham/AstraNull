@@ -155,10 +155,14 @@ describe('target-detail tag + ownership-step helpers', () => {
 
 describe('target-detail React contract', () => {
   it('leads with a stateful validation path and explicit check selection', () => {
+    const queue = readFileSync(new URL('../../apps/web/react/src/components/targets/domain-protection.tsx', import.meta.url), 'utf8');
     assert.match(DETAIL_SOURCE, /Validate this target/);
     assert.match(DETAIL_SOURCE, /check_id: effectiveSelectedCheckId/);
-    assert.match(DETAIL_SOURCE, /type="radio"/);
+    // Selection is one explicit radio per check in the shared check queue; starting needs a review.
+    assert.match(queue, /type="radio"/);
+    assert.match(DETAIL_SOURCE, /setReview\(\{ mode: 'single', checkId: effectiveSelectedCheckId \}\)/);
     assert.doesNotMatch(DETAIL_SOURCE, /checks_applied\?\.\[0\]|checks_applied\[0\]/);
+    assert.doesNotMatch(DETAIL_SOURCE, /shouldAutoDetectEdge/, 'opening a target never starts a probe');
   });
 
   it('removes all agent / placement language now that verdicts are external-probe only', () => {
@@ -184,7 +188,12 @@ describe('target-detail React contract', () => {
     assert.doesNotMatch(DETAIL_SOURCE, /hasEvidenceBackedVerdict\(item, \[\]\)/);
     assert.match(DETAIL_SOURCE, /evidence_ids: run\.evidence_ids/);
     assert.match(DETAIL_SOURCE, /<Tabs/);
-    assert.match(DETAIL_SOURCE, /Protection path/);
+    // Unified target tabs; legacy Protection path / edge / runs links resolve through targetTabFromParam.
+    for (const label of ['Overview', 'Validate', 'Findings', 'Changes & history']) {
+      assert.match(DETAIL_SOURCE, new RegExp(`label: '${label}'`));
+    }
+    assert.match(DETAIL_SOURCE, /targetTabFromParam\(getRouteParam\('tab'\)\)/);
     assert.match(DETAIL_SOURCE, /edgeDetectionReasonExplanation/);
+    assert.doesNotMatch(DETAIL_SOURCE, /buildDetailHref\('run-detail'|buildDetailHref\('scan-detail'/, 'results open in place, not a run page');
   });
 });

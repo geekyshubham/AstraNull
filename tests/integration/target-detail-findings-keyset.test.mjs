@@ -272,11 +272,11 @@ describeMaybe('target detail findings keyset pagination', () => {
       assert.match(firstSelect.text, /LIMIT \$\d+/, 'findings query must carry a SQL LIMIT');
       assert.match(
         firstSelect.text,
-        /ORDER BY created_at DESC, id DESC/,
+        /ORDER BY (?:f\.)?created_at DESC, (?:f\.)?id DESC/,
         'ordering must be the deterministic composite tuple',
       );
       // First page has no cursor, so no seek predicate yet.
-      assert.ok(!/\(created_at, id\) </.test(firstSelect.text));
+      assert.ok(!/\((?:f\.)?created_at, (?:f\.)?id\) </.test(firstSelect.text));
       // limit+1 is bound as a parameter, not interpolated.
       assert.equal(firstSelect.params.at(-1), 6);
 
@@ -288,7 +288,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       const secondSelect = recordingPool.findingsSelects()[0];
       assert.match(
         secondSelect.text,
-        /\(created_at, id\) < \(\$\d+::timestamptz, \$\d+::text\)/,
+        /\((?:f\.)?created_at, (?:f\.)?id\) < \(\$\d+::timestamptz, \$\d+::text\)/,
         'second page must use a row-tuple seek predicate cast to the real column types',
       );
       // Cursor values travel as bound params: tenant, target, created_at, id, limit+1.
@@ -333,7 +333,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       assert.equal(typeof sample.opened_at, 'string');
       assert.match(sample.opened_at, /^\d{4}-\d{2}-\d{2}T/);
       assert.ok(['open', 'closed', 'accepted'].includes(sample.state));
-      assert.equal(sample.owner_group, 'edge-sre');
+      assert.equal(sample.owner_group, 'unassigned');
 
       // counts are per-target totals and must NOT shrink to the page size.
       const fixture = buildFindingsFixture();
@@ -485,7 +485,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 }, {
         queryCounter: plain,
       });
-      assert.equal(plain.count, 12, 'target lookup + eleven sequential detail reads (agent binding read removed)');
+      assert.equal(plain.count, 14, 'target lookup + detail reads, plus observation history and origin bindings');
 
       const page1 = await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 });
       const legacy = { count: 0 };
@@ -495,7 +495,7 @@ describeMaybe('target detail findings keyset pagination', () => {
         { findings_limit: 5, findings_cursor: encodeCursor({ id: page1.findings.at(-1).id }) },
         { queryCounter: legacy },
       );
-      assert.equal(legacy.count, 13, 'legacy cursor adds one indexed resolution lookup');
+      assert.equal(legacy.count, 15, 'legacy cursor adds one indexed resolution lookup');
     });
   });
 });

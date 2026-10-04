@@ -8125,3 +8125,275 @@ dialog.modal-confirm[open]::backdrop {
     transition: none;
   }
 }
+
+/* ── Shared evidence inspector panel (current release) ─────────────────
+   Docked beside the work area at ≥1360px, a modal drawer from 700px, and a
+   full-width sheet below 700px. Pure surface tokens; depth from hairlines. */
+:root {
+  --inspector-width: clamp(440px, 34vw, 600px);
+  --z-inspector: 45;
+}
+
+:root[data-inspector-docked='true'] .app-shell .main {
+  padding-inline-end: var(--inspector-width);
+}
+
+.inspector-panel {
+  color: var(--fg);
+  background: var(--surface);
+  font-family: var(--font-body);
+}
+
+aside.inspector-panel[data-mode='docked'] {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: var(--z-inspector);
+  display: flex;
+  flex-direction: column;
+  width: var(--inspector-width);
+  border-inline-start: 1px solid var(--border);
+  animation: inspector-dock-in var(--motion-base) var(--ease-out-soft);
+}
+
+dialog.inspector-panel {
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  inset-block: 0;
+  inset-inline: auto 0;
+  width: min(600px, 100vw);
+  height: 100dvh;
+  overflow: hidden;
+}
+
+dialog.inspector-panel[data-mode='drawer'] {
+  border-inline-start: 1px solid var(--border-strong);
+  box-shadow: var(--elev-overlay);
+  animation: inspector-dock-in var(--motion-base) var(--ease-drawer);
+}
+
+dialog.inspector-panel[data-mode='sheet'] {
+  inset-inline: 0;
+  width: 100vw;
+  animation: inspector-sheet-in var(--motion-base) var(--ease-drawer);
+}
+
+dialog.inspector-panel::backdrop {
+  background: var(--overlay-backdrop);
+}
+
+.inspector-surface {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.inspector-head {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.inspector-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+}
+
+.inspector-eyebrow {
+  margin: 0;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.inspector-close {
+  display: inline-grid;
+  place-items: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  margin-inline-end: calc(var(--space-2) * -1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .inspector-close:hover { color: var(--fg); background: var(--surface-hover); }
+}
+
+.inspector-close:active { transform: scale(var(--press-scale)); }
+
+.inspector-close:focus-visible,
+.inspector-title:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.inspector-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.inspector-title:focus { outline: none; }
+
+.inspector-meta { min-width: 0; }
+
+.inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6) var(--space-6);
+}
+
+.inspector-foot {
+  padding: var(--space-3) var(--space-6) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+@media (max-width: 699px) {
+  .inspector-head,
+  .inspector-body,
+  .inspector-foot { padding-inline: var(--space-4); }
+  .inspector-close { margin-inline-end: 0; }
+}
+
+@keyframes inspector-dock-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes inspector-sheet-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  aside.inspector-panel[data-mode='docked'],
+  dialog.inspector-panel { animation: none; }
+  .inspector-close { transition: none; }
+}
+
+/* Review step definition list used by every governed start/retest confirmation. */
+.scan-review .td-review-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; }
+.scan-review .td-review-list div { display: contents; }
+.scan-review .td-review-list dt { color: var(--fg-2); font-size: var(--text-sm); }
+.scan-review .td-review-list dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .scan-review .td-review-list { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .scan-review .td-review-list dd { margin-bottom: var(--space-2); }
+}
+
+/* Inline text action inside running copy (for example "Clear filters" beside a count). */
+.link-button {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.link-button:focus-visible { outline: var(--focus-ring-width) solid var(--focus-color); outline-offset: var(--focus-ring-offset); border-radius: var(--radius-sm); }
+@media (pointer: coarse) { .link-button { padding-block: var(--space-3); } }
+
+/* Shared form dialog footer (shared overlays P2): the action row stays reachable at the bottom of
+   a scrolling body with a full safe inset, and fields use the dialog's content measure. */
+.form-modal-body {
+  padding-bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  overscroll-behavior: contain;
+}
+.form-modal-body .form-actions,
+.form-modal-body .product-form .form-actions {
+  position: sticky;
+  bottom: calc(var(--space-6) * -1 - env(safe-area-inset-bottom, 0px));
+  z-index: 1;
+  margin-top: var(--space-4);
+  margin-inline: calc(var(--space-5) * -1);
+  padding: var(--space-4) var(--space-5) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+.form-modal .product-form > label,
+.form-modal .product-form > .full { min-width: 0; }
+.form-modal .product-form input:not([type='checkbox']):not([type='radio']),
+.form-modal .product-form select,
+.form-modal .product-form textarea { width: 100%; }
+.modal-confirm-body .modal-confirm-actions { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+/* Held live-list updates: a fixed notice, so announcing new rows never shifts the rows below. */
+.live-update-pill {
+  position: fixed;
+  inset-block-end: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  inset-inline-start: calc((100vw + var(--sidebar-width)) / 2);
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(640px, calc(100vw - var(--space-8)));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--elev-overlay);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  transform: translateX(-50%);
+  animation: live-pill-in var(--motion-base) var(--ease-out-soft);
+}
+:root[data-inspector-docked='true'] .live-update-pill { inset-inline-start: calc((100vw + var(--sidebar-width) - var(--inspector-width)) / 2); }
+.sidebar-collapsed ~ .live-update-pill,
+.app-shell.sidebar-collapsed .live-update-pill { inset-inline-start: calc((100vw + var(--sidebar-collapsed-width)) / 2); }
+@media (max-width: 1120px) { .live-update-pill { inset-inline-start: 50%; } }
+@media (max-width: 520px) { .live-update-pill { border-radius: var(--radius-md); flex-wrap: wrap; } }
+@keyframes live-pill-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .live-update-pill { animation: none; } }
+
+/* Light theme: tab counts sit on a recessed wash; secondary ink measured 4.45:1 there, so counts
+   use primary ink (meets 4.5:1). Dark theme already passes with the inherited tab ink. */
+:root[data-theme='light'] [data-ui='tabs'] .tab .tab-count { color: var(--fg); }
+
+/* Server cohort list on Targets: visible predicates, server totals, keyset paging. */
+.cohort-panel { display: grid; gap: var(--space-4); padding: var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.cohort-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+.cohort-head h2 { margin: 0 0 var(--space-2); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.015em; }
+.cohort-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.cohort-filters li { display: inline-flex; gap: var(--space-1); align-items: baseline; padding: var(--space-1) var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-pill); font-size: var(--text-sm); }
+.cohort-filter-key { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.cohort-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cohort-count { margin: 0; color: var(--fg-2); font-size: var(--text-sm); line-height: 1.5; }
+.cohort-target { display: grid; gap: var(--space-2); justify-items: start; min-width: 0; }
+.cohort-target strong { font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.cohort-members summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; color: var(--fg); font-size: var(--text-sm); text-decoration: underline; text-underline-offset: 3px; }
+.cohort-members ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0; padding: 0; list-style: none; }
+.cohort-members li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.cohort-cell { display: grid; gap: var(--space-1); justify-items: start; }
+.cohort-cell small { color: var(--fg-2); }
+.cohort-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); }
+@media (pointer: coarse) { .cohort-members summary { min-height: 44px; } }
+@media (max-width: 620px) { .cohort-panel { padding: var(--space-4); } }

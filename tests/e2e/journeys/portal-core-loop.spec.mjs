@@ -44,6 +44,7 @@ test.describe('portal core loop (Playwright)', () => {
     await gotoPortalRoute(page, 'target-groups', baseUrl);
 
     await expect(page.getByRole('heading', { name: 'Target groups', exact: true })).toBeVisible();
-    await expect(page.getByRole('cell', { name: 'edge-checkout' })).toBeVisible();
+    // The group name is its own link; the open-count link in the same row also names the group.
+    await expect(page.getByRole('link', { name: 'edge-checkout', exact: true })).toBeVisible();
   });
 });

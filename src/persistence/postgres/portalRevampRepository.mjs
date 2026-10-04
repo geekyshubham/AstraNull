@@ -9,11 +9,15 @@ import {
 import { newId } from '../../lib/ids.mjs';
 import { targetTagsFromRecord } from '../../contracts/targetManagement.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
+import { presentTargetDeclaration } from '../../lib/targetDeclarations.mjs';
+import { currentOriginProof } from '../../services/originBindings.mjs';
+import { attachHistoryReadModel, deriveProtectionProfile, historyReadModel } from '../../services/protectionProfile.mjs';
 import {
-  WAF_EDGE_DETECTION_CHECK_ID,
   boundCheckRows,
   edgeDetectionRequestRow,
+  presentWafPosture,
   recentRunRow,
+  remediationOwnerGroup,
 } from '../../lib/targetDetailRows.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
@@ -26,6 +30,21 @@ function toIso(value) {
   if (value == null) return value;
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+function recordedMarkerRules(...values) {
+  for (const value of values) {
+    if (value == null || value === '') continue;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  return null;
+}
+
+function recordedOriginState(value) {
+  if (value == null) return 'not_tested';
+  const text = String(value).trim();
+  return text || 'not_tested';
 }
 
 function mapDnsRow(row) {
@@ -821,7 +840,10 @@ export function createPortalRevampRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         bump();
         const targetRes = await client.query(
-          `SELECT * FROM targets WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`,
+          `SELECT t.*, tg.declaration_json AS group_declaration_json
+           FROM targets t
+           LEFT JOIN target_groups tg ON tg.id = t.target_group_id AND tg.tenant_id = t.tenant_id
+           WHERE t.tenant_id = $1 AND t.id = $2 AND t.deleted_at IS NULL`,
           [ctx.tenantId, targetId],
         );
         const target = targetRes.rows[0];
@@ -876,7 +898,7 @@ export function createPortalRevampRepository(pool) {
         if (findingsCursor) {
           findingsParams.push(findingsCursor.created_at, findingsCursor.id);
           findingsKeysetPredicate =
-            `\n               AND (created_at, id) < ($${findingsParams.length - 1}::timestamptz, $${findingsParams.length}::text)`;
+            `\n               AND (f.created_at, f.id) < ($${findingsParams.length - 1}::timestamptz, $${findingsParams.length}::text)`;
         }
         findingsParams.push(findingsLimit + 1);
         // created_at_cursor is the LOSSLESS cursor value. TIMESTAMPTZ holds microseconds
@@ -886,10 +908,13 @@ export function createPortalRevampRepository(pool) {
         // row in the truncated sub-millisecond window. Casting to text in SQL round-trips
         // exactly. The Date-typed created_at is still selected for the opened_at output.
         const findingsSql =
-          `SELECT id, severity, title, status, created_at, created_at::text AS created_at_cursor
-             FROM findings
-             WHERE tenant_id = $1 AND target_id = $2${findingsKeysetPredicate}
-             ORDER BY created_at DESC, id DESC
+          `SELECT f.id, f.severity, f.title, f.status, f.created_at, f.created_at::text AS created_at_cursor,
+                  rem.owner_group
+             FROM findings f
+             LEFT JOIN finding_remediations rem
+               ON rem.tenant_id = f.tenant_id AND rem.finding_id = f.id
+             WHERE f.tenant_id = $1 AND f.target_id = $2${findingsKeysetPredicate}
+             ORDER BY f.created_at DESC, f.id DESC
              LIMIT $${findingsParams.length}`;
 
         // node-postgres transaction clients are single-query streams. Await each read before
@@ -954,23 +979,32 @@ export function createPortalRevampRepository(pool) {
            ORDER BY created_at, id`,
           [ctx.tenantId, target.target_group_id, targetId],
         );
-        const latestCheckIds = [
-          ...new Set([WAF_EDGE_DETECTION_CHECK_ID, ...policies.rows.map((row) => row.check_id)]),
-        ];
         bump();
         const latestRuns = await client.query(
           `SELECT DISTINCT ON (r.check_id)
-                  r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at,
-                  v.id AS verdict_id, v.verdict, v.evidence_ids
+                  r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at, r.summary_json,
+                  v.id AS verdict_id, v.verdict, v.evidence_ids,
+                  ev.producer_kind, ev.evidence_label, ev.simulation
            FROM test_runs r
            LEFT JOIN LATERAL (
              SELECT id, verdict, evidence_ids FROM verdicts
              WHERE tenant_id = r.tenant_id AND test_run_id = r.id
              ORDER BY created_at DESC, id DESC LIMIT 1
            ) v ON TRUE
-           WHERE r.tenant_id = $1 AND r.target_id = $2 AND r.check_id = ANY($3::text[])
+           LEFT JOIN LATERAL (
+             SELECT e.producer_kind,
+                    evid.label AS evidence_label,
+                    evid.metadata_json->>'simulation' AS simulation
+             FROM events e
+             LEFT JOIN evidence_vault evid
+               ON evid.tenant_id = e.tenant_id AND evid.related_event_id = e.id
+             WHERE e.tenant_id = r.tenant_id AND e.test_run_id = r.id
+             ORDER BY e.timestamp DESC, e.id DESC
+             LIMIT 1
+           ) ev ON TRUE
+           WHERE r.tenant_id = $1 AND r.target_id = $2
            ORDER BY r.check_id, COALESCE(r.started_at, r.created_at) DESC, r.id DESC`,
-          [ctx.tenantId, targetId, latestCheckIds],
+          [ctx.tenantId, targetId],
         );
         bump();
         const currentVerification = await client.query(
@@ -982,7 +1016,20 @@ export function createPortalRevampRepository(pool) {
         );
         bump();
         const wafAsset = await client.query(
-          `SELECT * FROM waf_assets WHERE tenant_id = $1 AND target_id = $2 LIMIT 1`,
+          `SELECT wa.*,
+                  fp.id AS fingerprint_id,
+                  fp.confidence AS fingerprint_confidence,
+                  fp.signals_json->>'signature' AS fingerprint_signature
+           FROM waf_assets wa
+           LEFT JOIN LATERAL (
+             SELECT id, confidence, signals_json
+             FROM waf_fingerprints
+             WHERE tenant_id = wa.tenant_id AND waf_asset_id = wa.id
+             ORDER BY observed_at DESC, id DESC
+             LIMIT 1
+           ) fp ON TRUE
+           WHERE wa.tenant_id = $1 AND wa.target_id = $2
+           LIMIT 1`,
           [ctx.tenantId, targetId],
         );
         bump();
@@ -1029,7 +1076,7 @@ export function createPortalRevampRepository(pool) {
           title: f.title,
           state: f.status,
           opened_at: toIso(f.created_at),
-          owner_group: 'edge-sre',
+          owner_group: remediationOwnerGroup(f.owner_group),
         }));
         const findingsPageLast = findingsPageRows[findingsPageRows.length - 1];
         // Unpaginated callers never received a cursor before, so keep emitting null for
@@ -1053,7 +1100,82 @@ export function createPortalRevampRepository(pool) {
           latestRuns.rows.map((row) => [row.check_id, { run: row, verdict: verdictOf(row) }]),
         );
         const checksApplied = boundCheckRows(target, policies.rows, latestByCheck);
-        const wafPosture = assetRow
+        bump();
+        // ponytail: newest 100 observations, not the full history. Upgrade path: keyset the profile read.
+        const observationHistory = await client.query(
+          `SELECT id, tenant_id, target_id, target_group_id, family, check_id, test_run_id, source_kind,
+                  corpus_version, scenario_version, check_version, outcome, attempt_class, producer_kind,
+                  origin_binding_id, provenance_json, observed_at, source_completed_at, created_at
+           FROM target_observations
+           WHERE tenant_id = $1 AND target_id = $2
+           ORDER BY observed_at DESC, source_completed_at DESC NULLS LAST, id COLLATE "C" DESC
+           LIMIT 100`,
+          [ctx.tenantId, targetId],
+        );
+        bump();
+        const originBindingRows = await client.query(
+          `SELECT id, tenant_id, protected_target_id, origin_target_id, host, sni, port, path, status,
+                  created_at
+           FROM origin_bindings
+           WHERE tenant_id = $1 AND status = 'active'
+             AND (origin_target_id = $2 OR protected_target_id = $2)`,
+          [ctx.tenantId, targetId],
+        );
+        let proofRecords = { targets: [], targetVerifications: [], wafConnectors: [], wafConnectorSnapshots: [] };
+        if (originBindingRows.rows.length) {
+          bump();
+          const boundIds = [...new Set(originBindingRows.rows.flatMap((row) => [row.origin_target_id, row.protected_target_id]))];
+          const proof = await client.query(
+            `SELECT
+               (SELECT json_agg(json_build_object(
+                  'id', t.id, 'tenant_id', t.tenant_id, 'target_group_id', t.target_group_id,
+                  'kind', t.kind, 'value', t.value, 'created_at', t.created_at
+                )) FROM targets t WHERE t.tenant_id = $1 AND t.id = ANY($2::text[]) AND t.deleted_at IS NULL) AS targets,
+               (SELECT json_agg(v) FROM target_verifications v WHERE v.tenant_id = $1 AND v.target_id = ANY($2::text[])) AS verifications,
+               (SELECT json_agg(json_build_object(
+                  'id', c.id, 'tenant_id', c.tenant_id, 'provider', c.provider, 'status', c.status,
+                  'has_secret', c.secret_id IS NOT NULL
+                )) FROM waf_connectors c WHERE c.tenant_id = $1) AS connectors,
+               (SELECT json_agg(json_build_object(
+                  'id', s.id, 'tenant_id', s.tenant_id, 'connector_id', s.connector_id, 'provider', s.provider,
+                  'snapshot_kind', s.snapshot_kind, 'resource_ref_hash', s.resource_ref_hash,
+                  'summary', s.summary_json, 'evidence_source', s.evidence_source, 'observed_at', s.observed_at
+                )) FROM waf_connector_snapshots s WHERE s.tenant_id = $1) AS snapshots`,
+            [ctx.tenantId, boundIds],
+          );
+          const proofRow = proof.rows[0] ?? {};
+          proofRecords = {
+            targets: proofRow.targets ?? [],
+            targetVerifications: proofRow.verifications ?? [],
+            wafConnectors: proofRow.connectors ?? [],
+            wafConnectorSnapshots: proofRow.snapshots ?? [],
+          };
+        }
+        const edgeRow = edgeDetection.rows[0] ?? null;
+        const derived = deriveProtectionProfile({
+          now: new Date(),
+          target: {
+            id: target.id,
+            kind: target.kind,
+            value: target.value,
+            tenant_id: target.tenant_id,
+            target_group_id: target.target_group_id,
+          },
+          edgeRow,
+          policies: policies.rows,
+          observations: latestRuns.rows.map((row) => ({
+            check_id: row.check_id,
+            run: row,
+            verdict: verdictOf(row),
+          })),
+        });
+        const attached = attachHistoryReadModel(derived, historyReadModel({
+          observations: observationHistory.rows,
+          bindings: originBindingRows.rows,
+          proofFor: (id) => currentOriginProof(proofRecords, ctx.tenantId, id),
+          targetId: target.id,
+        }));
+        const wafPosture = presentWafPosture(assetRow
           ? {
               asset_id: assetRow.id,
               vendor: assetRow.vendor ?? 'generic',
@@ -1069,15 +1191,20 @@ export function createPortalRevampRepository(pool) {
                     last_polled_at: toIso(connectorRow.last_success_at ?? connectorRow.last_polled_at),
                   }
                 : null,
-              fingerprint: null,
-              marker_rules: assetRow.marker_rules ?? 0,
+              fingerprint: assetRow.fingerprint_id
+                ? {
+                    signature: assetRow.fingerprint_signature ?? null,
+                    score: assetRow.fingerprint_confidence,
+                  }
+                : null,
+              marker_rules: recordedMarkerRules(assetRow.marker_rules),
               origin_bypass: {
-                state: assetRow.origin_bypass_state ?? 'not_exposed',
+                state: recordedOriginState(assetRow.origin_bypass_state),
                 last_checked_at: toIso(assetRow.origin_bypass_checked_at ?? snapshotRow?.created_at),
               },
-              raw_context_yaml: `asset_id: ${assetRow.id}\nvendor: ${assetRow.vendor ?? 'generic'}\ntarget_id: ${targetId}\n`,
+              raw_context_yaml: typeof assetRow.raw_context_yaml === 'string' ? assetRow.raw_context_yaml : null,
             }
-          : null;
+          : null, ctx);
 
         const payload = {
           target: {
@@ -1086,11 +1213,12 @@ export function createPortalRevampRepository(pool) {
             target_group_id: target.target_group_id,
             kind: target.kind,
             value: target.value,
-            expected_behavior: target.expected_behavior ?? 'cloud_baseline',
+            expected_behavior: target.expected_behavior ?? 'cloud_baseline', // target declaration default, not the immutable run snapshot
             // WAF-CDN-01: expose canonical top-level `tags: string[]` so the detail page matches
             // the collection serializer (docs/api.md: every target payload, including detail
             // targets, exposes top-level tags). Reserved metadata stays stripped.
             tags: targetTagsFromRecord(target),
+            declaration: presentTargetDeclaration(target.declaration_json, target.group_declaration_json),
             created_at: toIso(target.created_at),
             eligibility: 'eligible',
             eligibility_reason: null,
@@ -1106,7 +1234,9 @@ export function createPortalRevampRepository(pool) {
             })),
           },
           waf_posture: wafPosture,
-          edge_detection: presentTargetEdgeDetection(edgeDetection.rows[0] ?? null),
+          edge_detection: presentTargetEdgeDetection(edgeRow),
+          protection_profile: attached.protection_profile,
+          coverage: attached.coverage,
           edge_detection_request: edgeDetectionRequestRow(latestByCheck),
           checks_applied: checksApplied,
           runs_recent: runsRecent,

@@ -11,16 +11,15 @@ import {
 } from '../../helpers/portal-playwright-session.mjs';
 import { NAV_ROUTE_IDS } from '../../helpers/portal-routes.mjs';
 
-// Measured 22 /v1 requests for boot + 7 navigations (2026-08, three consecutive runs, no
-// variance). 45 keeps ~2x headroom so a fetch regression trips the budget instead of hiding
-// under it; re-tune from the OBSERVED_V1_REQUESTS line this spec logs.
+// Measured 26 /v1 requests for boot + 6 sidebar navigations + one Check library target selection
+// (2026-10, three consecutive runs, no variance). 45 keeps ~1.7x headroom so a fetch regression trips
+// the budget instead of hiding under it; re-tune from the OBSERVED_V1_REQUESTS line this spec logs.
 const REQUEST_BUDGET = 45;
 const ROUTES_TO_NAVIGATE = [
   { routeId: 'target-groups', label: 'Target groups' },
   { routeId: 'targets', label: 'Targets' },
-  { routeId: 'checks', label: 'Vector library' },
-  { routeId: 'test-policies', label: 'Test policies' },
-  { routeId: 'runs', label: 'Test runs' },
+  { routeId: 'checks', label: 'Check library' },
+  { routeId: 'test-policies', label: 'Validation schedules' },
   { routeId: 'findings', label: 'Findings' },
   { routeId: 'reports', label: 'Reports' },
 ];
@@ -54,7 +53,17 @@ test.describe('portal route request budget (WP1)', () => {
       await expect(page.getByRole('button', { name: route.label, exact: true })).toHaveAttribute('aria-current', 'page');
       await page.waitForTimeout(250);
       await page.waitForLoadState('networkidle');
+      if (route.routeId === 'checks') {
+        // Choosing a target is the page's main selection; it adds one exact compatibility read.
+        const compatibility = page.waitForResponse((response) => /\/v1\/targets\/[^/]+\/compatible-checks$/.test(new URL(response.url()).pathname));
+        await page.getByRole('button', { name: 'Target', exact: true }).click();
+        await page.getByRole('listbox', { name: 'Target' }).getByRole('option', { name: /checkout\.acme\.com/ }).first().click();
+        expect((await compatibility).status()).toBe(200);
+        await page.waitForLoadState('networkidle');
+        await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com');
+      }
     }
+    await expect(page.getByRole('button', { name: 'Test runs', exact: true })).toHaveCount(0);
 
     console.log(`OBSERVED_V1_REQUESTS=${apiResponses.length}`);
     const rateLimited = apiResponses.filter((response) => response.status === 429);

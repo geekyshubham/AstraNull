@@ -72,8 +72,10 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     await libraryButton.click();
 
     await expect.poll(() => new URL(page.url()).hash).toBe('#checks');
-    await expect(page.getByRole('heading', { name: 'Vector library' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('button', { name: 'Declared target group', exact: true })).toContainText('Select a declared target group');
+    await expect(page.getByRole('heading', { level: 1, name: 'Check library' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.vector-target-note')).toContainText('Browsing without a target');
+    await expect(page.getByRole('button', { name: 'Target', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: /^(Review run|Start bounded check)$/ })).toHaveCount(0);
     expect(runPosts, 'navigation must not start a run').toHaveLength(0);
     expect(nativeDialogs, 'no native window.confirm may be raised').toEqual([]);
   });
@@ -143,12 +145,14 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     const banner = page.locator('[role="status"], [role="alert"]').filter({ hasText: /poll/i }).first();
     await expect(banner).toBeVisible({ timeout: 15_000 });
     expect(polls, 'Poll must POST /v1/connectors/:id/poll').not.toHaveLength(0);
-    // The LAST POLL cell is rendered from the connectors dataset, so it can only change if
+    // The last-attempt and last-sync cells are rendered from the connectors dataset, so they can only change if
     // the row is refetched after the action.
     await expect
       .poll(() => connectorReads.length, { timeout: 15_000 })
       .toBeGreaterThan(readsBefore);
-    await expect(page.locator('table').filter({ hasText: 'Last poll' }).first()).toBeVisible();
+    const connectorTable = page.locator('table').filter({ hasText: 'Last successful sync' }).first();
+    await expect(connectorTable).toBeVisible();
+    await expect(connectorTable.getByRole('columnheader', { name: 'Last attempt' })).toBeVisible();
   });
 
   test('cold deep-link into a role-gated route keeps the route when the role is already stored', async ({ page }) => {

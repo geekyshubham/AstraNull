@@ -82,6 +82,7 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | GET | `/v1/signup-requests/:id` | — | Public-safe signup request status (`{ request }`) or `404`. |
 | GET | `/v1/signup-requests/:id/events` | — | Ordered signup queue events `{ events, count }`; messages truncated to **500** chars; rate-limited to **12/min** per request id (`429 rate_limited`). |
 | GET | `/v1/checks` | `check:read` | Authenticated global check catalog. The permission is explicit for every customer role; future tenant-customized catalogs must retain tenant scoping. |
+| GET | `/v1/checks/:id` | `check:read` | Exact catalog row `{ check }` (same section fields as the list). Unknown id is `404 not_found`. Does not start a run. |
 | GET | `/v1/vectors` | `check:read` | Authenticated 721-row public-safe vector library. Query with bounded `limit` (1–100, default 50), `offset` (0–721), `q`/`search` (first 200 characters across safe descriptive/contract fields), or exact `vector_id`, `section`, `domain`, `scope`, `family`, `validation_tier`, `evidence_tier`, `evidence_capability`, `execution_disposition`, `registry_source`, and `check_id` filters. Each item keeps the source claim neutral as `targeted_resource_or_assumption`; `intended_detection_goal` is explicitly intent, never an observed result. `evidence_capability` classifies E1 declaration-only, E2 transport-only, E3 semantic-safe, E4 SOC-governed, or E5 monitor-only, while `execution_disposition` independently states whether safe validation, SOC governance, or monitoring applies. Supplemental E1 metadata remains in `metadata_available`/`metadata_check_ids` and never converts an authoritative E4 vector into safe validation. No `detects` field is published. Response is `{ items, count, meta: { total: 721, filtered_total, offset, limit, returned } }`; this metadata route never starts traffic. |
 | GET | `/v1/state` | `tenant:read` | Dashboard aggregate. In `postgres` mode uses `runtime.services.state.getState` (evidence-backed readiness from Postgres repositories); high-scale counts and kill-switch state return explicit not-wired metadata until those route families migrate. |
 | GET | `/v1/placement/reviews` | `target_group:read` | Optional query `target_group_id`. Metadata-only per-target-group placement diagnostics (`proven`, `needs_baseline`, `missing_agent`, `misplaced_risk`) with summary counts, bound/online agent ids, recent observation counts, and warnings. `404` `not_found` when `target_group_id` is not declared for the tenant. Postgres mode uses `runtime.services.placement.listPlacementReviews`. |
@@ -197,11 +198,13 @@ Authenticated TOTP conditional access under the `profile:mfa` permission (every 
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/target-groups` | `target_group:read` | `?archived=true` lists soft-deleted groups only | `{ items, count }` active groups by default (`deleted_at` / `archived_at` null). Each item carries the group row plus summary keys `target_count` (active declared targets in the group) and `loa_state` (`signed` when an active LOA signature exists, else `required`). The heavier detail fields stay on `GET /v1/target-groups/:id`. |
-| GET | `/v1/targets` | `target_group:read` | — | `{ items, count, meta }` tenant-scoped inventory across active groups and targets. Every item exposes top-level `tags: string[]`. Verification, provenance, and eligibility are derived from authoritative server records, never target metadata. It performs no automatic inventory discovery. `environment_id`/`environment_name` are no longer returned (ADR-0008). |
+| GET | `/v1/target-groups` | `target_group:read` | `?archived=true` lists soft-deleted groups only | `{ items, count }` active groups by default (`deleted_at` / `archived_at` null). Each item carries the group row plus summary keys `target_count` (active declared targets in the group), `loa_state` (`signed` when an active LOA signature exists, else `required`), and `open_findings_count` (exact `open` lifecycle only — `in_progress` and closure statuses are excluded; legacy `state`-only rows count by their effective status; membership is the same overlap predicate the findings list uses, so per-group counts are per-finding links and their sum is not a unique tenant open total). The heavier detail fields stay on `GET /v1/target-groups/:id`. |
+| GET | `/v1/targets` | `target_group:read` | No query string | `{ items, count, meta }` tenant-scoped inventory across active groups and targets. Every item exposes top-level `tags: string[]`. Verification, provenance, and eligibility are derived from authoritative server records, never target metadata. The legacy kind-only stamp `eligibility: "eligible"` with a null reason is rewritten on this read: a declaration whose verification is below the ownership-proof rank (`dns_verified`, `provider_verified`, `user_confirmed`) is `not_runnable_now`. A recorded proof stays `eligible`. This read does not start a run. `POST /v1/test-runs` still applies the strict startup gate. `environment_id`/`environment_name` are no longer returned (ADR-0008). Any query string uses the declared-host predicate below (default unit `target`, page limit 1–200) and does not return this unpaged list. `400` on an unknown parameter. |
 | POST | `/v1/targets` | `target_group:write` | `{ kind, value, expected_behavior?, tags?, target_group_id? }` | `201` target with top-level `tags`. Omitted `target_group_id` lands the target in the tenant default group — the active group whose `settings_json.default_scope === true`, created on demand (`Default`, `external_only`, UTC, `expected_behavior_default` from body or `block_at_edge`) and audited. `400 invalid_target` / `invalid_target_tags`, `404 target_group_not_found` for an unknown explicit group, or `409 target_exists`. Audited `target.added`. |
 | PATCH | `/v1/targets/:id` | `target_group:write` | `{ tags?, expected_behavior? }` | Updated target (top-level `tags`), `404 not_found`, or `400 invalid_target_tags`. Kind/value are immutable. A patch that omits `tags` never erases existing tags. Audited `target.updated`. |
-| GET | `/v1/targets/:id` | `target_group:read` | `?runs_limit=&findings_limit=&findings_cursor=` | Target-detail hydrator. `target` includes top-level `tags: string[]` (ADR-0008). In addition to target, verification, WAF posture, checks, runs, findings, LOA, and counts, `edge_detection` contains the latest persisted signed-worker classification described below. |
+| GET | `/v1/targets/:id/compatible-checks` | `target_group:read` | — | Read-only catalog compatibility for that target. `runtime_launch_gates` and every pair `launch_block_reason` are `not_evaluated`; `launchable` is `null`. Does not start a run. `404` when the target is missing or another tenant's. |
+| GET | `/v1/targets/:id` | `target_group:read` | `?runs_limit=&findings_limit=&findings_cursor=` | Target-detail hydrator. `target` includes top-level `tags: string[]` (ADR-0008). `target.eligibility` uses the same runtime rule as the unfiltered list: an unproven declaration is `not_runnable_now`; recorded proof stays `eligible`. `eligibility_reason` is left as stored. Coverage launch gates stay `not_evaluated` and `launchable` stays null. In addition to target, verification, WAF posture, checks, runs, findings, LOA, and counts, `edge_detection` contains the latest persisted signed-worker classification described below. |
+| GET | `/v1/analytics/declared-hosts` | `target_group:read` | See below | Current-scope WAF/CDN cohort. Default unit `normalized_hostname`. |
 | POST | `/v1/target-groups` | `target_group:write` | `{ name, description?, timezone?, safe_test_windows?, safety_policy?, settings_json? }` | `201` group with server-owned `ownership_status: "unverified"`, `dns_ownership: null`, and `validation_mode: "external_only"`. Active names are unique **per tenant** (case-insensitive). `environment_id` is ignored on write and omitted from responses (ADR-0008). Client ownership fields are ignored. |
 | GET | `/v1/target-groups/:id` | `target_group:read` | — | Active group with active `targets[]` (each with top-level `tags`), `target_count`, LOA data, six recent runs (including persisted `policy_id` when scheduled), finding summaries, and empty-state `meta`. Archived target rows remain in history but are not returned. |
 | PATCH | `/v1/target-groups/:id` | `target_group:write` | partial group fields | Updated group or `404`; changing the name rechecks the tenant-wide name uniqueness. `environment_id` is ignored; `validation_mode` always resolves to `external_only`. |
@@ -228,6 +231,49 @@ Canonical target kinds are `fqdn`, `ip`, `url`, `tcp`, `dns_zone`, and `canary` 
 - `plain_language_summary` and `summary.{edge,effectiveness,network_firewall}`: non-technical explanations derived from those same evidence-backed fields (for example, `Detected Amazon CloudFront (CDN) and AWS WAF. The WAF blocked 9 of 10 safe test probes (90%).`).
 
 The object contains labels and bounded metadata only; raw headers, cookies, bodies, and packet content are never returned.
+
+### Declared-host analytics
+
+`GET /v1/analytics/declared-hosts` and a `GET /v1/targets` URL that has any query string share one predicate. Permission is `target_group:read` (viewer included). Postgres without the reader returns `503 postgres_route_not_wired`. There is no default estate cap; a finite snapshot of 5001 or 10000 rows returns `complete: true` and that exact `total`. The page limit is 1–200 (default 50). The response page is not the whole estate.
+
+`as_of` is the caller evaluation clock, not a historical selector. `scope` is `current`, `historical` is false, and `snapshot_id` is null. Omitting `as_of` on the first page uses the server clock and returns it. A later page without `as_of` keeps the cursor clock. A different `as_of` than the cursor is `409 cursor_clock_mismatch`.
+
+Allowlisted query keys: `q`, `target_group_id`, `verification_state`, `kind`, `tag`, `service_role`, `criticality`, `owner_status`, `owner`, `family`, `family_status`, `freshness`, `has_open_finding`, `unit`, `cursor`, `limit`, `as_of`, `cohort_version`. Explicit aliases, applied only when the canonical key is absent or equal: `search`→`q`, `group`→`target_group_id`, `verification`→`verification_state`, `role`→`service_role`. Unit tokens: `normalized_hostname`→`hostname`, `declared_target`→`target`. `origin_status` is not an alias. Unknown names and unknown enum values are `400` (`unknown_query_param`, `invalid_query_value`, `family_required`, `invalid_limit`, `invalid_cursor`, `invalid_as_of`), not an empty cohort.
+
+`cohort_version` is a hash of the echoed filters plus every target id in the requested unit. Send it back with the same filters. A changed scope is `409 cohort_changed` with `filters`, `as_of`, `scope: current`, `historical: false`, and no `total` or `items`. Refetch the same filters without `cohort_version`. A cursor from another filter set is `409 cursor_filter_mismatch`.
+
+Analytics JSON (family `waf` or `cdn` selects the segment array; the family does not drop rows unless `family_status` or `freshness` is set):
+
+- `unit`: `normalized_hostname` or `declared_target` (the dashboard compares this string). `canonical_unit`: `hostname` or `target`.
+- `denominator`: requested-unit total. `units.target_records` and `units.normalized_hosts` are both counts from the same snapshot.
+- `segments`: array copied from `rollup.segments.all` for the requested family. Each item is `{ key, count, percentage, list_query }`. Keys are `detected`, `not_detected`, `inconclusive`, `not_checked`, `not_recorded`, `stale`, `conflict`. The `unknown` bucket is not in this array.
+- `unknown_count`: that family's `unknown` bucket only. It is not `unknown` + `not_checked` + `not_recorded`. `null` when `family` is omitted.
+- `stale_count`: the `stale` bucket (also present as a segment). `null` when `family` is omitted.
+- `list_query.query`: echoed filters. `unit` inside that object is the canonical `hostname` or `target`. The targets page copies `service_role`, `criticality`, `owner_status`, `tag`, `family`, `family_status`, `freshness`, `has_open_finding`, and `unit` from it.
+- `role_segments`: the role rollup (`all`, `api`, `login`, `website`, `unclassified`).
+- `page`: `{ items, count, total, next_cursor, limit }`, also copied to the top-level `items`, `count`, `total`, `next_cursor`, and `limit`.
+- `source`: `active_declared_targets`. `version`: `declared-host-analytics.v1`. `as_of_semantics`: `caller_evaluation_clock` or `not_recorded`.
+- `rollup.freshness_policy.applied` stays false. The reader still stamps family freshness with `deriveProtectionProfile` at `as_of` before the predicate runs. `conflict` wins over `stale`.
+
+Filtered `GET /v1/targets` keeps legacy `items`, `count`, and `meta`, and adds `total`, `page`, `units`, `filters`, `list_query`, `as_of`, `cohort_version`, `scope`, `historical`, `complete`. Its `unit` is the canonical token (`target` by default). Its `segments` is the role rollup object, not the family array. `page.total` and `total` match the analytics denominator for the same filters and unit.
+
+No raw edge metadata, evidence JSON, or connector config is returned. `verification_state` is the effective state: a stored `provider_verified` proof is `pending` when the connector feature is disabled or the provider source is not current. The field is that status only. A missing verification stays null and matches `verification_state=unknown`, not `unverified`.
+
+`GET /v1/targets/:id/compatible-checks` returns `{ target_id, kind, value, target_group_id, runtime_launch_gates, launch_block_reason, coverage, checks }`. Each check copies the catalog identity (`check_id`, `name`, `version`, `vector_family`, `supported_targets`, `required_customer_setup`, `safety_class`, `risk_class`) and forces `runtime_launch_gates`, `launch_block_reason` to `not_evaluated` and `launchable` to `null`. Pairs the target kind cannot run are omitted. Probe profiles are not copied.
+
+### Target history and origin bindings
+
+Read-only family history for a declared target plus the declared protected→origin bindings. Dev and Postgres implement the same routes through the target history services (Postgres mode never falls back to the dev store; an unwired or partial service is `503 postgres_route_not_wired`). A missing target or a target owned by another tenant is `404 not_found`. Every read below is passive: it never writes observations, current pointers, bindings, runs, or audits.
+
+| Method | Path | Permission | Request | Response |
+|---|---|---|---|---|
+| GET | `/v1/targets/:id/observations` | `target_group:read` | `?family&from&to&cursor&limit` | `{ items, count, next_cursor, filters, current[], comparison }`. `items` is the newest-first page of projected observations (`id`, `tenant_id`, `target_id`, `target_group_id`, `family`, `check_id`, `test_run_id`, `source_kind`, `source_id`, `corpus_version`, `scenario_version`, `check_version`, `observed_at`, `source_completed_at`, `outcome`, `attempt_class`, `producer_kind`, `origin_binding_id`, redacted `provenance`, `created_at`); internal nonce/digest columns are never returned. `limit` is 1–100 (default 50); `next_cursor` is opaque and resumes exactly at the page boundary. `filters` echoes the applied filter set. `current[]` is the per-family retained state (`family`, `last_successful`, `latest_failed_attempt`, `fresh_negative`, `provider_loss`). `comparison` compares only the two newest successful observations per family on an unfiltered page (`scope: newest_page`; with `cursor`, `from`, or `to` it is `filtered_page` and empty): `comparable_changes[]` holds comparable changed pairs and `comparison_gaps[]` holds pairs that cannot be compared, each entry `{ family, previous_id, observation_id, comparable, reason, change, direction, details? }` where `details` on a `provider_changed` pair is `{ before_provider, after_provider }` from recorded provenance only; gap reasons include `provider_not_recorded`, `missing_version`, `corpus_changed`, `scenario_changed`, `check_version_changed`, `context_mismatch`, and `transport_failure`. Failed attempts never compare. `400` `invalid_family`, `invalid_timestamp` (with `field`), or `invalid_cursor` for bad query values. |
+| GET | `/v1/targets/:id/origin-bindings` | `target_group:read` | — | `{ items, count }` where the target is the protected side or the origin side of the binding. Items carry `id`, `tenant_id`, `protected_target_id`, `protected_target_group_id`, `origin_target_id`, `origin_target_group_id`, `host`, `sni`, `port`, `path`, `status`, `assurance` (always `none`), `lockdown` (`not_tested`), `relation` (`declared_binding`), `capacity_assurance: false`, `currently_authorized`, `authorization_state`, `created_at`, `archived_at`. No binding read starts a run or probe. |
+| POST | `/v1/origin-bindings` | `target_group:write` | `{ protected_target_id, origin_target_id, scope? }` | `201` active binding. `host`, `sni`, `port`, and `path` are derived server-side from the protected target and its declared `allowed_scope` — a body cannot retarget them; a body containing `direct_ip`, `discovered_endpoint`, `endpoint`, or `destination` anywhere is `400 scope_not_declared`. `status: active`, `assurance: none`, `lockdown: not_tested`, `currently_authorized` reflects the origin's current proof. Replaying the exact same active pair with the same derived scope returns `200` with `replayed: true` and no second audit. Errors: `400 protected_target_not_hostname`, `400 scope_mismatch` / `port_unspecified` / `path_unspecified` / `declaration_scope_invalid`, `409 ownership_not_verified` (the origin target must carry a current ownership proof), `409 binding_target_mismatch` (identical pair), `409 scope_conflict` (same active pair, different scope), `404 unknown_target` (missing, other-tenant, or foreign-tenant protected target), `403` for viewers. Audited `origin_binding.created` exactly once per pair. |
+| GET | `/v1/origin-bindings/:id` | `target_group:read` | — | One binding with the fields above; tenant-scoped `404` for an unknown or other-tenant id. Read-only. |
+| POST | `/v1/origin-bindings/:id/archive` | `target_group:write` | — | `200` archived binding (`status: archived`, stamped `archived_at`); `currently_authorized` flips to false. Archiving again is `409 already_archived`; unknown or other-tenant id is `404`. Audited `origin_binding.archived` exactly once. A binding is not an origin lockdown and not a capacity assurance; reachability evidence for a bound origin is only accepted from an approved host/SNI check against the bound origin recorded after the binding was created. |
+
+`GET /v1/targets/:id` (target detail) additionally exposes the same history read model under both `protection_profile` and `coverage`: `retained_family_states[]`, `comparable_changes[]`, `comparison_gaps[]`, and `origin_bindings[]` as explicit arrays (empty when there is no recorded history), plus `protection_profile.origin` when the target is a bound origin.
 
 ## Tenant subscription and support summary
 
@@ -424,10 +470,10 @@ A validation scan is an on-demand or scheduled batch of bounded safe checks agai
 |---|---|---|---|---|
 | POST | `/v1/validation-scans` | `test_run:start` | `{ target_group_id, target_id?, check_ids, name?, scheduled_for?, recurrence? }` | `201` scan. Omitting `target_id` plans every active compatible target; incompatible pairs are returned in `excluded`. Run-now scans return already `running` with the first step in progress. `scheduled_for` must be at least one minute ahead; `recurrence` is `daily`, `weekly`, or `monthly` (string or `{ cadence, timezone }`) and requires `scheduled_for`. Errors: `400 invalid_validation_scan` (with `field`), `400 unknown_check`, `400 check_requires_additional_input`, `400 target_kind_not_supported`, `400 scan_has_no_runnable_steps`, `400 scan_too_large` (more than 500 check/target steps; `check_ids` is capped at 500), `403 soc_gated_check` (with `check_id`), `404 target_group_not_found`, `404 target_not_found`, `409 concurrent_scan_blocked`. |
 | GET | `/v1/validation-scans` | `test_run:read` | `?target_group_id&target_id&status&limit` | `{ items, count, meta: { empty_reason } }`; `status` accepts a comma-separated list; `target_id` keeps only exact-target scans (the target detail page reads its latest run-all scan with `limit=1`). |
-| GET | `/v1/validation-scans/:id` | `test_run:read` | — | Scan with `summary`, `steps[]` (per-step `status`, `request`, `response`, `requests_sent`, `requests_simulated`, `verdict`, `test_run_id`, `error_code`, `skip_reason`, `eligible_at`), `excluded[]`, schedule fields, `abort_reason`, and cancel provenance. Reads by callers holding `test_run:start` advance an active scan and dispatch a due scheduled scan; read-only roles (viewer, auditor) never trigger dispatch, child-run starts, or other side effects. Step `error_code: probe_dispatch_failed` means the child run was cancelled because its signed probe job could not be created. |
+| GET | `/v1/validation-scans/:id` | `test_run:read` | — | Passive scan read: `{ scan_id, status, summary, steps[] (per-step `status`, `request`, `response`, `requests_sent`, `requests_simulated`, `verdict`, `test_run_id`, `error_code`, `skip_reason`, `eligible_at`), excluded[], schedule fields, abort_reason, cancel provenance }`. The read NEVER advances an active scan and NEVER dispatches a due scheduled scan — no HTTP caller, no role, and no query parameter (including `advance=true`, which is ignored) can trigger dispatch, child-run starts, or other side effects. Advancement happens only through the explicit runner path (`npm run validation-scan:runner`) or the internal start path. Step `error_code: probe_dispatch_failed` means the child run was cancelled because its signed probe job could not be created. |
 | PATCH | `/v1/validation-scans/:id` | `test_run:start` | `{ target_id?, check_ids?, name?, scheduled_for?, recurrence? }` | `200` re-planned scan; only while `scheduled` and not leased by a dispatcher, else `409 scan_not_editable`. The scan row and its steps are replaced in one transaction. Audits `validation_scan.updated` with `changed_fields`. |
 | POST | `/v1/validation-scans/:id/cancel` | `test_run:start` | `{ reason?, cancel_series? }` | `200` cancelled scan for `scheduled`, `pending`, or `running`; pending steps become `skipped`; every active child run bound to the scan (linked to a step or not) is cancelled with `source: scan`, and a child run that commits after Stop is cancelled by the executor and audited as `validation_scan.orphan_run_cancelled`. `cancel_series: true` also removes the recurrence and cancels every scheduled occurrence in the series. `409 not_cancellable` otherwise. |
-| GET | `/v1/validation-scans/:id/activity` | `test_run:read` | `?after=<cursor>&limit` | `{ scan_id, status, items, count, cursor }`. `cursor` is opaque (`c1.` prefix) and tracks ingestion order (audit sequence plus event `ingested_at`), so polling with `after=<cursor>` returns late observations even when their event time precedes earlier items; items remain sorted by event time for display. A legacy item id is still accepted. Items are `{ id, at, kind: scan|run|event, action, summary, step_id, check_id, test_run_id, actor_role, metadata }` with allowlisted metadata only. |
+| GET | `/v1/validation-scans/:id/activity` | `test_run:read` | `?after=<cursor>&limit` | Passive read that never advances the scan or starts runs (an `advance` query parameter is ignored). `{ scan_id, status, items, count, cursor }`. `cursor` is opaque (`c1.` prefix) and tracks ingestion order (audit sequence plus event `ingested_at`), so polling with `after=<cursor>` returns late observations even when their event time precedes earlier items; items remain sorted by event time for display. A legacy item id is still accepted. Items are `{ id, at, kind: scan|run|event, action, summary, step_id, check_id, test_run_id, actor_role, metadata }` with allowlisted metadata only. |
 
 Scan statuses are `scheduled`, `pending`, `running`, `completed`, `denied`, `cancelled`; step statuses are `pending`, `deferred`, `starting`, `running`, `collecting`, `verdicted`, `denied`, `skipped`, `cancelled`. A cooldown or a rolling hourly safe-run cap defers the next step (`eligible_at`); window, kill switch, suspension, or foreign concurrency denials stop the scan with the remaining steps `skipped`. Due scheduled scans are dispatched only after kill switch, suspension, group, safe window, and concurrency re-checks; denied dispatches audit `validation_scan.schedule_denied` and never force-run. HTTP callers cannot fabricate the internal `scanDispatch` context; child runs carry `scan_id` and `scan_step_id`. `GET /v1/checks` items include `section_id` and `section_label` (taxonomy attack-surface domain) for grouped selection. In Postgres deployments schedule `npm run validation-scan:runner -- --tenant-id <tenant>` from cron or a Kubernetes CronJob to dispatch due scans and advance running ones.
 
@@ -435,7 +481,7 @@ Scan statuses are `scheduled`, `pending`, `running`, `completed`, `denied`, `can
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| POST | `/v1/test-runs` | `test_run:start` | `{ check_id, target_group_id, target_id?, probe_profile? }` | Starts a manual run. HTTP callers cannot fabricate trusted policy dispatch context or a scheduled `policy_id`; scheduled runs enter through the runtime-internal leased dispatcher. Returns `201` run + correlation nonce, with simulation/probe-job details by configured mode. Safety denials include `429` window/rate/cooldown errors, `403 soc_gated_check`, `409 concurrent_run_blocked`, and signed-worker Host/SNI `400 missing_target_bound_direct_address` unless the verified target itself is an IP or IP-literal URL. |
+| POST | `/v1/test-runs` | `test_run:start` | `{ check_id, target_group_id, target_id?, origin_binding_id?, retest_of_finding_id?, probe_profile? }` | Starts a manual run. HTTP callers cannot fabricate trusted policy dispatch context or a scheduled `policy_id`; scheduled runs enter through the runtime-internal leased dispatcher. Returns `201` run + correlation nonce, with simulation/probe-job details by configured mode. Safety denials include `429` window/rate/cooldown errors, `403 soc_gated_check`, `409 concurrent_run_blocked`, and signed-worker Host/SNI `400 missing_target_bound_direct_address` unless the verified target itself is an IP or IP-literal URL. A bound run (`origin_binding_id`) must pass the origin scope gate: active same-tenant binding, the run target exactly the bound origin, an approved Host/SNI check, the stored scope re-derived from the current declaration (`409 scope_mismatch` otherwise), and both origin and protected proofs current (`409 ownership_not_verified`); body destination keys are rejected outright. The signed job carries only the server-validated approved scope from the run's provenance stamp — a bound record without a stored approved scope fails closed (`probe_job_dispatch_failed` / recovery blocked) and target metadata can never repair it. Body `producer_kind`, `check_version`, `live`, and `expected_behavior` are ignored and recorded. A `retest_of_finding_id` requires `finding:write` and the same tenant/target/check pair. |
 | GET | `/v1/test-runs` | `test_run:read` | query `target_group_id?`, `target_id?`, `check_id?`, `limit?` (default 100, max 100) | `{ items, count, meta.empty_reason }`, newest first; each item carries its published `verdict` (or `null`). Filters apply identically in dev-json and Postgres mode. |
 | GET | `/v1/test-runs/:id` | `test_run:read` | — | Run detail + verdict when present. |
 | GET | `/v1/test-runs/:id/events` | `test_run:read` | — | Timeline events. |
@@ -448,19 +494,47 @@ In `postgres` mode, `runtime.services.testRuns` backs the safe validation loop: 
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/findings` | `finding:read` | — | `{ items }`. |
-| GET | `/v1/findings/:id` | `finding:read` | — | Finding. |
-| PATCH | `/v1/findings/:id` | `finding:write` | `{ status?, notes? }` | Updated finding. |
+| GET | `/v1/findings` | `finding:read` | `?q&status&severity&check_id&target_group_id&target_id&test_run_id&limit&page&offset` | `{ items, count, total, page, pages, has_more, limit, meta: { empty_reason } }`. `count` and `total` are the full matched count for the applied filters (not the page size), `has_more` is `page * limit < total`. `limit` is 1–200 (default 50), `page` 1–1,000,000; `offset` conflicts with `page` (`400`). `q` matches safe identity columns only (`title`, `id`, `check_id`, `target_id`, `target_group_id`, `assignee`); notes and evidence are never searched. `status=all` and `severity=all` mean unfiltered. Unknown parameters or unsupported values are `400` (`unknown_query_param`, `invalid_query_value` with `field`). Repeated query parameters, including a repeated blank, are `400 invalid_query_value`; internal repository parameters are not accepted over HTTP. Items are external-only customer projections (notes/remediation scrubbed). `target_group_id` matches findings stored in the group plus findings whose target is a member of it. |
+| GET | `/v1/findings/:id` | `finding:read` | — | Finding with `closed_at`, `lineage`, `retests`, `originating`, and `latest` retest lineage. `latest` carries `{ test_run_id, relation, status, finalized, completed_at, pending, can_advance_remediation }`: an unfinalized run is explicitly `pending` and never claims a later passing result or advances remediation on its own. Closure stamps `closed_at`; it does not claim a fix was proved. Siblings are never closed. `404` when missing or another tenant's. |
+| PATCH | `/v1/findings/:id` | `finding:write` | `{ status?, notes?, assignee? }` | Updated external-only finding projection. Lifecycle transitions are validated: an unsupported `status` is `400 invalid_lifecycle`, never a false `200`; an open finding may be resolved/closed (stamping an audited `closed_at` — a closure timestamp, not a claim that a fix was proved), and reopening clears it. `404` when missing or another tenant's. Customer writes accept status, notes, and assignee only; supplied closure timestamps, verdict references, and evidence references are ignored. Audited `finding.updated`. |
 | POST | `/v1/findings/:id/export` | `finding:read` | — | Redacted export JSON: existing finding fields plus top-level `custody` (digest manifest; see **Export custody** below). |
 
 ## Reports
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/reports` | `report:create` | `limit?` | `{ items, capabilities }`. `items` is generated report metadata for the tenant, newest first; each item carries `period` (`null` when the report was generated without a declared window). `capabilities` is the authoritative builder enum set — `{ default_kind, default_format, default_period, kinds: [{ value, label }], formats: [{ value, label }], periods: [{ value, label }] }` from `src/contracts/complianceReports.mjs`; clients must render report kind/format/period pickers from it instead of hardcoding enum copies. |
-| POST | `/v1/reports` | `report:create` | `{ kind?, title?, period? }` | `201` report with summary. `period` is optional and must be one of `last-7-days`, `last-30-days`, `quarter`, `all-time`; anything else returns `400 { error: 'unsupported_period', supported_periods }`. Omitted or empty stores `period: null`. |
-| GET | `/v1/reports/:id` | `report:create` | — | Report metadata, including `period`. |
-| GET | `/v1/reports/:id/export?format=json\|markdown\|html` | `report:create` | — | `format=json`: `{ payload, custody }`. `format=markdown` or `html`: redacted report text with an embedded **Custody** section (artifact id, `content_sha256`, canonicalization, `created_at`, optional `previous_audit_hash`). Self-contained HTML has no external scripts. |
+| GET | `/v1/reports` | `report:read` | `limit?` | `{ items, capabilities }`. `items` is generated report metadata for the tenant, newest first; each item carries `period` (`null` when the report was generated without a declared window). This GET does not generate, export, or send a report. `capabilities` is the builder contract below. |
+| GET | `/v1/reports/capabilities` | `report:read` | — | `{ capabilities }` with the same object as `GET /v1/reports`. Registered before `GET /v1/reports/:id`, so `capabilities` is not a report id. Does not generate, export, or send. |
+| POST | `/v1/reports` | `report:create` | `{ kind?, title?, period?, target_ids?, target_group_ids?, run_ids? }` | `201` report with summary when generation succeeds. A body the report service rejects (`error` plus `status`) is returned with that status, not `201`, and nothing is written. `period` is optional and must be one of `last-7-days`, `last-30-days`, `quarter`, `all-time`; anything else returns `400 { error: 'unsupported_period', supported_periods }`. Omitted or empty stores `period: null`. Scope keys are top-level exact id lists only: a `metadata.target_ids` / `metadata.target_group_ids` / `metadata.run_ids` block is `400 { error: 'unrecognized_scope', fields: ['metadata.…'] }`, never a silently ignored scope. |
+| GET | `/v1/reports/:id` | `report:read` | — | Report metadata, including `period`. |
+| GET | `/v1/reports/:id/export?format=json\|markdown\|html` | `report:read` | — | `format=json`: `{ payload, custody }`. `format=markdown` or `html`: redacted report text with an embedded **Custody** section (artifact id, `content_sha256`, canonicalization, `created_at`, optional `previous_audit_hash`). Self-contained HTML has no external scripts. Export stays on this route. `GET /v1/reports` does not export. |
+
+### Report builder capabilities
+
+`capabilities` on `GET /v1/reports` and `GET /v1/reports/capabilities` keeps `default_kind`, `default_format`, `default_period`, `kinds`, `formats`, and `periods` from `reportCapabilities()` and adds:
+
+```json
+{
+  "scope": {
+    "fields": ["target_ids", "target_group_ids", "run_ids"],
+    "max_ids": 100,
+    "declared_members_cap": 100,
+    "omitted": "tenant"
+  },
+  "capture": {
+    "runs_when_run_ids_omitted": 10,
+    "findings": 100,
+    "evidence": 100
+  },
+  "readiness_score": {
+    "scoped": "unknown",
+    "reason": "published_readiness_formula_is_tenant_wide"
+  },
+  "snapshot_frozen": true
+}
+```
+
+`max_ids`, `declared_members_cap`, and the capture caps are the exported `MAX_REPORT_SCOPE_IDS` (100), `MAX_DECLARED_MEMBERS` (100), `MAX_CAPTURED_RUNS` (10), `MAX_SNAPSHOT_FINDINGS` (100), and `MAX_SNAPSHOT_EVIDENCE` (100). The builder enables only `scope.fields`. Omitted scope is the tenant. An explicit scope does not receive the tenant readiness formula: `readiness_score.scoped` is `unknown` for that reason. `snapshot_frozen` is true for a report generated through the current world reader. There is no `primary_run_id` capability. `primary_run_id` on the create body is `400 unrecognized_scope`. A generated summary stores `primary_run_id: null` and does not take `run_ids[0]`. `metadata.target_ids`, `metadata.target_group_ids`, and `metadata.run_ids` are `400 unrecognized_scope` and do not grant scope. Check-version stamping is not accepted on this body.
 
 ### Export custody (developer validation)
 
@@ -585,7 +659,8 @@ In Postgres mode, probe worker leasing and result ingestion are wired through `r
 
 | Method | Path | Permission | Response |
 |---|---|---|---|
-| GET | `/v1/audit-log` | `audit:read` | Tenant audit entries (production: paginated, durable store). |
+| GET | `/v1/audit-log` | `audit:read` | `{ items, count, total, next_cursor, filters, limit }`. Filters: `resource` (type or id), `actor` (`actor_user_id` exact), `action`, `since`, `until` (inclusive timestamps), `cursor`, `limit` (1–500, default 200). Aliases, applied only when the canonical key is absent or equal: `actor_user_id`→`actor`, `from`→`since`, `to`→`until`. A conflict is `400 invalid_query_value`. `total` is the filtered count. A filter does not substitute the newest 200. The cursor timestamp is microsecond text (`YYYY-MM-DDTHH:MM:SS.USZ`). Bad `since`, `until`, `limit`, or `cursor` is `400`. Same permission as before (`owner`, `admin`, `soc`, `auditor`; viewer is `403`). |
+| GET | `/v1/audit-log/:id` | `audit:read` | `{ entry }` the stored event for that tenant, including `entry_hash`, `prev_hash`, and `metadata` when the audit row has them. Does not rebuild the event. `404 not_found` when the id is missing or belongs to another tenant. |
 | GET | `/v1/observability` | `tenant:read` | JSON counters + inventory counts. |
 
 ## Role → permission map
@@ -635,3 +710,94 @@ Purge rules:
 | External notification providers | Configured channel test per tenant |
 
 See [`docs/release-checklist.md`](release-checklist.md) for the full gate list.
+
+## Evidence context
+
+`GET /v1/evidence-context` is read-only. It does not start a probe, advance a validation scan, export a report, verify custody, or send a notification.
+
+Permission is `evidence:read` plus the entry permission: `finding` and `group_member` require `finding:read`, `check_result` requires `test_run:read`, `provider` requires `target_group:read`, `artifact` requires `evidence:read`, `report` requires `report:read`, and `audit` requires `audit:read`. The check happens before any record lookup. A role that cannot read the entry gets `403` `{ "error": "forbidden", "permission": "<permission>", "state": "denied" }` (viewer and engineer receive this for `audit`, not an empty body). An id outside the tenant, or a target/check/run/artifact tuple that is not linked, is `404` `{ "error": "not_found", "state": "not_found" }`. `group_id` is `400` `group_id_not_supported`. Ids must match `^[A-Za-z0-9_.:-]{1,128}$`.
+
+In Postgres mode a missing configured read returns `503` `{ "error": "unavailable", "unavailable_reason": "fetch_failed", "state": "unavailable" }`. It does not fall through to the dev store. Dev mode uses an injected method when one is present, otherwise the dev module.
+
+Query: `entry` is required.
+
+| entry | Required query | Proof used |
+|---|---|---|
+| `finding` | `finding_id` | That finding's `evidence_ids` and its originating verdict only when the stored run's tenant, target, check, and id match the finding and `verdict_id` matches. Not the newest run on the target. |
+| `group_member` | `finding_id` | That member finding only. Another finding's artifact is `404`. |
+| `check_result` | `target_id`, `check_id`, `test_run_id` | That run and its verdict. The run must match the target and check. Sibling runs are not listed. |
+| `provider` | `target_id`, `family` (`cdn`, `waf`, `cloud`, `dns`, `origin_hosting`) | That family's stored columns and `evidence_json` only. CDN does not copy `waf_vendor`. A method or status alone is not primary proof. |
+| `artifact` | `evidence_id` | That vault row. |
+| `report` | `report_id` | Captured `run_ids` and `summary.evidence_ids`, plus `summary` score, factors, and `as_of` / `generated_at`. Live runs are not read. |
+| `audit` | `audit_id` | Actor, action, resource, and time. The action is not an infrastructure proof. |
+
+`200` finding body (digest recorded, one correlated event, no later pointer):
+
+```json
+{
+  "entry": "finding",
+  "tenant_id": "ten_1",
+  "subject": { "finding_id": "finding_1", "target_id": "tgt_1", "check_id": "app.marker.safe" },
+  "answer": {
+    "outcome": "allowed",
+    "explanation": "scrubbed",
+    "limitations": ["external_only", "bounded_check_not_capacity"],
+    "expected_behavior": "block_at_edge",
+    "observed_behavior": "allowed"
+  },
+  "primary": {
+    "test_run_id": "run_open",
+    "verdict_id": "verdict_open",
+    "evidence_ids": ["evidence_1"],
+    "observed_at": "2026-10-02T00:00:00.000Z",
+    "integrity": {
+      "status": "recorded_digest",
+      "verified_at": null,
+      "method": null,
+      "refs": [
+        { "evidence_id": "evidence_1", "status": "recorded_digest", "verified_at": null, "method": null }
+      ]
+    }
+  },
+  "latest_distinct": null,
+  "originating": {
+    "test_run_id": "run_open",
+    "verdict_id": "verdict_open",
+    "evidence_ids": ["evidence_1"],
+    "observed_at": "2026-10-02T00:00:00.000Z"
+  },
+  "latest_same_check": null,
+  "alternatives": [],
+  "request_summary": { "status": "recorded", "event_id": "evt_1", "method": "GET", "path": "/health" },
+  "response_summary": { "status": "recorded", "event_id": "evt_1", "status_code": 200, "external_result": "allowed" },
+  "evaluation": {
+    "status": "recorded",
+    "expected_behavior": "block_at_edge",
+    "observed": "allowed",
+    "verdict": "allowed",
+    "reasons": [],
+    "rule_version": null,
+    "confidence": "external_only"
+  },
+  "unavailable_reason": null,
+  "state": "ready",
+  "truncation": {
+    "evidence_refs": { "source_count": 1, "returned": 1, "limit": 32, "truncated": false },
+    "events": { "source_count": 1, "returned": 1, "limit": 20, "truncated": false }
+  }
+}
+```
+
+Integrity `status` is `not_recorded`, `recorded_digest`, `not_verified`, or `verified`. `verified` requires every covered ref to have its own top-level `verification` object with `ok: true`, a method matching `^[a-z0-9_.:-]{1,64}$` other than `customer_supplied`, an ISO `verified_at`, and `covered_refs` containing that row's id. `metadata.verified_at` and `metadata.verify_method` are customer claims: they yield `not_verified`, or `recorded_digest` when a digest is stored. One verified row does not upgrade its siblings. `verified_at` and `method` on the aggregate are set only when every ref is verified and those values agree.
+
+A conflicting or unbound origin run does not supply the verdict, explanation, or evaluation. Evidence tied to that run is an alternative (`scope_conflict` or `unbound_evidence`) and is not integrity proof. A recorded field that disagrees is a conflict. A missing target or check on an evidence row is not a conflict, because the vault has no such columns. An event is used only when tenant, run, target, and check are all recorded and equal. Several events are not merged. The summary is taken from the single top-level `related_event_id` when that event matches, or from the one fully matched event when no related id is stored. Otherwise the summaries are `{ "status": "not_recorded" }` and the events stay `unmatched_operation` alternatives. A missing correlation is `partial`.
+
+`latest_distinct` is set only when `last_verdict_id` points at a different verdict that passes the same later-run checks. `latest_same_check` is the newest other run with the same tenant, target, and check, status `verdicted` or `completed`, a non-empty verdict string, and at least one evidence id. `closes_finding` is false. Running, cancelled, unbound, or evidence-empty runs are not newer proof. `originating` and `latest_same_check` are present on `finding` and `group_member`.
+
+Empty evidence ids yield `primary: null`, `unavailable_reason: "no_refs"`, `state: "no_refs"`. A listed id missing from the vault is `partial` plus `missing_evidence_ids`. Ids past the load cap are `truncation.evidence_refs` (`source_count`, `returned`, `limit` 32, `truncated`) and are not listed as missing. Events are read with a limit of 21 and the body keeps 20. `truncation.events.source_count` is the in-memory total in dev mode. In Postgres it is null when the SQL limit is hit, because the total is not counted. `state` is `partial` when any ref is unbound or conflicting, the origin linkage is not a match, the operation correlation is partial, or a ref or event list is truncated.
+
+Report `primary` is null unless `summary` or the report row has `primary_test_run_id` or `primary_evidence_id` and that id is in the captured set. `run_ids[0]` is not a primary. Every captured run id is a `report_snapshot_run` alternative and every summary evidence id is a `report_snapshot_evidence` alternative with its own `integrity`. `subject.score` is `summary.readiness_score` or `summary.score`. `subject.factors` is `summary.readiness_factors` or `summary.factors`. `subject.as_of` is `summary.as_of` or `summary.generated_at`. `created_at` is not borrowed. Refs with no primary stay `state: "ready"` and `unavailable_reason: null`.
+
+Provider `subject` adds `status`, `provider` (null when zero or several), `product`, `source`, `reason`, `confidence`, `conflict`, `corpus`, `observed_at`, and `proof`. `proof` is string arrays, each capped at 16: `{ "matched_signals": [], "methods": [], "cnames": [], "addresses": [], "fingerprints": [] }`. The current summary renderer drops arrays, so read `subject.proof` directly. Each distinct provider is a `provider_layer` alternative with the same scalar fields plus that layer's arrays. `primary` is set only when at least one signal, CNAME, address, or fingerprint is present. A method label alone leaves `primary: null`, `evaluation.status: "not_recorded"`, and `unavailable_reason: "no_refs"`. DNS and origin hosting stay `not_recorded` / `unknown` with `reason: "no_origin_hosting_observation"` until that family has its own observation. Headers, bodies, cookies, and authorization values are not copied.
+
+`request_summary` and `response_summary` copy only recorded primitive fields from the one selected event (`engine`, `method`, `path` with the query removed, `protocol`, `max_requests`, `timeout_ms`, `external_result`, `status_code`, `received_at`). Recorded values are not recased. Missing fields are `{ "status": "not_recorded" }`. Evaluation from a stored verdict forces `confidence: "external_only"`. Responses are passed through `redactObject` again. Raw headers, cookies, authorization, bodies, URL queries, and agent or placement metadata are not returned. `GET /v1/test-runs/:id/events` remains the raw bounded event list and is not this payload.

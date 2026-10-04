@@ -5,6 +5,13 @@ import {
   targetTagsFromRecord,
   targetValidationResponse,
 } from '../contracts/targetManagement.mjs';
+import {
+  DeclarationValidationError,
+  mergeStoredDeclaration,
+  normalizeDeclarationInput,
+  presentGroupDeclaration,
+  presentTargetDeclaration,
+} from '../lib/targetDeclarations.mjs';
 import { newId } from '../lib/ids.mjs';
 import { csvImportRejected, validateTargetImportRows } from '../lib/targetCsvImport.mjs';
 import {
@@ -20,8 +27,22 @@ import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 import { listTargetEdgeDetectionsForGroup } from './targetEdgeDetectionStore.mjs';
 import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
+import { presentDeclaredTargetObservation } from './declaredHostAnalytics.mjs';
+import { findingRowStatus } from '../lib/findingList.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
+
+/**
+ * The group list counter counts the exact canonical open state only: the
+ * effective lifecycle status (`status`, then legacy `state`, then the open
+ * fallback) must be exactly `open` after trimming and lowercasing, matching the
+ * portal `isFindingOpen` contract. `in_progress` belongs to the UI "Active"
+ * bucket, not to the `Open findings` count, and closure statuses never count.
+ * The group link and its `status=open` findings filter must agree with it.
+ */
+export function isGroupOpenFinding(finding) {
+  return findingRowStatus(finding) === 'open';
+}
 
 /** Detail-page cap on runs / findings, mirrored by the Postgres adapter. */
 const TARGET_GROUP_RUNS_RECENT_LIMIT = 6;
@@ -46,10 +67,38 @@ function optionalString(...values) {
   return null;
 }
 
-/** Shape a stored target record for POST/PATCH responses: expose top-level `tags`. */
-function presentTarget(target) {
-  if (!target) return target;
-  return { ...target, tags: targetTagsFromRecord(target) };
+function declarationPatchFromBody(body) {
+  if (body?.declaration === undefined) return { patch: null, error: null };
+  try {
+    return { patch: normalizeDeclarationInput(body.declaration), error: null };
+  } catch (error) {
+    if (error instanceof DeclarationValidationError) return { patch: null, error: error.toResponse() };
+    throw error;
+  }
+}
+
+function applyStoredDeclaration(record, patch, changedFields) {
+  if (!patch || Object.keys(patch).length === 0) return false;
+  record.declaration_json = mergeStoredDeclaration(record.declaration_json, patch);
+  changedFields.push('declaration');
+  return true;
+}
+
+/** Copy for clients. Stored `declaration_json` stays on the record so a later patch can inherit. */
+function presentTarget(target, group = null) {
+  if (!target || target.error) return target;
+  const { declaration_json, ...rest } = target;
+  return {
+    ...rest,
+    tags: targetTagsFromRecord(target),
+    declaration: presentTargetDeclaration(declaration_json, group?.declaration_json),
+  };
+}
+
+function presentGroup(group) {
+  if (!group || group.error) return group;
+  const { declaration_json, ...rest } = group;
+  return { ...rest, declaration: presentGroupDeclaration(declaration_json) };
 }
 
 function latestTargetVerifications(tenantId) {
@@ -99,6 +148,7 @@ function targetInventoryItem(target, group, verification) {
     source,
     import_source: importIntegration,
     import_integration: importIntegration,
+    declaration: presentTargetDeclaration(target.declaration_json, group?.declaration_json),
     created_at: toIso(target.created_at),
   };
 }
@@ -138,6 +188,98 @@ export function listTargetsEnvelope(ctx) {
         : 'No targets have been declared for this tenant yet.',
     },
   };
+}
+
+/** One active target for read-only projections. Missing verification stays null. */
+export function getTarget(ctx, id) {
+  if (!id) return null;
+  const store = getStore();
+  const target = store.targets.find(
+    (row) => row.id === id && row.tenant_id === ctx.tenantId && !isArchivedTarget(row),
+  );
+  if (!target) return null;
+  const group = store.targetGroups.find(
+    (row) => row.id === target.target_group_id && row.tenant_id === ctx.tenantId && !isArchivedTargetGroup(row),
+  );
+  if (!group) return null;
+  return {
+    id: target.id,
+    tenant_id: target.tenant_id,
+    target_group_id: target.target_group_id,
+    kind: target.kind,
+    value: target.value,
+    declaration: presentTargetDeclaration(target.declaration_json, group.declaration_json),
+  };
+}
+
+/**
+ * Active declared rows for the shared analytics predicate.
+ * Does not copy metadata or call getTargetDetail. Open findings of zero are a known zero.
+ *
+ * @param {{ tenantId: string }} ctx
+ * @param {{ asOf?: unknown }} [options]
+ */
+export function listDeclaredAnalyticsRows(ctx, options = {}) {
+  const store = getStore();
+  const groups = new Map(
+    store.targetGroups
+      .filter((group) => group.tenant_id === ctx.tenantId && !isArchivedTargetGroup(group))
+      .map((group) => [group.id, group]),
+  );
+  const verifications = latestTargetVerifications(ctx.tenantId);
+  const edges = new Map();
+  for (const row of store.targetEdgeDetections ?? []) {
+    if (row.tenant_id === ctx.tenantId && row.target_id) edges.set(row.target_id, row);
+  }
+  const openFindings = new Map();
+  for (const finding of store.findings ?? []) {
+    if (finding.tenant_id !== ctx.tenantId || !finding.target_id) continue;
+    if (finding.status !== 'open' && finding.state !== 'open') continue;
+    openFindings.set(finding.target_id, (openFindings.get(finding.target_id) ?? 0) + 1);
+  }
+  const lastValidation = new Map();
+  for (const run of store.testRuns ?? []) {
+    if (run.tenant_id !== ctx.tenantId || !run.target_id || !run.completed_at) continue;
+    const iso = toIso(run.completed_at);
+    const previous = lastValidation.get(run.target_id);
+    if (iso && (!previous || iso > previous)) lastValidation.set(run.target_id, iso);
+  }
+  return store.targets
+    .filter((target) => target.tenant_id === ctx.tenantId && !isArchivedTarget(target) && groups.has(target.target_group_id))
+    .map((target) => {
+      const group = groups.get(target.target_group_id);
+      const edge = edges.get(target.id) ?? null;
+      const raw = {
+        id: target.id,
+        tenant_id: target.tenant_id,
+        target_group_id: target.target_group_id,
+        kind: target.kind,
+        value: target.value,
+        edge_id: edge?.id ?? null,
+        waf_status: edge?.waf_status ?? null,
+        cdn_status: edge?.cdn_status ?? null,
+        waf_vendor: edge?.waf_vendor ?? null,
+        cdn_provider: edge?.cdn_provider ?? null,
+        conflicting_vendor_signals: edge?.conflicting_vendor_signals === true,
+        edge_observed_at: edge?.observed_at ?? null,
+      };
+      return {
+        id: target.id,
+        tenant_id: target.tenant_id,
+        target_group_id: target.target_group_id,
+        target_group_name: group.name,
+        kind: target.kind,
+        value: target.value,
+        normalized_value: target.normalized_value ?? null,
+        tags: targetTagsFromRecord(target),
+        verification_state: verifications.get(target.id)?.state ?? null,
+        declaration: presentTargetDeclaration(target.declaration_json, group.declaration_json),
+        protection_profile: presentDeclaredTargetObservation(raw, { now: options.asOf ?? null }),
+        findings_count: openFindings.get(target.id) ?? 0,
+        last_validation_at: lastValidation.get(target.id) ?? null,
+        created_at: toIso(target.created_at),
+      };
+    });
 }
 
 export function isArchivedTargetGroup(group) {
@@ -185,7 +327,26 @@ function targetGroupSummaryJoins(tenantId) {
     if (row.tenant_id !== tenantId || row.state !== 'signed') continue;
     loaStates.set(row.target_group_id, row.state);
   }
-  return { targetCounts, loaStates };
+  // One pass over the tenant's findings with the shared findings-list predicate
+  // (stored group OR active same-tenant target membership). Each finding contributes
+  // once per distinct matching group, never a pass per group.
+  const targetGroupByTargetId = new Map(
+    getStore().targets
+      .filter((target) => target.tenant_id === tenantId && !isArchivedTarget(target) && target.target_group_id)
+      .map((target) => [target.id, target.target_group_id]),
+  );
+  const openCounts = new Map();
+  for (const finding of getStore().findings ?? []) {
+    if (finding.tenant_id !== tenantId || !isGroupOpenFinding(finding)) continue;
+    const matchGroups = new Set();
+    if (finding.target_group_id) matchGroups.add(finding.target_group_id);
+    const memberGroup = finding.target_id ? targetGroupByTargetId.get(finding.target_id) : null;
+    if (memberGroup) matchGroups.add(memberGroup);
+    for (const groupId of matchGroups) {
+      openCounts.set(groupId, (openCounts.get(groupId) ?? 0) + 1);
+    }
+  }
+  return { targetCounts, loaStates, openCounts };
 }
 
 export function listTargetGroups(ctx, options = {}) {
@@ -194,11 +355,14 @@ export function listTargetGroups(ctx, options = {}) {
     (g) => g.tenant_id === ctx.tenantId
       && (includeArchived ? isArchivedTargetGroup(g) : !isArchivedTargetGroup(g)),
   );
-  const { targetCounts, loaStates } = targetGroupSummaryJoins(ctx.tenantId);
+  const { targetCounts, loaStates, openCounts } = targetGroupSummaryJoins(ctx.tenantId);
   return groups.map((g) => ({
-    ...g,
+    ...presentGroup(g),
     target_count: targetCounts.get(g.id) ?? 0,
     loa_state: loaStates.get(g.id) ?? g.loa_state ?? 'required',
+    // Authoritative whole-tenant count for the portal list. Always a number: a zero here
+    // was actually counted over every tenant finding, never derived from a capped page.
+    open_findings_count: openCounts.get(g.id) ?? 0,
   }));
 }
 
@@ -227,8 +391,7 @@ export function getTargetGroup(ctx, id) {
   const targets = getStore().targets
     .filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId && !isArchivedTarget(t))
     .map((target) => ({
-      ...target,
-      tags: targetTagsFromRecord(target),
+      ...presentTarget(target, g),
       verification_state: verifications.get(target.id)?.state ?? 'unverified',
       edge_detection: presentTargetEdgeDetection(edgeDetections[target.id] ?? null),
     }));
@@ -263,7 +426,7 @@ export function getTargetGroup(ctx, id) {
     (row) => row.tenant_id === ctx.tenantId && row.target_group_id === id && row.state === 'signed',
   );
   return {
-    ...g,
+    ...presentGroup(g),
     ownership_status: ownershipSummaryFromTargetStates(targets.map((target) => target.verification_state)),
     targets,
     target_count: targets.length,
@@ -294,6 +457,8 @@ export function getTargetGroup(ctx, id) {
 }
 
 export function createTargetGroup(ctx, body = {}) {
+  const declared = declarationPatchFromBody(body);
+  if (declared.error) return declared.error;
   const name = String(body.name ?? 'New target group').trim() || 'New target group';
   // ADR-0008: groups are tenant-scoped now that environments are gone; the uniqueness check
   // is tenant-wide instead of per-environment.
@@ -322,6 +487,8 @@ export function createTargetGroup(ctx, body = {}) {
     ...(Object.keys(settings).length > 0 ? { settings_json: settings } : {}),
     created_at: new Date().toISOString(),
   };
+  const declarationFields = [];
+  applyStoredDeclaration(record, declared.patch, declarationFields);
   getStore().targetGroups.push(record);
   audit({
     tenant_id: ctx.tenantId,
@@ -332,8 +499,19 @@ export function createTargetGroup(ctx, body = {}) {
     resource_id: id,
     metadata: { changed_fields: ['name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
   });
+  if (declarationFields.includes('declaration')) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target_group.declaration_updated',
+      resource_type: 'target_group',
+      resource_id: id,
+      metadata: { changed_fields: declarationFields },
+    });
+  }
   persistStore();
-  return record;
+  return presentGroup(record);
 }
 
 export function addTarget(ctx, groupId, body = {}) {
@@ -341,6 +519,8 @@ export function addTarget(ctx, groupId, body = {}) {
     (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
+  const declared = declarationPatchFromBody(body);
+  if (declared.error) return declared.error;
 
   let normalized;
   try {
@@ -369,6 +549,8 @@ export function addTarget(ctx, groupId, body = {}) {
     created_at: new Date().toISOString(),
   };
   if (Object.keys(normalized.metadata).length > 0) record.metadata = normalized.metadata;
+  const declarationFields = [];
+  applyStoredDeclaration(record, declared.patch, declarationFields);
   getStore().targets.push(record);
   // A new target has no proof. Reset only the presentation rollup; existing per-target
   // verification rows remain intact and continue to authorize their exact targets.
@@ -386,8 +568,19 @@ export function addTarget(ctx, groupId, body = {}) {
       dropped_untrusted_fields: normalized.dropped_fields,
     },
   });
+  if (declarationFields.includes('declaration')) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target.declaration_updated',
+      resource_type: 'target',
+      resource_id: id,
+      metadata: { target_group_id: groupId, changed_fields: declarationFields },
+    });
+  }
   persistStore();
-  return presentTarget(record);
+  return presentTarget(record, group);
 }
 
 export function importTargets(ctx, groupId, rows = []) {
@@ -447,6 +640,8 @@ export function patchTargetGroup(ctx, id, body = {}) {
     (candidate) => candidate.id === id && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
+  const declared = declarationPatchFromBody(body);
+  if (declared.error) return declared.error;
   const changedFields = [];
 
   if (body.name !== undefined) {
@@ -474,6 +669,7 @@ export function patchTargetGroup(ctx, id, body = {}) {
     group.validation_mode = 'external_only';
     changedFields.push('validation_mode');
   }
+  applyStoredDeclaration(group, declared.patch, changedFields);
 
   audit({
     tenant_id: ctx.tenantId,
@@ -484,8 +680,19 @@ export function patchTargetGroup(ctx, id, body = {}) {
     resource_id: id,
     metadata: { changed_fields: changedFields },
   });
+  if (changedFields.includes('declaration')) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target_group.declaration_updated',
+      resource_type: 'target_group',
+      resource_id: id,
+      metadata: { changed_fields: ['declaration'] },
+    });
+  }
   persistStore();
-  return group;
+  return presentGroup(group);
 }
 
 export function archiveTargetGroup(ctx, id) {
@@ -548,6 +755,8 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
       && !isArchivedTarget(candidate),
   );
   if (!target) return null;
+  const declared = declarationPatchFromBody(body);
+  if (declared.error) return declared.error;
 
   let normalized;
   try {
@@ -594,6 +803,7 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
     target.expected_behavior = body.expected_behavior ?? null;
     changedFields.push('expected_behavior');
   }
+  applyStoredDeclaration(target, declared.patch, changedFields);
 
   audit({
     tenant_id: ctx.tenantId,
@@ -604,8 +814,19 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
     resource_id: targetId,
     metadata: { target_group_id: groupId, changed_fields: changedFields, dropped_untrusted_fields: normalized.dropped_fields },
   });
+  if (changedFields.includes('declaration')) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target.declaration_updated',
+      resource_type: 'target',
+      resource_id: targetId,
+      metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
+    });
+  }
   persistStore();
-  return presentTarget(target);
+  return presentTarget(target, group);
 }
 
 export function deleteTarget(ctx, groupId, targetId) {
@@ -1003,11 +1224,12 @@ export function createTargetDirect(ctx, body = {}) {
 }
 
 /**
- * Direct target patch by id (ADR-0008 `PATCH /v1/targets/:id`). Body `{ tags?, expected_behavior? }`.
+ * Direct target patch by id (ADR-0008 `PATCH /v1/targets/:id`).
+ * Body `{ tags?, expected_behavior?, declaration? }`. Kind and value stay immutable.
  *
  * @param {import('../context.mjs').TenantScope} ctx
  * @param {string} targetId
- * @param {{ tags?: string[], expected_behavior?: string }} body
+ * @param {{ tags?: string[], expected_behavior?: string, declaration?: object }} body
  */
 export function patchTargetById(ctx, targetId, body = {}) {
   const target = getStore().targets.find(
@@ -1017,8 +1239,14 @@ export function patchTargetById(ctx, targetId, body = {}) {
   );
   if (!target) return { error: 'not_found', status: 404 };
   // Route through the group-scoped patch so audit, dedupe, and immutability rules stay shared.
+  // Kind and value are forwarded so a change is rejected instead of dropped.
   return patchTarget(ctx, target.target_group_id, targetId, {
     ...(body.tags !== undefined ? { tags: body.tags } : {}),
     ...(body.expected_behavior !== undefined ? { expected_behavior: body.expected_behavior } : {}),
+    ...(body.declaration !== undefined ? { declaration: body.declaration } : {}),
+    ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+    ...(body.metadata_json !== undefined ? { metadata_json: body.metadata_json } : {}),
+    ...(body.kind !== undefined ? { kind: body.kind } : {}),
+    ...(body.value !== undefined ? { value: body.value } : {}),
   });
 }

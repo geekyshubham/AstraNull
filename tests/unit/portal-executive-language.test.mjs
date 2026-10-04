@@ -160,11 +160,14 @@ describe('portal executive language', () => {
   });
 
   it('keeps executive and target summaries evidence-aware in source', () => {
-    assert.match(DASHBOARD_SOURCE, /Where does attack traffic get stopped\?/);
+    // Current release: the browser-inferred defense-path diagram is gone; priorities lead and the
+    // readiness score carries its scope. Target summaries come from recorded family rows.
+    assert.doesNotMatch(DASHBOARD_SOURCE, /Where does attack traffic get stopped\?|buildDefensePath/);
     assert.match(DASHBOARD_SOURCE, /What to fix first/);
     assert.match(DASHBOARD_SOURCE, /dashboardReadinessMessage/);
-    assert.match(TARGET_SOURCE, /plain_language_summary/);
-    assert.match(TARGET_SOURCE, /Protection path/);
+    assert.match(DASHBOARD_SOURCE, /not a protection guarantee/i);
+    assert.match(TARGET_SOURCE, /providerFamilyRows\(/);
+    assert.match(TARGET_SOURCE, /Protection observations|ProviderObservations/);
     assert.match(TARGET_SOURCE, /evidenceModePresentation/);
   });
 });
@@ -172,11 +175,13 @@ describe('portal executive language', () => {
 describe('QA swarm 2026-10-01 regressions', () => {
   const read = (rel) => readFileSync(new URL(`../../apps/web/react/src/${rel}`, import.meta.url), 'utf8');
 
-  it('gates the dashboard Run safe validation CTA behind canStartRun (RBAC-01)', () => {
+  it('gates the dashboard validation CTA behind canStartRun (RBAC-01)', () => {
     const source = read('pages/dashboard-page.tsx');
     assert.match(source, /import \{ canStartRun \} from '\.\.\/lib\/run-permissions\.mjs'/);
-    // The CTA only renders for roles that actually hold test_run:start.
-    assert.match(source, /canStartRun\(session\.role\) \?[\s\S]*?Run safe validation/);
+    // The CTA only renders for roles that actually hold test_run:start, and leads to a target
+    // (validation is target-first; there is no standalone run page in the current release).
+    assert.match(source, /canStartRun\(session\.role\) \?[\s\S]*?href="#targets"[\s\S]*?Validate a target/);
+    assert.doesNotMatch(source, /href="#runs"/);
   });
 
   it('makes the Reports nav copy truthful — no WAF/release promise (WAF-CDN-02)', () => {

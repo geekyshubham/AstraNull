@@ -124,6 +124,10 @@ function canAdvanceOnRead(ctx) {
   return roleHasPermission(ctx?.role, 'test_run:start');
 }
 
+function advanceEnabled(options) {
+  return options?.advance !== false && options?.advance !== 'false';
+}
+
 function leaseHeldByOther(scan, now) {
   return Boolean(scan.lease_token && scan.lease_expires_at && new Date(scan.lease_expires_at) > now);
 }
@@ -660,6 +664,9 @@ export function createPostgresValidationScanServices(repositories, options = {})
   }
 
   async function advanceScan(ctx, id, callOptions = {}) {
+    if (!advanceEnabled(callOptions)) {
+      return { scan_id: id, acquired: false, reason: 'advance_disabled', dispatched: false };
+    }
     if (!ctx?.tenantId) return null;
     const preview = await repo.getScan(ctx, id);
     if (!preview) return null;
@@ -912,6 +919,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
   }
 
   async function dispatchDueValidationScans(ctx, callOptions = {}) {
+    if (!advanceEnabled(callOptions)) return [];
     const now = toDate(callOptions.now);
     const actor = ctx?.userId ? ctx : systemCtx(ctx.tenantId);
     const leased = await repo.leaseDueScans(ctx, {
@@ -939,7 +947,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
   }
 
   async function readPathAdvance(ctx, scan, callOptions = {}) {
-    if (!canAdvanceOnRead(ctx)) return;
+    if (!advanceEnabled(callOptions) || !canAdvanceOnRead(ctx)) return;
     const now = toDate(callOptions.now);
     const system = systemCtx(scan.tenant_id);
     if (scan.status === 'scheduled' && scan.scheduled_for && new Date(scan.scheduled_for) <= now) {

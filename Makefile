@@ -14,10 +14,10 @@ oidc-fixture:
 	"$(NODE)" scripts/generate-bundled-oidc-fixture.mjs --quiet
 
 test-unit: oidc-fixture
-	"$(NODE)" --test tests/unit/*.test.mjs
+	"$(NODE)" --test --test-concurrency=1 tests/unit/*.test.mjs
 
 test-integration: oidc-fixture
-	"$(NODE)" --test tests/integration/*.test.mjs
+	"$(NODE)" --test --test-concurrency=1 tests/integration/*.test.mjs
 
 test-e2e-first-slice: oidc-fixture
 	"$(NODE)" --test tests/e2e/*.test.mjs

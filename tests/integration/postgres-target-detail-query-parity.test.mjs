@@ -136,7 +136,7 @@ describe('postgres target-detail query parity', () => {
         title: 'Canonical status finding',
         state: 'open',
         opened_at: '2026-01-02T00:00:00.000Z',
-        owner_group: 'edge-sre',
+        owner_group: 'unassigned',
       });
       assert.deepEqual(postgresPayload.counts, {
         runs_total: RUN_COUNT,

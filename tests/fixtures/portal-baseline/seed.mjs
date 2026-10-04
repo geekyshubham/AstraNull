@@ -427,11 +427,12 @@ export function buildPortalBaselineStore() {
       },
     ],
     wafFingerprints: [
-      { id: 'wf_checkout_1', waf_asset_id: 'wa_checkout_1', signature: 'cf_managed_v3', score: 0.94 },
+      { id: 'wf_checkout_1', tenant_id: ids.tenantId, waf_asset_id: 'wa_checkout_1', signature: 'cf_managed_v3', score: 0.94 },
     ],
     wafValidationRuns: [
       {
         id: 'wvr_checkout_1',
+        tenant_id: ids.tenantId,
         waf_asset_id: 'wa_checkout_1',
         verdict: 'pass',
         started_at: FROZEN,
@@ -441,6 +442,7 @@ export function buildPortalBaselineStore() {
     wafPostureSnapshots: [
       {
         id: 'wps_checkout_1',
+        tenant_id: ids.tenantId,
         waf_asset_id: 'wa_checkout_1',
         state: 'protected',
         posture: 'protected',

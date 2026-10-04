@@ -216,6 +216,147 @@ export const EDGE_DETECTION_SHAPE = {
   },
 };
 
+const NULLABLE_STRING = ['string', 'null'];
+const NULLABLE_NUMBER = ['number', 'null'];
+
+const PROTECTION_FAMILY_SHAPE = {
+  status: 'string',
+  reason: NULLABLE_STRING,
+  provider: NULLABLE_STRING,
+  product: NULLABLE_STRING,
+  confidence: NULLABLE_NUMBER,
+  observed_at: NULLABLE_STRING,
+  test_run_id: NULLABLE_STRING,
+  evidence_ids: ['string'],
+  sources: ['string'],
+  freshness: 'string',
+  freshness_policy_id: 'string',
+};
+
+const FRESHNESS_POLICY_SHAPE = {
+  id: 'string',
+  version: 'number',
+  max_age_ms: 'number',
+  unit: 'string',
+};
+
+const COVERAGE_COUNTS_SHAPE = {
+  applicable_count: 'number',
+  evaluated_count: 'number',
+  conclusive_count: 'number',
+  inconclusive_count: 'number',
+  not_run_count: 'number',
+  stale_count: 'number',
+  unknown_count: 'number',
+  partial_count: 'number',
+  excluded_count: 'number',
+  percentage: NULLABLE_NUMBER,
+  percentage_reason: 'string',
+};
+
+/** Projected observation from `projectObservation`. Provenance is a redacted scalar map, not a fixed key set. */
+const HISTORY_OBSERVATION_SHAPE = {
+  id: 'string',
+  tenant_id: 'string',
+  target_id: 'string',
+  target_group_id: 'string',
+  family: 'string',
+  check_id: 'string',
+  test_run_id: NULLABLE_STRING,
+  source_kind: 'string',
+  source_id: NULLABLE_STRING,
+  corpus_version: NULLABLE_STRING,
+  scenario_version: NULLABLE_STRING,
+  check_version: NULLABLE_STRING,
+  observed_at: 'string',
+  source_completed_at: NULLABLE_STRING,
+  outcome: 'string',
+  attempt_class: 'string',
+  producer_kind: NULLABLE_STRING,
+  origin_binding_id: NULLABLE_STRING,
+  provenance: 'object',
+  created_at: NULLABLE_STRING,
+};
+
+const HISTORY_RETAINED_FAMILY_SHAPE = {
+  family: 'string',
+  last_successful: [HISTORY_OBSERVATION_SHAPE, 'null'],
+  latest_failed_attempt: [HISTORY_OBSERVATION_SHAPE, 'null'],
+  fresh_negative: 'boolean',
+  provider_loss: 'boolean',
+};
+
+/** Shared by comparable_changes entries and comparison_gaps entries. `details` is the
+ *  explicit provider-identity payload that only provider_changed pairs carry. */
+const HISTORY_COMPARISON_ENTRY_SHAPE = {
+  family: 'string',
+  previous_id: 'string',
+  observation_id: 'string',
+  comparable: 'boolean',
+  reason: NULLABLE_STRING,
+  change: NULLABLE_STRING,
+  direction: NULLABLE_STRING,
+  'details?': {
+    before_provider: 'string',
+    after_provider: 'string',
+  },
+};
+
+/** Only a comparable changed pair is stored. Gaps stay off this array. */
+const HISTORY_COMPARABLE_CHANGE_SHAPE = HISTORY_COMPARISON_ENTRY_SHAPE;
+
+const HISTORY_COMPARISON_GAP_SHAPE = HISTORY_COMPARISON_ENTRY_SHAPE;
+
+const HISTORY_BINDING_REACHABILITY_SHAPE = {
+  status: 'string',
+  lockdown: 'string',
+  assurance: 'string',
+  reason: NULLABLE_STRING,
+  observation_id: NULLABLE_STRING,
+  'capacity_assurance?': 'boolean',
+  'scope?': {
+    host: 'string',
+    sni: 'string',
+    port: NULLABLE_NUMBER,
+    path: NULLABLE_STRING,
+  },
+  'limitations?': ['string'],
+};
+
+/** `historyReadModel` binding, not the origin-binding list presenter. */
+const HISTORY_ORIGIN_BINDING_SHAPE = {
+  id: 'string',
+  protected_target_id: 'string',
+  origin_target_id: 'string',
+  host: 'string',
+  sni: 'string',
+  port: NULLABLE_NUMBER,
+  path: NULLABLE_STRING,
+  status: 'string',
+  assurance: 'string',
+  lockdown: 'string',
+  currently_authorized: 'boolean',
+  reachability: HISTORY_BINDING_REACHABILITY_SHAPE,
+};
+
+const HISTORY_READ_FIELDS = {
+  retained_family_states: [HISTORY_RETAINED_FAMILY_SHAPE],
+  comparable_changes: [HISTORY_COMPARABLE_CHANGE_SHAPE],
+  comparison_gaps: [HISTORY_COMPARISON_GAP_SHAPE],
+  origin_bindings: [HISTORY_ORIGIN_BINDING_SHAPE],
+};
+
+const DECLARATION_SHAPE = {
+  purpose: NULLABLE_STRING,
+  purpose_status: 'string',
+  purpose_source: NULLABLE_STRING,
+  service_roles: ['string'],
+  service_roles_status: 'string',
+  service_roles_source: NULLABLE_STRING,
+  owner: { status: 'string', label: NULLABLE_STRING, source: NULLABLE_STRING },
+  criticality: { status: 'string', value: NULLABLE_STRING, source: NULLABLE_STRING },
+};
+
 export const TARGET_DETAIL_SHAPE = {
   target: {
     id: 'string',
@@ -227,6 +368,7 @@ export const TARGET_DETAIL_SHAPE = {
     // ADR-0008: tags are the membership mechanism (e.g. `env:prod`); every target payload
     // exposes the trusted top-level list, which may be empty.
     tags: ['string'],
+    declaration: DECLARATION_SHAPE,
     created_at: 'string',
     eligibility: 'string',
     eligibility_reason: 'null',
@@ -237,8 +379,91 @@ export const TARGET_DETAIL_SHAPE = {
     source_ref: ['object', 'null'],
     history: [{ state: 'string', transitioned_at: 'string', 'source_ref?': ['object', 'null'] }],
   },
+  // Loose: legacy posture keys stay, including null marker_rules and unknown origin state.
+  // Connector YAML is permission-scoped and is not part of this core shape.
   waf_posture: ['object', 'null'],
   'edge_detection?': [EDGE_DETECTION_SHAPE, 'null'],
+  protection_profile: {
+    derivation_version: 'string',
+    as_of: 'string',
+    freshness_policy: FRESHNESS_POLICY_SHAPE,
+    families: {
+      waf: PROTECTION_FAMILY_SHAPE,
+      cdn: PROTECTION_FAMILY_SHAPE,
+      cloud: PROTECTION_FAMILY_SHAPE,
+      dns: PROTECTION_FAMILY_SHAPE,
+      origin_hosting: PROTECTION_FAMILY_SHAPE,
+    },
+    effectiveness: {
+      unit: 'string',
+      status: 'string',
+      blocked_count: NULLABLE_NUMBER,
+      allowed_count: NULLABLE_NUMBER,
+      inconclusive_count: NULLABLE_NUMBER,
+      not_run_count: NULLABLE_NUMBER,
+      tested_count: NULLABLE_NUMBER,
+      percentage: NULLABLE_NUMBER,
+      percentage_reason: 'string',
+    },
+    origin: {
+      status: 'string',
+      binding_id: 'null',
+      reason: 'string',
+      assurance: 'string',
+      reachability: {
+        status: 'string',
+        source: NULLABLE_STRING,
+        tested_target_id: NULLABLE_STRING,
+        scenario_id: NULLABLE_STRING,
+        limitations: ['string'],
+      },
+    },
+    dimensions: [{
+      id: 'string',
+      unit: 'string',
+      status: 'string',
+      ...COVERAGE_COUNTS_SHAPE,
+      freshness_policy_id: 'string',
+      scope: { target_id: 'string', plan_version: 'string' },
+    }],
+    ...HISTORY_READ_FIELDS,
+  },
+  coverage: {
+    unit: 'string',
+    plan_version: 'string',
+    as_of: 'string',
+    freshness_policy: FRESHNESS_POLICY_SHAPE,
+    runtime_launch_gates: 'string',
+    scope: { target_id: 'string', plan_version: 'string' },
+    ...COVERAGE_COUNTS_SHAPE,
+    pairs: [{
+      check_id: 'string',
+      dimension: 'string',
+      state: 'string',
+      prior_state: NULLABLE_STRING,
+      exclusion_reason: NULLABLE_STRING,
+      last_run_id: NULLABLE_STRING,
+      observed_at: NULLABLE_STRING,
+      freshness: 'string',
+      provenance: 'string',
+      live_external: 'boolean',
+      pair_reason: NULLABLE_STRING,
+      retained: [{
+        verdict: NULLABLE_STRING,
+        observed_at: NULLABLE_STRING,
+        provenance: 'string',
+        check_version: NULLABLE_STRING,
+        scenario_version: NULLABLE_STRING,
+        run_status: NULLABLE_STRING,
+      }, 'null'],
+      policy_id: NULLABLE_STRING,
+      launch_eligibility: { status: 'string', reason: 'string' },
+      launchable: 'null',
+      launch_block_reason: 'string',
+      policy_binding: 'string',
+    }],
+    ...HISTORY_READ_FIELDS,
+  },
   'edge_detection_request?': [{
     test_run_id: 'string',
     run_status: 'string',
@@ -276,6 +501,47 @@ export const TARGET_DETAIL_SHAPE = {
     waf_empty_reason: ['string', 'null'],
   },
   'findings_next_cursor?': 'string',
+};
+
+/** `presentFindingLineage` on GET /v1/findings/:id. Strict: every field is documented. */
+export const FINDING_LINEAGE_SHAPE = {
+  finding_id: 'string',
+  tenant_id: 'string',
+  target_id: 'string',
+  check_id: 'string',
+  closed_at: NULLABLE_STRING,
+  sibling_closure: 'boolean',
+  siblings: [{ id: 'string', target_id: 'string', status: 'string', closed_at: NULLABLE_STRING }],
+  retests: [{
+    id: 'string',
+    test_run_id: 'string',
+    target_id: 'string',
+    check_id: 'string',
+    intent: 'string',
+    relation: 'string',
+    created_at: 'string',
+  }],
+  later_same_pair: [{
+    test_run_id: 'string',
+    relation: 'string',
+    reason: NULLABLE_STRING,
+    can_advance_remediation: 'boolean',
+    'finalized?': 'boolean',
+  }],
+  originating: [{
+    test_run_id: 'string',
+    relation: 'string',
+    status: NULLABLE_STRING,
+  }, 'null'],
+  latest: [{
+    test_run_id: 'string',
+    relation: 'string',
+    status: NULLABLE_STRING,
+    finalized: 'boolean',
+    completed_at: NULLABLE_STRING,
+    pending: 'boolean',
+    can_advance_remediation: 'boolean',
+  }, 'null'],
 };
 
 export const EVIDENCE_SHAPE = {

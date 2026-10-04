@@ -9,17 +9,23 @@ describe('Targets portal contract', () => {
   it('renders the required inventory fields and safe add/edit/remove behavior', () => {
     const source = readPage('targets-page.tsx');
 
+    // Current release: kind moves into the target cell; ownership and last validation are columns.
     for (const label of [
       'Target',
-      'Kind',
+      'Ownership',
+      'Last validation',
       'Tags',
       'Target group',
-      'Verification',
       'Added from',
       'Added',
     ]) {
       assert.match(source, new RegExp(`label: '${label}'`));
     }
+    assert.match(source, /<span>\{targetKindLabel\(item\)\}<\/span>/, 'kind stays visible in the target cell');
+    // Pending ownership is never counted as ready, and a missing timestamp is not "Never".
+    assert.doesNotMatch(source, /Ready for validation/);
+    assert.match(source, /Not available in inventory/);
+    assert.doesNotMatch(source, /: 'Never'/);
     // ADR-0008: direct target creation via POST /v1/targets with top-level tags + optional group.
     assert.match(source, /requestJson\(config, session, '\/v1\/targets', \{ method: 'POST', body \}\)/);
     assert.match(source, /body\.target_group_id = groupId/);
@@ -41,9 +47,12 @@ describe('Targets portal contract', () => {
     const targetGroup = readPage('target-group-detail-view.tsx');
     const finding = readPage('finding-detail-view.tsx');
 
-    for (const source of [targets, targetGroup, finding]) {
+    for (const source of [targetGroup, finding]) {
       assert.match(source, /aria-label={`Open target \$\{getString\(item,/);
     }
+    // Targets leads each row with one explicit link: Open, or Verify ownership while pending.
+    assert.match(targets, /aria-label=\{verified \? `Open target \$\{value\}` : `Verify ownership of \$\{value\}`\}/);
+    assert.match(targets, /href=\{verified \? buildDetailHref\('target-detail', id\)/);
     assert.doesNotMatch(targets, /function rowProps|getRowProps=\{\(item\) => rowProps/);
     assert.doesNotMatch(targetGroup, /targetRowNavProps|tg-target-row|isNestedInteractiveTarget/);
     assert.doesNotMatch(finding, /targetRowNavProps/);

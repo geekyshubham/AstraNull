@@ -66,6 +66,23 @@ function applyPortalScaleCounts(store) {
     expected_behavior: 'cloud_baseline',
     created_at: frozenAt,
   }));
+  // Real finding rows behind the rollup: every third one open, as in the shared scale fixture, so the
+  // state count, the open list total and the dashboard link all describe the same rows.
+  store.findings = Array.from({ length: PORTAL_SCALE_PROFILE.findings }, (_, index) => {
+    const target = store.targets[index % store.targets.length];
+    return {
+      id: `fnd_dom_scale_${index}`,
+      tenant_id: tenantId,
+      target_group_id: target.target_group_id,
+      target_id: target.id,
+      check_id: 'chk_l7_rate',
+      severity: 's3',
+      title: `Scale finding ${index}`,
+      status: index % 3 === 0 ? 'open' : 'closed',
+      opened_at: frozenAt,
+      created_at: frozenAt,
+    };
+  });
   store.stateRollups = {
     ...(store.stateRollups ?? {}),
     [tenantId]: {
@@ -138,38 +155,73 @@ test.describe('portal dashboard overview panels', () => {
     await expect(alert).toContainText(KILL_SWITCH_REASON);
     await expect(alert.getByTitle(/kill_switch\.updated_at/)).toBeVisible();
   });
-  test('FT-DASH-04 served bundle keeps scale target groups, targets, and findings distinct', async ({ page }) => {
+  test('FT-DASH-04 served bundle counts the scale estate from server totals and links each count to its exact list', async ({ page }) => {
     test.skip(!isPortalScaleEnabled(), 'Set ASTRANULL_PORTAL_SCALE=1 for the full served-DOM scale assertion.');
+    test.setTimeout(300_000);
     expect(PORTAL_SCALE_PROFILE.targetGroups).toBe(10_000);
     expect(PORTAL_SCALE_PROFILE.targets).toBe(5_000);
     expect(SCALE_OPEN_FINDINGS).toBe(33_334);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalScaleCounts });
     const baseUrl = getPortalPlaywrightBaseUrl();
+    const read = async (path) => {
+      const response = await fetch(`${baseUrl}${path}`, { headers: portalOwnerHeaders() });
+      expect(response.ok, `${path} ${response.status}`).toBe(true);
+      return response.json();
+    };
     const state = await fetchPortalState(baseUrl);
     expect(state.target_groups).toBe(10_000);
     expect(state.open_findings).toBe(33_334);
     expect(state).not.toHaveProperty('targets');
     expect(state).not.toHaveProperty('target_count');
 
-    const inventoryResponse = await fetch(`${baseUrl}/v1/targets`, { headers: portalOwnerHeaders() });
-    expect(inventoryResponse.ok).toBe(true);
-    const inventory = await inventoryResponse.json();
-    expect(inventory.items).toHaveLength(5_000);
+    // The rows agree with the rollup: the open list total is the full predicate, not a page.
+    const openPage = await read('/v1/findings?status=open&limit=50');
+    expect(openPage.items).toHaveLength(50);
+    expect(openPage.total).toBe(33_334);
+    expect(openPage.pages).toBe(Math.ceil(33_334 / 50));
+    expect((await read('/v1/findings?limit=1')).total).toBe(PORTAL_SCALE_PROFILE.findings);
+
+    // A bounded target page carries the full denominator; target records and hostnames stay separate units.
+    const targetPage = await read('/v1/targets?unit=target&limit=50');
+    expect(targetPage.items).toHaveLength(50);
+    expect(targetPage.total).toBe(5_000);
+    expect(targetPage.units).toMatchObject({ target_records: 5_000, normalized_hosts: 5_000 });
+    const waf = await read('/v1/analytics/declared-hosts?family=waf&unit=normalized_hostname&limit=1');
+    expect(waf.units).toMatchObject({ target_records: 5_000, normalized_hosts: 5_000 });
+    const wafNotChecked = waf.segments.find((segment) => segment.key === 'not_checked');
+    expect(wafNotChecked.count).toBe(5_000);
 
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', baseUrl);
 
-    // Targets-first KPI: declared targets come from the loaded inventory (5,000), grouped.
-    const declared = page.locator('.dashboard-kpi').filter({ hasText: 'Declared targets' });
-    await expect(declared.locator('.dashboard-kpi-value')).toContainText('5,000');
-    // The dashboard must never invent a "10,000 targets" or "5,000 targets" sentence from group counts.
+    const kpis = page.getByRole('group', { name: 'Readiness key metrics' });
+    const declared = kpis.getByRole('link', { name: /^Declared targets/ });
+    await expect(declared.locator('.dashboard-kpi-value')).toHaveText('5,000');
+    await expect(declared).toContainText('5,000 distinct hostnames');
+    const open = kpis.getByRole('link', { name: /^Open findings/ });
+    await expect(open.locator('.dashboard-kpi-value')).toHaveText('33,334');
+    await expect(open).toHaveAttribute('href', '#findings?status=open');
+    // Group counts never turn into a target sentence.
     await expect(page.getByText('10,000 targets', { exact: true })).toHaveCount(0);
 
-    await gotoPortalRoute(page, 'targets', baseUrl);
-    const targetSummary = page.getByLabel('Target inventory summary');
-    await expect(
-      targetSummary.locator('.targets-summary-cell').filter({ hasText: 'Declared targets' }).locator('strong'),
-    ).toHaveText('5,000');
+    // The WAF cohort count opens the exact server list with the same count and unit.
+    const cohortLink = page.getByRole('link', { name: 'WAF observations not checked: 5,000 distinct hostnames. Open the matching list.' });
+    await expect(cohortLink).toHaveAttribute('href', '#targets?family=waf&family_status=not_checked&unit=hostname');
+    await cohortLink.click();
+    const cohort = page.locator('.cohort-count');
+    await expect(cohort).toContainText('Showing 1 to 50 of 5,000 distinct hostnames.');
+    await expect(cohort).toContainText('Same scope: 5,000 declared target records and 5,000 distinct hostnames.');
+
+    // The open-findings count opens the same predicate with the same full total and real paging.
+    await gotoPortalRoute(page, 'dashboard', baseUrl);
+    await kpis.getByRole('link', { name: /^Open findings/ }).click();
+    await expect(page).toHaveURL(/#findings\?status=open$/);
+    const openChip = page.getByRole('group', { name: 'Finding status filters' }).getByRole('button', { name: /^Open/ });
+    await expect(openChip).toHaveAttribute('aria-pressed', 'true');
+    await expect(openChip.locator('.rf-tab-count')).toHaveText('33,334');
+    await page.getByRole('button', { name: 'Each finding' }).click();
+    await expect(page.locator('.rf-pager > .rf-pager-info')).toHaveText('Showing 1 to 25 of 33,334 findings');
+    await expect(page.locator('.rf-pager .rf-toolbar .rf-pager-info')).toHaveText(`Page 1 of ${Math.ceil(33_334 / 25).toLocaleString('en-US')}`);
   });
 });

@@ -351,7 +351,7 @@ export function presentTargetEdgeDetection(row) {
   const cdnProvider = boundedString(record.cdn_provider)
     || stringList(record.cdn_providers)[0]
     || layers.find((l) => l.family === 'cdn')?.provider
-    || (record.cdn_status === 'detected' && boundedString(record.waf_vendor) ? boundedString(record.waf_vendor) : '');
+    || '';
   const cdnProviders = stringList(record.cdn_providers);
   if (cdnProvider && !cdnProviders.includes(cdnProvider)) {
     cdnProviders.push(cdnProvider);

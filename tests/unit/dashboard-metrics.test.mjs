@@ -118,8 +118,8 @@ describe('dashboard-metrics', () => {
         { id: 't_gap', value: 'bad.example.com', target_group_id: 'g1', verification: { state: 'unverified' } }
       ],
       runs: [
-        { id: 'r1', target_id: 't_pass', status: 'completed', verdict: 'pass', completed_at: '2026-02-01T00:00:00Z' },
-        { id: 'r2', target_id: 't_gap', status: 'verdicted', verdict: 'penetrated', completed_at: '2026-02-02T00:00:00Z' }
+        { id: 'r1', target_id: 't_pass', status: 'completed', verdict: 'pass', verdict_id: 'vrd_r1', completed_at: '2026-02-01T00:00:00Z' },
+        { id: 'r2', target_id: 't_gap', status: 'verdicted', verdict: 'penetrated', verdict_id: 'vrd_r2', completed_at: '2026-02-02T00:00:00Z' }
       ]
     }));
     assert.equal(rows.length, 2);
@@ -128,6 +128,32 @@ describe('dashboard-metrics', () => {
     assert.equal(rows[1].verdictStatus, 'pass');
     assert.equal(rows[1].verified, true);
     assert.deepEqual(rows[1].tags, ['prod']);
+  });
+
+  it('never treats a finished run without a recorded verdict as evidence-backed', () => {
+    const rows = buildTargetPostureRows(portalData({
+      targets: [{ id: 't1', value: 'checkout.example.com', verification: { state: 'dns_verified' } }],
+      // The run row carries a bare verdict string and a completed status but names no verdict or evidence.
+      runs: [{ id: 'run_bare', target_id: 't1', status: 'completed', verdict: 'pass', started_at: '2026-07-01T12:00:00Z' }],
+      findings: [{ id: 'f1', target_id: 't1', status: 'open' }],
+    }));
+    assert.equal(rows[0].verdict, '');
+    assert.equal(rows[0].verdictStatus, 'none');
+    assert.equal(rows[0].verdictBasis, 'unbacked');
+    assert.equal(rows[0].verdictRunId, '');
+  });
+
+  it('labels an earlier backed verdict as earlier when a newer finished run is unbacked', () => {
+    const rows = buildTargetPostureRows(portalData({
+      targets: [{ id: 't1', value: 'checkout.example.com', verification: { state: 'dns_verified' } }],
+      runs: [
+        { id: 'run_old', target_id: 't1', status: 'completed', verdict: { id: 'vrd_old', verdict: 'protected', evidence_ids: ['evt_1'] }, completed_at: '2026-06-01T00:00:00Z' },
+        { id: 'run_new', target_id: 't1', status: 'completed', verdict: null, completed_at: '2026-07-01T00:00:00Z' },
+      ],
+    }));
+    assert.equal(rows[0].verdictStatus, 'pass');
+    assert.equal(rows[0].verdictBasis, 'earlier');
+    assert.equal(rows[0].verdictRunId, 'run_old');
   });
 
   it('builds the four outside-in defense stages from loaded data only', () => {
@@ -190,8 +216,8 @@ describe('dashboard-metrics', () => {
       ],
       runs: [
         // Both an own run and a bare group run exist for the group; neither may leak to the sibling.
-        { id: 'r_own', target_id: 't_verified', target_group_id: 'tg_demo_origin', status: 'completed', verdict: 'pass', completed_at: '2026-03-01T00:00:00Z' },
-        { id: 'r_group', target_group_id: 'tg_demo_origin', status: 'verdicted', verdict: 'pass', completed_at: '2026-03-02T00:00:00Z' }
+        { id: 'r_own', target_id: 't_verified', target_group_id: 'tg_demo_origin', status: 'completed', verdict: 'pass', verdict_id: 'vrd_own', completed_at: '2026-03-01T00:00:00Z' },
+        { id: 'r_group', target_group_id: 'tg_demo_origin', status: 'verdicted', verdict: 'pass', verdict_id: 'vrd_group', completed_at: '2026-03-02T00:00:00Z' }
       ]
     }));
     const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
@@ -210,8 +236,8 @@ describe('dashboard-metrics', () => {
         verification: { state: index < 2 ? 'dns_verified' : 'unverified' }
       })),
       runs: [
-        { id: 'ra', target_id: 't0', target_group_id: 'g', status: 'completed', verdict: 'pass', completed_at: '2026-03-01T00:00:00Z' },
-        { id: 'rb', target_id: 't1', target_group_id: 'g', status: 'verdicted', verdict: 'penetrated', completed_at: '2026-03-02T00:00:00Z' }
+        { id: 'ra', target_id: 't0', target_group_id: 'g', status: 'completed', verdict: 'pass', verdict_id: 'vrd_ra', completed_at: '2026-03-01T00:00:00Z' },
+        { id: 'rb', target_id: 't1', target_group_id: 'g', status: 'verdicted', verdict: 'penetrated', verdict_id: 'vrd_rb', completed_at: '2026-03-02T00:00:00Z' }
       ]
     });
     const withEvidence = new Set(
@@ -231,10 +257,12 @@ describe('dashboard-metrics', () => {
     assert.doesNotMatch(dashboard, /data\.agents\b/, 'dashboard must not read data.agents');
     assert.doesNotMatch(dashboard, /data\.environments\b/, 'dashboard must not read data.environments');
     assert.match(dashboard, /formatNumber\(declaredTargets\)/);
+    // Target records and distinct hostnames are separate units with shared formatting.
     assert.match(
       targets,
-      /Declared targets<\/span><strong>{formatNumber\(targets\.length\)}/,
+      /Declared target records<\/span><strong>{formatNumber\(units\.records\)}/,
     );
+    assert.match(targets, /Distinct hostnames<\/span><strong>{formatNumber\(units\.distinctHosts\)}/);
     assert.match(
       governance,
       /{formatNumber\(openFindingsCount\)}<\/span> open findings/,

@@ -21,6 +21,7 @@ import {
 } from '../../fixtures/portal-baseline/provenance.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { acceptTargetObservation } from '../../../src/services/targetHistory.mjs';
 import {
   countOpenFindings,
   expectedReadinessScores,
@@ -81,10 +82,12 @@ test.describe('portal dynamic provenance', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'findings', baseUrl);
 
-    const openTab = page.locator('.ft-status .ft-tab').filter({ hasText: /^Open/ });
-    const pageSizeSelect = page.locator('.findings-pager select').last();
-    await expect(openTab.locator('.ft-count')).toHaveText(String(PROVENANCE_FINDINGS.baselineOpenCount));
-    await expect(page.locator('.findings-pager')).toContainText(`of ${PROVENANCE_FINDINGS.baselineOpenCount}`);
+    // Current Findings: exact single-status chips with server totals, and a server pager in "Each finding".
+    const openTab = page.getByRole('group', { name: 'Finding status filters' }).getByRole('button', { name: /^Open/ });
+    const pager = page.locator('.rf-pager > .rf-pager-info');
+    await expect(openTab.locator('.rf-tab-count')).toHaveText(String(PROVENANCE_FINDINGS.baselineOpenCount));
+    await page.getByRole('button', { name: 'Each finding' }).click();
+    await expect(pager).toContainText(`of ${PROVENANCE_FINDINGS.baselineOpenCount}`);
     for (const title of PROVENANCE_FINDINGS.baselineOnlyTitles) {
       await expect(page.getByText(title, { exact: false })).toBeVisible();
     }
@@ -98,9 +101,10 @@ test.describe('portal dynamic provenance', () => {
     expect(countOpenFindings(mutatedFindings)).toBe(PROVENANCE_FINDINGS.mutatedOpenCount);
 
     await page.goto(`${mutatedBaseUrl}/app#findings`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(openTab.locator('.ft-count')).toHaveText(String(PROVENANCE_FINDINGS.mutatedOpenCount));
-    await expect(page.locator('.findings-pager')).toContainText(`of ${PROVENANCE_FINDINGS.mutatedOpenCount}`);
-    await pageSizeSelect.selectOption('12');
+    await expect(openTab.locator('.rf-tab-count')).toHaveText(String(PROVENANCE_FINDINGS.mutatedOpenCount));
+    // The restarted server is a new origin, so the remembered view does not carry over.
+    await page.getByRole('button', { name: 'Each finding' }).click();
+    await expect(pager).toContainText(`of ${PROVENANCE_FINDINGS.mutatedOpenCount}`);
     for (const title of PROVENANCE_FINDINGS.mutatedOnlyTitles) {
       await expect(page.getByText(title, { exact: false })).toBeVisible();
     }
@@ -134,30 +138,68 @@ test.describe('portal dynamic provenance', () => {
     await expect(promotedTargetRow).toContainText('Domain ownership verified');
   });
 
-  test('FT-PROV-dyn-04 target detail WAF posture updates after posture mutation', async ({ page }) => {
+  test('FT-PROV-dyn-04 configured WAF posture never reads as observed WAF detection; per-family history follows recorded observations', async ({ page }) => {
     await startPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureProtected });
     const baseUrl = getPortalPlaywrightBaseUrl();
     const initialDetail = await fetchPortalTargetDetail(PROVENANCE_WAF_POSTURE.targetId, baseUrl);
     expect(initialDetail.waf_posture?.posture).toBe(PROVENANCE_WAF_POSTURE.baselinePosture);
+    expect(initialDetail.protection_profile?.families?.waf?.status).toBe('not_checked');
 
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', baseUrl);
-
-    // Post-ADR-0008 target detail: WAF posture surfaces as the "Web application firewall" layer
-    // under the "Protection path" tab of the "Evidence & posture" card (no legacy "WAF posture"
-    // heading or technical-record codeblock).
-    const wafLayer = page.locator('.td-layer').filter({ hasText: 'Web application firewall' });
-    await expect(wafLayer.getByText('Protection worked', { exact: true })).toBeVisible();
+    // Configuration metadata for a WAF asset is not an external observation: the WAF family stays
+    // "Not checked" and blocking stays unmeasured, whatever posture the configuration records.
+    const observations = page.getByRole('region', { name: 'Protection observations' });
+    const wafFamily = observations.getByRole('listitem').filter({ hasText: /^WAF/ });
+    await expect(wafFamily).toContainText('Not checked');
+    await expect(wafFamily).toContainText('No recorded observation');
+    await expect(observations).toContainText('Not measured. Detection alone does not show whether anything is blocked.');
+    // The declared expectation ("Expected: Protected path baseline") is customer context, not an observation.
+    await expect(observations).not.toContainText(/Protection worked|\bprotected\b/i);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureDrift });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
     const mutatedDetail = await fetchPortalTargetDetail(PROVENANCE_WAF_POSTURE.targetId, mutatedBaseUrl);
     expect(mutatedDetail.waf_posture?.posture).toBe(PROVENANCE_WAF_POSTURE.mutatedPosture);
     expect(mutatedDetail.waf_posture?.drift_reason).toBe(PROVENANCE_WAF_POSTURE.mutatedDriftReason);
+    expect(mutatedDetail.protection_profile?.families?.waf?.status).toBe('not_checked');
 
     await page.goto(`${mutatedBaseUrl}/app#target-detail?id=${encodeURIComponent(PROVENANCE_WAF_POSTURE.targetId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(wafLayer.getByText('Drift', { exact: true })).toBeVisible();
-    await expect(wafLayer.getByText('Protection worked', { exact: true })).toHaveCount(0);
+    await expect(wafFamily).toContainText('Not checked');
+    await expect(observations).not.toContainText(/\bdrift\b|policy_exception/i);
+    await expect(page.locator('#portal-main')).not.toContainText('policy_exception');
+
+    // A recorded WAF observation from an explicit synthetic producer updates that family's history,
+    // labelled as not live evidence, and is not promoted into the current detection above.
+    const recorded = acceptTargetObservation(
+      { tenantId: PORTAL_BASELINE_IDS.tenantId, userId: 'usr_owner', role: 'owner' },
+      {
+        target_id: PROVENANCE_WAF_POSTURE.targetId,
+        family: 'waf',
+        check_id: 'waf.fingerprint.safe',
+        outcome: 'detected',
+        source_kind: 'edge_detection',
+        producer_kind: 'internal_simulation',
+        nonce: 'prov-dyn-04-waf',
+        observed_at: '2026-09-01T10:00:00.000Z',
+        source_completed_at: '2026-09-01T10:00:05.000Z',
+        corpus_version: 'corpus-synthetic',
+        scenario_version: 'scenario-synthetic',
+        check_version: 'sha256:synthetic',
+      },
+      { internal: true },
+    );
+    expect(recorded.error).toBeUndefined();
+    expect(recorded.producer_kind).toBe('internal_simulation');
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(wafFamily).toContainText('Not checked');
+    await page.getByRole('tab', { name: /^Changes/ }).click();
+    const layers = page.getByRole('region', { name: 'Current state by layer' });
+    const wafLayer = layers.getByRole('listitem').filter({ hasText: /^WAF/ });
+    await expect(wafLayer).toContainText('Detected');
+    await expect(wafLayer).toContainText('Not live evidence');
+    await expect(layers.getByRole('listitem').filter({ hasText: /^CDN/ })).toHaveCount(0);
   });
 
   test('FT-PROV-dyn-05 dashboard WAF connectors tile updates after connector status mutation', async ({ page }) => {
@@ -172,9 +214,11 @@ test.describe('portal dynamic provenance', () => {
 
     // The dashboard WAF-summary connector tile was removed in the portal revamp; connector
     // status now surfaces per-connector in the "Configured connectors" table on Integrations.
-    const connectorTable = page.locator('.card').filter({ hasText: 'Configured connectors' }).locator('table');
-    await expect(connectorTable.getByText('active', { exact: true })).toBeVisible();
-    await expect(connectorTable.getByText('degraded', { exact: true })).toHaveCount(0);
+    // The State column shows each recorded status by meaning: active reads "Configuration accepted",
+    // degraded reads "Last poll incomplete".
+    const stateCells = page.locator('td[data-label="State"]');
+    await expect(stateCells.getByText('Configuration accepted', { exact: true })).toBeVisible();
+    await expect(stateCells.getByText('Last poll incomplete', { exact: true })).toHaveCount(0);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceConnectorDegraded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -183,8 +227,8 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedSummary.connectors_degraded).toBe(PROVENANCE_WAF_CONNECTORS.mutatedDegraded);
 
     await page.goto(`${mutatedBaseUrl}/app#integrations`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(connectorTable.getByText('degraded', { exact: true })).toBeVisible();
-    await expect(connectorTable.getByText('active', { exact: true })).toHaveCount(0);
+    await expect(stateCells.getByText('Last poll incomplete', { exact: true })).toBeVisible();
+    await expect(stateCells.getByText('Configuration accepted', { exact: true })).toHaveCount(0);
   });
 
   test('FT-PROV-dyn-06 finding remediation badge and delivered_via line update after mutation', async ({ page }) => {

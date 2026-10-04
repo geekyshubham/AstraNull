@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
+import { advanceScan } from '../../src/services/validationScans.mjs';
 import { getStore } from '../../src/store.mjs';
 import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
@@ -29,8 +30,13 @@ function expireCollectionWindows() {
   }
 }
 
+// The explicit runner path (the same service methods the validation-scan-runner CLI calls
+// through its adapters). Isolated sim mode: no signing secret, no network, no probe jobs.
+const RUNNER_CTX = { tenantId: 'ten_demo', userId: 'validation-scan-runner', role: 'system' };
+const SIM_CONFIG = { probeMode: 'simulation' };
+
 describe('validation scans API', () => {
-  it('runs the on-demand lifecycle: create with selected checks, watch progress, read activity, stop', async () => {
+  it('runs the on-demand lifecycle: create with selected checks, passive reads, explicit runner advance, stop', async () => {
     const engineer = demoHeaders('engineer');
     const viewer = demoHeaders('viewer', 'ten_demo', 'usr_viewer');
 
@@ -50,16 +56,61 @@ describe('validation scans API', () => {
     assert.equal(created.json.steps[0].section_label != null, true);
     assert.equal(getStore().testRuns.length, 1);
 
+    // The explicit start fixed the initial step state. Every read below observes it
+    // unchanged with zero side effects: no child run, no audit, no probe job.
+    const stepsAfterCreate = JSON.stringify(created.json.steps.map((step) => step.status));
+    const runsAfterCreate = getStore().testRuns.length;
+    const auditsAfterCreate = getStore().auditLog.length;
+    const jobsAfterCreate = (getStore().probeJobs ?? []).length;
+
     expireCollectionWindows();
+    // A read-only caller never advances.
     const viewerRead = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: viewer });
     assert.equal(viewerRead.status, 200);
-    assert.deepEqual(viewerRead.json.steps.map((step) => step.status), ['collecting', 'pending', 'pending']);
-    assert.equal(getStore().testRuns.length, 1, 'read-only callers never advance scans or start child runs');
+    assert.deepEqual(JSON.stringify(viewerRead.json.steps.map((step) => step.status)), stepsAfterCreate);
+    // An authorized caller does not advance either, and an advance=true query parameter
+    // is ignored: HTTP GETs are always passive by contract.
+    const engineerRead = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}?advance=true`, { headers: engineer });
+    assert.equal(engineerRead.status, 200);
+    assert.deepEqual(JSON.stringify(engineerRead.json.steps.map((step) => step.status)), stepsAfterCreate);
+    const activityRead = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}/activity?advance=true`, { headers: engineer });
+    assert.equal(activityRead.status, 200);
+    assert.equal(activityRead.json.items[0].action, 'validation_scan.created');
+    const listed = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1', { headers: viewer });
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.count, 1);
+    assert.equal(listed.json.items[0].id, created.json.id);
+    assert.equal(getStore().testRuns.length, runsAfterCreate, 'passive reads never start child runs');
+    assert.equal(getStore().auditLog.length, auditsAfterCreate, 'passive reads never audit');
+    assert.equal((getStore().probeJobs ?? []).length, jobsAfterCreate, 'passive reads never create probe jobs');
+    assert.equal(viewerRead.json.steps[0].test_run_id, getStore().testRuns[0].id, 'state unchanged after the explicit start');
+    assert.equal(viewerRead.json.steps[0].status, 'collecting');
+
+    const byTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_1&limit=1', { headers: viewer });
+    assert.deepEqual(byTarget.json.items.map((scan) => scan.id), [created.json.id]);
+    const otherTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_other', { headers: viewer });
+    assert.equal(otherTarget.json.count, 0);
+
+    // The concurrency gate still holds while the scan is active — an HTTP caller can
+    // never bypass it by creating a second scan for the same group.
+    const concurrent = await request(baseUrl, 'POST', '/v1/validation-scans', {
+      headers: engineer,
+      body: { target_group_id: 'tg_1', target_id: 'tgt_1', check_ids: ['dns.authoritative_response.safe'] },
+    });
+    assert.equal(concurrent.status, 409);
+    assert.equal(concurrent.json.error, 'concurrent_scan_blocked');
+
+    // Explicit runner path: the only authorized way to move a running scan forward.
+    // This is the same service method the validation-scan-runner CLI drives in
+    // Postgres mode; sequential gating stays intact.
+    const advanced = advanceScan(RUNNER_CTX, created.json.id, { runtimeConfig: SIM_CONFIG });
+    assert.equal(advanced.acquired, true);
     const progressed = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
     assert.equal(progressed.status, 200);
     assert.deepEqual(progressed.json.steps.map((step) => step.status), ['verdicted', 'collecting', 'pending']);
     assert.equal(progressed.json.steps[0].verdict.verdict, 'inconclusive');
     assert.equal(progressed.json.steps[0].test_run_id, getStore().testRuns[0].id);
+    assert.equal(getStore().testRuns.length, 2, 'one explicit advance started exactly one child run');
 
     const activity = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}/activity`, { headers: viewer });
     assert.equal(activity.status, 200);
@@ -70,15 +121,6 @@ describe('validation scans API', () => {
       assert.equal(JSON.stringify(item).includes('nonce_for'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(item.metadata ?? {}, 'payload'), false);
     }
-
-    const listed = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1', { headers: viewer });
-    assert.equal(listed.status, 200);
-    assert.equal(listed.json.count, 1);
-    assert.equal(listed.json.items[0].id, created.json.id);
-    const byTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_1&limit=1', { headers: viewer });
-    assert.deepEqual(byTarget.json.items.map((scan) => scan.id), [created.json.id]);
-    const otherTarget = await request(baseUrl, 'GET', '/v1/validation-scans?target_group_id=tg_1&target_id=tgt_other', { headers: viewer });
-    assert.equal(otherTarget.json.count, 0);
 
     const stopped = await request(baseUrl, 'POST', `/v1/validation-scans/${created.json.id}/cancel`, {
       headers: engineer,
@@ -101,6 +143,44 @@ describe('validation scans API', () => {
     expireCollectionWindows();
     const final = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
     assert.equal(final.json.status, 'cancelled');
+    assert.equal(getStore().testRuns.length, 2);
+  });
+
+  it('completes every step sequentially through explicit runner advances and is inert afterwards', async () => {
+    const engineer = demoHeaders('engineer');
+    const created = await request(baseUrl, 'POST', '/v1/validation-scans', {
+      headers: engineer,
+      body: { target_group_id: 'tg_1', target_id: 'tgt_1', check_ids: ['dns.authoritative_response.safe', 'origin.leak_scan.safe'] },
+    });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.json.steps.map((step) => step.status), ['collecting', 'pending']);
+    assert.equal(getStore().testRuns.length, 1);
+
+    expireCollectionWindows();
+    const first = advanceScan(RUNNER_CTX, created.json.id, { runtimeConfig: SIM_CONFIG });
+    assert.equal(first.acquired, true);
+
+    expireCollectionWindows();
+    const second = advanceScan(RUNNER_CTX, created.json.id, { runtimeConfig: SIM_CONFIG });
+    assert.equal(second.acquired, true);
+
+    const final = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
+    assert.equal(final.status, 200);
+    assert.equal(final.json.status, 'completed');
+    assert.deepEqual(final.json.steps.map((step) => step.status), ['verdicted', 'verdicted']);
+    assert.ok(final.json.completed_at);
+    assert.equal(final.json.summary.verdicted, 2);
+    assert.equal(getStore().testRuns.length, 2, 'each step started exactly one child run');
+    assert.equal(getStore().auditLog.filter((row) => row.action === 'validation_scan.completed').length, 1);
+
+    // A completed scan is inert: a further explicit advance does nothing, and a passive
+    // read after the sweep keeps the terminal state.
+    const inactive = advanceScan(RUNNER_CTX, created.json.id, { runtimeConfig: SIM_CONFIG });
+    assert.equal(inactive.acquired, false);
+    assert.equal(inactive.reason, 'inactive');
+    expireCollectionWindows();
+    const afterInert = await request(baseUrl, 'GET', `/v1/validation-scans/${created.json.id}`, { headers: engineer });
+    assert.equal(afterInert.json.status, 'completed');
     assert.equal(getStore().testRuns.length, 2);
   });
 
