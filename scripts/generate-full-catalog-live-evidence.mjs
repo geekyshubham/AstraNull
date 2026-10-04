@@ -32,8 +32,7 @@ export const GENERATOR_SCHEMA = 'astranull.full-catalog-live-evidence.v1';
 export const ARTIFACT_TYPE = 'astranull_full_catalog_target_evaluation';
 export const ARTIFACT_SCHEMA_VERSION = 2;
 export const EXPECTED_CATALOG_ROWS = 721;
-// Website/FQDN evidence excludes open-recursion testing, which requires a declared resolver IP.
-export const EXPECTED_SAFE_CHECK_RESULTS = 193;
+export const EXPECTED_SAFE_CHECK_RESULTS = 194;
 export const EXPECTED_DISPOSITIONS = Object.freeze({
   safe_runnable: 404,
   additional_input_required: 10,
@@ -287,10 +286,10 @@ function validateMatrix(matrix, catalogRows = VECTOR_CATALOG) {
     matrix.runnable_safe_check_ids,
     'matrix.runnable_safe_check_ids',
   );
-  invariant(plannedIds.size === EXPECTED_SAFE_CHECK_RESULTS, 'matrix must plan exactly 193 unique safe checks');
+  invariant(plannedIds.size === EXPECTED_SAFE_CHECK_RESULTS, 'matrix must plan exactly 194 unique safe checks');
   invariant(
     matrix.summary.runnable_safe_check_count === EXPECTED_SAFE_CHECK_RESULTS,
-    'matrix runnable_safe_check_count must be 193',
+    'matrix runnable_safe_check_count must be 194',
   );
   assertSameJson([...rowRunnableIds].sort(), [...plannedIds].sort(), 'row/planned runnable check IDs');
 
@@ -381,7 +380,7 @@ function validateLiveResults(liveResults, matrix, plannedIds, options) {
     invariant(byCheckId.has(checkId), `missing live result for planned check: ${checkId}`);
   }
   const selected = matrix.runnable_safe_check_ids.map((checkId) => byCheckId.get(checkId));
-  invariant(selected.length === EXPECTED_SAFE_CHECK_RESULTS, 'selected live result count must be 193');
+  invariant(selected.length === EXPECTED_SAFE_CHECK_RESULTS, 'selected live result count must be 194');
   invariant(
     new Set(selected.map((result) => result.check_id)).size === EXPECTED_SAFE_CHECK_RESULTS,
     'selected live check results must be unique',
@@ -478,7 +477,7 @@ export function validateFullCatalogLiveEvidence(artifact) {
   requireCanonicalTimestamp(artifact.generated_at, 'artifact.generated_at');
   invariant(artifact.target?.validation_mode === 'external_only', 'artifact target must be external_only');
   invariant(Array.isArray(artifact.rows) && artifact.rows.length === EXPECTED_CATALOG_ROWS, 'artifact must contain exactly 721 rows');
-  invariant(Array.isArray(artifact.check_results) && artifact.check_results.length === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must contain exactly 193 check results');
+  invariant(Array.isArray(artifact.check_results) && artifact.check_results.length === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must contain exactly 194 check results');
 
   const resultByCheckId = new Map();
   const runIds = new Set();
@@ -535,16 +534,16 @@ export function validateFullCatalogLiveEvidence(artifact) {
   }
 
   invariant(vectorIds.size === EXPECTED_CATALOG_ROWS, 'artifact vector IDs must be unique');
-  invariant(referencedChecks.size === EXPECTED_SAFE_CHECK_RESULTS, 'artifact rows must reference all 193 check results');
+  invariant(referencedChecks.size === EXPECTED_SAFE_CHECK_RESULTS, 'artifact rows must reference all 194 check results');
   assertSameJson(sortedCounter(evaluationStatuses), EXPECTED_EVALUATION_STATUS, 'artifact evaluation totals');
   invariant(artifact.summary?.catalog_rows === EXPECTED_CATALOG_ROWS, 'artifact summary catalog_rows must be 721');
   invariant(artifact.summary?.unique_vector_ids === EXPECTED_CATALOG_ROWS, 'artifact summary vector IDs must be 721');
-  invariant(artifact.summary?.planned_unique_safe_checks === EXPECTED_SAFE_CHECK_RESULTS, 'artifact summary planned checks must be 193');
-  invariant(artifact.summary?.completed_unique_safe_checks === EXPECTED_SAFE_CHECK_RESULTS, 'artifact summary completed checks must be 193');
+  invariant(artifact.summary?.planned_unique_safe_checks === EXPECTED_SAFE_CHECK_RESULTS, 'artifact summary planned checks must be 194');
+  invariant(artifact.summary?.completed_unique_safe_checks === EXPECTED_SAFE_CHECK_RESULTS, 'artifact summary completed checks must be 194');
   invariant(artifact.summary?.refusals === 0, 'artifact summary refusals must be zero');
-  invariant(artifact.summary?.check_status?.verdicted === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 193 verdicted checks');
-  invariant(artifact.summary?.check_confidence?.external_only === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 193 external_only checks');
-  invariant(artifact.summary?.probe_result_events === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 193 probe_result events');
+  invariant(artifact.summary?.check_status?.verdicted === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 194 verdicted checks');
+  invariant(artifact.summary?.check_confidence?.external_only === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 194 external_only checks');
+  invariant(artifact.summary?.probe_result_events === EXPECTED_SAFE_CHECK_RESULTS, 'artifact must have 194 probe_result events');
   assertSameJson(artifact.summary.evaluation_status, EXPECTED_EVALUATION_STATUS, 'artifact summary evaluation totals');
 
   requireObject(artifact.custody, 'artifact.custody');

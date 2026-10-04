@@ -696,7 +696,7 @@ export const CHECK_CATALOG = [
     name: 'Open Recursion Behavior (Safe)',
     vector_family: 'dns',
     description: 'Live open-recursion check — single external lookup via declared resolver.',
-    supported_targets: ['ip'],
+    supported_targets: ['fqdn', 'dns', 'ip'],
     required_customer_setup: ['declared_resolver_target'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Resolver must not answer recursion for external names when closed.',

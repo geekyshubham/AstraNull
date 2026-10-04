@@ -1445,17 +1445,42 @@ describe('capability probes P0/P1', () => {
     assert.equal(resolverCalls, 0);
   });
 
-  it('open recursion refuses an exact target that is not an IP literal', async () => {
+  it('open recursion resolves an FQDN target and queries the resolved address', async () => {
+    let resolverCalls = 0;
+    const calls = [];
+    const outcome = await probeOpenRecursion(job({
+      target: { kind: 'fqdn', value: 'resolver.example.test' },
+      probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
+    }), {
+      resolve4Fn: async () => ['93.184.216.34'],
+      resolve6Fn: async () => [],
+      resolve4ExternalFn: async (resolver, name) => {
+        resolverCalls += 1;
+        calls.push({ resolver, name });
+        return ['1.2.3.4'];
+      },
+    });
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.resolver_host, 'resolver.example.test');
+    assert.equal(outcome.metadata.resolver_address, '93.184.216.34');
+    assert.equal(outcome.metadata.open_recursion_detected, true);
+    assert.equal(resolverCalls, 1);
+    assert.deepEqual(calls, [{ resolver: '93.184.216.34', name: 'resolver.example.test' }]);
+  });
+
+  it('open recursion refuses an FQDN target resolving to a non-routable address', async () => {
     let resolverCalls = 0;
     const outcome = await probeOpenRecursion(job({
       target: { kind: 'fqdn', value: 'resolver.example.test' },
       probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
     }), {
+      resolve4Fn: async () => ['10.0.0.53'],
+      resolve6Fn: async () => [],
       resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
     });
     assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
-    assert.equal(outcome.metadata.reason, 'not_an_ip_literal');
+    assert.equal(outcome.metadata.blocked_address, '10.0.0.53');
     assert.equal(resolverCalls, 0);
   });
 

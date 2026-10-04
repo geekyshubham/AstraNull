@@ -152,12 +152,12 @@ describe('full-catalog live evidence generator', () => {
       .every((row) => row.check_result_refs.length > 0));
   });
 
-  it('preserves the required 721/404/10/258/49/193 totals', () => {
+  it('preserves the required 721/404/10/258/49/194 totals', () => {
     const artifact = buildArtifact();
 
     assert.equal(artifact.rows.length, 721);
-    assert.equal(artifact.check_results.length, 193);
-    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 193);
+    assert.equal(artifact.check_results.length, 194);
+    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 194);
     assert.deepEqual(MATRIX.summary.dispositions, {
       safe_runnable: 404,
       additional_input_required: 10,
@@ -172,9 +172,9 @@ describe('full-catalog live evidence generator', () => {
       monitor_only_not_executed: 49,
       soc_gated_not_executed: 258,
     });
-    assert.equal(artifact.summary.planned_unique_safe_checks, 193);
-    assert.equal(artifact.summary.completed_unique_safe_checks, 193);
-    assert.equal(artifact.summary.check_status.verdicted, 193);
-    assert.equal(artifact.summary.check_confidence.external_only, 193);
+    assert.equal(artifact.summary.planned_unique_safe_checks, 194);
+    assert.equal(artifact.summary.completed_unique_safe_checks, 194);
+    assert.equal(artifact.summary.check_status.verdicted, 194);
+    assert.equal(artifact.summary.check_confidence.external_only, 194);
   });
 });

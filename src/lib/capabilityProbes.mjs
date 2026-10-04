@@ -2605,9 +2605,7 @@ export async function probeOpenRecursion(job, deps = {}) {
 
   deps = ensureProbeDeadline(job, deps);
   const queryName = targetHost;
-  const resolverVerdict = await vetProbeDestinationHost(resolverHost, deps, {
-    requireIpLiteral: true,
-  });
+  const resolverVerdict = await vetProbeDestinationHost(resolverHost, deps);
   if (remainingProbeTimeoutMs(job, deps) <= 0) {
     return deadlineOutcome(job, kind, deps, 0, { resolver_host: resolverHost });
   }
@@ -2615,7 +2613,7 @@ export async function probeOpenRecursion(job, deps = {}) {
     return {
       external_result: 'error',
       metadata: withKind(job, kind, {
-        error_class: 'resolver_not_routable',
+        error_class: resolverVerdict.blocked_address ? 'resolver_not_routable' : (resolverVerdict.error_class ?? 'resolver_not_routable'),
         resolver_host: resolverHost,
         blocked_address: resolverVerdict.blocked_address ?? null,
         reason: resolverVerdict.reason,
@@ -2631,6 +2629,8 @@ export async function probeOpenRecursion(job, deps = {}) {
     return resolverClient.resolve4(name);
   });
 
+  const resolverAddress = resolverVerdict.addresses?.[0] ?? resolverHost;
+
   let open_recursion = false;
   let requestsSent = 0;
   try {
@@ -2638,7 +2638,7 @@ export async function probeOpenRecursion(job, deps = {}) {
       startProbeIoAttempt(
         deps,
         'dns_external_lookup',
-        () => resolveExternal(resolverHost, queryName),
+        () => resolveExternal(resolverAddress, queryName),
         () => { requestsSent = 1; },
       ),
       job,
@@ -2649,6 +2649,7 @@ export async function probeOpenRecursion(job, deps = {}) {
     if (!isAuthoritativeDnsNegative(error)) {
       return dnsResolverFailureOutcome(job, kind, deps, requestsSent, error, {
         resolver_host: resolverHost,
+        resolver_address: resolverAddress,
         recursion_test_name: queryName,
       });
     }
@@ -2660,6 +2661,7 @@ export async function probeOpenRecursion(job, deps = {}) {
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       resolver_host: resolverHost,
+      resolver_address: resolverAddress,
       recursion_test_name: queryName,
       open_recursion_detected: open_recursion,
       resolver_attempts: requestsSent,
