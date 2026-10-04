@@ -29,3 +29,7 @@ Current external inconclusive results remain evaluated coverage. A pending run w
 - Stop works for standalone checks and whole scans with the existing audit trail and safety gates.
 - Controls, row details, pause, filters, responsive scrolling, light/dark contrast, and keyboard focus work at 375/768/1024/1440 pixels.
 - Unit, HTTP integration, real PostgreSQL/RLS, browser, build, lint, schema, and safety checks pass.
+
+## Live verification (2026-10-04)
+
+CI and AWS deployment succeeded for `f4654c3a`. The live `tgt_794d63f6ec7459eb` workspace returned signed worker activity with actual HEAD/POST methods, WAF vector identity, HTTP 200/403/431 statuses, observed HTML MIME types, request/body preview fields, and operation counts. A live POST entry expanded to show its 70-byte request, captured preview and readable explanation. Stop validation and Stop run were visible without canceling the ongoing approved batch. Coverage had 0 partial pairs; current inconclusive results remained evaluated. The batch had completed 109 of 149 checks and preserved queued/deferred safety gates. Headers-only checks explicitly report that their response bodies were not consumed rather than inventing a payload.

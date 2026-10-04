@@ -37681,7 +37681,7 @@ function EC({ config: e, session: t, runId: n, checkName: r, running: i, canStop
               children: [
                 "Worker-recorded activity for ",
                 r || "the selected check",
-                ". Query values, bodies and credential values are not shown."
+                ", including methods, vectors, response formats and redacted payload previews. Credentials and declared private query values are withheld."
               ]
             }),
             /* @__PURE__ */ (0, H.jsx)("thead", {

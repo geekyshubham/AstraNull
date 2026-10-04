@@ -22,7 +22,7 @@
 .probe-activity-table code { display: block; overflow-wrap: anywhere; color: var(--fg-2); margin-top: 4px; background: transparent; }
 .probe-activity-table small { display: block; margin-top: 4px; color: var(--fg-2); }
 .probe-activity-operation { font-weight: 500; }
-.probe-activity-expand { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; background: transparent; border: 0; color: var(--fg-2); border-radius: 4px; cursor: pointer; }
+.probe-activity-expand { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; background: transparent; border: 0; color: var(--fg-2); border-radius: 4px; cursor: pointer; scroll-margin-block: 44px 8px; }
 .probe-activity-expand:hover { background: var(--surface-sunk); color: var(--fg); }
 .probe-activity-expand:focus-visible, .probe-activity-scroll:focus-visible, .probe-activity-tools select:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
 .probe-activity-detail td { background: var(--surface-sunk); }

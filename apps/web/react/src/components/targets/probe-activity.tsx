@@ -99,7 +99,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
       {error ? <p className="probe-activity-error" role="alert">{error}</p> : null}
       <div className="probe-activity-scroll" role="region" aria-label="Recorded request and response activity" tabIndex={0}>
         <table className="probe-activity-table" role="table">
-          <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}. Query values, bodies and credential values are not shown.</caption>
+          <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}, including methods, vectors, response formats and redacted payload previews. Credentials and declared private query values are withheld.</caption>
           <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Event</th><th role="columnheader" scope="col">Time</th><th role="columnheader" scope="col">Request / operation</th><th role="columnheader" scope="col">Response</th><th role="columnheader" scope="col"><span className="sr-only">Details</span></th></tr></thead>
           <tbody role="rowgroup">
             {items.map((item) => {
