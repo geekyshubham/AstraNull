@@ -577,9 +577,12 @@ export function TargetDetailView({
   const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))
     && runAll.some((check) => getString(check, ['check_id'], '') === getString(run, ['check_id'], ''))) ?? null;
   const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
-  const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId) ?? null;
-  const activityRunId = activityRow?.runId || (!selectedRow ? getString(activeStandalone, ['id'], '') : '');
-  const activityRunning = activityRow ? activityRow.status === 'running' : activeStandalone !== null;
+  const currentScanStep = Array.isArray(scan?.steps) ? (scan.steps as DataItem[]).find((step) => ['running', 'collecting', 'starting'].includes(getString(step, ['status'], '')) && getString(step, ['test_run_id'], '')) ?? null : null;
+  const latestTargetRun = targetRuns[0] ?? null;
+  const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId === getString(latestTargetRun, ['id'], '')) ?? null;
+  const activityRunId = selectedRow ? selectedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '';
+  const activityRunning = selectedRow ? selectedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
+  const activityCheckName = selectedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : activityRow?.name || (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : ''));
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -1574,9 +1577,9 @@ export function TargetDetailView({
             ) : null}
             <ProbeActivity
               config={config} session={session} runId={activityRunId}
-              checkName={activityRow?.name || displayCheckName(getString(activeStandalone, ['check_id'], ''))}
+              checkName={activityCheckName}
               running={activityRunning} canStop={canStartBoundedRun && Boolean(activityRunId)}
-              onStop={() => setStopSingleRun({ id: activityRunId, name: activityRow?.name || 'Current check' })}
+              onStop={() => setStopSingleRun({ id: activityRunId, name: activityCheckName || 'Current check' })}
               onFollowActive={selectedRow && activeCheckRow && selectedRow.checkId !== activeCheckRow.checkId ? () => selectCheck(activeCheckRow.checkId) : undefined}
               notSent={activityRow && !activityRunId && ['blocked', 'skipped', 'cancelled'].includes(activityRow.status) ? { reason: activityRow.reason, at: activityRow.finishedAt || activityRow.startedAt } : null}
             />
