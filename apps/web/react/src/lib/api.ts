@@ -2,6 +2,7 @@ import { CORE_PORTAL_DATASETS, PORTAL_ROUTE_DATASETS } from './types';
 import type { DataItem, PortalConfig, PortalData, PortalDataset, RouteId, Session, StatePayload } from './types';
 import { asArray, DEPLOYMENT_MODE_GAP_MESSAGE } from './utils';
 import { canReadDataset } from './dataset-access.mjs';
+import { parseFindingsEnvelope } from './findings-query.mjs';
 import { configurationErrorMessage } from './error-messages';
 // Plain ESM so node:test can exercise the real shipped logic rather than a copy of it. These
 // used to be defined here and re-implemented inside the test file, so the tests could not
@@ -356,12 +357,13 @@ async function getJson(path: string, headers: Record<string, string>) {
 async function requestWithHeaders(
   path: string,
   headers: Record<string, string>,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; signal?: AbortSignal } = {}
 ) {
   const response = await fetchWithRateLimitRetry(path, {
     method: options.method ?? 'GET',
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
@@ -381,7 +383,7 @@ export async function requestJson(
   config: PortalConfig,
   session: Session,
   path: string,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; signal?: AbortSignal } = {}
 ) {
   return requestWithHeaders(path, buildApiHeaders(config, session), options);
 }
@@ -559,6 +561,14 @@ function applyDatasetValue(data: PortalData, dataset: PortalDataset, value: unkn
       data.targetGroups = asArray(value);
       data.targetGroupsMeta = asObject((value as { meta?: unknown } | null)?.meta);
       break;
+    case 'findings': {
+      const envelope = parseFindingsEnvelope(value);
+      data.findings = envelope.items;
+      data.findingsMeta = envelope.exact
+        ? { total: envelope.total, page: envelope.page, pages: envelope.pages, limit: envelope.limit, hasMore: envelope.hasMore, emptyReason: envelope.emptyReason }
+        : null;
+      break;
+    }
     case 'targets':
       data.targets = asArray(value);
       data.targetsMeta = asObject((value as { meta?: unknown } | null)?.meta);
@@ -794,6 +804,7 @@ export const EMPTY_PORTAL_DATA: PortalData = {
   validationScans: [],
   validationScansMeta: null,
   findings: [],
+  findingsMeta: null,
   evidence: [],
   highScale: [],
   reports: [],

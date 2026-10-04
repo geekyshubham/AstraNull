@@ -1,5 +1,11 @@
 # Backend and Platform Test Strategy
 
+## Local Node test execution
+
+`npm test`, `npm run test:unit`, and the corresponding Make targets run one Node test file at a time. The suite includes wall-clock performance budgets; launching a worker for every reported CPU can make unrelated test files compete with those measurements. File-level serialization preserves the existing performance thresholds and all assertions. Tests for races still create their explicit parallel requests and Postgres transactions inside each test.
+
+The browser suite remains a separate command: `ASTRANULL_PORTAL_SCALE=1 npm run test:portal-playwright`. Run it separately from Node performance measurements when collecting final verification evidence.
+
 ## Test categories
 
 | Category | What to test |

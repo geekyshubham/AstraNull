@@ -1,8 +1,18 @@
 import { audit } from '../audit.mjs';
+import {
+  buildFindingListEnvelope,
+  findingListQueryFailure,
+  findingMatchesListQuery,
+  parseFindingListQuery,
+} from '../lib/findingList.mjs';
+import { planFindingPatch } from '../lib/findingLifecycle.mjs';
 import { newId } from '../lib/ids.mjs';
 import { scrubFindingForCustomer } from '../lib/outsideInEvidence.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { emitNotificationIfSubscribed } from './notifications.mjs';
+import { presentFindingLineage } from './retestLineage.mjs';
+
+export { FINDING_LIFECYCLE, authorizeFindingWrite, planFindingPatch } from '../lib/findingLifecycle.mjs';
 
 export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   const store = getStore();
@@ -66,45 +76,49 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   return finding;
 }
 
-export function listFindings(ctx, options = {}) {
-  let rows = getStore().findings.filter((f) => f.tenant_id === ctx.tenantId);
-  if (options.target_group_id) {
-    rows = rows.filter((f) => f.target_group_id === options.target_group_id);
+function groupMemberIds(tenantId, groupId) {
+  const ids = new Set();
+  if (!groupId) return ids;
+  for (const target of getStore().targets ?? []) {
+    if (target.tenant_id !== tenantId || target.id == null) continue;
+    if (target.target_group_id !== groupId || target.deleted_at) continue;
+    ids.add(target.id);
   }
-  if (options.target_id) {
-    rows = rows.filter((f) => f.target_id === options.target_id);
-  }
-  if (options.test_run_id) {
-    rows = rows.filter((f) => f.test_run_id === options.test_run_id);
-  }
+  return ids;
+}
+
+function selectFindings(ctx, query) {
+  const members = groupMemberIds(ctx.tenantId, query.target_group_id);
+  const rows = getStore().findings.filter((row) => (
+    row.tenant_id === ctx.tenantId && findingMatchesListQuery(row, query, members)
+  ));
   rows.sort((left, right) =>
     String(right.created_at ?? right.opened_at ?? '').localeCompare(
       String(left.created_at ?? left.opened_at ?? ''),
     ) || String(right.id ?? '').localeCompare(String(left.id ?? '')),
   );
-  const limit = Number(options.limit);
-  if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
+  if (query.limit == null) return query.offset ? rows.slice(query.offset) : rows;
+  return rows.slice(query.offset, query.offset + query.limit);
+}
+
+export function listFindings(ctx, options = {}) {
+  const query = parseFindingListQuery(options, { paginate: false });
   // EVIDENCE-01 / ADR-0008: customer list items must read external-only — scrub notes/remediation.
-  return rows.map(scrubFindingForCustomer);
+  return selectFindings(ctx, query).map(scrubFindingForCustomer);
 }
 
 export function listFindingsEnvelope(ctx, options = {}) {
-  const items = listFindings(ctx, options);
-  return {
-    items,
-    count: items.length,
-    meta: {
-      empty_reason: items.length
-        ? null
-        : options.target_group_id
-          ? 'No findings match this target group filter.'
-          : options.target_id
-            ? 'No findings match this target filter.'
-            : options.test_run_id
-              ? 'No findings match this test run filter.'
-              : 'No findings have been published for this tenant yet.',
-    },
-  };
+  let query;
+  try {
+    query = parseFindingListQuery(options, { paginate: true });
+  } catch (err) {
+    const failure = findingListQueryFailure(err);
+    if (failure) return failure;
+    throw err;
+  }
+  const matched = selectFindings(ctx, { ...query, limit: null, offset: 0 });
+  const items = matched.slice(query.offset, query.offset + query.limit).map(scrubFindingForCustomer);
+  return buildFindingListEnvelope(items, matched.length, query);
 }
 
 /** Live store row for internal mutation (patch). Not customer-facing — never scrubbed. */
@@ -116,13 +130,31 @@ export function getFinding(ctx, id) {
   const row = findFindingRow(ctx, id);
   // EVIDENCE-01 / ADR-0008: customer finding detail must read external-only. Scrub the projection;
   // the stored row (returned by findFindingRow for mutation) is untouched.
-  return row ? scrubFindingForCustomer(row) : null;
+  if (!row) return null;
+  const view = scrubFindingForCustomer(row);
+  const store = getStore();
+  const lineage = (store.findingRetestLineage ?? []).filter((item) => item.tenant_id === ctx.tenantId && item.finding_id === row.id);
+  const runs = (store.testRuns ?? []).filter((item) => item.tenant_id === ctx.tenantId);
+  const siblings = (store.findings ?? []).filter((item) => item.tenant_id === ctx.tenantId
+    && item.id !== row.id
+    && item.check_id === row.check_id);
+  const presented = presentFindingLineage({ finding: row, runs, lineage, siblings });
+  view.closed_at = row.closed_at ?? null;
+  view.lineage = presented;
+  view.retests = presented.retests;
+  view.originating = presented.originating;
+  view.latest = presented.latest;
+  return view;
 }
 
 export function patchFinding(ctx, id, body) {
   const f = findFindingRow(ctx, id);
   if (!f) return null;
-  if (body.status) f.status = body.status;
+  const planned = planFindingPatch(body);
+  if (planned.error) return planned;
+  if (planned.patch.status) f.status = planned.patch.status;
+  if (planned.patch.closed_at === null) f.closed_at = null;
+  else if (planned.patch.closed_at && !f.closed_at) f.closed_at = planned.patch.closed_at;
   if (body.assignee !== undefined) f.assignee = body.assignee;
   if (body.notes !== undefined) f.notes = body.notes;
   f.updated_at = new Date().toISOString();

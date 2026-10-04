@@ -299,7 +299,14 @@ describe('postgres portal audited transaction boundary', () => {
       const sql = String(text).trim();
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return sql;
       if (sql.includes("set_config('app.tenant_id'")) return 'tenant-context';
-      if (sql.includes('SELECT * FROM targets WHERE')) return 'target';
+      if (
+        sql.includes('FROM targets t')
+        && sql.includes('group_declaration_json')
+        && sql.includes('tg.tenant_id = t.tenant_id')
+        && sql.includes('t.tenant_id = $1 AND t.id = $2')
+        && sql.includes('t.deleted_at IS NULL')
+      ) return 'target';
+      if (sql.includes('FROM target_verification_current')) return 'current-verification';
       if (sql.includes('FROM target_verifications')) return 'verifications';
       if (sql.includes('FROM loa_signatures')) return 'loa';
       if (sql.includes('COUNT(*) FILTER')) return 'finding-counts';
@@ -307,16 +314,17 @@ describe('postgres portal audited transaction boundary', () => {
       if (sql.includes('DISTINCT ON (r.check_id)')) return 'latest-runs-by-check';
       if (sql.includes('FROM test_runs')) return 'runs';
       if (sql.includes('FROM test_policies')) return 'policies';
-      if (sql.includes('FROM target_verification_current')) return 'current-verification';
-      if (sql.includes('SELECT * FROM waf_assets')) return 'waf-asset';
-      if (sql.includes('FROM agents')) return 'agent-binding';
       if (sql.includes('FROM waf_posture_snapshots')) return 'waf-snapshot';
+      if (sql.includes('FROM waf_assets wa') && sql.includes('wa.tenant_id = $1') && sql.includes('wa.target_id = $2')) return 'waf-asset';
+      if (sql.includes('FROM agents')) return 'agent-binding';
       if (sql.includes('FROM target_edge_detections')) return 'edge-detection';
+      if (sql.includes('FROM target_observations')) return 'target-observations';
+      if (sql.includes('FROM origin_bindings')) return 'origin-bindings';
       return sql;
     }
 
     const client = {
-      async query(text) {
+      async query(text, params = []) {
         const label = queryLabel(text);
         assert.equal(activeQueries, 0, `client.query overlap before ${label}`);
         activeQueries += 1;
@@ -325,9 +333,11 @@ describe('postgres portal audited transaction boundary', () => {
         try {
           await new Promise((resolve) => setImmediate(resolve));
           if (label === 'target') {
+            assert.deepEqual(params, [CTX.tenantId, 'tgt_ordered']);
             return { rows: [{
               id: 'tgt_ordered', tenant_id: CTX.tenantId, target_group_id: 'tg_ordered',
               kind: 'fqdn', value: 'ordered.example.test', metadata_json: {},
+              declaration_json: {}, group_declaration_json: {},
               created_at: NOW.toISOString(),
             }] };
           }
@@ -374,6 +384,8 @@ describe('postgres portal audited transaction boundary', () => {
       'waf-asset',
       'waf-snapshot',
       'edge-detection',
+      'target-observations',
+      'origin-bindings',
       'COMMIT',
     ];
     assert.deepEqual(

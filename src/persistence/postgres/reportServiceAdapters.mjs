@@ -3,10 +3,19 @@ import {
   buildComplianceMapping,
   buildHtmlComplianceSection,
   buildMarkdownComplianceSection,
-  buildReportComplianceSummary,
-  normalizeReportKind,
-  normalizeReportPeriod,
 } from '../../contracts/complianceReports.mjs';
+import {
+  MAX_CAPTURED_RUNS,
+  MAX_DECLARED_MEMBERS,
+  MAX_SNAPSHOT_EVIDENCE,
+  MAX_SNAPSHOT_FINDINGS,
+  buildGeneratedReportRecord,
+  parseReportCreateBody,
+  readinessExportText,
+  reportExportSources,
+  reportPeriodBounds,
+  worldFromListSamples,
+} from '../../lib/reportSnapshot.mjs';
 import { buildCustodyManifest } from '../../lib/custody.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
@@ -184,7 +193,7 @@ th{background:#f4f4f4}
 <body>
 <h1>${escapeHtml(payload.title)}</h1>
 <p class="muted">AstraNull readiness report · kind: ${escapeHtml(payload.kind)} · metadata-only export</p>
-<p>Readiness score: <span class="score">${escapeHtml(String(payload.summary?.readiness_score ?? 'n/a'))}</span></p>
+<p>Readiness score: <span class="score">${escapeHtml(readinessExportText(payload.summary))}</span></p>
 <p>Open findings: ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
 <h2>Recent runs</h2>
 <table><thead><tr><th>Run</th><th>Check</th><th>Vector</th><th>Status</th></tr></thead><tbody>${runs || '<tr><td colspan="4">None</td></tr>'}</tbody></table>
@@ -293,48 +302,68 @@ export function createPostgresReportServices(repositories, options = {}) {
 
   const reports = {
     async createReport(ctx, body) {
-      const runs = await validationEvidence.listTestRuns(ctx, { limit: 10 });
-      const findings = await validationEvidence.listFindings(ctx);
-      const openFindings = (findings ?? []).filter((f) => f.status === 'open');
-      let readinessScore = null;
-      /** @type {unknown} */
-      let readinessFactors = {
-        status: 'postgres_report_readiness_summary_not_wired',
-        detail: REPORT_READINESS_STATE_FALLBACK_DETAIL,
-      };
-      if (stateGetState) {
-        const state = await stateGetState(ctx);
-        const readiness = state?.readiness ?? {};
-        readinessScore = readiness.score ?? null;
-        readinessFactors = readiness.factors ?? [];
+      const parsed = parseReportCreateBody(body);
+      if (!parsed.ok) return parsed.error;
+      const now = nowFn().toISOString();
+      const bounds = reportPeriodBounds(parsed.value.period, now);
+      let world;
+      if (typeof reportsRepo.readReportGenerationWorld === 'function') {
+        world = await reportsRepo.readReportGenerationWorld(ctx, {
+          targetIds: parsed.value.targetIds,
+          targetGroupIds: parsed.value.targetGroupIds,
+          runIds: parsed.value.runIds,
+          periodBounds: bounds,
+          limits: {
+            members: MAX_DECLARED_MEMBERS,
+            runs: MAX_CAPTURED_RUNS,
+            findings: MAX_SNAPSHOT_FINDINGS,
+            evidence: MAX_SNAPSHOT_EVIDENCE,
+          },
+        });
+      } else if (parsed.value.explicit) {
+        return {
+          error: 'report_scope_unavailable',
+          status: 400,
+          reason: 'repository_cannot_validate_scope',
+        };
+      } else {
+        const runs = await validationEvidence.listTestRuns(ctx, { limit: MAX_CAPTURED_RUNS });
+        const findings = await validationEvidence.listFindings(ctx);
+        world = worldFromListSamples(runs, findings, { runLimit: MAX_CAPTURED_RUNS });
       }
-      const id = newIdFn('report');
-      const reportKind = normalizeReportKind(body?.kind);
-      const reportPeriod = normalizeReportPeriod(body?.period);
-      const record = {
-        id,
-        tenant_id: ctx.tenantId,
-        kind: reportKind,
-        title: body?.title ?? 'AstraNull Readiness Summary',
-        status: 'ready',
-        period: reportPeriod,
-        summary: {
-          readiness_score: readinessScore,
-          readiness_factors: readinessFactors,
-          open_findings: openFindings.length,
-          recent_runs: (runs ?? []).map((r) => ({
-            id: r.id,
-            status: r.status,
-            check_id: r.check_id,
-          })),
-          compliance: buildReportComplianceSummary(reportKind),
-          period: reportPeriod,
-        },
-        run_ids: (runs ?? []).map((r) => r.id),
-        created_at: nowFn().toISOString(),
-        created_by: ctx.userId,
-      };
-      const report = await reportsRepo.createReport(ctx, record);
+      let readiness = null;
+      let readinessSource = 'not_recorded';
+      if (!parsed.value.explicit) {
+        if (stateGetState) {
+          const state = await stateGetState(ctx);
+          const stateReadiness = state?.readiness ?? {};
+          readiness = {
+            score: stateReadiness.score ?? null,
+            factors: stateReadiness.factors ?? [],
+          };
+          readinessSource = 'postgres_state';
+        } else {
+          readiness = {
+            score: null,
+            factors: {
+              status: 'postgres_report_readiness_summary_not_wired',
+              detail: REPORT_READINESS_STATE_FALLBACK_DETAIL,
+            },
+          };
+          readinessSource = 'postgres_report_readiness_summary_not_wired';
+        }
+      }
+      const built = buildGeneratedReportRecord({
+        ctx,
+        parsed: parsed.value,
+        world,
+        readiness,
+        now,
+        id: newIdFn('report'),
+        readinessSource,
+      });
+      if (!built.ok) return built.error;
+      const report = await reportsRepo.createReport(ctx, built.record);
       await auditRepo.appendAuditEvent(
         {
           tenant_id: ctx.tenantId,
@@ -342,11 +371,11 @@ export function createPostgresReportServices(repositories, options = {}) {
           actor_role: ctx.role,
           action: 'report.generated',
           resource_type: 'report',
-          resource_id: id,
+          resource_id: built.record.id,
         },
         { now: nowFn() },
       );
-      await notifyReportReady(ctx, report ?? record);
+      await notifyReportReady(ctx, report ?? built.record);
       return report;
     },
 
@@ -362,8 +391,13 @@ export function createPostgresReportServices(repositories, options = {}) {
       const report = await reportsRepo.getReport(ctx, id);
       if (!report) return null;
 
-      const runRows = await reportsRepo.listRunsForReport(ctx, report.run_ids ?? []);
-      const verdictRows = await reportsRepo.listVerdictsForRunIds(ctx, report.run_ids ?? []);
+      const sources = reportExportSources(report);
+      const runRows = sources.frozen
+        ? sources.runs
+        : await reportsRepo.listRunsForReport(ctx, report.run_ids ?? []);
+      const verdictRows = sources.frozen
+        ? sources.verdicts
+        : await reportsRepo.listVerdictsForRunIds(ctx, report.run_ids ?? []);
       const complianceMapping = buildComplianceMapping(report.kind);
       const payload = redactObject({
         report_id: report.id,
@@ -413,7 +447,7 @@ export function createPostgresReportServices(repositories, options = {}) {
         const lines = [
           `# ${payload.title}`,
           '',
-          `Readiness score: **${payload.summary?.readiness_score ?? 'n/a'}**`,
+          `Readiness score: **${readinessExportText(payload.summary)}**`,
           '',
           '## Recent runs',
           ...(payload.runs ?? []).map(

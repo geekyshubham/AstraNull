@@ -316,6 +316,56 @@ function isExactTargetHost(value, targetHost) {
 }
 
 /**
+ * Exact protected Host/SNI/port/path of a bound run. Only the server-validated scope that
+ * startTestRun captured in the run's provenance stamp (after both current proofs and the
+ * exact-existing-binding check) is trusted here. A request probe profile or target metadata
+ * can never introduce a binding scope, and no scope at all means the run is not bound
+ * (legacy unbound behavior).
+ *
+ * @param {{ origin_binding_id?: unknown, provenance_json?: unknown }} run
+ * @param {{ probe_profile?: { kind?: unknown } }} check
+ * @returns {{ host: string, sni: string, port: number | null, path: string | null } | null}
+ */
+export function runBoundOriginScope(run, check) {
+  if (check?.probe_profile?.kind !== 'host_sni_bypass') return null;
+  const bindingId = typeof run?.origin_binding_id === 'string' ? run.origin_binding_id.trim() : '';
+  if (!bindingId) return null;
+  return validatedOriginScopeSnapshot(run?.provenance_json?.origin_scope);
+}
+
+function validatedOriginScopeSnapshot(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const host = typeof candidate.host === 'string' ? candidate.host.trim().toLowerCase() : null;
+  const sni = typeof candidate.sni === 'string' ? candidate.sni.trim().toLowerCase() : null;
+  if (!host || !sni || host !== sni || !isHostShapedValueSafe(host)) return null;
+  let port = null;
+  if (candidate.port != null) {
+    if (typeof candidate.port !== 'number') return null;
+    port = candidate.port;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  }
+  let path = null;
+  if (candidate.path != null) {
+    if (
+      typeof candidate.path !== 'string'
+      || !candidate.path.startsWith('/')
+      || candidate.path.startsWith('//')
+      || candidate.path.includes('\\')
+      || candidate.path.includes('@')
+      || candidate.path.includes('?')
+      || candidate.path.includes('#')
+      || candidate.path.includes('://')
+      || /[\u0000-\u0020\u007f]/.test(candidate.path)
+      || candidate.path.length > 256
+    ) {
+      return null;
+    }
+    path = candidate.path;
+  }
+  return { host, sni, port, path };
+}
+
+/**
  * Final signed-job destination boundary. This runs after catalog, request, and target metadata
  * merges so no earlier profile source can retarget a normal worker job away from its verified
  * target. Host/SNI labels and HTTP path fields are intentionally unaffected: they do not select
@@ -495,8 +545,25 @@ export function verifyProbeJobSignature(job, secret) {
 }
 
 /**
+ * A bound run (non-empty `origin_binding_id`) whose provenance stamp carries no shape-valid
+ * approved origin scope snapshot must never dispatch. Thrown before any signing, job record,
+ * or dispatch exists, so a bound legacy/recovery record can never silently fall back to the
+ * legacy unbound host resolution (e.g. re-targeting from target metadata `protected_host`).
+ * Recovery and run-start callers must translate this into a structured fail-closed response;
+ * the runtime request body can never repair a missing stored scope.
+ */
+export class BoundRunScopeMissingError extends Error {
+  constructor(checkId) {
+    super('bound_run_missing_approved_origin_scope');
+    this.name = 'BoundRunScopeMissingError';
+    this.code = 'bound_run_missing_approved_origin_scope';
+    this.check_id = checkId ?? null;
+  }
+}
+
+/**
  * @param {{
- *   run: { id: string, tenant_id: string, safety_constraints?: Record<string, unknown> },
+ *   run: { id: string, tenant_id: string, safety_constraints?: Record<string, unknown>, origin_binding_id?: unknown, provenance_json?: unknown },
  *   check: Record<string, unknown>,
  *   target: Record<string, unknown>,
  *   probeProfile?: unknown,
@@ -516,9 +583,16 @@ export function buildSignedProbeJobRecord({
   now,
   newId,
 }) {
+  // Fail closed FIRST: a bound record without a validated approved scope snapshot cannot
+  // dispatch, and no target metadata (e.g. protected_host) may stand in for the scope.
+  const boundByOriginBinding = typeof run?.origin_binding_id === 'string' && run.origin_binding_id.trim() !== '';
+  if (boundByOriginBinding) {
+    const approvedScope = runBoundOriginScope(run, check);
+    if (!approvedScope) throw new BoundRunScopeMissingError(check?.check_id);
+  }
   const nonce = generateNonce();
   const nonce_hash = hashNonce(nonce);
-  const resolvedProbeProfile = bindProbeProfileDestinationsToTarget(
+  let resolvedProbeProfile = bindProbeProfileDestinationsToTarget(
     enrichProbeProfileFromTarget(
       resolveJobProbeProfile(check, probeProfile),
       target,
@@ -526,6 +600,13 @@ export function buildSignedProbeJobRecord({
     target,
   );
   const signedTarget = targetDescriptor(target);
+  const bindingScope = runBoundOriginScope(run, check);
+  if (bindingScope) {
+    // Bound run: the approved signed scope is the exact protected Host (SNI by derivation
+    // always equals the bound host). Silently overriding the merged catalog/body/metadata
+    // label here is what the worker executes and what the signature covers.
+    resolvedProbeProfile = { ...resolvedProbeProfile, protected_host: bindingScope.host };
+  }
   const baseConstraints = normalizeJobConstraints(
     run.safety_constraints,
     resolvedProbeProfile,
@@ -536,6 +617,7 @@ export function buildSignedProbeJobRecord({
     ...(ownershipBinding && typeof ownershipBinding === 'object'
       ? { ownership_binding: structuredClone(ownershipBinding) }
       : {}),
+    ...(bindingScope ? { origin_scope: { ...bindingScope } } : {}),
   };
   const job = {
     id: newId(),

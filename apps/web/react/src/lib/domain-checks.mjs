@@ -39,8 +39,8 @@ const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 
 const STEP_STATUS = Object.freeze({ pending: 'queued', deferred: 'waiting', starting: 'running', running: 'running', collecting: 'running', denied: 'blocked', skipped: 'skipped', cancelled: 'cancelled' });
 
 export const ROW_STATUS_META = Object.freeze({
-  passed: { label: 'Protected', tone: 'success' },
-  failed: { label: 'Exposed', tone: 'danger' },
+  passed: { label: 'Passed this check', tone: 'success' },
+  failed: { label: 'Gap found', tone: 'danger' },
   inconclusive: { label: 'Inconclusive', tone: 'warn' },
   observed: { label: 'Observed', tone: 'muted' },
   running: { label: 'Running', tone: 'info' },
@@ -398,35 +398,10 @@ export function edgeEvidenceSignals(edge) {
     const provider = text(layer.provider);
     const matched = vendorMatches.find((match) => text(record(match)?.vendor) === provider);
     const signals = list(record(matched)?.matched_signals).map((signal) => text(record(signal)?.signal)).filter(Boolean);
-    const rawSources = list(layer.sources).map(text).filter(Boolean);
-    const sources = [...rawSources];
-    if (sources.length === 0) {
-      if (family === 'waf' && (wafw00f?.detected || record(wafw00f?.generic)?.found)) {
-        sources.push('response_fingerprint');
-      }
-      if (signals.length > 0 || vendorMatches.some((m) => text(record(m)?.vendor) === provider)) {
-        sources.push('response_header');
-      }
-      if (family === 'cdn' && (text(cdncheck?.provider) === provider || list(evidence.address_matches).some((m) => text(record(m)?.provider) === provider))) {
-        sources.push('address_range');
-      }
-      if (list(evidence.cname_matches).some((m) => text(record(m)?.provider) === provider)) {
-        sources.push('cname_suffix');
-      }
-      if (sources.length === 0) {
-        sources.push(family === 'waf' ? 'response_fingerprint' : 'address_range');
-      }
-    }
+    // Only sources and signals the server recorded for this layer. Nothing is inferred from
+    // another family's evidence, and a missing method stays "Source not recorded".
+    const sources = list(layer.sources).map(text).filter(Boolean);
     const resolvedSignals = [...signals];
-    if (resolvedSignals.length === 0) {
-      if (family === 'cdn') {
-        if (cdncheck?.matched) resolvedSignals.push('ip_range');
-        if (vendorMatches.some((m) => text(record(m)?.vendor) === provider)) resolvedSignals.push('header');
-      } else if (family === 'waf') {
-        if (wafw00f?.detected) resolvedSignals.push('wafw00f_plugin');
-        if (vendorMatches.some((m) => text(record(m)?.vendor) === provider)) resolvedSignals.push('header');
-      }
-    }
     const sourceObjects = sources.map((source) => ({
       id: text(source),
       ...(SOURCE_COPY[text(source)] ?? { method: titleCase(source), detail: '' }),
@@ -438,7 +413,7 @@ export function edgeEvidenceSignals(edge) {
       name: providerName(provider, layer.display_name),
       logo: providerLogoId(provider),
       confidence: Number.isFinite(Number(layer.confidence)) ? Math.round(Number(layer.confidence) * 100) : null,
-      agreement: text(layer.evidence_consistency) || (sources.length > 1 ? 'agreement' : 'single_source'),
+      agreement: text(layer.evidence_consistency),
       conflicting: layer.conflicting === true,
       sources: sourceObjects,
       signals: [...new Set(resolvedSignals)].slice(0, 6),
@@ -510,4 +485,581 @@ export function shouldAutoDetectEdge({ eligible, featureEnabled, canRun, edge, r
 export function validationScansPathForTarget(targetGroupId, targetId) {
   const params = new URLSearchParams({ target_group_id: text(targetGroupId), target_id: text(targetId), limit: '1' });
   return `/v1/validation-scans?${params.toString()}`;
+}
+
+/** Provider families shown on a target, each from its own source only. */
+export const PROVIDER_FAMILY_ORDER = Object.freeze(['cdn', 'waf', 'cloud', 'origin_hosting', 'dns']);
+
+const FAMILY_TITLES = Object.freeze({
+  cdn: 'CDN',
+  waf: 'WAF',
+  cloud: 'Edge or cloud layer',
+  origin_hosting: 'Origin hosting',
+  dns: 'DNS provider',
+});
+
+const FAMILY_STATUS = Object.freeze({
+  detected: { label: 'Detected', tone: 'default' },
+  not_detected: { label: 'Not detected in this observation', tone: 'muted' },
+  inconclusive: { label: 'Inconclusive', tone: 'warn' },
+  not_checked: { label: 'Not checked', tone: 'muted' },
+  not_recorded: { label: 'Not recorded', tone: 'muted' },
+  unknown: { label: 'Unknown', tone: 'muted' },
+  error: { label: 'Attempt failed', tone: 'warn' },
+  attempt_failed: { label: 'Attempt failed', tone: 'warn' },
+});
+
+const FAMILY_LIMITS = Object.freeze({
+  cdn: 'Presence of a CDN does not prove capacity or blocking.',
+  waf: 'Detection is not effectiveness; blocking comes from check results.',
+  cloud: 'An observed edge or cloud address does not identify where the origin is hosted.',
+  origin_hosting: 'Origin hosting is never inferred from CDN, WAF, or edge addressing.',
+  dns: 'The DNS provider is never inferred from CDN or WAF vendors.',
+});
+
+function finiteOrNull(value) {
+  const number = Number(value);
+  return value === null || value === undefined || value === '' || !Number.isFinite(number) ? null : number;
+}
+
+/**
+ * One row per provider family. Uses `protection_profile.families[family]` when the server sends
+ * it; otherwise only the legacy `edge_detection[family]` row of the same family (WAF, CDN, edge
+ * or cloud). DNS and origin hosting stay Unknown without their own recorded source. A WAF vendor
+ * never fills the CDN row, and sources are listed only when recorded.
+ */
+export function providerFamilyRows({ protection_profile: profile = null, edge_detection: edge = null } = {}) {
+  const families = record(record(profile)?.families);
+  const edgeRecord = record(edge);
+  return PROVIDER_FAMILY_ORDER.map((family) => {
+    const fromProfile = record(families?.[family]);
+    let row = fromProfile;
+    let source = fromProfile ? 'protection_profile' : 'none';
+    let layer = null;
+    if (!row && edgeRecord && ['waf', 'cdn', 'cloud'].includes(family)) {
+      row = record(edgeRecord[family]);
+      layer = list(edgeRecord.layers).map(record).find((entry) => entry && text(entry.family) === family) ?? null;
+      source = row ? 'edge_detection' : 'none';
+    }
+    let status = text(row?.status).toLowerCase();
+    if (!status) {
+      if (family === 'dns' || family === 'origin_hosting') status = 'unknown';
+      else status = edgeRecord ? 'not_recorded' : 'not_checked';
+    }
+    const provider = text(row?.provider) || text(row?.vendor) || (source === 'edge_detection' ? text(layer?.provider) : '');
+    const meta = FAMILY_STATUS[status] ?? { label: titleCase(status) || 'Unknown', tone: 'muted' };
+    const sources = list(row?.sources ?? layer?.sources).map(text).filter(Boolean).map((id) => ({
+      id,
+      ...(SOURCE_COPY[id] ?? { method: titleCase(id), detail: '' }),
+    }));
+    const confidence = finiteOrNull(row?.confidence ?? layer?.confidence);
+    const freshness = text(row?.freshness);
+    return {
+      family,
+      title: FAMILY_TITLES[family],
+      status,
+      statusLabel: meta.label,
+      tone: freshness === 'stale' && status === 'detected' ? 'warn' : meta.tone,
+      provider,
+      providerName: provider ? providerName(provider, row?.display_name ?? layer?.display_name) : '',
+      logo: provider ? providerLogoId(provider) : '',
+      observedAt: text(row?.observed_at) || (source === 'edge_detection' ? text(edgeRecord?.observed_at) : ''),
+      testRunId: text(row?.test_run_id) || (source === 'edge_detection' ? text(edgeRecord?.test_run_id) : ''),
+      freshness: freshness || (source === 'none' ? 'unknown' : ''),
+      sources,
+      confidence: confidence === null ? null : Math.round(confidence * (confidence <= 1 ? 100 : 1)),
+      reason: text(row?.reason),
+      limitation: FAMILY_LIMITS[family],
+      source,
+    };
+  });
+}
+
+/**
+ * Recorded marker effectiveness, separate from detection. Percentage is null whenever the
+ * definitive denominator is zero; nothing is computed from provider presence.
+ */
+export function markerEffectiveness({ protection_profile: profile = null, edge_detection: edge = null } = {}) {
+  const fromProfile = record(record(profile)?.effectiveness);
+  const legacy = record(record(edge)?.effectiveness);
+  const row = fromProfile ?? legacy;
+  if (!row) return null;
+  const blocked = finiteOrNull(row.blocked_count);
+  const allowed = finiteOrNull(row.allowed_count ?? row.passed_count);
+  const inconclusive = finiteOrNull(row.inconclusive_count);
+  const notRun = finiteOrNull(row.not_run_count);
+  const definitive = (blocked ?? 0) + (allowed ?? 0);
+  const tested = finiteOrNull(row.tested_count);
+  if (definitive === 0 && !inconclusive && !tested) return null;
+  const percentage = definitive > 0 ? finiteOrNull(row.percentage) : null;
+  return {
+    blocked: blocked ?? 0,
+    allowed: allowed ?? 0,
+    inconclusive: inconclusive ?? 0,
+    notRun,
+    definitive,
+    percentage,
+    source: fromProfile ? 'protection_profile' : 'edge_detection',
+  };
+}
+
+/**
+ * Origin reachability as the profile records it. `assurance` stays what the server says (`none`
+ * today): a recorded reachability observation is not an authorized origin lockdown.
+ */
+export function originExposureDetail({ protection_profile: profile = null } = {}) {
+  const origin = record(record(profile)?.origin);
+  const reach = record(origin?.reachability);
+  return {
+    status: text(origin?.status) || 'not_tested',
+    assurance: text(origin?.assurance) || 'not_recorded',
+    reachabilityStatus: text(reach?.status) || 'not_tested',
+    testedTargetId: text(reach?.tested_target_id),
+    scenarioId: text(reach?.scenario_id),
+    source: text(reach?.source),
+    limitations: list(reach?.limitations).map(text).filter(Boolean),
+  };
+}
+
+/** Origin exposure: only an explicit recorded status; the legacy not_exposed default is ignored. */
+export function originExposureStatus({ protection_profile: profile = null } = {}) {
+  const origin = record(record(profile)?.origin);
+  const status = text(origin?.status);
+  return status || 'not_tested';
+}
+
+const TAB_ALIASES = Object.freeze({
+  overview: 'overview',
+  protection: 'overview',
+  edge: 'overview',
+  profile: 'overview',
+  validate: 'validate',
+  checks: 'validate',
+  run: 'validate',
+  findings: 'findings',
+  history: 'history',
+  changes: 'history',
+  runs: 'history',
+});
+
+/** Unified target tabs; legacy names (protection, edge, runs, checks) keep resolving. */
+export function targetTabFromParam(value) {
+  return TAB_ALIASES[text(value).toLowerCase()] ?? 'overview';
+}
+
+const HOST_KINDS = new Set(['fqdn', 'hostname', 'domain', 'url', 'dns_zone', 'canary']);
+
+/**
+ * Normalized hostname identity for one declared target, or '' when the target is not a hostname
+ * (IP, CIDR, TCP endpoint). Lowercased, trailing dot removed; URL targets reduce to their host.
+ */
+export function normalizedHostKey(target) {
+  const kind = text(target?.kind).toLowerCase();
+  if (!HOST_KINDS.has(kind)) return '';
+  let value = text(target?.value).toLowerCase();
+  if (!value) return '';
+  if (kind === 'url' || value.includes('://')) {
+    try {
+      value = new URL(value.includes('://') ? value : `https://${value}`).hostname;
+    } catch {
+      return '';
+    }
+  }
+  value = value.replace(/\.$/, '');
+  if (/^[0-9.]+$/.test(value) || value.includes(':')) return '';
+  return value;
+}
+
+/** Declared-record count versus distinct hostname count; the two units are never merged. */
+export function inventoryUnits(targets) {
+  const hosts = new Set();
+  let nonHost = 0;
+  for (const target of list(targets)) {
+    const key = normalizedHostKey(target);
+    if (key) hosts.add(key);
+    else nonHost += 1;
+  }
+  return { records: list(targets).length, distinctHosts: hosts.size, nonHostRecords: nonHost };
+}
+
+export const SERVICE_ROLES = Object.freeze(['website', 'api', 'login', 'dns', 'network']);
+export const CRITICALITY_VALUES = Object.freeze(['critical', 'high', 'medium', 'low']);
+
+/** Editable draft from the server declaration; inherited owner/criticality stay empty (not copied). */
+export function declarationDraftFrom(declaration) {
+  const source = record(declaration) ?? {};
+  const owner = record(source.owner);
+  const criticality = record(source.criticality);
+  const criticalityValue = text(criticality?.value).toLowerCase();
+  return {
+    purpose: text(source.purpose),
+    service_roles: list(source.service_roles).map((role) => text(role).toLowerCase()).filter((role) => SERVICE_ROLES.includes(role)),
+    owner_label: text(owner?.status) === 'declared' ? text(owner?.label) : '',
+    criticality: text(criticality?.status) === 'declared' && CRITICALITY_VALUES.includes(criticalityValue) ? criticalityValue : '',
+  };
+}
+
+/**
+ * Only changed fields. An explicit null or [] clears the target value and blocks group
+ * inheritance, so untouched inherited fields are never sent.
+ */
+export const DECLARATION_LIMITS = Object.freeze({ purpose: 200, owner_label: 80 });
+
+/** Field errors for a draft; values are never cropped to fit, the user fixes them. */
+export function validateDeclarationDraft(draft) {
+  const errors = {};
+  if (text(draft.purpose).length > DECLARATION_LIMITS.purpose) errors.purpose = `Purpose must be at most ${DECLARATION_LIMITS.purpose} characters.`;
+  if (text(draft.owner_label).length > DECLARATION_LIMITS.owner_label) errors.owner_label = `Owner must be at most ${DECLARATION_LIMITS.owner_label} characters.`;
+  return errors;
+}
+
+export function declarationPatchBody(initial, draft) {
+  const patch = {};
+  if (text(draft.purpose) !== text(initial.purpose)) patch.purpose = text(draft.purpose) || null;
+  if ([...draft.service_roles].sort().join(',') !== [...initial.service_roles].sort().join(',')) patch.service_roles = [...draft.service_roles];
+  if (text(draft.owner_label) !== text(initial.owner_label)) patch.owner = text(draft.owner_label) ? { label: text(draft.owner_label) } : null;
+  if (draft.criticality !== initial.criticality) patch.criticality = draft.criticality || null;
+  return patch;
+}
+
+/*
+ * Declared-host cohorts (GET /v1/analytics/declared-hosts and filtered GET /v1/targets share one
+ * server predicate). The browser never computes a cohort; it carries the server's exact filters.
+ */
+
+/** Server-allowlisted cohort filters. Aliases map to their canonical key. */
+export const COHORT_FILTER_KEYS = Object.freeze([
+  'q', 'target_group_id', 'verification_state', 'kind', 'tag', 'service_role', 'criticality',
+  'owner_status', 'owner', 'family', 'family_status', 'freshness', 'has_open_finding', 'unit',
+]);
+const COHORT_ALIASES = Object.freeze({ search: 'q', group: 'target_group_id', target_group: 'target_group_id', verification: 'verification_state', role: 'service_role' });
+const UNIT_TOKENS = Object.freeze({ hostname: 'hostname', normalized_hostname: 'hostname', target: 'target', declared_target: 'target' });
+const COHORT_VALUE = /^[A-Za-z0-9_.:@ /+-]{1,120}$/;
+
+/**
+ * Canonical cohort filters from address or server parameters. Aliases fold into canonical keys;
+ * a conflicting alias is dropped (the server would reject it); unknown keys never pass.
+ * Returns null when no cohort filter is present.
+ */
+export function canonicalCohortFilters(input) {
+  const entries = input instanceof URLSearchParams ? [...input.entries()] : Object.entries(record(input) ?? {});
+  const out = {};
+  const aliasValues = {};
+  for (const [rawKey, rawValue] of entries) {
+    const value = text(rawValue);
+    if (!value || !COHORT_VALUE.test(value)) continue;
+    if (COHORT_FILTER_KEYS.includes(rawKey)) out[rawKey] = value;
+    else if (COHORT_ALIASES[rawKey]) aliasValues[COHORT_ALIASES[rawKey]] = value;
+  }
+  for (const [key, value] of Object.entries(aliasValues)) {
+    if (!out[key]) out[key] = value;
+  }
+  if (out.unit) {
+    const unit = UNIT_TOKENS[out.unit];
+    if (unit) out.unit = unit;
+    else delete out.unit;
+  }
+  if ((out.family_status || out.freshness) && !out.family) {
+    delete out.family_status;
+    delete out.freshness;
+  }
+  const keys = Object.keys(out).filter((key) => key !== 'unit');
+  return keys.length ? out : null;
+}
+
+/** Targets address for a server `list_query` (or `list_query.query`), keeping only allowed filters and the unit. */
+export function cohortHrefFromListQuery(listQuery) {
+  const source = record(record(listQuery)?.query) ?? record(listQuery) ?? {};
+  const filters = canonicalCohortFilters(source) ?? {};
+  if (source.unit && UNIT_TOKENS[text(source.unit)]) filters.unit = UNIT_TOKENS[text(source.unit)];
+  const params = new URLSearchParams();
+  for (const key of COHORT_FILTER_KEYS) {
+    if (filters[key]) params.set(key, filters[key]);
+  }
+  const query = params.toString();
+  return query ? `#targets?${query}` : '#targets';
+}
+
+const SEGMENT_LABELS = Object.freeze({
+  detected: 'Detected',
+  not_detected: 'Not detected in the last observation',
+  inconclusive: 'Inconclusive',
+  conflict: 'Conflicting signals',
+  stale: 'Stale observation',
+  not_checked: 'Not checked',
+  not_recorded: 'Not recorded',
+  unknown: 'Unknown',
+});
+const SEGMENT_GROUP = Object.freeze({
+  detected: 'detected',
+  not_detected: 'not_detected',
+  inconclusive: 'inconclusive',
+  conflict: 'conflict',
+  stale: 'stale',
+  not_checked: 'unmeasured',
+  not_recorded: 'unmeasured',
+  unknown: 'unmeasured',
+});
+
+/**
+ * Display buckets for one family from the analytics response. The server's `unknown_count` is the
+ * unknown bucket only; "Unknown or not checked" adds the explicit not_checked and not_recorded
+ * segments to it, while each part keeps its own exact list link. Inconclusive and conflict stay
+ * separate. `reconciled` is false when the parts do not add up to the denominator.
+ */
+export function familyCoverageBuckets(payload) {
+  const body = record(payload) ?? {};
+  const denominator = finiteOrNull(body.denominator);
+  const parts = list(body.segments).map(record).filter((segment) => segment && text(segment.key)).map((segment) => ({
+    key: text(segment.key),
+    label: SEGMENT_LABELS[text(segment.key)] ?? titleCase(segment.key),
+    group: SEGMENT_GROUP[text(segment.key)] ?? 'other',
+    count: finiteOrNull(segment.count) ?? 0,
+    href: cohortHrefFromListQuery(segment.list_query),
+  }));
+  const unknownCount = finiteOrNull(body.unknown_count);
+  if (unknownCount !== null) {
+    const family = text(record(record(body.list_query)?.query)?.family ?? record(body.filters)?.family);
+    const unit = text(record(record(body.list_query)?.query)?.unit ?? body.canonical_unit);
+    parts.push({
+      key: 'unknown',
+      label: SEGMENT_LABELS.unknown,
+      group: 'unmeasured',
+      count: unknownCount,
+      href: cohortHrefFromListQuery({ family, unit, family_status: 'unknown' }),
+    });
+  }
+  const unmeasured = parts.filter((part) => part.group === 'unmeasured').reduce((sum, part) => sum + part.count, 0);
+  const total = parts.reduce((sum, part) => sum + part.count, 0);
+  return {
+    denominator,
+    parts,
+    unmeasured,
+    reconciled: denominator !== null && total === denominator,
+    units: {
+      targetRecords: finiteOrNull(record(body.units)?.target_records),
+      normalizedHosts: finiteOrNull(record(body.units)?.normalized_hosts),
+    },
+    unit: text(body.canonical_unit) || UNIT_TOKENS[text(body.unit)] || '',
+    asOf: text(body.as_of),
+    current: text(body.scope) === 'current' && body.historical === false,
+    complete: body.complete !== false,
+  };
+}
+
+/**
+ * What to do with a failed cohort page read. `refetch` drops cohort_version and cursor but keeps
+ * every visible filter; `reset` returns to the first page with the same filters.
+ */
+export function classifyCohortError(error) {
+  const status = Number(record(error)?.status);
+  const code = text(record(record(error)?.payload)?.error);
+  if (status === 409 && code === 'cohort_changed') return { action: 'refetch', reason: 'cohort_changed' };
+  if (status === 409 && (code === 'cursor_clock_mismatch' || code === 'cursor_filter_mismatch')) return { action: 'reset', reason: code };
+  if (status === 400 && code === 'invalid_cursor') return { action: 'reset', reason: code };
+  if (status === 400) return { action: 'unsupported', reason: code || 'invalid_query' };
+  if (status === 403) return { action: 'denied', reason: 'forbidden' };
+  return { action: 'error', reason: code || 'unavailable' };
+}
+
+const ORIGIN_PROTECTED_KINDS = new Set(['fqdn', 'hostname', 'domain']);
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function hostOfTarget(target) {
+  const kind = text(target?.kind).toLowerCase();
+  const value = text(target?.value);
+  if (kind === 'url') {
+    try {
+      return new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+  return value.replace(/\.$/, '').toLowerCase();
+}
+
+function isIpLiteral(host) {
+  return IPV4.test(host) || host.includes(':');
+}
+
+/**
+ * Which side of an origin relation a declared target can take, mirroring the server's binding
+ * rule: a hostname or non-IP URL is `protected`, an IP target or IP-literal URL is `origin`.
+ * Anything else (CIDR, TCP endpoint, zone) takes no part.
+ */
+export function originBindingRole(target) {
+  const kind = text(target?.kind).toLowerCase();
+  const host = hostOfTarget(target);
+  if (!host) return null;
+  if (kind === 'ip' || (kind === 'url' && isIpLiteral(host))) return 'origin';
+  if (ORIGIN_PROTECTED_KINDS.has(kind) || (kind === 'url' && !isIpLiteral(host))) return 'protected';
+  return null;
+}
+
+const ORIGIN_PROOF_STATES = new Set(['dns_verified', 'user_confirmed']);
+
+function verificationStateOf(target) {
+  return text(target?.verification_state) || text(record(target?.verification)?.state) || text(target?.verify_state);
+}
+
+/**
+ * Declared origin targets that can be bound to `protectedTarget`. Only existing targets in the
+ * loaded inventory are offered; nothing is discovered. `ready` have current origin proof
+ * (dns_verified or user_confirmed); `blocked` exist but lack it.
+ */
+export function originBindingCandidates(targets, protectedTarget) {
+  const selfId = text(protectedTarget?.id);
+  const ready = [];
+  const blocked = [];
+  for (const target of list(targets)) {
+    if (!record(target) || text(target.id) === selfId || target.deleted_at) continue;
+    if (originBindingRole(target) !== 'origin') continue;
+    const state = verificationStateOf(target) || 'unverified';
+    (ORIGIN_PROOF_STATES.has(state) ? ready : blocked).push({ id: text(target.id), value: text(target.value), kind: text(target.kind), state });
+  }
+  return { ready, blocked };
+}
+
+const ORIGIN_BINDING_ERRORS = Object.freeze({
+  ownership_not_verified: 'Ownership is not currently verified for this pair, so the relation was not recorded.',
+  origin_target_not_verified_address: 'The origin must be a declared IP target or a URL whose host is an IP address.',
+  protected_target_not_hostname: 'Only a hostname or a non-IP URL can be the protected side of a relation.',
+  scope_mismatch: 'The port or path is outside what this target declares.',
+  port_unspecified: 'This target declares several ports. Choose one of them.',
+  path_unspecified: 'This target declares several paths. Choose one of them.',
+  declaration_scope_invalid: 'The target declaration scope does not match its own hostname. Fix the declaration first.',
+  unknown_target: 'One of these targets is no longer declared in this workspace.',
+  binding_target_mismatch: 'A target cannot be bound to itself, and an origin check must run on the bound origin.',
+  scope_not_declared: 'Undeclared destinations are not accepted.',
+  unknown_origin_binding: 'This relation no longer exists or was archived.',
+  already_archived: 'This relation is already archived.',
+  origin_check_not_approved: 'Only the approved origin check can use a relation.',
+  forbidden: 'Your role cannot change origin relations.',
+  scope_conflict: 'These two targets already have an active relation with a different port or path. Nothing was changed. Archive that relation first if this scope should replace it.',
+});
+
+/** Server error code of an origin relation request, '' when none. */
+export function originBindingErrorCode(error) {
+  return text(record(record(error)?.payload)?.error) || text(record(error)?.error);
+}
+
+export function originBindingErrorMessage(error) {
+  const code = originBindingErrorCode(error);
+  const message = ORIGIN_BINDING_ERRORS[code] ?? (error instanceof Error && error.message ? error.message : 'The request did not complete.');
+  const existing = code === 'scope_conflict' ? text(record(record(error)?.payload)?.existing_id) || text(record(error)?.existing_id) : '';
+  return existing ? `${message} Existing relation: ${existing}.` : message;
+}
+
+/** Optional binding scope choice; empty fields are omitted so the server derives them from the declaration. */
+export function originBindingScope({ port = '', path = '' } = {}) {
+  const scope = {};
+  const errors = {};
+  const portText = text(port);
+  if (portText) {
+    const value = Number(portText);
+    if (!/^\d+$/.test(portText) || value < 1 || value > 65535) errors.port = 'Enter a port from 1 to 65535.';
+    else scope.port = value;
+  }
+  const pathText = text(path);
+  if (pathText) {
+    if (!pathText.startsWith('/') || pathText.length > 200 || /\s/.test(pathText)) errors.path = 'Enter a path that starts with / (up to 200 characters, no spaces).';
+    else scope.path = pathText;
+  }
+  return { scope, errors, valid: Object.keys(errors).length === 0 };
+}
+
+const OUTCOME_LABELS = Object.freeze({
+  detected: 'Detected',
+  not_detected: 'Not detected',
+  pass: 'Passed',
+  fail: 'Gap found',
+  reachable: 'Origin reachable',
+  unreachable: 'Origin not reachable',
+  timeout: 'Timed out',
+  tls_failure: 'TLS failure',
+  dns_failure: 'DNS failure',
+  transport_failure: 'Transport failure',
+  source_disconnected: 'Source disconnected',
+  inconclusive: 'Inconclusive',
+  canceled: 'Cancelled',
+  cancelled: 'Cancelled',
+  stale: 'Stale',
+  error: 'Error',
+  pending: 'Pending',
+});
+
+const ATTEMPT_LABELS = Object.freeze({
+  successful: 'Completed observation',
+  failed_attempt: 'Failed attempt',
+  retained_noncurrent: 'Kept, not current',
+});
+
+const PRODUCER_LABELS = Object.freeze({
+  signed_probe: 'Signed external probe',
+  live_external: 'Live external probe',
+  internal_simulation: 'Internal simulation',
+  customer_declaration: 'Customer declaration',
+  manual: 'Manual record',
+});
+
+const LIVE_PRODUCERS = new Set(['signed_probe', 'live_external']);
+
+/** One observation as `/v1/targets/:id/observations` projects it, with plain labels. Nothing is inferred. */
+export function presentObservation(item) {
+  const row = record(item);
+  if (!row || !text(row.id)) return null;
+  const outcome = text(row.outcome);
+  const attempt = text(row.attempt_class);
+  const producer = text(row.producer_kind);
+  return {
+    id: text(row.id),
+    family: text(row.family),
+    outcome,
+    outcomeLabel: OUTCOME_LABELS[outcome] ?? titleCase(outcome || 'not_recorded'),
+    attempt,
+    attemptLabel: ATTEMPT_LABELS[attempt] ?? titleCase(attempt || 'not_recorded'),
+    producer,
+    producerLabel: PRODUCER_LABELS[producer] ?? (producer ? titleCase(producer) : 'Not recorded'),
+    live: producer ? LIVE_PRODUCERS.has(producer) : null,
+    observedAt: text(row.observed_at),
+    completedAt: text(row.source_completed_at),
+    checkId: text(row.check_id),
+    testRunId: text(row.test_run_id),
+    sourceKind: text(row.source_kind),
+    corpusVersion: text(row.corpus_version),
+    scenarioVersion: text(row.scenario_version),
+    checkVersion: text(row.check_version),
+    bindingId: text(row.origin_binding_id),
+  };
+}
+
+const COMPARISON_REASONS = Object.freeze({
+  missing_observation: 'Only one completed observation is recorded.',
+  transport_failure: 'One side is a failed attempt, which is not a change.',
+  not_successful: 'One side did not complete.',
+  target_mismatch: 'The observations are for different targets.',
+  check_mismatch: 'Different checks produced them.',
+  missing_version: 'A check, scenario or corpus version is missing, so they are not compared.',
+  corpus_changed: 'The signature corpus changed between them.',
+  scenario_changed: 'The scenario changed between them.',
+  check_version_changed: 'The check definition changed between them.',
+  context_mismatch: 'They differ in family, origin relation or producer.',
+  provider_not_recorded: 'A provider is not recorded on one side, so a provider change cannot be confirmed.',
+});
+
+const DIRECTION_LABELS = Object.freeze({
+  appeared: 'Appeared',
+  disappeared: 'Disappeared',
+  improvement: 'Improved (gap to pass)',
+  regression: 'Regressed (pass to gap)',
+  unclassified: 'Changed',
+  provider_changed: 'Provider changed',
+});
+
+export function comparisonReasonLabel(reason) {
+  return COMPARISON_REASONS[text(reason)] ?? titleCase(text(reason) || 'not_recorded');
+}
+
+export function changeDirectionLabel(direction) {
+  return DIRECTION_LABELS[text(direction)] ?? 'Changed';
 }

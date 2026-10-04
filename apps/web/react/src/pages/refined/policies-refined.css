@@ -463,3 +463,92 @@
     transition: none;
   }
 }
+
+/* ---------- Dispatch truth: next run, timezone, reason ---------- */
+.refined.rf-policies .rf-next-run > span,
+.refined.rf-policies .rf-next-blocked > span { display: inline-flex; flex-wrap: wrap; gap: 0 var(--space-1); min-width: 0; }
+.refined.rf-policies .rf-next-zone { color: var(--fg-2); }
+.refined.rf-policies .rf-next-viewer { flex-basis: 100%; color: var(--fg-2); }
+.refined.rf-policies .rf-dispatch-reason { max-width: 32ch; line-height: 1.45; }
+.refined.rf-policies .rf-check-link,
+.refined.rf-policies .rf-target-link { color: var(--fg); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.refined.rf-policies .rf-check-link:hover,
+.refined.rf-policies .rf-target-link:hover { text-decoration-color: currentColor; }
+.refined.rf-policies .rf-cell-meta a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.rf-schedule-actions { flex-wrap: nowrap; }
+.rf-review-list { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.rf-review-list li { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
+
+/* ---------- Edit schedule dialog (also used on the schedule detail page) ---------- */
+.rf-edit-form .rf-binding-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunk);
+}
+.rf-edit-form .rf-binding-facts dt { color: var(--fg-2); font-size: var(--text-xs); }
+.rf-edit-form .rf-binding-facts dd { margin: 0; min-width: 0; color: var(--fg); font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
+.rf-edit-form .rf-mono,
+.rf-edit-form .rf-binding-facts .rf-mono { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 400; color: var(--fg-2); }
+.rf-edit-form .rf-help { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--fg-2); font-size: var(--text-sm); }
+.rf-edit-form .rf-window-editor { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; margin: 0; padding: 0; border: 0; }
+.rf-edit-form .rf-window-editor legend { padding: 0; color: var(--fg); font-weight: 600; font-size: var(--text-sm); }
+.rf-edit-form .rf-window-editor > .btn { align-self: flex-start; }
+.rf-edit-form .rf-window-list { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.rf-edit-form .rf-window-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; }
+.rf-edit-form .rf-window-row .field,
+.rf-edit-form .rf-window-row label { margin: 0; min-width: 0; }
+.rf-edit-form .rf-discard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.rf-edit-form .rf-dirty-note { margin-right: auto; }
+.rf-link-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.rf-link-button:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; border-radius: var(--radius-sm); }
+.rf-link-button:disabled { color: var(--fg-2); cursor: not-allowed; }
+
+@media (max-width: 700px) {
+  .rf-edit-form .rf-binding-facts { grid-template-columns: minmax(0, 1fr); }
+  .rf-edit-form .rf-window-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .rf-edit-form .rf-window-row > .field:first-child { grid-column: 1 / -1; }
+  .rf-schedule-actions { flex-wrap: wrap; }
+}
+
+/* ---------- Critique pass: column measure and inline timing ---------- */
+@media (min-width: 701px) {
+  .refined.rf-policies .rf-panel-flush td:nth-child(1) .rf-cell,
+  .refined.rf-policies .rf-panel-flush td:nth-child(2) .rf-cell { min-width: 18ch; }
+}
+@media (max-width: 700px) {
+  .refined.rf-policies .rf-segmented { flex-wrap: wrap; }
+  .refined.rf-policies .rf-dispatch-reason { max-width: none; }
+  .refined.rf-policies .rf-schedule-actions,
+  .refined.rf-policies .row-actions.rf-schedule-actions { flex-wrap: wrap; }
+}
+.refined.rf-policies .rf-check-link,
+.refined.rf-policies .rf-target-link { overflow-wrap: normal; word-break: normal; }
+.refined.rf-policies .rf-cell .rf-mono.rf-cell-meta { overflow-wrap: normal; word-break: keep-all; white-space: nowrap; }
+.refined.rf-policies .rf-cell-meta.rf-next-run,
+.refined.rf-policies .rf-cell-meta.rf-next-blocked { flex-wrap: nowrap; align-items: flex-start; }
+.refined.rf-policies .rf-next-run svg,
+.refined.rf-policies .rf-next-blocked svg { margin-top: 3px; }
+.refined.rf-policies .rf-next-run > span,
+.refined.rf-policies .rf-next-blocked > span { flex: 1 1 auto; }
+.refined.rf-policies .rf-schedule-actions,
+.refined.rf-policies .row-actions.rf-schedule-actions { flex-wrap: nowrap; }
+
+@media (pointer: coarse) {
+  .refined.rf-policies td a,
+  .refined.rf-policies .rf-cell-meta a { display: inline-flex; align-items: center; min-height: 44px; }
+}

@@ -4,11 +4,11 @@ import {
   evaluateCheckPrerequisites,
   getCheckById,
   isCustomerRunnable,
-  resolveExpectedBehaviorForCheck,
 } from '../../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { probeDispatchReady } from '../../config.mjs';
+import { approvedScenarioVersion, deriveRunEvidenceStamp, verdictExpectedBehaviorForRun } from '../../lib/checkDefinitionVersion.mjs';
 import { newId } from '../../lib/ids.mjs';
 import {
   VERDICT_INSERTED,
@@ -45,6 +45,13 @@ import {
   isOpsReadinessProbeKind,
   resolveOpsReadinessScenario,
 } from '../../lib/opsReadinessValidation.mjs';
+import {
+  buildFindingListEnvelope,
+  findingListQueryFailure,
+  parseFindingListQuery,
+} from '../../lib/findingList.mjs';
+import { authorizeFindingWrite, planFindingPatch } from '../../lib/findingLifecycle.mjs';
+import { currentOriginProof, validateOriginBindingForRun } from '../../services/originBindings.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { isWithinPolicySafeWindow } from '../../contracts/testPolicyManagement.mjs';
@@ -525,16 +532,41 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const recoveredMissingJob = !probeJob;
     if (!probeJob) {
       const recoveryNow = nowFn();
-      const builtJob = buildSignedProbeJobRecord({
-        run: existingRun,
-        check,
-        target,
-        probeProfile: body.probe_profile,
-        ownershipBinding: finalValidation.ownershipBinding,
-        probeWorkerSecret: runtimeConfig.probeWorkerSecret,
-        now: recoveryNow,
-        newId: () => newId('pjob'),
-      });
+      let builtJob;
+      try {
+        builtJob = buildSignedProbeJobRecord({
+          run: existingRun,
+          check,
+          target,
+          probeProfile: body.probe_profile,
+          ownershipBinding: finalValidation.ownershipBinding,
+          probeWorkerSecret: runtimeConfig.probeWorkerSecret,
+          now: recoveryNow,
+          newId: () => newId('pjob'),
+        });
+      } catch (error) {
+        if (error?.code === 'bound_run_missing_approved_origin_scope') {
+          // Fail closed: a bound legacy/recovery record without its stored approved origin
+          // scope must never be re-signed from caller input or target metadata. Report the
+          // blocked recovery and drop the unsafe job creation instead of dispatching a
+          // wrong-scope job. The run intent stays committed (no orphan); the structured
+          // error is permanent until the stored provenance is repaired by its owner.
+          await appendAudit(ctx, 'probe_job.dispatch_recovery_blocked', 'probe_job', existingRun.id, {
+            test_run_id: existingRun.id,
+            check_id: check.check_id,
+            origin_binding_id: existingRun.origin_binding_id ?? null,
+            reason: 'bound_run_missing_approved_origin_scope',
+          });
+          return {
+            error: 'probe_dispatch_recovery_scope_blocked',
+            status: 503,
+            retryable: false,
+            message:
+              'Recovery refused to rebuild this bound run\'s probe job without its stored approved origin scope.',
+          };
+        }
+        throw error;
+      }
       // createProbeJob serializes by tenant/run and returns an already-committed row if
       // another retry won the race, so this repair never creates duplicate outbound work.
       probeJob = await probeJobs.createProbeJob(ctx, builtJob);
@@ -970,7 +1002,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
     }
 
     const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
-    const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
+    // Stamped runs finalize against the immutable start snapshot; legacy unstamped runs keep
+    // the historical catalog fallback (see verdictExpectedBehaviorForRun).
+    const expectedBehavior = verdictExpectedBehaviorForRun(run);
     const probeKind = check?.probe_profile?.kind ?? null;
     const probeIoObserved = probeEventHasProbeIo(probeEvent);
     // ADR-0008: verdicts are produced from external probe evidence only.
@@ -1194,10 +1228,18 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
       return summary;
     },
-    async getRunEvents(ctx, id) {
+    async getRunEvents(ctx, id, options = {}) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;
-      return validationEvidence.listRunEvents(ctx, id);
+      const listOptions = {};
+      if (Array.isArray(options?.ids)) {
+        listOptions.ids = options.ids;
+        if (options.target_id != null) listOptions.target_id = options.target_id;
+        if (options.check_id != null) listOptions.check_id = options.check_id;
+        return validationEvidence.listRunEvents(ctx, id, listOptions);
+      }
+      if (options?.limit != null) listOptions.limit = options.limit;
+      return validationEvidence.listRunEvents(ctx, id, listOptions);
     },
     async startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, dispatchOptions = {}) {
       const check = getCheckById(body.check_id);
@@ -1463,6 +1505,59 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       target = finalValidation.target;
 
+      const retestFindingId = typeof body.retest_of_finding_id === 'string' ? body.retest_of_finding_id.trim() : '';
+      if (retestFindingId) {
+        const allowed = authorizeFindingWrite(ctx);
+        if (!allowed.ok) {
+          return { error: 'forbidden', status: allowed.status ?? 403, permission: 'finding:write' };
+        }
+        const finding = typeof validationEvidence.getFinding === 'function'
+          ? await validationEvidence.getFinding(ctx, retestFindingId)
+          : null;
+        if (!finding) return { error: 'unknown_finding', status: 404 };
+        if (finding.tenant_id !== ctx.tenantId || finding.target_id !== target.id || finding.check_id !== check.check_id) {
+          return { error: 'pair_mismatch', status: 409 };
+        }
+      }
+      const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
+      let originScopeSnapshot = null;
+      if (originBindingId) {
+        if (typeof validationEvidence.loadOriginBindingProof !== 'function') {
+          return { error: 'origin_binding_unavailable', status: 503 };
+        }
+        const loaded = await validationEvidence.loadOriginBindingProof(ctx, originBindingId);
+        const records = {
+          targets: loaded?.targets ?? [],
+          targetVerifications: loaded?.targetVerifications ?? [],
+          wafConnectors: loaded?.wafConnectors ?? [],
+          wafConnectorSnapshots: loaded?.wafConnectorSnapshots ?? [],
+        };
+        const protectedTarget = records.targets.find((row) => row.id === loaded?.binding?.protected_target_id);
+        const bindingDecision = validateOriginBindingForRun({
+          binding: loaded?.binding,
+          runTarget: target,
+          protectedTarget,
+          check,
+          originProof: currentOriginProof(records, ctx.tenantId, target.id),
+          protectedProof: currentOriginProof(records, ctx.tenantId, protectedTarget?.id),
+          body,
+        });
+        if (bindingDecision.error) return bindingDecision;
+        // Server-validated approved scope (exact existing binding, both current proofs). Only
+        // these safe fields may leave this gate; carry them into the version stamp provenance
+        // so signed job creation — including repair/recovery rebuilds — signs the approved
+        // Host/SNI/port/path exactly.
+        originScopeSnapshot = bindingDecision.scope;
+      }
+      const opsReadiness = isOpsReadinessProbeKind(check);
+      const stamp = deriveRunEvidenceStamp(check, body, {
+        probeMode: runtimeConfig.probeMode ?? 'simulation',
+        opsReadiness,
+        scenarioVersion: approvedScenarioVersion(
+          check,
+          opsReadiness ? resolveOpsReadinessScenario(check) : null,
+        ),
+      });
       const safetyConstraints = effectiveSafetyConstraints(check, group);
       const runId = newId('run');
       const runRecord = {
@@ -1484,8 +1579,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
         created_by: ctx.userId,
         correlation: { nonce_hash: null, window_ms: 120000 },
         collection_deadline_at: new Date(nowMs + collectionDeadlineMs(check)).toISOString(),
+        check_version: stamp.check_version ?? null,
+        scenario_version: stamp.scenario_version ?? null,
+        producer_kind: stamp.producer_kind ?? null,
+        expected_behavior: stamp.expected_behavior ?? null,
+        expected_behavior_json: stamp.expected_behavior_json ?? null,
+        provenance_json: originScopeSnapshot
+          ? {
+            ...(stamp.provenance_json ?? {}),
+            origin_scope: {
+              host: originScopeSnapshot.host,
+              sni: originScopeSnapshot.sni,
+              port: originScopeSnapshot.port ?? null,
+              path: originScopeSnapshot.path ?? null,
+            },
+          }
+          : (stamp.provenance_json ?? null),
+        origin_binding_id: originBindingId || null,
+        retest_of_finding_id: retestFindingId || null,
       };
       let run = await validationEvidence.createTestRun(ctx, runRecord);
+      if (run?.error) return run;
 
       await appendAudit(ctx, 'test_run.started', 'test_run', runId, {
         check_id: check.check_id,
@@ -1739,6 +1853,12 @@ export function createPostgresValidationServices(repositories, options = {}) {
     async getEvidence(ctx, id) {
       return validationEvidence.getEvidence(ctx, id);
     },
+    async getTargetEdgeDetection(ctx, targetId) {
+      if (typeof validationEvidence.getTargetEdgeDetection !== 'function') {
+        throw new Error('missing_configured_read:getTargetEdgeDetection');
+      }
+      return validationEvidence.getTargetEdgeDetection(ctx, targetId);
+    },
   };
 
   const findings = {
@@ -1748,30 +1868,50 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return Array.isArray(rows) ? rows.map(scrubFindingForCustomer) : rows;
     },
     async listFindingsEnvelope(ctx, options = {}) {
+      let query;
+      try {
+        query = parseFindingListQuery(options, { paginate: true });
+      } catch (err) {
+        const failure = findingListQueryFailure(err);
+        if (failure) return failure;
+        throw err;
+      }
+      if (typeof validationEvidence.listFindingsPage === 'function') {
+        const page = await validationEvidence.listFindingsPage(ctx, options);
+        const items = Array.isArray(page?.items) ? page.items.map(scrubFindingForCustomer) : [];
+        return buildFindingListEnvelope(items, page?.total ?? 0, query);
+      }
       const items = await this.listFindings(ctx, options);
-      return {
-        items,
-        count: items.length,
-        meta: {
-          empty_reason: items.length
-            ? null
-            : options.target_group_id
-              ? 'No findings match this target group filter.'
-              : options.target_id
-                ? 'No findings match this target filter.'
-                : options.test_run_id
-                  ? 'No findings match this test run filter.'
-                  : 'No findings have been published for this tenant yet.',
-        },
-      };
+      return buildFindingListEnvelope(items, items.length, query);
     },
     async getFinding(ctx, id) {
       // EVIDENCE-01 / ADR-0008: customer finding detail must read external-only; scrub the projection.
-      return scrubFindingForCustomer(await validationEvidence.getFinding(ctx, id));
+      const row = await validationEvidence.getFinding(ctx, id);
+      if (!row) return null;
+      const view = scrubFindingForCustomer(row);
+      if (typeof validationEvidence.readFindingLineage === 'function') {
+        const lineage = await validationEvidence.readFindingLineage(ctx, id);
+        if (lineage && !lineage.error) {
+          view.closed_at = row.closed_at ?? lineage.closed_at ?? null;
+          view.lineage = lineage;
+          view.retests = lineage.retests ?? [];
+          view.originating = lineage.originating ?? null;
+          view.latest = lineage.latest ?? null;
+        }
+      }
+      return view;
     },
     async patchFinding(ctx, id, body) {
+      const planned = planFindingPatch(body ?? {});
+      if (planned.error) return planned;
       const updated_at = nowFn().toISOString();
-      const row = await validationEvidence.patchFinding(ctx, id, { ...body, updated_at });
+      // Only customer lifecycle and assignment fields cross this boundary.
+      // Evidence links and closure timestamps belong to the server writers.
+      const patch = { ...planned.patch, updated_at };
+      for (const key of ['assignee', 'notes']) {
+        if (Object.hasOwn(body ?? {}, key)) patch[key] = body[key];
+      }
+      const row = await validationEvidence.patchFinding(ctx, id, patch);
       if (!row) return null;
       await audit.appendAuditEvent(
         {

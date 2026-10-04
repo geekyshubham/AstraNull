@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Activity, Bell, CalendarClock, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, Search, ShieldCheck, Siren, Users } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { EmptyState } from '../components/ui/empty-state';
 import { Select } from '../components/ui/select';
 import { DataTable, type TableColumn } from '../components/ui/table';
-import { isStaffSocRole, requestJson, requestSocJson, saveSession } from '../lib/api';
+import { fetchPortalConfig, isStaffSocRole, requestJson, requestSocJson, saveSession } from '../lib/api';
 import {
   computeReleaseEvidenceCoverage,
   pickReleaseEvidenceCustodyUri,
@@ -19,13 +19,14 @@ import {
 } from '../lib/high-scale';
 import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { buildDetailHref, getRouteTenantId } from '../lib/route-params';
+import { buildDetailHref, getRouteTenantId, parseInspectorRef, replaceRouteParams } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
 import { formatAuditAction, formatDate, formatNumber, sensitiveResourceLabel } from '../lib/utils';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
 import { plainCodeLabel } from '../lib/plain-language.mjs';
-import { MetricCard, PageContextSummary, PageHeader } from './page-components';
+import { CustomerPageStyles, MetricCard, PageContextSummary, PageHeader, PanelCardHeader } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
+import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -728,6 +729,32 @@ const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
   }
 ];
 
+type AttemptView = {
+  key: string;
+  attempt: DataItem;
+  event: DataItem;
+  rule: DataItem | null;
+  status: string;
+};
+
+const ATTEMPT_STATUS_COPY: Record<string, { label: string; tone: GovernanceBadgeTone; meaning: string }> = {
+  delivered_provider: { label: 'Delivered', tone: 'success', meaning: 'The provider accepted the message.' },
+  delivered_in_app: { label: 'In-app feed', tone: 'success', meaning: 'Recorded in the in-app feed.' },
+  queued_provider_not_configured: { label: 'Recorded, not sent', tone: 'muted', meaning: 'Outbound delivery is not enabled on the server, so nothing was sent.' },
+  provider_retry_scheduled: { label: 'Retry scheduled', tone: 'warn', meaning: 'A send failed and a retry is already scheduled.' },
+  provider_failed_dlq: { label: 'Failed', tone: 'danger', meaning: 'Retries were exhausted. The attempt is parked until someone retries it.' }
+};
+
+function attemptStatusCopy(status: string) {
+  return ATTEMPT_STATUS_COPY[status] ?? { label: status ? status.replaceAll('_', ' ') : 'Outcome not recorded', tone: 'warn' as GovernanceBadgeTone, meaning: 'The server recorded a status this page does not interpret. Treat the outcome as unknown.' };
+}
+
+function readNotificationParam(name: string) {
+  const hash = window.location.hash.replace(/^#/, '');
+  const index = hash.indexOf('?');
+  return new URLSearchParams(index >= 0 ? hash.slice(index + 1) : '').get(name) ?? '';
+}
+
 export function NotificationsPage({
   data,
   config,
@@ -745,53 +772,56 @@ export function NotificationsPage({
   const [error, setError] = useState('');
   const [destinationError, setDestinationError] = useState('');
   const [triggerError, setTriggerError] = useState('');
-  const [ruleDryRunPreview, setRuleDryRunPreview] = useState('');
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
+  const [ruleMode, setRuleMode] = useState<'new' | 'existing'>('new');
+  const [existingRuleId, setExistingRuleId] = useState('');
   const [ruleChannel, setRuleChannel] = useState('webhook');
   const [ruleTriggers, setRuleTriggers] = useState<string[]>(['finding.high_severity']);
   const [ruleEnabled, setRuleEnabled] = useState(true);
+  const [selectedAttemptKey, setSelectedAttemptKey] = useState(() => readNotificationParam('focus'));
+  const [attemptFilter, setAttemptFilter] = useState<'problems' | 'all'>('problems');
+  const [retryPreview, setRetryPreview] = useState<{ key: string; summary: string } | null>(null);
+  const [batchPreview, setBatchPreview] = useState<{ kind: 'retries' | 'failed'; summary: string } | null>(null);
+  const formHeadingRef = useRef<HTMLHeadingElement>(null);
   const canWrite = canWriteNotifications(session.role);
-  const attempts = useMemo(() => deliveryAttempts(data.notificationEvents ?? []), [data.notificationEvents]);
-  const deliveredCount = attempts.filter((item) => getString(item, ['status']) === 'delivered_provider').length;
-  const retryItems = attempts.filter((item) => getString(item, ['status']) === 'provider_retry_scheduled');
-  const dlqItems = attempts.filter((item) => getString(item, ['status']) === 'provider_failed_dlq');
-  const providerHealthRows = useMemo(
-    () => buildProviderHealthRows(data.notificationRules ?? [], attempts),
-    [data.notificationRules, attempts]
-  );
+  const rules = data.notificationRules ?? [];
+  const events = useMemo(() => (data.notificationEvents ?? []).slice().sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? ''))), [data.notificationEvents]);
 
-  const ruleColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'channel',
-      label: 'Channel',
-      render: (item) => {
-        const channel = getString(item, ['channel']);
-        const label = NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? formatGovernanceStatusLabel(channel);
-        return <Badge tone="info">{label}</Badge>;
-      }
-    },
-    {
-      key: 'enabled',
-      label: 'Enabled',
-      render: (item) => (
-        <Badge tone={item.enabled === false ? 'muted' : 'success'}>
-          {item.enabled === false ? 'Disabled' : 'Enabled'}
-        </Badge>
-      )
-    },
-    { key: 'triggers', label: 'Triggers', render: (item) => (Array.isArray(item.triggers) ? item.triggers.length : 0) },
-    { key: 'destination', label: 'Destination', render: (item) => getString(item, ['destination_preview'], 'metadata-only') }
-  ];
-  const eventColumns: TableColumn<DataItem>[] = [
-    { key: 'trigger', label: 'Trigger', render: (item) => humanizeNotificationTrigger(getString(item, ['trigger'])) },
-    { key: 'subject', label: 'Subject', render: (item) => getString(item, ['subject']) },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
-  ];
-  const providerColumns: TableColumn<ProviderHealthRow>[] = [
-    { key: 'provider', label: 'Provider', render: (item) => <Badge tone="info">{item.label}</Badge> },
-    { key: 'channel', label: 'Channel', render: (item) => <span className="muted">{item.detail}</span> },
-    { key: 'health', label: 'Health', render: (item) => <Badge tone={item.tone}>{item.status}</Badge> }
-  ];
+  const attempts: AttemptView[] = useMemo(() => events.flatMap((event) => {
+    const list = Array.isArray(event.delivery_attempts) ? event.delivery_attempts as DataItem[] : [];
+    return list.map((attempt, index) => ({
+      key: getString(attempt, ['id', 'attempt_id'], `${getString(event, ['id'], 'event')}-${index}`),
+      attempt,
+      event,
+      rule: rules.find((rule) => getString(rule, ['id'], '') === getString(attempt, ['rule_id'], '')) ?? null,
+      status: getString(attempt, ['status'], '')
+    }));
+  }), [events, rules]);
+  const counts = useMemo(() => {
+    const result = { delivered: 0, retry: 0, failed: 0, notSent: 0, unknown: 0 };
+    for (const view of attempts) {
+      if (view.status === 'delivered_provider' || view.status === 'delivered_in_app') result.delivered += 1;
+      else if (view.status === 'provider_retry_scheduled') result.retry += 1;
+      else if (view.status === 'provider_failed_dlq') result.failed += 1;
+      else if (view.status === 'queued_provider_not_configured') result.notSent += 1;
+      else result.unknown += 1;
+    }
+    return result;
+  }, [attempts]);
+  const problemAttempts = attempts.filter((view) => !['delivered_provider', 'delivered_in_app', 'queued_provider_not_configured'].includes(view.status));
+  const visibleAttempts = attemptFilter === 'problems' ? problemAttempts : attempts;
+  const selected = attempts.find((view) => view.key === selectedAttemptKey) ?? null;
+  const enabledRules = rules.filter((rule) => rule.enabled !== false).length;
+  const eventsUnavailable = Boolean(data.loadErrors.notificationEvents);
+
+  useEffect(() => {
+    replaceRouteParams({ focus: selectedAttemptKey || null });
+    setRetryPreview(null);
+  }, [selectedAttemptKey]);
+
+  useEffect(() => {
+    if (ruleFormOpen) formHeadingRef.current?.focus();
+  }, [ruleFormOpen]);
 
   async function runAction<T>(label: string, action: () => Promise<T>, success: string) {
     setBusy(label);
@@ -812,100 +842,152 @@ export function NotificationsPage({
 
   function toggleRuleTrigger(trigger: string) {
     setTriggerError('');
-    setRuleDryRunPreview('');
-    setRuleTriggers((current) =>
-      current.includes(trigger) ? current.filter((item) => item !== trigger) : [...current, trigger]
-    );
+    setRuleTriggers((current) => current.includes(trigger) ? current.filter((item) => item !== trigger) : [...current, trigger]);
   }
 
   async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formEl = event.currentTarget;
-    const form = new FormData(formEl);
-    const channel = ruleChannel.trim();
     const triggers = NOTIFICATION_TRIGGERS.filter((trigger) => ruleTriggers.includes(trigger));
     if (triggers.length === 0) {
-      setTriggerError('Select at least one rule kind before adding the rule.');
-      setRuleDryRunPreview('');
+      setTriggerError('Choose at least one event to route.');
       return;
     }
     setTriggerError('');
+    if (ruleMode === 'existing') {
+      const rule = rules.find((item) => getString(item, ['id'], '') === existingRuleId);
+      if (!rule) {
+        setDestinationError('Choose an existing channel.');
+        return;
+      }
+      setDestinationError('');
+      const merged = [...new Set([...(Array.isArray(rule.triggers) ? (rule.triggers as unknown[]).map(String) : []), ...triggers])];
+      const updated = await runAction('create-notification-rule', () => requestJson(config, session, `/v1/notifications/${encodeURIComponent(existingRuleId)}`, {
+        method: 'PATCH',
+        body: { triggers: merged, enabled: ruleEnabled }
+      }), `Routed ${triggers.map(humanizeNotificationTrigger).join(', ')} to the existing ${getString(rule, ['channel'])} channel ${getString(rule, ['destination_preview'], '')}. Its stored destination was not changed.`);
+      if (updated) setRuleFormOpen(false);
+      return;
+    }
+    const form = new FormData(formEl);
+    const channel = ruleChannel.trim();
     const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
     if ('error' in validation) {
       setDestinationError(validation.error);
-      setRuleDryRunPreview('');
       return;
     }
     setDestinationError('');
-    setRuleDryRunPreview('');
     const created = await runAction('create-notification-rule', () => requestJson(config, session, '/v1/notifications', {
       method: 'POST',
-      body: {
-        channel,
-        enabled: ruleEnabled,
-        triggers,
-        destination: validation.destination
-      }
-    }), `Notification rule created ${ruleEnabled ? 'enabled' : 'disabled'} (metadata-only delivery ledger).`);
+      body: { channel, enabled: ruleEnabled, triggers, destination: validation.destination }
+    }), `Rule created ${ruleEnabled ? 'and enabled' : 'disabled'}. Nothing was sent; the first message goes out when a matching event occurs and outbound delivery is enabled.`);
     if (created) {
       formEl.reset();
-      setRuleTriggers(['finding.high_severity']);
-      setRuleEnabled(true);
       setRuleFormOpen(false);
     }
   }
 
-  function previewRuleFromForm(formEl: HTMLFormElement) {
-    const form = new FormData(formEl);
-    const channel = ruleChannel.trim();
-    const triggers = NOTIFICATION_TRIGGERS.filter((trigger) => ruleTriggers.includes(trigger));
-    if (triggers.length === 0) {
-      setTriggerError('Select at least one rule kind before previewing.');
-      setRuleDryRunPreview('');
-      return;
-    }
-    setTriggerError('');
-    const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
-    if ('error' in validation) {
-      setDestinationError(validation.error);
-      setRuleDryRunPreview('');
-      return;
-    }
-    setDestinationError('');
-    const triggerLabels = triggers.map((trigger) => humanizeNotificationTrigger(trigger)).join(', ');
-    const target = channel === 'in_app' ? 'in-app feed' : validation.destination;
-    setRuleDryRunPreview(
-      `Dry-run: would create ${ruleEnabled ? 'an enabled' : 'a disabled'} ${channel} rule for ${triggers.length} trigger${triggers.length === 1 ? '' : 's'} (${triggerLabels}) to ${target}. No ledger write.`
-    );
+  async function previewAttemptRetry(view: AttemptView) {
+    const id = getString(view.attempt, ['id', 'attempt_id'], '');
+    if (!id) return;
+    const result = await runAction(`preview-${view.key}`, () => requestJson(config, session, '/v1/notifications/dlq/redrive', {
+      method: 'POST',
+      body: { dry_run: true, attempt_ids: [id] }
+    }), 'Retry preview ready. Nothing was sent or changed.') as DataItem | null;
+    if (result) setRetryPreview({ key: view.key, summary: summarizeOperationResult(result) });
   }
 
-  async function processRetries(dryRun: boolean) {
-    if (!dryRun && !(await confirm({ title: 'Process notification retries', description: 'Process notification retries now?', confirmLabel: 'Process retries', confirmTone: 'default' }))) return;
-    await runAction(`process-retries-${dryRun ? 'preview' : 'run'}`, () => requestJson(config, session, '/v1/notifications/retries/process', {
+  async function retryAttempt(view: AttemptView) {
+    const id = getString(view.attempt, ['id', 'attempt_id'], '');
+    if (!id) return;
+    const destination = getString(view.attempt, ['destination_preview'], getString(view.rule ?? {}, ['destination_preview'], 'its destination'));
+    if (!await confirm({
+      title: 'Retry this delivery',
+      description: `Requeue the failed ${getString(view.attempt, ['channel'], 'notification')} delivery for "${getString(view.event, ['subject'], 'this event')}" to ${destination}? The portal records the retry in metadata-only mode; whether a message is sent depends on your deployment's delivery configuration. If the provider did receive the original, the recipient may see a duplicate.`,
+      confirmLabel: 'Retry delivery',
+      confirmTone: 'default'
+    })) return;
+    await runAction(`retry-${view.key}`, () => requestJson(config, session, '/v1/notifications/dlq/redrive', {
       method: 'POST',
-      body: { dry_run: dryRun }
-    }), dryRun ? 'Due retry preview completed.' : 'Due retries processed (metadata-only).');
+      body: { dry_run: false, attempt_ids: [id] }
+    }), 'Delivery requeued for retry.');
+    setRetryPreview(null);
   }
 
-  async function redriveDlq(dryRun: boolean) {
-    if (!dryRun && !(await confirm({ title: 'Redrive dead-letter queue', description: 'Redrive the DLQ now?', confirmLabel: 'Redrive queue', confirmTone: 'default' }))) return;
-    const attemptIds = dlqItems
-      .map((item) => getString(item, ['id', 'attempt_id'], ''))
-      .filter(Boolean);
-    await runAction(`redrive-dlq-${dryRun ? 'preview' : 'run'}`, () => requestJson(config, session, '/v1/notifications/dlq/redrive', {
+  async function previewBatch(kind: 'retries' | 'failed') {
+    const result = await runAction(`batch-preview-${kind}`, () => requestJson(config, session, kind === 'retries' ? '/v1/notifications/retries/process' : '/v1/notifications/dlq/redrive', {
       method: 'POST',
-      body: {
-        dry_run: dryRun,
-        attempt_ids: attemptIds.length > 0 ? attemptIds : undefined
+      body: kind === 'retries'
+        ? { dry_run: true }
+        : { dry_run: true, attempt_ids: attempts.filter((view) => view.status === 'provider_failed_dlq').map((view) => getString(view.attempt, ['id', 'attempt_id'], '')).filter(Boolean) }
+    }), 'Preview ready. Nothing was sent or changed.') as DataItem | null;
+    if (result) setBatchPreview({ kind, summary: summarizeOperationResult(result) });
+  }
+
+  async function runBatch(kind: 'retries' | 'failed') {
+    const failedIds = attempts.filter((view) => view.status === 'provider_failed_dlq').map((view) => getString(view.attempt, ['id', 'attempt_id'], '')).filter(Boolean);
+    if (!await confirm({
+      title: kind === 'retries' ? 'Process due retries' : 'Retry all failed deliveries',
+      description: kind === 'retries'
+        ? `Process retries that are due now (${batchPreview?.summary ?? 'see preview'})? Recorded in metadata-only mode from the portal. Recipients may see duplicates if earlier sends actually arrived.`
+        : `Requeue ${formatNumber(failedIds.length)} failed deliveries listed on this page? Recorded in metadata-only mode from the portal. Recipients may see duplicates if earlier sends actually arrived.`,
+      confirmLabel: kind === 'retries' ? 'Process retries' : 'Retry failed deliveries',
+      confirmTone: 'default'
+    })) return;
+    await runAction(`batch-${kind}`, () => requestJson(config, session, kind === 'retries' ? '/v1/notifications/retries/process' : '/v1/notifications/dlq/redrive', {
+      method: 'POST',
+      body: kind === 'retries' ? { dry_run: false } : { dry_run: false, attempt_ids: failedIds }
+    }), kind === 'retries' ? 'Due retries processed.' : 'Failed deliveries requeued.');
+    setBatchPreview(null);
+  }
+
+  const ruleColumns: TableColumn<DataItem>[] = [
+    {
+      key: 'channel',
+      label: 'Channel',
+      render: (item) => {
+        const channel = getString(item, ['channel']);
+        return (
+          <span className="cp-stack">
+            <span>{NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? formatGovernanceStatusLabel(channel)}</span>
+            <span className="muted small mono">{getString(item, ['destination_preview'], 'Destination hidden')}</span>
+          </span>
+        );
       }
-    }), dryRun ? 'DLQ redrive preview completed.' : 'DLQ attempts requeued (metadata-only).');
-  }
+    },
+    { key: 'triggers', label: 'Routes', render: (item) => (Array.isArray(item.triggers) ? (item.triggers as unknown[]).map((trigger) => humanizeNotificationTrigger(String(trigger))).join(', ') : '') || <span className="muted">No events</span> },
+    { key: 'enabled', label: 'Sending', render: (item) => <Badge tone="muted">{item.enabled === false ? 'Disabled' : 'Enabled'}</Badge> },
+    {
+      key: 'last',
+      label: 'Last attempt',
+      render: (item) => {
+        const last = attempts.find((view) => getString(view.attempt, ['rule_id'], '') === getString(item, ['id'], ''));
+        if (!last) return <span className="muted">None in loaded events</span>;
+        const copy = attemptStatusCopy(last.status);
+        return <span className="cp-stack"><Badge tone={copy.tone}>{copy.label}</Badge><span className="muted small">{formatDate(last.attempt.attempted_at ?? last.attempt.created_at ?? last.event.created_at)}</span></span>;
+      }
+    },
+    { key: 'edit', label: 'Configuration', render: (item) => <AnchorButton size="sm" variant="ghost" href={`#integrations?focus=${encodeURIComponent(getString(item, ['id'], ''))}`}>Open channel</AnchorButton> }
+  ];
+
+  const attemptColumns: TableColumn<AttemptView>[] = [
+    { key: 'status', label: 'Outcome', render: (view) => { const copy = attemptStatusCopy(view.status); return <Badge tone={copy.tone}>{copy.label}</Badge>; } },
+    { key: 'time', label: 'Attempted', render: (view) => <span className="mono">{formatDate(view.attempt.attempted_at ?? view.attempt.created_at ?? view.event.created_at)}</span> },
+    { key: 'event', label: 'Event', render: (view) => <span className="cp-stack"><span>{humanizeNotificationTrigger(getString(view.event, ['trigger']))}</span><span className="muted small">{getString(view.event, ['subject'], '')}</span></span> },
+    { key: 'channel', label: 'Channel', render: (view) => <span className="cp-stack"><span>{formatGovernanceStatusLabel(getString(view.attempt, ['channel'], ''), 'Not recorded')}</span><span className="muted small mono">{getString(view.attempt, ['destination_preview'], getString(view.rule ?? {}, ['destination_preview'], ''))}</span></span> },
+  ];
+
+  const selectedCopy = selected ? attemptStatusCopy(selected.status) : null;
+  const selectedAttemptNumber = selected ? getString(selected.attempt, ['attempt_number'], '') : '';
+  const selectedMaxAttempts = selected ? getString(selected.attempt, ['max_attempts'], '') : '';
 
   return (
-    <div className="content">
+    <div className="content notifications-page">
+      <CustomerPageStyles />
       <PageHeader
         route="notifications"
-        description="Rules, delivery evidence, retries, and dead-letter recovery for readiness events. External delivery remains provider-configured and opt-in."
+        title="Notifications"
+        description={<>Routing rules decide which events go to which channel. Channel destinations are set up in <a className="cp-link" href="#integrations">Integrations</a>. An event being recorded is not a message delivered.</>}
         actions={canWrite ? (
           <Button
             size="sm"
@@ -914,703 +996,916 @@ export function NotificationsPage({
             aria-controls={ruleFormOpen ? 'notifications-create-rule' : undefined}
             onClick={() => setRuleFormOpen((open) => !open)}
           >
-            {ruleFormOpen ? 'Close rule form' : 'New rule'}
+            {ruleFormOpen ? 'Close routing form' : 'Route events'}
           </Button>
         ) : <Badge tone="muted">Read only</Badge>}
       />
-      <div className="metric-grid three">
-        <MetricCard label="Delivered" value={formatNumber(deliveredCount)} sub="successful deliveries" icon={CheckCircle2} tone="success" />
-        <MetricCard label="Retrying" value={formatNumber(retryItems.length)} sub="awaiting retry" icon={Bell} tone={retryItems.length > 0 ? 'warn' : 'muted'} />
-        <MetricCard label="DLQ" value={formatNumber(dlqItems.length)} sub="dead-letter queue" icon={Siren} tone={dlqItems.length > 0 ? 'danger' : 'muted'} />
-      </div>
-      <PageContextSummary>
-        <span className="tabular-nums">{formatNumber(data.notificationRules.length)}</span> rules ·{' '}
-        <span className="tabular-nums">{formatNumber(data.notificationEvents.length)}</span> events ·{' '}
-        <span className="tabular-nums">{formatNumber(dlqItems.length)}</span> DLQ ({formatNumber(retryItems.length)} retries scheduled)
-      </PageContextSummary>
+      <dl className="release-dimensions" aria-label="Delivery summary for loaded events">
+        <div><dt>Channels</dt><dd>{formatNumber(enabledRules)} of {formatNumber(rules.length)}</dd><dd className="release-dimension-hint">enabled</dd></div>
+        <div><dt>Delivered</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.delivered)}</dd><dd className="release-dimension-hint">attempts accepted by a provider or in-app</dd></div>
+        <div><dt>Failed or retrying</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.failed + counts.retry)}</dd><dd className="release-dimension-hint">{formatNumber(counts.failed)} failed · {formatNumber(counts.retry)} retry scheduled</dd></div>
+        <div><dt>Recorded, not sent</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.notSent)}</dd><dd className="release-dimension-hint">outbound delivery disabled{counts.unknown ? ` · ${formatNumber(counts.unknown)} unknown` : ''}</dd></div>
+      </dl>
+      <p className="muted small">Counts cover the {formatNumber(events.length)} most recent events loaded, not all history.</p>
       <GovernanceFeedbackBanner message={message} error={error} />
+
       {canWrite && ruleFormOpen ? (
         <Card id="notifications-create-rule" raised>
           <CardHeader>
-            <CardTitle>Create notification rule</CardTitle>
-            <CardDescription>Pick a delivery mode, the rule kinds (triggers) that fire it, and whether it starts enabled. Metadata-only ledger. External delivery stays opt-in through the server delivery mode.</CardDescription>
+            <div>
+              <CardTitle><span ref={formHeadingRef} tabIndex={-1}>Route events to a channel</span></CardTitle>
+              <CardDescription>Send chosen events to a new destination, or add them to a channel you already set up. Saving sends nothing.</CardDescription>
+            </div>
           </CardHeader>
           <CardContent>
-            <form className="product-form" onSubmit={handleCreateRule} aria-busy={busy === 'create-notification-rule'}>
-              <Select
-                label="Delivery mode"
-                value={ruleChannel}
-                options={NOTIFICATION_CHANNEL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-                onChange={(value) => { setRuleChannel(value); setDestinationError(''); setRuleDryRunPreview(''); }}
-                disabled={busy !== ''}
-              />
-              <label className="full">
-                <span>{ruleChannel === 'in_app' ? 'Destination (optional for in-app)' : 'Destination'}</span>
-                <input
-                  name="destination_preview"
-                  placeholder={ruleChannel === 'email' ? 'alerts@example.com' : ruleChannel === 'in_app' ? 'Delivered to the tenant in-app feed' : 'https://hooks.example.invalid/notifications'}
-                  aria-invalid={destinationError ? true : undefined}
-                  aria-describedby={destinationError ? 'notification-destination-error' : undefined}
-                  disabled={busy !== '' || ruleChannel === 'in_app'}
-                />
-              </label>
-              <fieldset className="full">
-                <legend>Rule kinds and filters (triggers)</legend>
-                {NOTIFICATION_TRIGGERS.map((trigger) => (
-                  <label key={trigger} className="check-row">
+            <form className="product-form" onSubmit={handleCreateRule} aria-busy={busy === 'create-notification-rule'} noValidate>
+              <fieldset className="full report-kind-group">
+                <legend>Destination</legend>
+                <div className="cp-toolbar">
+                  <label className="check-row"><input type="radio" name="rule_mode" checked={ruleMode === 'new'} onChange={() => { setRuleMode('new'); setDestinationError(''); }} /><span>New destination</span></label>
+                  <label className="check-row"><input type="radio" name="rule_mode" checked={ruleMode === 'existing'} disabled={rules.length === 0} onChange={() => { setRuleMode('existing'); setDestinationError(''); }} /><span>Existing channel{rules.length === 0 ? ' (none yet)' : ''}</span></label>
+                </div>
+              </fieldset>
+              {ruleMode === 'new' ? (
+                <>
+                  <Select
+                    label="Channel type"
+                    value={ruleChannel}
+                    options={NOTIFICATION_CHANNEL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                    onChange={(value) => { setRuleChannel(value); setDestinationError(''); }}
+                    disabled={busy !== ''}
+                  />
+                  <label className="full">
+                    <span>{ruleChannel === 'in_app' ? 'Destination (not needed for in-app)' : 'Destination'}</span>
                     <input
-                      type="checkbox"
-                      name="triggers"
-                      value={trigger}
-                      checked={ruleTriggers.includes(trigger)}
-                      onChange={() => toggleRuleTrigger(trigger)}
-                      disabled={busy !== ''}
+                      name="destination_preview"
+                      placeholder={ruleChannel === 'email' ? 'alerts@example.com' : ruleChannel === 'in_app' ? 'Delivered to the in-app feed' : 'https://hooks.example.invalid/notifications'}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-invalid={destinationError ? true : undefined}
+                      aria-describedby={destinationError ? 'notification-destination-error' : 'notification-destination-help'}
+                      disabled={busy !== '' || ruleChannel === 'in_app'}
                     />
+                    <span className="muted small" id="notification-destination-help">Webhook URLs can contain secrets. After saving, only a redacted preview is shown and the URL is not kept in this form.</span>
+                  </label>
+                </>
+              ) : (
+                <Select
+                  className="full"
+                  label="Existing channel"
+                  value={existingRuleId}
+                  options={[{ value: '', label: 'Choose a channel' }, ...rules.map((rule) => ({
+                    value: getString(rule, ['id'], ''),
+                    label: `${NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === getString(rule, ['channel']))?.label ?? getString(rule, ['channel'])} · ${getString(rule, ['destination_preview'], 'destination hidden')}`
+                  }))]}
+                  onChange={(value) => { setExistingRuleId(value); setDestinationError(''); }}
+                  error={destinationError || undefined}
+                />
+              )}
+              <fieldset className="full">
+                <legend>Events to route</legend>
+                {NOTIFICATION_TRIGGERS.filter((trigger) => trigger !== 'high_scale.state_change').map((trigger) => (
+                  <label key={trigger} className="check-row">
+                    <input type="checkbox" name="triggers" value={trigger} checked={ruleTriggers.includes(trigger)} onChange={() => toggleRuleTrigger(trigger)} disabled={busy !== ''} />
                     <span>{humanizeNotificationTrigger(trigger)}</span>
                   </label>
                 ))}
               </fieldset>
-              {triggerError ? (
-                <p className="form-banner error full" id="notification-trigger-error" role="alert">
-                  {triggerError}
-                </p>
-              ) : null}
+              {triggerError ? <p className="field-error full" role="alert">{triggerError}</p> : null}
               <label className="check-row full">
-                <input
-                  type="checkbox"
-                  name="enabled"
-                  checked={ruleEnabled}
-                  onChange={(changeEvent) => setRuleEnabled(changeEvent.target.checked)}
-                  disabled={busy !== ''}
-                />
-                <span>Enabled on creation (uncheck to add the rule in a disabled state)</span>
+                <input type="checkbox" name="enabled" checked={ruleEnabled} onChange={(changeEvent) => setRuleEnabled(changeEvent.target.checked)} disabled={busy !== ''} />
+                <span>Enabled after saving</span>
               </label>
-              {destinationError ? (
-                <p className="form-banner error full" id="notification-destination-error" role="alert">
-                  {destinationError}
-                </p>
-              ) : null}
-              {ruleDryRunPreview ? (
-                <div className="callout info full"><Info size={18} aria-hidden="true" /><span>{ruleDryRunPreview}</span></div>
-              ) : null}
+              {destinationError && ruleMode === 'new' ? <p className="field-error full" id="notification-destination-error" role="alert">{destinationError}</p> : null}
               <div className="form-actions full">
-                <Button type="submit" loading={busy === 'create-notification-rule'} disabled={busy !== '' && busy !== 'create-notification-rule'}>Add rule</Button>
-                <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={(clickEvent) => {
-                  const form = clickEvent.currentTarget.closest('form');
-                  if (form instanceof HTMLFormElement) previewRuleFromForm(form);
-                }}>Preview rule (no send)</Button>
+                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setRuleFormOpen(false)}>Cancel</Button>
+                <Button type="submit" loading={busy === 'create-notification-rule'} disabled={busy !== '' && busy !== 'create-notification-rule'}>{ruleMode === 'existing' ? 'Add to channel' : 'Save rule'}</Button>
               </div>
+              <p className="muted small full">Your channel type, events, and enabled choice are kept if you close this form; the destination is not.</p>
             </form>
           </CardContent>
         </Card>
-      ) : !canWrite ? (
-        <Card density="compact">
-          <CardContent>
-            <EmptyState
-              icon={Lock}
-              title="Notification write access required."
-              body="Owner or admin role is required to add rules or operate retry and dead-letter queues. Existing delivery evidence remains visible."
-            />
-          </CardContent>
-        </Card>
       ) : null}
-      <div className="split" aria-busy={busy !== ''}>
+
+      <div className={selected ? 'release-ledger has-selection' : 'release-ledger'}>
         <Card>
-          <CardHeader><CardTitle>Rules</CardTitle></CardHeader>
+          <PanelCardHeader
+            title="Delivery attempts"
+            description="Select an attempt to see its event, channel, and configuration."
+            trailing={(
+              <div className="cp-toolbar" role="group" aria-label="Filter attempts">
+                <button type="button" className={`filter-chip${attemptFilter === 'problems' ? ' is-active' : ''}`} aria-pressed={attemptFilter === 'problems'} onClick={() => setAttemptFilter('problems')}>Needs attention {formatNumber(problemAttempts.length)}</button>
+                <button type="button" className={`filter-chip${attemptFilter === 'all' ? ' is-active' : ''}`} aria-pressed={attemptFilter === 'all'} onClick={() => setAttemptFilter('all')}>All {formatNumber(attempts.length)}</button>
+              </div>
+            )}
+          />
           <CardContent>
             <DataTable
-              columns={ruleColumns}
-              items={data.notificationRules}
-              empty={<EmptyState icon={Bell} title="No notification rules." body="Create a metadata-only rule to start recording delivery intent." actionLabel={canWrite ? 'New rule' : undefined} onAction={canWrite ? () => setRuleFormOpen(true) : undefined} />}
-              loadError={data.loadErrors.notificationRules}
-              onRetry={() => void onRefresh()}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Recent events</CardTitle></CardHeader>
-          <CardContent>
-            <DataTable
-              columns={eventColumns}
-              items={data.notificationEvents.slice().sort((left, right) => new Date(String(right.created_at ?? '')).getTime() - new Date(String(left.created_at ?? '')).getTime())}
-              empty={<EmptyState icon={ClipboardList} title="No notification events." body="Events appear after configured triggers fire." />}
+              columns={attemptColumns}
+              items={visibleAttempts}
+              getRowId={(view) => view.key}
+              selectedId={selectedAttemptKey || null}
+              getRowProps={(view) => ({
+                tabIndex: 0,
+                'aria-label': `Inspect ${attemptStatusCopy(view.status).label.toLowerCase()} delivery for ${humanizeNotificationTrigger(getString(view.event, ['trigger']))}`,
+                onClick: () => setSelectedAttemptKey(view.key),
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  setSelectedAttemptKey(view.key);
+                }
+              })}
               loadError={data.loadErrors.notificationEvents}
               onRetry={() => void onRefresh()}
+              empty={attempts.length > 0
+                ? <EmptyState icon={CheckCircle2} title="No failed or retrying deliveries." body="Every loaded attempt was delivered or recorded without sending." actionLabel="Show all attempts" onAction={() => setAttemptFilter('all')} />
+                : <EmptyState icon={ClipboardList} title="No delivery attempts recorded." body={rules.length ? 'Attempts appear when a routed event occurs.' : 'Route events to a channel first.'} />}
             />
           </CardContent>
         </Card>
+        {selected && selectedCopy ? (
+          <Card className="release-record-detail" raised>
+            <section aria-label="Selected delivery attempt">
+              <CardHeader>
+                <div>
+                  <CardTitle>{selectedCopy.label}: {humanizeNotificationTrigger(getString(selected.event, ['trigger']))}</CardTitle>
+                  <CardDescription>{selectedCopy.meaning}</CardDescription>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedAttemptKey('')}>Close</Button>
+              </CardHeader>
+              <CardContent className="stack-tight">
+                <div className="kv-list">
+                  <KvField label="Attempted">{formatDate(selected.attempt.attempted_at ?? selected.attempt.created_at)}</KvField>
+                  <KvField label="Reason">{getString(selected.attempt, ['reason', 'provider_error'], 'Not recorded')}</KvField>
+                  <KvField label="Attempt">{selectedAttemptNumber ? `${selectedAttemptNumber}${selectedMaxAttempts ? ` of ${selectedMaxAttempts}` : ''}` : 'Not recorded'}</KvField>
+                  <KvField label="Event">{getString(selected.event, ['subject'], 'Not recorded')} · {formatDate(selected.event.created_at)}</KvField>
+                  <KvField label="Channel">{formatGovernanceStatusLabel(getString(selected.attempt, ['channel'], ''), 'Not recorded')} <span className="mono muted">{getString(selected.attempt, ['destination_preview'], '')}</span></KvField>
+                  <KvField label="Rule">{selected.rule ? `${selected.rule.enabled === false ? 'Disabled' : 'Enabled'} · routes ${(Array.isArray(selected.rule.triggers) ? (selected.rule.triggers as unknown[]).length : 0)} event types` : 'Rule removed or not recorded'}</KvField>
+                </div>
+                <div className="row-actions">
+                  {selected.rule ? <AnchorButton size="sm" variant="secondary" href={`#integrations?focus=${encodeURIComponent(getString(selected.rule, ['id'], ''))}`}>Fix channel configuration</AnchorButton> : null}
+                </div>
+                {selected.status === 'provider_failed_dlq' ? (
+                  canWrite ? (
+                    <div className="stack-tight">
+                      <p className="muted small">Fix the channel first if the reason points to a bad destination. Preview the retry, then retry explicitly.</p>
+                      <div className="row-actions">
+                        <Button size="sm" variant="secondary" loading={busy === `preview-${selected.key}`} disabled={busy !== ''} onClick={() => void previewAttemptRetry(selected)}>Preview retry</Button>
+                        <Button size="sm" loading={busy === `retry-${selected.key}`} disabled={busy !== '' || retryPreview?.key !== selected.key} onClick={() => void retryAttempt(selected)}>Retry delivery</Button>
+                      </div>
+                      {retryPreview?.key === selected.key ? <p className="muted small" role="status">Preview: {retryPreview.summary}</p> : null}
+                    </div>
+                  ) : <p className="muted small">Owner or admin role is required to retry deliveries.</p>
+                ) : selected.status === 'provider_retry_scheduled' ? (
+                  <p className="muted small">A retry is already scheduled. No manual retry is offered, to avoid sending twice.</p>
+                ) : !ATTEMPT_STATUS_COPY[selected.status] ? (
+                  <p className="form-banner neutral">The outcome is unknown, so retry is not offered. Retrying an attempt that may have been delivered risks a duplicate; check the destination first.</p>
+                ) : null}
+              </CardContent>
+            </section>
+          </Card>
+        ) : selectedAttemptKey && attempts.length > 0 ? (
+          <div className="form-banner neutral" role="status">
+            Attempt {selectedAttemptKey} is not among the loaded events. <button type="button" className="rf-link-button" onClick={() => setSelectedAttemptKey('')}>Clear selection</button>
+          </div>
+        ) : null}
       </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle>Providers</CardTitle>
-          <CardDescription>Delivery-provider health derived from configured rules correlated with recorded delivery attempts.</CardDescription>
-        </CardHeader>
+        <PanelCardHeader title="Routing rules" description="Each rule sends chosen events to one channel. Edit destinations and turn channels on or off in Integrations." />
         <CardContent>
           <DataTable
-            columns={providerColumns}
-            items={providerHealthRows}
-            getRowId={(item) => item.channel}
-            empty={<EmptyState icon={Bell} title="No delivery providers." body="Provider health appears once notification rules are created and delivery attempts are recorded." />}
-            loadError={data.loadErrors.notificationRules || data.loadErrors.notificationEvents}
+            columns={ruleColumns}
+            items={rules}
+            getRowId={(item) => getString(item, ['id'], '')}
+            empty={<EmptyState icon={Bell} title="No routing rules." body="Nothing is routed to a channel yet." actionLabel={canWrite ? 'Route events' : undefined} onAction={canWrite ? () => setRuleFormOpen(true) : undefined} />}
+            loadError={data.loadErrors.notificationRules}
             onRetry={() => void onRefresh()}
           />
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Delivery operations</CardTitle>
-          <CardDescription>Retry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state.</CardDescription>
-        </CardHeader>
-        <CardContent className="stack-tight">
-          <DeliveryOperationPanel titleId="notification-preview-title" title="Preview" description="Dry-run — no ledger changes">
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === 'process-retries-preview'}
-              disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'process-retries-preview', false, dlqItems.length))}
-              title={notificationOperationDisabledReason(canWrite, busy, 'process-retries-preview', false, dlqItems.length) || undefined}
-              onClick={() => void processRetries(true)}
-            >Preview due retries</Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === 'redrive-dlq-preview'}
-              disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-preview', true, dlqItems.length))}
-              title={notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-preview', true, dlqItems.length) || undefined}
-              onClick={() => void redriveDlq(true)}
-            >Preview DLQ redrive</Button>
-          </DeliveryOperationPanel>
-          <DeliveryOperationPanel titleId="notification-live-title" title="Live" description="Applies changes — confirmation required">
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === 'process-retries-run'}
-              disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'process-retries-run', false, dlqItems.length))}
-              title={notificationOperationDisabledReason(canWrite, busy, 'process-retries-run', false, dlqItems.length) || undefined}
-              onClick={() => void processRetries(false)}
-            >Process due retries</Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === 'redrive-dlq-run'}
-              disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-run', true, dlqItems.length))}
-              title={notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-run', true, dlqItems.length) || undefined}
-              onClick={() => void redriveDlq(false)}
-            >Redrive DLQ</Button>
-          </DeliveryOperationPanel>
-        </CardContent>
-      </Card>
+
+      {canWrite ? (
+        <Card>
+          <PanelCardHeader title="Bulk recovery" description="Preview first. Live actions apply to every matching attempt and can produce duplicates if earlier sends arrived." />
+          <CardContent className="stack-tight">
+            <DeliveryOperationPanel titleId="notification-retries-title" title="Due retries" description={batchPreview?.kind === 'retries' ? `Preview: ${batchPreview.summary}` : 'Process retries whose scheduled time has passed.'}>
+              <Button size="sm" variant="secondary" loading={busy === 'batch-preview-retries'} disabled={busy !== ''} onClick={() => void previewBatch('retries')}>Preview due retries</Button>
+              <Button size="sm" variant="secondary" loading={busy === 'batch-retries'} disabled={busy !== '' || batchPreview?.kind !== 'retries'} onClick={() => void runBatch('retries')}>Process due retries</Button>
+            </DeliveryOperationPanel>
+            <DeliveryOperationPanel titleId="notification-failed-title" title="Failed deliveries" description={batchPreview?.kind === 'failed' ? `Preview: ${batchPreview.summary}` : `${formatNumber(counts.failed)} failed attempt${counts.failed === 1 ? '' : 's'} on this page.`}>
+              <Button size="sm" variant="secondary" loading={busy === 'batch-preview-failed'} disabled={busy !== '' || counts.failed === 0} onClick={() => void previewBatch('failed')}>Preview retry of failed</Button>
+              <Button size="sm" variant="secondary" loading={busy === 'batch-failed'} disabled={busy !== '' || counts.failed === 0 || batchPreview?.kind !== 'failed'} onClick={() => void runBatch('failed')}>Retry failed deliveries</Button>
+            </DeliveryOperationPanel>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
+}
+
+function summarizeOperationResult(result: DataItem) {
+  const parts: string[] = [];
+  const labels: Array<[string, string]> = [
+    ['due_count', 'due'],
+    ['requeued_count', 'would be requeued'],
+    ['still_dlq_count', 'still failed'],
+    ['skipped_count', 'skipped'],
+    ['held_count', 'held'],
+    ['cancelled_count', 'cancelled'],
+    ['scheduled_not_due_count', 'scheduled, not yet due'],
+    ['network_sends_performed', 'messages sent']
+  ];
+  for (const [key, label] of labels) {
+    const value = result[key];
+    if (typeof value === 'number') parts.push(`${value} ${label}`);
+  }
+  if (typeof result.delivery_mode === 'string') parts.push(`mode ${result.delivery_mode.replaceAll('_', ' ')}`);
+  return parts.length ? parts.join(' · ') : 'the server returned no counts';
+}
+
+const AUDIT_PAGE_SIZE = 50;
+const AUDIT_RESOURCE_ROUTES: Record<string, string> = {
+  target: 'target-detail',
+  target_group: 'target-group-detail',
+  finding: 'finding-detail',
+  report: 'report-detail',
+  test_policy: 'policy-detail',
+  evidence: 'evidence-detail'
+};
+
+function auditTimestamp(entry: DataItem) {
+  return String(entry.timestamp ?? entry.created_at ?? '');
+}
+
+function auditActionCategory(action: string) {
+  const index = action.indexOf('.');
+  return index > 0 ? action.slice(0, index) : action;
+}
+
+function auditDayBound(value: string, end: boolean) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;
+  const [year, month, day] = value.split('-').map(Number);
+  const at = end ? new Date(year, month - 1, day, 23, 59, 59, 999) : new Date(year, month - 1, day, 0, 0, 0, 0);
+  return at.getTime();
+}
+
+function readAuditParam(name: string) {
+  const hash = window.location.hash.replace(/^#/, '');
+  const index = hash.indexOf('?');
+  return new URLSearchParams(index >= 0 ? hash.slice(index + 1) : '').get(name) ?? '';
+}
+
+function incomingAuditEventId() {
+  const ref = parseInspectorRef(window.location.hash);
+  if (ref?.entry === 'audit' && ref.audit_id) return ref.audit_id;
+  return readAuditParam('event');
+}
+
+type AuditFilters = { actor: string; action: string; resource: string; since: string; until: string };
+
+const EMPTY_AUDIT_FILTERS: AuditFilters = { actor: '', action: '', resource: '', since: '', until: '' };
+
+function readAuditFilters(): AuditFilters {
+  return {
+    actor: readAuditParam('actor'),
+    action: readAuditParam('category'),
+    resource: readAuditParam('resource'),
+    since: /^\d{4}-\d{2}-\d{2}$/.test(readAuditParam('from')) ? readAuditParam('from') : '',
+    until: /^\d{4}-\d{2}-\d{2}$/.test(readAuditParam('to')) ? readAuditParam('to') : ''
+  };
+}
+
+/** Server query for the exact filters the user applied; local calendar days become inclusive instants. */
+export function auditListQuery(filters: AuditFilters, cursor: string, limit = AUDIT_PAGE_SIZE) {
+  const params = new URLSearchParams();
+  if (filters.actor.trim()) params.set('actor', filters.actor.trim());
+  if (filters.action.trim()) params.set('action', filters.action.trim());
+  if (filters.resource.trim()) params.set('resource', filters.resource.trim());
+  const since = auditDayBound(filters.since, false);
+  const until = auditDayBound(filters.until, true);
+  if (Number.isFinite(since)) params.set('since', new Date(since).toISOString());
+  if (Number.isFinite(until)) params.set('until', new Date(until).toISOString());
+  if (cursor) params.set('cursor', cursor);
+  params.set('limit', String(limit));
+  return `/v1/audit-log?${params.toString()}`;
 }
 
 export function AuditPage({
   data,
   session,
+  config,
   onRefresh
 }: {
   data: PortalData;
   session: Session;
+  config?: PortalConfig;
   onRefresh?: () => void | Promise<void>;
 }) {
-  const [filter, setFilter] = useState('');
-  const [custodyOnly, setCustodyOnly] = useState(false);
-  const [actorFilter, setActorFilter] = useState('all');
-  const [actionFilter, setActionFilter] = useState('all');
-  const [selectedId, setSelectedId] = useState('');
-  const [showRawAuditMetadata, setShowRawAuditMetadata] = useState(false);
   const allowed = canReadAudit(session.role);
+  const [draft, setDraft] = useState<AuditFilters>(readAuditFilters);
+  const [applied, setApplied] = useState<AuditFilters>(readAuditFilters);
+  const [cursorStack, setCursorStack] = useState<string[]>(['']);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [listState, setListState] = useState<{ status: 'loading' | 'ready' | 'error' | 'denied'; items: DataItem[]; total: number | null; nextCursor: string; error: string }>({ status: 'loading', items: [], total: null, nextCursor: '', error: '' });
+  const [selectedId, setSelectedId] = useState(incomingAuditEventId);
+  const [exact, setExact] = useState<{ id: string; status: 'idle' | 'loading' | 'found' | 'not_found' | 'denied' | 'error'; entry: DataItem | null }>({ id: '', status: 'idle', entry: null });
+  const [exactTick, setExactTick] = useState(0);
+  const [showRawAuditMetadata, setShowRawAuditMetadata] = useState(false);
+  const [copyNotice, setCopyNotice] = useState('');
+  const [dateError, setDateError] = useState('');
+  const configRef = useRef<PortalConfig | null>(config ?? null);
+  const viewerZone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'; } catch { return 'local time'; }
+  })();
+  const currentCursor = cursorStack[cursorStack.length - 1] ?? '';
 
-  const actorOptions = useMemo(() => {
-    const actors = new Set<string>();
-    for (const entry of data.audit) {
-      const actor = getString(entry, ['actor_role', 'actor_user_id'], 'system');
-      if (actor !== '—') actors.add(actor);
-    }
-    return [
-      { value: 'all', label: 'All' },
-      ...Array.from(actors).sort().map((actor) => ({ value: actor, label: plainCodeLabel(actor) }))
-    ];
-  }, [data.audit]);
+  async function resolvedConfig() {
+    if (config) return config;
+    if (!configRef.current) configRef.current = await fetchPortalConfig();
+    return configRef.current;
+  }
 
-  const actionOptions = useMemo(() => {
-    const actions = new Set<string>();
-    for (const entry of data.audit) {
-      const action = getString(entry, ['action'], '');
-      if (action !== '—') actions.add(action);
+  useEffect(() => {
+    function onHashChange() {
+      const next = incomingAuditEventId();
+      if (next) setSelectedId(next);
     }
-    return [
-      { value: 'all', label: 'All' },
-      ...Array.from(actions).sort().map((action) => ({ value: action, label: formatAuditAction(action) }))
-    ];
-  }, [data.audit]);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
-  const items = data.audit.filter((entry) => {
-    const action = getString(entry, ['action'], '').toLowerCase();
-    if (custodyOnly && !action.includes('custody') && !action.includes('export') && !action.includes('report')) {
-      return false;
-    }
-    if (actorFilter !== 'all') {
-      const actor = getString(entry, ['actor_role', 'actor_user_id'], 'system');
-      if (actor !== actorFilter) return false;
-    }
-    if (actionFilter !== 'all') {
-      const entryAction = getString(entry, ['action'], '');
-      if (entryAction !== actionFilter) return false;
-    }
-    if (!filter.trim()) return true;
-    const haystack = `${getString(entry, ['action'])} ${getString(entry, ['resource_type'])} ${getString(entry, ['resource_id'])}`.toLowerCase();
-    return haystack.includes(filter.trim().toLowerCase());
-  }).sort((left, right) => {
-    const leftAt = new Date(String(left.timestamp ?? left.created_at ?? '')).getTime();
-    const rightAt = new Date(String(right.timestamp ?? right.created_at ?? '')).getTime();
+  useEffect(() => {
+    replaceRouteParams({
+      actor: applied.actor || null,
+      category: applied.action || null,
+      resource: applied.resource || null,
+      from: applied.since || null,
+      to: applied.until || null,
+      event: selectedId && !parseInspectorRef(window.location.hash) ? selectedId : null
+    });
+  }, [applied, selectedId]);
+
+  useEffect(() => {
+    if (!allowed) return undefined;
+    let cancelled = false;
+    setListState((current) => ({ ...current, status: 'loading', error: '' }));
+    (async () => {
+      try {
+        const payload = await requestJson(await resolvedConfig(), session, auditListQuery(applied, currentCursor)) as DataItem;
+        if (cancelled) return;
+        const items = Array.isArray(payload?.items) ? (payload.items as DataItem[]) : [];
+        const total = typeof payload?.total === 'number' ? payload.total : null;
+        setListState({ status: 'ready', items, total, nextCursor: getString(payload, ['next_cursor'], ''), error: '' });
+      } catch (err) {
+        if (cancelled) return;
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setListState({ status: status === 403 ? 'denied' : 'error', items: [], total: null, nextCursor: '', error: apiErrorMessage(err, 'The audit log could not be loaded.') });
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowed, applied, currentCursor, reloadTick]);
+
+  const items = [...listState.items].sort((left, right) => {
+    const leftAt = Date.parse(auditTimestamp(left));
+    const rightAt = Date.parse(auditTimestamp(right));
     return (Number.isFinite(rightAt) ? rightAt : 0) - (Number.isFinite(leftAt) ? leftAt : 0);
   });
-  const selectedEntry = items.find((entry) => auditEntrySelectionKey(entry) === selectedId) ?? null;
+  const onPage = selectedId ? items.find((entry) => auditEntrySelectionKey(entry) === selectedId) ?? null : null;
+
+  useEffect(() => {
+    if (!allowed || !selectedId || onPage || listState.status === 'loading') return undefined;
+    if (exact.id === selectedId && exact.status !== 'idle' && exactTick === 0) return undefined;
+    let cancelled = false;
+    setExact({ id: selectedId, status: 'loading', entry: null });
+    (async () => {
+      try {
+        const payload = await requestJson(await resolvedConfig(), session, `/v1/audit-log/${encodeURIComponent(selectedId)}`) as DataItem;
+        if (cancelled) return;
+        const entry = getNestedItem(payload, ['entry']);
+        setExact(entry && getString(entry, ['id'], '') === selectedId ? { id: selectedId, status: 'found', entry } : { id: selectedId, status: 'not_found', entry: null });
+      } catch (err) {
+        if (cancelled) return;
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setExact({ id: selectedId, status: status === 404 ? 'not_found' : status === 403 ? 'denied' : 'error', entry: null });
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowed, selectedId, Boolean(onPage), listState.status, exactTick]);
+
+  const selectedEntry = onPage ?? (exact.id === selectedId && exact.status === 'found' ? exact.entry : null);
+  const selectedOffPage = Boolean(selectedEntry) && !onPage;
 
   useEffect(() => {
     setShowRawAuditMetadata(false);
+    setCopyNotice('');
   }, [selectedId]);
 
-  const filtersActive = custodyOnly || actorFilter !== 'all' || actionFilter !== 'all' || filter.trim() !== '';
-  const hasAnyAudit = data.audit.length > 0;
-  const custodyHashCount = data.audit.filter((entry) => {
-    const hash = getString(entry, ['entry_hash'], '');
-    return Boolean(hash && hash !== '—');
-  }).length;
-
-  function clearAuditFilters() {
-    setCustodyOnly(false);
-    setActorFilter('all');
-    setActionFilter('all');
-    setFilter('');
+  function applyFilters(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (draft.since && draft.until && draft.since > draft.until) {
+      setDateError('The start date is after the end date. Fix the range before applying.');
+      return;
+    }
+    setDateError('');
+    setApplied({ ...draft, actor: draft.actor.trim(), action: draft.action.trim(), resource: draft.resource.trim() });
+    setCursorStack(['']);
   }
 
-  function renderAuditEmpty() {
-    if (hasAnyAudit && filtersActive) {
-      const custodyIsOnlyFilter = custodyOnly && actorFilter === 'all' && actionFilter === 'all' && !filter.trim();
-      if (custodyIsOnlyFilter) {
-        return (
-          <EmptyState
-            icon={ClipboardList}
-            title="No custody-sealed entries in this view."
-            body="Custody chain filter is on, so this view lists export, report, and custody actions. Turn it off to see all security-relevant actions."
-            actionLabel="Show all entries"
-            onAction={() => setCustodyOnly(false)}
-          />
-        );
-      }
-      return (
-        <EmptyState
-          icon={ClipboardList}
-          title="No audit entries match the current filters."
-          body="Adjust or clear the custody, actor, action, or search filters to widen the trail."
-          actionLabel="Clear filters"
-          onAction={clearAuditFilters}
-        />
-      );
-    }
+  function clearFilters() {
+    setDraft(EMPTY_AUDIT_FILTERS);
+    setApplied(EMPTY_AUDIT_FILTERS);
+    setCursorStack(['']);
+    setDateError('');
+  }
+
+  const filtersActive = Object.values(applied).some(Boolean);
+  const suggestions = (key: 'actor_user_id' | 'action' | 'resource_type') => [...new Set(items.map((entry) => getString(entry, [key], '')).filter((value) => value && value !== '—'))].sort();
+
+  function formatAuditHash(item: DataItem) {
+    const hash = getString(item, ['entry_hash'], '');
+    if (!hash || hash === '—') return '';
+    return hash.length <= 12 ? hash : `${hash.slice(0, 6)}…${hash.slice(-4)}`;
+  }
+
+  function resourceCell(item: DataItem) {
+    const resourceType = getString(item, ['resource_type'], '');
+    const resourceId = getString(item, ['resource_id'], '');
+    const sensitiveLabel = sensitiveResourceLabel(resourceType);
+    if (sensitiveLabel) return <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>;
     return (
-      <EmptyState
-        icon={ClipboardList}
-        title="No audit entries."
-        body="Security-relevant actions will appear here after workflow activity."
-      />
+      <span className="cp-stack">
+        <span>{plainCodeLabel(resourceType || 'resource')}</span>
+        {resourceId && resourceId !== '—' ? <span className="mono muted small">{resourceId}</span> : null}
+      </span>
     );
   }
 
-  function formatAuditCustodyDigest(item: DataItem) {
-    const hash = getString(item, ['entry_hash'], '');
-    if (!hash || hash === '—') return '—';
-    if (hash.length <= 12) return `sha256 ${hash}`;
-    return `sha256 ${hash.slice(0, 4)}…${hash.slice(-4)}`;
-  }
-
   const columns: TableColumn<DataItem>[] = [
-    { key: 'time', label: 'Time', render: (item) => <span className="mono">{formatDate(item.timestamp ?? item.created_at)}</span> },
-    { key: 'actor', label: 'Actor', render: (item) => <span>{plainCodeLabel(getString(item, ['actor_role', 'actor_user_id'], 'system'))}</span> },
-    { key: 'action', label: 'Action', render: (item) => <span>{formatAuditAction(getString(item, ['action']))}</span> },
+    { key: 'time', label: `Time (${viewerZone})`, render: (item) => <span className="mono">{auditTimestamp(item) ? formatDate(auditTimestamp(item)) : 'Not recorded'}</span> },
     {
-      key: 'target',
-      label: 'Target',
+      key: 'actor',
+      label: 'Actor',
       render: (item) => {
-        const resourceType = getString(item, ['resource_type'], '');
-        const resourceId = getString(item, ['resource_id'], '');
-        const sensitiveLabel = sensitiveResourceLabel(resourceType);
-        if (sensitiveLabel) {
-          return <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>;
-        }
-        const target = resourceId && resourceId !== '—'
-          ? resourceId
-          : `${resourceType} ${getString(item, ['resource_id'], '')}`.trim();
-        return <span className="mono">{target || '—'}</span>;
-      }
-    },
-    {
-      key: 'custody',
-      label: 'Custody',
-      render: (item) => {
-        const digest = formatAuditCustodyDigest(item);
-        const fullHash = getString(item, ['entry_hash'], '');
-        if (digest === '—') return <span className="muted">—</span>;
+        const userId = getString(item, ['actor_user_id'], '');
+        const role = getString(item, ['actor_role'], '');
         return (
-          <span className="mono muted" title={fullHash !== '—' ? fullHash : undefined}>
-            {digest}
+          <span className="cp-stack">
+            <span>{userId && userId !== '—' ? userId : 'Not recorded'}</span>
+            <span className="muted small">{role && role !== '—' ? plainCodeLabel(role) : 'Role not recorded'}</span>
           </span>
         );
+      }
+    },
+    { key: 'action', label: 'Action', render: (item) => <span>{formatAuditAction(getString(item, ['action']))}</span> },
+    { key: 'resource', label: 'Resource', render: resourceCell },
+    {
+      key: 'hash',
+      label: 'Recorded hash',
+      render: (item) => {
+        const short = formatAuditHash(item);
+        return short ? <span className="mono muted" title={getString(item, ['entry_hash'])}>{short}</span> : <span className="muted">Not recorded</span>;
       }
     }
   ];
 
+  const resourceRoute = selectedEntry ? AUDIT_RESOURCE_ROUTES[getString(selectedEntry, ['resource_type'], '')] : '';
+  const selectedResourceId = selectedEntry ? getString(selectedEntry, ['resource_id'], '') : '';
+  const pageNumber = cursorStack.length;
+  const totalText = listState.total === null ? 'total not returned' : `${formatNumber(listState.total)} matching`;
+
   return (
-    <div className="content">
-      <PageHeader route="audit" description="Append-only, custody-sealed event trail. Toggle custody-chain-only to trace the provenance of any verdict or approval." />
+    <div className="content audit-page">
+      <CustomerPageStyles />
+      <PageHeader route="audit" title="Audit log" description="Who did what, when, and to which resource. Records are append-only; an audit entry records an action, not proof that an infrastructure change worked." />
       {!allowed ? (
-        <EmptyState icon={ClipboardList} title="Audit access required." body="Switch to owner, admin, SOC, or auditor role to read the tenant audit log." />
+        <EmptyState icon={Lock} title="Audit access required." body="Owners, admins, SOC, and auditors can read the audit log. Your role cannot, so no events are shown." />
       ) : (
         <>
           <PageContextSummary>
-            <span className="tabular-nums">{formatNumber(items.length)}</span> visible of{' '}
-            <span className="tabular-nums">{formatNumber(data.audit.length)}</span> events ·{' '}
-            <span className="tabular-nums">{formatNumber(custodyHashCount)}</span> with recorded entry hashes · newest first
+            {listState.status === 'ready' ? <>{totalText}{filtersActive ? ' for the applied filters' : ''} · page {formatNumber(pageNumber)}, newest first</> : listState.status === 'loading' ? 'Loading events…' : 'Events unavailable'}
           </PageContextSummary>
           <div className="callout info" role="note">
             <Lock size={18} aria-hidden="true" />
-            <span>Audit records are append-only. Recorded entry hashes and export/report events preserve custody for independent review.</span>
+            <span>A recorded hash shows what the server stored with each entry. This page does not verify the hash chain. Filters and paging run on the server across the whole log.</span>
           </div>
-          <div className="audit-filter-toolbar">
-            <div className="audit-filter-chips">
-              <button
-                type="button"
-                className={`filter-chip${custodyOnly ? ' is-active' : ''}`}
-                aria-pressed={custodyOnly}
-                onClick={() => setCustodyOnly((current) => !current)}
-              >
-                Custody chain only
-              </button>
-              {filtersActive ? (
-                <button type="button" className="filter-chip" onClick={clearAuditFilters}>Clear filters</button>
-              ) : null}
-            </div>
+          <form className="audit-filter-toolbar" role="search" aria-label="Audit filters" onSubmit={applyFilters} noValidate>
             <div className="audit-filter-fields">
-              <Select label="Actor" name="audit_actor" value={actorFilter} options={actorOptions} onChange={setActorFilter} />
-              <Select label="Action" name="audit_action" value={actionFilter} options={actionOptions} onChange={setActionFilter} />
+              <label className="field">
+                <span>From ({viewerZone})</span>
+                <input type="date" value={draft.since} onChange={(event) => setDraft((current) => ({ ...current, since: event.target.value }))} max={draft.until || undefined} />
+              </label>
+              <label className="field">
+                <span>To ({viewerZone})</span>
+                <input type="date" value={draft.until} onChange={(event) => setDraft((current) => ({ ...current, until: event.target.value }))} min={draft.since || undefined} aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'audit-date-error' : undefined} />
+              </label>
+              <label className="field">
+                <span>Actor user ID</span>
+                <input list="audit-actor-options" value={draft.actor} onChange={(event) => setDraft((current) => ({ ...current, actor: event.target.value }))} placeholder="Exact user ID" autoComplete="off" spellCheck={false} />
+                <datalist id="audit-actor-options">{suggestions('actor_user_id').map((value) => <option key={value} value={value} />)}</datalist>
+              </label>
+              <label className="field">
+                <span>Action</span>
+                <input list="audit-action-options" value={draft.action} onChange={(event) => setDraft((current) => ({ ...current, action: event.target.value }))} placeholder="Exact action, e.g. report.generated" autoComplete="off" spellCheck={false} />
+                <datalist id="audit-action-options">{suggestions('action').map((value) => <option key={value} value={value} />)}</datalist>
+              </label>
+              <label className="field">
+                <span>Resource type or ID</span>
+                <input list="audit-resource-options" value={draft.resource} onChange={(event) => setDraft((current) => ({ ...current, resource: event.target.value }))} placeholder="e.g. target or tgt_123" autoComplete="off" spellCheck={false} />
+                <datalist id="audit-resource-options">{suggestions('resource_type').map((value) => <option key={value} value={value} />)}</datalist>
+              </label>
             </div>
-            <label className="audit-search-pill">
-              <Search size={15} aria-hidden="true" />
-              <input
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-                placeholder="Search action, resource, or id"
-                aria-label="Search audit log by action, resource type, or id"
-              />
-            </label>
-          </div>
+            {dateError ? <p className="field-error" id="audit-date-error" role="alert">{dateError}</p> : null}
+            <div className="cp-toolbar">
+              <Button type="submit" size="sm">Apply filters</Button>
+              {filtersActive ? <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>Clear filters</Button> : null}
+              <span className="muted small">Filters match exactly; dates are whole days in your timezone.</span>
+            </div>
+          </form>
+          {selectedId && !selectedEntry ? (
+            <div className={exact.status === 'error' ? 'form-banner error row-actions' : 'form-banner neutral'} role="status">
+              <span>
+                Event {selectedId}{' '}
+                {exact.id !== selectedId || exact.status === 'loading' || exact.status === 'idle' || listState.status === 'loading' ? 'is being looked up by its exact ID…'
+                  : exact.status === 'not_found' ? 'does not exist in this workspace. Nothing else was selected in its place.'
+                    : exact.status === 'denied' ? 'is not readable with your role.'
+                      : 'could not be looked up. Nothing else was selected in its place.'}
+              </span>
+              {exact.status === 'error' ? <Button size="sm" variant="secondary" onClick={() => setExactTick((count) => count + 1)}>Retry lookup</Button> : null}
+            </div>
+          ) : null}
+          {selectedEntry ? (
+            <Card density="compact" raised>
+              <section id="audit-event-detail" tabIndex={-1} aria-label="Selected audit event" className="audit-event-detail">
+                <CardHeader>
+                  <div>
+                    <CardTitle>{formatAuditAction(getString(selectedEntry, ['action']))}</CardTitle>
+                    <CardDescription>{auditTimestamp(selectedEntry) ? formatDate(auditTimestamp(selectedEntry)) : 'Time not recorded'} · {plainCodeLabel(getString(selectedEntry, ['resource_type'], 'resource'))}</CardDescription>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedId('')}>Close</Button>
+                </CardHeader>
+                <CardContent className="stack-tight">
+                  {selectedOffPage ? <p className="muted small">Loaded by exact ID; it is not on the current page of results.</p> : null}
+                  <div className="kv-list">
+                    <KvField label="Actor">{getString(selectedEntry, ['actor_user_id'], 'Not recorded')} ({plainCodeLabel(getString(selectedEntry, ['actor_role'], 'role not recorded'))})</KvField>
+                    <KvField label="Resource">
+                      {(() => {
+                        const sensitiveLabel = sensitiveResourceLabel(getString(selectedEntry, ['resource_type'], ''));
+                        if (sensitiveLabel) return sensitiveLabel;
+                        if (resourceRoute && selectedResourceId && selectedResourceId !== '—') {
+                          return <a className="cp-link" href={buildDetailHref(resourceRoute, selectedResourceId)}>{selectedResourceId}</a>;
+                        }
+                        return selectedResourceId || 'Not recorded';
+                      })()}
+                    </KvField>
+                    <KvField label="Event time">{auditTimestamp(selectedEntry) ? formatDate(auditTimestamp(selectedEntry)) : 'Not recorded'}</KvField>
+                    <KvField label="Event ID"><span className="cp-mono-wrap">{getString(selectedEntry, ['id'], 'Not recorded')}</span></KvField>
+                    <KvField label="Sequence">{getString(selectedEntry, ['sequence'], 'Not recorded')}</KvField>
+                    <KvField label="Recorded hash"><span className="cp-mono-wrap">{getString(selectedEntry, ['entry_hash'], 'Not recorded')}</span></KvField>
+                    <KvField label="Previous hash"><span className="cp-mono-wrap">{getString(selectedEntry, ['prev_hash'], 'Not recorded')}</span></KvField>
+                    {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' && !Array.isArray(selectedEntry.metadata) && isFlatMetadataObject(selectedEntry.metadata)
+                      ? Object.entries(selectedEntry.metadata).map(([key, value]) => (
+                        <KvField key={key} label={plainCodeLabel(key)}>{value === null ? 'Not recorded' : String(value)}</KvField>
+                      ))
+                      : selectedEntry.metadata && typeof selectedEntry.metadata === 'object'
+                        ? <KvField label="Recorded change">Structured; open the technical record below.</KvField>
+                        : <KvField label="Recorded change">No metadata recorded</KvField>}
+                  </div>
+                  <p className="muted small">This records that the action happened. Whether the resulting configuration works is shown by evidence on the resource itself.</p>
+                  <div className="row-actions">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        const href = `${window.location.origin}${window.location.pathname}#audit?event=${encodeURIComponent(getString(selectedEntry, ['id'], ''))}`;
+                        void navigator.clipboard.writeText(href).then(() => setCopyNotice('Event link copied.')).catch(() => setCopyNotice('Copy failed; select the event ID above.'));
+                      }}
+                    >
+                      Copy event link
+                    </Button>
+                    <span className="muted small" aria-live="polite">{copyNotice}</span>
+                  </div>
+                  {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' ? (() => {
+                    const metadataJson = JSON.stringify(selectedEntry.metadata, null, 2);
+                    const downloadId = getString(selectedEntry, ['id', 'audit_id'], 'audit-entry');
+                    return (
+                      <ExpandableCodePanel
+                        panelId="audit-raw-metadata-panel"
+                        expanded={showRawAuditMetadata}
+                        onToggle={() => setShowRawAuditMetadata((open) => !open)}
+                        toggleLabels={{ show: 'Show technical record', hide: 'Hide technical record' }}
+                        code={metadataJson.slice(0, 1800)}
+                        truncated={metadataJson.length > 1800}
+                        downloadLabel="Download full metadata"
+                        onDownload={() => downloadJsonFile(`audit-metadata-${downloadId}.json`, selectedEntry.metadata)}
+                      />
+                    );
+                  })() : null}
+                </CardContent>
+              </section>
+            </Card>
+          ) : null}
           <Card>
             <CardHeader>
               <CardTitle>Events</CardTitle>
+              <CardDescription>Select an event to see its recorded change. The selection is kept in the address so it can be shared.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={columns}
-                items={items}
-                selectedId={selectedId || null}
-                getRowId={(item) => auditEntrySelectionKey(item)}
-                getRowProps={(item) => {
-                  const key = auditEntrySelectionKey(item);
-                  const sensitiveLabel = sensitiveResourceLabel(getString(item, ['resource_type'], ''));
-                  const resourceLabel = sensitiveLabel ?? getString(item, ['resource_id', 'resource_type'], 'unknown resource');
-                  const label = `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${resourceLabel}`;
-                  return {
-                    onClick: () => setSelectedId(key),
-                    onKeyDown: (event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      event.preventDefault();
-                      setSelectedId(key);
-                    },
-                    tabIndex: 0,
-                    role: 'button',
-                    'aria-label': label
-                  };
-                }}
-                empty={renderAuditEmpty()}
-                loadError={data.loadErrors.audit}
-                onRetry={onRefresh ? () => void onRefresh() : undefined}
-              />
+            <CardContent className="stack-tight">
+              {listState.status === 'loading' && items.length === 0 ? <PortalLoadingSkeleton rows={4} label="Loading audit events" /> : (
+                <DataTable
+                  columns={columns}
+                  items={items}
+                  selectedId={selectedId || null}
+                  getRowId={(item) => auditEntrySelectionKey(item)}
+                  getRowProps={(item) => {
+                    const key = auditEntrySelectionKey(item);
+                    const sensitiveLabel = sensitiveResourceLabel(getString(item, ['resource_type'], ''));
+                    const resourceLabel = sensitiveLabel ?? getString(item, ['resource_id', 'resource_type'], 'unknown resource');
+                    return {
+                      onClick: () => setSelectedId(key),
+                      onKeyDown: (event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        setSelectedId(key);
+                      },
+                      tabIndex: 0,
+                      'aria-label': `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${resourceLabel}`
+                    };
+                  }}
+                  empty={filtersActive
+                    ? <EmptyState icon={ClipboardList} title="No events match these filters." body="The server found no event for the applied filters. Clear them to see every event." actionLabel="Clear filters" onAction={clearFilters} />
+                    : <EmptyState icon={ClipboardList} title="No audit events recorded yet." body="Security-relevant actions such as target, schedule, report, and credential changes are recorded here as they happen." />}
+                  loadError={listState.status === 'error' ? listState.error : null}
+                  onRetry={() => { setReloadTick((count) => count + 1); void onRefresh?.(); }}
+                />
+              )}
+              {listState.status === 'ready' && (cursorStack.length > 1 || listState.nextCursor) ? (
+                <nav className="cp-toolbar" aria-label="Audit pages">
+                  <span className="muted small">Page {formatNumber(pageNumber)} · {formatNumber(items.length)} events on this page · {totalText}</span>
+                  <Button size="sm" variant="secondary" disabled={cursorStack.length <= 1} onClick={() => setCursorStack((current) => current.slice(0, -1))}>Newer</Button>
+                  <Button size="sm" variant="secondary" disabled={!listState.nextCursor} onClick={() => setCursorStack((current) => [...current, listState.nextCursor])}>Older</Button>
+                </nav>
+              ) : null}
             </CardContent>
           </Card>
-          {selectedEntry ? (
-            <Card density="compact" raised>
-              <CardHeader>
-                <CardTitle>Custody and metadata drilldown</CardTitle>
-                <CardDescription>{formatAuditAction(getString(selectedEntry, ['action']))} · {plainCodeLabel(getString(selectedEntry, ['resource_type']))}</CardDescription>
-              </CardHeader>
-              <CardContent className="kv-list">
-                <KvField label="Actor">
-                  {getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})
-                </KvField>
-                <KvField label="Resource">
-                  {(() => {
-                    const resourceType = getString(selectedEntry, ['resource_type'], '');
-                    const resourceId = getString(selectedEntry, ['resource_id']);
-                    const sensitiveLabel = sensitiveResourceLabel(resourceType);
-                    return sensitiveLabel
-                      ? <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>
-                      : resourceId;
-                  })()}
-                </KvField>
-                <KvField label="Timestamp">{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</KvField>
-                {getString(selectedEntry, ['entry_hash'], '') !== '—' ? (
-                  <KvField label="Entry hash">
-                    <span className="mono">{getString(selectedEntry, ['entry_hash'])}</span>
-                  </KvField>
-                ) : null}
-                {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' && !Array.isArray(selectedEntry.metadata) ? (
-                  isFlatMetadataObject(selectedEntry.metadata)
-                    ? Object.entries(selectedEntry.metadata).map(([key, value]) => (
-                      <KvField key={key} label={key}>{value === null ? 'null' : String(value)}</KvField>
-                    ))
-                    : (
-                      <KvField label="Metadata">
-                        <span className="muted">Structured metadata — use View raw for full JSON.</span>
-                      </KvField>
-                    )
-                ) : (
-                  <KvField label="Metadata">none</KvField>
-                )}
-                {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' ? (() => {
-                  const metadataJson = JSON.stringify(selectedEntry.metadata, null, 2);
-                  const metadataTruncated = metadataJson.length > 1800;
-                  const downloadId = getString(selectedEntry, ['id', 'audit_id'], 'audit-entry');
-                  return (
-                    <ExpandableCodePanel
-                      panelId="audit-raw-metadata-panel"
-                      expanded={showRawAuditMetadata}
-                      onToggle={() => setShowRawAuditMetadata((open) => !open)}
-                      toggleLabels={{ show: 'View raw', hide: 'Hide raw metadata' }}
-                      code={metadataJson.slice(0, 1800)}
-                      truncated={metadataTruncated}
-                      downloadLabel="Download full metadata"
-                      onDownload={() => downloadJsonFile(`audit-metadata-${downloadId}.json`, selectedEntry.metadata)}
-                    />
-                  );
-                })() : null}
-              </CardContent>
-            </Card>
-          ) : null}
         </>
       )}
     </div>
   );
 }
 
+type ReleaseRecordView = {
+  key: string;
+  item: DataItem;
+  kind: string;
+  accepted: boolean;
+  acceptance: string;
+  validity: 'valid' | 'invalid' | 'not_recorded';
+  missingFields: string[];
+  forbiddenFields: string[];
+  custodyUri: string;
+};
+
+function releaseRecordView(item: DataItem, index: number): ReleaseRecordView {
+  const status = getString(item, ['status'], '').toLowerCase();
+  const validation = getNestedItem(item, ['validation']) ?? null;
+  const missingFields = Array.isArray(validation?.missing_fields) ? (validation!.missing_fields as unknown[]).map(String) : [];
+  const forbiddenFields = Array.isArray(validation?.forbidden_fields) ? (validation!.forbidden_fields as unknown[]).map(String) : [];
+  return {
+    key: getString(item, ['id'], `${getString(item, ['kind'], 'record')}-${index}`),
+    item,
+    kind: getString(item, ['kind'], 'unknown'),
+    accepted: status === 'accepted' || status === 'approved',
+    acceptance: status || 'not recorded',
+    validity: !validation ? 'not_recorded' : validation.ok === true ? 'valid' : 'invalid',
+    missingFields,
+    forbiddenFields,
+    custodyUri: pickReleaseEvidenceCustodyUri(getNestedItem(item, ['evidence']) ?? (item.evidence as DataItem | undefined)) ?? ''
+  };
+}
+
 export function ReleaseEvidencePage({ data, session }: { data: PortalData; session: Session }) {
-  const [showGapTechnicalDetails, setShowGapTechnicalDetails] = useState(false);
   const [clipboardNotice, setClipboardNotice] = useState('');
+  const [selectedKey, setSelectedKey] = useState('');
+  const [missingQuery, setMissingQuery] = useState('');
+  const [recordFilter, setRecordFilter] = useState<'all' | 'problems'>('all');
   const allowed = canReadReleaseEvidence(session.role);
   const attestation = data.releaseAttestation;
   const coverage = computeReleaseEvidenceCoverage(data.releaseEvidence);
+  const records = data.releaseEvidence
+    .slice()
+    .sort((left, right) => new Date(String(right.created_at ?? '')).getTime() - new Date(String(left.created_at ?? '')).getTime())
+    .map(releaseRecordView);
+  const acceptedInvalid = records.filter((record) => record.accepted && record.validity === 'invalid');
+  const acceptedValidKinds = new Set(records.filter((record) => record.accepted && record.validity === 'valid').map((record) => record.kind));
+  const visibleRecords = recordFilter === 'problems' ? records.filter((record) => !record.accepted || record.validity !== 'valid') : records;
+  const selected = records.find((record) => record.key === selectedKey) ?? null;
+  const signoff = getNestedString(attestation, ['signoff_status'], '');
+  const missingFiltered = coverage.missing.filter((kind) => `${kind} ${plainCodeLabel(kind)}`.toLowerCase().includes(missingQuery.trim().toLowerCase()));
+
   const missingKindColumns: TableColumn<{ kind: string }>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => <span title={item.kind}>{plainCodeLabel(item.kind)}</span> },
-    { key: 'status', label: 'Status', render: () => <Badge tone="warn">Missing</Badge> }
+    { key: 'kind', label: 'Required kind', render: (item) => <span title={item.kind}>{plainCodeLabel(item.kind)}</span> },
+    { key: 'status', label: 'Inventory', render: () => <Badge tone="warn">No accepted record</Badge> }
   ];
-  const columns: TableColumn<DataItem>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => { const kind = getString(item, ['kind']); return <Badge tone="info" title={kind}>{plainCodeLabel(kind)}</Badge>; } },
+  const columns: TableColumn<ReleaseRecordView>[] = [
+    { key: 'kind', label: 'Kind', render: (record) => <span title={record.kind}>{plainCodeLabel(record.kind)}</span> },
+    { key: 'acceptance', label: 'Attached', render: (record) => <Badge tone="muted">{record.accepted ? 'Accepted' : formatGovernanceStatusLabel(record.acceptance, 'Not recorded')}</Badge> },
     {
-      key: 'status',
-      label: 'Status',
-      render: (item) => {
-        const status = getString(item, ['status', 'validation_status'], 'recorded');
-        return <Badge tone={releaseEvidenceStatusBadgeTone(status)}>{formatGovernanceStatusLabel(status, 'Recorded')}</Badge>;
-      }
+      key: 'validity',
+      label: 'Contract validity',
+      render: (record) => record.validity === 'valid'
+        ? <Badge tone="success">Valid</Badge>
+        : record.validity === 'invalid'
+          ? <Badge tone="danger">{record.accepted ? 'Accepted but invalid' : 'Invalid'}</Badge>
+          : <Badge tone="muted">Not validated</Badge>
     },
-    { key: 'validation', label: 'Validation', render: (item) => summarizeReleaseEvidenceValidation(getNestedItem(item, ['validation']) ?? (item.validation as DataItem | undefined) ?? null) },
-    { key: 'release', label: 'Release', render: (item) => getString(item, ['release_id', 'id']) },
-    { key: 'custody', label: 'Custody', render: (item) => {
-      const uri = pickReleaseEvidenceCustodyUri(getNestedItem(item, ['evidence']) ?? (item.evidence as DataItem | undefined));
-      if (!uri) return <Badge tone="muted">Metadata only</Badge>;
-      return (
-        <div className="row-actions">
-          <span className="traffic-path-label" title={uri}>
-            <code>{uri}</code>
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-label="Copy custody URI"
-            onClick={() => {
-              void navigator.clipboard.writeText(uri).then(() => setClipboardNotice('Custody URI copied to clipboard.')).catch(() => setClipboardNotice('Could not copy custody URI.'));
-            }}
-          >
-            <Copy size={14} aria-hidden="true" />
-          </Button>
-        </div>
-      );
-    } },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
+    { key: 'custody', label: 'Custody reference', render: (record) => record.custodyUri ? <span className="muted small">Reference recorded, not verified</span> : <span className="muted small">None</span> },
+    { key: 'created', label: 'Recorded', render: (record) => <span className="mono">{formatDate(record.item.created_at)}</span> }
   ];
 
   function gapLedgerTechnicalPayload() {
     return {
       exported_at: new Date().toISOString(),
       tenant_id: session.tenant_id ?? data.state?.tenant_id ?? 'unknown',
+      profile: getNestedString(attestation, ['profile'], 'not recorded'),
       coverage,
+      accepted_invalid: acceptedInvalid.map((record) => ({ kind: record.kind, missing_fields: record.missingFields, forbidden_fields: record.forbiddenFields })),
       attestation,
-      records: data.releaseEvidence.map((item) => ({
-        kind: getString(item, ['kind']),
-        status: getString(item, ['status']),
-        validation: summarizeReleaseEvidenceValidation(getNestedItem(item, ['validation']) ?? (item.validation as DataItem | undefined) ?? null),
-        custody_uri: pickReleaseEvidenceCustodyUri(getNestedItem(item, ['evidence']) ?? (item.evidence as DataItem | undefined))
+      records: records.map((record) => ({
+        kind: record.kind,
+        status: record.acceptance,
+        validation: summarizeReleaseEvidenceValidation(getNestedItem(record.item, ['validation']) ?? null),
+        custody_uri: record.custodyUri || null
       }))
     };
   }
 
   function copyGapLedgerSummary() {
-    const missingLine = coverage.missing.length > 0
-      ? `Missing kinds: ${coverage.missing.join(', ')}.`
-      : 'All required kinds are recorded.';
     const summary = [
-      `Release evidence gap ledger — ${session.tenant_id ?? data.state?.tenant_id ?? 'unknown'}`,
-      `Recorded ${coverage.recorded} of ${coverage.expected} required kinds.`,
-      missingLine,
-      `Attestation signoff: ${getNestedString(attestation, ['signoff_status'], 'unknown')}.`,
-      `Production ready: ${String(attestation?.production_ready ?? 'unknown')}.`,
-      `Exported at ${new Date().toISOString()}.`
+      `Release evidence gap ledger · workspace ${session.tenant_id ?? data.state?.tenant_id ?? 'unknown'} · profile ${getNestedString(attestation, ['profile'], 'not recorded')}`,
+      `Accepted records cover ${coverage.recorded} of ${coverage.expected} required kinds; ${acceptedValidKinds.size} of those kinds have a contract-valid record.`,
+      coverage.missing.length > 0 ? `Missing kinds (${coverage.missing.length}): ${coverage.missing.join(', ')}.` : 'No required kind is missing an accepted record.',
+      acceptedInvalid.length > 0 ? `Accepted but failing contract validation (${acceptedInvalid.length}): ${acceptedInvalid.map((record) => record.kind).join(', ')}.` : 'No accepted record fails contract validation.',
+      `External signoff: ${signoff || 'not recorded'}. Operator production-ready flag: ${String(attestation?.production_ready ?? 'not recorded')}.`,
+      'Inventory completeness and contract validity are not customer launch approval.',
+      `Copied ${new Date().toISOString()}.`
     ].join('\n');
     void navigator.clipboard.writeText(summary)
-      .then(() => setClipboardNotice('Gap summary copied to clipboard.'))
-      .catch(() => setClipboardNotice('Could not copy gap summary.'));
-  }
-
-  function copyGapLedgerTechnicalJson() {
-    void navigator.clipboard.writeText(JSON.stringify(gapLedgerTechnicalPayload(), null, 2))
-      .then(() => setClipboardNotice('Technical JSON copied to clipboard.'))
-      .catch(() => setClipboardNotice('Could not copy technical JSON.'));
+      .then(() => setClipboardNotice('Gap summary copied.'))
+      .catch(() => setClipboardNotice('Could not copy the gap summary.'));
   }
 
   return (
-    <div className="content">
+    <div className="content release-evidence-page">
+      <CustomerPageStyles />
       <PageHeader
         route="release-evidence"
-        description="Production and staging custody ledger: accepted evidence kinds, coverage gaps, and the latest operator-attested readiness snapshot."
+        title="Release evidence"
+        description="Which required release evidence is attached, which of it passes contract validation, and whether external signoff is recorded. These are separate; none of them alone approves a customer launch."
       />
       {!allowed ? (
-        <EmptyState icon={FileText} title="Release evidence access required." body="Switch to owner, admin, SOC, or auditor role to inspect production release evidence." />
+        <EmptyState icon={FileText} title="Release evidence access required." body="Owners, admins, SOC, and auditors can read release evidence. Your role cannot." />
       ) : (
         <>
-          <div className="metric-grid three">
-            <MetricCard
-              label="Evidence kinds"
-              value={`${formatNumber(coverage.recorded)}/${formatNumber(coverage.expected)}`}
-              sub={coverage.kindsComplete ? 'inventory complete' : 'required inventory'}
-              icon={FileText}
-              tone={coverage.kindsComplete ? 'success' : 'warn'}
-            />
-            <MetricCard
-              label="Missing"
-              value={formatNumber(coverage.missing.length)}
-              sub="required kinds"
-              icon={ClipboardList}
-              tone={coverage.missing.length > 0 ? 'warn' : 'success'}
-            />
-            <MetricCard
-              label="Production readiness"
-              value={productionReadyLabel(attestation?.production_ready)}
-              sub="attestation snapshot"
-              icon={ShieldCheck}
-              tone={productionReadyBadgeTone(attestation?.production_ready)}
-            />
-          </div>
-          <PageContextSummary>
-            Evidence kinds <span className="tabular-nums">{coverage.recorded}/{coverage.expected}</span>
-            {coverage.kindsComplete ? ' · inventory complete' : ` · ${coverage.missing.length} missing`} · attestation{' '}
-            {formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status'], 'unknown'), 'unknown')} · production{' '}
-            {productionReadyLabel(attestation?.production_ready)}
-          </PageContextSummary>
+          <dl className="release-dimensions" aria-label="Release evidence dimensions">
+            <div>
+              <dt>Inventory</dt>
+              <dd>{formatNumber(coverage.recorded)} of {formatNumber(coverage.expected)}</dd>
+              <dd className="release-dimension-hint">required kinds have an accepted record · {formatNumber(coverage.missing.length)} missing</dd>
+            </div>
+            <div>
+              <dt>Contract validity</dt>
+              <dd>{formatNumber(acceptedValidKinds.size)} of {formatNumber(coverage.expected)}</dd>
+              <dd className="release-dimension-hint">{acceptedInvalid.length > 0 ? `${formatNumber(acceptedInvalid.length)} accepted record${acceptedInvalid.length === 1 ? ' fails' : 's fail'} validation` : 'kinds have a contract-valid accepted record'}</dd>
+            </div>
+            <div>
+              <dt>External signoff</dt>
+              <dd>{signoff ? formatGovernanceStatusLabel(signoff) : 'Not recorded'}</dd>
+              <dd className="release-dimension-hint">Operator attestation{attestation?.checked_at || attestation?.created_at ? ` checked ${formatDate(attestation?.checked_at ?? attestation?.created_at)}` : ', time not recorded'}</dd>
+            </div>
+            <div>
+              <dt>Profile</dt>
+              <dd>{getNestedString(attestation, ['profile'], 'Not recorded')}</dd>
+              <dd className="release-dimension-hint">Production-ready flag: {productionReadyLabel(attestation?.production_ready)}</dd>
+            </div>
+          </dl>
           {clipboardNotice ? <GovernanceInfoBanner>{clipboardNotice}</GovernanceInfoBanner> : null}
-          <Card>
-            <CardHeader>
-              <CardTitle>Gap ledger</CardTitle>
-              <CardDescription>Kinds not yet attached to accepted release evidence for this tenant.</CardDescription>
-            </CardHeader>
-            <CardContent className="product-form">
-              <p className="muted">Recorded {coverage.recorded} of {coverage.expected} required kinds. Customer launch remains gated by staging, legal, SOC, and security signoffs.</p>
-              {coverage.missing.length > 0 ? (
-                <div className="stack-tight">
-                  <DataTable
-                    columns={missingKindColumns}
-                    items={coverage.missing.slice(0, 12).map((kind) => ({ kind }))}
-                    empty={<EmptyState icon={FileText} title="No missing kinds." body="All required kinds are recorded." />}
-                  />
-                  {coverage.missing.length > 12 ? <p className="muted">…and {coverage.missing.length - 12} more kinds.</p> : null}
-                </div>
-              ) : <p className="muted">All required kinds are recorded for this tenant inventory snapshot.</p>}
-              <div className="row-actions">
-                <Button size="sm" onClick={copyGapLedgerSummary}>Copy gap summary</Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-expanded={showGapTechnicalDetails}
-                  aria-controls={showGapTechnicalDetails ? 'release-evidence-technical-export' : undefined}
-                  onClick={() => setShowGapTechnicalDetails((open) => !open)}
-                >
-                  {showGapTechnicalDetails ? 'Hide technical export' : 'Technical export'}
-                </Button>
-              </div>
-              {showGapTechnicalDetails ? (
-                <div className="expand-panel stack-tight" id="release-evidence-technical-export">
-                  <div className="row-actions">
-                    <Button size="sm" variant="secondary" onClick={copyGapLedgerTechnicalJson}>Copy technical JSON</Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => downloadJsonFile(`release-evidence-gap-ledger-${session.tenant_id ?? 'tenant'}.json`, gapLedgerTechnicalPayload())}
-                    >
-                      Download .json
-                    </Button>
+          {data.loadErrors.releaseEvidence ? (
+            <div className="form-banner error" role="alert">Release evidence could not be loaded: {data.loadErrors.releaseEvidence}. Missing kinds below are unknown, not confirmed missing.</div>
+          ) : null}
+          <div className={selected ? 'release-ledger has-selection' : 'release-ledger'}>
+            <Card>
+              <PanelCardHeader
+                title="Attached records"
+                description="Select a record to see why it passes or fails."
+                trailing={(
+                  <div className="cp-toolbar" role="group" aria-label="Filter records">
+                    <button type="button" className={`filter-chip${recordFilter === 'all' ? ' is-active' : ''}`} aria-pressed={recordFilter === 'all'} onClick={() => setRecordFilter('all')}>All {formatNumber(records.length)}</button>
+                    <button type="button" className={`filter-chip${recordFilter === 'problems' ? ' is-active' : ''}`} aria-pressed={recordFilter === 'problems'} onClick={() => setRecordFilter('problems')}>Needs attention {formatNumber(records.filter((record) => !record.accepted || record.validity !== 'valid').length)}</button>
                   </div>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
+                )}
+              />
+              <CardContent>
+                <DataTable
+                  columns={columns}
+                  items={visibleRecords}
+                  getRowId={(record) => record.key}
+                  selectedId={selectedKey || null}
+                  getRowProps={(record) => ({
+                    tabIndex: 0,
+                    'aria-label': `Inspect ${plainCodeLabel(record.kind)} record`,
+                    onClick: () => setSelectedKey(record.key),
+                    onKeyDown: (event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      setSelectedKey(record.key);
+                    }
+                  })}
+                  empty={<EmptyState icon={FileText} title={recordFilter === 'problems' ? 'No records need attention.' : 'No release evidence attached.'} body={recordFilter === 'problems' ? 'Every attached record is accepted and contract-valid.' : 'Records appear after an operator attaches them. Rehearsal fixtures do not establish production readiness.'} />}
+                  loadError={data.loadErrors.releaseEvidence}
+                />
+              </CardContent>
+            </Card>
+            {selected ? (
+              <Card className="release-record-detail" raised>
+                <section aria-label={`${plainCodeLabel(selected.kind)} record detail`}>
+                  <CardHeader>
+                    <div>
+                      <CardTitle>{plainCodeLabel(selected.kind)}</CardTitle>
+                      <CardDescription><code>{selected.kind}</code> · recorded {formatDate(selected.item.created_at)}</CardDescription>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => setSelectedKey('')}>Close</Button>
+                  </CardHeader>
+                  <CardContent className="stack-tight">
+                    <div className="kv-list">
+                      <KvField label="Attached">{selected.accepted ? 'Accepted into the inventory' : formatGovernanceStatusLabel(selected.acceptance, 'Not recorded')}</KvField>
+                      <KvField label="Contract validity">{selected.validity === 'valid' ? 'Valid against the evidence contract (metadata only)' : selected.validity === 'invalid' ? 'Fails the evidence contract' : 'Not validated'}</KvField>
+                      <KvField label="Custody">{selected.custodyUri ? 'Reference recorded; not verified here' : 'No custody reference'}</KvField>
+                      <KvField label="Release">{getString(selected.item, ['release_id', 'id'], 'Not recorded')}</KvField>
+                    </div>
+                    {selected.validity === 'invalid' ? (
+                      <div className="form-banner error" role="note">
+                        <strong>Why it fails{selected.accepted ? ' even though it was accepted' : ''}:</strong>
+                        {selected.missingFields.length ? <> missing {selected.missingFields.join(', ')}.</> : null}
+                        {selected.forbiddenFields.length ? <> forbidden {selected.forbiddenFields.join(', ')}.</> : null}
+                        {!selected.missingFields.length && !selected.forbiddenFields.length ? ' the validator recorded no field-level reason.' : null}
+                        {' '}It does not count as passing evidence.
+                      </div>
+                    ) : null}
+                    {selected.custodyUri ? (
+                      <div className="row-actions">
+                        <code className="cp-mono-wrap">{selected.custodyUri}</code>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label="Copy custody reference"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(selected.custodyUri).then(() => setClipboardNotice('Custody reference copied.')).catch(() => setClipboardNotice('Could not copy the custody reference.'));
+                          }}
+                        >
+                          <Copy size={14} aria-hidden="true" />
+                        </Button>
+                      </div>
+                    ) : null}
+                    <p className="muted small">Valid metadata is not customer launch approval. External signoff is tracked separately above.</p>
+                  </CardContent>
+                </section>
+              </Card>
+            ) : null}
+          </div>
           <Card>
-            <CardHeader>
-              <CardTitle>Release evidence inventory</CardTitle>
-              <CardDescription>Accepted kinds, validation summary, and custody URI previews without raw bodies.</CardDescription>
-            </CardHeader>
-            <CardContent>
+            <PanelCardHeader
+              title={`Missing kinds (${formatNumber(coverage.missing.length)})`}
+              description="Every required kind without an accepted record. Owners are not recorded in the evidence contract."
+              trailing={(
+                <div className="row-actions">
+                  <Button size="sm" variant="secondary" onClick={copyGapLedgerSummary}>Copy gap summary</Button>
+                  <Button size="sm" variant="ghost" onClick={() => downloadJsonFile(`release-evidence-gap-ledger-${session.tenant_id ?? 'tenant'}.json`, gapLedgerTechnicalPayload())}>Download JSON</Button>
+                </div>
+              )}
+            />
+            <CardContent className="stack-tight">
+              {coverage.missing.length > 8 ? (
+                <label className="audit-search-pill">
+                  <Search size={15} aria-hidden="true" />
+                  <input type="search" value={missingQuery} onChange={(event) => setMissingQuery(event.target.value)} placeholder="Filter missing kinds" aria-label="Filter missing kinds" />
+                </label>
+              ) : null}
               <DataTable
-                columns={columns}
-                items={data.releaseEvidence.slice().sort((left, right) => new Date(String(right.created_at ?? '')).getTime() - new Date(String(left.created_at ?? '')).getTime())}
-                empty={<EmptyState icon={FileText} title="No release evidence records." body="Operator-attested evidence records appear after they are accepted; rehearsal fixtures do not establish production readiness." />}
-                loadError={data.loadErrors.releaseEvidence}
+                columns={missingKindColumns}
+                items={missingFiltered.map((kind) => ({ kind }))}
+                getRowId={(item) => item.kind}
+                empty={coverage.missing.length === 0
+                  ? <EmptyState icon={CheckCircle2} title="No required kind is missing." body="Every required kind has an accepted record. Check contract validity and signoff separately." />
+                  : <EmptyState icon={Search} title="No missing kind matches." body="Clear the filter to see all missing kinds." actionLabel="Clear filter" onAction={() => setMissingQuery('')} />}
               />
             </CardContent>
           </Card>
-          <Card density="compact">
-            <CardHeader>
-              <CardTitle>Attestation snapshot</CardTitle>
-              <CardDescription>Latest staging readiness attestation. Inventory completeness and customer production launch remain separate decisions.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {data.loadErrors.releaseAttestation ? (
-                <div className="form-banner error" role="alert">Could not load attestation — {data.loadErrors.releaseAttestation}</div>
-              ) : attestation ? (
-                <div className="kv-list kv-list--compact">
-                  <KvField label="Signoff status">
-                    <Badge tone="info">{formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status']), '—')}</Badge>
-                  </KvField>
-                  <KvField label="Production ready">
-                    <Badge tone={productionReadyBadgeTone(attestation.production_ready)}>{productionReadyLabel(attestation.production_ready)}</Badge>
-                  </KvField>
-                  <KvField label="Profile">{getNestedString(attestation, ['profile'], 'full')}</KvField>
-                  <KvField label="Checked at">{formatDate(attestation.checked_at ?? attestation.created_at)}</KvField>
-                </div>
-              ) : (
-                <EmptyState icon={FileText} title="No attestation snapshot." body="An operator-attested staging record has not been loaded for this tenant." />
-              )}
-            </CardContent>
-          </Card>
+          {data.loadErrors.releaseAttestation ? (
+            <div className="form-banner error" role="alert">Attestation could not be loaded: {data.loadErrors.releaseAttestation}. Signoff status above is unknown.</div>
+          ) : null}
         </>
       )}
     </div>

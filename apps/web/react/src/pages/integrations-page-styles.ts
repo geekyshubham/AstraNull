@@ -10,6 +10,13 @@
  * No per-provider tint is applied and no raw hex appears here.
  */
 export const INTEGRATIONS_PAGE_STYLES = `
+.integration-page .integration-directory-group { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); }
+.integration-page .integration-directory-group + .integration-directory-group { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }
+.integration-page .integration-directory-group-title { margin: 0; color: var(--fg); font-size: var(--text-sm); font-weight: 600; line-height: 1.5; }
+.integration-page .integration-directory-group-title .muted { font-weight: 400; }
+.integration-page .integration-tile-head { flex-wrap: wrap; row-gap: var(--space-2); }
+.integration-page .integration-tile-head > .badge { flex: none; white-space: nowrap; }
+.integration-discard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .integration-page .integration-directory-meta {
   display: flex;
   flex-direction: column;
@@ -265,5 +272,10 @@ export const INTEGRATIONS_PAGE_STYLES = `
   .integration-page .integration-directory-meta {
     align-items: flex-start;
   }
+}
+.integration-page .connector-attempt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 `;

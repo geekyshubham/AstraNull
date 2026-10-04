@@ -159,6 +159,16 @@ describe('GET /v1/targets inventory', () => {
       source: 'manual',
       import_source: null,
       import_integration: null,
+      declaration: {
+        purpose: null,
+        purpose_status: 'unassigned',
+        purpose_source: null,
+        service_roles: [],
+        service_roles_status: 'unassigned',
+        service_roles_source: null,
+        owner: { status: 'unassigned', label: null, source: null },
+        criticality: { status: 'unassigned', value: null, source: null },
+      },
       created_at: CREATED_AT,
     });
 

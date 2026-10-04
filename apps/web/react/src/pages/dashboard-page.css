@@ -224,26 +224,54 @@
   gap: var(--space-1-5);
 }
 
+/* The dashboard reflows by the width it is given, not the viewport: a docked inspector narrows the
+   main column, so the layout reads the same at that width as it would on a narrower screen. */
+.dashboard-page { container: dashboard / inline-size; }
+
 /* ---- Overview workspace grid ----
    Named areas, flat cards (no nesting): readiness band spans the top, the
    scannable target list leads the left column, next steps lead the right. */
 .an-dash-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
   grid-template-areas:
-    'readiness readiness'
-    'targets fixes'
-    'targets activity';
-  grid-template-rows: auto auto 1fr;
+    'fixes targets'
+    'coverage coverage'
+    'activity readiness';
+  grid-template-rows: auto auto auto;
   gap: var(--space-5);
   align-items: start;
   width: 100%;
 }
 .an-dash-grid > * { min-width: 0; }
+/* The dashboard's tables have three columns; the shared 780px table minimum would clip them beside a
+   docked inspector. They keep their own scroll region below this width. */
+.an-dash-grid .data-table { min-width: 32rem; }
 .dash-area-readiness { grid-area: readiness; }
 .dash-area-targets { grid-area: targets; }
 .dash-area-fixes { grid-area: fixes; }
 .dash-area-activity { grid-area: activity; }
+.dash-area-coverage { grid-area: coverage; }
+
+/* Declared-host coverage: server analytics only, horizontal stacked bars with a text legend. */
+.declared-coverage { display: grid; gap: var(--space-4); padding: var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.declared-coverage-head h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.015em; }
+.declared-coverage-head p { max-width: 80ch; margin: var(--space-1) 0 0; color: var(--fg-2); font-size: var(--text-sm); line-height: 1.5; }
+.coverage-row { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: var(--space-2) var(--space-4); align-items: center; padding-top: var(--space-4); border-top: 1px solid var(--border-soft); }
+.coverage-row > :not(.coverage-title) { grid-column: 2; }
+.coverage-title { font-size: var(--text-sm); font-weight: 600; }
+.coverage-unavailable { color: var(--fg-2); font-size: var(--text-sm); }
+.coverage-bar { display: flex; gap: 2px; height: 8px; overflow: hidden; border-radius: var(--radius-pill); background: var(--wash-strong); }
+.coverage-seg { min-width: 4px; flex-basis: 0; background: var(--border-strong); }
+.coverage-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); }
+.coverage-legend a { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; color: var(--fg); text-underline-offset: 3px; }
+.coverage-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--border-strong); }
+.coverage-meta { color: var(--fg-2); font-size: var(--text-xs); }
+.fix-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-start; }
+.fix-row:has(.fix-actions) { grid-template-columns: auto minmax(0, 1fr); }
+.fix-row > .fix-actions { grid-column: 2; }
+.dashboard-kpi-scope { margin-top: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
+@media (pointer: coarse) { .coverage-legend a { min-height: 44px; } }
 
 /* Readiness band: donut + weighted factors side by side, divided by a hairline. */
 .readiness-split {
@@ -395,6 +423,8 @@
   white-space: nowrap;
 }
 .posture-tags-empty { color: var(--fg-2); font-size: 0.75rem; }
+.posture-verdict { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.posture-verdict-note { color: var(--fg-2); font-size: 0.75rem; }
 
 /* ---- Weighted factors (compact) ---- */
 .an-factor-list {
@@ -595,17 +625,19 @@
 }
 .aging-age { font-family: var(--font-mono); }
 
-/* ---- Responsive ---- */
-@media (max-width: 1100px) {
+/* ---- Responsive (dashboard width) ----
+   880px: the fix list needs ~320px and the posture table ~520px side by side, so below that they stack.
+   720px: the readiness and findings split panes stack. 480px: single-column rows. */
+@container dashboard (max-width: 880px) {
   .an-dash-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'readiness' 'fixes' 'targets' 'activity';
+    grid-template-areas: 'fixes' 'targets' 'coverage' 'activity' 'readiness';
     grid-template-rows: none;
   }
   .dashboard-kpis { grid-template-columns: repeat(2, 1fr); }
 }
 
-@media (max-width: 900px) {
+@container dashboard (max-width: 720px) {
   .defense-path-track { grid-template-columns: minmax(0, 1fr); }
   .defense-stage { border-radius: var(--radius-md); }
   .defense-stage + .defense-stage { margin-top: var(--space-2); border-left-width: 1px; }
@@ -626,12 +658,16 @@
   }
 }
 
-@media (max-width: 560px) {
+@container dashboard (max-width: 480px) {
   .dashboard-kpis { grid-template-columns: minmax(0, 1fr); }
   .dashboard-kpi { padding: var(--space-4); }
   .dashboard-kpi-value { font-size: 1.75rem; }
   .fix-row { grid-template-columns: auto minmax(0, 1fr); }
   .fix-row > :last-child { grid-column: 2; justify-self: start; }
+  .fix-actions { justify-content: flex-start; }
+  .declared-coverage { padding: var(--space-4); }
+  .coverage-row { grid-template-columns: minmax(0, 1fr); }
+  .coverage-row > :not(.coverage-title) { grid-column: 1; }
   .defense-path { padding: var(--space-4); }
   .posture-tally { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .posture-tally { row-gap: var(--space-3); }
@@ -647,3 +683,19 @@
   .dashboard-kpi.is-interactive:active { transform: none; }
   .dashboard-kpi.is-interactive:hover .dashboard-kpi-chevron { transform: none; }
 }
+
+/* Coverage segment groups: neutral attribution, amber for uncertainty, dashed for unmeasured. */
+.coverage-seg[data-segment='detected'], .coverage-swatch[data-segment='detected'] { background: var(--fg-2); }
+.coverage-seg[data-segment='not_detected'], .coverage-swatch[data-segment='not_detected'] { background: var(--meta); }
+.coverage-seg[data-segment='inconclusive'], .coverage-swatch[data-segment='inconclusive'],
+.coverage-seg[data-segment='conflict'], .coverage-swatch[data-segment='conflict'] { background: var(--warn); }
+.coverage-seg[data-segment='stale'], .coverage-swatch[data-segment='stale'] { background: color-mix(in oklab, var(--warn), var(--bg) 45%); }
+.coverage-seg[data-segment='unmeasured'] { background: var(--wash-strong); outline: 1px dashed var(--border-strong); outline-offset: -1px; }
+.coverage-swatch[data-segment='unmeasured'] { background: transparent; outline: 1px dashed var(--border-strong); }
+.declared-coverage-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+.coverage-unit { display: inline-flex; gap: var(--space-1); padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); }
+.coverage-unit button { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-pill); background: transparent; color: var(--fg-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.coverage-unit button[aria-pressed='true'] { border-color: var(--border); background: var(--surface); color: var(--fg); }
+.coverage-unit button:focus-visible { outline: var(--focus-ring-width) solid var(--focus-color); outline-offset: var(--focus-ring-offset); }
+@media (pointer: coarse) { .coverage-unit button { min-height: 44px; } }
+.coverage-legend-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }

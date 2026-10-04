@@ -484,6 +484,26 @@ export function createPostgresStateServices(repositories, options = {}) {
   const nowFn = options.now ?? (() => new Date());
 
   return {
+    async queryAuditEntries(ctx, options = {}) {
+      if (typeof repositories.audit?.queryAuditEntries !== 'function') {
+        const error = new Error('Audit reads are not wired.');
+        error.status = 503;
+        error.code = 'postgres_route_not_wired';
+        throw error;
+      }
+      return repositories.audit.queryAuditEntries(ctx, options);
+    },
+
+    async getAuditEntry(ctx, id) {
+      if (typeof repositories.audit?.getAuditEntry !== 'function') {
+        const error = new Error('Audit reads are not wired.');
+        error.status = 503;
+        error.code = 'postgres_route_not_wired';
+        throw error;
+      }
+      return repositories.audit.getAuditEntry(ctx, id);
+    },
+
     async getState(ctx) {
       const tenantId = ctx.tenantId;
       const nowMs = nowFn().getTime();

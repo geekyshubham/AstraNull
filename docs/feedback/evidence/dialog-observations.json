@@ -1,0 +1,156 @@
+[
+  {
+    "route": "targets",
+    "button": "Add target",
+    "noDialog": true,
+    "body": "Scope\n\u203a\nTargets\n\nProof for customer-declared scope\n\nTargets\n\nAll declared hostnames and IPs, ready for bounded validation.\n\nReview unverified\nAdd target\nDECLARED TARGETS\n5\nOWNERSHIP VERIFIED\n3\nREADY FOR VALIDATION\n5\nUNVERIFIED\n2\nAdd a target\n\nDeclare one target manually. Exact-target DNS verification is required before any external probe can run. Omit the group to land in the tenant default group.\n\nClose\nKind\nFQDN / hostname\nIP address\nURL\nTCP host:port\nDNS zone\nCanary endpoint\nValue\nExpected behavior\nBlock at edge\nAbsorb at origin\nRate shape\nTarget group\nDefault (auto)\nedge-checkout\nTags\nComma-separated. 0/16 valid.\nAdd target\nTarget inventory\n\n5 of 5 configured targets. Use Open target for evidence-backed detail; other row actions remain independent.\n\nSearch targets\nVERIFICATION\nAll states\nVerified\nNot verified\nTARGET GROUP\nAll groups\nedge-checkout\nKIND\nAll kinds\nHostname\nTAG\nAll tags\n\n5 matching targets\n\nTARGET\tKIND\tTAGS\tTARGET GROUP\tVERIFICATION\tADDED FROM\tLAST VALIDATED\tADDED\tACTIONS\n\ncheckout.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\npay.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\napi.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\ncdn.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nVerification in progress\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\nstatic.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nVerification in progress\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove"
+  },
+  {
+    "route": "targets",
+    "button": "Edit tags for checkout.acme.com",
+    "text": "Edit target tags\n\nTrimmed, lowercased, deduplicated. Kind and value stay immutable.\n\nClose\nTags\nComma-separated. 0/16 valid.\nCancel\nSave tags",
+    "escapeClosed": true
+  },
+  {
+    "route": "targets",
+    "button": "Remove target checkout.acme.com",
+    "text": "Remove declared target\nRemove checkout.acme.com from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.\nCancel\nRemove target",
+    "escapeClosed": true
+  },
+  {
+    "route": "target-groups",
+    "button": "Create target group",
+    "text": "Create declared target group\n\nCustomers declare scope manually. AstraNull does not discover inventory automatically.\n\nClose\nName\nMore options\nCancel\nCreate group",
+    "escapeClosed": true
+  },
+  {
+    "route": "target-groups",
+    "button": "Add target",
+    "text": "Add declared target\n\nAdd FQDN, URL, IP/port, DNS, or canary targets to the selected group.\n\nClose\nSelected group\nedge-checkout\nedge-checkout\nTarget type\nFQDN\nURL\nIP/Port\nDNS service\nCanary endpoint\nFQDN\nValue\nCancel\nAdd target",
+    "escapeClosed": true
+  },
+  {
+    "route": "test-policies",
+    "button": "Create schedule",
+    "text": "Create validation schedule\n\nBind a customer-runnable check to one exact active target in each selected group. Every target is selected explicitly, each group is written sequentially, and failed bindings remain selected for retry. SOC-gated checks remain request-only.\n\nClose\nTARGET GROUPS\nNo target groups selected\n\nSelect declared groups, then bind one exact compatible active target per group. AstraNull never assigns a target automatically.\n\nCheck\nSelect check\nOrigin Leak Scan (Safe)\nFirewall Exposure Scan (Safe)\nProtected-Path Canary (Safe)\nForbidden TCP Port (Safe)\nForbidden UDP Port (Safe)\nBasic Deny-Rule Validation (Safe)\nDNS Authoritative Response (Safe)\nDNS Random-Prefix / NXDOMAIN (Safe)\nOpen Recursion Behavior (Safe)\nWAF Marker Rule (Safe)\nOutside-In WAF Scanner (Safe)\nWAF Marker Rule Posture (Safe)\nWAF Low-Rate Limit Readiness (Safe)\nHTTP Method Restriction (Safe)\nHeader/Size Boundary (Safe)\nLow-Rate Rate-Limit Check (Safe)\nTLS Profile Exposure (Safe)\nHTTP/2 Readiness Metadata (Safe)\nHTTP/3 Alt-Svc Observation (Safe)\nAlert Workflow Webhook Ping (Safe)\nRunbook / Emergency Contact Validation (Safe)\nKill Switch Drill Readiness (Safe)\nIPv6 Declared Reachability (Safe)\nDNS Amplification Exposure (Safe Metadata)\nDNSSEC / Expensive Query Readiness (Safe)\nSecondary DNS Failover (Safe)\nZone Transfer Exposure (Safe)\nCache Busting Readiness (Safe)\nExpensive Endpoint (Safe)\nPassword Reset Abuse-Sensitive Flow (Safe)\nGraphQL Complexity Readiness (Safe)\nBot / Challenge Marker (Safe)\nSlow Header/Body Timeout Readiness (Safe)\nIdle Connection Timeout Readiness (Safe)\nHTTP/2 Rapid Reset Readiness (Safe)\nHTTP/2 Stream Concurrency (Safe)\ngRPC Reflection / Stream Readiness (Safe)\nWebSocket Connection Controls (Safe)\nTLS Full Audit (Safe)\nAPI Surface Scan (Safe)\nCORS Posture (Safe)\nWAF Enforcement Probe (Safe)\nICMP Flood Readiness (Safe)\nGRE / ESP Tunnel Flood Readiness (Safe)\nIPv6 Volumetric Readiness (Safe)\nSIP / VoIP Flood Readiness (Safe)\nSCTP Exposure Readiness (Safe)\nMulticast / Broadcast Storm Readiness (Safe)\nACK Flood Readiness (Safe)\nRST Flood Readiness (Safe)\nSYN-ACK Flood Readiness (Safe)\nTCP Flag Anomaly Handling (Safe)\nOut-of-State TCP Filtering (Safe)\nFragmentation Flood Readiness (Safe)\nSYN Flood Readiness (Safe)\nTCP Connection Flood Readiness (Safe)\nNAT / State Table Readiness (Safe)\nSMTP Connection Flood Readiness (Safe)\nSSH Connection Flood Readiness (Safe)\nFTP Connection Flood Readiness (Safe)\nIKE / IPsec Negotiation Readiness (Safe)\nApplication Connection Hoarding Readiness (Safe)\nLegacy Oversized-Packet Filtering Posture (Safe)\nOverlapping-Fragment Filtering Posture (Safe)\nIP Options Filtering Posture (Safe)\nQUIC Parser Robustness Posture (Safe)\nSpoofed Same-Source Filtering Posture (Safe)\nQUIC Migration Abuse Posture (Safe)\nSSDP / UPnP Reflector Exposure (Safe)\nSNMP Responder Exposure (Safe)\nCHARGEN / QOTD / Echo Responder Exposure (Safe)\nmDNS / NetBIOS / WS-Discovery Exposure (Safe)\nPortmapper / RIPv1 / RPC Service Exposure (Safe)\nDTLS / SIP / RDP / TFTP Responder Exposure (Safe)\nQUIC Alt-Svc Advertisement Observation (Safe)\nTCP Middlebox Reflection Exposure (Safe)\nMSSQL Resolver Exposure (Safe)\nJenkins / CI Discovery Exposure (Safe)\nCoAP IoT Responder Exposure (Safe)\nLegacy Device / Game Discovery Exposure (Safe)\nSTUN / TURN Responder Exposure (Safe)\nIPMI / BMC Responder Exposure (Safe)\nOpen Redis Exposure (Safe)\nOpenVPN / WireGuard Responder Exposure (Safe)\nNTP Mode Restriction Exposure (Safe)\nCLDAP Exposure Posture (Safe)\nMemcached Exposure (Safe)\nDNS ANY/TXT Response-Class Posture (Safe)\nDirected Broadcast Filtering Posture (Safe)\nAuthoritative / Resolver Amplification Posture (Safe)\nDNS Laundering Readiness (Safe)\nDNS Garbage-Query Readiness (Safe)\nPhantom Domain Readiness (Safe)\nDomain Lock-Up Readiness (Safe)\nNXNSAttack Readiness (Safe)\nDNSBomb Pulsing Readiness (Safe)\nQNAME Minimization Posture (Safe)\nDoH / DoT Endpoint Readiness (Safe)\nDNS TCP Fallback Readiness (Safe)\nDNS Zone-Walking Posture (Safe)\nHTTP GET Limit Validation (Safe)\nHTTP POST Limit Readiness (Safe)\nSlow Header Client Readiness (Safe)\nSlow Body Client Readiness (Safe)\nSlow Read Response Readiness (Safe)\nLow-and-Slow Header Timeout Sample (Safe)\nLarge Body Limit Readiness (Safe)\nFile Upload Abuse Readiness (Safe)\nParser Depth Limit Readiness (Safe)\nBatch API Limit Readiness (Safe)\nCheckout Endpoint Limit Readiness (Safe)\nOTP / SMS Cost Guardrail Readiness (Safe)\nSearch-Cluster Query Cost Readiness (Safe)\nHealth-Check Flood Readiness (Safe)\nXML-RPC Endpoint Posture (Safe)\nWebhook Callback Limit Readiness (Safe)\nHTTP Pipelining Limit Readiness (Safe)\nRange Request Limit Readiness (Safe)\nConditional Revalidation Cost Readiness (Safe)\nChallenge Endpoint Cost Readiness (Safe)\nMQTT Broker Readiness (Safe)\nRegex Complexity Posture (Safe)\nGraphQL Batch / Alias Limit Validation (Safe)\nTLS Handshake Rate Readiness (Safe)\nTLS Renegotiation Posture (Safe)\nTLS 0-RTT Early Data Posture (Safe)\nOCSP Stapling Posture (Safe)\nHTTP/2 Rapid Reset Mitigation Validation (Safe)\nHTTP/2 MadeYouReset Readiness (Safe)\nHTTP/2 CONTINUATION Flood Readiness (Safe)\nHTTP/2 Priority Abuse Readiness (Safe)\nHPACK Advertised Limits Readiness (Safe)\nHTTP/2 Server Push Posture (Safe)\nQPACK Compression Limit Readiness (Safe)\nSSE Stream Limit Readiness (Safe)\nHTTP/3 Alt-Svc Posture Observation (Safe)\nWebSocket Message Rate Readiness (Safe)\nCDN Bypass Coverage Readiness (Safe)\nDNS Hostname Bypass Sample (Safe)\nCarpet Bombing Readiness (Safe)\nPulse-Wave Readiness (Safe)\nSpoofed Source Filtering Readiness (Safe)\nRansom DDoS Runbook Readiness (Safe)\nRate-Limit Evasion Resistance (Safe)\nAdaptive Evasion Resistance (Safe)\nResidential Proxy Resistance (Safe)\nAutoscaling Cost Guardrail Readiness (Safe)\nAttack Alert Coverage Readiness (Safe)\nSLP Amplification Exposure (Safe)\nTP240 PhoneHome Amplification Exposure (Safe)\nL2TP Reflection Exposure (Safe)\nNAT-PMP Amplification Exposure (Safe)\nCUPS/IPP Reflector Exposure (Safe)\nDNS Multi-Question / Oversized Parser Posture (Safe)\nWAF HTTP Method/Protocol Policy Marker (Safe)\nWAF Request-Smuggling Marker (Safe)\nWAF CRLF/Response-Splitting Marker (Safe)\nWAF Open-Redirect / Parameter-Policy Marker (Safe)\nWAF NoSQL Injection Marker (Safe)\nWAF XPath/XML Injection Marker (Safe)\nWAF JNDI/LDAP (Log4Shell) Marker (Safe)\nWAF CSV/Formula & Data-Channel Injection Marker (Safe)\nWAF Prototype-Pollution Marker (Safe)\nWAF Unsafe-Deserialization Marker (Safe)\nWAF SSRF Marker (Safe)\nWAF XXE Marker (Safe)\nWAF File-Upload Signature Marker (Safe)\nWAF/API-Gateway JWT Tamper Marker (Safe)\nWAF Evasion \u2014 Unicode Normalization (Safe)\nWAF Evasion \u2014 Homoglyph (Safe)\nWAF Evasion \u2014 Overlong Utf8 (Safe)\nWAF Evasion \u2014 ALT Charset (Safe)\nWAF Evasion \u2014 Html Entity (Safe)\nWAF Evasion \u2014 JS Escape (Safe)\nWAF Evasion \u2014 Json Unicode Escape (Safe)\nWAF Evasion \u2014 CSS Escape (Safe)\nWAF Evasion \u2014 Base64 Wrap (Safe)\nWAF Evasion \u2014 Numeric Repr (Safe)\nWAF Evasion \u2014 Whitespace (Safe)\nWAF Evasion \u2014 Lexical Operator (Safe)\nWAF Evasion \u2014 Lexical Tautology (Safe)\nWAF Evasion \u2014 Lexical Literal (Safe)\nWAF Evasion \u2014 Control Char (Safe)\nWAF Evasion \u2014 Path Matrix (Safe)\nWAF Evasion \u2014 Path Suffix (Safe)\nWAF Evasion \u2014 IP Representation (Safe)\nWAF Evasion \u2014 Parser HPP (Safe)\nWAF Evasion \u2014 Parser Json DUP (Safe)\nWAF Evasion \u2014 Parser Header DUP (Safe)\nWAF Evasion \u2014 Framing CL TE (Safe)\nWAF Evasion \u2014 Framing Transfer Coding (Safe)\nWAF Evasion \u2014 Framing H2 H1 (Safe)\nWAF Evasion \u2014 Framing Line Ending (Safe)\nWAF Evasion \u2014 Framing Chunk EXT (Safe)\nWAF Evasion \u2014 Body Gzip (Safe)\nWAF Evasion \u2014 Body Nested Encoding (Safe)\nWAF Evasion \u2014 Content Type Binary (Safe)\nWAF Evasion \u2014 Struct Type Confusion (Safe)\nWAF Evasion \u2014 Struct Deep Nesting (Safe)\nWAF Evasion \u2014 Parameter Location (Safe)\nWAF Evasion \u2014 Method Override (Safe)\nWAF Evasion \u2014 Protocol Version (Safe)\nWAF Evasion \u2014 Protocol Upgrade (Safe)\nWAF Evasion \u2014 Benign Padding (Safe)\nWAF Evasion \u2014 Polyglot Content (Safe)\nWAF Evasion \u2014 Protocol H3 H1 (Safe)\nWAF Evasion \u2014 Protocol Qpack Hpack (Safe)\nWAF Evasion \u2014 Multipart Charset (Safe)\nWAF Evasion \u2014 XML Attribute (Safe)\nWAF Inspection-Limit / Fail-Open (Safe)\nWAF Evasion Posture \u2014 Cache-key / routing mismatch\nWAF Evasion Posture \u2014 IP fragmentation / TCP segmentation differential\nWAF Evasion Posture \u2014 Zero-day / rule-gap evasion\nWAF Evasion Posture \u2014 Stored / deferred second-order payload\nWAF Evasion Posture \u2014 Application-layer encrypted / opaque payload\nWAF Evasion Posture \u2014 Signed but malicious structured data\nWAF Evasion Posture \u2014 Connection coalescing identity confusion\nWAF Evasion Posture \u2014 Encrypted ClientHello / hidden routing-metadata gap\nCompressed Request Decompression Acceptance Posture (Safe)\nRequest URI / Parameter Size Limit Posture (Safe)\nWAF HTTP Routing & Proxy-Trust Posture\nWAF JSONP & CSS-Injection Policy Posture\nOrigin Leak Scan (Safe)\nCadence\nManual\nDaily\nWeekly\nMonthly\nWeekly\nExpected verdict\nPass\nWarn\nFail\nManual review\nPass\nSafe window (optional)\nCancel\nCreate schedule",
+    "escapeClosed": true
+  },
+  {
+    "route": "test-policies",
+    "button": "Archive",
+    "text": "Archive schedule pol_checkout\n\nAre you sure? Scheduled runs under this schedule will stop and an audit entry will be written.\n\nCancel\nArchive schedule",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Add provider",
+    "text": "Configure Cloudflare\n\nChoose the least-access path that meets your need. A provider selection alone never connects an account.\n\nClose\nCloudflare\nRead-only zone and ruleset polling\nProvider\nCloudflare\nAkamai EdgeDNS\nGoDaddy\nNamecheap\nIBM NS1\nAWS WAF\nGoogle Cloud DNS\nAzure DNS\nHetzner DNS\nIMPLEMENTED\nConnect read-only\n\nStore a vault-backed read-only credential and use the bounded polling worker for Cloudflare, Akamai EdgeDNS, Namecheap, GoDaddy, IBM NS1, or AWS WAF web ACLs.\n\nContinue to connect\nNO CREDENTIALS\nManual metadata\n\nCreate a provider record without credentials, then submit selected normalized zone or policy metadata. AstraNull does not contact the provider.\n\nContinue manually\nCORE WORKFLOW\nSingle domain\n\nDeclare one FQDN directly. It lands in your chosen or default target group; ownership verification remains required.\n\nAdd single domain\nCloudflare setup guide\nCancel",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Add domain",
+    "text": "Add single domain\n\nDeclare one hostname as a target. This is not provider discovery and does not grant cloud access.\n\nClose\nHostname\nExpected behavior\nBlock at edge\nAbsorb at origin\nRate shape\nTarget group (optional)\nTenant default group\nedge-checkout\nTags (optional)\nRecorded provenance: manual customer declaration via AstraNull Integrations; provider access: none. The target starts unverified and cannot receive external probes until ownership is proven.\nCancel\nAdd declared domain",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Manual snapshot",
+    "text": "Manual metadata snapshot\n\nUse this for generic providers, or whenever credential-backed polling is unavailable. Only normalized metadata is accepted.\n\nClose\nConnector\nCloudflare checkout \u2014 Cloudflare\nSnapshot kind\nWAF policy\nCDN property\nDNS zone\nCloud asset\nVulnerability\nDisplay ref\nResource hash\nConfig hash\nPolicy mode\nBlock\nMonitor\nUnknown\nRule count\nHostnames\nCancel\nIngest snapshot",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Setup guide for Cloudflare",
+    "text": "Cloudflare setup guide\n\nLeast-privilege, read-only steps verified against the provider's documentation.\n\nClose\nCloudflare\nRead-only zone and ruleset polling\nACCESS MODE\nCREDENTIAL POLLING\nWHAT ASTRANULL READS\nZone list, then the rulesets attached to each zone.\nMINIMUM PERMISSION\nZone > Zone > Read. Add Zone > WAF > Read to include rulesets.\nCREDENTIAL FORMAT\nThe token string, or {\"api_token\":\"...\"}\nSteps\nIn the Cloudflare dashboard open My Profile > API Tokens and select Create Token.\nChoose Create custom token and give it a recognizable name.\nAdd the permission Zone > Zone > Read, and optionally Zone > WAF > Read.\nUnder Zone Resources, limit the token to the zones you want validated.\nSelect Continue to summary, then Create Token, and paste the token here once.\nNever performed\n\nNever edits DNS records, rules, or zone settings.\n\nTroubleshooting\n\nIf the poll reports a rulesets permission gap, the token lacks Zone > WAF > Read. Zones still import; rulesets are skipped.\n\nOfficial documentation\nCreate an API token\n(opens in a new tab)\nList zones API\n(opens in a new tab)\nList zone rulesets API\n(opens in a new tab)\nClose\nConnect",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Connect Cloudflare",
+    "text": "Configure Cloudflare\n\nChoose the least-access path that meets your need. A provider selection alone never connects an account.\n\nClose\nCloudflare\nRead-only zone and ruleset polling\nProvider\nCloudflare\nAkamai EdgeDNS\nGoDaddy\nNamecheap\nIBM NS1\nAWS WAF\nGoogle Cloud DNS\nAzure DNS\nHetzner DNS\nIMPLEMENTED\nConnect read-only\n\nStore a vault-backed read-only credential and use the bounded polling worker for Cloudflare, Akamai EdgeDNS, Namecheap, GoDaddy, IBM NS1, or AWS WAF web ACLs.\n\nContinue to connect\nNO CREDENTIALS\nManual metadata\n\nCreate a provider record without credentials, then submit selected normalized zone or policy metadata. AstraNull does not contact the provider.\n\nContinue manually\nCORE WORKFLOW\nSingle domain\n\nDeclare one FQDN directly. It lands in your chosen or default target group; ownership verification remains required.\n\nAdd single domain\nCloudflare setup guide\nCancel",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Connect Slack",
+    "text": "Connect Slack\n\nPost readiness alerts to a Slack channel as Block Kit messages.\n\nClose\nCreate a Slack incoming webhook\nOpen api.slack.com/apps, choose Create New App, then From scratch, and pick your workspace.\nUnder Features, open Incoming Webhooks and switch Activate Incoming Webhooks on.\nSelect Add New Webhook to Workspace, choose the channel that should receive alerts, and select Authorize.\nCopy the webhook URL. It looks like https://hooks.slack.com/services/T\u2026/B\u2026/\u2026. Paste it below.\n\nTreat the URL like a password. Slack revokes webhook URLs it finds published online.\n\nSlack incoming webhooks guide\n(opens in a new tab)\nSlack webhook URL\n\nStarts with https://hooks.slack.com/services/. The URL is a secret; it is stored server-side and only a host preview is shown back.\n\nNotify on\nHigh-severity finding\n:\nA new high or critical finding is recorded.\nHigh-scale state change\n:\nA SOC-governed high-scale request changes state.\nSafe test completed\n:\nA safe validation run finishes.\nReport ready\n:\nA readiness report is generated.\nTurn this channel on now\nExample payload\nOutbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.\nCancel\nConnect Slack",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Connect Microsoft Teams",
+    "text": "Connect Microsoft Teams\n\nPost Adaptive Cards to a Teams channel through a Workflows webhook.\n\nClose\nCreate a Teams Workflows webhook\nIn Microsoft Teams, go to the channel that should receive alerts, select More options (\u2026), then Workflows.\nSearch for the template Send webhook alerts to a channel and select it.\nConfirm the team and channel, then select Save.\nCopy the webhook URL shown once the workflow is created. Paste it below.\n\nMicrosoft 365 (Office 365) connectors are being retired, so use Workflows rather than the legacy Incoming Webhook connector. A workflow belongs to the person who created it; add a co-owner so alerts keep flowing if that person leaves. Teams messages are limited to 28 KB, and larger cards are refused before sending. The card includes a View in AstraNull button when your operator sets ASTRANULL_PORTAL_URL.\n\nMicrosoft Learn: create an incoming webhook\n(opens in a new tab)\nWorkflows webhook URL\n\nCopy the URL shown after saving the Workflows template. Legacy Microsoft 365 connector URLs are being retired.\n\nNotify on\nHigh-severity finding\n:\nA new high or critical finding is recorded.\nHigh-scale state change\n:\nA SOC-governed high-scale request changes state.\nSafe test completed\n:\nA safe validation run finishes.\nReport ready\n:\nA readiness report is generated.\nTurn this channel on now\nExample payload\nOutbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.\nCancel\nConnect Microsoft Teams",
+    "escapeClosed": true
+  },
+  {
+    "route": "integrations",
+    "button": "Add Email",
+    "error": "TimeoutError: locator.waitFor: Timeout 4000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Add Email', exact: true }).first() to be visible\u001b[22m\n"
+  },
+  {
+    "route": "integrations",
+    "button": "Add Webhook",
+    "error": "TimeoutError: locator.waitFor: Timeout 4000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Add Webhook', exact: true }).first() to be visible\u001b[22m\n"
+  },
+  {
+    "route": "integrations",
+    "button": "Snapshots",
+    "noDialog": true,
+    "body": "record and attach operator-supplied DNS zone evidence.\n\nManual metadata\nSetup guide\nAdd manually\nConfigured connectors\n\nValidate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered.\n\n1 TOTAL\nCONNECTOR\tCAPABILITY\tSTATUS\tLAST POLL\tPOLL ERRORS\tSECRET REF\tUPDATED\tACTIONS\n\nCloudflare checkout\nCloudflare\n\t\nMANUAL METADATA\n\t\nACTIVE\n\t\nOct 3, 09:47 PM\n\t\n\u2014\n\t\nnone \u2014 manual only\n\t\nOct 3, 09:47 PM\n\t\nValidate\nPoll\nSnapshots\nDisable\nNotification channels\n\nSend readiness alerts to Slack, Microsoft Teams, email, or your own endpoint. Channels only receive redacted event summaries; they never get access to your infrastructure.\n\nRefresh\nSlack\nIncoming webhook\n\nPost readiness alerts to a Slack channel as Block Kit messages.\n\nNot connected\nConnect\nMicrosoft Teams\nWorkflows webhook\n\nPost Adaptive Cards to a Teams channel through a Workflows webhook.\n\nNot connected\nConnect\nEmail\nSMTP\n1 CONFIGURED\n\nSend an HTML summary to a team inbox or distribution list.\n\n1 of 1 on\nAdd\nWebhook\nHTTPS POST\n1 CONFIGURED\n\nPOST redacted event JSON to your own endpoint, SIEM, or automation.\n\n1 of 1 on\nAdd\nCHANNEL\tDESTINATION\tNOTIFIES ON\tSTATE\tLAST DELIVERY\tCONNECTED\tACTIONS\n\nWebhook\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\t\nfinding opened, Report ready\n\t\nON\n\t\nNO DELIVERIES YET\n: The server has no delivery attempt recorded for this channel.\n\t\nJul 1, 05:30 PM\n\t\nTurn off\nEdit\nRemove\n\n\nEmail\n\t\nemail:s\u2026@demo.astranull.local\n\t\nHigh-scale state change\n\t\nON\n\t\nNO DELIVERIES YET\n: The server has no delivery attempt recorded for this channel.\n\t\nJul 1, 05:30 PM\n\t\nTurn off\nEdit\nRemove\n\nOutbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it."
+  },
+  {
+    "route": "integrations",
+    "button": "Disable",
+    "text": "Disable connector\nDisable this connector? Deliveries through it will stop.\nCancel\nDisable connector",
+    "escapeClosed": true
+  },
+  {
+    "route": "notifications",
+    "button": "New rule",
+    "noDialog": true,
+    "body": "Governance\n\u203a\nNotifications\n\nGovernance\n\nNotifications\n\nRules, delivery evidence, retries, and dead-letter recovery for readiness events. External delivery remains provider-configured and opt-in.\n\nClose rule form\nDELIVERED\n0\n\nsuccessful deliveries\n\nRETRYING\n0\n\nawaiting retry\n\nDLQ\n1\n\ndead-letter queue\n\nCRITICAL\n\n2 rules \u00b7 2 events \u00b7 1 DLQ (0 retries scheduled)\n\nCreate notification rule\n\nPick a delivery mode, the rule kinds (triggers) that fire it, and whether it starts enabled. Metadata-only ledger. External delivery stays opt-in through the server delivery mode.\n\nDelivery mode\nWebhook\nEmail\nSlack\nTeams\nIn-app\nWebhook\nDestination\nRule kinds and filters (triggers)\nHigh-severity finding\nSafe test completed\nHigh-scale state change\nReport ready\nEnabled on creation (uncheck to add the rule in a disabled state)\nAdd rule\nPreview rule (no send)\nRules\nCHANNEL\tENABLED\tTRIGGERS\tDESTINATION\n\nWEBHOOK\n\t\nENABLED\n\t\n2\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\n\nEMAIL\n\t\nENABLED\n\t\n1\n\t\nemail:s\u2026@demo.astranull.local\nRecent events\nTRIGGER\tSUBJECT\tCREATED\n\nReport ready\n\t\nReport ready: Checkout edge readiness summary\n\t\nOct 3, 09:47 PM\n\n\nFinding \u00b7 Opened\n\t\nFinding opened: Origin direct bypass\n\t\nOct 3, 09:47 PM\nProviders\n\nDelivery-provider health derived from configured rules correlated with recorded delivery attempts.\n\nPROVIDER\tCHANNEL\tHEALTH\n\nEMAIL\n\t\nemail:s\u2026@demo.astranull.local\n\t\nIDLE\n\n\nWEBHOOK\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\t\nDEAD-LETTER\nDelivery operations\n\nRetry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state.\n\nPreview\n\nDry-run \u2014 no ledger changes\n\nPreview due retries\nPreview DLQ redrive\nLive\n\nApplies changes \u2014 confirmation required\n\nProcess due retries\nRedrive DLQ"
+  },
+  {
+    "route": "notifications",
+    "button": "Process due retries",
+    "text": "Process notification retries\nProcess notification retries now?\nCancel\nProcess retries",
+    "escapeClosed": true
+  },
+  {
+    "route": "notifications",
+    "button": "Redrive DLQ",
+    "text": "Redrive dead-letter queue\nRedrive the DLQ now?\nCancel\nRedrive queue",
+    "escapeClosed": true
+  },
+  {
+    "route": "finding-detail?id=fnd_checkout_1",
+    "button": "Accept risk",
+    "text": "Accept finding risk\nAccept this finding as risk? This records a terminal risk decision.\nCancel\nAccept risk",
+    "escapeClosed": true
+  },
+  {
+    "route": "finding-detail?id=fnd_checkout_1",
+    "button": "Close finding",
+    "text": "Close finding\nClose this finding after reviewing its evidence and remediation state?\nCancel\nClose finding",
+    "escapeClosed": true
+  },
+  {
+    "route": "target-detail?id=tgt_checkout_1",
+    "button": "Run all checks",
+    "text": "Run all 149 checks on checkout.acme.com?\n\n149 bounded external checks across 10 categories, at most 489 probe requests in total.\n\nWAF/CDN detection and origin exposure run first, then one check at a time. Each result appears on this page as it lands.\n\nThe run paces itself inside your safe-run limits. If an hourly limit is reached it pauses and shows when it resumes.\n\nOther runs in this target group wait until it finishes. You can stop it at any time.\n\n72 declaration-only checks are skipped because they send no traffic.\n\nCancel\nRun all checks",
+    "escapeClosed": true
+  },
+  {
+    "route": "target-group-detail?id=tg_checkout",
+    "button": "Import CSV",
+    "text": "Import targets from CSV\n\nDeclare several targets for this group at once. Every row is validated before anything is saved: if any row is rejected, nothing is imported and each rejected row is listed with its reason. Nothing is discovered automatically.\n\nClose\nCSV file\n\nOne target per row (FQDN, URL, or IP, with an optional header row). Up to 1000 rows and 256 KB per file.\n\nCancel\nImport",
+    "escapeClosed": true
+  },
+  {
+    "route": "target-group-detail?id=tg_checkout",
+    "button": "Import DNS zones",
+    "text": "Onboard a target\nClose\nDomain \u00b7 DNS TXT\nDNS provider \u00b7 select zones\n\nConnect a DNS provider once, then select exact zones for this target group. A current, secured provider check can verify an imported zone; manually supplied or older records remain pending and still require DNS proof.\n\nCL\nCloudflare checkout\n\nScope required: \u2014\n\nStatus: active\n\nSelect DNS zones",
+    "escapeClosed": true
+  }
+]

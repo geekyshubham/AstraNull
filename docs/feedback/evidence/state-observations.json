@@ -1,0 +1,279 @@
+[
+  {
+    "route": "dashboard",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Readiness overview",
+    "tableOverflows": 0
+  },
+  {
+    "route": "targets",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Targets",
+    "tableOverflows": 1
+  },
+  {
+    "route": "target-groups",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Target groups",
+    "tableOverflows": 1
+  },
+  {
+    "route": "checks",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Vector library",
+    "tableOverflows": 1
+  },
+  {
+    "route": "test-policies",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Test policies",
+    "tableOverflows": 1
+  },
+  {
+    "route": "findings",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Findings",
+    "tableOverflows": 0
+  },
+  {
+    "route": "reports",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Reports",
+    "tableOverflows": 1
+  },
+  {
+    "route": "integrations",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Integrations",
+    "tableOverflows": 2
+  },
+  {
+    "route": "notifications",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Notifications",
+    "tableOverflows": 3
+  },
+  {
+    "route": "audit",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Audit log",
+    "tableOverflows": 1
+  },
+  {
+    "route": "settings",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Settings",
+    "tableOverflows": 0
+  },
+  {
+    "route": "support",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Support",
+    "tableOverflows": 0
+  },
+  {
+    "route": "subscription",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Billing",
+    "tableOverflows": 1
+  },
+  {
+    "route": "target-detail?id=tgt_checkout_1",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "checkout.acme.com",
+    "tableOverflows": 1
+  },
+  {
+    "route": "dashboard",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Readiness overview",
+    "tableOverflows": 0
+  },
+  {
+    "route": "targets",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Targets",
+    "tableOverflows": 1
+  },
+  {
+    "route": "target-groups",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Target groups",
+    "tableOverflows": 1
+  },
+  {
+    "route": "checks",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Vector library",
+    "tableOverflows": 1
+  },
+  {
+    "route": "test-policies",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Test policies",
+    "tableOverflows": 1
+  },
+  {
+    "route": "findings",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Findings",
+    "tableOverflows": 0
+  },
+  {
+    "route": "reports",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Reports",
+    "tableOverflows": 1
+  },
+  {
+    "route": "integrations",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Integrations",
+    "tableOverflows": 2
+  },
+  {
+    "route": "notifications",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Notifications",
+    "tableOverflows": 3
+  },
+  {
+    "route": "audit",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Audit log",
+    "tableOverflows": 1
+  },
+  {
+    "route": "settings",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Settings",
+    "tableOverflows": 0
+  },
+  {
+    "route": "support",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Support",
+    "tableOverflows": 0
+  },
+  {
+    "route": "subscription",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "Billing",
+    "tableOverflows": 1
+  },
+  {
+    "route": "target-detail?id=tgt_checkout_1",
+    "theme": "light",
+    "width": 375,
+    "pageWidth": 375,
+    "h1": "checkout.acme.com",
+    "tableOverflows": 1
+  },
+  {
+    "dashboardBaseline": {
+      "id": "dashboard",
+      "url": "http://127.0.0.1:5173/app?ux_review=baseline#dashboard?tab=overview",
+      "h1": "Readiness overview",
+      "title": "Dashboard \u00b7 Overview \u00b7 AstraNull",
+      "tabs": [
+        "Overview",
+        "Risk trends"
+      ],
+      "buttons": [
+        {
+          "text": "",
+          "label": "Open navigation",
+          "disabled": false
+        },
+        {
+          "text": "",
+          "label": "Switch to light theme",
+          "disabled": false
+        },
+        {
+          "text": "Refresh",
+          "label": null,
+          "disabled": false
+        },
+        {
+          "text": "Overview",
+          "label": null,
+          "disabled": false
+        },
+        {
+          "text": "Risk trends",
+          "label": null,
+          "disabled": false
+        },
+        {
+          "text": "Readiness72/100Not ready yet: high-priority gaps remainOpen readiness trend",
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "body": "Overview\n\u203a\nDashboard\n\nTenant \u00b7 TEN_DEMO\n\nReadiness overview\n\nEvery verdict below traces to observed probe evidence or an explicit customer declaration. Validation runs from the outside in.\n\nRefresh\nRun safe validation\n\n5 declared targets, 3 ownership verified, 1 evidence record. High-scale tests stay SOC-gated.\n\nOverview\nRisk trends\nWhere does attack traffic get stopped?\n\nEach stage shows the evidence AstraNull has for the path a request takes, from the open internet to your origin.\n\nPATH STATUS\nAT LEAST ONE STAGE HAS A GAP\nINTERNET\n3/5 verified\n\nDeclared targets with proven ownership are the entry point every probe uses.\n\nREVIEW\nEDGE / CDN\nNo provider metadata\n\nReported edge/CDN providers are declaration context, not proof traffic was blocked.\n\nNOT MEASURED\nWAF\nNot enough evidence\n\n0% of declared WAF assets fully validated.\n\nREVIEW\nORIGIN\n1 open origin finding\n\nDirect-origin traffic was reachable in recorded evidence and the finding is still open.\n\nGAP\nReadiness\n72/100\nNot ready yet: high-priority gaps remain\nOpen readiness trend\nDeclared targets\n5\n3 ownership verified (60%)\nOpen targets\nEvidence coverage\n40%\n2 of 5 targets have evidence-backed verdicts\nOpen test runs\nOpen findings\n1\n0 CRITICAL\n1 HIGH\nView all findings\nReadiness posture\n\nCorrelated check verdicts this cycle, and the weighted factors behind the published score.\n\nCheck verdicts\nREADINESS\n72\n/100\nPass\n100%\n1/1\nReview\n0%\n0/1\nGap\n0%\n0/1\n\n1 check correlated this cycle\n\nWeighted factors\n\nEach factor contributes its points to the published readiness score.\n\nValidation coverage\n44/44\n\n1 of 1 target group(s) have recent evidence-backed validations.\n\nOpen findings impact\n0/28\n\n0 open finding(s); 1 verdict(s) recorded (0 recent). Stale or missing recent verdict evidence does not support full posture credit.\n\nEvidence freshness\n17/17\n\nRecent evidence-backed validation within 30 days (1 run(s), 1 target group(s)).\n\nSOC governance posture\n11/11\n\nRequest hsr demo approved: authorization pack accepted with 2 SOC approver(s). Other request(s) still pending gates: Hsr checkout scheduled: missing accepted artifacts: Customer authorization letter, target ownership confirmation, emergency contacts, stop criteria, test plan, business approval, legal approval, scope and rate plan, abort criteria | hsr demo draft: missing accepted artifacts: Customer authorization letter, target ownership confirmation, emergency contacts, stop criteria, test plan, business approval, legal approval, scope and rate plan, abort criteria; SOC approvals 0/2.\n\nTarget posture\n\nDeclared targets, worst posture first. Open a row for its evidence and checks.\n\nAll targets\n0\nGap\n1\nReview\n1\nPass\n3\nNo result\nTARGET\tOWNERSHIP\tLATEST VERDICT\n\ncheckout.acme.com\nNo tags\n\t\nDNS verified\n\t\nPASSED \u00b7 1 OPEN\n\n\ncdn.acme.com\nNo tags\n\t\nPending\n\t\nNO RESULT\n\n\npay.acme.com\nNo tags\n\t\nDNS verified\n\t\nNO RESULT\n\n\nstatic.acme.com\nNo tags\n\t\nPending\n\t\nNO RESULT\n\n\napi.acme.com\nNo tags\n\t\nDNS verified\n\t\nPASS\nWhat to fix first\n\nUp to three actions backed by the evidence currently loaded.\n\n1 TO REVIEW\n1\nBlock direct access to checkout.acme.com\nHigh severity: Origin direct bypass \u00b7 checkout.acme.com\nReview\nRecent validation activity\n\nThe latest safe validation runs and their verdicts.\n\nAll runs\nRUN\tVERDICT\tWHEN\n\norigin.direct_bypass.safe\nrun_demo_running\n\t\nNO RESULT YET\n\t\n46m ago\n\n\ndns.authoritative_response.safe\nrun_demo_dns\n\t\nNO RESULT YET\n\t\n3h ago\n\n\norigin.leak_scan.safe\nrun_checkout_1\n\t\nPROTECTION STOPPED THE TEST TRAFFIC\n\t\n0s ago",
+      "overflow": false
+    }
+  },
+  {
+    "route": "dashboard",
+    "width": 768,
+    "overflow": false
+  },
+  {
+    "route": "dashboard",
+    "width": 1024,
+    "overflow": false
+  },
+  {
+    "route": "dashboard",
+    "width": 1440,
+    "overflow": false
+  },
+  {
+    "reducedMotion": {
+      "enabled": true,
+      "factorTransition": "0s"
+    }
+  }
+]

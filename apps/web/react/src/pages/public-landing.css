@@ -1,12 +1,14 @@
-/* AstraNull public landing. Persuade mode, calm and technical.
-   Token-only: colour, type, space, radius and motion come from styles.css :root.
-   Every rule is scoped under .public-landing (or the landing footer) so it
-   outranks the shared primitives that load after this file in the bundle.
-   Shape rule: panels and the record figure use --radius-lg, inline field
-   chips use --radius-sm, buttons keep the shared pill. Depth is hairline
-   borders only (no drop shadows). */
+/* AstraNull public surfaces: landing (Persuade, calm and technical) and the
+   access tasks (Operate). Token-only: colour, type, space, radius and motion
+   come from styles.css :root. This file loads before the shared sheet, so any
+   rule that adjusts a shared class is scoped under .public-app or
+   .public-landing to outrank it. Shape: panels use --radius-lg, chips and
+   inputs --radius-sm, buttons keep the shared pill. Depth is hairlines only. */
 
-.public-landing {
+.public-landing,
+.public-auth-task,
+.public-auth-split,
+.public-unavailable {
   /* Orange reads as ink on the dark canvas; on the light canvas it falls to
      about 2.3:1, so accent text is mixed toward the foreground there. */
   --landing-accent-ink: var(--accent);
@@ -14,15 +16,20 @@
   --landing-rule: var(--border);
   --landing-measure: 62ch;
   --landing-sticky-top: 96px;
-
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 var(--space-6);
 }
 
 :root[data-theme="light"] .public-landing,
-:root[data-theme="light"] .public-footer {
+:root[data-theme="light"] .public-footer,
+:root[data-theme="light"] .public-auth-task,
+:root[data-theme="light"] .public-auth-split,
+:root[data-theme="light"] .public-unavailable {
   --landing-accent-ink: color-mix(in oklab, var(--accent), var(--fg) 48%);
+}
+
+.public-landing {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
 }
 
 .public-landing code {
@@ -33,7 +40,14 @@
 
 /* ── Hero ───────────────────────────────────────────────────────────── */
 .public-landing .public-hero {
-  padding: clamp(48px, 8vw, 96px) 0 clamp(56px, 7vw, 88px);
+  padding: clamp(40px, 7vw, 88px) 0 clamp(56px, 7vw, 88px);
+}
+
+.public-landing .public-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: clamp(var(--space-8), 5vw, 80px);
+  align-items: center;
 }
 
 .public-landing .public-kicker {
@@ -47,31 +61,30 @@
 }
 
 .public-landing .public-hero h1 {
-  max-width: 24ch;
-  margin: var(--space-5) 0 0;
+  max-width: 18ch;
+  margin: var(--space-4) 0 0;
   color: var(--fg);
-  font-size: clamp(36px, 5.2vw, 64px);
+  font-size: clamp(36px, 4.8vw, 60px);
   font-weight: 600;
-  line-height: 1.02;
-  letter-spacing: -0.04em;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
   text-wrap: balance;
 }
 
-.public-landing .public-hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
-  gap: clamp(var(--space-8), 6vw, 96px);
-  align-items: start;
-  margin-top: clamp(var(--space-8), 5vw, 64px);
-}
-
 .public-landing .public-hero-lead {
-  max-width: 44ch;
-  margin: 0;
+  max-width: 48ch;
+  margin: var(--space-5) 0 0;
   color: var(--landing-prose);
   font-size: var(--text-lg);
   line-height: 1.55;
   text-wrap: pretty;
+}
+
+.public-landing .public-hero-note {
+  max-width: 48ch;
+  margin: var(--space-4) 0 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
 }
 
 .public-landing .public-actions {
@@ -86,80 +99,118 @@
   padding-inline: 20px;
 }
 
-.public-landing .public-actions .btn:active:not(:disabled) {
+.public-app .btn:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-/* The verdict record: real field names from the API, described rather than
-   filled with invented results. */
-.public-landing .public-record {
+/* ── Illustrative example: one check, start to finish ───────────────── */
+.public-landing .public-example {
   margin: 0;
   border: 1px solid var(--landing-rule);
   border-radius: var(--radius-lg);
   background: var(--surface);
 }
 
-.public-landing .public-record-title {
-  margin: 0;
+.public-landing .public-example-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   border-bottom: 1px solid var(--landing-rule);
   padding: var(--space-4) var(--space-5);
+}
+
+.public-landing .public-example-title {
+  margin: 0;
   color: var(--fg);
   font-size: var(--text-sm);
   font-weight: 600;
 }
 
-.public-landing .public-record-fields {
+.public-landing .public-example-steps {
   margin: 0;
   padding: var(--space-2) var(--space-5);
-}
-
-.public-landing .public-record-fields > div {
-  display: grid;
-  grid-template-columns: minmax(0, 15ch) minmax(0, 1fr);
-  gap: var(--space-4);
-  padding: var(--space-3) 0;
-}
-
-.public-landing .public-record-fields > div + div {
-  border-top: 1px solid var(--border-soft);
-}
-
-.public-landing .public-record-fields dt {
-  min-width: 0;
-  color: var(--fg);
-}
-
-.public-landing .public-record-fields dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--landing-prose);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-
-.public-landing .public-record-vocab {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1-5);
-  margin: 0;
-  padding: 0;
   list-style: none;
 }
 
-.public-landing .public-record-vocab code {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-1-5);
+.public-landing .public-example-steps > li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+}
+
+.public-landing .public-example-steps > li + li {
+  border-top: 1px solid var(--border-soft);
+}
+
+.public-landing .public-example-index {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  transition:
+    border-color var(--motion-fast) var(--ease-out-soft),
+    background-color var(--motion-fast) var(--ease-out-soft),
+    color var(--motion-fast) var(--ease-out-soft);
+}
+
+.public-landing .public-example-steps > li.is-done .public-example-index {
+  border-color: var(--fg-2);
   color: var(--fg);
 }
 
-.public-landing .public-record-vocab code.is-accent {
-  border-color: color-mix(in oklab, var(--accent), transparent 40%);
-  color: var(--landing-accent-ink);
+.public-landing .public-example-steps > li.is-active .public-example-index {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-on);
 }
 
-.public-landing .public-record figcaption {
+.public-landing .public-example-steps p {
+  margin: 0;
+}
+
+.public-landing .public-example-action {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.public-landing .public-example-result {
+  margin-top: 2px !important;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.public-landing .public-example-detail {
+  margin-top: var(--space-1) !important;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.public-landing .public-example-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  border-top: 1px solid var(--landing-rule);
+  padding: var(--space-3) var(--space-5);
+}
+
+.public-landing .public-example-progress {
+  color: var(--landing-prose);
+  font-size: var(--text-xs);
+}
+
+.public-landing .public-example figcaption {
   border-top: 1px solid var(--landing-rule);
   padding: var(--space-3) var(--space-5);
   color: var(--landing-prose);
@@ -208,10 +259,10 @@
   letter-spacing: -0.01em;
 }
 
-/* ── Validation flow: sticky intro beside an ordered rail ───────────── */
+/* ── How a check works: sticky intro beside an ordered rail ─────────── */
 .public-landing .public-flow-layout {
   display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
   gap: clamp(var(--space-8), 6vw, 96px);
   align-items: start;
 }
@@ -279,57 +330,92 @@
   text-wrap: pretty;
 }
 
-.public-landing .public-flow-records {
+/* Technical record fields: available depth, never the first explanation. */
+.public-landing .public-technical {
+  margin-top: var(--space-8);
+  border-top: 1px solid var(--landing-rule);
+  padding-top: var(--space-4);
+}
+
+.public-landing .public-technical > summary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.public-landing .public-technical > summary::-webkit-details-marker {
+  display: none;
+}
+
+.public-landing .public-technical > summary::before {
+  content: "+";
+  display: inline-grid;
+  width: 18px;
+  place-items: center;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+
+.public-landing .public-technical[open] > summary::before {
+  content: "−";
+}
+
+.public-landing .public-technical > summary:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.public-landing .public-record-fields {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.public-landing .public-record-fields > div {
+  display: grid;
+  grid-template-columns: minmax(0, 13ch) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.public-landing .public-record-fields > div + div {
+  border-top: 1px solid var(--border-soft);
+}
+
+.public-landing .public-record-fields dt {
+  min-width: 0;
+  color: var(--fg);
+}
+
+.public-landing .public-record-fields dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--landing-prose);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.public-landing .public-record-vocab {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1-5) var(--space-2);
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.public-landing .public-flow-step .public-flow-records {
-  margin-top: var(--space-3);
-}
-
-.public-landing .public-flow-records > span {
-  color: var(--meta);
-  font-size: var(--text-xs);
-}
-
-:root[data-theme="light"] .public-landing .public-flow-records > span {
-  color: var(--fg-2);
-}
-
-.public-landing .public-flow-records code {
+.public-landing .public-record-vocab code {
+  display: inline-block;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--wash);
   padding: 1px var(--space-1-5);
   color: var(--fg);
-  font-size: var(--text-xs);
-}
-
-/* The high-scale step sits behind a gate: dashed frame, lock marker. */
-.public-landing .public-flow-step.is-gate > div {
-  border: 1px dashed color-mix(in oklab, var(--accent), transparent 35%);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-5) var(--space-5);
-}
-
-.public-landing .public-flow-step.is-gate .public-flow-marker {
-  border-color: var(--accent);
-  color: var(--landing-accent-ink);
-}
-
-.public-landing .public-flow-step.is-gate h3 {
-  padding-top: 0;
-}
-
-.public-landing .public-flow-step .public-flow-gate {
-  margin: 0 0 var(--space-2);
-  color: var(--landing-accent-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 500;
 }
 
 /* ── Boundaries ledger: a 2x2 rule grid, not a card grid ────────────── */
@@ -357,7 +443,7 @@
 .public-landing .public-ledger-label {
   display: block;
   margin-bottom: var(--space-3);
-  color: var(--landing-accent-ink);
+  color: var(--fg-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 500;
@@ -385,75 +471,7 @@
 .public-landing .public-note svg {
   flex: none;
   margin-top: 2px;
-  color: var(--landing-accent-ink);
-}
-
-/* ── High-scale lane: a small request feeding a large SOC-owned panel ─ */
-.public-landing .public-lane {
-  display: grid;
-  grid-template-columns: minmax(0, 0.7fr) auto minmax(0, 1.6fr);
-  gap: var(--space-5);
-  align-items: center;
-}
-
-.public-landing .public-lane-panel {
-  min-width: 0;
-  border: 1px solid var(--landing-rule);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-}
-
-.public-landing .public-lane-panel.is-soc {
-  border-color: color-mix(in oklab, var(--accent), transparent 45%);
-  background: color-mix(in oklab, var(--accent), transparent 95%);
-}
-
-.public-landing .public-lane-role {
-  margin: 0 0 var(--space-2);
-  color: var(--landing-accent-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
-
-.public-landing .public-lane-panel > p:last-child {
-  margin: var(--space-3) 0 0;
-  color: var(--landing-prose);
-  font-size: var(--text-sm);
-  line-height: 1.65;
-}
-
-.public-landing .public-lane-arrow {
-  color: var(--meta);
-}
-
-.public-landing .public-lane-stages {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: var(--space-4) 0 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: soc-stage;
-}
-
-.public-landing .public-lane-stages li {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: var(--space-1) var(--space-2);
-  color: var(--fg);
-  font-size: var(--text-xs);
-  counter-increment: soc-stage;
-}
-
-.public-landing .public-lane-stages li::before {
-  content: counter(soc-stage);
-  color: var(--landing-prose);
-  font-family: var(--font-mono);
+  color: var(--fg-2);
 }
 
 /* ── Comparison table ───────────────────────────────────────────────── */
@@ -581,12 +599,604 @@
   color: var(--fg);
 }
 
-/* Visible keyboard focus on every landing link, including inline ones. */
+/* Visible keyboard focus on every public link, including inline ones. */
 .public-landing a:focus-visible,
 .public-footer a:focus-visible,
-.public-landing .public-compare:focus-visible {
+.public-landing .public-compare:focus-visible,
+.public-auth-task a:focus-visible,
+.public-auth-split a:focus-visible,
+.public-unavailable a:focus-visible {
   outline: 2px solid var(--focus-color);
   outline-offset: 2px;
+}
+
+/* ── Access task layout: heading, one sentence, the form, then links ── */
+.public-auth-task {
+  display: grid;
+  width: 100%;
+  max-width: 480px;
+  align-content: start;
+  gap: var(--space-5);
+  margin: 0 auto;
+  padding: clamp(32px, 7vh, 72px) var(--space-6) var(--space-12);
+}
+
+.public-auth-task-head {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.public-auth-task-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.public-auth-task-lead {
+  max-width: 52ch;
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.public-auth-task-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.public-auth-task-links a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--fg);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+.public-auth-task-links a:hover {
+  text-decoration-color: currentColor;
+}
+
+.public-app .public-auth-card .card-content {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.public-app .auth-form label > .auth-field-help {
+  color: var(--fg-2);
+  font-weight: 400;
+}
+
+/* Field-level validation sits under the field it describes. */
+.public-app .public-field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.public-app .public-field-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.public-app .public-field-error-list {
+  display: grid;
+  gap: var(--space-1);
+  padding-left: var(--space-5);
+  list-style: disc;
+}
+
+.public-app .auth-form input[aria-invalid="true"],
+.public-app .auth-form textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.public-app .public-form-error {
+  border: 1px solid color-mix(in oklab, var(--danger), transparent 55%);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Script-focused regions (tabindex -1) move the reading position for screen
+   readers; they are not controls, so they get a quiet hairline, not a ring. */
+.public-app .public-form-error[tabindex="-1"]:focus-visible,
+.public-app .public-confirmation:focus-visible,
+.public-app .public-status-result:focus-visible,
+.public-app .public-notice[tabindex="-1"]:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 4px;
+}
+
+/* Notices: one bordered surface, semantic icon, text carries the meaning. */
+.public-app .public-notice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--space-3);
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: transparent;
+}
+
+.public-app .public-notice.is-warn {
+  border-color: color-mix(in oklab, var(--warn), transparent 50%);
+}
+
+.public-app .public-notice.is-danger {
+  border-color: color-mix(in oklab, var(--danger), transparent 50%);
+}
+
+.public-app .public-notice.is-success {
+  border-color: color-mix(in oklab, var(--success), transparent 55%);
+}
+
+.public-app .public-notice-icon {
+  margin-top: 2px;
+  color: var(--fg-2);
+}
+
+.public-app .public-notice.is-warn .public-notice-icon { color: var(--warn); }
+.public-app .public-notice.is-danger .public-notice-icon { color: var(--danger); }
+.public-app .public-notice.is-success .public-notice-icon { color: var(--success); }
+
+.public-app .public-notice-body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.public-app .public-notice-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.public-app .public-notice-text p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.public-app .public-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* Password requirements: compact, live, and readable without colour. */
+.public-app .public-requirements {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.public-app .public-requirements ul {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.public-app .public-requirements li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.public-app .public-requirements li svg {
+  flex: none;
+  color: var(--fg-2);
+  transition: color var(--motion-fast) var(--ease-out-soft);
+}
+
+.public-app .public-requirements li.is-met {
+  color: var(--fg);
+}
+
+.public-app .public-requirements li.is-met svg {
+  color: var(--success);
+}
+
+.public-app .public-requirements p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.public-app .public-text-button {
+  justify-self: center;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 0 var(--space-2);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.public-app .public-text-button:hover {
+  color: var(--fg);
+}
+
+.public-app .public-text-button:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Request access and status ──────────────────────────────────────── */
+@media (min-width: 901px) {
+  .public-app .public-auth-split {
+    align-items: start;
+  }
+
+  .public-app .public-auth-split .auth-aside {
+    position: sticky;
+    top: calc(var(--space-12) + var(--space-8));
+  }
+}
+
+.public-app .public-auth-split .auth-points li svg {
+  color: var(--fg-2);
+}
+
+.public-app .public-loading {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.public-app .public-confirmation,
+.public-app .public-status-result {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.public-app .public-status-result {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-5);
+}
+
+.public-app .public-status-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.public-app .public-status-head h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.public-app .public-reference {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.public-app .public-reference-label {
+  flex-basis: 100%;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.public-app .public-reference-value {
+  flex: 1 1 16ch;
+  min-width: 0;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.public-app .public-copy {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.public-app .public-copy-status {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.public-app .public-copy-status:empty {
+  display: none;
+}
+
+.public-app .public-help-line {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.public-app .public-help-line a {
+  color: var(--fg);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.public-app .public-facts {
+  display: grid;
+  margin: 0;
+}
+
+.public-app .public-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 11ch) minmax(0, 1fr);
+  gap: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-3) 0;
+}
+
+.public-app .public-facts dt {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.public-app .public-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.public-app .public-facts-note {
+  color: var(--fg-2);
+}
+
+.public-app .public-reviewer-note {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.public-app .public-reviewer-note p {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.public-app .public-reviewer-note .public-reviewer-note-label {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* Lifecycle: the recorded stage and what comes next, nothing estimated. */
+.public-app .public-lifecycle {
+  position: relative;
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.public-app .public-lifecycle > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+}
+
+.public-app .public-lifecycle > li:last-child {
+  padding-bottom: 0;
+}
+
+.public-app .public-lifecycle > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 26px;
+  bottom: 2px;
+  left: 11.5px;
+  width: 1px;
+  background: var(--border);
+}
+
+.public-app .public-lifecycle-marker {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--fg-2);
+}
+
+.public-app .public-lifecycle > li.is-complete .public-lifecycle-marker {
+  border-color: var(--fg-2);
+  color: var(--fg);
+}
+
+.public-app .public-lifecycle > li.is-current .public-lifecycle-marker {
+  border-color: var(--accent);
+  color: var(--landing-accent-ink, var(--accent));
+}
+
+.public-app .public-lifecycle > li.is-untracked .public-lifecycle-marker {
+  border-style: dashed;
+}
+
+.public-app .public-lifecycle-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.public-app .public-lifecycle-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.public-app .public-lifecycle > li.is-complete .public-lifecycle-label,
+.public-app .public-lifecycle > li.is-current .public-lifecycle-label {
+  color: var(--fg);
+}
+
+.public-app .public-lifecycle > li.is-complete .public-lifecycle-status,
+.public-app .public-lifecycle > li.is-upcoming .public-lifecycle-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.public-app .public-lifecycle-status {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.public-app .public-lifecycle-detail {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.public-app .public-next-steps {
+  display: grid;
+  gap: var(--space-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-5);
+}
+
+.public-app .public-next-steps h2 {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.public-app .public-auth-split .auth-footer {
+  text-align: left;
+}
+
+/* ── Unavailable routes ─────────────────────────────────────────────── */
+.public-unavailable {
+  display: grid;
+  max-width: 560px;
+  justify-items: start;
+  gap: var(--space-4);
+  margin: clamp(32px, 8vh, 96px) auto;
+}
+
+.public-unavailable-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--fg-2);
+}
+
+.public-unavailable h1 {
+  margin: 0;
+  color: var(--fg);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.public-unavailable-body,
+.public-unavailable-help {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.public-unavailable-help {
+  font-size: var(--text-sm);
+}
+
+.public-unavailable-requested {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.public-unavailable-requested code {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1-5);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.public-unavailable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
@@ -600,16 +1210,6 @@
     position: static;
   }
 
-  .public-landing .public-lane {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .public-landing .public-lane-arrow {
-    justify-self: start;
-    margin-left: var(--space-6);
-    transform: rotate(90deg);
-  }
-
   .public-landing .public-cta-final {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -617,6 +1217,26 @@
 
   .public-landing .public-cta-final .public-actions {
     justify-content: flex-start;
+  }
+}
+
+/* The request-access heading leads on narrow screens, ahead of the form. */
+@media (max-width: 900px) {
+  .public-app .public-auth-split .auth-aside {
+    order: 0;
+    gap: var(--space-3);
+  }
+
+  .public-app .public-auth-split .auth-panel {
+    order: 1;
+  }
+
+  .public-app .public-auth-split .auth-lead {
+    font-size: var(--text-base);
+  }
+
+  .public-app .public-auth-split .auth-title {
+    font-size: 28px;
   }
 }
 
@@ -629,6 +1249,16 @@
     padding-inline: var(--space-4);
   }
 
+  .public-auth-task {
+    padding-inline: var(--space-4);
+    padding-top: var(--space-6);
+    gap: var(--space-4);
+  }
+
+  .public-auth-task-title {
+    font-size: 26px;
+  }
+
   .public-landing .public-ledger {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -639,13 +1269,17 @@
     padding: var(--space-6) 0;
   }
 
-  .public-landing .public-record-fields > div {
+  .public-landing .public-record-fields > div,
+  .public-app .public-facts > div {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-1);
   }
 
-  .public-landing .public-lane-panel {
-    padding: var(--space-5);
+  .public-landing .public-example-steps,
+  .public-landing .public-example-head,
+  .public-landing .public-example-controls,
+  .public-landing .public-example figcaption {
+    padding-inline: var(--space-4);
   }
 }
 
@@ -668,17 +1302,27 @@
     left: 15px;
   }
 
-  .public-landing .public-flow-step.is-gate > div {
-    padding: var(--space-4);
+  .public-app .auth-form-actions.row-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (pointer: coarse) {
+  .public-landing .public-example-controls .btn,
+  .public-app .public-copy .btn,
+  .public-app .public-notice-actions .btn {
+    min-height: 44px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .public-landing .public-actions .btn:active:not(:disabled) {
+  .public-app .btn:active:not(:disabled) {
     transform: none;
   }
 
-  .public-footer a {
+  .public-footer a,
+  .public-landing .public-example-index,
+  .public-app .public-requirements li svg {
     transition: none;
   }
 }

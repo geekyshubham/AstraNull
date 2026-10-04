@@ -247,8 +247,80 @@ function apexDomain(job) {
   return (hostPort ? hostPort[1] : withoutPath) || null;
 }
 
+const BOUND_SCOPE_HOSTNAME_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function isBoundScopeHostname(value) {
+  const hostname = value.endsWith('.') ? value.slice(0, -1) : value;
+  if (
+    !hostname
+    || hostname.includes('://')
+    || hostname.includes('@')
+    || hostname.includes('/')
+    || hostname.includes(':')
+    || /\s/.test(hostname)
+  ) {
+    return false;
+  }
+  const labels = hostname.split('.');
+  return labels.every((label) => label.length > 0 && BOUND_SCOPE_HOSTNAME_LABEL.test(label));
+}
+
+function isBoundScopePathValue(value) {
+  return (
+    typeof value !== 'string'
+    || !value.startsWith('/')
+    || value.startsWith('//')
+    || value.includes('\\')
+    || value.includes('@')
+    || value.includes('?')
+    || value.includes('#')
+    || value.includes('://')
+    || /[\u0000-\u0020\u007f]/.test(value)
+    || value.length > 256
+  );
+}
+
+/**
+ * Exact approved origin scope of a signed bound probe job.
+ *
+ * The control plane signs `constraints.origin_scope` ({host, sni, port, path}) from the
+ * server-validated binding derivation at run start — never from request or target metadata.
+ * Only a shape-valid, self-consistent snapshot is consumed here; anything malformed means
+ * the job is handled with legacy unbound resolution.
+ *
+ * @param {Record<string, unknown> | null | undefined} job
+ * @returns {{ host: string, sni: string, port: number | null, path: string | null } | null}
+ */
+export function approvedSignedOriginScope(job) {
+  if (job?.probe_profile?.kind !== 'host_sni_bypass') return null;
+  const scope = job?.constraints?.origin_scope;
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return null;
+  const normalize = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : null);
+  const host = normalize(scope.host);
+  const sni = normalize(scope.sni);
+  if (!host || !sni || host !== sni || !isBoundScopeHostname(host)) return null;
+  let port = null;
+  if (scope.port != null) {
+    if (typeof scope.port !== 'number') return null;
+    port = scope.port;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  }
+  if (scope.path != null && isBoundScopePathValue(scope.path)) return null;
+  const path = scope.path == null ? null : scope.path;
+  return { host, sni, port, path };
+}
+
+function boundScopeRequestUrl(url, scope) {
+  const rebuilt = new URL(url.toString());
+  rebuilt.search = '';
+  rebuilt.pathname = scope.path || '/';
+  rebuilt.port = scope.port != null ? String(scope.port) : '';
+  return rebuilt.toString();
+}
+
 function resolveHostSniTargets(job) {
   const targetValue = String(job.target?.value ?? '').trim();
+  const approvedScope = approvedSignedOriginScope(job);
   let hostname = job.probe_profile?.protected_host ?? apexDomain(job);
   let hostHeader = hostname;
   let directIp = job.probe_profile?.direct_ip ?? job.target?.metadata?.direct_origin_ip ?? null;
@@ -267,7 +339,7 @@ function resolveHostSniTargets(job) {
       requestPath = `${url.pathname || '/'}${url.search || ''}`;
       if (!directIp && /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname)) {
         directIp = url.hostname;
-        requestUrl = targetValue;
+        requestUrl = approvedScope ? boundScopeRequestUrl(url, approvedScope) : targetValue;
       }
     } catch {
       // ignore malformed URL targets
@@ -276,7 +348,16 @@ function resolveHostSniTargets(job) {
   if (!directIp && job.target?.kind === 'ip') {
     directIp = targetValue;
   }
-
+  if (approvedScope) {
+    // Bound run: the signed approved scope is the exact protected Host/SNI and port/path.
+    // An untrusted probe profile or target URL cannot retarget the logical application
+    // layer; the socket destination itself remains the independently verified,
+    // target-bound origin address resolved below.
+    hostname = approvedScope.host;
+    hostHeader = approvedScope.host;
+    requestPort = approvedScope.port;
+    requestPath = approvedScope.path ?? '/';
+  }
   return { hostname, hostHeader, directIp, requestUrl, requestPort, requestPath };
 }
 

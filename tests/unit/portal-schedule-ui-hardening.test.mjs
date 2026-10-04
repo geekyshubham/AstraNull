@@ -8,6 +8,7 @@ const picker = read('apps/web/react/src/components/policies/target-group-picker.
 const select = read('apps/web/react/src/components/ui/select.tsx');
 const styles = read('apps/web/react/src/styles.css');
 const policies = read('apps/web/react/src/pages/page-components.tsx');
+const scheduleForm = read('apps/web/react/src/pages/refined/policies-refined.tsx');
 const targetGroup = read('apps/web/react/src/pages/target-group-detail-view.tsx');
 const details = read('apps/web/react/src/pages/detail-pages.tsx');
 const surfaces = read('apps/web/react/src/pages/functional-surfaces.tsx');
@@ -18,10 +19,12 @@ describe('portal schedule UI hardening', () => {
     assert.match(picker, /if \(\/\^https\?:\\\/\\\/\/i\.test\(value\)\) return 'url'/);
     assert.match(picker, /supportedTargets\.length === 0 \|\| supportedTargets\.includes\(effectivePolicyTargetKind\(target\)\)/);
 
-    assert.match(policies, /compatibleTargets = selectedPolicyCheck[\s\S]*targets\.filter\(\(target\) => isPolicyTargetCompatible\(selectedPolicyCheck, target\)\)/);
+    assert.match(scheduleForm, /const compatibleTargets = check \? targets\.filter\(\(target\) => isPolicyTargetCompatible\(check, target\)\) : \[\];/);
+    assert.match(scheduleForm, /\.\.\.compatibleTargets\.map\(\(target\) =>/);
     assert.match(policies, /handlePolicyCheckChange[\s\S]*selectedTargetId: nextCheck && selectedTarget && isPolicyTargetCompatible\(nextCheck, selectedTarget\)[\s\S]*: ''/);
-    assert.match(policies, /No compatible targets/);
-    assert.match(policies, /has no exact target compatible with/);
+    assert.match(policies, /const policyBindingsReady[\s\S]*isPolicyTargetCompatible\(selectedPolicyCheck, target\)/);
+    assert.match(scheduleForm, /No compatible targets/);
+    assert.match(scheduleForm, /has no exact target compatible with/);
 
     assert.match(targetGroup, /compatiblePolicyTargets = selectedPolicyCheck[\s\S]*isPolicyTargetCompatible\(selectedPolicyCheck, target\)/);
     assert.match(targetGroup, /setSelectedPolicyTargetId\(\(current\)[\s\S]*isPolicyTargetCompatible\(item, selectedTarget\) \? current : ''/);

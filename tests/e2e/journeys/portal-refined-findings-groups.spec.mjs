@@ -116,8 +116,8 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
 
       const link = alertLink(page, /Origin direct bypass/i);
       await expect(link).toBeVisible();
-      // The default Open filter counts only assets with an open member.
-      await expect(link).toHaveAttribute('aria-label', /1 affected asset$/);
+      // The default Open filter counts only targets with an open member.
+      await expect(link).toHaveAttribute('aria-label', /1 affected target$/);
 
       // Keyboard: Enter on the focused alert link opens the group detail.
       await link.focus();
@@ -125,38 +125,46 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
       await expect(page).toHaveURL(/#finding-group-detail\?key=/);
       await waitForPortalRouteSettled(page);
 
-      const summary = page.getByRole('region', { name: 'Alert summary' });
-      await expect(summary).toContainText('Affected assets');
+      const summary = page.getByRole('region', { name: 'Finding group summary' });
+      await expect(summary).toContainText('Affected targets');
       await expect(summary).toContainText('4 findings');
 
-      const filters = page.getByRole('group', { name: 'Affected asset status filter' });
+      const filters = page.getByRole('group', { name: 'Affected target status filter' });
       const filterButton = (label) => filters.getByRole('button', { name: new RegExp(`^${label}`) });
       await expect(filterButton('All').locator('.rf-tab-count')).toHaveText('2');
       await expect(filterButton('Open').locator('.rf-tab-count')).toHaveText('1');
       await expect(filterButton('Accepted').locator('.rf-tab-count')).toHaveText('1');
       await expect(filterButton('Closed').locator('.rf-tab-count')).toHaveText('2');
 
-      // All filter: one explicit link per historical finding on the first target.
+      // All filter: one explicit evidence action per historical finding (each member's own proof).
+      const member = (findingId) => page.locator(`[data-focus-key="member-${findingId}"]`);
       for (const findingId of ['fnd_hist_open', 'fnd_hist_accepted', 'fnd_hist_closed', 'fnd_hist_closed_2']) {
-        await expect(page.getByRole('link', { name: new RegExp(`finding ${findingId} for`) })).toHaveCount(1);
+        await expect(member(findingId)).toHaveCount(1);
       }
       await expect(page.getByText(/3 findings:/)).toBeVisible();
 
-      // Lifecycle filter narrows links to that lifecycle only.
+      // Lifecycle filter narrows the actions to that lifecycle only.
       await filterButton('Accepted').click();
       await expect(filterButton('Accepted')).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.getByRole('link', { name: /finding fnd_hist_accepted for/ })).toHaveCount(1);
-      await expect(page.getByRole('link', { name: /finding fnd_hist_open for/ })).toHaveCount(0);
-      await expect(page.getByRole('link', { name: /finding fnd_hist_closed_2 for/ })).toHaveCount(0);
+      await expect(member('fnd_hist_accepted')).toHaveCount(1);
+      await expect(member('fnd_hist_open')).toHaveCount(0);
+      await expect(member('fnd_hist_closed_2')).toHaveCount(0);
 
       await filterButton('Closed').click();
-      await expect(page.getByRole('link', { name: /finding fnd_hist_closed for/ })).toHaveCount(1);
-      await expect(page.getByRole('link', { name: /finding fnd_hist_closed_2 for/ })).toHaveCount(1);
-      await expect(page.getByRole('link', { name: /finding fnd_hist_accepted for/ })).toHaveCount(0);
+      await expect(member('fnd_hist_closed')).toHaveCount(1);
+      await expect(member('fnd_hist_closed_2')).toHaveCount(1);
+      await expect(member('fnd_hist_accepted')).toHaveCount(0);
 
-      // Warm navigation into a non-representative historical member.
-      await page.getByRole('link', { name: /finding fnd_hist_closed for/ }).click();
-      await expect(page).toHaveURL(/#finding-detail\?id=fnd_hist_closed(&|$)/);
+      // A non-representative member opens its own evidence in place, never the lead finding's.
+      await member('fnd_hist_closed').click();
+      await expect(page).toHaveURL(/inspect=group_member&ev_finding=fnd_hist_closed(&|$)/);
+      await expect(page.locator('.inspector-panel')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.inspector-panel')).toHaveCount(0);
+
+      // The full finding stays one explicit link away.
+      await page.getByRole('link', { name: /Open full finding for/ }).first().click();
+      await expect(page).toHaveURL(/#finding-detail\?id=fnd_hist_/);
       await waitForPortalRouteSettled(page);
       const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
       await expect(ruleAssets).toBeVisible();
@@ -177,7 +185,8 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
     await expect(alertLink(page, /Rate limit drift/i)).toHaveCount(0);
     await expect(alertLink(page, /Origin direct bypass/i)).toHaveCount(1);
 
-    await pick('Accepted').click();
+    // Status chips are exact single server statuses; these rows are accepted_risk.
+    await pick('Accepted risk').click();
     await expect(alertLink(page, /Rate limit drift/i)).toHaveCount(1);
     await expect(alertLink(page, /Cache bypass header/i)).toHaveCount(0);
 
@@ -204,7 +213,7 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
 
     await alertLink(page, /Cache bypass header/i).click();
     await waitForPortalRouteSettled(page);
-    const summary = page.getByRole('region', { name: 'Alert summary' });
+    const summary = page.getByRole('region', { name: 'Finding group summary' });
     await expect(summary).toContainText('SLA unknown');
     await expect(summary).toContainText('1 open finding not dated');
     await expect(summary).not.toContainText('Within SLA');
@@ -218,17 +227,19 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
     await expect(summary).not.toContainText('Within SLA');
   });
 
-  test('Classic accepted-risk-only rule reads Risk accepted, not Closed (F08)', async ({ page }) => {
+  test('accepted-risk-only group reads accepted risk, never closed, even from a legacy classic link (F08)', async ({ page }) => {
+    // The customer UI ships one presentation; the legacy ?variant=classic address still resolves.
     await prepare(page, { variant: 'classic' });
     await gotoHash(page, 'findings?variant=classic');
+    await expect(page.getByRole('button', { name: /Classic|Refined/ })).toHaveCount(0);
     const statusFilters = page.getByRole('group', { name: 'Finding status filters' });
-    await statusFilters.getByRole('button', { name: /^Accepted/ }).click();
+    await statusFilters.getByRole('button', { name: /^Accepted risk/ }).click();
 
     const row = rowWith(page, /Rate limit drift/i);
     await expect(row).toBeVisible();
-    await expect(row).toContainText('Risk accepted');
-    await expect(row).toContainText('No active SLA');
-    await expect(row).not.toContainText(/Closed/);
+    await expect(row).toContainText(/accepted risk/i);
+    await expect(row).toContainText('No SLA clock');
+    await expect(row).not.toContainText(/closed/i);
   });
 
   test('finding-detail cold deep link shows target group names (F12)', async ({ page }) => {

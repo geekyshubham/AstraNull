@@ -97,6 +97,10 @@ function canAdvanceOnRead(ctx) {
   return roleHasPermission(ctx?.role, 'test_run:start');
 }
 
+function advanceEnabled(options) {
+  return options?.advance !== false && options?.advance !== 'false';
+}
+
 function systemCtx(tenantId) {
   return { tenantId, userId: 'system', role: 'system' };
 }
@@ -409,6 +413,9 @@ function pendingRunStepId(scan, run) {
 }
 
 export function advanceScan(ctx, id, options = {}) {
+  if (!advanceEnabled(options)) {
+    return { scan_id: id, acquired: false, reason: 'advance_disabled', dispatched: false };
+  }
   const store = ensureStoreShape();
   const scan = store.validationScans.find((row) => row.id === id && (!ctx?.tenantId || row.tenant_id === ctx.tenantId));
   if (!scan) return null;
@@ -666,6 +673,7 @@ export function listDueValidationScans(ctx, options = {}) {
 }
 
 export function dispatchDueValidationScans(ctx, options = {}) {
+  if (!advanceEnabled(options)) return [];
   const now = toDate(options.now);
   const actor = ctx?.userId ? ctx : systemCtx(ctx.tenantId);
   const results = [];
@@ -683,7 +691,7 @@ export function dispatchDueValidationScans(ctx, options = {}) {
 }
 
 function readPathAdvance(ctx, scan, options = {}) {
-  if (!canAdvanceOnRead(ctx)) return;
+  if (!advanceEnabled(options) || !canAdvanceOnRead(ctx)) return;
   const now = toDate(options.now);
   if (scan.status === 'scheduled' && scan.scheduled_for && new Date(scan.scheduled_for) <= now) {
     dispatchScheduledScan(systemCtx(scan.tenant_id), scan, { ...options, now });

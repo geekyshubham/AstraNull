@@ -1,0 +1,142 @@
+[
+  {
+    "id": "dashboard",
+    "title": "Dashboard",
+    "source": "pages/dashboard-page.tsx; pages/dashboard-page.css; lib/dashboard-metrics.ts; components/charts/"
+  },
+  {
+    "id": "targets",
+    "title": "Targets",
+    "source": "pages/targets-page.tsx; lib/target-csv-import.ts"
+  },
+  {
+    "id": "target-groups",
+    "title": "Target groups",
+    "source": "pages/page-components.tsx: TargetGroupsPage"
+  },
+  {
+    "id": "target-group-detail",
+    "title": "Target group detail",
+    "source": "pages/target-group-detail-view.tsx; pages/detail-pages.tsx"
+  },
+  {
+    "id": "target-detail",
+    "title": "Target detail",
+    "source": "pages/target-detail-view.tsx; components/targets/domain-protection.tsx; lib/domain-checks.mjs"
+  },
+  {
+    "id": "checks",
+    "title": "Vector library / check library",
+    "source": "pages/vector-library-page.tsx; pages/vector-library-page.css; lib/vector-library.mjs"
+  },
+  {
+    "id": "check-detail",
+    "title": "Check detail",
+    "source": "pages/detail-pages.tsx: CheckDetailPage"
+  },
+  {
+    "id": "test-policies",
+    "title": "Test policies / validation schedules",
+    "source": "pages/page-components.tsx: PolicyPage; pages/refined/policies-refined.tsx"
+  },
+  {
+    "id": "policy-detail",
+    "title": "Validation schedule detail",
+    "source": "pages/detail-pages.tsx: PolicyDetailPage"
+  },
+  {
+    "id": "findings",
+    "title": "Findings queue",
+    "source": "pages/functional-surfaces.tsx; pages/refined/findings-refined.tsx; lib/finding-groups.mjs"
+  },
+  {
+    "id": "finding-detail",
+    "title": "Finding detail and remediation",
+    "source": "pages/finding-detail-view.tsx; pages/detail-pages.tsx; lib/finding-detail.ts"
+  },
+  {
+    "id": "finding-group-detail",
+    "title": "Grouped finding detail",
+    "source": "pages/refined/finding-group-detail.tsx; lib/finding-groups.mjs"
+  },
+  {
+    "id": "evidence-detail",
+    "title": "Evidence artifact detail",
+    "source": "pages/detail-pages.tsx: EvidenceDetailPage; lib/custody.ts"
+  },
+  {
+    "id": "reports",
+    "title": "Reports",
+    "source": "pages/page-components.tsx: ReportsPage"
+  },
+  {
+    "id": "report-detail",
+    "title": "Report detail",
+    "source": "pages/detail-pages.tsx: ReportDetailPage"
+  },
+  {
+    "id": "integrations",
+    "title": "Integrations",
+    "source": "pages/integrations-page.tsx; components/integrations/notification-channels.tsx; lib/provider-setup-guides.ts"
+  },
+  {
+    "id": "notifications",
+    "title": "Notifications",
+    "source": "pages/governance-pages.tsx: NotificationsPage"
+  },
+  {
+    "id": "audit",
+    "title": "Audit log",
+    "source": "pages/governance-pages.tsx: AuditPage"
+  },
+  {
+    "id": "settings",
+    "title": "Settings",
+    "source": "pages/page-components.tsx: SettingsPage; lib/crud-ui.tsx"
+  },
+  {
+    "id": "support",
+    "title": "Support",
+    "source": "pages/page-components.tsx: SupportPage"
+  },
+  {
+    "id": "subscription",
+    "title": "Plan & usage / Billing",
+    "source": "pages/page-components.tsx: SubscriptionPage"
+  },
+  {
+    "id": "release-evidence",
+    "title": "Release evidence (auditor)",
+    "source": "pages/governance-pages.tsx: ReleaseEvidencePage"
+  },
+  {
+    "id": "landing",
+    "title": "Public landing",
+    "source": "pages/public-pages.tsx: PublicLandingPage; pages/public-landing.css"
+  },
+  {
+    "id": "login",
+    "title": "Customer sign-in",
+    "source": "pages/public-pages.tsx: LoginPage; lib/portal-auth-policy.mjs"
+  },
+  {
+    "id": "signup",
+    "title": "Request access",
+    "source": "pages/public-pages.tsx: SignupPage"
+  },
+  {
+    "id": "signup-status",
+    "title": "Access request status",
+    "source": "pages/public-pages.tsx: SignupStatusPage"
+  },
+  {
+    "id": "set-password",
+    "title": "Invitation password setup",
+    "source": "pages/public-pages.tsx: SetPasswordPage"
+  },
+  {
+    "id": "not-found",
+    "title": "Missing or unavailable route",
+    "source": "pages/router.tsx; lib/navigation.ts; lib/route-access.ts"
+  }
+]

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { Check, FileCheck2, ShieldCheck, Target, TriangleAlert, UserCog, Wrench } from 'lucide-react';
+import type { HTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
+import { ArrowLeft, Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
+import { readFindingLineage } from '../lib/finding-lineage.mjs';
+import { useProgressiveFindings } from '../components/findings/use-server-findings';
 import { VerifyChip } from '../lib/verify-chip';
 import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
@@ -33,8 +35,9 @@ import {
 } from '../lib/findings-helpers';
 import { buildTargetGroupNameMap, resolveTargetGroupLabel } from '../lib/finding-group-labels.mjs';
 import '../components/findings/findings-groups.css';
-import { MetricCard } from './page-components';
-import { useConfirmModal } from '../lib/crud-ui';
+import { ConfirmModal, useConfirmModal } from '../lib/crud-ui';
+import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
+import { getRouteParam, replaceRouteParams } from '../lib/route-params';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -53,6 +56,13 @@ const findingDetailStyles = `
 .finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }
 .finding-detail-page .finding-digest { display: inline-block; min-width: 0; max-width: 42ch; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
 .finding-detail-page .finding-artifact-row { cursor: pointer; }
+.finding-detail-page .finding-summary-fact dd small { display: block; margin-top: 2px; color: var(--fg-2); }
+.finding-detail-page .finding-lineage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }
+.finding-detail-page .finding-lineage-item { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.finding-detail-page .finding-lineage-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.finding-detail-page .rule-assets-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }
+.finding-detail-page .finding-lineage-runs { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.finding-detail-page .finding-lineage-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .finding-detail-page .finding-custody-card .code { max-width: 100%; white-space: pre; }
 @media (max-width: 720px) {
   .finding-detail-page .finding-summary-facts,
@@ -149,28 +159,18 @@ function remStateTone(remStateClass: string, remState: string): StatTone {
 }
 
 /**
- * Whole-row click-through props to an artifact's evidence-detail route.
- * Matches the shared `role="link"` row convention (hash + `?id=` per lib/route-params);
- * ignores clicks that originate on nested interactive elements (e.g. the Export button).
+ * Pointer convenience for artifact rows: a click on the row opens the same inspector as its View
+ * button. The row is not a control itself (no role or tab stop), so the View button stays the only
+ * keyboard and screen-reader target and nothing interactive is nested inside another control.
  */
-function evidenceRowNavProps(artifactId: string): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+function evidenceRowNavProps(artifactId: string, inspect: (artifactId: string) => void): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
   if (!artifactId) return {};
-  const navigate = () => {
-    window.location.hash = `evidence-detail?id=${encodeURIComponent(artifactId)}`;
-  };
   return {
-    role: 'link',
-    tabIndex: 0,
     className: 'finding-artifact-row',
-    'aria-label': `Open evidence detail for artifact ${artifactId}`,
     onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
-      if ((event.target as HTMLElement).closest('a, button')) return;
-      navigate();
-    },
-    onKeyDown: (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      navigate();
+      if ((event.target as HTMLElement).closest('a, button, input, select, textarea, summary')) return;
+      if (window.getSelection()?.toString()) return;
+      inspect(artifactId);
     }
   };
 }
@@ -220,6 +220,9 @@ export function FindingDetailView({
   const [affectedTargetsError, setAffectedTargetsError] = useState('');
   const [affectedTargetsReloadToken, setAffectedTargetsReloadToken] = useState(0);
   const [chainVerified, setChainVerified] = useState<boolean | null>(null);
+  const [retestReview, setRetestReview] = useState(() => getRouteParam('retest') === 'review');
+  const openInspector = useOpenInspector();
+  const inspected = useInspectorRef();
 
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
   const canWriteFinding = sessionHasPermission(session, 'finding:write');
@@ -241,11 +244,47 @@ export function FindingDetailView({
   const testRunId = getString(entity, ['test_run_id'], '');
   const checkId = getString(entity, ['check_id'], '');
   const vectorFamily = getString(entity, ['vector_family', 'vector'], '');
+  const lineage = readFindingLineage(entity);
+  const originalRunId = lineage.originating?.testRunId || (testRunId === 'Not reported' ? '' : testRunId);
+  const originalVerdictId = getString(entity, ['verdict_id'], '');
+  const laterVerdictId = getString(entity, ['last_verdict_id'], '');
+  const hasLaterVerdict = Boolean(laterVerdictId) && laterVerdictId !== originalVerdictId;
+  const retestAction = resolveFindingRetestAction(entity);
+  const retestCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? null;
+  const retestBound = Number((retestCheck?.probe_profile as DataItem | undefined)?.max_requests);
+  const retestTarget = [...data.targets, ...affectedTargets].find((target) => getString(target, ['id'], '') === targetId) ?? null;
+
+  function inspectOriginal() {
+    openInspector({ entry: 'finding', finding_id: entityId, target_id: targetId && targetId !== 'Not reported' ? targetId : undefined, check_id: checkId && checkId !== 'Not reported' ? checkId : undefined }, 'finding-view-evidence');
+  }
+
+  function inspectRun(runId: string) {
+    openInspector({ entry: 'check_result', target_id: targetId || undefined, check_id: checkId || undefined, test_run_id: runId }, `lineage-${runId}`);
+  }
+
+  function inspectArtifact(artifactId: string) {
+    openInspector({ entry: 'artifact', evidence_id: artifactId, finding_id: entityId }, `artifact-${artifactId}`);
+  }
+
+  function inspectSibling(siblingId: string, siblingTarget: string) {
+    openInspector({ entry: 'finding', finding_id: siblingId, target_id: siblingTarget || undefined }, `sibling-${siblingId}`);
+  }
+
+  function closeRetestReview() {
+    setRetestReview(false);
+    replaceRouteParams({ retest: null });
+  }
+
   const decisionSteps = buildFindingDecisionSteps(findingStatus, owner, remediation.remState, hasRemediationPlaybook);
   // Every loaded finding that shares this finding's rule (same recorded outcome), this one included.
+  // Rule siblings come from the server's exact check predicate across every status, read in pages.
+  // A finding without a check id can only be compared with the loaded page, and says so.
+  const ruleSource = useProgressiveFindings(config, session, { check_id: checkId }, 0, Boolean(checkId));
+  const ruleRows = checkId ? ruleSource.items : (data.findings ?? []);
+  const ruleComplete = checkId ? ruleSource.complete : data.findingsMeta ? !data.findingsMeta.hasMore : false;
   const ruleSiblings = useMemo(
-    () => findingRuleSiblings(entity, data.findings ?? [], data.targets ?? []),
-    [entity, data.findings, data.targets]
+    () => findingRuleSiblings(entity, ruleRows, data.targets ?? []),
+    [entity, ruleRows, data.targets]
   );
   const ruleTitle = findingRuleTitle(entity, data.checks);
   const ruleAssetsRef = useRef<HTMLElement | null>(null);
@@ -485,13 +524,20 @@ export function FindingDetailView({
       key: 'evidence',
       label: 'Evidence',
       render: (item) => {
-        const evidenceIds = Array.isArray(item.evidence_ids) ? item.evidence_ids.map(String).filter(Boolean) : [];
-        const evidenceId = evidenceIds[0] ?? getString(item, ['evidence_id'], '');
-        if (!evidenceId) return <span className="rule-asset-evidence-missing">No evidence ID recorded</span>;
+        const siblingId = getString(item, ['id'], '');
+        const evidenceCount = Array.isArray(item.evidence_ids) ? item.evidence_ids.filter(Boolean).length : 0;
+        if (!siblingId) return <span className="rule-asset-evidence-missing">No finding ID recorded</span>;
         return (
-          <a className="rule-asset-evidence" href={buildDetailHref('evidence-detail', evidenceId)} aria-label={`Open evidence ${evidenceId} for ${findingAssetLabel(item, data.targets)}`}>
-            {evidenceId}{evidenceIds.length > 1 ? ` +${evidenceIds.length - 1}` : ''}
-          </a>
+          <Button
+            size="sm"
+            variant="ghost"
+            data-focus-key={`sibling-${siblingId}`}
+            aria-label={`View the original evidence for the finding on ${findingAssetLabel(item, data.targets)}`}
+            onClick={() => inspectSibling(siblingId, getString(item, ['target_id'], ''))}
+          >
+            <Eye size={14} aria-hidden="true" />
+            {evidenceCount ? `View ${evidenceCount} record${evidenceCount === 1 ? '' : 's'}` : 'View evidence'}
+          </Button>
         );
       }
     }
@@ -504,9 +550,14 @@ export function FindingDetailView({
       render: (item) => {
         const artifactId = getString(item, ['id'], '');
         const label = plainCodeLabel(getString(item, ['kind'], ''), 'Evidence artifact');
-        return artifactId
-          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('evidence-detail', artifactId)} title={artifactId}>{label}</AnchorButton>
-          : <span>{label}</span>;
+        const cited = Array.isArray(entity.evidence_ids) && entity.evidence_ids.map(String).includes(artifactId);
+        return (
+          <span className="entity-cell-stack">
+            <span>{label}</span>
+            {artifactId ? null : <small>No artifact ID recorded</small>}
+            <small>{cited ? 'Cited by this finding' : 'Recorded for the originating run'}</small>
+          </span>
+        );
       }
     },
     { key: 'kind', label: 'Kind', render: (item) => plainCodeLabel(getString(item, ['kind'], ''), 'Not reported') },
@@ -515,16 +566,23 @@ export function FindingDetailView({
       label: 'Run',
       render: (item) => {
         const runId = getString(item, ['run_id'], '');
-        return runId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', runId)}>{runId}</AnchorButton> : <span className="rule-asset-meta">Not reported</span>;
+        return runId ? <span className="mono">{runId}</span> : <span className="rule-asset-meta">Not reported</span>;
       }
     },
-    { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], 'Not reported')}>{getString(item, ['sha256', 'content_sha256'], 'Not reported')}</span> },
+    { key: 'sha', label: 'Recorded digest', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], 'Not reported')}>{getString(item, ['sha256', 'content_sha256'], 'Not reported')}</span> },
     { key: 'sealed', label: 'Sealed', render: (item) => formatDate(item.sealed_at) },
     { key: 'size', label: 'Size', render: (item) => <span className="num">{formatBytes(item.size_bytes)}</span> },
     {
-      key: 'export',
-      label: '',
-      render: (item) => <Button size="sm" variant="ghost" aria-label={`Export finding evidence bundle from artifact ${getString(item, ['id', 'kind'], 'artifact')}`} onClick={() => void exportBundle()}>Export bundle</Button>
+      key: 'inspect',
+      label: 'Inspect',
+      render: (item) => {
+        const artifactId = getString(item, ['id'], '');
+        return artifactId ? (
+          <Button size="sm" variant="ghost" data-focus-key={`artifact-${artifactId}`} onClick={(event) => { event.stopPropagation(); inspectArtifact(artifactId); }} aria-label={`View artifact ${artifactId} in the evidence inspector`}>
+            <Eye size={14} aria-hidden="true" />View
+          </Button>
+        ) : null;
+      }
     }
   ];
 
@@ -559,8 +617,8 @@ export function FindingDetailView({
           </div>
         </div>
         <div className="row-actions">
-          <AnchorButton size="sm" variant="secondary" href="#findings">← Findings</AnchorButton>
-          <Button size="sm" variant="default" loading={busy === `export-${entityId}`} onClick={() => void exportBundle()}>Export evidence</Button>
+          <AnchorButton size="sm" variant="ghost" href="#findings"><ArrowLeft size={14} aria-hidden="true" />Findings</AnchorButton>
+          <Button size="sm" variant="default" data-focus-key="finding-view-evidence" onClick={inspectOriginal}><Eye size={14} aria-hidden="true" />View original evidence</Button>
         </div>
       </div>
 
@@ -569,13 +627,6 @@ export function FindingDetailView({
 
       {!loading ? (
         <>
-      <div className="metric-grid four">
-        <MetricCard label="Severity" value={formatSeverityLabel(severity)} sub="Recorded impact class" icon={TriangleAlert} tone={findingSeverityTone(severity)} />
-        <MetricCard label="Status" value={formatFindingLabel(findingStatus)} sub="Recorded finding state" icon={ShieldCheck} tone={findingStatusTone(findingStatus)} />
-        <MetricCard label="Target group" value={targetGroupId || 'Not reported'} sub="Declared scope" icon={Target} tone="info" />
-        <MetricCard label="Owner" value={owner} sub="Accountable owner" icon={UserCog} tone="muted" />
-      </div>
-
       <Card className="finding-summary-card">
         <CardHeader>
           <div><CardTitle>Finding summary</CardTitle><CardDescription>Key facts and exact relationships for triage and evidence review.</CardDescription></div>
@@ -594,8 +645,58 @@ export function FindingDetailView({
           <div className="finding-relations" aria-label="Finding relationships">
             {targetGroupId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', targetGroupId)}>Target group</AnchorButton> : null}
             {targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', targetId)}>Target</AnchorButton> : null}
-            {testRunId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('run-detail', testRunId)}>Source run</AnchorButton> : null}
           </div>
+          <section className="finding-lineage" aria-label="Original evidence and later results">
+            <div className="finding-lineage-item">
+              <span className="finding-lineage-label">Original evidence</span>
+              <span>{originalRunId ? <>Recorded execution <span className="mono">{originalRunId}</span></> : 'Originating execution not recorded'}{originalVerdictId ? <> · verdict <span className="mono">{originalVerdictId}</span></> : null}</span>
+              <span className="muted small">The observation that opened this finding. It is kept even after later results.</span>
+            </div>
+            <div className="finding-lineage-item">
+              <span className="finding-lineage-label">Retests of this finding</span>
+              {lineage.retests.length ? (
+                <ul className="finding-lineage-runs">
+                  {lineage.retests.map((run) => (
+                    <li key={run.testRunId}>
+                      <Button size="sm" variant="ghost" className="mono" data-focus-key={`lineage-${run.testRunId}`} aria-label={`View result of retest run ${run.testRunId}`} onClick={() => inspectRun(run.testRunId)}>{run.testRunId}</Button>
+                      {run.createdAt ? <span className="muted small"> requested {formatDate(run.createdAt)}</span> : null}
+                      {lineage.latest?.testRunId === run.testRunId ? (
+                        <>
+                          <Badge tone="muted">Most recent retest</Badge>
+                          <span className="muted small">
+                            {lineage.latest.pending || lineage.latest.finalized === false
+                              ? `Not finished${lineage.latest.status ? ` (${lineage.latest.status.replace(/_/g, ' ')})` : ''}; no later result yet`
+                              : lineage.latest.finalized ? `Finished${lineage.latest.completedAt ? ` ${formatDate(lineage.latest.completedAt)}` : ''}` : ''}
+                          </span>
+                        </>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : <span className="muted">No run has been recorded as a retest of this finding.</span>}
+              <span className="muted small">Only runs started from Review retest are retests. A retest result does not close this finding or any other.</span>
+            </div>
+            <div className="finding-lineage-item">
+              <span className="finding-lineage-label">Later runs, same target and check</span>
+              {lineage.laterSamePair.length ? (
+                <ul className="finding-lineage-runs">
+                  {lineage.laterSamePair.map((run) => (
+                    <li key={run.testRunId}>
+                      <Button size="sm" variant="ghost" className="mono" data-focus-key={`lineage-${run.testRunId}`} aria-label={`View result of run ${run.testRunId}`} onClick={() => inspectRun(run.testRunId)}>{run.testRunId}</Button>
+                      <span className="muted small">{run.finalized === false ? ' not finished' : run.finalized ? ' finished' : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <span className="muted">No other run of this target and check is recorded.</span>}
+              <span className="muted small">Routine runs without retest intent. They are listed for context and do not change this finding.</span>
+              {hasLaterVerdict ? <span className="small">Latest verdict recorded on this finding: <span className="mono">{laterVerdictId}</span></span> : null}
+            </div>
+            <div className="finding-lineage-item">
+              <span className="finding-lineage-label">Closure</span>
+              {lineage.closedAt ? <span>Closed {formatDate(lineage.closedAt)}</span> : <span className="muted">Not closed.</span>}
+              <span className="muted small">Closure is a recorded status change, not proof of a fix. Findings on other targets are never closed with this one.</span>
+            </div>
+          </section>
         </CardContent>
       </Card>
 
@@ -664,8 +765,32 @@ export function FindingDetailView({
                     await patchFinding({ status: 'closed' }, 'Finding closed.', 'close');
                   }}
                 >Close finding</Button>
-                <Button size="sm" variant="secondary" loading={busy === `retest-${entityId}`} disabled={busy !== '' || !canStartFindingRetest} onClick={() => void runAction(`retest-${entityId}`, async () => {
-                  const retest = resolveFindingRetestAction(entity);
+                <Button size="sm" variant="secondary" disabled={busy !== '' || !canStartFindingRetest || !retestAction} title={!retestAction ? 'Retest details are missing from this finding.' : undefined} onClick={() => setRetestReview(true)}>Review retest</Button>
+              </div>
+            </form>
+            ) : <RoleRestrictedCard title="Finding triage is read-only for your role." />}
+            <ConfirmModal
+              open={retestReview && canStartFindingRetest && Boolean(retestAction)}
+              title="Review this retest"
+              description={(
+                <div className="stack-tight scan-review">
+                  <dl className="td-review-list">
+                    <div><dt>Finding</dt><dd>{title} <span className="mono">{entityId}</span></dd></div>
+                    <div><dt>Target</dt><dd className="mono">{getString(retestTarget, ['value'], targetId || 'Not recorded')}</dd></div>
+                    <div><dt>Check</dt><dd>{checkId ? plainCheckName(getString(retestCheck ?? {}, ['name', 'title'], checkId)) : 'Not recorded'}</dd></div>
+                    {retestAction?.kind === 'safe-run' ? <div><dt>Recorded as</dt><dd>Retest of this finding (same target and check)</dd></div> : null}
+                    <div><dt>Upper bound</dt><dd>{retestAction?.kind === 'safe-run' ? (Number.isFinite(retestBound) ? `${retestBound} requests` : 'Not recorded in the catalog') : retestAction?.kind === 'waf-validation' ? 'WAF marker validation for the linked asset' : 'CVE pipeline retest'}</dd></div>
+                  </dl>
+                  <p>This starts a new bounded check on the same target and check. The server re-checks ownership, safe windows, rate, concurrency and kill-switch gates now; an expired scope is not replayed.</p>
+                  <p>The original evidence stays. A passing retest is shown as a later result and never closes other targets in this group.</p>
+                </div>
+              )}
+              confirmLabel="Start retest"
+              confirmTone="default"
+              busy={busy === `retest-${entityId}`}
+              onCancel={closeRetestReview}
+              onConfirm={() => void runAction(`retest-${entityId}`, async () => {
+                  const retest = retestAction;
                   if (!retest) throw new Error('Retest details are missing from this finding.');
                   // Every kind resolveFindingRetestAction can return must dispatch a real
                   // request; otherwise runAction reports a false "Retest started." success.
@@ -677,14 +802,14 @@ export function FindingDetailView({
                   } else if (retest.kind === 'cve-retest-url') {
                     await requestJson(config, session, retest.retestUrl, { method: 'POST' });
                   } else if (retest.kind === 'safe-run') {
-                    await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: getString(entity, ['target_group_id'], ''), target_id: getString(entity, ['target_id'], '') } });
+                    if (!targetId) throw new Error('This finding has no declared target, so a retest cannot be recorded against it.');
+                    await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: targetGroupId, target_id: targetId, retest_of_finding_id: entityId } });
                   } else {
                     throw new Error('Unsupported retest kind for this finding.');
                   }
-                }, 'Retest started.')}>Retest</Button>
-              </div>
-            </form>
-            ) : <RoleRestrictedCard title="Finding triage is read-only for your role." />}
+                  closeRetestReview();
+                }, 'Retest started. Its result appears as a later result; the original evidence is unchanged.')}
+            />
           </CardContent>
         </Card>
       </div>
@@ -747,10 +872,21 @@ export function FindingDetailView({
           <p className="rule-assets-summary">
             {ruleHasSiblings ? (
               <>
-                <span className="tabular-nums">{ruleSiblings.length}</span> findings on <span className="tabular-nums">{ruleAssetCount}</span> {ruleAssetCount === 1 ? 'asset' : 'assets'}, <span className="tabular-nums">{ruleOpenCount}</span> open
+                <span className="tabular-nums">{ruleSiblings.length}</span> findings on <span className="tabular-nums">{ruleAssetCount}</span> {ruleAssetCount === 1 ? 'asset' : 'assets'}, <span className="tabular-nums">{ruleOpenCount}</span> open{ruleComplete ? '' : ', among findings read so far'}
               </>
-            ) : 'No other loaded finding records this outcome. When validation records it on another asset, that asset is listed here.'}
+            ) : ruleComplete
+              ? 'No other finding records this outcome. When validation records it on another asset, that asset is listed here.'
+              : 'No other finding read so far records this outcome.'}
           </p>
+          {checkId && !ruleComplete && ruleSource.state === 'ready' && ruleSource.envelope?.total !== null && ruleSource.envelope?.total !== undefined ? (
+            <div className="rule-assets-more">
+              <span className="muted small">{`Read ${ruleSource.items.length} of ${ruleSource.envelope.total} findings for this check.`}</span>
+              {ruleSource.error ? <span className="small" role="alert">{ruleSource.error}</span> : null}
+              <Button size="sm" variant="secondary" loading={ruleSource.loadingMore} onClick={ruleSource.loadMore}>Read more findings for this check</Button>
+            </div>
+          ) : null}
+          {!checkId && !ruleComplete ? <p className="muted small">This finding has no check ID, so only the loaded page of findings is compared.</p> : null}
+          {checkId && ruleSource.state === 'error' ? <p className="small" role="alert">{`Findings for this check could not load: ${ruleSource.error}`}</p> : null}
           {ruleHasSiblings ? (
             <DataTable
               className="rule-assets-table"
@@ -827,7 +963,7 @@ export function FindingDetailView({
           </div>
           <div className="row-actions">
             <Button size="sm" variant="ghost" loading={busy === `verify-${entityId}`} disabled={evidence === null || busy !== ''} onClick={() => void verifyChain()}>Verify chain</Button>
-            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}`} disabled={busy !== ''} onClick={() => void exportBundle()}>Export bundle</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}`} disabled={busy !== ''} onClick={() => void exportBundle()}>Export evidence</Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -841,12 +977,17 @@ export function FindingDetailView({
             />
           ) : evidence.artifacts.length > 0 ? (
             <>
-              <p className="muted small">Select an artifact to open its evidence detail: payload, SHA-256 digest, and custody position.</p>
+              <p className="muted small">Artifacts recorded for this finding's originating execution. Select one to inspect it; a recorded digest is not a verified custody chain until you run Verify chain.</p>
               <DataTable
                 columns={artifactColumns}
                 items={evidence.artifacts}
                 getRowId={(item) => getString(item, ['id'], '')}
-                getRowProps={(item) => evidenceRowNavProps(getString(item, ['id'], ''))}
+                getRowProps={(item) => {
+                  const props = evidenceRowNavProps(getString(item, ['id'], ''), inspectArtifact);
+                  return getString(item, ['id'], '') && inspected?.entry === 'artifact' && inspected.evidence_id === getString(item, ['id'], '')
+                    ? { ...props, className: `${props.className ?? ''} is-selected`, 'aria-current': 'true' }
+                    : props;
+                }}
                 empty={<span className="muted">No artifacts in bundle.</span>}
               />
             </>

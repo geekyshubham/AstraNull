@@ -131,29 +131,61 @@ function runRow(run) {
   };
 }
 
+function isScopedTargetSelect(sql) {
+  return sql.includes('FROM targets t')
+    && sql.includes('tg.declaration_json AS group_declaration_json')
+    && sql.includes('tg.tenant_id = t.tenant_id')
+    && sql.includes('t.tenant_id = $1 AND t.id = $2')
+    && sql.includes('t.deleted_at IS NULL');
+}
+
+function scopedTargetRow(metadata = {}) {
+  return {
+    ...TARGET,
+    declaration_json: {},
+    group_declaration_json: {},
+    metadata_json: metadata,
+    created_at: new Date('2026-09-01T00:00:00.000Z'),
+  };
+}
+
 function postgresPool() {
   const client = {
     async query(text, params = []) {
       const sql = String(text);
-      if (sql.includes('SELECT * FROM targets WHERE')) {
-        return { rows: [{ ...TARGET, metadata_json: {}, created_at: new Date('2026-09-01T00:00:00.000Z') }] };
+      if (isScopedTargetSelect(sql)) {
+        if (params[0] !== CTX.tenantId || params[1] !== TARGET.id) return { rows: [] };
+        return { rows: [scopedTargetRow()] };
       }
       if (sql.includes('COUNT(*) FILTER')) return { rows: [{ open_count: 0, closed_count: 0 }] };
       if (sql.includes('DISTINCT ON (r.check_id)')) {
-        const wanted = new Set(params[2]);
+        assert.equal(params.length, 2, 'latest-run params are [tenantId, targetId]');
+        assert.equal(params[0], CTX.tenantId);
+        assert.equal(params[1], TARGET.id);
         const latest = new Map();
         for (const run of RUNS) {
-          if (!wanted.has(run.check_id) || latest.has(run.check_id)) continue;
+          if (run.tenant_id !== params[0] || run.target_id !== params[1] || latest.has(run.check_id)) continue;
           latest.set(run.check_id, runRow(run));
         }
         return { rows: [...latest.values()] };
       }
-      if (sql.includes('FROM test_runs')) return { rows: RUNS.map(runRow) };
-      if (sql.includes('FROM test_policies')) {
+      if (sql.includes('FROM test_runs')) {
+        assert.equal(params[0], CTX.tenantId);
+        assert.equal(params[1], TARGET.id);
         return {
-          rows: POLICIES.filter((policy) => policy.target_group_id === params[1]
+          rows: RUNS
+            .filter((run) => run.tenant_id === params[0] && run.target_id === params[1])
+            .map(runRow),
+        };
+      }
+      if (sql.includes('FROM test_policies')) {
+        assert.deepEqual(params, [CTX.tenantId, TARGET.target_group_id, TARGET.id]);
+        return {
+          rows: POLICIES.filter((policy) => policy.tenant_id === params[0]
+            && policy.target_group_id === params[1]
             && (!policy.target_id || policy.target_id === params[2])
-            && !policy.archived_at),
+            && !policy.archived_at
+            && policy.state !== 'archived'),
         };
       }
       if (sql.includes('FROM target_verification_current')) {
@@ -206,8 +238,9 @@ describe('target detail exposes canonical top-level tags (WAF-CDN-01)', () => {
         return {
           async query(text, params = []) {
             const sql = String(text);
-            if (sql.includes('SELECT * FROM targets WHERE')) {
-              return { rows: [{ ...TARGET, metadata_json: { tags: AISTRIP_TAGS }, created_at: new Date('2026-09-01T00:00:00.000Z') }] };
+            if (isScopedTargetSelect(sql)) {
+              if (params[0] !== CTX.tenantId || params[1] !== TARGET.id) return { rows: [] };
+              return { rows: [scopedTargetRow({ tags: AISTRIP_TAGS })] };
             }
             if (sql.includes('COUNT(*) FILTER')) return { rows: [{ open_count: 0, closed_count: 0 }] };
             if (sql.includes('DISTINCT ON (r.check_id)')) return { rows: [] };

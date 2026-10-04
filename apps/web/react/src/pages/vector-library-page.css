@@ -1,13 +1,8 @@
 /*
- * Vector library: catalog-first console page with two presentations.
+ * Check library: one target-first presentation over the vector catalog.
  * Token-only: every color/space/radius comes from styles.css :root.
- * classic = refined boxed console (scope card, catalog card, table first).
- * premium = open layout: larger display heading, facts strip, catalog grouped by
- * hairlines instead of a card, and a sticky evaluation-target rail on wide screens.
- * Both variants render the same controls, data, and permission gates.
  */
 
-/* ---------- Shared base (both variants) ---------- */
 /* Page CSS loads before styles.css, so page-root rules carry .content to win over `.content`. */
 .content.vector-library-page { gap: var(--space-6); }
 .vector-library-page > .page-head { margin-bottom: 0; }
@@ -64,7 +59,9 @@
 .vector-search-control input::placeholder { color: var(--muted); opacity: 1; }
 
 /* Table cells */
-.vector-library-table .data-table { min-width: 1120px; }
+.vector-library-table .data-table { min-width: 1040px; }
+.vector-library-table td .vector-cell-stack { min-width: 20ch; max-width: 42ch; white-space: normal; }
+.vector-library-table td .vector-primary { min-width: 22ch; max-width: 34ch; }
 .vector-primary,
 .vector-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); }
 .vector-primary strong,
@@ -134,25 +131,15 @@
   .vector-search-control { transition: none; }
 }
 
-/* ---------- Premium variant ---------- */
-.content.vector-library-page[data-variant="premium"] { gap: var(--space-8); }
-.vector-library-page[data-variant="premium"] > .page-head h1 {
-  font-size: var(--text-2xl);
-  line-height: 1.05;
-  letter-spacing: -0.04em;
-}
-.vector-library-page[data-variant="premium"] > .page-head p:last-child { max-width: 62ch; color: var(--fg-2); line-height: 1.55; }
-.vector-library-page[data-variant="premium"] > .page-context-summary { margin-top: calc(-1 * var(--space-4)); }
-
-/* Facts strip: hairline top and bottom only, neutral 1px column dividers. */
+/* ---------- Counts strip: separate units, hairlines only ---------- */
 .vector-facts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
-.vector-facts > div { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); padding: var(--space-4) var(--space-5); }
+.vector-facts > div { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); padding: var(--space-4) var(--space-5); }
 .vector-facts > div + div { border-left: 1px solid var(--border-soft); }
 .vector-facts > div:first-child { padding-left: 0; }
 .vector-facts dt {
@@ -164,103 +151,42 @@
   color: var(--meta);
 }
 .vector-facts dd { margin: 0; color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; overflow-wrap: anywhere; }
+.vector-facts dd.vector-fact-hint { margin: 0; color: var(--fg-2); font-family: var(--font-body); font-size: var(--text-xs); font-weight: 400; letter-spacing: 0; line-height: 1.45; }
 
-/* Catalog becomes an open section: no card chrome, hairline under the header. */
-.vector-library-page[data-variant="premium"] > .vector-catalog-card {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.vector-library-page[data-variant="premium"] > .vector-catalog-card > .card-header {
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
-}
-.vector-library-page[data-variant="premium"] .card-title { font-size: var(--text-lg); letter-spacing: -0.02em; }
-.vector-library-page[data-variant="premium"] .vector-catalog-body { gap: var(--space-5); }
-.vector-library-page[data-variant="premium"] .vector-pagination { border-top: 0; padding-top: 0; }
-
-/* Evaluation target stays a single quiet panel (it becomes the rail on wide screens). */
-.vector-library-page[data-variant="premium"] > .vector-scope-card { padding: var(--space-5); background: var(--surface); }
-.vector-library-page[data-variant="premium"] > .vector-scope-card > .card-header { margin-bottom: var(--space-4); flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
-.vector-library-page[data-variant="premium"] .vector-scope-card .vector-target-note { padding: 0; border: 0; background: transparent; }
-
-/* Detail dialog: label column plus prose rows, one divider convention. */
-.vector-library-page[data-variant="premium"] .vector-detail { gap: var(--space-6); }
-.vector-library-page[data-variant="premium"] .vector-detail-grid { grid-template-columns: minmax(0, 1fr); }
-.vector-library-page[data-variant="premium"] .vector-detail-block,
-.vector-library-page[data-variant="premium"] .vector-detail-grid > .vector-detail-block:nth-child(2) {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-1);
-  padding: var(--space-4) 0;
-  border-top: 1px solid var(--border-soft);
-}
-.vector-library-page[data-variant="premium"] .vector-detail-grid > .vector-detail-block:first-child { border-top: 0; padding-top: 0; }
-.vector-library-page[data-variant="premium"] .vector-detail-block h4 {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--meta);
-}
-.vector-library-page[data-variant="premium"] .vector-detail-block p { color: var(--fg); font-size: var(--text-base); max-width: 68ch; }
-.vector-library-page[data-variant="premium"] .vector-detail-rail {
-  padding: var(--space-5);
+.vector-filter-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; }
+.vector-filter-summary .muted { overflow-wrap: anywhere; }
+.vector-advanced-filters { padding-top: var(--space-3); border-top: 1px solid var(--border-soft); }
+.vector-target-controls .field input[type="search"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--surface-sunk);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
 }
-.vector-library-page[data-variant="premium"] .vector-detail-rail .vector-target-note { padding: 0; border: 0; background: transparent; }
+.vector-target-controls .field input[type="search"]:focus-visible { outline: none; border-color: var(--focus-color); box-shadow: var(--focus-ring); }
+.vector-target-note .badge { align-self: flex-start; }
+.vector-mapped-checks { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.vector-mapped-checks li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); }
+.vector-mapped-checks code { font-size: var(--text-xs); color: var(--fg-2); overflow-wrap: anywhere; }
 
-@media (min-width: 720px) {
-  .vector-library-page[data-variant="premium"] .vector-detail-block,
-  .vector-library-page[data-variant="premium"] .vector-detail-grid > .vector-detail-block:nth-child(2) {
-    grid-template-columns: 200px minmax(0, 1fr);
-    gap: var(--space-6);
-    align-items: baseline;
-  }
-  .vector-library-page[data-variant="premium"] .vector-detail-block > :not(h4) { grid-column: 2; }
-}
-
-/* Wide screens: catalog left, sticky evaluation-target rail right. */
-@media (min-width: 1360px) {
-  .content.vector-library-page[data-variant="premium"] {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 296px;
-    grid-auto-flow: row dense;
-    align-items: start;
-    column-gap: var(--space-8);
-  }
-  .vector-library-page[data-variant="premium"] > * { grid-column: 1 / -1; min-width: 0; }
-  .vector-library-page[data-variant="premium"] > .vector-catalog-card { grid-column: 1; }
-  .vector-library-page[data-variant="premium"] > .vector-scope-card {
-    grid-column: 2;
-    position: sticky;
-    top: calc(64px + var(--space-6));
-  }
-  /* Rail is narrow: stack status badge above a full-width title and description. */
-  .vector-library-page[data-variant="premium"] > .vector-scope-card > .card-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .vector-library-page[data-variant="premium"] > .vector-scope-card > .card-header > div { width: 100%; min-width: 0; }
-  .vector-library-page[data-variant="premium"] > .vector-scope-card > .card-header > .badge { order: -1; }
-  .vector-library-page[data-variant="premium"] .vector-scope-card .vector-target-controls { grid-template-columns: minmax(0, 1fr); }
-  .vector-library-page[data-variant="premium"] .vector-library-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .vector-library-page[data-variant="premium"] .vector-search-field { grid-column: 1 / -1; }
-  .vector-library-page[data-variant="premium"] .vector-library-table .data-table { min-width: 980px; }
+@media (min-width: 1180px) {
+  .vector-library-controls:not(.vector-advanced-filters) { grid-template-columns: minmax(280px, 2fr) minmax(200px, 1fr); }
+  .vector-advanced-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-@media (max-width: 760px) {
-  .vector-facts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .vector-facts > div { padding: var(--space-3) 0; }
-  .vector-facts > div + div { border-left: 0; }
-  .vector-facts > .vector-fact-wide { grid-column: 1 / -1; order: 3; border-top: 1px solid var(--border-soft); }
-  .vector-facts > div:nth-child(3) { padding-left: var(--space-4); border-left: 1px solid var(--border-soft); }
-  .vector-library-page[data-variant="premium"] > .page-head h1 { font-size: var(--text-xl); }
+@media (max-width: 900px) {
+  .vector-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vector-facts > div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .vector-facts > div:nth-child(n + 3) { border-top: 1px solid var(--border-soft); }
+}
+
+@media (max-width: 480px) {
+  .vector-facts { grid-template-columns: minmax(0, 1fr); }
+  .vector-facts > div,
+  .vector-facts > div + div { padding-left: 0; border-left: 0; }
+  .vector-facts > div + div { border-top: 1px solid var(--border-soft); }
 }

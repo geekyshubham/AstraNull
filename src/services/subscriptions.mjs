@@ -10,6 +10,16 @@ import { normalizePrivacySettings } from '../lib/privacySettings.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { auditInternal } from './internalAudit.mjs';
 
+function recordedAuditTime(entry) {
+  if (entry && entry.timestamp != null && entry.timestamp !== '') {
+    return { timestamp: entry.timestamp, timestamp_source: 'audit_log.timestamp' };
+  }
+  if (entry && entry.created_at != null && entry.created_at !== '') {
+    return { timestamp: entry.created_at, timestamp_source: 'audit_log.created_at_alias' };
+  }
+  return { timestamp: null, timestamp_source: 'not_recorded' };
+}
+
 function subscriptionForTenant(tenantId) {
   const store = getStore();
   if (!Array.isArray(store.tenantSubscriptions)) return null;
@@ -40,6 +50,7 @@ export function getCurrentSubscriptionSummary(ctx) {
   const plan = getSubscriptionPlan(subscription?.plan_id) ?? null;
   const account = tenantId ? getTenantAccount(tenantId) : null;
   const now = Date.now();
+  const asOf = new Date(now).toISOString();
   const oneHourAgo = now - 60 * 60 * 1000;
   const tenantRuns = store.testRuns.filter((run) => run.tenant_id === tenantId);
   const safeRunsStartedLastHour = tenantRuns.filter((run) => {
@@ -59,6 +70,8 @@ export function getCurrentSubscriptionSummary(ctx) {
 
   return {
     tenant_id: tenantId ?? null,
+    as_of: asOf,
+    as_of_source: 'subscription_summary_clock',
     account,
     subscription,
     plan,
@@ -81,13 +94,15 @@ export function getCurrentSubscriptionSummary(ctx) {
           : openFindings > 0
             ? 'customer_review'
             : 'nominal',
+      as_of: asOf,
+      as_of_source: 'subscription_summary_clock',
       recent_audit: recentAudit.map((entry) => ({
         id: entry.id,
         action: entry.action,
         actor_role: entry.actor_role,
         resource_type: entry.resource_type,
         resource_id: entry.resource_id,
-        created_at: entry.created_at,
+        ...recordedAuditTime(entry),
       })),
     },
   };

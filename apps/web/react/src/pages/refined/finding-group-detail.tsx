@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, SearchX, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, Eye, SearchX, TriangleAlert } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
 import { AnchorButton, Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { DataTable, type TableColumn } from '../../components/ui/table';
-import { VariantSwitch } from '../../components/ui/variant-switch';
-import { useDesignVariant, type DesignVariant } from '../../lib/design-variant';
+import { useInspectorRef, useOpenInspector } from '../../components/evidence/use-inspector';
+import { usePublishInspectorSequence, type InspectorSequenceItem } from '../../components/evidence/inspector-sequence';
 import { readFindingRemediationFields } from '../../lib/finding-detail';
+import { findingGroupCheckId } from '../../lib/findings-query.mjs';
+import { useProgressiveFindings } from '../../components/findings/use-server-findings';
 import {
   assetHasLifecycle,
   assetMembersInLifecycle,
@@ -35,15 +37,15 @@ export interface FindingGroupDetailPageProps {
 
 type AssetFilter = Exclude<FindingStatusBucket, 'other'> | 'all';
 
-const ASSET_FILTERS: Array<{ id: AssetFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'open', label: 'Open' },
-  { id: 'accepted', label: 'Accepted' },
-  { id: 'closed', label: 'Closed' }
+// Lifecycle buckets over the members read so far; each names the exact statuses it includes.
+const ASSET_FILTERS: Array<{ id: AssetFilter; label: string; statuses: string }> = [
+  { id: 'all', label: 'All', statuses: 'every status' },
+  { id: 'open', label: 'Open', statuses: 'open' },
+  { id: 'accepted', label: 'Accepted', statuses: 'accepted risk or accepted' },
+  { id: 'closed', label: 'Closed', statuses: 'resolved or closed' }
 ];
 
-/** Returning to findings keeps the Refined view, since grouping only exists there. */
-const FINDINGS_HREF = '#findings?variant=refined';
+const FINDINGS_HREF = '#findings';
 
 function readGroupKey() {
   const hash = window.location.hash.replace(/^#/, '');
@@ -55,10 +57,9 @@ function textOf(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPageProps) {
-  // This page only exists in the Refined presentation, so the switch always reports Refined.
-  const [, setVariant] = useDesignVariant('findings');
-  const variant: DesignVariant = 'refined';
+export function FindingGroupDetailPage({ data, config, session, onRefresh }: FindingGroupDetailPageProps) {
+  const inspected = useInspectorRef();
+  const openInspector = useOpenInspector();
   const [groupKey, setGroupKey] = useState(readGroupKey);
   const [assetFilter, setAssetFilter] = useState<AssetFilter>('all');
   const [busy, setBusy] = useState(false);
@@ -74,13 +75,21 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
     setAssetFilter('all');
   }, [groupKey]);
 
+  // Members come from the server's exact check predicate across every status, read in pages and
+  // narrowed to this group's issue identity. A group without a check id cannot be filtered on the
+  // server, so its read covers every finding and only continues when asked.
+  const checkId = findingGroupCheckId(groupKey);
+  const [reloadKey, setReloadKey] = useState(0);
+  const members = useProgressiveFindings(config, session, checkId ? { check_id: checkId } : {}, reloadKey, Boolean(groupKey));
   const groups = useMemo(
-    () => groupFindings(data.findings, { targets: data.targets, checks: data.checks, targetGroups: data.targetGroups }),
-    [data.findings, data.targets, data.checks, data.targetGroups]
+    () => groupFindings(members.items, { targets: data.targets, checks: data.checks, targetGroups: data.targetGroups }),
+    [members.items, data.targets, data.checks, data.targetGroups]
   );
   const group = findGroupByKey(groups, groupKey);
-  const loadError = data.loadErrors.findings ?? '';
-  const loading = !data.loaded && data.findings.length === 0 && !loadError;
+  const complete = members.complete;
+  const loadError = members.state === 'error' ? members.error : '';
+  const loading = Boolean(groupKey) && members.state === 'loading';
+  const unread = members.envelope?.total !== null && members.envelope?.total !== undefined ? Math.max(0, members.envelope.total - members.items.length) : null;
 
   const assetCounts = useMemo(() => {
     const counts: Record<AssetFilter, number> = { all: group?.assets.length ?? 0, open: 0, accepted: 0, closed: 0 };
@@ -98,16 +107,28 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
     [group, assetFilter]
   );
 
-  function changeVariant(next: DesignVariant) {
-    setVariant(next);
-    // Grouping is a Refined-only view; choosing Classic returns to the classic finding queue.
-    if (next === 'classic') window.location.hash = '#findings';
+  // Every member finding under the active lifecycle filter, in table order. Each opens its own
+  // original evidence; the inspector steps through them without wrapping or borrowing proof.
+  const memberSequence = useMemo<InspectorSequenceItem[]>(() => visibleAssets.flatMap((asset) => (
+    assetMembersInLifecycle(asset, assetFilter)
+      .filter((member) => member.findingId)
+      .map((member) => ({
+        ref: { entry: 'group_member' as const, finding_id: member.findingId, target_id: asset.targetId || undefined },
+        label: `${asset.label} · ${member.status.replace(/_/g, ' ')}`,
+      }))
+  )), [visibleAssets, assetFilter]);
+  usePublishInspectorSequence(group ? { owner: `finding-group:${group.key}`, noun: 'affected targets in this group', items: memberSequence } : null);
+  const inspectedMemberId = inspected?.entry === 'group_member' ? inspected.finding_id ?? '' : '';
+
+  function inspectMember(findingId: string, targetId: string) {
+    openInspector({ entry: 'group_member', finding_id: findingId, target_id: targetId || undefined }, `member-${findingId}`);
   }
 
   async function refresh() {
     setBusy(true);
     setError('');
     try {
+      setReloadKey((value) => value + 1);
       await onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Refresh failed.');
@@ -132,7 +153,7 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
   const assetColumns: TableColumn<FindingGroupAsset>[] = [
     {
       key: 'asset',
-      label: 'Asset',
+      label: 'Target',
       render: (asset) => (
         <span className="rf-cell-stack">
           <strong className="rf-asset-name">{asset.label}</strong>
@@ -182,19 +203,33 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
     },
     {
       key: 'actions',
-      label: 'Actions',
+      label: 'Evidence',
       render: (asset) => (
         <span className="rf-row-actions">
-          {/* One link per member finding in the active lifecycle filter, so no member is unreachable. */}
-          {assetMembersInLifecycle(asset, assetFilter).filter((member) => member.findingId).map((member, index, shown) => (
-            <AnchorButton
+          {/* One evidence action per member finding in the active lifecycle filter, so no member is unreachable. */}
+          {assetMembersInLifecycle(asset, assetFilter).filter((member) => member.findingId).map((member, _index, shown) => (
+            <Button
               key={member.findingId}
               size="sm"
-              variant="secondary"
-              href={buildDetailHref('finding-detail', member.findingId)}
-              aria-label={`Open ${member.status.replace(/_/g, ' ')} finding ${member.findingId} for ${asset.label}`}
+              variant={member.findingId === inspectedMemberId ? 'default' : 'secondary'}
+              data-focus-key={`member-${member.findingId}`}
+              aria-pressed={member.findingId === inspectedMemberId}
+              aria-label={`View evidence for the ${member.status.replace(/_/g, ' ')} finding on ${asset.label}`}
+              onClick={() => inspectMember(member.findingId, asset.targetId)}
             >
-              {shown.length > 1 ? `Open ${member.status.replace(/_/g, ' ')} finding` : 'Open finding'}
+              <Eye size={14} aria-hidden="true" />
+              {shown.length > 1 ? `View ${member.status.replace(/_/g, ' ')} evidence` : 'View evidence'}
+            </Button>
+          ))}
+          {assetMembersInLifecycle(asset, assetFilter).filter((member) => member.findingId).slice(0, 1).map((member) => (
+            <AnchorButton
+              key={`full-${member.findingId}`}
+              size="sm"
+              variant="ghost"
+              href={buildDetailHref('finding-detail', member.findingId)}
+              aria-label={`Open full finding for ${asset.label}`}
+            >
+              Full finding
             </AnchorButton>
           ))}
           {asset.targetId ? (
@@ -216,8 +251,8 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
 
       <header className="rf-header">
         <div className="rf-header-copy">
-          <p className="rf-eyebrow">Findings · alert</p>
-          <h1>{group ? group.title : 'Alert'}</h1>
+          <p className="rf-eyebrow">Findings · finding group</p>
+          <h1>{group ? group.title : 'Finding group'}</h1>
           {group ? (
             <div className="rf-alert-meta">
               <Badge tone={severityTone(group.severity || 'unknown')}>{formatSeverityLabel(group.severity || 'unknown')}</Badge>
@@ -226,11 +261,10 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
               <span className="rf-chip">{summarizeFindingStatuses(group.statusBreakdown)}</span>
             </div>
           ) : (
-            <p className="rf-header-description">One alert grouped across every affected asset, each tied to its own external probe evidence.</p>
+            <p className="rf-header-description">One issue grouped across every affected target, each tied to its own external probe evidence.</p>
           )}
         </div>
         <div className="rf-header-actions">
-          <VariantSwitch value={variant} onChange={changeVariant} />
           <Button size="sm" variant="secondary" loading={busy} disabled={busy} onClick={() => void refresh()}>Refresh</Button>
         </div>
       </header>
@@ -238,29 +272,46 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
       {error || loadError ? <div className="form-banner error" role="alert">{error || loadError}</div> : null}
 
       {loading ? (
-        <EmptyState icon={TriangleAlert} variant="skeleton" title="Loading alert" body="Fetching findings, declared targets, and the check catalog." />
+        <EmptyState icon={TriangleAlert} variant="skeleton" title="Loading finding group" body="Fetching findings, declared targets, and the check catalog." />
+      ) : !group && !complete && members.state === 'ready' ? (
+        <div className="rf-load-more">
+          <p className="rf-pager-info">
+            No member of this group is in the first <span className="tabular-nums">{members.items.length}</span> of <span className="tabular-nums">{members.envelope?.total ?? 'unknown'}</span> {checkId ? 'findings for this check' : 'findings'} read so far. Older findings have not been read yet; no other group is shown in its place.
+          </p>
+          {members.error ? <p className="rf-pager-info" role="alert">{members.error}</p> : null}
+          <Button size="sm" variant="secondary" loading={members.loadingMore} onClick={members.loadMore}>Read more findings</Button>
+        </div>
       ) : !group ? (
         <EmptyState
           icon={SearchX}
           title="This finding group is unavailable."
           body={groupKey
-            ? 'The alert may have closed or changed since the link was shared. Open the findings list for current alerts.'
-            : 'Open an alert from the Refined findings view to see its affected assets.'}
+            ? 'No finding on the server matches this group key. The group may have closed or changed since the link was shared. No other group was substituted.'
+            : 'This link has no group key. Open a finding group from the findings list.'}
           actionLabel="Open findings"
           actionHref={FINDINGS_HREF}
         />
       ) : (
         <>
-          <section className="rf-summary-strip" aria-label="Alert summary">
+          {!complete ? (
+            <div className="rf-load-more" role="status">
+              <p className="rf-pager-info">
+                Partial group: built from <span className="tabular-nums">{members.items.length}</span> of <span className="tabular-nums">{members.envelope?.total ?? 'unknown'}</span> {checkId ? 'findings for this check' : 'findings'}. Counts below may grow{unread !== null ? `; ${unread} not read yet` : ''}.
+              </p>
+              {members.error ? <p className="rf-pager-info" role="alert">{members.error}</p> : null}
+              <Button size="sm" variant="secondary" loading={members.loadingMore} onClick={members.loadMore}>Read more members</Button>
+            </div>
+          ) : null}
+          <section className="rf-summary-strip" aria-label="Finding group summary">
             <div className="rf-stat">
-              <span className="rf-stat-label">Affected assets</span>
-              <span className="rf-stat-value">{group.assets.length}</span>
-              <span className="rf-stat-hint">{group.findingIds.length} {pluralize(group.findingIds.length, 'finding')}</span>
+              <span className="rf-stat-label">Affected targets</span>
+              <span className="rf-stat-value">{group.assets.length}{complete ? '' : '+'}</span>
+              <span className="rf-stat-hint">{group.findingIds.length} {pluralize(group.findingIds.length, 'finding')}{complete ? '' : ' read so far'}</span>
             </div>
             <div className="rf-stat">
               <span className="rf-stat-label">Open</span>
-              <span className="rf-stat-value">{group.openCount}</span>
-              <span className="rf-stat-hint">{group.openAssetCount} {pluralize(group.openAssetCount, 'asset')} still exposed</span>
+              <span className="rf-stat-value">{group.openCount}{complete ? '' : '+'}</span>
+              <span className="rf-stat-hint">{group.openAssetCount} {pluralize(group.openAssetCount, 'target')} with an open finding</span>
             </div>
             <div className="rf-stat" data-tone={sla?.state === 'breached' ? 'danger' : undefined}>
               <span className="rf-stat-label">SLA</span>
@@ -292,11 +343,12 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
             <div className="rf-panel rf-meaning">
               <dl className="rf-meaning-list">
                 <div>
-                  <dt>Recorded verdict</dt>
+                  <dt>Example verdict</dt>
                   <dd>
                     <strong>{group.verdictLabel || 'Not recorded'}</strong>
                     {verdictMeaning ? <span> {verdictMeaning}</span> : null}
-                    {group.verdicts.length > 1 ? <span> Members record {group.verdicts.length} different verdicts; open each finding to compare.</span> : null}
+                    <span className="rf-cell-muted"> Taken from one member. It is not a verdict for every target; view each target's own evidence below.</span>
+                    {group.verdicts.length > 1 ? <span> Members record {group.verdicts.length} different verdicts.</span> : null}
                   </dd>
                 </div>
                 <div>
@@ -313,7 +365,7 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
                         {remediation.remSteps ? <span className="rf-meaning-steps">{remediation.remSteps}</span> : null}
                       </>
                     ) : (
-                      <span className="rf-cell-muted">No remediation plan is recorded on the lead finding. Open it to see linked action items and evidence.</span>
+                      <span className="rf-cell-muted">No remediation plan is recorded on the example finding.</span>
                     )}
                   </dd>
                 </div>
@@ -324,37 +376,35 @@ export function FindingGroupDetailPage({ data, onRefresh }: FindingGroupDetailPa
                   </div>
                 ) : null}
               </dl>
-              {group.representativeId ? (
-                <AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', group.representativeId)}>
-                  Open lead finding for full evidence
-                </AnchorButton>
-              ) : null}
             </div>
           </section>
 
           <section className="rf-section" aria-labelledby="rf-group-assets">
             <div className="rf-section-head">
-              <h2 id="rf-group-assets">Affected assets</h2>
-              <div className="rf-segmented" role="group" aria-label="Affected asset status filter">
+              <h2 id="rf-group-assets">Affected targets</h2>
+              <div className="rf-segmented" role="group" aria-label="Affected target status filter">
                 {ASSET_FILTERS.map((filter) => (
-                  <button key={filter.id} type="button" aria-pressed={assetFilter === filter.id} onClick={() => setAssetFilter(filter.id)}>
+                  <button key={filter.id} type="button" aria-pressed={assetFilter === filter.id} title={`Targets with a finding that is ${filter.statuses}`} onClick={() => setAssetFilter(filter.id)}>
                     {filter.label}
                     <span className="rf-tab-count tabular-nums">{assetCounts[filter.id]}</span>
                   </button>
                 ))}
               </div>
             </div>
-            <p className="rf-result-count">Open a finding for evidence, triage, safe retest, and custody export.</p>
+            <p className="rf-result-count">
+              {ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.label} counts targets with a finding that is {ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.statuses}{complete ? '' : ', among members read so far'}. View evidence opens each target's own original proof beside this list; Previous and Next step through the targets shown. A pass on one target never resolves another.
+            </p>
             <div className="rf-panel rf-panel-flush rf-findings-table rf-stack-table">
               <DataTable
                 columns={assetColumns}
                 items={visibleAssets}
                 getRowId={(asset) => asset.key}
+                getRowProps={(asset) => (asset.members.some((member) => member.findingId === inspectedMemberId) ? { className: 'is-selected', 'aria-current': 'true' } : {})}
                 empty={(
                   <EmptyState
                     icon={SearchX}
-                    title={`No ${assetFilter === 'all' ? '' : `${assetFilter} `}assets in this alert`}
-                    body="Choose another status to see the remaining affected assets."
+                    title={`No ${assetFilter === 'all' ? '' : `${assetFilter} `}targets in this group`}
+                    body="Choose another status to see the remaining affected targets."
                   />
                 )}
               />

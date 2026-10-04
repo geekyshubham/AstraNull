@@ -81,30 +81,54 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     await expect(page.locator('.skeleton-row').first()).toBeVisible();
   });
 
-  test('FT-STATE-error target-detail surfaces API empty_reason for missing target', async ({ page }) => {
+  test('FT-STATE-error target-detail keeps missing, denied and failed reads distinct and never shows raw server text', async ({ page }) => {
     await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
     const baseUrl = getPortalPlaywrightBaseUrl();
 
-    const missingRes = await fetch(`${baseUrl}/v1/targets/tgt_missing_state`, {
-      headers: portalOwnerHeaders(),
-    });
+    // The real API answers an unknown target with 404 and an explicit empty reason.
+    const missingRes = await fetch(`${baseUrl}/v1/targets/tgt_missing_state`, { headers: portalOwnerHeaders() });
+    expect(missingRes.status).toBe(404);
     const missingJson = await missingRes.json();
-    const emptyReason = String(
-      missingJson?.meta?.empty_reason
-      ?? missingJson?.error
-      ?? '',
-    ).trim();
-    expect(emptyReason.length).toBeGreaterThan(0);
+    expect(missingJson.error).toBe('not_found');
+    expect(missingJson.target).toBeNull();
+    expect(String(missingJson.meta?.empty_reason ?? '').trim().length).toBeGreaterThan(0);
 
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-detail', baseUrl, {
-      entityIds: { 'target-detail': 'tgt_missing_state' },
-    });
+    await gotoPortalRoute(page, 'target-detail', baseUrl, { entityIds: { 'target-detail': 'tgt_missing_state' } });
+    // 404: the shared missing-record state, on the same address, with nothing substituted.
+    const missing = page.locator('[data-unavailable-kind="record-missing"]');
+    await expect(missing.getByRole('heading', { name: 'This record is not available.' })).toBeVisible();
+    await expect(missing).toContainText('No placeholder values are shown in its place.');
+    await expect(missing.getByRole('link', { name: 'Back to targets' })).toHaveAttribute('href', /#targets$/);
+    await expect(page).toHaveURL(/#target-detail\?id=tgt_missing_state/);
+    await expect(page.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toHaveCount(0);
 
-    const emptyTitle = emptyReason.replace(/[.!?]+$/, '');
-    const emptyState = page.getByRole('region', { name: emptyTitle });
-    await expect(emptyState.getByRole('heading', { name: emptyTitle })).toBeVisible();
-    await expect(emptyState.locator(':scope > p')).toHaveCount(0);
+    // 403 (negative case only): the access-denied state, not "missing" and not an error.
+    await page.route('**/v1/targets/tgt_checkout_1', (route) => route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'forbidden', permission: 'target_group:read' }) }));
+    await page.goto(`${baseUrl}/app#target-detail?id=tgt_checkout_1`, { waitUntil: 'networkidle' });
+    await expect(page.locator('[data-unavailable-kind="access-denied"]')).toBeVisible();
+    await expect(page.locator('[data-unavailable-kind="record-missing"]')).toHaveCount(0);
+    await page.unroute('**/v1/targets/tgt_checkout_1');
+
+    // 500 with leaky server text (negative case only): a failed read with Retry; raw text never shown.
+    const leaky = 'relation "targets" does not exist; password=synthetic-leak at /srv/app/db.mjs:12';
+    await page.route('**/v1/targets/tgt_checkout_1', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: leaky, message: leaky, meta: { empty_reason: leaky } }) }));
+    // Same address as the 403 step, so reload to read it again.
+    await page.reload({ waitUntil: 'networkidle' });
+    const failed = page.locator('[data-target-load-error="true"]');
+    await expect(failed).toHaveAttribute('role', 'alert');
+    await expect(failed.getByRole('heading', { name: 'Target details could not load.' })).toBeVisible();
+    await expect(failed).toContainText('Something went wrong on the server. Try again.');
+    await expect(failed).toContainText('No other target is shown in its place.');
+    const visible = await page.locator('#portal-main').innerText();
+    expect(visible).not.toMatch(/synthetic-leak|relation "targets"|\/srv\/app/);
+    await expect(page.locator('[data-unavailable-kind]')).toHaveCount(0);
+
+    // Retry reads the same target again; once the server answers, the real record appears.
+    await page.unroute('**/v1/targets/tgt_checkout_1');
+    await failed.getByRole('button', { name: 'Retry' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
+    await expect(page.locator('[data-target-load-error="true"]')).toHaveCount(0);
   });
 
   test('FT-STATE-edge long group name, null-field finding, and RTL owner render', async ({ page }) => {

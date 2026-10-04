@@ -3,12 +3,17 @@ import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
+import { getCheckById } from '../../contracts/checks.mjs';
 import { WAF_EDGE_DETECTION_CHECK_ID } from '../../lib/edgeDetection.mjs';
 import {
   edgeDetectionRowFields,
   isPersistableEdgeDetection,
   projectEdgeDetection,
 } from '../../lib/edgeDetectionProjection.mjs';
+import {
+  originOutcomeFromProbe,
+  transportOutcomeFromProbe,
+} from '../../services/targetHistory.mjs';
 
 /** @type {readonly string[]} */
 export const PROBE_JOB_REPOSITORY_METHODS = Object.freeze([
@@ -196,15 +201,108 @@ async function ensureProbeResultEvidence(
  * `waf.fingerprint.safe` result bound to a target), same shared projection, and the write rides
  * the ingest transaction client so a rolled back probe event never leaves a detection behind.
  */
-async function recordProbeResultEdgeDetection(
+function historyStamp(run) {
+  return {
+    check_version: run?.check_version ?? null,
+    scenario_version: run?.scenario_version ?? null,
+  };
+}
+
+async function appendProbeHistory(validationEvidence, evidenceCtx, spec, client) {
+  if (typeof validationEvidence.appendAcceptedEdgeHistory !== 'function') return null;
+  const history = await validationEvidence.appendAcceptedEdgeHistory(evidenceCtx, spec, { client });
+  if (history?.error === 'idempotency_conflict') {
+    abortProbeResultMutation({ error: 'idempotency_conflict', status: 409 });
+  }
+  return history;
+}
+
+function historyBlocksCurrent(history) {
+  if (!history) return false;
+  if (history.skipped && history.skipped !== 'unknown_target') return true;
+  return (history.rows ?? []).some((row) => row?.error && !row.id);
+}
+
+/**
+ * Refresh the durable per-target WAF/CDN edge detection from a freshly ingested probe result.
+ *
+ * Postgres twin of the in-memory `recordSignedProbeHistory` hook. History is appended on the
+ * ingest transaction. The current edge row moves only for a newer persistable detection.
+ */
+export async function recordProbeResultEdgeDetection(
   validationEvidence,
   evidenceCtx,
   { run, job, probeMetadata, observedAt, newIdFn, client },
 ) {
-  if (job.check_id !== WAF_EDGE_DETECTION_CHECK_ID || !job.target_id) return null;
+  const edgeCheck = job.check_id === WAF_EDGE_DETECTION_CHECK_ID;
+  const originCheck = getCheckById(job.check_id)?.probe_profile?.kind === 'host_sni_bypass';
+  if ((!edgeCheck && !originCheck) || !job.target_id) return null;
   const targetGroupId = run.target_group_id ?? job.target_group_id ?? null;
   if (!targetGroupId) return null;
-  if (!isPersistableEdgeDetection(probeMetadata)) return null;
+
+  const completed = probeMetadata?.source_completed_at ?? probeMetadata?.completed_at ?? null;
+  const stamp = historyStamp(run);
+  const bindingId = run.origin_binding_id ?? null;
+
+  if (originCheck) {
+    const outcome = originOutcomeFromProbe(probeMetadata);
+    if (outcome && bindingId) {
+      const history = await appendProbeHistory(validationEvidence, evidenceCtx, {
+        target_id: job.target_id,
+        origin_binding_id: bindingId,
+        require_binding: true,
+        families: [{
+          family: 'origin_hosting',
+          check_id: job.check_id,
+          test_run_id: run.id,
+          source_kind: 'validation_run',
+          source_id: run.id,
+          corpus_version: null,
+          scenario_version: stamp.scenario_version,
+          check_version: stamp.check_version,
+          observed_at: observedAt,
+          source_completed_at: completed ?? observedAt,
+          outcome,
+          producer_kind: 'signed_probe',
+          event_id: `origin:${run.id}:${observedAt}`,
+          provenance: { status: outcome },
+        }],
+      }, client);
+      if (history?.error) return null;
+    }
+  }
+
+  if (!edgeCheck) return null;
+
+  const transport = transportOutcomeFromProbe(probeMetadata);
+  if (transport || !isPersistableEdgeDetection(probeMetadata)) {
+    if (transport) {
+      const families = ['waf', 'cdn'];
+      if (typeof probeMetadata?.edge_signature?.cloud_hosted === 'boolean') families.push('cloud');
+      await appendProbeHistory(validationEvidence, evidenceCtx, {
+        target_id: job.target_id,
+        families: families.map((family) => ({
+          family,
+          check_id: job.check_id,
+          test_run_id: run.id,
+          source_kind: 'edge_detection',
+          source_id: run.id,
+          corpus_version: typeof probeMetadata.edge_signature_corpus_version === 'string'
+            ? probeMetadata.edge_signature_corpus_version
+            : null,
+          scenario_version: stamp.scenario_version,
+          check_version: stamp.check_version,
+          observed_at: observedAt,
+          source_completed_at: completed,
+          outcome: transport,
+          producer_kind: 'signed_probe',
+          event_id: `edge-fail:${run.id}:${family}:${observedAt}`,
+          provenance: { status: transport },
+        })),
+      }, client);
+    }
+    return null;
+  }
 
   // Not in VALIDATION_PROBE_METHODS: existing callers build partial repository sets, and only
   // this check id reaches the write. Fail loudly rather than silently dropping the detection.
@@ -214,7 +312,42 @@ async function recordProbeResultEdgeDetection(
     );
   }
 
-  const fields = edgeDetectionRowFields(projectEdgeDetection(probeMetadata), {
+  const projection = projectEdgeDetection(probeMetadata);
+  const families = [
+    { family: 'waf', outcome: projection.waf?.status, provider: projection.waf?.vendor ?? null },
+    { family: 'cdn', outcome: projection.cdn?.status, provider: projection.cdn?.provider ?? null },
+  ];
+  if (typeof probeMetadata?.edge_signature?.cloud_hosted === 'boolean') {
+    families.push({
+      family: 'cloud',
+      outcome: projection.cloud?.status,
+      provider: projection.cloud?.provider ?? null,
+    });
+  }
+  const history = await appendProbeHistory(validationEvidence, evidenceCtx, {
+    target_id: job.target_id,
+    families: families
+      .filter((family) => family.outcome)
+      .map((family) => ({
+        family: family.family,
+        check_id: job.check_id,
+        test_run_id: run.id,
+        source_kind: 'edge_detection',
+        source_id: run.id,
+        corpus_version: projection.corpus_version || null,
+        scenario_version: stamp.scenario_version,
+        check_version: stamp.check_version,
+        observed_at: observedAt,
+        source_completed_at: completed,
+        outcome: family.outcome,
+        producer_kind: 'signed_probe',
+        event_id: `edge:${run.id}:${family.family}:${observedAt}`,
+        provenance: family.provider ? { status: family.outcome, provider: family.provider } : { status: family.outcome },
+      })),
+  }, client);
+  if (historyBlocksCurrent(history)) return null;
+
+  const fields = edgeDetectionRowFields(projection, {
     testRunId: run.id,
     observedAt,
   });

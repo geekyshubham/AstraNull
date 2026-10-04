@@ -234,7 +234,35 @@ describe('target groups API CRUD', () => {
     const inventory = await request(baseUrl, 'GET', '/v1/targets', { headers: engineer });
     const item = inventory.json.items.find((row) => row.id === target.json.id);
     assert.equal(item.verification_state, 'unverified');
-    assert.equal(item.eligibility, 'eligible');
+    // ADR-0008 eligibility: a declaration without a recorded ownership proof is
+    // not runnable now — the spoofed metadata (verification_state, eligibility,
+    // trusted_connector source, provenance) granted nothing. eligibility_reason
+    // is null here because the block is derived live from the missing proof,
+    // and the block source is the unverified state itself.
+    assert.equal(item.eligibility, 'not_runnable_now');
+    assert.equal(item.eligibility_reason, null);
+    assert.equal(item.verification.state, 'unverified');
     assert.equal(item.source, 'manual');
+
+    // Positive: a recorded server-side DNS proof (not metadata) is what makes the
+    // same declaration eligible. This eligibility is about run start-up only; the
+    // coverage launch gates remain not_evaluated elsewhere in the contract.
+    const store = getStore();
+    if (!Array.isArray(store.targetVerifications)) store.targetVerifications = [];
+    store.targetVerifications.push({
+      id: `tv_${target.json.id}`,
+      tenant_id: 'ten_demo',
+      target_id: target.json.id,
+      state: 'dns_verified',
+      source_kind: 'dns_txt',
+      source_ref: {},
+      transitioned_at: new Date().toISOString(),
+      transitioned_by: 'usr_admin',
+    });
+    const verifiedInventory = await request(baseUrl, 'GET', '/v1/targets', { headers: engineer });
+    const verifiedItem = verifiedInventory.json.items.find((row) => row.id === target.json.id);
+    assert.equal(verifiedItem.verification_state, 'dns_verified');
+    assert.equal(verifiedItem.verification.source_kind, 'dns_txt');
+    assert.equal(verifiedItem.eligibility, 'eligible');
   });
 });

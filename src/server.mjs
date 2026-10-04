@@ -58,10 +58,34 @@ import * as vectorLibrary from './services/vectorLibrary.mjs';
 import * as serviceAccounts from './services/serviceAccounts.mjs';
 import * as secretVault from './services/secretVault.mjs';
 import * as state from './services/state.mjs';
+import {
+  declaredHostApiPayload,
+  declaredTargetListPayload,
+  queryDeclaredHostAnalytics,
+} from './services/declaredHostAnalytics.mjs';
+import { DeclaredHostQueryError } from './lib/declaredHostAnalytics.mjs';
+import { AuditQueryError } from './persistence/postgres/auditRepository.mjs';
+import { deriveProtectionProfile } from './services/protectionProfile.mjs';
+import {
+  assessComparability,
+  getCurrentFamilyState,
+  listTargetObservations,
+} from './services/targetHistory.mjs';
+import {
+  archiveOriginBinding,
+  createOriginBinding,
+  getOriginBinding,
+  listOriginBindings,
+} from './services/originBindings.mjs';
+import { FindingListQueryError, parseFindingListQuery } from './lib/findingList.mjs';
+import { ownershipProofFromStates } from './lib/ownershipPolicy.mjs';
+import { getCheckById } from './contracts/checks.mjs';
+import { withCheckSection } from './contracts/validationScanManagement.mjs';
 import * as findings from './services/findings.mjs';
 import * as tenants from './services/tenants.mjs';
 import * as events from './services/events.mjs';
 import * as evidence from './services/evidence.mjs';
+import { getEvidenceContext } from './services/evidenceContext.mjs';
 import * as productionReleaseEvidence from './services/productionReleaseEvidence.mjs';
 import * as custodyVerification from './services/custodyVerification.mjs';
 import * as evidenceSnapshotSigning from './services/evidenceSnapshotSigning.mjs';
@@ -124,6 +148,7 @@ function defaultServiceDeps() {
     validationScans,
     vectors: vectorLibrary,
     evidence,
+    evidenceContext: { getEvidenceContext },
     findings: {
       listFindings: findings.listFindings,
       listFindingsEnvelope: findings.listFindingsEnvelope,
@@ -134,6 +159,17 @@ function defaultServiceDeps() {
     loa,
     targetDetail,
     remediation,
+    // Dev-json target history reads from the same rules as the Postgres adapters
+    // (src/services/targetHistory.mjs + src/services/originBindings.mjs). Postgres mode
+    // never sees these: the PG runtime injects targetHistoryRepository-backed services.
+    targetHistory: {
+      listTargetObservations,
+      getCurrentFamilyState,
+      listOriginBindings,
+      createOriginBinding,
+      getOriginBinding,
+      archiveOriginBinding,
+    },
     signupIntake,
     passwordAuth: createPasswordAuthService(createDevPasswordAuthRepository()),
     reports,
@@ -411,10 +447,161 @@ function blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)
 
 function blockPostgresAuditLogRoute(runtimeConfig, serviceDeps, path, method, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
-  if (method !== 'GET' || path !== '/v1/audit-log') return false;
-  if (typeof serviceDeps.audit?.listAuditEntries === 'function') return false;
+  const exact = path === '/v1/audit-log';
+  const one = /^\/v1\/audit-log\/[^/]+$/.test(path);
+  if (method !== 'GET' || (!exact && !one)) return false;
+  const reader = exact
+    ? (serviceDeps.state?.queryAuditEntries ?? serviceDeps.audit?.queryAuditEntries ?? serviceDeps.audit?.listAuditEntries)
+    : (serviceDeps.state?.getAuditEntry ?? serviceDeps.audit?.getAuditEntry);
+  if (typeof reader === 'function') return false;
   respondPostgresRouteNotWired(res);
   return true;
+}
+
+function searchParamsObject(url) {
+  const query = {};
+  for (const [key, value] of url.searchParams.entries()) {
+    if (Object.hasOwn(query, key)) {
+      throw new DeclaredHostQueryError('invalid_query_value', `Duplicate query parameter "${key}".`, key);
+    }
+    query[key] = value;
+  }
+  return query;
+}
+
+function queryFailure(res, error) {
+  if (error instanceof DeclaredHostQueryError || error instanceof AuditQueryError) {
+    return json(res, error.status ?? 400, {
+      error: error.code,
+      message: error.message,
+      field: error.field ?? null,
+      ...(error.filters ? { filters: error.filters } : {}),
+      ...(Object.hasOwn(error, 'as_of') ? { as_of: error.as_of } : {}),
+      scope: error.scope ?? 'current',
+      historical: false,
+    });
+  }
+  throw error;
+}
+
+function declaredHostReadOptions(query, defaultUnit) {
+  const options = { defaultUnit };
+  if (query.as_of) options.asOf = query.as_of;
+  else if (!query.cursor) options.asOf = new Date();
+  return options;
+}
+
+async function readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, defaultUnit) {
+  const options = declaredHostReadOptions(query, defaultUnit);
+  if (runtimeConfig.persistenceMode === 'postgres') {
+    const reader = serviceDeps.declaredHostAnalytics?.readDeclaredHostAnalytics;
+    if (typeof reader !== 'function') return { notWired: true };
+    return reader(ctx, query, options);
+  }
+  return queryDeclaredHostAnalytics(
+    targetGroups.listDeclaredAnalyticsRows(ctx, options),
+    query,
+    options,
+  );
+}
+
+function catalogIdentity(check) {
+  if (!check) return null;
+  return {
+    check_id: check.check_id,
+    name: check.name ?? null,
+    version: check.version ?? null,
+    vector_family: check.vector_family ?? null,
+    supported_targets: Array.isArray(check.supported_targets) ? check.supported_targets : [],
+    required_customer_setup: Array.isArray(check.required_customer_setup) ? check.required_customer_setup : [],
+    safety_class: check.safety_class ?? null,
+    risk_class: check.risk_class ?? null,
+  };
+}
+
+/** Legacy inventory stamps every kind `eligible`. An unproven declaration is not runnable now. */
+function presentRuntimeEligibility(record, verificationState) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+  if (record.eligibility !== 'eligible' || record.eligibility_reason != null) return record;
+  if (ownershipProofFromStates({ targetState: verificationState }).verified) return record;
+  return { ...record, eligibility: 'not_runnable_now' };
+}
+
+function presentTargetInventory(envelope) {
+  if (!envelope || !Array.isArray(envelope.items)) return envelope;
+  return {
+    ...envelope,
+    items: envelope.items.map((item) => presentRuntimeEligibility(
+      item,
+      item?.verification_state ?? item?.verification?.state,
+    )),
+  };
+}
+
+function presentTargetDetailEligibility(payload) {
+  if (!payload?.target) return payload;
+  const state = payload.verification?.state ?? payload.target.verification_state ?? null;
+  return {
+    ...payload,
+    target: presentRuntimeEligibility(payload.target, state),
+  };
+}
+
+const AUDIT_QUERY_ALIASES = Object.freeze([
+  ['actor_user_id', 'actor'],
+  ['from', 'since'],
+  ['to', 'until'],
+]);
+
+function normalizeAuditRouteQuery(query) {
+  const next = { ...query };
+  for (const [alias, canonical] of AUDIT_QUERY_ALIASES) {
+    if (!Object.hasOwn(next, alias)) continue;
+    const aliasValue = next[alias];
+    delete next[alias];
+    if (aliasValue == null || aliasValue === '') continue;
+    if (next[canonical] != null && next[canonical] !== '' && next[canonical] !== aliasValue) {
+      throw new AuditQueryError('invalid_query_value', `${alias} conflicts with ${canonical}.`);
+    }
+    if (next[canonical] == null || next[canonical] === '') next[canonical] = aliasValue;
+  }
+  return next;
+}
+
+const REPORT_METADATA_SCOPE_FIELDS = ['target_ids', 'target_group_ids', 'run_ids'];
+
+function metadataScopeGrant(body) {
+  const metadata = body?.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const fields = REPORT_METADATA_SCOPE_FIELDS.filter((field) => Object.hasOwn(metadata, field));
+  if (fields.length === 0) return null;
+  return {
+    error: 'unrecognized_scope',
+    status: 400,
+    fields: fields.map((field) => `metadata.${field}`),
+  };
+}
+
+function reportReadCapabilities() {
+  return {
+    ...reportCapabilities(),
+    scope: {
+      fields: ['target_ids', 'target_group_ids', 'run_ids'],
+      max_ids: reports.MAX_REPORT_SCOPE_IDS,
+      declared_members_cap: reports.MAX_DECLARED_MEMBERS,
+      omitted: 'tenant',
+    },
+    capture: {
+      runs_when_run_ids_omitted: reports.MAX_CAPTURED_RUNS,
+      findings: reports.MAX_SNAPSHOT_FINDINGS,
+      evidence: reports.MAX_SNAPSHOT_EVIDENCE,
+    },
+    readiness_score: {
+      scoped: 'unknown',
+      reason: 'published_readiness_formula_is_tenant_wide',
+    },
+    snapshot_frozen: true,
+  };
 }
 
 function blockPostgresEventsRoute(runtimeConfig, serviceDeps, path, method, res) {
@@ -531,6 +718,79 @@ function blockValidationScanRoute(serviceDeps, methodName, res) {
   if (typeof serviceDeps.validationScans?.[methodName] === 'function') return false;
   respondPostgresRouteNotWired(res);
   return true;
+}
+
+const FINDING_LIST_QUERY_KEYS = [
+  'q',
+  'status',
+  'severity',
+  'check_id',
+  'target_group_id',
+  'target_id',
+  'test_run_id',
+  'page',
+  'limit',
+  'offset',
+];
+
+function findingListQueryError(err) {
+  if (!(err instanceof FindingListQueryError)) return null;
+  return {
+    error: err.code,
+    status: err.status ?? 400,
+    field: err.field ?? null,
+    message: err.message,
+  };
+}
+
+function historyMethod(serviceDeps, name) {
+  const fn = serviceDeps.targetHistory?.[name];
+  return typeof fn === 'function' ? fn : null;
+}
+
+async function readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId) {
+  const readTarget = runtimeConfig.persistenceMode === 'postgres'
+    ? serviceDeps.targetGroups?.getTarget
+    : targetGroups.getTarget;
+  if (typeof readTarget !== 'function') return { missing: true };
+  const target = await readTarget(ctx, targetId);
+  if (!target || (target.tenant_id && target.tenant_id !== ctx.tenantId)) return { target: null };
+  return { target };
+}
+
+// ponytail: comparison uses only this newest-first page. A successful pair split
+// across the limit is omitted. Upgrade path: compare from current pointers plus
+// one older successful read.
+function observationPageComparison(items, query) {
+  const filtered = Boolean(query.cursor || query.from || query.to);
+  const comparable_changes = [];
+  const comparison_gaps = [];
+  if (!filtered) {
+    const newest = new Map();
+    for (const item of items) {
+      if (item?.attempt_class !== 'successful' || !item.family) continue;
+      const pair = newest.get(item.family) ?? [];
+      if (pair.length < 2) pair.push(item);
+      newest.set(item.family, pair);
+    }
+    for (const [family, pair] of newest) {
+      if (pair.length < 2) continue;
+      const compared = assessComparability(pair[1], pair[0]);
+      const entry = {
+        family,
+        previous_id: pair[1].id,
+        observation_id: pair[0].id,
+        ...compared,
+      };
+      if (compared.comparable && compared.change === 'changed') comparable_changes.push(entry);
+      else if (!compared.comparable) comparison_gaps.push(entry);
+    }
+  }
+  return {
+    comparable_changes,
+    comparison_gaps,
+    scope: filtered ? 'filtered_page' : 'newest_page',
+  };
 }
 
 function resolveProbeJobsService(runtimeConfig, serviceDeps) {
@@ -1316,6 +1576,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'evidence:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     return json(res, 200, { items: await serviceDeps.evidence.listEvidence(ctx) });
+  }
+  if (method === 'GET' && path === '/v1/evidence-context') {
+    const reader = serviceDeps.evidenceContext?.getEvidenceContext ?? getEvidenceContext;
+    const result = await reader(ctx, url.searchParams, {
+      ...serviceDeps,
+      persistenceMode: runtimeConfig.persistenceMode,
+    });
+    return json(res, result.status ?? 200, result.body);
   }
   const evMatch = path.match(/^\/v1\/evidence\/([^/]+)$/);
   if (evMatch && method === 'GET') {
@@ -2252,9 +2520,33 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, payload);
   }
 
+  if (path === '/v1/analytics/declared-hosts' && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    try {
+      const query = searchParamsObject(url);
+      const result = await readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, 'hostname');
+      if (result?.notWired) return respondPostgresRouteNotWired(res);
+      const family = query.family === 'waf' || query.family === 'cdn' ? query.family : null;
+      return json(res, 200, declaredHostApiPayload(result, { family }));
+    } catch (error) {
+      return queryFailure(res, error);
+    }
+  }
+
   if (path === '/v1/targets' && method === 'GET') {
     const gate = requirePermission(ctx, 'target_group:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
+    if ([...url.searchParams.keys()].length > 0) {
+      try {
+        const query = searchParamsObject(url);
+        const result = await readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, 'target');
+        if (result?.notWired) return respondPostgresRouteNotWired(res);
+        return json(res, 200, declaredTargetListPayload(result));
+      } catch (error) {
+        return queryFailure(res, error);
+      }
+    }
     const targetService = serviceDeps.targetGroups;
     let envelope;
     if (typeof targetService?.listTargetsEnvelope === 'function') {
@@ -2275,7 +2567,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     } else {
       envelope = targetGroups.listTargetsEnvelope(ctx);
     }
-    return json(res, 200, envelope);
+    return json(res, 200, presentTargetInventory(envelope));
   }
 
   if (path === '/v1/targets' && method === 'POST') {
@@ -2558,6 +2850,125 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     }
   }
 
+  const targetObservationsMatch = path.match(/^\/v1\/targets\/([^/]+)\/observations$/);
+  if (targetObservationsMatch && method === 'GET') {
+    const listObservations = historyMethod(serviceDeps, 'listTargetObservations');
+    const readCurrent = historyMethod(serviceDeps, 'getCurrentFamilyState');
+    if (!listObservations || !readCurrent) return respondPostgresRouteNotWired(res);
+    const targetId = decodeURIComponent(targetObservationsMatch[1]);
+    const query = {
+      target_id: targetId,
+      family: url.searchParams.get('family') ?? undefined,
+      from: url.searchParams.get('from') ?? undefined,
+      to: url.searchParams.get('to') ?? undefined,
+      cursor: url.searchParams.get('cursor') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+    };
+    const listed = await listObservations(ctx, query);
+    if (listed?.error) return json(res, listed.status ?? 400, listed);
+    const current = await readCurrent(ctx, { target_id: targetId });
+    if (current?.error) return json(res, current.status ?? 400, current);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    // Distinguish a missing/foreign target (`unknown_target`) from the router's
+    // `not_found`, which the portal reads as "this route is not supported yet".
+    if (!owned.target) return json(res, 404, { error: 'unknown_target' });
+    return json(res, 200, {
+      items: listed.items,
+      count: listed.count,
+      next_cursor: listed.next_cursor ?? null,
+      filters: listed.filters,
+      current: current.items ?? [],
+      comparison: observationPageComparison(listed.items ?? [], query),
+    });
+  }
+  if (targetObservationsMatch) return json(res, 404, { error: 'not_found' });
+
+  const targetOriginBindingsMatch = path.match(/^\/v1\/targets\/([^/]+)\/origin-bindings$/);
+  if (targetOriginBindingsMatch && method === 'GET') {
+    const listBindings = historyMethod(serviceDeps, 'listOriginBindings');
+    if (!listBindings) return respondPostgresRouteNotWired(res);
+    const targetId = decodeURIComponent(targetOriginBindingsMatch[1]);
+    const listed = await listBindings(ctx, {});
+    if (listed?.error) return json(res, listed.status ?? 400, listed);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    // Same unknown_target/not_found split as the observations route.
+    if (!owned.target) return json(res, 404, { error: 'unknown_target' });
+    const items = (listed.items ?? []).filter((row) => (
+      row.protected_target_id === targetId || row.origin_target_id === targetId
+    ));
+    return json(res, 200, { items, count: items.length });
+  }
+
+  const originBindingArchiveMatch = path.match(/^\/v1\/origin-bindings\/([^/]+)\/archive$/);
+  const originBindingIdMatch = path.match(/^\/v1\/origin-bindings\/([^/]+)$/);
+  if (path === '/v1/origin-bindings' && method === 'POST') {
+    const createBinding = historyMethod(serviceDeps, 'createOriginBinding');
+    if (!createBinding) return respondPostgresRouteNotWired(res);
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await createBinding(ctx, body);
+    if (result?.error) return json(res, result.status ?? 400, result);
+    return json(res, result?.replayed === true ? 200 : 201, result);
+  }
+  if (originBindingArchiveMatch && method === 'POST') {
+    const archiveBinding = historyMethod(serviceDeps, 'archiveOriginBinding');
+    if (!archiveBinding) return respondPostgresRouteNotWired(res);
+    await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await archiveBinding(ctx, decodeURIComponent(originBindingArchiveMatch[1]));
+    if (result?.error) return json(res, result.status ?? 400, result);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
+  if (originBindingIdMatch && method === 'GET') {
+    const readBinding = historyMethod(serviceDeps, 'getOriginBinding');
+    if (!readBinding) return respondPostgresRouteNotWired(res);
+    const result = await readBinding(ctx, decodeURIComponent(originBindingIdMatch[1]));
+    if (result?.error) return json(res, result.status ?? 400, result);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
+
+  const compatibleChecksMatch = path.match(/^\/v1\/targets\/([^/]+)\/compatible-checks$/);
+  if (compatibleChecksMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const readTarget = runtimeConfig.persistenceMode === 'postgres'
+      ? serviceDeps.targetGroups?.getTarget
+      : targetGroups.getTarget;
+    if (typeof readTarget !== 'function') return respondPostgresRouteNotWired(res);
+    const target = await readTarget(ctx, decodeURIComponent(compatibleChecksMatch[1]));
+    if (!target) return json(res, 404, { error: 'not_found' });
+    const derived = deriveProtectionProfile({
+      now: new Date(),
+      target,
+      edgeRow: null,
+      policies: [],
+      observations: [],
+    });
+    const checks = (derived.coverage?.pairs ?? []).map((pair) => ({
+      ...pair,
+      runtime_launch_gates: 'not_evaluated',
+      launch_block_reason: 'not_evaluated',
+      launchable: null,
+      catalog: catalogIdentity(getCheckById(pair.check_id)),
+    }));
+    return json(res, 200, {
+      target_id: target.id,
+      kind: target.kind,
+      value: target.value,
+      target_group_id: target.target_group_id,
+      runtime_launch_gates: 'not_evaluated',
+      launch_block_reason: 'not_evaluated',
+      coverage: {
+        ...derived.coverage,
+        runtime_launch_gates: 'not_evaluated',
+        pairs: checks,
+      },
+      checks,
+    });
+  }
+
   const targetDetailMatch = path.match(/^\/v1\/targets\/([^/]+)$/);
   if (targetDetailMatch && method === 'GET') {
     const gate = requirePermission(ctx, 'target_group:read');
@@ -2570,7 +2981,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       findings_cursor: url.searchParams.get('findings_cursor') ?? undefined,
     });
     if (payload?.error) return json(res, payload.status ?? 404, payload);
-    return json(res, 200, payload);
+    return json(res, 200, presentTargetDetailEligibility(payload));
   }
 
   const ownershipConfirmMatch = path.match(/^\/v1\/ownership-verifications\/([^/]+)\/confirm$/);
@@ -2784,6 +3195,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     return json(res, 200, { items: await serviceDeps.testRuns.listChecks() });
   }
+  const checkByIdMatch = path.match(/^\/v1\/checks\/([^/]+)$/);
+  if (checkByIdMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'check:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const check = getCheckById(decodeURIComponent(checkByIdMatch[1]));
+    if (!check) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, { check: withCheckSection(check) });
+  }
   if (path === '/v1/test-policies' && method === 'GET') {
     const gate = requirePermission(ctx, 'test_policy:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2846,7 +3265,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'test_run:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockValidationScanRoute(serviceDeps, 'getValidationScan', res)) return;
-    const result = await serviceDeps.validationScans.getValidationScan(ctx, scanMatch[1], { runtimeConfig });
+    const result = await serviceDeps.validationScans.getValidationScan(ctx, scanMatch[1], {
+      runtimeConfig,
+      advance: false,
+    });
     if (!result) return json(res, 404, { error: 'not_found' });
     return json(res, 200, result);
   }
@@ -2884,6 +3306,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       after: url.searchParams.get('after') ?? undefined,
       limit: url.searchParams.get('limit') ?? undefined,
       runtimeConfig,
+      advance: false,
     });
     if (!result) return json(res, 404, { error: 'not_found' });
     return json(res, 200, result);
@@ -2956,17 +3379,41 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (path === '/v1/findings' && method === 'GET') {
     const gate = requirePermission(ctx, 'finding:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    const listOpts = {
-      target_group_id: url.searchParams.get('target_group_id') ?? undefined,
-      target_id: url.searchParams.get('target_id') ?? undefined,
-      test_run_id: url.searchParams.get('test_run_id') ?? undefined,
-      limit: url.searchParams.get('limit') ?? undefined,
-    };
-    if (typeof serviceDeps.findings.listFindingsEnvelope === 'function') {
-      return json(res, 200, await serviceDeps.findings.listFindingsEnvelope(ctx, listOpts));
+    const listOpts = {};
+    try {
+      for (const [key, value] of url.searchParams) {
+        if (!FINDING_LIST_QUERY_KEYS.includes(key)) {
+          throw new FindingListQueryError('unknown_query_param', `Unknown query parameter: ${key}.`, key);
+        }
+        if (Object.hasOwn(listOpts, key)) {
+          throw new FindingListQueryError('invalid_query_value', `Duplicate query parameter: ${key}.`, key);
+        }
+        listOpts[key] = value;
+      }
+      parseFindingListQuery(listOpts);
+    } catch (err) {
+      const rejected = findingListQueryError(err);
+      if (rejected) return json(res, rejected.status, rejected);
+      throw err;
     }
-    const items = await serviceDeps.findings.listFindings(ctx, listOpts);
-    return json(res, 200, { items, count: items.length, meta: {} });
+    try {
+      if (typeof serviceDeps.findings.listFindingsEnvelope === 'function') {
+        const result = await serviceDeps.findings.listFindingsEnvelope(ctx, listOpts);
+        if (result?.error) return json(res, result.status ?? 400, result);
+        return json(res, 200, result);
+      }
+      const items = await serviceDeps.findings.listFindings(ctx, listOpts);
+      if (items?.error) return json(res, items.status ?? 400, items);
+      return json(res, 200, {
+        items,
+        count: Array.isArray(items) ? items.length : 0,
+        meta: {},
+      });
+    } catch (err) {
+      const rejected = findingListQueryError(err);
+      if (rejected) return json(res, rejected.status, rejected);
+      throw err;
+    }
   }
   const findingEvidenceMatch = path.match(/^\/v1\/findings\/([^/]+)\/evidence$/);
   if (findingEvidenceMatch && method === 'GET') {
@@ -2990,6 +3437,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const f = await serviceDeps.findings.patchFinding(ctx, fMatch[1], body);
     if (!f) return json(res, 404, { error: 'not_found' });
+    if (f.error) return json(res, f.status ?? 400, f);
     return json(res, 200, f);
   }
 
@@ -3006,7 +3454,13 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
         supported_periods: [...REPORT_PERIODS],
       });
     }
-    return json(res, 201, await serviceDeps.reports.createReport(ctx, body));
+    const granted = metadataScopeGrant(body);
+    if (granted) return json(res, granted.status, granted);
+    const created = await serviceDeps.reports.createReport(ctx, body);
+    if (created && typeof created === 'object' && created.error) {
+      return json(res, Number(created.status) || 400, created);
+    }
+    return json(res, 201, created);
   }
   if (path === '/v1/reports' && method === 'GET') {
     const gate = requirePermission(ctx, 'report:read');
@@ -3017,8 +3471,13 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
         limit: Number(url.searchParams.get('limit') ?? 100),
       }),
       // Report builders read their kind/format options from here, never from a client copy.
-      capabilities: reportCapabilities(),
+      capabilities: reportReadCapabilities(),
     });
+  }
+  if (path === '/v1/reports/capabilities' && method === 'GET') {
+    const gate = requirePermission(ctx, 'report:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    return json(res, 200, { capabilities: reportReadCapabilities() });
   }
   const rptMatch = path.match(/^\/v1\/reports\/([^/]+)$/);
   if (rptMatch && method === 'GET') {
@@ -3076,12 +3535,39 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'audit:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresAuditLogRoute(runtimeConfig, serviceDeps, path, method, res)) return;
-    if (runtimeConfig.persistenceMode === 'postgres') {
-      const items = await serviceDeps.audit.listAuditEntries(ctx, { limit: 200 });
-      return json(res, 200, { items });
+    try {
+      const query = normalizeAuditRouteQuery(searchParamsObject(url));
+      if (runtimeConfig.persistenceMode === 'postgres') {
+        const queryFn = serviceDeps.state?.queryAuditEntries ?? serviceDeps.audit?.queryAuditEntries;
+        if (typeof queryFn === 'function') return json(res, 200, await queryFn(ctx, query));
+        const legacy = serviceDeps.audit?.listAuditEntries;
+        const filtered = ['resource', 'actor', 'action', 'since', 'until', 'cursor', 'limit'].some(
+          (key) => query[key] != null && query[key] !== '',
+        );
+        if (typeof legacy === 'function' && !filtered) {
+          const listed = await legacy(ctx, { limit: 200 });
+          const items = Array.isArray(listed) ? listed : (listed?.items ?? []);
+          return json(res, 200, { items });
+        }
+        return respondPostgresRouteNotWired(res);
+      }
+      return json(res, 200, state.queryAuditEntries(ctx, query));
+    } catch (error) {
+      return queryFailure(res, error);
     }
-    const items = getStore().auditLog.filter((a) => a.tenant_id === ctx.tenantId).slice(-200);
-    return json(res, 200, { items });
+  }
+  const auditEntryMatch = path.match(/^\/v1\/audit-log\/([^/]+)$/);
+  if (auditEntryMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'audit:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockPostgresAuditLogRoute(runtimeConfig, serviceDeps, path, method, res)) return;
+    const getFn = runtimeConfig.persistenceMode === 'postgres'
+      ? (serviceDeps.state?.getAuditEntry ?? serviceDeps.audit?.getAuditEntry)
+      : state.getAuditEntry;
+    if (typeof getFn !== 'function') return respondPostgresRouteNotWired(res);
+    const entry = await getFn(ctx, decodeURIComponent(auditEntryMatch[1]));
+    if (!entry || entry.tenant_id !== ctx.tenantId) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, { entry });
   }
 
   const hsSvc = resolveHighScaleService(runtimeConfig, serviceDeps);

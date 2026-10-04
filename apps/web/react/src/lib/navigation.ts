@@ -25,10 +25,11 @@ export const NAV_GROUP_LABELS: Record<SurfaceKind, string> = {
   scope: 'Scope',
   validation: 'Validation',
   governance: 'Governance',
+  account: 'Account',
   staff: 'Staff'
 };
 
-/** Sixteen customer-visible sidebar items + two staff items (detail routes omitted). */
+/** Customer sidebar items (Targets first; deferred execution history omitted) + two staff items. */
 export const NAV_ITEMS: NavItem[] = [
   {
     id: 'dashboard',
@@ -38,39 +39,32 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard
   },
   {
-    id: 'target-groups',
-    label: 'Target groups',
-    group: 'scope',
-    description: 'Customer-declared business services, expected behavior, and owners.',
-    icon: Target
-  },
-  {
     id: 'targets',
     label: 'Targets',
     group: 'scope',
-    description: 'All declared hostnames, IPs, and CIDRs with tags, verification, eligibility, and group context.',
+    description: 'Declared hostnames, IPs, and CIDRs with ownership proof, tags, and the next validation step.',
     icon: Crosshair
   },
   {
+    id: 'target-groups',
+    label: 'Target groups',
+    group: 'scope',
+    description: 'Targets sharing validation settings: safe windows, expected behavior, and authorization.',
+    icon: Target
+  },
+  {
     id: 'checks',
-    label: 'Vector library',
+    label: 'Check library',
     group: 'validation',
     description: 'Browse 721 vectors, evidence boundaries, expected controls, and exact-target bounded checks.',
     icon: ListChecks
   },
   {
     id: 'test-policies',
-    label: 'Test policies',
+    label: 'Validation schedules',
     group: 'validation',
     description: 'Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
     icon: CalendarClock
-  },
-  {
-    id: 'runs',
-    label: 'Test runs',
-    group: 'validation',
-    description: 'Execution timeline, probe results, and verdicts.',
-    icon: Activity
   },
   {
     id: 'findings',
@@ -117,21 +111,21 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'settings',
     label: 'Settings',
-    group: 'governance',
+    group: 'account',
     description: 'Tenant profile, roles, tokens, retention, SSO, and safe defaults.',
     icon: KeyRound
   },
   {
     id: 'support',
     label: 'Support',
-    group: 'governance',
+    group: 'account',
     description: 'Support readiness, escalation paths, runbook references, and non-production on-call posture.',
     icon: LifeBuoy
   },
   {
     id: 'subscription',
-    label: 'Billing',
-    group: 'governance',
+    label: 'Plan & usage',
+    group: 'account',
     description: 'Plan, entitlements, limits, billing state, contract references, and effective dates.',
     icon: CreditCard
   },
@@ -153,6 +147,13 @@ export const NAV_ITEMS: NavItem[] = [
 
 /** Detail routes reachable via deep-link but hidden from the sidebar. */
 export const DETAIL_ROUTE_ITEMS: NavItem[] = [
+  {
+    id: 'runs',
+    label: 'Test runs',
+    group: 'validation',
+    description: 'Legacy execution list. Results and evidence now live on each target and check; this address still resolves for existing links.',
+    icon: Activity
+  },
   {
     id: 'check-detail',
     label: 'Check detail',

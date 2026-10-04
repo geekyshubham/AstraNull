@@ -3,8 +3,9 @@ import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { createServer as createViteServer } from 'vite';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
-import { MAX_SCAN_CHECKS } from '../../../src/contracts/validationScanManagement.mjs';
+import { ACTIVE_STEP_STATUSES, MAX_SCAN_CHECKS } from '../../../src/contracts/validationScanManagement.mjs';
 import {
+  advanceScanForTest,
   dispatchDueScansForTest,
   expireScanCollectionWindowsForTest,
   findStoredScanForTest,
@@ -22,10 +23,21 @@ import {
  * FT-SCAN-01 — validation scans: launcher, live polling view, scheduling, RBAC.
  *
  * Runs against the real in-process dev-json backend (no route mocking) so the
- * step lifecycle, activity log, and Stop path are exercised end to end. Simulated
- * child runs finalize once their collection window closes; the spec expires those
- * windows through the shared store instead of waiting out the real timers.
+ * step lifecycle, activity log, and Stop path are exercised end to end. Scan reads
+ * from the portal are passive (GET never advances a scan); progress comes only from
+ * the explicit system runner tick (`advanceScanForTest`). Simulated child runs
+ * finalize once their collection window closes; the spec expires those windows
+ * through the shared store instead of waiting out the real timers.
  */
+
+/** Steps that are active right now; a scan runs its steps one at a time. */
+function activeSteps(scan) {
+  return (scan?.steps ?? []).filter((step) => ACTIVE_STEP_STATUSES.includes(step.status));
+}
+
+function stepStatuses(scan) {
+  return (scan?.steps ?? []).map((step) => String(step.status ?? ''));
+}
 
 const SOC_GATED_CHECK_ID = 'l3.connection_table_exhaustion.request_only';
 const CHECK_PICKER_SEARCH = 'Search by name, check id, section, or probe kind';
@@ -136,7 +148,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(modal).toBeHidden();
   });
 
-  test('launches an exact-target scan from target group detail and follows it live until Stop', async ({ page }) => {
+  test('launches an exact-target scan, reads it passively, progresses it one step at a time through the runner, and stops it', async ({ page }) => {
     test.setTimeout(120_000);
     await injectPortalDevHeadersSession(page);
     const scanPosts = [];
@@ -188,8 +200,16 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(page.getByRole('heading', { level: 1, name: scanId })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText(`Exact target checkout.acme.com in edge-checkout`)).toBeVisible();
     await expect(stepRows(page)).toHaveCount(expectedChecks, { timeout: 20_000 });
-    await expect(page.locator('.scan-live-region')).toContainText('Refreshing every 3 seconds');
+    await expect(page.locator('.scan-live-region')).toContainText(/Scan running\. Refreshing every \d+ seconds?\./);
     await expect(page.getByRole('button', { name: `Stop scan ${scanId}` })).toBeVisible();
+
+    // Passive reads: several polls without a runner tick change no stored step.
+    const beforePolls = stepStatuses(findStoredScanForTest(scanId));
+    expect(beforePolls).toHaveLength(expectedChecks);
+    const readsBefore = scanReads.length;
+    await expect.poll(() => scanReads.length, { timeout: 15_000 }).toBeGreaterThan(readsBefore + 1);
+    expect(stepStatuses(findStoredScanForTest(scanId))).toEqual(beforePolls);
+    expect(activeSteps(findStoredScanForTest(scanId)).length).toBeLessThanOrEqual(1);
     await expect(page.getByRole('list', { name: 'Scan activity' })).toBeVisible();
     const initialActivity = await page.getByRole('list', { name: 'Scan activity' }).locator('li').count();
     expect(initialActivity).toBeGreaterThan(0);
@@ -199,8 +219,14 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(activeRow).toContainText(/max \d+ request/);
     await expect(activeRow).toContainText('0 (simulated, no live traffic)');
 
-    await expect.poll(async () => {
+    // The explicit runner advances the scan; the page only shows what was recorded.
+    const tick = () => {
       expireScanCollectionWindowsForTest(scanId);
+      advanceScanForTest(scanId);
+      expect(activeSteps(findStoredScanForTest(scanId)).length, 'one step at a time').toBeLessThanOrEqual(1);
+    };
+    await expect.poll(async () => {
+      tick();
       return stepRows(page).filter({ hasText: 'Verdicted' }).count();
     }, { timeout: 30_000, intervals: [500, 1000] }).toBeGreaterThanOrEqual(1);
     const verdictedRow = stepRows(page).filter({ hasText: 'Verdicted' }).first();
@@ -210,7 +236,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(page.getByRole('progressbar', { name: /Scan progress/ })).toBeVisible();
 
     await expect.poll(async () => {
-      expireScanCollectionWindowsForTest(scanId);
+      tick();
       return stepRows(page).filter({ hasText: 'Verdicted' }).count();
     }, { timeout: 30_000, intervals: [500, 1000] }).toBeGreaterThanOrEqual(2);
     await expect.poll(() => page.getByRole('list', { name: 'Scan activity' }).locator('li').count(), { timeout: 20_000 })

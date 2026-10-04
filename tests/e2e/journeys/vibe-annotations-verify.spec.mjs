@@ -85,30 +85,56 @@ test.describe('Vibe annotations verification', () => {
     await page.screenshot({ path: '/tmp/vibe-2-runs-select-open.png' });
   });
 
-  test('7, 8, 9. /app#target-detail elements removed and UI UX revamped', async ({ page }) => {
+  test('7, 8, 9. /app#target-detail removed elements stay removed; unified workspace geometry and exact context', async ({ page }) => {
+    // Local layout checks only: they do not need the vibe-annotations server and record no design approval.
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-detail', baseUrl);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 }]) {
+      await page.setViewportSize(viewport);
+      await gotoPortalRoute(page, 'target-detail', baseUrl);
 
-    // 7. remove td-cat-how
-    await expect(page.locator('.td-cat-how')).toHaveCount(0);
+      // 7, 8. Removed annotations stay removed.
+      await expect(page.locator('.td-cat-how')).toHaveCount(0);
+      await expect(page.locator('.td-decl-note')).toHaveCount(0);
+      // The customer UI ships one presentation; no Classic or Premium switch.
+      await expect(page.getByRole('radio', { name: /Classic|Premium/ })).toHaveCount(0);
 
-    // 8. remove td-decl-note
-    await expect(page.locator('.td-decl-note')).toHaveCount(0);
+      // 9. Exact context: shell breadcrumb with the current page marked, and a back link to Targets.
+      const crumbs = page.locator('#portal-main').getByRole('navigation', { name: 'Breadcrumb' });
+      await expect(crumbs).toHaveText('Scope›Target detail');
+      await expect(crumbs.locator('[aria-current="page"]')).toHaveText('Target detail');
+      await expect(page.locator('#portal-main a.td-back')).toHaveAttribute('href', '#targets');
+      await expect(page.locator('#portal-main a.td-back')).toHaveText('Targets');
+      const cluster = page.locator('.td-title-cluster');
+      await expect(cluster.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
+      await expect(cluster).toContainText('Domain ownership verified');
 
-    // 9. revamped UI UX
-    await expect(page.locator('.td-breadcrumbs')).toBeVisible();
-    await expect(page.locator('.td-title-cluster')).toBeVisible();
-    await expect(page.locator('.td-summary-region')).toBeVisible();
+      // Unified workspace geometry: one column; title, then tabs, then the panel, then target facts,
+      // all on the same left edge and inside the viewport.
+      const geometry = await page.evaluate(() => {
+        const rect = (node) => node?.getBoundingClientRect() ?? null;
+        const h1 = rect(document.querySelector('#portal-main h1'));
+        const tabs = rect(document.querySelector('#portal-main [role="tablist"]'));
+        const panel = rect(document.querySelector('#portal-main [role="tabpanel"]'));
+        const facts = rect(document.querySelector('#portal-main section.td-facts'));
+        return {
+          h1, tabs, panel, facts,
+          viewport: document.documentElement.clientWidth,
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      for (const key of ['h1', 'tabs', 'panel', 'facts']) expect(geometry[key], key).not.toBeNull();
+      expect(geometry.tabs.top).toBeGreaterThan(geometry.h1.bottom);
+      expect(geometry.panel.top).toBeGreaterThanOrEqual(geometry.tabs.bottom);
+      expect(geometry.facts.top).toBeGreaterThanOrEqual(geometry.panel.bottom);
+      for (const key of ['tabs', 'panel', 'facts']) {
+        expect(Math.abs(geometry[key].left - geometry.h1.left), `${key} shares the title's left edge`).toBeLessThanOrEqual(1);
+        expect(geometry[key].right, `${key} stays inside the viewport`).toBeLessThanOrEqual(geometry.viewport + 1);
+      }
+      expect(Math.abs(geometry.facts.width - geometry.panel.width)).toBeLessThanOrEqual(1);
+      expect(geometry.overflow).toBeLessThanOrEqual(1);
 
-    await page.screenshot({ path: '/tmp/vibe-3-target-detail-premium.png' });
-
-    // Switch to classic to verify classic layout also looks clean
-    const classicBtn = page.getByRole('radio', { name: 'Classic' });
-    if (await classicBtn.count() > 0) {
-      await classicBtn.click();
-      await page.waitForTimeout(300);
-      await page.screenshot({ path: '/tmp/vibe-3-target-detail-classic.png' });
+      await page.screenshot({ path: `/tmp/vibe-3-target-detail-${viewport.width}.png` });
     }
   });
 });

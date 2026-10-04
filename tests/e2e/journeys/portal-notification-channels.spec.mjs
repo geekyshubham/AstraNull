@@ -117,12 +117,14 @@ test.describe('notification channels panel', () => {
         await expect(turnOff).toBeVisible();
         await turnOff.click();
         await expect(panel.getByRole('status').filter({ hasText: 'Slack channel turned off.' })).toBeVisible();
-        await expect(panel.getByText('0 of 1 on')).toBeVisible();
+        await expect(panel.getByText('0 of 1 enabled')).toBeVisible();
+        await expect(panel.getByRole('row').filter({ hasText: 'Slack' }).filter({ hasText: 'Disabled' })).toHaveCount(1);
 
         const turnOn = panel.getByRole('button', { name: /^Turn on Slack channel/ });
         await turnOn.click();
         await expect(panel.getByRole('status').filter({ hasText: 'Slack channel turned on.' })).toBeVisible();
-        await expect(panel.getByText('1 of 1 on')).toBeVisible();
+        await expect(panel.getByText('1 of 1 enabled')).toBeVisible();
+        await expect(panel.getByRole('row').filter({ hasText: 'Slack' }).filter({ hasText: 'Enabled' })).toHaveCount(1);
 
         await panel.getByRole('button', { name: /^Remove Slack channel/ }).click();
         const confirm = page.locator('dialog.modal-confirm[open]').filter({ has: page.getByRole('heading', { name: 'Remove Slack channel?' }) });

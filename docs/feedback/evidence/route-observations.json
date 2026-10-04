@@ -1,0 +1,2718 @@
+[
+  {
+    "id": "dashboard",
+    "url": "http://127.0.0.1:5173/app?ux_review=baseline#dashboard?tab=overview",
+    "h1": "Readiness overview",
+    "title": "Dashboard \u00b7 Overview \u00b7 AstraNull",
+    "tabs": [
+      "Overview",
+      "Risk trends"
+    ],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Overview",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Risk trends",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Readiness72/100Not ready yet: high-priority gaps remainOpen readiness trend",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "body": "Overview\n\u203a\nDashboard\n\nTenant \u00b7 TEN_DEMO\n\nReadiness overview\n\nEvery verdict below traces to observed probe evidence or an explicit customer declaration. Validation runs from the outside in.\n\nRefresh\nRun safe validation\n\n5 declared targets, 3 ownership verified, 1 evidence record. High-scale tests stay SOC-gated.\n\nOverview\nRisk trends\nWhere does attack traffic get stopped?\n\nEach stage shows the evidence AstraNull has for the path a request takes, from the open internet to your origin.\n\nPATH STATUS\nAT LEAST ONE STAGE HAS A GAP\nINTERNET\n3/5 verified\n\nDeclared targets with proven ownership are the entry point every probe uses.\n\nREVIEW\nEDGE / CDN\nNo provider metadata\n\nReported edge/CDN providers are declaration context, not proof traffic was blocked.\n\nNOT MEASURED\nWAF\nNot enough evidence\n\n0% of declared WAF assets fully validated.\n\nREVIEW\nORIGIN\n1 open origin finding\n\nDirect-origin traffic was reachable in recorded evidence and the finding is still open.\n\nGAP\nReadiness\n72/100\nNot ready yet: high-priority gaps remain\nOpen readiness trend\nDeclared targets\n5\n3 ownership verified (60%)\nOpen targets\nEvidence coverage\n40%\n2 of 5 targets have evidence-backed verdicts\nOpen test runs\nOpen findings\n1\n0 CRITICAL\n1 HIGH\nView all findings\nReadiness posture\n\nCorrelated check verdicts this cycle, and the weighted factors behind the published score.\n\nCheck verdicts\nREADINESS\n72\n/100\nPass\n100%\n1/1\nReview\n0%\n0/1\nGap\n0%\n0/1\n\n1 check correlated this cycle\n\nWeighted factors\n\nEach factor contributes its points to the published readiness score.\n\nValidation coverage\n44/44\n\n1 of 1 target group(s) have recent evidence-backed validations.\n\nOpen findings impact\n0/28\n\n0 open finding(s); 1 verdict(s) recorded (0 recent). Stale or missing recent verdict evidence does not support full posture credit.\n\nEvidence freshness\n17/17\n\nRecent evidence-backed validation within 30 days (1 run(s), 1 target group(s)).\n\nSOC governance posture\n11/11\n\nRequest hsr demo approved: authorization pack accepted with 2 SOC approver(s). Other request(s) still pending gates: Hsr checkout scheduled: missing accepted artifacts: Customer authorization letter, target ownership confirmation, emergency contacts, stop criteria, test plan, business approval, legal approval, scope and rate plan, abort criteria | hsr demo draft: missing accepted artifacts: Customer authorization letter, target ownership confirmation, emergency contacts, stop criteria, test plan, business approval, legal approval, scope and rate plan, abort criteria; SOC approvals 0/2.\n\nTarget posture\n\nDeclared targets, worst posture first. Open a row for its evidence and checks.\n\nAll targets\n0\nGap\n1\nReview\n1\nPass\n3\nNo result\nTARGET\tOWNERSHIP\tLATEST VERDICT\n\ncheckout.acme.com\nNo tags\n\t\nDNS verified\n\t\nPASSED \u00b7 1 OPEN\n\n\ncdn.acme.com\nNo tags\n\t\nPending\n\t\nNO RESULT\n\n\npay.acme.com\nNo tags\n\t\nDNS verified\n\t\nNO RESULT\n\n\nstatic.acme.com\nNo tags\n\t\nPending\n\t\nNO RESULT\n\n\napi.acme.com\nNo tags\n\t\nDNS verified\n\t\nPASS\nWhat to fix first\n\nUp to three actions backed by the evidence currently loaded.\n\n1 TO REVIEW\n1\nBlock direct access to checkout.acme.com\nHigh severity: Origin direct bypass \u00b7 checkout.acme.com\nReview\nRecent validation activity\n\nThe latest safe validation runs and their verdicts.\n\nAll runs\nRUN\tVERDICT\tWHEN\n\norigin.direct_bypass.safe\nrun_demo_running\n\t\nNO RESULT YET\n\t\n46m ago\n\n\ndns.authoritative_response.safe\nrun_demo_dns\n\t\nNO RESULT YET\n\t\n3h ago\n\n\norigin.leak_scan.safe\nrun_checkout_1\n\t\nPROTECTION STOPPED THE TEST TRAFFIC\n\t\n0s ago",
+    "overflow": false
+  },
+  {
+    "id": "target-groups",
+    "title": "Target groups \u00b7 Scope \u00b7 AstraNull",
+    "h1": "Target groups",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Add target",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Create target group",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [],
+    "body": "Scope\n\u203a\nTarget groups\n\nCustomer-declared scope\n\nTarget groups\n\nDeclare the services AstraNull validates. Ownership stays exact-target proof; AstraNull never scans the estate or requires cloud credentials.\n\nAdd target\nCreate target group\nACTIVE GROUPS\n1\nCustomer-declared scope\nDECLARED TARGETS\n5\nExact targets only\nEVIDENCE-BACKED RUNS\n1\nExternal probe verdicts\nOPEN FINDINGS\n1\nAcross declared groups\nDeclared target groups\n\nCustomer-declared scope with ownership proof and the latest recorded verdict. Open any row for its targets, checks, and evidence.\n\nGROUP\tNAME\tCRITICALITY\tOWNERSHIP PROOF\tTARGETS\tRUNS\tOPEN\tLAST VERDICT\tOWNER\n\ntg_checkout\n\t\nedge-checkout\n\t\n\u2014\n\t\nPer target\n\t\n5\n\t\n3\n\t\n1\n\t\nPASS\n\t\n\u2014",
+    "overflow": false
+  },
+  {
+    "id": "targets",
+    "title": "Targets \u00b7 Scope \u00b7 AstraNull",
+    "h1": "Targets",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Review unverified",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Add target",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Edit tags",
+        "label": "Edit tags for checkout.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target checkout.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Edit tags",
+        "label": "Edit tags for pay.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target pay.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Edit tags",
+        "label": "Edit tags for api.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target api.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Edit tags",
+        "label": "Edit tags for cdn.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target cdn.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Edit tags",
+        "label": "Edit tags for static.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target static.acme.com",
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      }
+    ],
+    "links": [
+      {
+        "text": "checkout.acme.comHostname",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "pay.acme.comHostname",
+        "href": "/app#target-detail?id=tgt_checkout_2"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_2"
+      },
+      {
+        "text": "api.acme.comHostname",
+        "href": "/app#target-detail?id=tgt_checkout_3"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_3"
+      },
+      {
+        "text": "cdn.acme.comHostname",
+        "href": "/app#target-detail?id=tgt_checkout_4"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_4"
+      },
+      {
+        "text": "static.acme.comHostname",
+        "href": "/app#target-detail?id=tgt_checkout_5"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_5"
+      }
+    ],
+    "body": "Scope\n\u203a\nTargets\n\nProof for customer-declared scope\n\nTargets\n\nAll declared hostnames and IPs, ready for bounded validation.\n\nReview unverified\nAdd target\nDECLARED TARGETS\n5\nOWNERSHIP VERIFIED\n3\nREADY FOR VALIDATION\n5\nUNVERIFIED\n2\nTarget inventory\n\n5 of 5 configured targets. Use Open target for evidence-backed detail; other row actions remain independent.\n\nSearch targets\nVERIFICATION\nAll states\nVerified\nNot verified\nTARGET GROUP\nAll groups\nedge-checkout\nKIND\nAll kinds\nHostname\nTAG\nAll tags\n\n5 matching targets\n\nTARGET\tKIND\tTAGS\tTARGET GROUP\tVERIFICATION\tADDED FROM\tLAST VALIDATED\tADDED\tACTIONS\n\ncheckout.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\npay.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\napi.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nDomain ownership verified\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\ncdn.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nVerification in progress\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove\n\n\nstatic.acme.com\nHostname\n\t\nHOSTNAME\n\t\n\u2014\n\t\nedge-checkout\n\t\nVerification in progress\n\t\nmanual\nmanual\n\t\nNever\n\t\nJul 1, 05:30 PM\n\t\nOpen target\nEdit tags\nRemove",
+    "overflow": false
+  },
+  {
+    "id": "checks",
+    "title": "Vector library \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Vector library",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Classic",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Premium",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Select a declared target group",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Select a declared target group",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "edge-checkout",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Select an exact target",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Select an exact target",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All catalog sections",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All catalog sections",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "L7 DDoS",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Network / L2-L4 Direct",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Reflection-Amplification",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "WAF Evasion",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "WAF Web Attacks",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All evidence capabilities",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All evidence capabilities",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "E3 \u00b7 Semantic-safe",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "E1 \u00b7 Declaration only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "E2 \u00b7 Transport only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "E4 \u00b7 SOC-governed",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "E5 \u00b7 Monitor only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All execution boundaries",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All execution boundaries",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Customer-safe mapping",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Monitor only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All target dispositions",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All target dispositions",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Bounded check available",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Additional input required",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Target not supported",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Monitor only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Awaiting target selection",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Review",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Previous",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Next",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "search"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      }
+    ],
+    "links": [],
+    "body": "Validation\n\u203a\nVector library\n\n721-vector catalog\n\nVector library\n\nUnderstand the exposure each vector evaluates, what failure means, which control should prevent it, and whether an exact declared target is eligible for a bounded check.\n\nClassic\nPremium\nRefresh\n\n721 catalog vectors \u00b7 direct validation checks\n\nEvaluation target\n\nSelect both identifiers explicitly. AstraNull never substitutes the first group or target.\n\nSELECTION REQUIRED\nDECLARED TARGET GROUP\nSelect a declared target group\nedge-checkout\nSelect a declared target group\nEXACT TARGET\nSelect an exact target\nSelect an exact target\nNo exact target selected\n\nTarget fit is recalculated from each mapped check. Ownership, eligibility, concurrency, and rate limits are checked again at launch.\n\nCatalog\n\n721 matching vectors. Only 25 rows render per page.\n\nNO VECTOR-LEVEL VERDICT SYNTHESIS\nSEARCH\nCATALOG SECTION\nAll catalog sections\nL7 DDoS\nNetwork / L2-L4 Direct\nReflection-Amplification\nWAF Evasion\nWAF Web Attacks\nAll catalog sections\nEVIDENCE CAPABILITY\nAll evidence capabilities\nE3 \u00b7 Semantic-safe\nE1 \u00b7 Declaration only\nE2 \u00b7 Transport only\nE4 \u00b7 SOC-governed\nE5 \u00b7 Monitor only\nAll evidence capabilities\nEXECUTION BOUNDARY\nAll execution boundaries\nCustomer-safe mapping\nMonitor only\nAll execution boundaries\nSELECTED-TARGET DISPOSITION\nAll target dispositions\nBounded check available\nAdditional input required\nTarget not supported\nMonitor only\nAwaiting target selection\nAll target dispositions\nVECTOR\tEXPOSURE EVALUATED\tEVIDENCE CAPABILITY\tSELECTED-TARGET DISPOSITION\tEXPECTED CONTROL\tACTION\n\nOpen-recursive DNS reflection/amplification\nAMP-001\nDNS \u00b7 UDP/53; TCP fallback possible\n\t\nA recursive resolver answers arbitrary Internet clients over UDP and does not apply source validation, cookies, or effective response-rate controls.\nIntent only: assess validation evidence relevant to A recursive resolver answers arbitrary Internet clients over UDP and does not apply source validation, cookies, or effective response-rate controls.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nClose open recursion, response-rate limiting, DNS Cookies where supported, anti-spoofing/BCP38, anycast authoritative service, upstream scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nAuthoritative DNS reflection/amplification\nAMP-002\nDNS \u00b7 UDP/53\n\t\nAuthoritative service permits UDP queries from the Internet and hosts large answers or DNSSEC material.\nIntent only: assess validation evidence relevant to Authoritative service permits UDP queries from the Internet and hosts large answers or DNSSEC material.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nAuthoritative response-rate limiting, minimize unnecessary oversized records, DNS Cookies where applicable, anycast, upstream DDoS service, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nDNSSEC response amplification\nAMP-003\nDNSSEC \u00b7 UDP/53\n\t\nPublic DNSSEC-signed authoritative zones or resolvers return large UDP answers without validating the request source.\nIntent only: assess validation evidence relevant to Public DNSSEC-signed authoritative zones or resolvers return large UDP answers without validating the request source.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nResponse-rate limiting, sensible DNSSEC key and response design, EDNS/fragment controls, anycast, anti-spoofing and upstream scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nNTP control-query reflection/amplification\nAMP-004\nNTP \u00b7 UDP/123\n\t\nAn Internet-exposed NTP daemon enables abusable control/monitoring functions or excessive unauthenticated replies.\nIntent only: assess validation evidence relevant to An Internet-exposed NTP daemon enables abusable control/monitoring functions or excessive unauthenticated replies.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nUpgrade and disable legacy monitoring functions, restrict control queries, rate-limit NTP, anti-spoofing, upstream scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nCLDAP reflection/amplification\nAMP-005\nCLDAP \u00b7 UDP/389\n\t\nCLDAP is reachable from the Internet, commonly on exposed directory infrastructure, without source restrictions.\nIntent only: assess validation evidence relevant to CLDAP is reachable from the Internet, commonly on exposed directory infrastructure, without source restrictions.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nBlock Internet CLDAP, restrict directory services to trusted networks, patch and configure servers, anti-spoofing, upstream filtering.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nLDAP UDP reflection/amplification\nAMP-006\nLDAP \u00b7 UDP/389 where supported\n\t\nA directory implementation exposes unauthenticated UDP service to the Internet.\nIntent only: assess validation evidence relevant to A directory implementation exposes unauthenticated UDP service to the Internet.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable or restrict UDP directory service, use TCP/authenticated access for legitimate clients, anti-spoofing and upstream scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nMemcached UDP reflection/amplification\nAMP-007\nMemcached \u00b7 UDP/11211\n\t\nMemcached UDP is Internet reachable and unauthenticated; useful response content is available.\nIntent only: assess validation evidence relevant to Memcached UDP is Internet reachable and unauthenticated; useful response content is available.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable UDP support, bind to private interfaces, firewall access, authentication/network segmentation, anti-spoofing, upstream scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nSSDP reflection/amplification\nAMP-008\nSSDP/UPnP \u00b7 UDP/1900\n\t\nA router, media device, IoT device, or service exposes SSDP on a public interface.\nIntent only: assess validation evidence relevant to A router, media device, IoT device, or service exposes SSDP on a public interface.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable WAN-side UPnP/SSDP, block UDP/1900 at Internet boundaries, patch devices, anti-spoofing and scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nSNMPv2 reflection/amplification\nAMP-009\nSNMPv2 \u00b7 UDP/161\n\t\nSNMPv2 is exposed publicly with default or guessable community strings or overly broad access.\nIntent only: assess validation evidence relevant to SNMPv2 is exposed publicly with default or guessable community strings or overly broad access.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nRestrict SNMP to management networks, use SNMPv3, remove default communities, ACLs and rate limits, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nCharacter Generator reflection/amplification\nAMP-010\nCharGEN \u00b7 UDP/19\n\t\nThe legacy diagnostic service is enabled and reachable from the Internet.\nIntent only: assess validation evidence relevant to The legacy diagnostic service is enabled and reachable from the Internet.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable CharGEN, block UDP/19, remove obsolete inetd services, anti-spoofing and upstream filtering.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nQuote of the Day reflection/amplification\nAMP-011\nQOTD \u00b7 UDP/17\n\t\nQOTD is enabled and Internet reachable.\nIntent only: assess validation evidence relevant to QOTD is enabled and Internet reachable.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable QOTD, block UDP/17, remove legacy diagnostic services, anti-spoofing and scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nUDP Echo reflection or loop\nAMP-012\nEcho \u00b7 UDP/7\n\t\nUDP Echo is enabled and public, or an implementation participates in an error-message loop.\nIntent only: assess validation evidence relevant to UDP Echo is enabled and public, or an implementation participates in an error-message loop.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable Echo, block UDP/7, anti-spoofing, transaction validation and rate limits.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nLegacy Daytime or Time service reflection\nAMP-013\nDaytime/Time \u00b7 UDP/13 or UDP/37\n\t\nObsolete diagnostic services remain enabled on a public interface.\nIntent only: assess validation evidence relevant to Obsolete diagnostic services remain enabled on a public interface.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable legacy services and block their ports; anti-spoofing and rate controls.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nMulticast DNS reflection/amplification\nAMP-014\nmDNS \u00b7 UDP/5353\n\t\nmDNS responds on a public interface even though it is intended for local-link discovery.\nIntent only: assess validation evidence relevant to mDNS responds on a public interface even though it is intended for local-link discovery.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nBlock mDNS at routed boundaries, disable public-interface responses, patch devices, anti-spoofing and scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nNetBIOS reflection/amplification\nAMP-015\nNetBIOS Name Service \u00b7 UDP/137\n\t\nNetBIOS name service is Internet reachable.\nIntent only: assess validation evidence relevant to NetBIOS name service is Internet reachable.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nBlock public NetBIOS, disable on Internet-facing interfaces, segment legacy Windows services, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nRPCbind reflection/amplification\nAMP-016\nRPCbind/Portmapper \u00b7 UDP/111\n\t\nRPCbind is publicly reachable and answers unauthenticated UDP queries.\nIntent only: assess validation evidence relevant to RPCbind is publicly reachable and answers unauthenticated UDP queries.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nRestrict RPCbind to trusted networks, use host firewalls, disable unnecessary RPC services, anti-spoofing and scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nNFS-related RPC reflection/amplification\nAMP-017\nNFS/RPC services \u00b7 UDP ports assigned through RPCbind; often 2049 and dynamic\n\t\nLegacy UDP NFS/RPC services are Internet exposed and unauthenticated.\nIntent only: assess validation evidence relevant to Legacy UDP NFS/RPC services are Internet exposed and unauthenticated.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nNever expose NFS/RPC publicly, use TCP and authenticated private access, ACLs, disable UDP where unnecessary, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nTFTP reflection/amplification\nAMP-018\nTFTP \u00b7 UDP/69 plus negotiated transfer ports\n\t\nTFTP is exposed publicly and permits unauthenticated requests or verbose error behavior.\nIntent only: assess validation evidence relevant to TFTP is exposed publicly and permits unauthenticated requests or verbose error behavior.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nRestrict TFTP to management networks, disable public service, rate-limit errors, patch loop-prone implementations, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nRIPv1 reflection/amplification\nAMP-019\nRIPv1 \u00b7 UDP/520\n\t\nRIPv1 is enabled and reachable from untrusted networks and responds to unauthenticated requests.\nIntent only: assess validation evidence relevant to RIPv1 is enabled and reachable from untrusted networks and responds to unauthenticated requests.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nDisable RIPv1, use authenticated modern routing protocols, infrastructure ACLs, passive interfaces, anti-spoofing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nWS-Discovery reflection/amplification\nAMP-020\nWS-Discovery \u00b7 UDP/3702\n\t\nWS-Discovery is exposed on a routed public interface.\nIntent only: assess validation evidence relevant to WS-Discovery is exposed on a routed public interface.. This is not an observed or detected result.\n\t\nE3 \u00b7 SEMANTIC-SAFE EVIDENCE\nA bounded check can evaluate the stated behavior. Its run evidence still applies to the check, not automatically to every mapped vector.\n\t\nSELECT EXACT TARGET\nChoose a declared target group and exact target to evaluate compatible bounded checks.\n\t\nBlock WS-Discovery at Internet edges, patch and reconfigure IoT devices, isolate management networks, anti-spoofing and scrubbing.\nOpen to review failure meaning and evidence boundary.\n\t\nReview\n\n\nBitTorrent/uTP/DHT reflection/amplification\nAMP-021\nBitTorrent \u00b7 UDP ports vary; NETSCOUT reference 6881\n\t\nA publicly reachable P2P client or tracker replies before sufficiently validating peer reachability.\nIntent only: assess validation evidence relevant to A publicly reachable P2P client or tracker replies before sufficiently validat",
+    "overflow": false
+  },
+  {
+    "id": "test-policies",
+    "title": "Test policies \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Test policies",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Classic",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refined",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Create schedule",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Set weekly cadence",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Pause",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Archive",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Set weekly cadence",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Pause",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Archive",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Direct-Origin Bypass (Safe)",
+        "href": "#checks"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "DNS Authoritative Response (Safe)",
+        "href": "#checks"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      }
+    ],
+    "body": "Validation\n\u203a\nTest policies\n\nDeclared scope \u00b7 bounded execution\n\nTest policies\n\nScheduled validation cadences, exact target bindings, and safe windows. Expected verdicts remain declarations until external probe evidence is recorded; high-scale scenarios stay SOC-scheduled.\n\nClassic\nRefined\nCreate schedule\nACTIVE SCHEDULES\n2\n222 checks bindable\nNEXT RUN\nOct 4, 05:30 PM\n2 upcoming\nCHECKS BOUND\n2\nExact schedule bindings\nSOC-SCHEDULED\n0\nNone gated\nValidation schedules\n\nScheduled bindings between declared target groups and customer-runnable checks. 2 active \u00b7 2 total \u00b7 222 checks\n\n2 ACTIVE\nSCHEDULE\tTARGET GROUP\tCHECK\tSTATE\tCADENCE\tNEXT RUN\tSAFE WINDOW\tEXPECTED VERDICT\tEXACT TARGET\tUPDATED\tACTIONS\n\nCheckout daily bypass check\n\t\nedge-checkout\n\t\nDirect-Origin Bypass (Safe)\n\t\nACTIVE\n\t\nDAILY\n\t\nOct 4, 05:30 PM\n\t\n\u2014\n\t\n\u2014\nDeclared expectation\n\t\ncheckout.acme.com\nfqdn \u00b7 tgt_checkout_1\n\t\nJul 1, 05:30 PM\n\t\nSet weekly cadence\nPause\nArchive\n\n\nDNS authoritative weekly\n\t\nedge-checkout\n\t\nDNS Authoritative Response (Safe)\n\t\nACTIVE\n\t\nWEEKLY\n\t\nOct 7, 05:30 PM\n\t\n\u2014\n\t\n\u2014\nDeclared expectation\n\t\ncheckout.acme.com\nfqdn \u00b7 tgt_checkout_1\n\t\nJul 1, 05:30 PM\n\t\nSet weekly cadence\nPause\nArchive",
+    "overflow": false
+  },
+  {
+    "id": "findings",
+    "title": "Findings \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Findings",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Classic",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refined",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Open1",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Closed1",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Accepted0",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All2",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All severities",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All severities",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Severity 2 \u00b7 High",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Severity 3 \u00b7 Medium",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All owners",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All owners",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "unassigned",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All groups",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All groups",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "edge-checkout",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Worst severity",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Worst severity",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Most affected assets",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Recently opened",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Oldest first",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "SLA remaining",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Title A to Z",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "12",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "12",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "24",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "48",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Previous",
+        "label": "Previous findings page",
+        "disabled": true
+      },
+      {
+        "text": "Next",
+        "label": "Next findings page",
+        "disabled": true
+      }
+    ],
+    "fields": [
+      {
+        "label": "Filter findings by id, title, asset, check, owner, or group",
+        "name": "",
+        "type": "search"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      }
+    ],
+    "links": [
+      {
+        "text": "Origin direct bypass1 affected assetcheckout.acme.comCheck: Origin Leak Scan (Safe)",
+        "href": "/app#finding-detail?id=fnd_checkout_1"
+      }
+    ],
+    "body": "Validation\n\u203a\nFindings\n\nTriage & remediate\n\nFindings\n\nEvery finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path.\n\nClassic\nRefined\nRefresh\n\n1 open \u00b7 0 accepted risk \u00b7 0 closed in 30d \u00b7 0 SLA breached\n\nFinding queue\n\nOne row per rule, with every asset it was observed on. Open a row to see the affected assets, then any asset for explanation, remediation, safe retest, and custody export.\n\n0 SLA BREACHED\nOpen\n1\nClosed\n1\nAccepted\n0\nAll\n2\nSEARCH\nSEVERITY\nAll severities\nSeverity 2 \u00b7 High\nSeverity 3 \u00b7 Medium\nAll severities\nOWNER\nAll owners\nunassigned\nAll owners\nTARGET GROUP\nAll groups\nedge-checkout\nAll groups\nSORT\nWorst severity\nMost affected assets\nRecently opened\nOldest first\nSLA remaining\nTitle A to Z\nWorst severity\n\n1 rule across 1 matching finding\n\nFINDING\tWORST SEVERITY\tTARGET GROUP\tOWNER\tSLA\tSTATUS\n\nOrigin direct bypass\n1 affected asset\ncheckout.acme.com\nCheck: Origin Leak Scan (Safe)\n\t\nSEVERITY 2 \u00b7 HIGH\n\t\nedge-checkout\ntg_checkout\n\t\nUnassigned\n\t\nPENDING\n\t\nOPEN\n\nShowing 1 to 1 of 1 rule\n\nROWS\n12\n24\n48\n12\nPrevious\nNext\nPage 1 of 1",
+    "overflow": false
+  },
+  {
+    "id": "reports",
+    "title": "Reports \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Reports",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Generate & export",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Technical",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Executive",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Board",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Technical",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "SOC",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Audit",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "SOC 2",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "ISO 27001",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "DORA",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "NIS2",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Internal audit",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "JSON",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "JSON",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Markdown",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "HTML",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Last 30 days",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Last 7 days",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Last 30 days",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Current quarter",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All time",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "kind",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "format",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "period",
+        "type": "select-one"
+      }
+    ],
+    "links": [],
+    "body": "Governance\n\u203a\nReports\n\nReadiness \u00b7 on the record\n\nReports\n\nGenerate tenant-scoped readiness artifacts, verify JSON custody, and preserve export provenance for executive, technical, SOC, and audit review.\n\nGenerate & export\n\n2 reports \u00b7 0 custody exports recorded\n\nGenerate report\n\nSelect kind, export format, and period. JSON exports are verified against their returned custody envelope before the preview is marked verified.\n\nKind\nExecutive\nBoard\nTechnical\nSOC\nAudit\nSOC 2\nISO 27001\nDORA\nNIS2\nInternal audit\nTechnical\nFormat\nJSON\nMarkdown\nHTML\nJSON\nPeriod\nLast 7 days\nLast 30 days\nCurrent quarter\nAll time\nLast 30 days\n\nDirect PDF export is not available. Export HTML, then save it as PDF in your review tool.\n\nRecent reports\n\nOpen a report to inspect its scope, evidence summary, and available custody exports.\n\nREPORT\tKIND\tPERIOD\tFORMAT\tGENERATED\n\nrpt_checkout_baseline\n\t\ntechnical\n\t\n\u2014\n\t\n\u2014\n\t\nOct 3, 09:47 PM\n\n\nrpt_executive_demo\n\t\nexecutive\n\t\n\u2014\n\t\n\u2014\n\t\nOct 3, 09:47 PM",
+    "overflow": false
+  },
+  {
+    "id": "integrations",
+    "title": "Integrations \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Integrations",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Add domain",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Add provider",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Manual snapshot",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Cloudflare",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect Cloudflare",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Akamai EdgeDNS",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect Akamai EdgeDNS",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for GoDaddy",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect GoDaddy",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Namecheap",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect Namecheap",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for IBM NS1",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect IBM NS1",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for AWS WAF",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect AWS WAF",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Google Cloud DNS",
+        "disabled": false
+      },
+      {
+        "text": "Add manually",
+        "label": "Add Google Cloud DNS",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Azure DNS",
+        "disabled": false
+      },
+      {
+        "text": "Add manually",
+        "label": "Add Azure DNS",
+        "disabled": false
+      },
+      {
+        "text": "Setup guide",
+        "label": "Setup guide for Hetzner DNS",
+        "disabled": false
+      },
+      {
+        "text": "Add manually",
+        "label": "Add Hetzner DNS",
+        "disabled": false
+      },
+      {
+        "text": "Validate",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Poll",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Snapshots",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Disable",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": "Refresh notification channels",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect Slack",
+        "disabled": false
+      },
+      {
+        "text": "Connect",
+        "label": "Connect Microsoft Teams",
+        "disabled": false
+      },
+      {
+        "text": "Add",
+        "label": "Add another Email channel",
+        "disabled": false
+      },
+      {
+        "text": "Add",
+        "label": "Add another Webhook channel",
+        "disabled": false
+      },
+      {
+        "text": "Turn off",
+        "label": "Turn off Webhook channel webhook://hooks.demo.astranull.local\u2026",
+        "disabled": false
+      },
+      {
+        "text": "Edit",
+        "label": "Edit Webhook channel webhook://hooks.demo.astranull.local\u2026",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove Webhook channel webhook://hooks.demo.astranull.local\u2026",
+        "disabled": false
+      },
+      {
+        "text": "Turn off",
+        "label": "Turn off Email channel email:s\u2026@demo.astranull.local",
+        "disabled": false
+      },
+      {
+        "text": "Edit",
+        "label": "Edit Email channel email:s\u2026@demo.astranull.local",
+        "disabled": false
+      },
+      {
+        "text": "Remove",
+        "label": "Remove Email channel email:s\u2026@demo.astranull.local",
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [],
+    "body": "Governance\n\u203a\nIntegrations\n\nDNS & edge integrations\n\nIntegrations\n\nNotification, ticketing, SIEM, SOAR, and optional read-only provider connectors.\n\nAdd domain\nAdd provider\nManual snapshot\n\nOptional enrichment only \u00b7 no default cloud access \u00b7 customer-declared targets remain the core path\n\nPROVIDER PATHS\n9\nRead-only or manual metadata\nCONNECTORS\n1\n1 active\nSNAPSHOTS\n0\nNormalized metadata only\nVAULT SECRETS\n0\nPlaintext never rendered\nProvider access is optional. Core validation continues from customer-declared targets, and opening this directory never grants AstraNull cloud access.\nProvider directory\n\nChoose an implemented read-only connector, a manual metadata record, or declare one domain directly. Opening a provider never grants AstraNull cloud access. Each card links a least-privilege setup guide.\n\nOPTIONAL INTEGRATIONS\n1 of 9 providers connected\nCloudflare\nRead-only zone and ruleset polling\n1 CONFIGURED\n\nPoll bounded zone inventory and zone rulesets with a scoped read-only token. Imported domains retain exact provider evidence.\n\nCredential polling\nSetup guide\nConnect\nAkamai EdgeDNS\nRead-only zone polling\n\nEdgeGrid-authenticated bounded polling for Edge DNS zones and record sets. Only read-only access is requested.\n\nCredential polling\nSetup guide\nConnect\nGoDaddy\nRead-only domain polling\n\nList account domains with a Production key and secret. Only the domain list endpoint is called.\n\nCredential polling\nSetup guide\nConnect\nNamecheap\nRead-only domain polling\n\nList domains with a vault credential and an explicitly configured allowlisted egress IP. No IP-discovery service is contacted.\n\nCredential polling\nSetup guide\nConnect\nIBM NS1\nRead-only zone polling\n\nList NS1 zones with a key limited to the View zones permission, through bounded requests to the fixed NS1 service.\n\nCredential polling\nSetup guide\nConnect\nAWS WAF\nRead-only web ACL polling\n\nList and read AWS WAF web ACLs with an IAM policy limited to two read actions. Route 53 zones are not polled; record them as manual metadata.\n\nCredential polling\nSetup guide\nConnect\nGoogle Cloud DNS\nManual metadata\n\nNo live polling. Record selected Cloud DNS zone metadata without granting project access.\n\nManual metadata\nSetup guide\nAdd manually\nAzure DNS\nManual metadata\n\nNo live polling. Record selected Azure DNS zone metadata without granting subscription access.\n\nManual metadata\nSetup guide\nAdd manually\nHetzner DNS\nManual metadata\n\nNo live polling. Create a metadata-only provider record and attach operator-supplied DNS zone evidence.\n\nManual metadata\nSetup guide\nAdd manually\nConfigured connectors\n\nValidate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered.\n\n1 TOTAL\nCONNECTOR\tCAPABILITY\tSTATUS\tLAST POLL\tPOLL ERRORS\tSECRET REF\tUPDATED\tACTIONS\n\nCloudflare checkout\nCloudflare\n\t\nMANUAL METADATA\n\t\nACTIVE\n\t\nOct 3, 09:47 PM\n\t\n\u2014\n\t\nnone \u2014 manual only\n\t\nOct 3, 09:47 PM\n\t\nValidate\nPoll\nSnapshots\nDisable\nNotification channels\n\nSend readiness alerts to Slack, Microsoft Teams, email, or your own endpoint. Channels only receive redacted event summaries; they never get access to your infrastructure.\n\nRefresh\nSlack\nIncoming webhook\n\nPost readiness alerts to a Slack channel as Block Kit messages.\n\nNot connected\nConnect\nMicrosoft Teams\nWorkflows webhook\n\nPost Adaptive Cards to a Teams channel through a Workflows webhook.\n\nNot connected\nConnect\nEmail\nSMTP\n1 CONFIGURED\n\nSend an HTML summary to a team inbox or distribution list.\n\n1 of 1 on\nAdd\nWebhook\nHTTPS POST\n1 CONFIGURED\n\nPOST redacted event JSON to your own endpoint, SIEM, or automation.\n\n1 of 1 on\nAdd\nCHANNEL\tDESTINATION\tNOTIFIES ON\tSTATE\tLAST DELIVERY\tCONNECTED\tACTIONS\n\nWebhook\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\t\nfinding opened, Report ready\n\t\nON\n\t\nNO DELIVERIES YET\n: The server has no delivery attempt recorded for this channel.\n\t\nJul 1, 05:30 PM\n\t\nTurn off\nEdit\nRemove\n\n\nEmail\n\t\nemail:s\u2026@demo.astranull.local\n\t\nHigh-scale state change\n\t\nON\n\t\nNO DELIVERIES YET\n: The server has no delivery attempt recorded for this channel.\n\t\nJul 1, 05:30 PM\n\t\nTurn off\nEdit\nRemove\n\nOutbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.",
+    "overflow": false
+  },
+  {
+    "id": "notifications",
+    "title": "Notifications \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Notifications",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "New rule",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Preview due retries",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Preview DLQ redrive",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Process due retries",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Redrive DLQ",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [],
+    "body": "Governance\n\u203a\nNotifications\n\nGovernance\n\nNotifications\n\nRules, delivery evidence, retries, and dead-letter recovery for readiness events. External delivery remains provider-configured and opt-in.\n\nNew rule\nDELIVERED\n0\n\nsuccessful deliveries\n\nRETRYING\n0\n\nawaiting retry\n\nDLQ\n1\n\ndead-letter queue\n\nCRITICAL\n\n2 rules \u00b7 2 events \u00b7 1 DLQ (0 retries scheduled)\n\nRules\nCHANNEL\tENABLED\tTRIGGERS\tDESTINATION\n\nWEBHOOK\n\t\nENABLED\n\t\n2\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\n\nEMAIL\n\t\nENABLED\n\t\n1\n\t\nemail:s\u2026@demo.astranull.local\nRecent events\nTRIGGER\tSUBJECT\tCREATED\n\nReport ready\n\t\nReport ready: Checkout edge readiness summary\n\t\nOct 3, 09:47 PM\n\n\nFinding \u00b7 Opened\n\t\nFinding opened: Origin direct bypass\n\t\nOct 3, 09:47 PM\nProviders\n\nDelivery-provider health derived from configured rules correlated with recorded delivery attempts.\n\nPROVIDER\tCHANNEL\tHEALTH\n\nEMAIL\n\t\nemail:s\u2026@demo.astranull.local\n\t\nIDLE\n\n\nWEBHOOK\n\t\nwebhook://hooks.demo.astranull.local\u2026\n\t\nDEAD-LETTER\nDelivery operations\n\nRetry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state.\n\nPreview\n\nDry-run \u2014 no ledger changes\n\nPreview due retries\nPreview DLQ redrive\nLive\n\nApplies changes \u2014 confirmation required\n\nProcess due retries\nRedrive DLQ",
+    "overflow": false
+  },
+  {
+    "id": "audit",
+    "title": "Audit log \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Audit log",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Custody chain only",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Admin",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Engineer",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Soc",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "High scale request created",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Notification rule created",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Target group created",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Validation run started",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "audit_actor",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "audit_action",
+        "type": "select-one"
+      },
+      {
+        "label": "Search audit log by action, resource type, or id",
+        "name": "",
+        "type": "text"
+      }
+    ],
+    "links": [],
+    "body": "Governance\n\u203a\nAudit log\n\nGovernance\n\nAudit log\n\nAppend-only, custody-sealed event trail. Toggle custody-chain-only to trace the provenance of any verdict or approval.\n\n4 visible of 4 events \u00b7 4 with recorded entry hashes \u00b7 newest first\n\nAudit records are append-only. Recorded entry hashes and export/report events preserve custody for independent review.\nCustody chain only\nACTOR\nAll\nAdmin\nEngineer\nSoc\nAll\nACTION\nAll\nHigh scale request created\nNotification rule created\nTarget group created\nValidation run started\nAll\nEvents\nTIME\tACTOR\tACTION\tTARGET\tCUSTODY\n\nJul 1, 05:30 PM\n\t\nAdmin\n\t\nTarget group created\n\t\ntg_checkout\n\t\nsha256 38e6\u20260d16\n\n\nJul 1, 05:30 PM\n\t\nEngineer\n\t\nValidation run started\n\t\nrun_checkout_1\n\t\nsha256 8b06\u2026d8d3\n\n\nJul 1, 05:30 PM\n\t\nSoc\n\t\nHigh scale request created\n\t\nhsr_checkout_scheduled\n\t\nsha256 b274\u2026b0db\n\n\nJul 1, 05:30 PM\n\t\nAdmin\n\t\nNotification rule created\n\t\nnrule_demo_webhook\n\t\nsha256 8695\u2026c4c5",
+    "overflow": false
+  },
+  {
+    "id": "settings",
+    "title": "Settings \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Settings",
+    "tabs": [
+      "Organization",
+      "Access",
+      "Security",
+      "Privacy"
+    ],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Organization",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Access",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Security",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Privacy",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Save organization",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      }
+    ],
+    "links": [
+      {
+        "text": "Open audit log",
+        "href": "#audit"
+      },
+      {
+        "text": "Notification rules",
+        "href": "#notifications"
+      },
+      {
+        "text": "Integrations",
+        "href": "#integrations"
+      }
+    ],
+    "body": "Governance\n\u203a\nSettings\n\nTenant configuration\n\nSettings\n\nManage organization identity, one-time credentials, secret metadata, and retention while platform safety boundaries remain enforced.\n\nPortal Baseline Tenant \u00b7 0 vault secrets \u00b7 180d metadata retention\n\nOrganization\nAccess\nSecurity\nPrivacy\nOrganization profile\n\nOrganization display name and residency metadata. Privacy defaults stay metadata-only.\n\nOrganization name\nTenant ID\nData region\nSave organization\nWorkspace inventory\n\nLive workspace counts \u2014 not editable here.\n\nTarget groups\n1\nEvidence records\n1\nSession & access posture\n\nRead-only session view. User invites and enterprise SSO mapping are provisioned by AstraNull support.\n\nUser ID\nusr_admin\nRole\nadmin\nTenant\nten_demo\nAuth mode\ndev-headers\nTenant user invites and role changes are not self-service on this screen.\nAutomation credentials live under Access; vault secrets under Security; audit history on the Audit page.\nTenant audit log\n\nImmutable security-relevant history lives on the Audit page \u2014 Settings does not duplicate that log.\n\nOpen audit log\nNotification rules\nIntegrations",
+    "overflow": false
+  },
+  {
+    "id": "support",
+    "title": "Support \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Support",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "View",
+        "href": "#audit"
+      },
+      {
+        "text": "View",
+        "href": "#audit"
+      },
+      {
+        "text": "View",
+        "href": "#audit"
+      },
+      {
+        "text": "View",
+        "href": "#audit"
+      },
+      {
+        "text": "Review open findings (2)",
+        "href": "#findings"
+      },
+      {
+        "text": "Request SOC-governed test (2 pending)",
+        "href": "#runs"
+      },
+      {
+        "text": "Notification rules",
+        "href": "#notifications"
+      }
+    ],
+    "body": "Governance\n\u203a\nSupport\n\nReadiness support\n\nSupport\n\nAccount ownership, escalation context, and recent audit evidence inside AstraNull's defensive validation boundaries.\n\nOwner ops@demo.astranull.local \u00b7 2 open findings \u00b7 2 SOC escalations (soc review pending)\n\nThis deployment has not configured a support contact channel. Use the in-product evidence and SOC workflows below until an administrator provides one.\nSupport readiness\n\nTenant support posture from account, findings, high-scale, and audit records.\n\nSupport owner \u2014 ops@demo.astranull.local\nAccount lifecycle \u2014 ACTIVE\nRegion \u2014 us\nRecent tenant audit records \u2014 4\nRecent support evidence\n\nLatest tenant audit events exposed as metadata-only support context.\n\nNOTIFICATION RULE\nNotification rule created\nNot recorded\nView\nSOC-GOVERNED TEST\nHigh scale request created\nNot recorded\nView\nVALIDATION RUN\nValidation run started\nNot recorded\nView\nTARGET GROUP\nTarget group created\nNot recorded\nView\nSupport workflows\n\nCustomer escalation paths within authorized validation boundaries.\n\nSupport can coordinate escalation and request a stop. Only SOC can approve, schedule, execute, or stop high-scale validation; customer stop authority remains binding.\nReview open findings (2)\nRequest SOC-governed test (2 pending)\nNotification rules",
+    "overflow": false
+  },
+  {
+    "id": "subscription",
+    "title": "Billing \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Billing",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [],
+    "body": "Governance\n\u203a\nBilling\n\nPlan & usage\n\nBilling\n\nPlan, entitlements, limits, billing state, contract references, and effective dates.\n\nPortal loaded Oct 3, 11:58 PM \u00b7 source timestamp not provided\nRefresh\n\nEnterprise \u00b7 runs 1 / 200 per hour \u00b7 high-scale program enabled\n\nCurrent plan\n\nEnterprise\n\nContract posture and account ownership, without duplicating usage or entitlement panels.\n\nACTIVE\nEffective\nOct 3, 11:47 PM\nRenewal\nNot recorded\nData region\nus\nLifecycle\nACTIVE\nSupport owner\nops@demo.astranull.local\nContract ref\nDEMO-CONTRACT-001\nUsage against plan limits\n\nEach metric joins the recorded count, authoritative limit, and progress state.\n\n3 / 4 RECORDED\nTarget groups\nDeclared validation scopes\n1%\n1\nof 100\nUsers\nWorkspace members\n4%\n7\nof 200\nRuns\nStarted in the current hour\n1%\n1\nof 200\nHigh-scale requests\nCurrent month \u00b7 SOC-gated\nNO MEASURE\nNot recorded\nUsage unavailable\n\nProgress is unavailable until both usage and a plan limit are recorded.\n\nWorkspace signals \u00b7 not plan limits\nOpen findings\n2\nPending high-scale\n2\nEffective entitlements\n\nEffective access is the recorded subscription decision. Plan inclusion and access source explain how it was derived.\n\n4 / 4 ENABLED\nFEATURE\tPLAN INCLUSION\tEFFECTIVE ACCESS (AUTHORITATIVE)\tACCESS SOURCE\n\nWAF posture\n\t\nIncluded\n\t\nEnabled\n\t\nPlan default (enterprise)\n\n\nExternal discovery\n\t\nIncluded\n\t\nEnabled\n\t\nPlan default (enterprise)\n\n\nConnectors\n\t\nIncluded\n\t\nEnabled\n\t\nPlan default (enterprise)\n\n\nHigh-scale program\n\t\nIncluded\n\t\nEnabled\n\t\nPlan default (enterprise)",
+    "overflow": false
+  },
+  {
+    "id": "target-group-detail",
+    "title": "Target group detail \u00b7 Scope \u00b7 AstraNull",
+    "h1": "edge-checkout",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Start validation scan",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Add target",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Import DNS zones",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Issue DNS challenge",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Import CSV",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Add target",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Verify",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect edge",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Run test",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target checkout.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Verify",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect edge",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Run test",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target pay.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Verify",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect edge",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Run test",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target api.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Verify",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect edge",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Run test",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target cdn.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Verify",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect edge",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Run test",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Remove",
+        "label": "Remove target static.acme.com",
+        "disabled": false
+      },
+      {
+        "text": "Show 12 more",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Create schedule",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Show all (1)",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": "Select Origin Leak Scan (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Firewall Exposure Scan (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Protected-Path Canary (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Forbidden TCP Port (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Forbidden UDP Port (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Basic Deny-Rule Validation (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select DNS Authoritative Response (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select DNS Random-Prefix / NXDOMAIN (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Open Recursion Behavior (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select WAF Marker Rule (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select Outside-In WAF Scanner (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": "Select WAF Marker Rule Posture (Safe) for bounded runs and the scheduled policy",
+        "name": "target-group-policy-check",
+        "type": "radio"
+      },
+      {
+        "label": null,
+        "name": "target_id",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "cadence",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "expected_verdict",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "safe_window_day",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "safe_window_start",
+        "type": "time"
+      },
+      {
+        "label": null,
+        "name": "safe_window_end",
+        "type": "time"
+      },
+      {
+        "label": null,
+        "name": "safe_window_timezone",
+        "type": "text"
+      }
+    ],
+    "links": [
+      {
+        "text": "All groups",
+        "href": "#target-groups"
+      },
+      {
+        "text": "Choose a rule below",
+        "href": "#target-group-rules"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_2"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_3"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_4"
+      },
+      {
+        "text": "Open target",
+        "href": "/app#target-detail?id=tgt_checkout_5"
+      },
+      {
+        "text": "Open all policies",
+        "href": "#test-policies"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "Rate limit drift \u00b7 checkout.acme.com",
+        "href": "/app#finding-detail?id=fnd_checkout_2"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "Origin direct bypass \u00b7 checkout.acme.com",
+        "href": "/app#finding-detail?id=fnd_checkout_1"
+      },
+      {
+        "text": "run_demo_running",
+        "href": "/app#run-detail?id=run_demo_running"
+      },
+      {
+        "text": "run_checkout_1",
+        "href": "/app#run-detail?id=run_checkout_1"
+      },
+      {
+        "text": "run_demo_dns",
+        "href": "/app#run-detail?id=run_demo_dns"
+      }
+    ],
+    "body": "Scope\n\u203a\nTarget group detail\n\nDeclared business service\n\nedge-checkout\n\nManage declared scope, prove ownership, and schedule readiness checks.\n\ntg_checkout\nStart validation scan\nAdd target\nImport DNS zones\nAll groups\nOwnership verification\n\nEach step counts targets whose current proof is exactly that level, so stronger proof (provider, user) is not also counted under DNS. Group status is the weakest target's current proof. Incomplete proof keeps bounded validation fail closed.\n\nVERIFICATION IN PROGRESS\nDeclared\n5 of 5 currently at this level\n2\nDNS verified\n3 of 5 currently at this level\n3\nUser confirmed\n0 of 5 currently at this level\nTARGETS\n5\n3 ownership proven (runnable) \u00b7 2 locked\nOWNERSHIP\nVERIFICATION IN PROGRESS\nLOA\nSIGNED\nVALIDATION MODE\nExternal only\n\nLOA signed\n\nAlex Owner \u00b7 477f49212334cbb6edfaa4d399c16a64ee024c2e5bbff9062353ebd931a46c6f \u00b7 Jul 1, 05:30 PM\n\nDNS TXT verification\n\nSelect the exact declared FQDN, then publish its one-time _astranull-challenge TXT record. No first-domain fallback is used.\n\nDomain target\nSelect a declared FQDN\ncheckout.acme.com\npay.acme.com\napi.acme.com\ncdn.acme.com\nstatic.acme.com\nIssue DNS challenge\nSelect a domain target\n\nChoose the exact declared FQDN above. AstraNull will not choose the first domain in the group.\n\nDeclared targets\n\nCustomer-declared scope only. Verify each target before any check can run.\n\nImport CSV\nAdd target\nBounded run rule:\nNone selected\nChoose a rule below\nTARGET\tSOURCE\tEXPECTED BEHAVIOR\tSTATUS\tLAST RESULT\tWAF / CDN\tACTIONS\n\nFQDN\ncheckout.acme.com\ntgt_checkout_1\n\t\nMANUAL DECLARATION\n\t\nCloud baseline\n\t\nDomain ownership verified\nChecks enabled\n\t\n\u2014\n\t\nNot detected yet\n\t\nOpen target\nVerify\nDetect edge\nRun test\nRemove\n\n\nFQDN\npay.acme.com\ntgt_checkout_2\n\t\nMANUAL DECLARATION\n\t\nCloud baseline\n\t\nDomain ownership verified\nChecks enabled\n\t\n\u2014\n\t\nNot detected yet\n\t\nOpen target\nVerify\nDetect edge\nRun test\nRemove\n\n\nFQDN\napi.acme.com\ntgt_checkout_3\n\t\nMANUAL DECLARATION\n\t\nCloud baseline\n\t\nDomain ownership verified\nChecks enabled\n\t\n\u2014\n\t\nNot detected yet\n\t\nOpen target\nVerify\nDetect edge\nRun test\nRemove\n\n\nFQDN\ncdn.acme.com\ntgt_checkout_4\n\t\nMANUAL DECLARATION\n\t\nCloud baseline\n\t\nVerification in progress\nVerify before testing\n\t\n\u2014\n\t\nNot detected yet\n\t\nOpen target\nVerify\nDetect edge\nDetect edge is locked: ownership is pending. Verify this target with DNS or provider proof first.\nRun test\nRemove\n\n\nFQDN\nstatic.acme.com\ntgt_checkout_5\n\t\nMANUAL DECLARATION\n\t\nCloud baseline\n\t\nVerification in progress\nVerify before testing\n\t\n\u2014\n\t\nNot detected yet\n\t\nOpen target\nVerify\nDetect edge\nDetect edge is locked: ownership is pending. Verify this target with DNS or provider proof first.\nRun test\nRemove\nRules & schedule\n\nSelect the exact customer-runnable rule used by per-target bounded runs and any new schedule. Nothing is selected implicitly.\n\n222 CUSTOMER-RUNNABLE CHECKS\nAuthorized validation only\n\nSchedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios remain SOC-gated. They do not authorize or launch unmanaged DDoS traffic.\n\nSearch customer-runnable rules\nShowing 12 of 222 matching rules\nSELECT\tCUSTOMER-RUNNABLE CHECK\tFAMILY\tCATALOG BOUNDS\tCURRENT SCHEDULE\n\n\t\nOrigin Leak Scan (Safe)\nBounded DNS/subdomain/IPv6 origin leak discovery on declared apex domain.\norigin.leak_scan.safe\n\t\nORIGIN\n\t\n\u2264 15 events \u00b7 \u2264 120s\n\t\nNot scheduled in hydrated data\n\n\n\t\nFirewall Exposure Scan (Safe)\nBounded risky-port scan (one connect per port) on declared host.\nl3.firewall_exposure_scan.safe\n\t\nL3 L4\n\t\n\u2264 15 events \u00b7 \u2264 90s\n\t\nNot scheduled in hydrated data\n\n\n\t\nProtected-Path Canary (Safe)\nHarmless labeled canary request through protected path (simulated probe metadata).\npath.protected_canary.safe\n\t\nPATH\n\t\n\u2264 3 events \u00b7 \u2264 120s\n\t\nNot scheduled in hydrated data\n\n\n\t\nForbidden TCP Port (Safe)\nLow-rate reachability metadata check for a forbidden TCP port (simulated).\nl3.forbidden_tcp_port.safe\n\t\nL3 L4\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nNot scheduled in hydrated data\n\n\n\t\nForbidden UDP Port (Safe)\nSingle bounded UDP datagram to a declared forbidden port (no amplification).\nl3.forbidden_udp_port.safe\n\t\nL3 L4\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nNot scheduled in hydrated data\n\n\n\t\nBasic Deny-Rule Validation (Safe)\nOne bounded TCP connect to the declared deny-rule target shows whether the network firewall deny rule actually drops the traffic (external probe evidence only).\nl3.basic_deny_rule.safe\n\t\nL3 L4\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nNot scheduled in hydrated data\n\n\n\t\nDNS Authoritative Response (Safe)\nAuthoritative DNS response metadata validation (no live recursion abuse).\ndns.authoritative_response.safe\n\t\nDNS\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nWEEKLY\ncheckout.acme.com\nWindow not declared\n\n\n\t\nDNS Random-Prefix / NXDOMAIN (Safe)\nNXDOMAIN/random-prefix signal metadata for resolver hygiene.\ndns.random_prefix_nxdomain.safe\n\t\nDNS\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nNot scheduled in hydrated data\n\n\n\t\nOpen Recursion Behavior (Safe)\nLive open-recursion check \u2014 single external lookup via declared resolver.\ndns.open_recursion_behavior.safe\n\t\nDNS\n\t\n\u2264 3 events \u00b7 \u2264 60s\n\t\nNot scheduled in hydrated data\n\n\n\t\nWAF Marker Rule (Safe)\nCustomer-defined WAF marker rule validation via harmless metadata probe.\nl7.waf_marker_rule.safe\n\t\nL7\n\t\n\u2264 3 events \u00b7 \u2264 90s\n\t\nNot scheduled in hydrated data\n\n\n\t\nOutside-In WAF Scanner (Safe)\nBounded outside-in scan: wafw00f plugin evaluation over destination-pinned benign HTTP probes, cdncheck CDN/WAF/cloud classification from the vetted addresses and a counted CNAME chain, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.\nwaf.fingerprint.safe\n\t\nWAF\n\t\n\u2264 16 events \u00b7 \u2264 120s\n\t\nNot scheduled in hydrated data\n\n\n\t\nWAF Marker Rule Posture (Safe)\nWAF posture alias for customer-configured harmless marker rules (signed worker profile).\nwaf.marker_rule.safe\n\t\nWAF\n\t\n\u2264 3 events \u00b7 \u2264 90s\n\t\nNot scheduled in hydrated data\n210 more matching rules are available.\nShow 12 more\nCreate a schedule\n\nCadence repeats eligibility only. Every dispatch is still checked against ownership, LOA, catalog bounds, rate limits, safe window, and kill switch.\n\nSELECT CHECK + TARGET\n\nSelected rule: None\n\nScheduled policy settings\nExact target\nChoose target\nCadence\nDaily\nWeekly\nMonthly\nExpected verdict\nPass\nWarn\nManual review\nSafe window day\nChoose day\nMonday\nTuesday\nWednesday\nThursday\nFriday\nSaturday\nSunday\nSafe window start\nSafe window end\nWindow timezone\nCreate schedule\nOpen all policies\nValidation scans\n\nMulti-check scans for this group, one bounded child run at a time. Scheduled scans stay editable until they dispatch.\n\n0 SCHEDULED OR ACTIVE\nShow all (1)\n\nNo scheduled or active scans for this group. Show all to review completed history.\n\nFindings on this group\nTARGET\tFINDING\tSEVERITY\tSTATUS\n\ncheckout.acme.com\ntgt_checkout_1\n\t\nRate limit drift \u00b7 checkout.acme.com\nfnd_checkout_2\n\t\nSeverity 3 \u00b7 Medium\n\t\nclosed\n\n\ncheckout.acme.com\ntgt_checkout_1\n\t\nOrigin direct bypass \u00b7 checkout.acme.com\nfnd_checkout_1\n\t\nSeverity 2 \u00b7 High\n\t\nopen\nRecent runs\nRUN\tPOLICY\tCHECKS\tLIFECYCLE\tVERDICT\tSTARTED\n\nrun_demo_running\n\t\nNot scheduled\n\t\norigin.direct_bypass.safe\n\t\nPending\n\t\nNo result yet\n\t\nOct 3, 11:40 PM\n\n\nrun_checkout_1\n\t\nScheduled policy\n\t\norigin.leak_scan.safe\n\t\nPending\n\t\nProtection worked as expected\n\t\nOct 3, 09:47 PM\n\n\nrun_demo_dns\n\t\nScheduled policy\n\t\ndns.authoritative_response.safe\n\t\nPending\n\t\nNo result yet\n\t\nOct 3, 09:47 PM",
+    "overflow": false
+  },
+  {
+    "id": "target-detail",
+    "title": "Target detail \u00b7 Scope \u00b7 AstraNull",
+    "h1": "checkout.acme.com",
+    "tabs": [
+      "Protection path",
+      "WAF / CDN edge",
+      "Recent runs2 items2",
+      "Findings2 items2"
+    ],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Add tag",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "Run all checks",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Classic",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Premium",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Detect WAF and CDN",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Run all checks",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "All149",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Protected1",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Not run148",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Run selected check",
+        "label": null,
+        "disabled": true
+      },
+      {
+        "text": "2 findings",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Protection path",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "WAF / CDN edge",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Recent runs2 items2",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Findings2 items2",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": "Add a tag to this target",
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": "Choose check origin.direct_bypass.safe for this target",
+        "name": "target-run-check",
+        "type": "radio"
+      },
+      {
+        "label": "Choose check dns.authoritative_response.safe for this target",
+        "name": "target-run-check",
+        "type": "radio"
+      }
+    ],
+    "links": [
+      {
+        "text": "Targets",
+        "href": "#targets"
+      },
+      {
+        "text": "Group: edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "All targets",
+        "href": "#targets"
+      },
+      {
+        "text": "Full activity log",
+        "href": "/app#scan-detail?id=scan_checkout_1"
+      },
+      {
+        "text": "Open run evidence",
+        "href": "/app#run-detail?id=run_checkout_1"
+      },
+      {
+        "text": "Open evidence",
+        "href": "/app#run-detail?id=run_checkout_1"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      }
+    ],
+    "body": "Scope\n\u203a\nTarget detail\n\nTargets\n/\ncheckout.acme.com\n\ncheckout.acme.com\nDomain ownership verified\nVALIDATION UNLOCKED\nDomain Name\ntgt_checkout_1\n\u00b7\nExpected: Protected path baseline\n\u00b7\nGroup: edge-checkout\nNo tags yet\nAdd tag\nRun all checks\nAll targets\nClassic\nPremium\nOWNERSHIP\nOwnership proven\nWAF / CDN DETECTION\nNot started\nDetection only, not effectiveness\nBOUND CHECKS\n2\nValidation unlocked\nRECORDED RUNS\n2\nOPEN FINDINGS\n1\n2 recorded in total\nLATEST VERDICT\nPassed, findings open\nEvidence-backed results only\nEdge protection\n\nThe WAF and CDN in front of this domain, the evidence that found them, and whether your check results show them actually blocking attacks.\n\nNOT STARTED\n\nDetection has not run on this domain yet.\n\nDetect WAF and CDN\nWAF\nWeb application firewall\nNot evaluated yet\nEFFICACY\nNot evaluated yet\n\nNo evidence yet. Run all checks to measure it.\n\nCDN\nCDN and edge network\nNot evaluated yet\nEFFICACY\nNot evaluated yet\n\nNo evidence yet. Run all checks to measure it.\n\nAll checks\n\n149 bounded external checks apply to this domain. Open any check to see how it works, what it sent, and what came back.\n\nRun all checks\nLast run completed Jul 1, 05:30 PM: 1 of 149 checks finished.\nFull activity log\nAll\n149\nProtected\n1\nNot run\n148\nWeb application firewall\n60 checks\nOrigin exposure\n3 checks\n1 PROTECTED\nHTTP application layer\n22 checks\nProtocol machinery\n7 checks\nTLS\n6 checks\nNetwork and transport\n11 checks\nDNS\n11 checks\nReflection exposure\n21 checks\nAmplification exposure\n5 checks\nOperational readiness\n3 checks\nValidate this target\n\nFour steps take you from a declared domain to an evidence-backed readiness verdict. Each step shows its real state and the exact next action.\n\nREADY TO VALIDATE\nProve ownership\nOWNERSHIP PROVEN\n\nExternal validation probes are blocked until you prove you control this target. Ownership must reach at least DNS-verified. Publish the DNS TXT record below, then choose Check now.\n\nVerified via DNS TXT record. You can move on to choosing checks.\n\n2\nChoose a check\nPICK ONE\n\nThese bounded checks are bound to this target by a test policy. Pick the one you want to validate.\n\nPICK\tBOUND CHECK\tEVIDENCE LEVEL\n\n\t\norigin.direct_bypass.safe\norigin.direct_bypass.safe\n\t\nTEST METHOD NOT REPORTED\n\n\n\t\ndns.authoritative_response.safe\ndns.authoritative_response.safe\n\t\nTEST METHOD NOT REPORTED\nRun bounded validation\n2 RUNS\n\nRate-limited external probes run against this target and produce evidence. Nothing runs until you start it.\n\nRun selected check\nChoose a check in step 2.\n4\nReview results\nPASSED \u00b7 1 OPEN FINDING\n\nThe latest run passed, but a finding from earlier evidence is still open. Confirm the fix is in place, then close it in Findings.\n\nOpen evidence\n2 findings\nEvidence & posture\n\nEverything recorded for this target: what protects it, edge fingerprints, run history, and open findings.\n\nProtection path\nWAF / CDN edge\nRecent runs\n2 items\n2\nFindings\n2 items\n2\n\nLinked WAF posture is available: Protection worked. Open the evidence before treating it as a broad readiness claim.\n\nWeb application firewall\nPROTECTION WORKED\n\nProvider: cloudflare.\n\nCDN / edge network\nNOT ENOUGH EVIDENCE\n\nNo CDN provider asserted by a live edge result.\n\nCloud hosting\nNOT ENOUGH EVIDENCE\n\nHosting not asserted; hosting alone would not prove protection.\n\nOrigin access\nNOT ENOUGH EVIDENCE\n\n1 open origin finding still recorded; close it after confirming the fix.\n\nUnderstand evidence and result labels\nTarget facts\n\nDeclared inventory, ownership evidence, and authorization for this target.\n\nTARGET ID\ntgt_checkout_1\nDECLARED VALUE\ncheckout.acme.com\nKIND\nDomain name\nDECLARATION SOURCE\nManual declaration\nOWNERSHIP METHOD\nDNS TXT record\nOWNERSHIP STATUS\nDomain ownership verified\nTARGET GROUP\nedge-checkout\nEXPECTED BEHAVIOR\nProtected path baseline\nTAGS\nNone\nGROUP LOA\nSIGNED\nShow recorded verification transitions",
+    "overflow": false
+  },
+  {
+    "id": "finding-detail",
+    "title": "Finding detail \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Origin direct bypass \u00b7 checkout.acme.com",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Export evidence",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Save triage",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Accept risk",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Close finding",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Retest",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Verify chain",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export bundle",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export bundle",
+        "label": "Export finding evidence bundle from artifact art_probe_checkout_1",
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "assignee",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "notes",
+        "type": "textarea"
+      }
+    ],
+    "links": [
+      {
+        "text": "\u2190 Findings",
+        "href": "#findings"
+      },
+      {
+        "text": "Target group",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "Target",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "Source run",
+        "href": "/app#run-detail?id=run_checkout_1"
+      },
+      {
+        "text": "Open linked run",
+        "href": "/app#run-detail?id=run_checkout_1"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "Probe result",
+        "href": "/app#evidence-detail?id=art_probe_checkout_1"
+      },
+      {
+        "text": "run_checkout_1",
+        "href": "/app#run-detail?id=run_checkout_1"
+      }
+    ],
+    "body": "Validation\n\u203a\nFinding detail\n\nEvidence-backed finding\n\nOrigin direct bypass \u00b7 checkout.acme.com\n\nfnd_checkout_1\n\nSEVERITY 2 \u00b7 HIGH\nOPEN\n\u2190 Findings\nExport evidence\nSEVERITY\nSeverity 2 \u00b7 High\n\nRecorded impact class\n\nCRITICAL\nSTATUS\nOpen\n\nRecorded finding state\n\nATTENTION\nTARGET GROUP\ntg_checkout\n\nDeclared scope\n\nOWNER\nunassigned\n\nAccountable owner\n\nFinding summary\n\nKey facts and exact relationships for triage and evidence review.\n\nFINDING ID\nfnd_checkout_1\nSLA DUE\nNot reported\nCHECK\nOrigin Leak Scan (Safe)origin.leak_scan.safe\nTARGET ID\ntgt_checkout_1\nSOURCE RUN\nrun_checkout_1\nTarget group\nTarget\nSource run\nVerdict explanation\n\nSEVERITY 2 \u00b7 HIGH\n\u00b7\nOPEN\n\nEvidence provenance\nFinding record\nfnd_checkout_1\nOriginating run\nrun_checkout_1\nRun check\norigin.leak_scan.safe\nRun event records\n1 loaded from linked run\nOpen linked run\nWhy this finding?\n\nProtection stopped the test traffic. Open the technical evidence details for exact event fields.\n\nShow technical evidence details\nTriage\n\nAssign an owner, record notes, and move the finding state.\n\nFinding opened\nRecorded status: Open\n2\nOwner assigned\nNo assignee recorded.\n3\nRemediation linked\nNo playbook or progressed remediation state.\n4\nDecision recorded\nAccept risk or close after review.\nAssignee\nunassigned\nSLA due\nNot reported\nAssignee\nNotes\nSave triage\nAccept risk\nClose finding\nRetest\nAffected targets\n\nEmbedded finding links first; exact target-group linkage is the fallback.\n\nTARGET\tKIND\tVALUE\tVERIFICATION\tELIGIBILITY\tLAST VERDICT\n\ncheckout.acme.com\n\t\nDomain name\n\t\ncheckout.acme.com\n\t\nDomain ownership verified\n\t\nEligible\n\t\nNo result yet\nAffected assets for this rule\n\nEvery loaded finding that recorded \u201cOrigin direct bypass\u201d. Open an asset for its own explanation, remediation, retest, and custody export.\n\nNo other loaded finding records this outcome. When validation records it on another asset, that asset is listed here.\n\nRemediation\n\nWAF action tracking and owner assignment when a playbook is linked to this finding.\n\nNo remediation playbook linked\n\nThis finding has no WAF action item or remediation steps yet. Use triage above to assign an owner, or link a playbook when your integration provides one.\n\nEvidence bundle\n\nRecorded artifacts, source runs, sealed digests, and custody positions.\n\nVerify chain\nExport bundle\n\nSelect an artifact to open its evidence detail: payload, SHA-256 digest, and custody position.\n\nARTIFACT\tKIND\tRUN\tSHA-256\tSEALED\tSIZE\t\n\nProbe result\n\t\nProbe result\n\t\nrun_checkout_1\n\t\naabbccdd00112233445566778899aabbccdd00112233445566778899aabb\n\t\nJul 1, 05:30 PM\n\t\n812 B\n\t\nExport bundle\nCustody chain\n\nVerification is shown only after the exported evidence and custody manifest pass the verification check.\n\nNOT CHECKED\nShow technical custody record",
+    "overflow": false
+  },
+  {
+    "id": "finding-group-detail",
+    "title": "Finding group \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Origin direct bypass",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Classic",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refined",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Refresh",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "Back to findings",
+        "href": "#findings?variant=refined"
+      },
+      {
+        "text": "Open findings",
+        "href": "#findings?variant=refined"
+      }
+    ],
+    "body": "Validation\n\u203a\nFinding group\nBack to findings\n\nFINDINGS \u00b7 ALERT\n\nOrigin direct bypass\nSEVERITY 2 \u00b7 HIGH\nCheck: Origin Leak Scan (Safe)\nVector: Origin\n1 open\nClassic\nRefined\nRefresh\nAFFECTED ASSETS\n1\n1 finding\nOPEN\n1\n1 asset still exposed\nSLA\nSLA unknown\n1 open finding not dated\nFIRST OPENED\nOct 3, 09:47 PM\nLast observed Oct 3, 09:47 PM\nOWNERS\n0\nUnassigned\nWhat this means\nRECORDED VERDICT\nNo conclusion yet\nCHECK\nBounded DNS/subdomain/IPv6 origin leak discovery on declared apex domain.\nREMEDIATION\nNo remediation plan is recorded on the lead finding. Open it to see linked action items and evidence.\nOpen lead finding for full evidence\nAffected assets\nAll1\nOpen1\nAccepted0\nClosed0\n\nOpen a finding for evidence, triage, safe retest, and custody export.\n\nASSET\tTARGET GROUP\tSTATUS\tSEVERITY\tSLA\tOPENED\tACTIONS\n\ncheckout.acme.com\ntgt_checkout_1\n\t\nedge-checkout\n\t\nOPEN\n\t\nSEVERITY 2 \u00b7 HIGH\n\t\nNOT DATED\n\t\nOct 3, 09:47 PM\n\t\nOpen finding\nOpen target",
+    "overflow": false,
+    "url": "http://127.0.0.1:5173/app#finding-group-detail?key=origin.leak_scan.safe%7Ct%253Aorigin%2520direct%2520bypass"
+  },
+  {
+    "id": "evidence-detail",
+    "title": "Evidence detail \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Probe result",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Recompute digest",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export artifact",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "\u2190 Back to Evidence vault",
+        "href": "#evidence"
+      },
+      {
+        "text": "\u2190 Finding",
+        "href": "/app#finding-detail?id=fnd_checkout_1"
+      },
+      {
+        "text": "Open originating run",
+        "href": "/app#run-detail?id=run_checkout_1"
+      }
+    ],
+    "body": "Validation\n\u203a\nEvidence detail\n\nValidation \u00b7 evidence artifact\n\n\u2190 Back to Evidence vault\nValidation \u203a Evidence vault \u203a Probe result\n\nProbe result\n\u2190 Finding\nRecompute digest\nExport artifact\n\nRecorded evidence artifact with optional digest fields and a technical JSON preview. No custody or server verification is inferred.\n\nKIND\nProbe result\n\nArtifact classification\n\nRUN\nrun_checkout_1\n\nOriginating test run\n\nSIZE\n812 B\n\nRecorded size field\n\nDIGEST\nDigest recorded\n\nDigest method recorded\n\nArtifact record\n\nRecorded artifact metadata. Absent fields are omitted rather than inferred.\n\nShow technical artifact record\nOpen originating run\nSupplied chain metadata & digest\n\nRecorded chain and digest values are shown exactly; this panel does not independently verify them.\n\nShow technical custody and digest\nStored JSON preview\n\nNo payload, content, or metadata record is available.\n\nNo JSON preview available.\n\nThis artifact has no object-valued payload, content, or metadata record.",
+    "overflow": false
+  },
+  {
+    "id": "check-detail",
+    "route": "check-detail?id=origin.leak_scan.safe",
+    "role": "admin",
+    "url": "http://127.0.0.1:5173/app?ux_review=6#check-detail?id=origin.leak_scan.safe",
+    "title": "Check detail \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Origin Leak Scan (Safe)",
+    "body": "Validation\n\u203a\nCheck detail\n\nValidation\n\nValidation \u203a Check detail \u203a Origin Leak Scan (Safe)\n\nOrigin Leak Scan (Safe)\n\norigin.leak_scan.safe\n\nChecks\nSchedule this check\n\nBounded DNS/subdomain/IPv6 origin leak discovery on declared apex domain.\n\nFAMILY\nOrigin\n\nVector family\n\nMODE\nsafe\n\nCustomer-runnable\n\nEXECUTION\nBounded live probe\n\nUp to 15 probe operations + up to two DNS destination-vetting resolver operations per hostname destination\n\nLAST VERDICT\nNone\n\nNo runs yet\n\nRemediation\n\nRecommended action when this check surfaces a gap.\n\nReview the recorded run evidence and declared target behavior before changing protection.\n\nDetection logic and verdict path\n\nCatalog-recorded evidence and verdict rules for this check.\n\nVERDICT LOGIC\n\nLeak signals (direct origin IPs, IPv6-only DNS, stale subdomains) raise bypass findings.\n\nEXPLANATION\n\nThe bounded probe result is evaluated against the check expected behavior using external probe evidence only.\n\nEXPECTED BEHAVIOR CATALOG KEY\n\nBlock before the origin server\nTaxonomy mappings\n\nCatalog identifiers recorded for this check. Values are shown as stored, without broadening or truncation.\n\nATTACK VECTORS\n\nATT-101\nATT-122\nATT-126\n\nEXHAUSTED RESOURCES\n\nAPPLICATION L7\n\nDELIVERY PATTERNS\n\nNo Pattern identifiers recorded.\n\nWAF VULNERABILITIES\n\nNo WV identifiers recorded.\n\nNON-DDOS THREATS\n\nNo ND identifiers recorded.\n\nRequirements & scope\n\nWhat must be declared and placed before this check can run.\n\nSUPPORTED TARGETS\n\nFQDN\nURL\n\nREQUIRED CUSTOMER SETUP\n\ndeclared apex domain\nEvidence & safety bounds\n\nHow the run is governed and what evidence a verdict requires.\n\nEVIDENCE REQUIRED\n\nPROBE RESULT\n\nSAFETY BOUNDS\n\nMAX 15 EVENTS\nMAX 120S\n1 CONCURRENT / GROUP\n\nPROBE PROFILE\n\nOrigin leak scan\nUP TO 15 PROBE OPERATIONS + UP TO TWO DNS DESTINATION-VETTING RESOLVER OPERATIONS PER HOSTNAME DESTINATION\n\nSTOP CONDITIONS\n\nmax events reached\nmax duration elapsed\ncustomer cancel\ntenant kill switch\nScheduled policies\n\nTest policies explicitly linked to this catalog check.\n\nNo linked policies.\n\nNo active policy is explicitly linked to this check.\n\nOpen test policies\nRecent run evidence\n\nLatest loaded runs explicitly linked to this check.\n\nRUN\tTARGET GROUP\tLIFECYCLE\tVERDICT\tRECORDED\n\nrun_checkout_1\n\t\ntg_checkout\n\t\nCOMPLETED\n\t\nNo result yet\n\t\nOct 3, 09:47 PM\nDefinition\n\nNo runs recorded for this check yet.\n\nShow technical check definition",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      }
+    ],
+    "overflow": false,
+    "panels": []
+  },
+  {
+    "id": "policy-detail",
+    "title": "Policy detail \u00b7 Validation \u00b7 AstraNull",
+    "h1": "Checkout daily bypass check",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "Test policies",
+        "href": "#test-policies"
+      },
+      {
+        "text": "Open exact target",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      },
+      {
+        "text": "edge-checkout",
+        "href": "/app#target-group-detail?id=tg_checkout"
+      },
+      {
+        "text": "checkout.acme.com",
+        "href": "/app#target-detail?id=tgt_checkout_1"
+      }
+    ],
+    "body": "Validation\n\u203a\nPolicy detail\n\nValidation policy\n\nValidation \u203a Policy detail \u203a Checkout daily bypass check\n\nCheckout daily bypass check\nTest policies\nOpen exact target\n\nACTIVE \u00b7 origin.direct_bypass.safe\n\nSTATE\nActive\n\nenabled\n\nCADENCE\nDaily\n\nNo safe window returned\n\nNEXT ELIGIBLE\n\u2014\n\nRecorded next-run time\n\nLAST DISPATCHED\n\u2014\n\nNo previous run recorded\n\nImmutable binding\n\nExact target group, target, and check identifiers captured by this policy.\n\nTarget group\nedge-checkout\nExact target\ncheckout.acme.com\nCheck\norigin.direct_bypass.safe\nShow technical policy binding record\nSchedule facts\n\nScheduler fields returned with this policy; eligibility is still rechecked at dispatch.\n\nCadence\nDaily\nSafe window\n\u2014\nTimezone\nnot recorded\nExpected verdict\nNOT RECORDED\nMax concurrent runs\nnot returned\nEvent trigger\nnot returned\nOwner / creator\nusr_admin\nCreated\nJul 1, 05:30 PM\nUpdated\nJul 1, 05:30 PM\nDispatch gates\n\nOrdered checks derived from this policy record. Runtime ownership, scope, and concurrency checks still execute server-side.\n\nExact target binding recorded \u00b7 Exact target linked\nRECORDED\nCatalog check resolved \u00b7 origin.direct_bypass.safe\nRECORDED\nCustomer-runnable check \u00b7 safe\nRECORDED\nPolicy active and enabled \u00b7 active; enabled=true\nRECORDED\nSafe window recorded \u00b7 No safe window returned\nMISSING\nDispatch history\n\nRecent runs explicitly linked to this policy. A similar group or check name alone does not establish that link.\n\nRUN\tSTATUS\tVERDICT\tRECORDED\n\nrun_checkout_1\n\t\nCOMPLETED\n\t\nPROTECTION WORKED AS EXPECTED\n\t\nOct 3, 09:47 PM",
+    "overflow": false
+  },
+  {
+    "id": "report-detail",
+    "title": "Report detail \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Checkout edge readiness summary",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Export JSON",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export JSON",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export Markdown",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Export HTML",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "\u2190 Back to Reports",
+        "href": "#reports"
+      },
+      {
+        "text": "Reports",
+        "href": "#reports"
+      },
+      {
+        "text": "Back to reports",
+        "href": "#reports"
+      }
+    ],
+    "body": "Governance\n\u203a\nReport detail\n\nReport detail\n\n\u2190 Back to Reports\nGovernance \u203a Reports \u203a Checkout edge readiness summary\n\nCheckout edge readiness summary\n\nrpt_checkout_baseline\n\nReports\nExport JSON\n\nREADY \u00b7 \u2014 \u00b7 rpt_checkout_baseline\n\nREADINESS\n82\n\nRecorded score out of 100\n\nSTATUS\nReady\n\nReport delivery state\n\nOPEN FINDINGS\n1\n\nRecorded at report generation\n\nCRITICAL\nGENERATED\nOct 3, 09:47 PM\n\nReport snapshot timestamp\n\nReport summary\n\nReadiness and delivery status for this generated report.\n\n82/ 100\nReadiness\nREADY\nStatus\nREADY\nOpen findings\n1\nKind\ntechnical\nPeriod\n\u2014\nCreated\nOct 3, 09:47 PM\nReport ID\nrpt_checkout_baseline\nExport digest verification\n\nDigest metadata from an explicit JSON export plus the response from /v1/custody/verify when returned.\n\nNo export verification yet.\n\nUse Export JSON to generate an export, inspect its returned manifest, and request server verification.\n\nReadiness factor snapshot\n\nFactors captured inside this report summary. Scores and weights are shown as returned without renormalization.\n\nNo factor array in this report.\n\nThe report summary does not include a readiness-factor list.\n\nRun coverage in report snapshot\n\nRelationships are limited to runs captured by this report and still present in the loaded records. Finding counts reflect current exact-run relationships, not historical totals from report generation.\n\nSURFACE\tSNAPSHOT RUNS LOADED\tCURRENTLY OPEN LINKED FINDINGS\tLAST EVIDENCE-BACKED VERDICT\n\nedge-checkout\n\t\n1\n\t\n1\n\t\nPROTECTION WORKED AS EXPECTED\nExport formats\n\nExport this report as JSON, Markdown, or HTML. JSON exports include custody manifests for verification.\n\nExport JSON\nExport Markdown\nExport HTML\nBack to reports\n\nPDF export is not available in this slice; backend report exports support JSON, Markdown, and HTML only.",
+    "overflow": false
+  },
+  {
+    "id": "release-evidence",
+    "route": "release-evidence",
+    "role": "auditor",
+    "url": "http://127.0.0.1:5173/app?ux_review=5#release-evidence",
+    "title": "Release evidence \u00b7 Governance \u00b7 AstraNull",
+    "h1": "Release evidence",
+    "body": "Governance\n\u203a\nRelease evidence\n\nGovernance\n\nRelease evidence\n\nProduction and staging custody ledger: accepted evidence kinds, coverage gaps, and the latest operator-attested readiness snapshot.\n\nEVIDENCE KINDS\n2/26\n\nrequired inventory\n\nATTENTION\nMISSING\n24\n\nrequired kinds\n\nATTENTION\nPRODUCTION READINESS\nNot ready\n\nattestation snapshot\n\nATTENTION\n\nEvidence kinds 2/26 \u00b7 24 missing \u00b7 attestation invalid evidence \u00b7 production Not ready\n\nGap ledger\n\nKinds not yet attached to accepted release evidence for this tenant.\n\nRecorded 2 of 26 required kinds. Customer launch remains gated by staging, legal, SOC, and security signoffs.\n\nKIND\tSTATUS\n\nThird party security review\n\t\nMISSING\n\n\nMigration apply\n\t\nMISSING\n\n\nOperator runbook exercise\n\t\nMISSING\n\n\nOidc prod auth preflight\n\t\nMISSING\n\n\nEdge protection\n\t\nMISSING\n\n\nGoverned adapter\n\t\nMISSING\n\n\nProvider approval\n\t\nMISSING\n\n\nKill switch drill\n\t\nMISSING\n\n\nPostgres concurrency\n\t\nMISSING\n\n\nDr restore\n\t\nMISSING\n\n\nUi accessibility matrix\n\t\nMISSING\n\n\nNotification provider config\n\t\nMISSING\n\n\u2026and 12 more kinds.\n\nCopy gap summary\nTechnical export\nRelease evidence inventory\n\nAccepted kinds, validation summary, and custody URI previews without raw bodies.\n\nKIND\tSTATUS\tVALIDATION\tRELEASE\tCUSTODY\tCREATED\n\nSUPPORT READINESS\n\t\nACCEPTED\n\t\nContract valid (metadata-only)\n\t\nrel_local_demo_2026\n\t\nevidence://support/readiness\n\t\nJul 1, 05:30 PM\n\n\nVECTOR SAFETY POLICY\n\t\nACCEPTED\n\t\nInvalid \u2014 missing 2 field(s)\n\t\nrel_local_demo_2026\n\t\nevidence://vector/safety-policy\n\t\nJul 1, 05:30 PM\nAttestation snapshot\n\nLatest staging readiness attestation. Inventory completeness and customer production launch remain separate decisions.\n\nSignoff status\nINVALID EVIDENCE\nProduction ready\nNOT READY\nProfile\nfull\nChecked at\nOct 4, 12:05 AM",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      },
+      {
+        "text": "Copy gap summary",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Technical export",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Copy custody URI",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Copy custody URI",
+        "disabled": false
+      }
+    ],
+    "overflow": false,
+    "panels": []
+  },
+  {
+    "id": "landing",
+    "title": "AstraNull \u00b7 Prove DDoS readiness without handing over your cloud keys",
+    "h1": "Prove DDoS readiness without handing over your cloud keys.",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "Try the demo workspace",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [],
+    "links": [
+      {
+        "text": "Request access",
+        "href": "/signup"
+      },
+      {
+        "text": "See how validation works",
+        "href": "#proof"
+      },
+      {
+        "text": "Request access",
+        "href": "/signup"
+      },
+      {
+        "text": "Log in",
+        "href": "/app"
+      }
+    ],
+    "body": "NO-ACCESS-FIRST DDOS READINESS VALIDATION\n\nProve DDoS readiness without handing over your cloud keys.\n\nNo-access-first DDoS readiness validation for customer-declared targets.\n\nRequest access\nSee how validation works\n\nWhat every verdict carries\n\ntarget_id\nA customer-declared FQDN, DNS zone, or TCP surface\nconfidence\nexternal_only\nverdict\nprotected\nexposed\nbypassable\ninconclusive\nevidence_ids\nReferences to the probe evidence behind the verdict\nreason_codes\nWhy correlation reached this verdict\nField names from the verdict record. Values show what each field holds, not a customer result.\nFrom declared target to readiness verdict.\n\nA verdict is the end of a chain you can inspect, not a substitute for it. Each step records what the next one is allowed to rely on.\n\n01\nDeclare the targets\n\nList the FQDNs, DNS zones, and TCP surfaces in scope, by hand or through CSV or API import, and group them with tags. Ownership is proven, for example with a DNS TXT challenge, before any probe runs.\n\nRecorded as\ntarget\ntags\nownership_status\n\n02\nProbe from the outside\n\nSigned, rate-bounded probe jobs observe each approved target from outside your network. There is no agent to install and no cloud credential to grant.\n\nRecorded as\ncheck_id\nprobe_result\n\n03\nKeep the evidence\n\nEach observation is stored with the check and the expected behavior it was tested against. A missing observation stays a visible gap. It is never filled in by inference.\n\nRecorded as\nevidence_ids\nexpected_behavior\n\n04\nReach a readiness verdict\n\nCorrelation turns evidence into a verdict such as protected, exposed, bypassable, or inconclusive, with the reason codes behind it. Exports carry custody metadata for review and audit.\n\nRecorded as\nverdict\nreason_codes\nconfidence\n\nSeparate lane, SOC only\n\nEscalate through the SOC\n\nHigh-scale tests are requested, never self-served. The SOC reviews authorization, schedules the window, runs the test, and holds the stop control.\n\nRecorded as\nhigh_scale_request_id\n\nWhat it requires, and what it refuses to assume.\n\nFour limits shape every validation run, from the first declared target to a SOC-run high-scale test.\n\nScope\nCustomer-declared targets.\n\nYou choose the exact FQDNs, DNS zones, and TCP surfaces in scope. AstraNull does not perform automatic IP inventory discovery.\n\nAccess\nNo infrastructure keys by default.\n\nThe no-access-first path needs no customer cloud credentials and no installed agent. Validation runs from the outside in.\n\nExecution\nBounded checks behind an ownership gate.\n\nSafe checks run as bounded probe jobs, and only against targets with proven ownership. Missing evidence stays visible instead of being inferred.\n\nEscalation\nHigh-scale stays governed.\n\nCustomers request high-scale work. The SOC validates authorization, schedules execution, and keeps the stop controls and the audit trail.\n\nDefault validation is bounded and defensive. AstraNull does not expose self-service attack tooling or unmanaged traffic generation.\n\nHigh-scale testing is a SOC decision, not a button.\n\nCustomers can ask for a high-scale test. Only the AstraNull SOC can approve, schedule, execute, stop, and close one.\n\nCustomer\n\nRequest\n\nName the declared target group, the objective, a preferred window, and reachable contacts.\n\nAstraNull SOC\n\nReview, run, and close\nScope review\nAuthorization review\nRisk review\nSchedule\nGo or no-go\nExecute\nMonitor\nStop or complete\nReport\n\nA kill switch must be available before start. Production tests need SOC analyst and SOC lead approval, scope locks after final approval, and every decision lands in the audit log.\n\nCompare the operating model, not a marketing score.\n\nThe difference is where scope comes from, what access is required, who controls high-scale work, and what evidence remains after the run.\n\nCAPABILITY\n\tASTRANULL\tSELF-RUN LOAD TESTS\tPROVIDER DDOS DASHBOARDS\nScope source\tCustomer-declared targets\tOperator-defined test target\tProvider resource inventory\nCloud credentials\tNot required by default\tDepends on the test setup\tRequired for the provider account\nEvidence origin\tExternal probe evidence (external_only)\tNot inherent\tProvider telemetry\nHigh-scale control\tSOC approval and governed execution\tOperator-owned\tProvider-specific\nEvidence model\tCorrelated evidence and custody references\tTool-specific run output\tProvider metrics and logs\nStart with the scope you need to prove.\n\nRequest reviewed access, or return to an existing customer workspace.\n\nRequest access\nLog in\nTry the demo workspace",
+    "overflow": false
+  },
+  {
+    "id": "login",
+    "title": "Log in \u00b7 AstraNull Customer Portal",
+    "h1": "Sign in to your readiness workspace.",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "Admin",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Admin",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Engineer",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "SOC",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Viewer",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Auditor",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Owner",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Continue to portal",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Try demo",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "select-one"
+      }
+    ],
+    "links": [
+      {
+        "text": "Request access",
+        "href": "/signup"
+      },
+      {
+        "text": "Check request status",
+        "href": "/signup-status"
+      }
+    ],
+    "body": "Sign in to your readiness workspace.\n\nLocal developer validation uses tenant headers to preview RBAC without a password.\n\nEvidence-backed verdicts tied to observed probe data\nNo cloud credentials required in the default path\nAudit-ready exports and custody references\nCUSTOMER PORTAL\nCustomer sign-in\n\nDeveloper validation mode: continue with local tenant headers (no password required).\n\nWork email\nTenant\nRole\nAdmin\nEngineer\nSOC\nViewer\nAuditor\nOwner\nAdmin\nContinue to portal\nTry demo\n\nNeed an account? Request access \u00b7 Check request status",
+    "overflow": false
+  },
+  {
+    "id": "signup",
+    "title": "Request access \u00b7 AstraNull",
+    "h1": "Request governed validation access.",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "Professional",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Starter",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Professional",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Enterprise",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "United States",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "United States",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "European Union",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "United Kingdom",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Asia-Pacific",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Submit request",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Try demo",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "organization_name",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "contact_name",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "contact_email",
+        "type": "email"
+      },
+      {
+        "label": null,
+        "name": "requested_plan",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "region",
+        "type": "select-one"
+      },
+      {
+        "label": null,
+        "name": "intended_use",
+        "type": "textarea"
+      },
+      {
+        "label": null,
+        "name": "high_scale_interest",
+        "type": "checkbox"
+      }
+    ],
+    "links": [
+      {
+        "text": "Log in",
+        "href": "/login"
+      },
+      {
+        "text": "Check request status",
+        "href": "/signup-status"
+      }
+    ],
+    "body": "Request governed validation access.\n\nProvisioning is review-gated. Operations validates organization details, intended use, and plan fit before creating a tenant workspace.\n\nApproved requests move to provisioning before access begins\nHigh-scale programs stay SOC-scheduled and pack-gated\nTrack request status any time with your request ID\nREVIEWED ACCESS\nRequest an AstraNull account\n\nAccount creation is reviewed before tenant provisioning. Save the request ID shown after submission.\n\nOrganization\nContact name\nContact email\nRequested plan\nStarter\nProfessional\nEnterprise\nProfessional\nRegion\nUnited States\nEuropean Union\nUnited Kingdom\nAsia-Pacific\nUnited States\nIntended use\nRequest a conversation about governed high-scale rehearsal programs. Approval and execution remain separate.\nSubmit request\nTry demo\n\nAlready have access? Log in \u00b7 Check request status",
+    "overflow": false
+  },
+  {
+    "id": "signup-status",
+    "title": "Request status \u00b7 AstraNull",
+    "h1": "Track an access request.",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "Look up status",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      }
+    ],
+    "links": [
+      {
+        "text": "Log in",
+        "href": "/login"
+      }
+    ],
+    "body": "Track an access request.\n\nUse the request ID shown in the confirmation panel after intake submission. Status lookup does not require an account session.\n\nSTATUS LOOKUP\nCheck request status\n\nEnter the case-sensitive request ID shown after intake submission.\n\nRequest ID\nUse the ID returned after intake submission. Case-sensitive.\nLook up status\n\nIf you no longer have the request ID, contact your deployment administrator or the support channel provided during onboarding. \u00b7 Log in",
+    "overflow": false
+  },
+  {
+    "id": "set-password",
+    "title": "Set your password \u00b7 AstraNull",
+    "h1": "Set your account password.",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "Show password",
+        "label": null,
+        "disabled": false
+      },
+      {
+        "text": "Set password",
+        "label": null,
+        "disabled": false
+      }
+    ],
+    "fields": [
+      {
+        "label": null,
+        "name": "",
+        "type": "text"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "password"
+      },
+      {
+        "label": null,
+        "name": "",
+        "type": "password"
+      }
+    ],
+    "links": [
+      {
+        "text": "Back to log in",
+        "href": "/app"
+      }
+    ],
+    "body": "Set your account password.\n\nA one-time invitation authorizes password setup for this account. Setting a password activates the account and closes the invitation; it cannot be reused.\n\nStored as a salted scrypt verifier, never in plaintext\nYour role and workspace come from your account, not this form\nActivation is written to the tenant audit log\nONE-TIME INVITATION\nSet your password\n\nEnter the invitation token provided to you, then choose a password of at least 12 characters.\n\nInvitation token\nNew password\nShow password\nAt least 12 characters, mixing at least three of: lowercase, uppercase, digits, symbols. Do not reuse the name part of your email address.\nConfirm password\nSet password\n\nBack to log in",
+    "overflow": false
+  },
+  {
+    "id": "not-found",
+    "route": "not-a-route",
+    "role": "admin",
+    "url": "http://127.0.0.1:5173/app?ux_review=7#not-a-route",
+    "title": "Not found \u00b7 Overview \u00b7 AstraNull",
+    "h1": "Portal route not found.",
+    "body": "Overview\n\u203a\nNot found\nPortal route not found.\nThis path is not part of the current portal.\n\nThis route alias is not served by the AstraNull React portal. Removed aliases are not redirected, so the address is reported as-is rather than silently resolving to another page.\n\nOpen dashboard",
+    "tabs": [],
+    "buttons": [
+      {
+        "text": "",
+        "label": "Open navigation",
+        "disabled": false
+      },
+      {
+        "text": "",
+        "label": "Switch to light theme",
+        "disabled": false
+      }
+    ],
+    "overflow": false,
+    "panels": []
+  }
+]

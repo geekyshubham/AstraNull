@@ -54,35 +54,49 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     expect(patches.length, 'triage save must PATCH /v1/findings/:id').toBeGreaterThan(0);
   });
 
-  test('finding Retest never reports success without firing a request (regression)', async ({ page }) => {
+  test('finding retest is reviewed, sends nothing until confirmed, and never reports success without a request (regression)', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
 
     /** @type {string[]} */
     const retestCalls = [];
-    page.on('request', (req) => {
-      const u = req.url();
-      if (req.method() === 'POST' && /\/v1\/(test-runs|waf\/validations|waf\/cve-pipeline)/.test(u)) {
-        retestCalls.push(u);
+    let failNext = true;
+    // Retest POSTs are answered in the browser so no probe is dispatched by the dev server.
+    await page.route(/\/v1\/(test-runs|waf\/validations|waf\/cve-pipeline\/[^/]+\/retest)$/, async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      retestCalls.push(route.request().url());
+      if (failNext) {
+        failNext = false;
+        return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'safe_window_closed', message: 'The safe window for this target is closed.' }) });
       }
+      return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'run_retest_example', status: 'queued' }) });
     });
 
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
-    const retestBtn = page.getByRole('button', { name: 'Retest', exact: true });
-    await expect(retestBtn).toBeVisible({ timeout: 10_000 });
-    await retestBtn.click();
+    const reviewBtn = page.getByRole('button', { name: 'Review retest', exact: true });
+    await expect(reviewBtn).toBeEnabled({ timeout: 10_000 });
+    await reviewBtn.click();
 
-    // Either a real retest request fired (success path) OR an error banner is shown.
-    // The old bug showed "Retest started." with NO request for waf/cve kinds — this
-    // asserts that a success banner is only reached when a request actually happened.
-    await expect(page.locator(BANNER).last()).toBeVisible({ timeout: 10_000 });
-    const successShown = await page
-      .locator(BANNER)
-      .filter({ hasText: /Retest started/i })
-      .count();
-    if (successShown > 0) {
-      expect(retestCalls.length, 'success banner requires a real retest request').toBeGreaterThan(0);
-    }
+    const review = page.locator('dialog.modal-confirm[open]').filter({ hasText: 'Review this retest' });
+    await expect(review).toBeVisible();
+    await expect(review).toContainText('Target');
+    await expect(review).toContainText('Check');
+    await expect(review).toContainText('The original evidence stays.');
+    expect(retestCalls, 'opening the review must not start a retest').toEqual([]);
+    await review.getByRole('button', { name: 'Cancel' }).click();
+    await expect(review).toHaveCount(0);
+    expect(retestCalls, 'cancelling the review must not start a retest').toEqual([]);
+
+    await reviewBtn.click();
+    await page.locator('dialog.modal-confirm[open]').getByRole('button', { name: 'Start retest' }).click();
+    await expect.poll(() => retestCalls.length).toBe(1);
+    await expect(page.locator(BANNER).filter({ hasText: /safe window|safe_window_closed|could not|failed/i }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(BANNER).filter({ hasText: /Retest started/i })).toHaveCount(0);
+
+    if (await page.locator('dialog.modal-confirm[open]').count() === 0) await reviewBtn.click();
+    await page.locator('dialog.modal-confirm[open]').getByRole('button', { name: 'Start retest' }).click();
+    await expect(page.locator(BANNER).filter({ hasText: /Retest started/i }).first()).toBeVisible({ timeout: 10_000 });
+    expect(retestCalls, 'success banner requires a real retest request').toHaveLength(2);
   });
 
   test('onboard modal surfaces validation errors INSIDE the open dialog (regression)', async ({ page }) => {
@@ -138,7 +152,7 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     await expect(dialog.locator('.dns-footer')).not.toContainText('Not recorded', { timeout: 10_000 });
   });
 
-  test('finding evidence export and report-detail exports download a file (regression)', async ({ page }) => {
+  test('finding evidence export downloads a file (regression)', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
@@ -148,13 +162,21 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     expect(findingFile.suggestedFilename()).toMatch(/^finding-.+-evidence\.json$/);
     const bundle = JSON.parse(readFileSync(await findingFile.path(), 'utf8'));
     expect(bundle.custody?.content_sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
 
+  test('report-detail exports each format from the single Export menu (regression)', async ({ page }) => {
+    const baseUrl = getPortalPlaywrightBaseUrl();
+    await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'report-detail', baseUrl);
-    for (const [label, ext] of [['Export JSON', 'json'], ['Export Markdown', 'md'], ['Export HTML', 'html']]) {
+    const exportButton = page.getByRole('button', { name: 'Export', exact: true });
+    await expect(exportButton).toHaveCount(1);
+    for (const [label, ext] of [[/^JSON/, 'json'], [/^Markdown/, 'md'], [/^HTML/, 'html']]) {
+      await exportButton.click();
+      const menu = page.getByRole('list', { name: /^Export / });
       const download = page.waitForEvent('download');
-      // The export preview panel repeats the format buttons; use the page-header action.
-      await page.getByRole('button', { name: label, exact: true }).first().click();
+      await menu.getByRole('button', { name: label }).click();
       expect((await download).suggestedFilename()).toMatch(new RegExp(`\\.${ext}$`));
+      await expect(menu).toHaveCount(0);
     }
   });
 

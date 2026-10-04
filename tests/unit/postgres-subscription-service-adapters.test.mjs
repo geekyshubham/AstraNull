@@ -168,6 +168,8 @@ describe('postgres subscription service adapter', () => {
     // Top-level shape
     assert.deepEqual(Object.keys(summary).sort(), [
       'account',
+      'as_of',
+      'as_of_source',
       'plan',
       'subscription',
       'support',
@@ -175,6 +177,8 @@ describe('postgres subscription service adapter', () => {
       'usage',
     ]);
     assert.equal(summary.tenant_id, tenantId);
+    assert.equal(summary.as_of, '2026-01-01T12:00:00.000Z');
+    assert.equal(summary.as_of_source, 'subscription_summary_clock');
     assert.equal(summary.account.support_owner, 'staff_owner');
 
     // Subscription + effective entitlements (grant flips connectors on)
@@ -199,16 +203,25 @@ describe('postgres subscription service adapter', () => {
     assert.equal(summary.support.lifecycle_state, 'active');
     assert.equal(summary.support.region, 'eu');
     assert.equal(summary.support.escalation_state, 'soc_review_pending');
+    assert.equal(summary.support.as_of, '2026-01-01T12:00:00.000Z');
+    assert.equal(summary.support.as_of_source, 'subscription_summary_clock');
     assert.equal(summary.support.recent_audit.length, 2);
     // mapInternalAudit renames actor_role -> staff_role; summary restores actor_role.
     assert.equal(summary.support.recent_audit[0].actor_role, 'admin');
+    // Fixture rows only have created_at (the tenant-detail alias of audit_logs.timestamp).
+    assert.equal(summary.support.recent_audit[0].timestamp, '2026-01-01T11:00:00.000Z');
+    assert.equal(summary.support.recent_audit[0].timestamp_source, 'audit_log.created_at_alias');
+    assert.equal(summary.support.recent_audit[1].timestamp, '2026-01-01T10:00:00.000Z');
+    assert.equal(summary.support.recent_audit[1].timestamp_source, 'audit_log.created_at_alias');
+    assert.equal('created_at' in summary.support.recent_audit[0], false);
     assert.deepEqual(Object.keys(summary.support.recent_audit[0]).sort(), [
       'action',
       'actor_role',
-      'created_at',
       'id',
       'resource_id',
       'resource_type',
+      'timestamp',
+      'timestamp_source',
     ]);
 
     // Tenant scoping: detail keyed by tenantId, repo reads receive tenant ctx.
@@ -262,10 +275,14 @@ describe('postgres subscription service adapter', () => {
 
     const summary = await service.getCurrentSubscriptionSummary({});
     assert.equal(summary.tenant_id, null);
+    assert.equal(summary.as_of, null);
+    assert.equal(summary.as_of_source, 'not_recorded');
     assert.equal(summary.subscription, null);
     assert.equal(summary.plan, null);
     assert.equal(summary.usage.users, 0);
     assert.equal(summary.support.escalation_state, 'nominal');
+    assert.equal(summary.support.as_of, null);
+    assert.equal(summary.support.as_of_source, 'not_recorded');
     assert.equal(calls.length, 0);
   });
 });

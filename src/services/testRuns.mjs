@@ -1,10 +1,10 @@
-import { audit } from '../audit.mjs';
+import {
+  audit } from '../audit.mjs';
 import {
   customerSelectableChecks,
   evaluateCheckPrerequisites,
   getCheckById,
   isCustomerRunnable,
-  resolveExpectedBehaviorForCheck,
 } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
@@ -16,13 +16,24 @@ import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, probeEventHasProbeIo } from './correlation.mjs';
-import { upsertFindingFromVerdict } from './findings.mjs';
-import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
+import { authorizeFindingWrite, upsertFindingFromVerdict } from './findings.mjs';
+import {
+  bindingRecordsFromStore,
+  currentOriginProof,
+  validateOriginBindingForRun,
+} from './originBindings.mjs';
+import { registerRetestLineage } from './retestLineage.mjs';
+import { executeOpsReadinessProbe, isOpsReadinessProbeKind, resolveOpsReadinessScenario } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { getTestPolicyForDispatch } from './testPolicies.mjs';
 import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
+import {
+  approvedScenarioVersion,
+  deriveRunEvidenceStamp,
+  verdictExpectedBehaviorForRun,
+} from '../lib/checkDefinitionVersion.mjs';
 import { validateHostSniTargetBinding } from '../lib/probeJobs.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { probeDispatchReady } from '../config.mjs';
@@ -75,9 +86,14 @@ export function listTestRuns(ctx, options = {}) {
   const verdicts = getStore().verdicts ?? [];
   return rows.map((run) =>
     // EVIDENCE-01 / ADR-0008: list items carry the same nested verdict as run detail; scrub it here too.
+    // Authoritative resolution only: the same-tenant published verdict record backs every list
+    // verdict. A raw run.verdict string (legacy row field) or the run status never invents one —
+    // an unbacked run projects null, never a phantom PASS.
     scrubRunForCustomer({
       ...run,
-      verdict: run.verdict ?? verdicts.find((v) => v.tenant_id === ctx.tenantId && v.test_run_id === run.id) ?? null,
+      verdict: verdicts.find(
+        (v) => v.tenant_id === ctx.tenantId && v.test_run_id === run.id,
+      ) ?? null,
     }),
   );
 }
@@ -161,10 +177,42 @@ export function getTestRun(ctx, id) {
   return scrubRunForCustomer({ ...run, verdict: verdict ?? null });
 }
 
-export function getRunEvents(ctx, id) {
+const MAX_EVENT_ID_LOOKUP = 32;
+
+function eventLookupIds(value) {
+  if (!Array.isArray(value)) return null;
+  const ids = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(item) || ids.includes(item)) continue;
+    ids.push(item);
+    if (ids.length >= MAX_EVENT_ID_LOOKUP) break;
+  }
+  return ids;
+}
+
+export function getRunEvents(ctx, id, options = {}) {
   const run = getStore().testRuns.find((r) => r.id === id && r.tenant_id === ctx.tenantId);
   if (!run) return null;
-  return getStore().events.filter((e) => e.test_run_id === id && e.tenant_id === ctx.tenantId);
+  const events = getStore().events.filter((e) => e.test_run_id === id && e.tenant_id === ctx.tenantId);
+  const lookup = eventLookupIds(options?.ids);
+  if (lookup) {
+    const want = new Set(lookup);
+    return events.filter((event) => {
+      const matched = want.has(event.id) || (typeof event.event_id === 'string' && want.has(event.event_id));
+      if (!matched) return false;
+      if (options.target_id && event.target_id !== options.target_id) return false;
+      if (options.check_id && event.check_id !== options.check_id) return false;
+      return true;
+    });
+  }
+  if (options?.limit == null) return events;
+  const requested = Number(options.limit);
+  if (!Number.isFinite(requested) || requested < 1) return events;
+  // Callers that pass limit must not receive the rest of the run. sourceCount is the
+  // in-memory total; it is non-enumerable so existing array comparisons stay stable.
+  const capped = events.slice(0, Math.min(Math.floor(requested), 1000));
+  Object.defineProperty(capped, 'sourceCount', { value: events.length });
+  return capped;
 }
 
 function activeRunForGroup(tenantId, targetGroupId) {
@@ -275,6 +323,16 @@ function revalidateBeforeDispatch(ctx, body, check, initialTarget, probeWillLeav
 }
 
 const CANCELLABLE_STATUSES = new Set(['planned', 'running', 'collecting']);
+
+function dropStartedRun(run) {
+  const store = getStore();
+  const runs = store.testRuns ?? [];
+  const index = runs.indexOf(run);
+  if (index >= 0) runs.splice(index, 1);
+  if (!run?.retest_of_finding_id || !Array.isArray(store.findingRetestLineage)) return;
+  store.findingRetestLineage = store.findingRetestLineage.filter((row) => row.test_run_id !== run.id
+    || row.tenant_id !== run.tenant_id);
+}
 
 function denySafeStart(ctx, action, resourceId, metadata, error, status = 429) {
   audit({
@@ -577,6 +635,44 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     );
   }
 
+  const retestFindingId = typeof body.retest_of_finding_id === 'string' ? body.retest_of_finding_id.trim() : '';
+  if (retestFindingId) {
+    const allowed = authorizeFindingWrite(ctx);
+    if (!allowed.ok) return { error: 'forbidden', status: allowed.status ?? 403, permission: 'finding:write' };
+    const finding = getStore().findings.find((row) => row.tenant_id === ctx.tenantId && row.id === retestFindingId);
+    if (!finding) return { error: 'unknown_finding', status: 404 };
+    if (finding.target_id !== target.id || finding.check_id !== check.check_id) {
+      return { error: 'pair_mismatch', status: 409 };
+    }
+  }
+  const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
+  let originScopeSnapshot = null;
+  if (originBindingId) {
+    const records = bindingRecordsFromStore(getStore(), ctx.tenantId);
+    const binding = (getStore().originBindings ?? []).find((row) => row.tenant_id === ctx.tenantId && row.id === originBindingId);
+    const protectedTarget = records.targets.find((row) => row.id === binding?.protected_target_id);
+    const bindingDecision = validateOriginBindingForRun({
+      binding,
+      runTarget: target,
+      protectedTarget,
+      check,
+      originProof: currentOriginProof(records, ctx.tenantId, target.id),
+      protectedProof: currentOriginProof(records, ctx.tenantId, protectedTarget?.id),
+      body,
+    });
+    if (bindingDecision.error) return bindingDecision;
+    // Server-validated approved scope (exact existing binding, both current proofs). Only
+    // these safe fields may leave this gate; carry them into the version stamp provenance
+    // so the signed job serialization can sign the approved Host/SNI/port/path exactly.
+    originScopeSnapshot = bindingDecision.scope;
+  }
+  const opsReadiness = isOpsReadinessProbeKind(check);
+  const stamp = deriveRunEvidenceStamp(check, body, {
+    probeMode: runtimeConfig.probeMode ?? 'simulation',
+    opsReadiness,
+    scenarioVersion: approvedScenarioVersion(check, opsReadiness ? resolveOpsReadinessScenario(check) : null),
+  });
+
   const safetyConstraints = effectiveSafetyConstraints(check, group);
   const runId = newId('run');
   const run = {
@@ -600,8 +696,37 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     collection_deadline_at: new Date(
       Date.now() + collectionDeadlineMs(check),
     ).toISOString(),
+    check_version: stamp.check_version ?? null,
+    scenario_version: stamp.scenario_version ?? null,
+    producer_kind: stamp.producer_kind ?? null,
+    expected_behavior: stamp.expected_behavior ?? null,
+    expected_behavior_json: stamp.expected_behavior_json ?? null,
+    provenance_json: originScopeSnapshot
+      ? {
+        ...(stamp.provenance_json ?? {}),
+        origin_scope: {
+          host: originScopeSnapshot.host,
+          sni: originScopeSnapshot.sni,
+          port: originScopeSnapshot.port ?? null,
+          path: originScopeSnapshot.path ?? null,
+        },
+      }
+      : (stamp.provenance_json ?? null),
+    origin_binding_id: originBindingId || null,
+    retest_of_finding_id: retestFindingId || null,
   };
   getStore().testRuns.push(run);
+  if (retestFindingId) {
+    const lineage = registerRetestLineage(ctx, {
+      finding_id: retestFindingId,
+      test_run_id: run.id,
+      intent: 'retest',
+    });
+    if (lineage?.error) {
+      dropStartedRun(run);
+      return lineage;
+    }
+  }
 
   audit({
     tenant_id: ctx.tenantId,
@@ -622,18 +747,26 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
 
   if (!inlineProbe) {
     if (wouldExceedEventCap(run, 1)) {
-      getStore().testRuns.pop();
+      dropStartedRun(run);
       return denyEventCap(ctx, run, { phase: 'probe_job' });
     }
     try {
       probeJob = createProbeJob(ctx, run, check, target, body.probe_profile, runtimeConfig);
-    } catch {
-      getStore().testRuns.splice(getStore().testRuns.indexOf(run), 1);
+    } catch (error) {
+      dropStartedRun(run);
+      // A bound run without its approved origin scope fails closed: the started run intent is
+      // dropped, the explicit reason is audited, and no signed job exists to dispatch.
       return denySafeStart(
         ctx,
         'test_run.dispatch_failed',
         targetGroupId,
-        { check_id: check.check_id, scan_id: run.scan_id, reason: 'probe_job_dispatch_failed' },
+        {
+          check_id: check.check_id,
+          scan_id: run.scan_id,
+          reason: error?.code === 'bound_run_missing_approved_origin_scope'
+            ? 'bound_run_missing_approved_origin_scope'
+            : 'probe_job_dispatch_failed',
+        },
         'probe_job_dispatch_failed',
         503,
       );
@@ -648,7 +781,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     run.correlation.nonce_hash = probe.nonce_hash;
 
     if (wouldExceedEventCap(run, 1)) {
-      getStore().testRuns.pop();
+      dropStartedRun(run);
       return denyEventCap(ctx, run, { phase: 'probe' });
     }
 
@@ -804,7 +937,9 @@ function finalizeVerdictIfReady(run, options = {}) {
   }
 
   const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
-  const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
+  // Stamped runs finalize against the immutable start snapshot; legacy unstamped runs keep
+  // the historical catalog fallback (see verdictExpectedBehaviorForRun).
+  const expectedBehavior = verdictExpectedBehaviorForRun(run);
   const probeKind = getCheckById(run.check_id)?.probe_profile?.kind ?? null;
   const probeIoObserved = probeEventHasProbeIo(probeEvent);
 

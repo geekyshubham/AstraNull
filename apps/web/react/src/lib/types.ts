@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 
-export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'governance' | 'staff';
+export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'governance' | 'account' | 'staff';
 
 export type RouteId =
   | 'not-found'
@@ -197,6 +197,16 @@ export type StatePayload = {
 
 export type DataItem = Record<string, unknown>;
 
+/** `GET /v1/findings` envelope fields kept beside the loaded page (docs/backend/current-release-findings.md). */
+export type FindingsListMeta = {
+  total: number | null;
+  page: number;
+  pages: number | null;
+  limit: number | null;
+  hasMore: boolean;
+  emptyReason: string | null;
+};
+
 export type PortalData = {
   state: StatePayload | null;
   tenant: DataItem | null;
@@ -209,7 +219,10 @@ export type PortalData = {
   runs: DataItem[];
   validationScans: DataItem[];
   validationScansMeta: DataItem | null;
+  /** First server page of `GET /v1/findings` (all statuses, server default limit). Never the whole estate on its own. */
   findings: DataItem[];
+  /** Envelope of that page: the full predicate `total`, `pages` and `hasMore`. null when the server sent no envelope. */
+  findingsMeta: FindingsListMeta | null;
   evidence: DataItem[];
   highScale: DataItem[];
   reports: DataItem[];

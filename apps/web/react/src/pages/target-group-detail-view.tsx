@@ -12,6 +12,7 @@ import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
+import { openEvidenceInspector } from '../lib/evidence-inspector.mjs';
 import { buildDetailHref } from '../lib/route-params';
 // @ts-ignore Plain ESM keeps these UI decisions directly executable by node:test.
 import { apiErrorCode, edgeDetectionLockedReason, edgeDetectionReasonExplanation, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
@@ -1696,11 +1697,11 @@ export function TargetGroupDetailView({
       render: (item) => {
         // Durable per-target detection from the target API. Absent until a detection has run.
         const detection = asDataItem(item.edge_detection);
-        if (!detection) return <span className="muted small">Not detected yet</span>;
+        if (!detection) return <span className="muted small" title="No WAF/CDN observation has been recorded for this target.">Not checked</span>;
         const waf = asDataItem(detection.waf);
         const cdn = asDataItem(detection.cdn);
-        const wafStatus = getString(waf, ['status'], 'inconclusive');
-        const cdnStatus = getString(cdn, ['status'], 'inconclusive');
+        const wafStatus = getString(waf, ['status'], 'not_recorded');
+        const cdnStatus = getString(cdn, ['status'], 'not_recorded');
         const observedAt = getString(detection, ['observed_at', 'updated_at'], '');
         const observedNote = observedAt ? ` · observed ${formatDate(observedAt)}` : '';
         const conflicting = detection.conflicting_vendor_signals === true;
@@ -1908,7 +1909,16 @@ export function TargetGroupDetailView({
   ];
 
   const runColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', getString(item, ['id'], ''))}>{getString(item, ['id'], '')}</AnchorButton> },
+    { key: 'run', label: 'Result', render: (item) => {
+      const runId = getString(item, ['id'], '');
+      const runTarget = getString(item, ['target_id'], '');
+      const runCheck = getString(item, ['check_id'], '');
+      return runId && runTarget && runCheck ? (
+        <Button size="sm" variant="ghost" data-focus-key={`group-run-${runId}`} onClick={() => openEvidenceInspector({ entry: 'check_result', target_id: runTarget, check_id: runCheck, test_run_id: runId }, { focusKey: `group-run-${runId}` })} aria-label={`View evidence for recorded execution ${runId}`}>
+          View evidence
+        </Button>
+      ) : <span className="mono small">{runId || 'Not recorded'}</span>;
+    } },
     { key: 'policy', label: 'Policy', render: (item) => { const policyId = getString(item, ['policy_id', 'test_policy_id'], ''); return <span title={policyId || undefined}>{policyId ? 'Scheduled policy' : 'Not scheduled'}</span>; } },
     { key: 'checks', label: 'Checks', render: (item) => String(item.check_count ?? getString(item, ['check_id'], '—')) },
     { key: 'status', label: 'Lifecycle', render: (item) => humanizeLabel(getString(item, ['status'], 'pending')) },
@@ -2286,7 +2296,7 @@ export function TargetGroupDetailView({
               ) : null}
               <p className="muted small">Fingerprint detection is not a protection verdict. A successful no-match does not prove that no edge control exists.</p>
               {edgeDetectionRunId ? (
-                <p><a href={buildDetailHref('run-detail', edgeDetectionRunId)}>Open test run {edgeDetectionRunId}</a></p>
+                <p className="muted small">Recorded execution <span className="mono">{edgeDetectionRunId}</span>. Open the target for the family-specific evidence.</p>
               ) : null}
             </div>
           ) : null}
@@ -2534,7 +2544,7 @@ export function TargetGroupDetailView({
       <Card>
         <CardHeader><CardTitle>Recent runs</CardTitle></CardHeader>
         <CardContent>
-          <DataTable columns={runColumns} items={relatedRuns} empty={emptyStateFromApi({ icon: Activity, meta: groupMeta ? { empty_reason: getString(groupMeta, ['runs_empty_reason'], '') } : null, actionHref: '#runs', actionLabel: 'Open test runs' })} />
+          <DataTable columns={runColumns} items={relatedRuns} empty={emptyStateFromApi({ icon: Activity, meta: groupMeta ? { empty_reason: getString(groupMeta, ['runs_empty_reason'], '') } : null, })} />
         </CardContent>
       </Card>
 

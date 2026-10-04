@@ -44,7 +44,8 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await expectNoButton(page, 'Create schedule');
 
     await gotoPortalRoute(page, 'reports', baseUrl);
-    await expectNoButton(page, 'Generate & export');
+    await expectNoButton(page, 'Review report');
+    await expectNoButton(page, 'Generate report');
     await expect(page.getByText('Report generation is not available for your role.')).toBeVisible();
 
     await gotoPortalRoute(page, 'settings', baseUrl);
@@ -66,8 +67,23 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page, VIEWER_SESSION);
 
+    // Cold load of the excluded SOC console: the existing access gate denies it in place and hydrates nothing from it.
+    const socRequests = [];
+    const onSocRequest = (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.startsWith('/internal/') || pathname.startsWith('/v1/soc') || pathname.includes('high-scale')) socRequests.push(`${request.method()} ${pathname}`);
+    };
+    page.on('request', onSocRequest);
     await page.goto(`${baseUrl}/app#internal-soc`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(page.locator('.route-access-notice')).toContainText('not available for the viewer role');
+    await expect(page).toHaveURL(/#internal-soc$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'You do not have access to this page.' })).toBeVisible();
+    await expect(page.getByText('SOC console is not available to the viewer role. Nothing from it was loaded.')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Go to Dashboard' }).or(page.getByRole('button', { name: 'Go to Dashboard' }))).toBeVisible();
+    for (const label of ['Kill switch', 'Approve', 'Schedule', 'Start execution', 'Stop']) await expectNoButton(page, label);
+    await expect(page.getByRole('navigation').getByRole('button', { name: 'SOC console', exact: true })).toHaveCount(0);
+    expect(socRequests, 'a denied SOC console loads none of its data').toEqual([]);
+    page.off('request', onSocRequest);
+
     await gotoPortalRoute(page, 'target-group-detail', baseUrl);
     await expect(page.locator('.route-access-notice')).toHaveCount(0);
     await expectNoButton(page, 'Add target');
@@ -76,14 +92,22 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await expectNoButton(page, 'Run test');
 
     await gotoPortalRoute(page, 'target-detail', baseUrl);
-    await expectNoButton(page, 'Run selected check');
-    await expect(page.getByText('Read-only role')).toBeVisible();
+    await expectNoButton(page, 'Detect WAF and CDN');
+    await expectNoButton(page, 'Detect again');
+    await page.getByRole('tab', { name: /^Validate/ }).click();
+    const validatePanel = page.locator('#td-panel-validate');
+    await expect(validatePanel.getByText('Read-only role', { exact: true })).toBeVisible();
+    for (const label of ['Run selected check', 'Start check', 'Start all checks', 'Start detection']) await expectNoButton(page, label);
+    await expect(validatePanel.getByRole('button', { name: /^(Review|Run|Start)\b/ })).toHaveCount(0);
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
 
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
     await expectNoButton(page, 'Save triage');
     await expectNoButton(page, 'Accept risk');
     await expectNoButton(page, 'Close finding');
-    await expectNoButton(page, 'Retest');
+    await expectNoButton(page, 'Review retest');
+    await expectNoButton(page, 'Start retest');
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
     await expect(page.getByText('Finding triage is read-only for your role.')).toBeVisible();
   });
 
@@ -105,7 +129,11 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await injectPortalDevHeadersSession(page, AUDITOR_SESSION);
 
     await gotoPortalRoute(page, 'reports', baseUrl);
-    await expect(page.getByRole('button', { name: 'Generate & export' })).toBeVisible();
+    const review = page.getByRole('button', { name: 'Review report' });
+    await expect(review).toBeDisabled();
+    await page.getByRole('radio', { name: /Technical/ }).check();
+    await expect(review).toBeEnabled();
+    await expect(page.getByText('Report generation is not available for your role.')).toHaveCount(0);
 
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
     await expectNoButton(page, 'Accept risk');

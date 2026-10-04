@@ -126,10 +126,17 @@ function setTargetVerificationState(store, targetId, state) {
 function setWafPosture(store, posture, driftReason) {
   const snapshot = store.wafPostureSnapshots.find((row) => row.waf_asset_id === 'wa_checkout_1');
   if (snapshot) {
+    snapshot.tenant_id = ids.tenantId;
     snapshot.state = posture;
     snapshot.posture = posture;
     snapshot.drift_reason = driftReason === 'none' ? null : driftReason;
     snapshot.observed_at = FROZEN;
+  }
+  for (const row of store.wafFingerprints ?? []) {
+    if (row.waf_asset_id === 'wa_checkout_1') row.tenant_id = ids.tenantId;
+  }
+  for (const row of store.wafValidationRuns ?? []) {
+    if (row.waf_asset_id === 'wa_checkout_1') row.tenant_id = ids.tenantId;
   }
 
   const asset = store.wafAssets.find((row) => row.id === 'wa_checkout_1');

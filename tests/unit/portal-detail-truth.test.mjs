@@ -75,7 +75,17 @@ describe('portal detail truth labels', () => {
   });
 
   it('describes digest recomputation as local and makes no server-verification claim', () => {
-    assert.match(source, />Recompute digest<\/Button>/);
+    assert.match(source, />Compute local digest<\/Button>/);
+    assert.match(source, /<span>Recorded hash<\/span>/);
+    assert.match(source, /<span>Locally computed \(this page\)<\/span>/);
+    assert.match(source, /\/v1\/evidence-context\?entry=artifact&evidence_id=/);
+    assert.match(source, /const serverVerified = integrityState\.status === 'ready' && integrityState\.value === 'verified';/);
+    assert.match(source, /'Not verified \(recorded hash only\)'/);
+    assert.match(source, /'Verification status unavailable'/);
+    assert.doesNotMatch(source, /getString\(entity, \['verified'\]/);
+    assert.doesNotMatch(source, /const byRun =/);
+    assert.doesNotMatch(source, /custodyLabel/);
+    assert.match(source, /'Not verified: no authoritative verification succeeded'/);
     assert.match(source, /No server verification request was made/);
     assert.match(source, /recorded artifact digest may cover different sealed bytes/);
     assert.match(source, /no comparison or server verification was performed/);

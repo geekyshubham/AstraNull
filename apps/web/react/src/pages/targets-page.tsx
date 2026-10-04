@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Cloud,
   CloudSun,
@@ -14,7 +14,7 @@ import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
-import { buildDetailHref } from '../lib/route-params';
+import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import { formatDate, formatNumber } from '../lib/utils';
 import { resolveTargetVerificationProvenance, VerifyChip } from '../lib/verify-chip';
 import { AnchorButton, Button } from '../components/ui/button';
@@ -23,11 +23,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { EmptyState } from '../components/ui/empty-state';
 import { FormModal, useConfirmModal } from '../lib/crud-ui';
+import { canonicalCohortFilters, COHORT_FILTER_KEYS, inventoryUnits } from '../lib/domain-checks.mjs';
+import { TargetCohortList } from '../components/targets/target-cohort';
+import { useListReturnState, useRestoreListPosition } from '../components/evidence/use-inspector';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
 .targets-page .targets-summary-cell { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); background: var(--surface); }
 .targets-page .targets-summary-cell span { color: var(--fg-2); font-size: var(--text-xs); }
+.targets-page .targets-summary-cell small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
+.targets-page .target-primary-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.targets-page .target-unknown { color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-summary-cell strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-xl); font-variant-numeric: tabular-nums; }
 .targets-page .targets-intake { border-color: color-mix(in oklab, var(--accent), transparent 70%); }
 .targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }
@@ -61,7 +67,7 @@ const TARGETS_PAGE_STYLES = `
   .targets-page .target-row-actions .btn { min-height: 44px; }
 }
 @media (max-width: 1000px) { .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-intake-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 620px) { .targets-page .targets-summary, .targets-page .targets-intake-form, .targets-page .targets-toolbar { grid-template-columns: 1fr; } .targets-page .targets-search { grid-column: auto; } .targets-page .targets-intake-form .btn { width: 100%; } }
+@media (max-width: 620px) { .targets-page .targets-intake-form, .targets-page .targets-toolbar { grid-template-columns: 1fr; } .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-summary-cell { padding: var(--space-3); } .targets-page .targets-summary-cell small { display: none; } .targets-page .targets-search { grid-column: auto; } .targets-page .targets-intake-form .btn { width: 100%; } }
 `;
 
 type Tone = NonNullable<BadgeProps['tone']>;
@@ -103,6 +109,20 @@ function parseTagInput(raw: string): { tags: string[]; error: string } {
 }
 
 /** Read the stored tag list off a target record (top-level `tags`, then metadata.tags). */
+/**
+ * Server cohort filters carried in the address (dashboard and analytics links). `verification` is
+ * this page's own filter over the complete inventory (it groups pending with unverified), so it
+ * never turns the page into a server cohort.
+ */
+function readCohortFromAddress(): Record<string, string> | null {
+  const hash = window.location.hash.replace(/^#/, '');
+  const params = new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
+  params.delete('verification');
+  return canonicalCohortFilters(params);
+}
+
+const COHORT_ADDRESS_KEYS = [...COHORT_FILTER_KEYS, 'search', 'group', 'target_group', 'verification_state', 'role'];
+
 function targetTags(item: DataItem): string[] {
   if (Array.isArray(item.tags)) return item.tags.filter((tag): tag is string => typeof tag === 'string');
   const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata) ? item.metadata as DataItem : null;
@@ -190,11 +210,24 @@ export function TargetsPage({
   onRefresh: () => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
-  const [query, setQuery] = useState('');
-  const [verificationFilter, setVerificationFilter] = useState('all');
-  const [groupFilter, setGroupFilter] = useState('all');
-  const [kindFilter, setKindFilter] = useState('all');
-  const [tagFilter, setTagFilter] = useState('all');
+  const { initial, save } = useListReturnState(session, 'targets');
+  const urlVerification = getRouteParam('verification');
+  const savedFilters: Record<string, string> = { ...(initial.filters ?? {}), ...(urlVerification ? { verification: urlVerification } : {}) };
+  const [cohort, setCohort] = useState<Record<string, string> | null>(readCohortFromAddress);
+  useEffect(() => {
+    const sync = () => setCohort(readCohortFromAddress());
+    window.addEventListener('hashchange', sync);
+    window.addEventListener('popstate', sync);
+    return () => {
+      window.removeEventListener('hashchange', sync);
+      window.removeEventListener('popstate', sync);
+    };
+  }, []);
+  const [query, setQuery] = useState(savedFilters.q ?? '');
+  const [verificationFilter, setVerificationFilter] = useState(savedFilters.verification ?? 'all');
+  const [groupFilter, setGroupFilter] = useState(savedFilters.group ?? 'all');
+  const [kindFilter, setKindFilter] = useState(savedFilters.kind ?? 'all');
+  const [tagFilter, setTagFilter] = useState(savedFilters.tag ?? 'all');
   const [showAdd, setShowAdd] = useState(false);
   const [addKind, setAddKind] = useState('fqdn');
   const [addTags, setAddTags] = useState('');
@@ -236,6 +269,30 @@ export function TargetsPage({
 
   const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
   const unverifiedCount = targets.length - verifiedCount;
+  const units = useMemo(() => inventoryUnits(targets), [targets]);
+  const filtersActive = Boolean(query.trim()) || verificationFilter !== 'all' || groupFilter !== 'all' || kindFilter !== 'all' || tagFilter !== 'all';
+
+  function clearCohort() {
+    replaceRouteParams(Object.fromEntries(COHORT_ADDRESS_KEYS.map((key) => [key, null])));
+    setCohort(null);
+  }
+
+  useEffect(() => {
+    save({ filters: { q: query.trim(), verification: verificationFilter, group: groupFilter, kind: kindFilter, tag: tagFilter } });
+  }, [save, query, verificationFilter, groupFilter, kindFilter, tagFilter]);
+  useRestoreListPosition(data.loaded && filtered.length > 0, initial);
+
+  function clearFilters() {
+    setQuery('');
+    setVerificationFilter('all');
+    setGroupFilter('all');
+    setKindFilter('all');
+    setTagFilter('all');
+  }
+
+  function rememberRow(id: string) {
+    save({ selectedRowId: id, focusKey: `target-${id}` });
+  }
   const targetKinds = [...new Set(targets.map((item) => getString(item, ['kind'], 'unknown').toLowerCase()).filter(Boolean))].sort();
 
   async function addTarget(event: FormEvent<HTMLFormElement>) {
@@ -277,6 +334,7 @@ export function TargetsPage({
         }).catch(() => undefined);
       }
       setMessage(`${value} added to declared scope. Verify ownership before running checks.`);
+      save({ selectedRowId: createdId, focusKey: createdId ? `target-${createdId}` : undefined });
       setShowAdd(false);
       setAddTags('');
       setAddKind('fqdn');
@@ -351,17 +409,52 @@ export function TargetsPage({
     {
       key: 'target',
       label: 'Target',
-      render: (item) => (
-        <span className="target-primary">
-          <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
-          <a className="target-primary-copy" href={buildDetailHref('target-detail', getString(item, ['id'], ''))}>
-            <strong title={getString(item, ['value'], '')}>{getString(item, ['value'], '—')}</strong>
-            <span>{targetKindLabel(item)}</span>
-          </a>
-        </span>
-      )
+      render: (item) => {
+        const id = getString(item, ['id'], '');
+        const value = getString(item, ['value'], id);
+        const verified = isVerified(verificationState(item));
+        return (
+          <span className="target-primary">
+            <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
+            <span className="target-primary-copy">
+              <strong title={value}>{value}</strong>
+              <span>{targetKindLabel(item)}</span>
+              <span className="target-primary-actions">
+                <AnchorButton
+                  size="sm"
+                  variant={verified ? 'secondary' : 'default'}
+                  href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
+                  data-focus-key={`target-${id}`}
+                  onClick={() => rememberRow(id)}
+                  aria-label={verified ? `Open target ${value}` : `Verify ownership of ${value}`}
+                >
+                  {verified ? 'Open' : 'Verify ownership'}
+                </AnchorButton>
+              </span>
+            </span>
+          </span>
+        );
+      }
     },
-    { key: 'kind', label: 'Kind', render: (item) => <Badge tone="muted">{targetKindLabel(item)}</Badge> },
+    {
+      key: 'verification',
+      label: 'Ownership',
+      render: (item) => {
+        const verification = item.verification && typeof item.verification === 'object' && !Array.isArray(item.verification) ? item.verification as DataItem : null;
+        return <VerifyChip state={verificationState(item)} provenance={resolveTargetVerificationProvenance(item, verification)} />;
+      }
+    },
+    {
+      key: 'validated',
+      label: 'Last validation',
+      render: (item) => {
+        if (!Object.hasOwn(item, 'last_validation_at') && !Object.hasOwn(item, 'last_validated_at')) {
+          return <span className="target-unknown">Not available in inventory</span>;
+        }
+        const value = item.last_validation_at ?? item.last_validated_at;
+        return value ? <span className="mono small">{formatDate(value)}</span> : <span className="target-unknown">Not checked</span>;
+      }
+    },
     {
       key: 'tags',
       label: 'Tags',
@@ -381,15 +474,6 @@ export function TargetsPage({
       render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-group-detail', getString(item, ['target_group_id'], ''))}>{getString(item, ['target_group_name', 'target_group_id'], '—')}</AnchorButton>
     },
     {
-      key: 'verification',
-      label: 'Verification',
-      render: (item) => {
-        const verification = item.verification && typeof item.verification === 'object' && !Array.isArray(item.verification) ? item.verification as DataItem : null;
-        return <VerifyChip state={verificationState(item)} provenance={resolveTargetVerificationProvenance(item, verification)} />;
-      }
-    },
-
-    {
       key: 'source',
       label: 'Added from',
       render: (item) => {
@@ -397,23 +481,15 @@ export function TargetsPage({
         return <span className="provider-line"><ProviderIcon source={source} /><span className="source-cell"><strong>{source.replace(/_/g, ' ')}</strong><small>{getString(item, ['source'], 'manual')}</small></span></span>;
       }
     },
-    { key: 'validated', label: 'Last validated', render: (item) => <span className="mono small">{item.last_validated_at || item.last_validation_at ? formatDate(item.last_validated_at ?? item.last_validation_at) : 'Never'}</span> },
     { key: 'added', label: 'Added', render: (item) => <span className="mono small">{formatDate(item.created_at)}</span> },
     {
       key: 'actions',
-      label: 'Actions',
+      label: 'Manage',
       render: (item) => {
         const id = getString(item, ['id'], '');
         return (
           <span className="target-row-actions">
-            <AnchorButton
-              size="sm"
-              variant="ghost"
-              href={buildDetailHref('target-detail', id)}
-              aria-label={`Open target ${getString(item, ['value'], id)}`}
-            >
-              Open target
-            </AnchorButton>
+            {!canWriteTargets ? <span className="target-unknown">No changes for your role</span> : null}
             {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openTagEditor(item)} aria-label={`Edit tags for ${getString(item, ['value'], id)}`}>Edit tags</Button> : null}
             {canWriteTargets ? <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove target ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button> : null}
           </span>
@@ -429,7 +505,7 @@ export function TargetsPage({
         <div>
           <p className="eyebrow">Proof for customer-declared scope</p>
           <h1>Targets</h1>
-          <p>All declared hostnames and IPs, ready for bounded validation.</p>
+          <p>Declared hostnames, IPs and CIDRs. Each must prove ownership before any bounded check runs.</p>
         </div>
         <div className="row-actions">
           <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Review unverified</Button>
@@ -440,12 +516,18 @@ export function TargetsPage({
       {message ? <div className="form-banner" role="status">{message}</div> : null}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
 
+      {cohort ? (
+        <TargetCohortList filters={cohort} config={config} session={session} inventory={targets} onClear={clearCohort} />
+      ) : null}
+
+      {!cohort ? (<>
       <div className="targets-summary" aria-label="Target inventory summary">
-        <div className="targets-summary-cell"><span>Declared targets</span><strong>{formatNumber(targets.length)}</strong></div>
-        <div className="targets-summary-cell"><span>Ownership verified</span><strong>{formatNumber(verifiedCount)}</strong></div>
-        <div className="targets-summary-cell"><span>Ready for validation</span><strong>{formatNumber(targets.length)}</strong></div>
-        <div className="targets-summary-cell"><span>Unverified</span><strong>{formatNumber(unverifiedCount)}</strong></div>
+        <div className="targets-summary-cell"><span>Declared target records</span><strong>{formatNumber(units.records)}</strong><small>Every hostname, IP, CIDR or endpoint you declared</small></div>
+        <div className="targets-summary-cell"><span>Distinct hostnames</span><strong>{formatNumber(units.distinctHosts)}</strong><small>{units.nonHostRecords ? `${formatNumber(units.nonHostRecords)} IP, CIDR or endpoint records not counted` : 'Normalized host identity'}</small></div>
+        <div className="targets-summary-cell"><span>Ownership verified</span><strong>{formatNumber(verifiedCount)}</strong><small>Can be checked after per-check gates</small></div>
+        <div className="targets-summary-cell"><span>Ownership pending</span><strong>{formatNumber(unverifiedCount)}</strong><small>Locked: no external check can run</small></div>
       </div>
+      </>) : null}
 
       {canWriteTargets && showAdd ? (
         <Card className="targets-intake">
@@ -491,9 +573,10 @@ export function TargetsPage({
         </Card>
       ) : null}
 
+      {!cohort ? (
       <Card>
         <CardHeader>
-          <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(targets.length)} configured targets. Use Open target for evidence-backed detail; other row actions remain independent.</CardDescription></div>
+          <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(targets.length)} loaded target records. Open a target for its profile and checks; Verify ownership opens its own DNS record.</CardDescription></div>
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">
@@ -503,7 +586,10 @@ export function TargetsPage({
             <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
             <label className="targets-filter"><span>Tag</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           </div>
-          <p className="targets-result-count" aria-live="polite">{formatNumber(filtered.length)} matching {filtered.length === 1 ? 'target' : 'targets'}</p>
+          <p className="targets-result-count" aria-live="polite">
+            {formatNumber(filtered.length)} matching {filtered.length === 1 ? 'target record' : 'target records'}
+            {filtersActive ? <> · <button type="button" className="link-button" onClick={clearFilters}>Clear filters</button></> : null}
+          </p>
           <DataTable
             className="targets-table-wrap"
             columns={columns}
@@ -511,10 +597,11 @@ export function TargetsPage({
             getRowId={(item, index) => getString(item, ['id'], String(index))}
             loadError={data.loadErrors.targets}
             onRetry={() => void onRefresh()}
-            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets configured yet'} body={targets.length ? 'Clear or adjust the filters to return to the full declared inventory.' : 'Add a target here, or import approved provider inventory into a target group.'} actionLabel={!targets.length && canWriteTargets ? 'Add target' : undefined} onAction={!targets.length && canWriteTargets ? () => setShowAdd(true) : undefined} />}
+            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets declared yet'} body={targets.length ? 'The declared inventory is unchanged; only the current filters hide it.' : 'Add a target here, or import approved provider inventory into a target group.'} actionLabel={targets.length ? 'Clear filters' : canWriteTargets ? 'Add target' : undefined} onAction={targets.length ? clearFilters : canWriteTargets ? () => setShowAdd(true) : undefined} />}
           />
         </CardContent>
       </Card>
+      ) : null}
 
       <FormModal
         open={canWriteTargets && Boolean(editTargetId)}

@@ -103,6 +103,16 @@ function toSummarySubscription(rawSubscription, tenantId) {
  *
  * @param {Array<Record<string, unknown>>} recentTenantAudit
  */
+function recordedAuditTime(entry) {
+  if (entry && entry.timestamp != null && entry.timestamp !== '') {
+    return { timestamp: entry.timestamp, timestamp_source: 'audit_log.timestamp' };
+  }
+  if (entry && entry.created_at != null && entry.created_at !== '') {
+    return { timestamp: entry.created_at, timestamp_source: 'audit_log.created_at_alias' };
+  }
+  return { timestamp: null, timestamp_source: 'not_recorded' };
+}
+
 function toRecentAudit(recentTenantAudit) {
   const rows = Array.isArray(recentTenantAudit) ? recentTenantAudit : [];
   return rows.slice(0, RECENT_AUDIT_LIMIT).map((entry) => ({
@@ -111,13 +121,15 @@ function toRecentAudit(recentTenantAudit) {
     actor_role: entry.actor_role ?? entry.staff_role ?? null,
     resource_type: entry.resource_type ?? null,
     resource_id: entry.resource_id ?? null,
-    created_at: entry.created_at ?? null,
+    ...recordedAuditTime(entry),
   }));
 }
 
 function emptySummary() {
   return {
     tenant_id: null,
+    as_of: null,
+    as_of_source: 'not_recorded',
     account: null,
     subscription: null,
     plan: null,
@@ -135,6 +147,8 @@ function emptySummary() {
       lifecycle_state: 'unrecorded',
       region: null,
       escalation_state: 'nominal',
+      as_of: null,
+      as_of_source: 'not_recorded',
       recent_audit: [],
     },
   };
@@ -183,6 +197,7 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
       if (!tenantId) return emptySummary();
 
       const nowMs = nowFn().getTime();
+      const asOf = new Date(nowMs).toISOString();
       const oneHourAgo = nowMs - ONE_HOUR_MS;
 
       const [detail, groups, runs, findings, highScaleRequests] = await Promise.all([
@@ -221,6 +236,8 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
 
       return {
         tenant_id: tenantId,
+        as_of: asOf,
+        as_of_source: 'subscription_summary_clock',
         account,
         subscription,
         plan,
@@ -243,6 +260,8 @@ export function createPostgresSubscriptionServices(repositories, options = {}) {
               : openFindings > 0
                 ? 'customer_review'
                 : 'nominal',
+          as_of: asOf,
+          as_of_source: 'subscription_summary_clock',
           recent_audit: recentAudit,
         },
       };
