@@ -771,6 +771,30 @@ Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE
 then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner`.
 The pre-deploy release tree is retained at `/opt/astranull-release-22e07fb567c871ec9b580468b9a49aaceae27a57`.
 
+## Production release 2026-10-04 (`e2d41ca4` complete current-release evidence and target workflows)
+
+Commit `e2d41ca461e4d2d9e8bbdbf2675eca95623ce4e7` ("feat: complete current-release evidence and target workflows") was pushed to `main` and deployed to `astranull.site`:
+1. **Target & Evidence Workflows**: Complete matching customer UI and API integrations, retained history, origin bindings, findings pagination, analytics, and report snapshots.
+2. **Review & Repair Hardening**: Fixed concurrent observation, binding, and retest-lineage inserts with app-role Postgres regressions; fixed inspector fallback error tenant/user/role load keys; fixed rejected findings queries, microsecond chronology, and customer writes to server-owned finding fields.
+3. **Test Serialization**: Serialized Node test files without relaxing performance thresholds.
+
+Before release: 4,764 Node tests passed, 360 browser/a11y tests passed, 14 scale checks passed, 9 contracts passed; `npm run web:typecheck`, `npm run lint`, `npm run lint:portal`, `npm run safety`, `npm run web:build` green.
+
+| Step | Detail |
+|---|---|
+| Archive | Verified commit `e2d41ca461e4d2d9e8bbdbf2675eca95623ce4e7`, deployed via GitHub Actions workflow `deploy-aws.yml` (run 37198280317) |
+| Image | Built through `ops/aws/Dockerfile`, tagged `astranull:e2d41ca4` → `sha256:60428d6ecb3c59412664e90e53abe439187241d63e317171278d4497a56eca8d` |
+| Backup | Verified pre-deploy database snapshot `/opt/astranull-backups/postgres-2026-10-04T12-02-04-119Z-de425c48cd18.dump.enc` (+ manifest) |
+| Migrate | `migrate-postgres: ok`, head stays `0062_notification_outbox_reconciliation`; app/backup/connector role grants re-applied |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner, connector-poll-scheduler, connector-poll-runner — all six healthy on the new image, restarts 0; postgres and caddy untouched |
+| Live checks | `/health` ok (HTTP 200), `/ready` ready (HTTP 200; oidc-jwt, postgres, signed-worker); served `react-app.js` (`cba42b27...`) and `react-app.css` (`fa8877a9...`) byte-identical to the commit; unauthenticated routes 401; CSP/COOP/Permissions-Policy/HSTS verified |
+
+Rollback (code only): from `/opt/astranull`, export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:37bc10aec7b2737add0bfeea7ca97bae52ba77282bee628ca183a6821d2b14af` (`astranull:1e85d825`),
+then `sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner`.
+The pre-deploy release tree is retained at `/opt/astranull-release-1e85d8256e01a8ef186716757b49463c6218d6a8`.
+
+
 
 
 
