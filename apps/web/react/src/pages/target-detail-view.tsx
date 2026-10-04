@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Square,
   Target,
   TriangleAlert,
   X,
@@ -71,6 +72,7 @@ import {
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
 import { TargetChangesHistory } from '../components/targets/target-history';
 import { OriginRelations } from '../components/targets/origin-relations';
+import { ProbeActivity } from '../components/targets/probe-activity';
 import { DECLARATION_LIMITS, validateDeclarationDraft } from '../lib/domain-checks.mjs';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
 import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
@@ -445,6 +447,7 @@ export function TargetDetailView({
   const [edgeReason, setEdgeReason] = useState('');
   const [review, setReview] = useState<ReviewPlan>(null);
   const [stopOpen, setStopOpen] = useState(false);
+  const [stopSingleRun, setStopSingleRun] = useState<{ id: string; name: string } | null>(null);
   const [editingContext, setEditingContext] = useState(false);
   const [dnsWatchStartedAt, setDnsWatchStartedAt] = useState(0);
   const edgeRetriesRef = useRef(0);
@@ -557,6 +560,11 @@ export function TargetDetailView({
   const effectiveness = useMemo(() => markerEffectiveness(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
   const originStatus = originExposureStatus(profileInput);
   const scanActive = isScanActive(scan);
+  const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
+  const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
+  const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId) ?? null;
+  const activityRunId = activityRow?.runId || (!selectedRow ? getString(activeStandalone, ['id'], '') : '');
+  const activityRunning = activityRow ? activityRow.status === 'running' : activeStandalone !== null;
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -594,10 +602,22 @@ export function TargetDetailView({
     setEdgeError('');
     setEdgeReason('');
     setDnsWatchStartedAt(0);
+    setStopSingleRun(null);
     edgeRetriesRef.current = 0;
   }, [entityId]);
 
   useEffect(() => { void loadTargetActivity(); }, [loadTargetActivity]);
+
+  useEffect(() => {
+    if (scanActive || !activeStandalone) return undefined;
+    let busyPoll = false;
+    const timer = window.setInterval(() => {
+      if (busyPoll) return;
+      busyPoll = true;
+      void loadTargetActivity().finally(() => { busyPoll = false; });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [scanActive, activeStandalone?.id, loadTargetActivity]);
 
   // Follow a multi-check run the user started. Results land in place; the selection never moves.
   useEffect(() => {
@@ -817,6 +837,21 @@ export function TargetDetailView({
   }, 0);
   const runAllCategoryCount = new Set(checkRows.map((row) => row.category.id)).size;
 
+  async function stopSingleCheck() {
+    if (!stopSingleRun) return;
+    setBusy('stop-check'); setError('');
+    try {
+      await requestJson(config, session, `/v1/test-runs/${encodeURIComponent(stopSingleRun.id)}/cancel`, {
+        method: 'POST', body: { reason: 'Stopped from target execution activity' },
+      });
+      setStopSingleRun(null); setBanner('Check stopped. Its recorded activity and results are kept.');
+      await loadTargetActivity(); await reload();
+    } catch (reason) { setError(apiErrorMessage(reason, 'The check could not stop. Refresh its current state.')); }
+    finally { setBusy(''); }
+  }
+
+  function openStopCheck(row: CheckRow) { if (row.runId) setStopSingleRun({ id: row.runId, name: row.name }); }
+
   async function saveTags(next: string[]) {
     if (!target) return;
     await patchTargetTags(config, session, targetGroupId, entityId, next);
@@ -991,8 +1026,13 @@ export function TargetDetailView({
         {hasTarget ? (
           <div className="td-head-actions">
             {canStartBoundedRun ? (
-              <Button onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById('td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
-                <Play size={15} aria-hidden="true" />Plan validation
+              <Button onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById(scanActive || activeStandalone ? 'probe-activity-title' : 'td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
+                <Play size={15} aria-hidden="true" />{scanActive || activeStandalone ? 'View activity' : 'Plan validation'}
+              </Button>
+            ) : null}
+            {canStartBoundedRun && (scanActive || activeStandalone) ? (
+              <Button variant="danger" onClick={() => scanActive ? setStopOpen(true) : setStopSingleRun({ id: getString(activeStandalone, ['id'], ''), name: displayCheckName(getString(activeStandalone, ['check_id'], '')) })}>
+                <Square size={14} aria-hidden="true" />{scanActive ? 'Stop validation' : 'Stop current check'}
               </Button>
             ) : null}
             {declared && canWrite && !editingContext ? (
@@ -1380,6 +1420,14 @@ export function TargetDetailView({
                 The linked check <span className="mono">{selectedCheckId}</span> is not compatible with this target kind, so it is not listed. No other check was selected.
               </div>
             ) : null}
+            <ProbeActivity
+              config={config} session={session} runId={activityRunId}
+              checkName={activityRow?.name || displayCheckName(getString(activeStandalone, ['check_id'], ''))}
+              running={activityRunning} canStop={canStartBoundedRun && Boolean(activityRunId)}
+              onStop={() => setStopSingleRun({ id: activityRunId, name: activityRow?.name || 'Current check' })}
+              onFollowActive={selectedRow && activeCheckRow && selectedRow.checkId !== activeCheckRow.checkId ? () => selectCheck(activeCheckRow.checkId) : undefined}
+              notSent={activityRow && !activityRunId && ['blocked', 'skipped', 'cancelled'].includes(activityRow.status) ? { reason: activityRow.reason, at: activityRow.finishedAt || activityRow.startedAt } : null}
+            />
             <CheckQueue
               rows={checkRows}
               selectedCheckId={effectiveSelectedCheckId}
@@ -1393,6 +1441,8 @@ export function TargetDetailView({
               busy={busy === 'run-all'}
               onRunAll={() => setReview({ mode: 'all' })}
               onStop={() => setStopOpen(true)}
+              onStopCheck={canStartBoundedRun ? openStopCheck : undefined}
+              onActivity={(row) => { selectCheck(row.checkId); document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' }); }}
               liveNotes={liveNotes}
               footer={declarationOnlyCount > 0 ? <p className="td-muted">{declarationOnlyCount} declaration-only checks are not listed because they send no traffic.</p> : null}
             />
@@ -1540,6 +1590,13 @@ export function TargetDetailView({
         busy={busy === 'run' || busy === 'run-all'}
         onCancel={() => setReview(null)}
         onConfirm={() => void startReviewed()}
+      />
+      <ConfirmModal
+        open={stopSingleRun !== null}
+        title={`Stop ${stopSingleRun?.name || 'this check'}?`}
+        description={scanActive ? 'This stops only this check. The remaining checks in the validation batch continue. Use Stop validation to stop the whole batch.' : 'The worker stops further attempts and retains recorded activity. A bounded request already in flight may finish.'}
+        confirmLabel="Stop check" confirmTone="danger" busy={busy === 'stop-check'}
+        onCancel={() => setStopSingleRun(null)} onConfirm={() => void stopSingleCheck()}
       />
       <CancelScanDialog
         scan={stopOpen ? scan : null}

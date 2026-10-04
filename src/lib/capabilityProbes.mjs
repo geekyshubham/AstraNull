@@ -1913,6 +1913,9 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     wafRequired: job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
     fetchFn: deadlineFetch,
+    onPhase: (entry) => deps.onProbeActivity?.({ stage: 'phase_completed', operation: entry.phase,
+      ...(Number.isInteger(entry.status_code) && entry.status_code >= 100 ? { status_code: entry.status_code } : {}),
+      ...(entry.error_class ? { error_class: entry.error_class } : {}) }),
     originBypassFn: directIp && hostname
       ? async ({ directIp: ip, hostname: host }) => {
         try {

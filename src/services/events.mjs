@@ -6,6 +6,7 @@ import { getStore, persistStore } from '../store.mjs';
 import { recordEvidence } from './evidence.mjs';
 
 const RESERVED_PUBLIC_EVENT_SIGNAL_TYPES = new Set([
+  'probe_activity',
   'probe_result',
   'agent_observation',
   'ownership_observation',

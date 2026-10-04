@@ -3,6 +3,7 @@ import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
+import { normalizeProbeActivityBatch, probeActivityEvent, sameProbeActivity } from '../../lib/probeActivity.mjs';
 import { getCheckById } from '../../contracts/checks.mjs';
 import { WAF_EDGE_DETECTION_CHECK_ID } from '../../lib/edgeDetection.mjs';
 import {
@@ -30,6 +31,7 @@ export const PROBE_JOB_REPOSITORY_METHODS = Object.freeze([
 export const POSTGRES_PROBE_JOB_SERVICE_METHODS = Object.freeze([
   'listPendingProbeJobsForWorker',
   'ingestProbeResult',
+  'ingestProbeActivity',
 ]);
 
 /**
@@ -571,6 +573,36 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         return [];
       }
       return probeJobs.leasePendingJobsForWorker(ctx, workerId);
+    },
+
+    async ingestProbeActivity(ctx, jobId, body) {
+      if (!ctx.workerId) return { error: 'unauthorized', status: 401 };
+      const initialJob = await probeJobs.getJobById(ctx, jobId);
+      if (!initialJob || initialJob.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+      const mutation = await validationEvidence.withRunMutationLock(ctx, initialJob.test_run_id, async (client) => {
+        if (await killSwitchActiveForProbeTenant(killSwitch, ctx, { client })) return { error: 'tenant_kill_switch_active', status: 409 };
+        const job = await probeJobs.getJobById(ctx, jobId, { client });
+        const run = await validationEvidence.getTestRun(ctx, initialJob.test_run_id, { client });
+        if (!job || !run || !probeJobMatchesRun(job, run)) return { error: 'job_not_found', status: 404 };
+        if (job.status !== 'leased' || !['running', 'collecting'].includes(run.status)) return { error: 'job_not_open', status: 409 };
+        if (job.leased_by !== ctx.workerId) return { error: 'job_leased_to_another_worker', status: 403 };
+        const parsed = normalizeProbeActivityBatch(body, job, nowFn());
+        if (parsed.error) return parsed;
+        const records = parsed.items.map((item) => probeActivityEvent(job, item, ctx.workerId));
+        const existing = await validationEvidence.listRunEvents(ctx, run.id, { ids: records.map((record) => record.event_id), client });
+        const byId = new Map(existing.map((event) => [event.event_id, event]));
+        for (const record of records) {
+          const replay = byId.get(record.event_id);
+          if (replay && !sameProbeActivity(replay.metadata?.activity, record.metadata.activity)) return { error: 'probe_activity_conflict', status: 409 };
+        }
+        let accepted = 0;
+        for (const record of records) {
+          if (byId.has(record.event_id)) continue;
+          await validationEvidence.appendEvent(ctx, record, { client }); accepted += 1;
+        }
+        return { accepted, continue: true };
+      }, { wait: true });
+      return mutation.result ?? { error: 'probe_activity_busy', status: 409 };
     },
 
     async ingestProbeResult(ctx, jobId, body) {

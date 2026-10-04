@@ -27,7 +27,7 @@ export function lastRunForTargetGroup(tenantId, targetGroupId) {
 }
 
 export function countEventsForRun(runId) {
-  return getStore().events.filter((e) => e.test_run_id === runId).length;
+  return getStore().events.filter((e) => e.test_run_id === runId && e.signal_type !== 'probe_activity').length;
 }
 
 export function wouldExceedEventCap(run, additional = 1) {

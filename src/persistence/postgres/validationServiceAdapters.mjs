@@ -9,6 +9,7 @@ import { targetKindCompatibilityError } from '../../contracts/checkTargetCompati
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { probeDispatchReady } from '../../config.mjs';
 import { approvedScenarioVersion, deriveRunEvidenceStamp, verdictExpectedBehaviorForRun } from '../../lib/checkDefinitionVersion.mjs';
+import { projectRunActivity } from '../../lib/probeActivity.mjs';
 import { newId } from '../../lib/ids.mjs';
 import {
   VERDICT_INSERTED,
@@ -162,6 +163,7 @@ function observationBodyContainsRawFields(body) {
 }
 
 const RESERVED_PUBLIC_EVENT_SIGNAL_TYPES = new Set([
+  'probe_activity',
   'probe_result',
   'agent_observation',
   'ownership_observation',
@@ -255,6 +257,7 @@ export const POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS = Object.freeze([
   'listTestRuns',
   'getTestRun',
   'getRunEvents',
+  'getRunActivity',
   'startTestRun',
   'finalizeTestRun',
   'cancelTestRun',
@@ -1043,7 +1046,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       limit: 1000,
       ...repositoryOptions,
     });
-    if (wouldExceedEventCap(run, events.length, 1)) {
+    if (wouldExceedEventCap(run, events.filter((event) => event.signal_type !== 'probe_activity').length, 1)) {
       await appendAudit(
         { tenantId: run.tenant_id, userId: 'system', role: 'system' },
         'test_run.event_cap_denied',
@@ -1228,6 +1231,12 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
       return summary;
     },
+    async getRunActivity(ctx, id, options = {}) {
+      const run = await validationEvidence.getTestRun(ctx, id);
+      if (!run) return null;
+      return projectRunActivity(run, await validationEvidence.listRunEvents(ctx, id, { limit: 1000 }), options.limit);
+    },
+
     async getRunEvents(ctx, id, options = {}) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;

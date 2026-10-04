@@ -270,6 +270,8 @@ function CheckQueueRow({
   canSelect,
   onSelect,
   onInspect,
+  onStopCheck,
+  onActivity,
   liveNote,
 }: {
   row: CheckRow;
@@ -277,6 +279,8 @@ function CheckQueueRow({
   canSelect: boolean;
   onSelect: (checkId: string) => void;
   onInspect: (row: CheckRow) => void;
+  onStopCheck?: (row: CheckRow) => void;
+  onActivity?: (row: CheckRow) => void;
   /** Set when the server says this pair's result is retained, not current live external evidence. */
   liveNote?: string;
 }) {
@@ -323,6 +327,8 @@ function CheckQueueRow({
             {row.finishedAt || row.startedAt ? <div><dt>{row.finishedAt ? 'Finished' : 'Started'}</dt><dd>{formatDate(row.finishedAt || row.startedAt)}</dd></div> : null}
           </dl>
           <div className="td-check-links">
+            {row.runId || ['blocked', 'skipped', 'cancelled'].includes(row.status) ? <Button size="sm" variant="ghost" onClick={() => onActivity?.(row)}>View activity</Button> : null}
+            {row.runId && row.status === 'running' && onStopCheck ? <Button size="sm" variant="danger" aria-label={`Stop ${row.name}`} onClick={() => onStopCheck(row)}><Square size={13} aria-hidden="true" />Stop this check</Button> : null}
             {row.runId ? (
               <Button size="sm" variant="secondary" data-focus-key={`check-evidence-${row.checkId}`} onClick={() => onInspect(row)}>
                 <Eye size={14} aria-hidden="true" />View evidence
@@ -348,12 +354,14 @@ export type CheckQueueProps = {
   busy: boolean;
   onRunAll: () => void;
   onStop: () => void;
+  onStopCheck?: (row: CheckRow) => void;
+  onActivity?: (row: CheckRow) => void;
   footer?: ReactNode;
   liveNotes?: Record<string, string>;
 };
 
 /** Every compatible check for this target, grouped by category, selectable in place. */
-export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspect, scan, scanActive, canRun, runDisabledReason, busy, onRunAll, onStop, footer, liveNotes = {} }: CheckQueueProps) {
+export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspect, scan, scanActive, canRun, runDisabledReason, busy, onRunAll, onStop, onStopCheck, onActivity, footer, liveNotes = {} }: CheckQueueProps) {
   const [filter, setFilter] = useState<'all' | RowStatus>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const counts = useMemo(() => {
@@ -474,6 +482,8 @@ export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspe
                   canSelect={canSelect}
                   onSelect={onSelect}
                   onInspect={onInspect}
+                  onStopCheck={onStopCheck}
+                  onActivity={onActivity}
                   liveNote={liveNotes[row.checkId]}
                 />
               ))}

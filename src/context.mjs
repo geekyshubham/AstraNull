@@ -90,7 +90,7 @@ export function verifySignedSessionToken(token, secret) {
 
 export function isProbeWorkerRoute(pathname, method) {
   if (method === 'GET' && pathname === '/internal/probe/jobs') return true;
-  if (method === 'POST' && /^\/internal\/probe\/jobs\/[^/]+\/result$/.test(pathname)) return true;
+  if (method === 'POST' && /^\/internal\/probe\/jobs\/[^/]+\/(result|activity)$/.test(pathname)) return true;
   return false;
 }
 

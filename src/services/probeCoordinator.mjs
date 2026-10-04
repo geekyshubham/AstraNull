@@ -15,6 +15,8 @@ import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs'
 import { getStore, persistStore } from '../store.mjs';
 import { recordEvidence } from './evidence.mjs';
 import { recordSignedProbeHistory } from './targetEdgeDetectionStore.mjs';
+import { normalizeProbeActivityBatch, probeActivityEvent } from '../lib/probeActivity.mjs';
+import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 
 const PROBE_WORKER_SIG_VERSION = 'pw1';
 
@@ -210,6 +212,30 @@ export function listPendingProbeJobsForWorker(workerCtx, runtimeConfig) {
   }
   if (jobs.length) persistStore();
   return jobs.map((j) => jobForWorkerResponse(j));
+}
+
+export function ingestProbeActivity(ctx, jobId, body) {
+  const store = getStore();
+  const job = store.probeJobs.find((entry) => entry.id === jobId && entry.tenant_id === ctx.tenantId);
+  if (!job || job.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+  const run = store.testRuns.find((entry) => entry.id === job.test_run_id && entry.tenant_id === ctx.tenantId);
+  if (isKillSwitchActiveForTenant(ctx.tenantId)) return { error: 'tenant_kill_switch_active', status: 409 };
+  if (job.status !== 'leased' || !['running', 'collecting'].includes(run?.status)) return { error: 'job_not_open', status: 409 };
+  if (job.leased_by !== ctx.workerId) return { error: 'job_leased_to_another_worker', status: 403 };
+  const parsed = normalizeProbeActivityBatch(body, job);
+  if (parsed.error) return parsed;
+  const records = parsed.items.map((item) => probeActivityEvent(job, item, ctx.workerId));
+  for (const record of records) {
+    const existing = store.events.find((entry) => entry.tenant_id === ctx.tenantId && entry.event_id === record.event_id);
+    if (existing && JSON.stringify(existing.metadata) !== JSON.stringify(record.metadata)) return { error: 'probe_activity_conflict', status: 409 };
+  }
+  let accepted = 0;
+  for (const record of records) {
+    if (store.events.some((entry) => entry.tenant_id === ctx.tenantId && entry.event_id === record.event_id)) continue;
+    store.events.push({ ...record, ingested_at: new Date().toISOString() }); accepted += 1;
+  }
+  if (accepted) persistStore();
+  return { accepted, continue: true };
 }
 
 export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {

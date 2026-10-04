@@ -10,6 +10,7 @@ export const EVENT_PRODUCER_KINDS = Object.freeze({
 // signal is trusted from an authenticated agent. `ownership_observation` is trusted only
 // from signed probes.
 const TRUSTED_PRODUCERS_BY_SIGNAL = new Map([
+  ['probe_activity', new Set([EVENT_PRODUCER_KINDS.SIGNED_PROBE])],
   ['probe_result', new Set([
     EVENT_PRODUCER_KINDS.SIGNED_PROBE,
     EVENT_PRODUCER_KINDS.INTERNAL_SIMULATION,

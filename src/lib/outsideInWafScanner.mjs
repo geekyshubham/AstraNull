@@ -1008,6 +1008,10 @@ export async function runOutsideInWafScan(options = {}) {
   const started = Date.now();
   let requestsSent = 0;
   const phaseLog = [];
+  function recordPhase(entry) {
+    phaseLog.push(entry);
+    try { options.onPhase?.(entry); } catch { /* Observation cannot alter the bounded scan. */ }
+  }
   const markerResults = [];
   const transportErrorClasses = [];
 
@@ -1061,7 +1065,7 @@ export async function runOutsideInWafScan(options = {}) {
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
     recordTransportError(snapshot);
-    phaseLog.push({
+    recordPhase({
       phase,
       status_code: snapshot.status_code,
       ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
@@ -1091,7 +1095,7 @@ export async function runOutsideInWafScan(options = {}) {
     recordTransportError(baseline);
     redirectHops = baselineResult.redirect_hops;
     finalUrlHostname = baselineResult.final_url_hostname;
-    phaseLog.push({
+    recordPhase({
       phase: 'baseline',
       status_code: baseline.status_code,
       redirect_hops: redirectHops,
@@ -1269,7 +1273,7 @@ export async function runOutsideInWafScan(options = {}) {
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
     recordTransportError(snapshot);
-    phaseLog.push({
+    recordPhase({
       phase: 'content_type_confusion',
       status_code: snapshot.status_code,
       ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
@@ -1302,7 +1306,7 @@ export async function runOutsideInWafScan(options = {}) {
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
     recordTransportError(snapshot);
-    phaseLog.push({
+    recordPhase({
       phase: 'multipart_confusion',
       status_code: snapshot.status_code,
       ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
@@ -1348,7 +1352,7 @@ export async function runOutsideInWafScan(options = {}) {
     // An origin-bypass connection failure means the direct origin did not answer — this is the
     // expected origin-lockdown signal, NOT an edge-probe transport failure. Keep it out of
     // transportErrorClasses so it never taints edge-marker coverage/inconclusiveness (ADR-0008).
-    phaseLog.push({
+    recordPhase({
       phase: 'origin_bypass',
       status_code: originBypassStatus,
       reachable: directOriginReachable,

@@ -10,6 +10,7 @@ import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibil
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { redactObject } from '../lib/redact.mjs';
+import { projectRunActivity } from '../lib/probeActivity.mjs';
 import { scrubRunForCustomer } from '../lib/outsideInEvidence.mjs';
 import { recordEvidence } from './evidence.mjs';
 import { newId } from '../lib/ids.mjs';
@@ -165,6 +166,12 @@ export function finalizeTestRun(ctx, id, { force = false } = {}) {
   }
   persistStore();
   return { run: getTestRun(ctx, id), verdict };
+}
+
+export function getRunActivity(ctx, id, options = {}) {
+  const run = getStore().testRuns.find((entry) => entry.id === id && entry.tenant_id === ctx.tenantId);
+  if (!run) return null;
+  return projectRunActivity(run, getRunEvents(ctx, id), options.limit);
 }
 
 export function getTestRun(ctx, id) {

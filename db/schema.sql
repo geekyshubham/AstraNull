@@ -908,6 +908,9 @@ CREATE TABLE events (
     OR (signal_type = 'agent_observation' AND producer_kind = 'authenticated_agent')
     OR (signal_type = 'ownership_observation' AND producer_kind IN ('signed_probe', 'authenticated_agent'))
     OR (signal_type = 'agent_no_observation' AND producer_kind = 'internal_control_plane')
+  ),
+  CONSTRAINT events_probe_activity_producer_check CHECK (
+    signal_type IS DISTINCT FROM 'probe_activity' OR producer_kind = 'signed_probe'
   )
 );
 

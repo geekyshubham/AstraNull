@@ -1398,9 +1398,9 @@ export function createServer(options = {}) {
         if (
           isProbeWorkerRoute(url.pathname, req.method) &&
           req.method === 'POST' &&
-          /^\/internal\/probe\/jobs\/[^/]+\/result$/.test(url.pathname)
+          /^\/internal\/probe\/jobs\/[^/]+\/(result|activity)$/.test(url.pathname)
         ) {
-          probeBodyText = await readBodyText(req, runtimeConfig.maxJsonBodyBytes);
+          probeBodyText = await readBodyText(req, url.pathname.endsWith('/activity') ? Math.min(runtimeConfig.maxJsonBodyBytes, 32 * 1024) : runtimeConfig.maxJsonBodyBytes);
         }
         const auth = await resolveHumanApiAuth(req.headers, url.pathname, req.method, runtimeConfig, {
           bodyText: probeBodyText,
@@ -3346,6 +3346,15 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, run);
   }
   const runEvents = path.match(/^\/v1\/test-runs\/([^/]+)\/events$/);
+  const runActivity = path.match(/^\/v1\/test-runs\/([^/]+)\/activity$/);
+  if (runActivity && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof serviceDeps.testRuns?.getRunActivity !== 'function') return json(res, 503, { error: 'run_activity_unavailable' });
+    const activity = await serviceDeps.testRuns.getRunActivity(ctx, runActivity[1], { limit: url.searchParams.get('limit') });
+    if (!activity) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, activity);
+  }
   if (runEvents && method === 'GET') {
     const gate = requirePermission(ctx, 'test_run:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -3819,6 +3828,16 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (blockPostgresProbeJobsRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const jobs = await probeJobsSvc.listPendingProbeJobsForWorker(ctx, runtimeConfig);
     return json(res, 200, { jobs });
+  }
+  const probeActivityMatch = path.match(/^\/internal\/probe\/jobs\/([^/]+)\/activity$/);
+  if (probeActivityMatch && method === 'POST') {
+    if (!ctx.workerId) return json(res, 401, { error: 'unauthorized' });
+    if (typeof probeJobsSvc?.ingestProbeActivity !== 'function') return json(res, 503, { error: 'probe_activity_unavailable' });
+    let body;
+    try { body = JSON.parse(options.probeBodyText ?? '{}'); }
+    catch { return json(res, 400, { error: 'invalid_json' }); }
+    const result = await probeJobsSvc.ingestProbeActivity(ctx, probeActivityMatch[1], body);
+    return json(res, result.error ? (result.status ?? 400) : 201, result);
   }
   const probeResultMatch = path.match(/^\/internal\/probe\/jobs\/([^/]+)\/result$/);
   if (probeResultMatch && method === 'POST') {

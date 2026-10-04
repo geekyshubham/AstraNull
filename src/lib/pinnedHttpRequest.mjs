@@ -6,6 +6,7 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import tls from 'node:tls';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
+import { emitProbeActivity, activityUrl } from './probeActivity.mjs';
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5000;
 const MAX_TRANSPORT_TIMEOUT_MS = 30_000;
@@ -229,6 +230,7 @@ function headersWithHost(url, input = {}) {
  * intentionally never followed here; callers must explicitly vet every hop.
  */
 export async function pinnedFetch(urlValue, options = {}, deps = {}) {
+  const startedAt = Date.now();
   const url = assertHttpUrl(urlValue, ['http:', 'https:']);
   const pinned = await resolvePinnedWithinBounds(logicalHostname(url), deps, {
     signal: options.signal,
@@ -244,6 +246,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     const finishReject = (error) => {
       if (settled) return;
       settled = true;
+      emitProbeActivity(deps, { stage: 'attempt_failed', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), error_class: String(error?.code ?? error?.name ?? 'request_failed'), duration_ms: Date.now() - startedAt });
       reject(error);
     };
     const req = requestFn(http1RequestOptions(url, pinned, headers, options), (res) => {
@@ -252,6 +255,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
         return;
       }
       settled = true;
+      emitProbeActivity(deps, { stage: 'response_received', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), ...(Number.isInteger(res.statusCode) ? { status_code: res.statusCode } : {}), duration_ms: Date.now() - startedAt });
       resolve({
         status: res.statusCode ?? 0,
         statusText: res.statusMessage ?? '',
@@ -271,6 +275,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     }
     if (options.body != null) req.write(options.body);
     req.end();
+    emitProbeActivity(deps, { stage: 'request_started', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), protocol: url.protocol.replace(':', ''), body_bytes: options.body == null ? 0 : Buffer.byteLength(options.body), header_names: Object.keys(headers).slice(0, 16) });
   });
 }
 

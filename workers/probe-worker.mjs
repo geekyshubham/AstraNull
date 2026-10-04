@@ -36,6 +36,8 @@ import {
 import { assertProbeDestinationAllowed } from '../src/lib/probeEndpoint.mjs';
 import { validateHmacSecretEntropy } from '../src/lib/evidenceSigning.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../src/lib/wafProductCatalog.mjs';
+import { emitProbeActivity } from '../src/lib/probeActivity.mjs';
+import { createProbeActivityReporter } from './probe-activity-reporter.mjs';
 import {
   probeWorkerAuthHeaders,
   verifyProbeJobSignature,
@@ -1323,6 +1325,9 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
 
 export async function executeProbeForJob(job, deps = {}) {
   const timing = createProbeDeadline(job);
+  const cancel = () => timing.controller.abort(Object.assign(new Error('Probe stopped.'), { code: 'probe_stopped' }));
+  if (deps.cancellationSignal?.aborted) cancel();
+  else deps.cancellationSignal?.addEventListener('abort', cancel, { once: true });
   const caps = resolveSignedOperationCaps(job);
   const accounting = {
     destinationResolverAttempts: 0,
@@ -1366,6 +1371,7 @@ export async function executeProbeForJob(job, deps = {}) {
   };
   const recordProbeLogicalAttempt = (operation) => {
     reserveOperation('probe');
+    emitProbeActivity(deps, { stage: 'attempt_started', operation: String(operation ?? job.probe_profile?.kind ?? 'probe') });
     if (operation === 'dns_a') probeResolverCredits.a += 1;
     if (operation === 'dns_aaaa') probeResolverCredits.aaaa += 1;
   };
@@ -1388,6 +1394,7 @@ export async function executeProbeForJob(job, deps = {}) {
     recordDestinationResolverAttempt: () => {
       assertCanAttempt();
       reserveOperation('resolver');
+      emitProbeActivity(deps, { stage: 'attempt_started', operation: 'destination_resolution', protocol: 'dns' });
     },
   };
 
@@ -1420,6 +1427,7 @@ export async function executeProbeForJob(job, deps = {}) {
       throw error;
     }
   } finally {
+    deps.cancellationSignal?.removeEventListener('abort', cancel);
     timing.close();
   }
   return finalizeProbeOutcome(outcome, timing, accounting);
@@ -1436,11 +1444,19 @@ export async function processJob(config, job, deps = {}) {
     );
   }
 
+  emitProbeActivity(deps, { stage: 'job_started', operation: job.probe_profile?.kind ?? 'probe' });
   const outcome = await executeProbeForJob(job, {
     ...deps,
     probeWorkerSecret: config.secret,
     signedJobVerified: true,
   });
+  if ((outcome.probe_requests_sent ?? outcome.requests_sent) === 0) {
+    emitProbeActivity(deps, { stage: 'request_not_sent', operation: job.probe_profile?.kind ?? 'probe', reason: outcome.metadata?.error_class ?? 'no_probe_io' });
+  }
+  for (const phase of (outcome.metadata?.phases_dropped ?? []).slice(0, 32)) {
+    emitProbeActivity(deps, { stage: 'request_not_sent', operation: phase, reason: 'outside_request_budget' });
+  }
+  emitProbeActivity(deps, { stage: 'probe_completed', operation: job.probe_profile?.kind ?? 'probe', outcome: outcome.external_result, requests_sent: outcome.requests_sent, duration_ms: outcome.duration_ms });
   return buildResultBody(job, outcome.external_result, outcome.metadata, {
     requests_sent: outcome.requests_sent,
     probe_requests_sent: outcome.probe_requests_sent,
@@ -1460,7 +1476,14 @@ export async function pollAndProcessOnce(config) {
   const jobs = listed.json?.jobs ?? [];
   const results = [];
   for (const job of jobs) {
-    const body = await processJob(config, job);
+    const cancellation = new AbortController();
+    const reporter = createProbeActivityReporter(job,
+      (batch) => signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/activity`, batch),
+      { onStop: () => cancellation.abort() });
+    let body;
+    try { body = await processJob(config, job, { onProbeActivity: reporter.record, cancellationSignal: cancellation.signal }); }
+    finally { await reporter.close(); }
+    if (cancellation.signal.aborted) { results.push({ job_id: job.id, external_result: 'stopped' }); continue; }
     const resultPath = `/internal/probe/jobs/${job.id}/result`;
     const posted = await signedFetch(config, 'POST', resultPath, body);
     if (posted.status !== 201) {

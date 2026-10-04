@@ -1,3 +1,5 @@
+import { emitProbeActivity } from './probeActivity.mjs';
+
 /**
  * Build the worker's injected pre-I/O reservation callback.
  *
@@ -25,7 +27,13 @@ export function createProbePreAttempt({ recordProbeLogicalAttempt, assertCanAtte
 export function startProbeIoAttempt(deps, operation, initiate, onReserved) {
   if (typeof initiate !== 'function') throw new TypeError('probe I/O initializer must be a function');
   const beforeAttempt = deps?.beforeProbeIoAttempt ?? deps?.recordProbeLogicalAttempt;
-  beforeAttempt?.(operation);
-  onReserved?.();
-  return initiate();
+  try {
+    beforeAttempt?.(operation);
+    onReserved?.();
+    const result = initiate();
+    return result;
+  } catch (error) {
+    emitProbeActivity(deps, { stage: 'request_not_sent', operation: String(operation), reason: String(error?.code ?? 'attempt_refused') });
+    throw error;
+  }
 }
