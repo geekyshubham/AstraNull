@@ -534,7 +534,7 @@ describe('profile honesty: retained records and origin assurance', () => {
 
   it('labels simulated, manual or unversioned records as not current live evidence', () => {
     const view = read('apps/web/react/src/pages/target-detail-view.tsx');
-    assert.match(view, /pair\.live_external === false && asDataItem\(pair\.retained\)/);
+    assert.match(view, /retainedCoveragePairs\(coveragePairs\)/);
     assert.match(view, /Recorded, not counted as current live coverage/);
     for (const reason of ['simulation', 'manual_declaration', 'missing_check_version', 'missing_scenario_version']) {
       assert.match(view, new RegExp(`${reason}:`));
