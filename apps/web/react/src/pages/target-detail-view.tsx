@@ -959,7 +959,6 @@ export function TargetDetailView({
             <h1 className="page-title mono">{title || 'Target'}</h1>
             {hasTarget ? (
               <div className="td-title-badges">
-                <VerifyChip state={verificationState} provenance={provenance} label={ownershipLabel(verificationState)} />
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
                   {targetEligible ? 'Validation unlocked' : 'Validation locked'}
                 </Badge>

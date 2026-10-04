@@ -37386,51 +37386,53 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   function ue(e) {
     g(e), qf({ check: e || null });
   }
-  let L = s?.target ?? null, de = s?.verification ?? null, fe = s?.ownership_challenge ?? null, pe = s?.tags ?? [], me = CC(L, ["kind"], "unknown"), he = CC(L, ["eligibility"], "unknown"), ge = CC(de, ["state"], CC(L, ["verification_state"], "unverified")), _e = jb(ge, fe).done, ve = db(he, ge) && _e, ye = ux(L, de), be = /agent/i.test(ye) ? `Recorded ownership evidence for ${ge}.` : ye, xe = CC(L, ["target_group_id"], ""), Se = CC(i.find((e) => CC(e, ["id"], "") === xe) ?? null, ["name"], CC(L, ["target_group_name"], xe)), Ce = Ml(n.role), we = Ml(n.role), Te = (0, D.useMemo)(() => bb(s?.runs_recent), [s?.runs_recent]), Ee = uC(), De = (0, D.useCallback)((e) => CC(e, ["run_id", "id"], ""), []), Oe = lC(Te, {
+  let L = s?.target ?? null, de = s?.verification ?? null, fe = s?.ownership_challenge ?? null, pe = s?.tags ?? [], me = CC(L, ["kind"], "unknown"), he = CC(L, ["eligibility"], "unknown"), ge = CC(de, ["state"], CC(L, ["verification_state"], "unverified")), _e = jb(ge, fe).done, ve = db(he, ge) && _e, ye = ux(L, de);
+  /agent/i.test(ye) && `${ge}`;
+  let be = CC(L, ["target_group_id"], ""), xe = CC(i.find((e) => CC(e, ["id"], "") === be) ?? null, ["name"], CC(L, ["target_group_name"], be)), Se = Ml(n.role), Ce = Ml(n.role), we = (0, D.useMemo)(() => bb(s?.runs_recent), [s?.runs_recent]), Te = uC(), Ee = (0, D.useCallback)((e) => CC(e, ["run_id", "id"], ""), []), De = lC(we, {
     scope: `${mp(n) || "anon"}|target|${e}`,
-    idOf: De,
-    hold: Ee.holding || se?.entry === "check_result"
-  }), ke = Oe.items, Ae = Array.isArray(s?.findings) ? s.findings : [], je = FC(de), Me = s?.declaration ?? null, Ne = NC(Me), Pe = (0, D.useMemo)(() => L ? Wu(r, L) : [], [r, L]), Fe = (0, D.useMemo)(() => L ? Gu(r, L).length : 0, [r, L]), Ie = (0, D.useMemo)(() => ed({
-    checks: Pe,
+    idOf: Ee,
+    hold: Te.holding || se?.entry === "check_result"
+  }), Oe = De.items, ke = Array.isArray(s?.findings) ? s.findings : [], Ae = FC(de), je = s?.declaration ?? null, Me = NC(je), Ne = (0, D.useMemo)(() => L ? Wu(r, L) : [], [r, L]), Pe = (0, D.useMemo)(() => L ? Gu(r, L).length : 0, [r, L]), Fe = (0, D.useMemo)(() => ed({
+    checks: Ne,
     scan: y,
     runs: x
   }), [
-    Pe,
+    Ne,
     y,
     x
-  ]), Le = (0, D.useMemo)(() => td(Ie), [Ie]), Re = Ie.some((e) => e.checkId === h) ? h : "", ze = !!h && !Re && Ie.length > 0, Be = Ie.find((e) => e.checkId === Re) ?? null, Ve = (0, D.useMemo)(() => new Map(r.map((e) => [CC(e, ["check_id", "id"], ""), Gl(CC(e, ["name", "title"], ""))])), [r]), He = (e) => Ve.get(e) || e || "Unnamed check", Ue = s?.edge_detection ?? null, We = s?.edge_detection_request ?? null, Ge = {
+  ]), Ie = (0, D.useMemo)(() => td(Fe), [Fe]), Le = Fe.some((e) => e.checkId === h) ? h : "", Re = !!h && !Le && Fe.length > 0, ze = Fe.find((e) => e.checkId === Le) ?? null, Be = (0, D.useMemo)(() => new Map(r.map((e) => [CC(e, ["check_id", "id"], ""), Gl(CC(e, ["name", "title"], ""))])), [r]), Ve = (e) => Be.get(e) || e || "Unnamed check", He = s?.edge_detection ?? null, Ue = s?.edge_detection_request ?? null, We = {
     protection_profile: s?.protection_profile ?? null,
-    edge_detection: Ue
-  }, Ke = (0, D.useMemo)(() => md(Ge), [s?.protection_profile, Ue]), qe = (0, D.useMemo)(() => hd(Ge), [s?.protection_profile, Ue]), Je = _d(Ge), Ye = so(y), Xe = CC(y, ["id"], ""), Ze = Array.isArray(y?.steps) ? y.steps.find((e) => CC(e, ["check_id"], "") === "waf.fingerprint.safe") ?? null : null, Qe = Ye && vC.has(CC(Ze, ["status"], "")), $e = sd({
+    edge_detection: He
+  }, Ge = (0, D.useMemo)(() => md(We), [s?.protection_profile, He]), Ke = (0, D.useMemo)(() => hd(We), [s?.protection_profile, He]), qe = _d(We), Je = so(y), Ye = CC(y, ["id"], ""), Xe = Array.isArray(y?.steps) ? y.steps.find((e) => CC(e, ["check_id"], "") === "waf.fingerprint.safe") ?? null : null, Ze = Je && vC.has(CC(Xe, ["status"], "")), Qe = sd({
     eligible: ve,
-    edge: Ue,
-    request: We,
+    edge: He,
+    request: Ue,
     localRequest: T,
-    scanFingerprintActive: Qe
-  }), et = $e === "evaluating", tt = CC(We, ["test_run_id"], ""), nt = jb(ge, fe), rt = nt.done, it = r.find((e) => CC(e, ["check_id", "id"], "") === "waf.fingerprint.safe") ?? null, at = (0, D.useCallback)(async () => {
-    if (!xe) return;
-    let [r, i] = await Promise.all([B(t, n, cd(xe, e)).catch(() => null), B(t, n, `/v1/test-runs?target_id=${encodeURIComponent(e)}&limit=${dC}`).then((e) => (w(""), e)).catch((e) => (w(Vo(e, "Recorded check results could not load.")), null))]);
+    scanFingerprintActive: Ze
+  }), $e = Qe === "evaluating", et = CC(Ue, ["test_run_id"], ""), tt = jb(ge, fe), nt = tt.done, rt = r.find((e) => CC(e, ["check_id", "id"], "") === "waf.fingerprint.safe") ?? null, it = (0, D.useCallback)(async () => {
+    if (!be) return;
+    let [r, i] = await Promise.all([B(t, n, cd(be, e)).catch(() => null), B(t, n, `/v1/test-runs?target_id=${encodeURIComponent(e)}&limit=${dC}`).then((e) => (w(""), e)).catch((e) => (w(Vo(e, "Recorded check results could not load.")), null))]);
     r && Array.isArray(r.items) && b(r.items[0] ?? null), i && Array.isArray(i.items) && S(i.items);
   }, [
     t,
     n,
     e,
-    xe
+    be
   ]);
   (0, D.useEffect)(() => {
     b(null), S([]), E(""), k(""), j(""), I(0), ie.current = 0;
   }, [e]), (0, D.useEffect)(() => {
-    at();
-  }, [at]), (0, D.useEffect)(() => {
-    if (!Xe || !Ye) return;
-    let e = !1, r, i = 0, a = Qe, s = async () => {
+    it();
+  }, [it]), (0, D.useEffect)(() => {
+    if (!Ye || !Je) return;
+    let e = !1, r, i = 0, a = Ze, s = async () => {
       try {
-        let r = await B(t, n, `/v1/validation-scans/${encodeURIComponent(Xe)}?advance=false`);
+        let r = await B(t, n, `/v1/validation-scans/${encodeURIComponent(Ye)}?advance=false`);
         if (e) return;
         i = 0, b(r);
         let s = Array.isArray(r.steps) ? r.steps.find((e) => CC(e, ["check_id"], "") === Tu) : null, c = vC.has(CC(s ?? null, ["status"], ""));
         if (a && !c && ce().catch(() => void 0), a = c, !so(r)) {
-          at(), ce().catch(() => void 0), o().catch(() => void 0);
+          it(), ce().catch(() => void 0), o().catch(() => void 0);
           return;
         }
       } catch {
@@ -37453,21 +37455,21 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   }, [
     t,
     n,
-    Xe,
     Ye,
-    at
+    Je,
+    it
   ]);
-  let ot = (0, D.useCallback)(async () => {
-    if (xe) {
+  let at = (0, D.useCallback)(async () => {
+    if (be) {
       E("pending"), k(""), j("");
       try {
         await B(t, n, "/v1/waf/edge-detection", {
           method: "POST",
           body: {
-            target_group_id: xe,
+            target_group_id: be,
             target_id: e
           }
-        }), ie.current = 0, await ce().catch(() => void 0), at();
+        }), ie.current = 0, await ce().catch(() => void 0), it();
       } catch (e) {
         if (hb(e) === "concurrent_run_blocked") {
           E("blocked");
@@ -37480,23 +37482,23 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     t,
     n,
     e,
-    xe,
-    at,
+    be,
+    it,
     ce
   ]);
   (0, D.useEffect)(() => {
-    if (T !== "blocked" || Ue || Ye || ie.current >= hC) return;
+    if (T !== "blocked" || He || Je || ie.current >= hC) return;
     let e = window.setTimeout(() => {
-      ie.current += 1, ot();
+      ie.current += 1, at();
     }, mC);
     return () => window.clearTimeout(e);
   }, [
     T,
-    Ue,
-    Ye,
-    ot
+    He,
+    Je,
+    at
   ]), (0, D.useEffect)(() => {
-    if (!et || Ue || Qe) return;
+    if (!$e || He || Ze) return;
     let e = !1, t = Date.now(), n = window.setInterval(() => {
       if (!e) {
         if (Date.now() - t > pC) {
@@ -37511,7 +37513,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             "queued",
             "running",
             "collecting"
-          ].includes(t)) && (E(""), at());
+          ].includes(t)) && (E(""), it());
         }).catch(() => void 0);
       }
     }, fC);
@@ -37519,15 +37521,15 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       e = !0, window.clearInterval(n);
     };
   }, [
-    et,
-    Ue,
-    Qe,
-    at,
+    $e,
+    He,
+    Ze,
+    it,
     ce
   ]), (0, D.useEffect)(() => {
-    if ($e !== "no_result" || !tt || !a) return;
+    if (Qe !== "no_result" || !et || !a) return;
     let e = !1;
-    return B(t, n, `/v1/waf/edge-detection/${encodeURIComponent(tt)}`).then((t) => {
+    return B(t, n, `/v1/waf/edge-detection/${encodeURIComponent(et)}`).then((t) => {
       e || j(CC(t, ["reason"], ""));
     }).catch(() => void 0), () => {
       e = !0;
@@ -37535,18 +37537,18 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   }, [
     t,
     n,
-    $e,
-    tt,
+    Qe,
+    et,
     a
   ]), (0, D.useEffect)(() => {
-    if (!re || !Ce || rt || !fe?.id || CC(fe, ["state"], "") !== "pending" || !xe) return;
+    if (!re || !Se || nt || !fe?.id || CC(fe, ["state"], "") !== "pending" || !be) return;
     let e = fe.id, r = !1, i = window.setInterval(() => {
       if (!r) {
         if (Date.now() - re > _C) {
           window.clearInterval(i), I(0);
           return;
         }
-        r = !0, oS(t, n, xe, e).then(async (e) => {
+        r = !0, oS(t, n, be, e).then(async (e) => {
           e?.verified === !0 && (window.clearInterval(i), I(0), m("Ownership proven. You can now review and start bounded checks on this target."), await o().catch(() => void 0), await ce().catch(() => void 0));
         }).catch(() => void 0).finally(() => {
           r = !1;
@@ -37558,31 +37560,31 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     re,
     t,
     n,
-    Ce,
-    rt,
+    Se,
+    nt,
     fe?.id,
     fe?.state,
-    xe
+    be
   ]);
-  let st = Pe.length === 0 ? "No runnable checks apply to this kind of target." : ve ? et && !Ye ? "WAF/CDN detection is running. Multi-check runs unlock when it finishes." : "" : "Prove ownership first. AstraNull never probes a target you have not verified.", ct = we ? ve ? Re ? Ye ? "A multi-check run is in progress on this target." : "" : "Select a check in the list first." : "Prove ownership first. AstraNull never probes a target you have not verified." : "Your role can inspect evidence but cannot start checks.";
-  async function ut() {
+  let ot = Ne.length === 0 ? "No runnable checks apply to this kind of target." : ve ? $e && !Je ? "WAF/CDN detection is running. Multi-check runs unlock when it finishes." : "" : "Prove ownership first. AstraNull never probes a target you have not verified.", st = Ce ? ve ? Le ? Je ? "A multi-check run is in progress on this target." : "" : "Select a check in the list first." : "Prove ownership first. AstraNull never probes a target you have not verified." : "Your role can inspect evidence but cannot start checks.";
+  async function ct() {
     if (M && L) {
       if (M.mode === "detect") {
-        N(null), await ot();
+        N(null), await at();
         return;
       }
       if (M.mode === "single") {
-        if (ct) return;
+        if (st) return;
         u("run"), f(""), m("");
         try {
           await B(t, n, "/v1/test-runs", {
             method: "POST",
             body: {
-              target_group_id: xe,
+              target_group_id: be,
               target_id: e,
-              check_id: Re
+              check_id: Le
             }
-          }), N(null), m(`${He(Re)} started. Its result and evidence appear on this check when recorded.`), await at(), await ce(), o().catch(() => void 0);
+          }), N(null), m(`${Ve(Le)} started. Its result and evidence appear on this check when recorded.`), await it(), await ce(), o().catch(() => void 0);
         } catch (e) {
           N(null), f(Vo(e, "The check could not start."));
         } finally {
@@ -37590,19 +37592,19 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         }
         return;
       }
-      if (!st) {
+      if (!ot) {
         u("run-all"), f(""), m("");
         try {
           let r = await B(t, n, "/v1/validation-scans", {
             method: "POST",
             body: {
-              target_group_id: xe,
+              target_group_id: be,
               target_id: e,
-              check_ids: Pe.map((e) => CC(e, ["check_id"], "")).filter(Boolean),
+              check_ids: Ne.map((e) => CC(e, ["check_id"], "")).filter(Boolean),
               name: `All compatible checks · ${_b(L)}`.slice(0, 120)
             }
           });
-          N(null), b(r), m(`Started ${Pe.length} bounded checks, one at a time. Results appear on each check as they land.`);
+          N(null), b(r), m(`Started ${Ne.length} bounded checks, one at a time. Results appear on each check as they land.`);
         } catch (e) {
           N(null), f(oo(e.payload, Vo(e, "The multi-check run could not start.")));
         } finally {
@@ -37611,21 +37613,21 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }
     }
   }
-  let ft = Pe.reduce((e, t) => {
+  let ut = Ne.reduce((e, t) => {
     let n = Number(t.probe_profile?.max_requests);
     return e + (Number.isFinite(n) ? n : 0);
-  }, 0), pt = new Set(Ie.map((e) => e.category.id)).size;
-  async function mt(r) {
-    L && (await sS(t, n, xe, e, r), m("Tags saved."), await o(), await ce());
+  }, 0), ft = new Set(Fe.map((e) => e.category.id)).size;
+  async function pt(r) {
+    L && (await sS(t, n, be, e, r), m("Tags saved."), await o(), await ce());
   }
-  async function ht(r, i) {
+  async function mt(r, i) {
     await lS(t, n, e, r, i), ne(!1), m("Declared context saved and recorded in the audit log."), await ce();
   }
-  async function gt() {
+  async function ht() {
     if (L) {
       u("issue"), f(""), m("");
       try {
-        await aS(t, n, xe, e), m("DNS TXT record issued. Add it at your DNS provider, then choose Check now."), await ce();
+        await aS(t, n, be, e), m("DNS TXT record issued. Add it at your DNS provider, then choose Check now."), await ce();
       } catch (e) {
         f(e instanceof Error ? e.message : "Could not issue an ownership challenge.");
       } finally {
@@ -37633,11 +37635,11 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }
     }
   }
-  async function _t() {
+  async function gt() {
     if (fe?.id) {
       u("verify"), f(""), m("");
       try {
-        let e = await oS(t, n, xe, fe.id);
+        let e = await oS(t, n, be, fe.id);
         e?.verified === !0 || CC(wC(e.challenge), ["state"]) === "resolved" ? (I(0), m("Ownership proven. You can now review and start bounded checks on this target.")) : (I(Date.now()), m("The DNS TXT record was not found yet. DNS can take a few minutes; this page re-checks every 30 seconds for 15 minutes while it stays open.")), await o(), await ce();
       } catch (e) {
         f(e instanceof Error ? e.message : "Could not check the DNS record.");
@@ -37646,14 +37648,14 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }
     }
   }
-  function vt(t) {
+  function _t(t) {
     oe({
       entry: "provider",
       target_id: e,
       family: t.family
     }, `provider-${t.family}`);
   }
-  function yt(t) {
+  function vt(t) {
     t.runId && oe({
       entry: "check_result",
       target_id: e,
@@ -37661,7 +37663,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       test_run_id: t.runId
     }, `check-evidence-${t.checkId}`);
   }
-  function bt(t) {
+  function yt(t) {
     let n = CC(t, ["run_id", "id"], ""), r = CC(t, ["check_id"], "");
     n && r && oe({
       entry: "check_result",
@@ -37670,7 +37672,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       test_run_id: n
     }, `run-${n}`);
   }
-  function xt(t) {
+  function bt(t) {
     let n = CC(t, ["id"], "");
     n && oe({
       entry: "finding",
@@ -37679,9 +37681,9 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       check_id: CC(t, ["check_id"], "") || void 0
     }, `finding-${n}`);
   }
-  let St = se?.entry === "check_result" ? se.test_run_id ?? "" : "", Ct = se?.entry === "finding" ? se.finding_id ?? "" : "";
-  function wt(e = !1) {
-    return rt ? /* @__PURE__ */ (0, V.jsxs)("p", {
+  let xt = se?.entry === "check_result" ? se.test_run_id ?? "" : "", St = se?.entry === "finding" ? se.finding_id ?? "" : "";
+  function Ct(e = !1) {
+    return nt ? /* @__PURE__ */ (0, V.jsxs)("p", {
       className: "td-muted",
       children: [
         "Verified via ",
@@ -37748,11 +37750,11 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }), /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "td-actions",
         children: [
-          Ce ? /* @__PURE__ */ (0, V.jsxs)(H, {
+          Se ? /* @__PURE__ */ (0, V.jsxs)(H, {
             size: "sm",
             loading: l === "verify",
             disabled: l !== "",
-            onClick: () => void _t(),
+            onClick: () => void gt(),
             children: [/* @__PURE__ */ (0, V.jsx)(En, {
               size: 15,
               "aria-hidden": "true"
@@ -37761,12 +37763,12 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             tone: "muted",
             children: "Read-only role"
           }),
-          Ce ? /* @__PURE__ */ (0, V.jsx)(H, {
+          Se ? /* @__PURE__ */ (0, V.jsx)(H, {
             size: "sm",
             variant: "ghost",
             loading: l === "issue",
             disabled: l !== "",
-            onClick: () => void gt(),
+            onClick: () => void ht(),
             children: "Reissue record"
           }) : null,
           fe.expires_at ? /* @__PURE__ */ (0, V.jsxs)("span", {
@@ -37785,11 +37787,11 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         ]
       })] }) : /* @__PURE__ */ (0, V.jsx)("div", {
         className: "td-actions",
-        children: Ce ? /* @__PURE__ */ (0, V.jsxs)(H, {
+        children: Se ? /* @__PURE__ */ (0, V.jsxs)(H, {
           size: "sm",
           loading: l === "issue",
           disabled: l !== "",
-          onClick: () => void gt(),
+          onClick: () => void ht(),
           children: [/* @__PURE__ */ (0, V.jsx)(En, {
             size: 15,
             "aria-hidden": "true"
@@ -37801,7 +37803,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       })]
     });
   }
-  function Tt() {
+  function wt() {
     let t = !!L, n = t ? _b(L) : e;
     return /* @__PURE__ */ (0, V.jsxs)("header", {
       className: "page-head td-page-head",
@@ -37823,35 +37825,27 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               children: n || "Target"
             }), t ? /* @__PURE__ */ (0, V.jsxs)("div", {
               className: "td-title-badges",
-              children: [
-                /* @__PURE__ */ (0, V.jsx)(dx, {
-                  state: ge,
-                  provenance: be,
-                  label: OC(ge)
-                }),
-                /* @__PURE__ */ (0, V.jsx)(W, {
-                  tone: ve ? "success" : "warn",
-                  title: `Reported eligibility ${he}; ownership ${ge}`,
-                  children: ve ? "Validation unlocked" : "Validation locked"
-                }),
-                /* @__PURE__ */ (0, V.jsx)("span", {
-                  className: "td-kind-tag",
-                  children: TC(me)
-                })
-              ]
+              children: [/* @__PURE__ */ (0, V.jsx)(W, {
+                tone: ve ? "success" : "warn",
+                title: `Reported eligibility ${he}; ownership ${ge}`,
+                children: ve ? "Validation unlocked" : "Validation locked"
+              }), /* @__PURE__ */ (0, V.jsx)("span", {
+                className: "td-kind-tag",
+                children: TC(me)
+              })]
             }) : null]
           }),
           t ? /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "td-context",
             children: [
-              Ne ? /* @__PURE__ */ (0, V.jsxs)("dl", {
+              Me ? /* @__PURE__ */ (0, V.jsxs)("dl", {
                 className: "td-context-list",
                 "aria-label": "Declared context",
                 children: [
-                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Purpose" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Ne.purpose || "Not declared", Ne.purposeSource ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Ne.purposeSource] }) : null] })] }),
-                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Service roles" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Ne.roles.length ? Ne.roles.join(" + ") : "Unclassified", Ne.rolesSource ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Ne.rolesSource] }) : null] })] }),
-                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Owner" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Ne.owner.text, Ne.owner.source ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Ne.owner.source] }) : null] })] }),
-                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Criticality" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Ne.criticality.text, Ne.criticality.source ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Ne.criticality.source] }) : null] })] })
+                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Purpose" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Me.purpose || "Not declared", Me.purposeSource ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Me.purposeSource] }) : null] })] }),
+                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Service roles" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Me.roles.length ? Me.roles.join(" + ") : "Unclassified", Me.rolesSource ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Me.rolesSource] }) : null] })] }),
+                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Owner" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Me.owner.text, Me.owner.source ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Me.owner.source] }) : null] })] }),
+                  /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Criticality" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Me.criticality.text, Me.criticality.source ? /* @__PURE__ */ (0, V.jsxs)("small", { children: [" · ", Me.criticality.source] }) : null] })] })
                 ]
               }) : /* @__PURE__ */ (0, V.jsx)("p", {
                 className: "td-muted td-context-missing",
@@ -37860,10 +37854,10 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "td-metaline",
                 children: [
-                  xe ? /* @__PURE__ */ (0, V.jsxs)("a", {
+                  be ? /* @__PURE__ */ (0, V.jsxs)("a", {
                     className: "td-group-link",
-                    href: Gf("target-group-detail", xe),
-                    children: ["Group: ", Se]
+                    href: Gf("target-group-detail", be),
+                    children: ["Group: ", xe]
                   }) : /* @__PURE__ */ (0, V.jsx)("span", { children: "No group" }),
                   /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "dot",
@@ -37875,15 +37869,15 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               }),
               /* @__PURE__ */ (0, V.jsx)(MC, {
                 tags: pe,
-                canEdit: Ce,
-                onChange: mt
+                canEdit: Se,
+                onChange: pt
               })
             ]
           }) : null
         ]
       }), t ? /* @__PURE__ */ (0, V.jsxs)("div", {
         className: "td-head-actions",
-        children: [we ? /* @__PURE__ */ (0, V.jsxs)(H, {
+        children: [Ce ? /* @__PURE__ */ (0, V.jsxs)(H, {
           onClick: () => {
             le("validate"), window.requestAnimationFrame(() => document.getElementById("td-all-checks")?.scrollIntoView({
               behavior: hc() ? "auto" : "smooth",
@@ -37894,7 +37888,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             size: 15,
             "aria-hidden": "true"
           }), "Plan validation"]
-        }) : null, Ne && Ce && !F ? /* @__PURE__ */ (0, V.jsxs)(H, {
+        }) : null, Me && Se && !F ? /* @__PURE__ */ (0, V.jsxs)(H, {
           variant: "secondary",
           onClick: () => ne(!0),
           children: [/* @__PURE__ */ (0, V.jsx)(tn, {
@@ -37907,7 +37901,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
   }
   if (!s || s.loading) return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content target-detail-view",
-    children: [Tt(), /* @__PURE__ */ (0, V.jsxs)("div", {
+    children: [wt(), /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "stack",
       "aria-busy": "true",
       "aria-live": "polite",
@@ -37934,7 +37928,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     });
     if (s.error) return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content target-detail-view",
-      children: [Tt(), /* @__PURE__ */ (0, V.jsx)("div", {
+      children: [wt(), /* @__PURE__ */ (0, V.jsx)("div", {
         role: "alert",
         "data-target-load-error": "true",
         children: /* @__PURE__ */ (0, V.jsx)(G, {
@@ -37954,7 +37948,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     let e = s.meta && typeof s.meta == "object" ? s.meta : null;
     return /* @__PURE__ */ (0, V.jsxs)("div", {
       className: "content target-detail-view",
-      children: [Tt(), gh({
+      children: [wt(), gh({
         icon: Hn,
         meta: e,
         actionHref: "#targets",
@@ -37962,9 +37956,9 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       })]
     });
   }
-  let Et = Ae.filter((e) => v_(e)).sort((e, t) => (yC[CC(t, ["severity"], "").toLowerCase()] ?? 0) - (yC[CC(e, ["severity"], "").toLowerCase()] ?? 0)), Dt = Et[0] ?? null, Ot = (Le.passed ?? 0) + (Le.failed ?? 0) + (Le.inconclusive ?? 0) + (Le.observed ?? 0), kt = s.coverage ?? null, At = Ru(Array.isArray(kt?.pairs) ? kt.pairs.filter((e) => e && typeof e == "object") : []), jt = Object.fromEntries(At.map((e) => [CC(e, ["check_id"], ""), (bC[CC(e, ["pair_reason"], "")] ?? TC(CC(e, ["pair_reason"], "not_recorded"))).toLowerCase()])), Mt = Array.isArray(s.protection_profile?.dimensions) ? s.protection_profile.dimensions.filter((e) => e && typeof e == "object") : [];
-  function Nt() {
-    if (!rt) return /* @__PURE__ */ (0, V.jsxs)("section", {
+  let Tt = ke.filter((e) => v_(e)).sort((e, t) => (yC[CC(t, ["severity"], "").toLowerCase()] ?? 0) - (yC[CC(e, ["severity"], "").toLowerCase()] ?? 0)), Et = Tt[0] ?? null, Dt = (Ie.passed ?? 0) + (Ie.failed ?? 0) + (Ie.inconclusive ?? 0) + (Ie.observed ?? 0), Ot = s.coverage ?? null, kt = Ru(Array.isArray(Ot?.pairs) ? Ot.pairs.filter((e) => e && typeof e == "object") : []), At = Object.fromEntries(kt.map((e) => [CC(e, ["check_id"], ""), (bC[CC(e, ["pair_reason"], "")] ?? TC(CC(e, ["pair_reason"], "not_recorded"))).toLowerCase()])), jt = Array.isArray(s.protection_profile?.dimensions) ? s.protection_profile.dimensions.filter((e) => e && typeof e == "object") : [];
+  function Mt() {
+    if (!nt) return /* @__PURE__ */ (0, V.jsxs)("section", {
       className: "td-next",
       "data-kind": "ownership",
       "aria-labelledby": "td-next-title",
@@ -37980,14 +37974,14 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             children: "Prove ownership to unlock validation"
           }),
           /* @__PURE__ */ (0, V.jsx)(W, {
-            tone: nt.tone,
-            children: nt.label
+            tone: tt.tone,
+            children: tt.label
           })
         ]
-      }), wt()]
+      }), Ct()]
     });
-    if (Dt) {
-      let e = CC(Dt, ["id"], "");
+    if (Et) {
+      let e = CC(Et, ["id"], "");
       return /* @__PURE__ */ (0, V.jsxs)("section", {
         className: "td-next",
         "data-kind": "finding",
@@ -38002,11 +37996,11 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               }),
               /* @__PURE__ */ (0, V.jsx)("h2", {
                 id: "td-next-title",
-                children: Zl(Dt, [L], r)
+                children: Zl(Et, [L], r)
               }),
               /* @__PURE__ */ (0, V.jsx)(W, {
-                tone: DC(CC(Dt, ["severity"], "")),
-                children: Qi(CC(Dt, ["severity"], "unknown"))
+                tone: DC(CC(Et, ["severity"], "")),
+                children: Qi(CC(Et, ["severity"], "unknown"))
               })
             ]
           }),
@@ -38014,8 +38008,8 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             className: "td-copy",
             children: [
               "Opened ",
-              z(Dt.created_at ?? Dt.opened_at),
-              Et.length > 1 ? `. ${Et.length - 1} more open on this target.` : ".",
+              z(Et.created_at ?? Et.opened_at),
+              Tt.length > 1 ? `. ${Tt.length - 1} more open on this target.` : ".",
               " ",
               "A later passing check does not close it; review the original evidence first."
             ]
@@ -38027,7 +38021,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 size: "sm",
                 variant: "secondary",
                 "data-focus-key": `finding-${e}`,
-                onClick: () => xt(Dt),
+                onClick: () => bt(Et),
                 children: [/* @__PURE__ */ (0, V.jsx)(lt, {
                   size: 14,
                   "aria-hidden": "true"
@@ -38039,13 +38033,13 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 href: Gf("finding-detail", e),
                 children: "Open full finding"
               }),
-              Et.length > 1 ? /* @__PURE__ */ (0, V.jsxs)(H, {
+              Tt.length > 1 ? /* @__PURE__ */ (0, V.jsxs)(H, {
                 size: "sm",
                 variant: "ghost",
                 onClick: () => le("findings"),
                 children: [
                   "All ",
-                  Et.length,
+                  Tt.length,
                   " open findings"
                 ]
               }) : null
@@ -38054,7 +38048,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         ]
       });
     }
-    return Ot === 0 ? /* @__PURE__ */ (0, V.jsxs)("section", {
+    return Dt === 0 ? /* @__PURE__ */ (0, V.jsxs)("section", {
       className: "td-next",
       "data-kind": "plan",
       "aria-labelledby": "td-next-title",
@@ -38102,9 +38096,9 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           className: "td-copy",
           children: [
             "Passed checks show behavior in their recorded scenario only. ",
-            Le.not_run ?? 0,
+            Ie.not_run ?? 0,
             " compatible check",
-            (Le.not_run ?? 0) === 1 ? "" : "s",
+            (Ie.not_run ?? 0) === 1 ? "" : "s",
             " have no result yet."
           ]
         }),
@@ -38120,11 +38114,11 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       ]
     });
   }
-  function Pt() {
-    if (kt) {
-      let e = Number(kt.applicable_count), t = kt.percentage === null || kt.percentage === void 0 ? null : Number(kt.percentage), n = (e) => e == null || e === "" || !Number.isFinite(Number(e)) ? "Not recorded" : String(e), r = (e, t) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: e }), /* @__PURE__ */ (0, V.jsx)("dd", {
+  function Nt() {
+    if (Ot) {
+      let e = Number(Ot.applicable_count), t = Ot.percentage === null || Ot.percentage === void 0 ? null : Number(Ot.percentage), n = (e) => e == null || e === "" || !Number.isFinite(Number(e)) ? "Not recorded" : String(e), r = (e, t) => /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: e }), /* @__PURE__ */ (0, V.jsx)("dd", {
         className: "tabular-nums",
-        children: n(kt[t])
+        children: n(Ot[t])
       })] }, t);
       return /* @__PURE__ */ (0, V.jsxs)("section", {
         className: "td-coverage",
@@ -38137,13 +38131,13 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               children: "Check coverage"
             }), /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               "Applicable target and check pairs from the server plan (",
-              CC(kt, ["plan_version"], "version not recorded"),
+              CC(Ot, ["plan_version"], "version not recorded"),
               ")."
             ] })] }), /* @__PURE__ */ (0, V.jsxs)("span", {
               className: "td-coverage-figure-wrap",
               children: [/* @__PURE__ */ (0, V.jsx)("strong", {
                 className: "td-coverage-figure tabular-nums",
-                children: e > 0 && t !== null ? t === 0 && Number(kt.conclusive_count) > 0 ? "<1%" : `${t}%` : "Not applicable"
+                children: e > 0 && t !== null ? t === 0 && Number(Ot.conclusive_count) > 0 ? "<1%" : `${t}%` : "Not applicable"
               }), /* @__PURE__ */ (0, V.jsx)("span", {
                 className: "td-muted",
                 children: e > 0 && t !== null ? "of applicable pairs have a conclusive result" : "No applicable target and check pairs"
@@ -38164,7 +38158,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               r("Excluded", "excluded_count")
             ]
           }),
-          At.length ? /* @__PURE__ */ (0, V.jsxs)("div", {
+          kt.length ? /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "td-retained",
             role: "note",
             children: [
@@ -38173,10 +38167,10 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 className: "td-muted",
                 children: "These records are simulated, manual, stale, unfinished, or lack the version, completion time, or cited evidence needed for current coverage. Current external inconclusive results count as evaluated checks."
               }),
-              /* @__PURE__ */ (0, V.jsx)("ul", { children: At.map((e) => {
+              /* @__PURE__ */ (0, V.jsx)("ul", { children: kt.map((e) => {
                 let t = wC(e.retained);
                 return /* @__PURE__ */ (0, V.jsxs)("li", { children: [
-                  /* @__PURE__ */ (0, V.jsx)("span", { children: He(CC(e, ["check_id"], "")) }),
+                  /* @__PURE__ */ (0, V.jsx)("span", { children: Ve(CC(e, ["check_id"], "")) }),
                   /* @__PURE__ */ (0, V.jsxs)("span", {
                     className: "td-muted",
                     children: [" · ", bC[CC(e, ["pair_reason"], "")] ?? TC(CC(e, ["pair_reason"], "not_recorded"))]
@@ -38195,7 +38189,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
               }) })
             ]
           }) : null,
-          Mt.length ? /* @__PURE__ */ (0, V.jsx)("div", {
+          jt.length ? /* @__PURE__ */ (0, V.jsx)("div", {
             className: "td-dimensions",
             role: "region",
             "aria-label": "Coverage by readiness dimension",
@@ -38241,7 +38235,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                     children: "Excluded"
                   })
                 ] }) }),
-                /* @__PURE__ */ (0, V.jsx)("tbody", { children: Mt.map((e) => {
+                /* @__PURE__ */ (0, V.jsx)("tbody", { children: jt.map((e) => {
                   let t = Number(e.applicable_count);
                   return /* @__PURE__ */ (0, V.jsxs)("tr", { children: [
                     /* @__PURE__ */ (0, V.jsx)("th", {
@@ -38296,7 +38290,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
             children: "Recorded check results"
           }), /* @__PURE__ */ (0, V.jsxs)("p", { children: [
             "Counts over ",
-            Ie.length,
+            Fe.length,
             " catalog checks compatible with this target kind. The server applicability plan is not reported yet, so no coverage percentage is shown."
           ] })] })
         }),
@@ -38305,23 +38299,23 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           children: [
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Gap found" }), /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "tabular-nums",
-              children: Le.failed ?? 0
+              children: Ie.failed ?? 0
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Passed" }), /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "tabular-nums",
-              children: Le.passed ?? 0
+              children: Ie.passed ?? 0
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Inconclusive" }), /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "tabular-nums",
-              children: Le.inconclusive ?? 0
+              children: Ie.inconclusive ?? 0
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Observed only" }), /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "tabular-nums",
-              children: Le.observed ?? 0
+              children: Ie.observed ?? 0
             })] }),
             /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Not run" }), /* @__PURE__ */ (0, V.jsx)("dd", {
               className: "tabular-nums",
-              children: Le.not_run ?? 0
+              children: Ie.not_run ?? 0
             })] })
           ]
         }),
@@ -38333,10 +38327,10 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       ]
     });
   }
-  function Ft() {
-    return !a && !Ue ? "WAF/CDN detection is not enabled for this workspace." : $e === "locked" ? "Detection is available once ownership is proven. AstraNull never probes a target you have not verified." : $e === "waiting" ? "Another run holds this group’s single run slot. Your detection request starts when it frees up." : $e === "error" ? O || "WAF/CDN detection could not be queued." : $e === "no_result" ? wb(A) || "The last detection run finished without a trusted result, so nothing is asserted." : $e === "not_started" ? "Detection has not run on this target. It starts only when someone chooses Detect WAF and CDN." : null;
+  function Pt() {
+    return !a && !He ? "WAF/CDN detection is not enabled for this workspace." : Qe === "locked" ? "Detection is available once ownership is proven. AstraNull never probes a target you have not verified." : Qe === "waiting" ? "Another run holds this group’s single run slot. Your detection request starts when it frees up." : Qe === "error" ? O || "WAF/CDN detection could not be queued." : Qe === "no_result" ? wb(A) || "The last detection run finished without a trusted result, so nothing is asserted." : Qe === "not_started" ? "Detection has not run on this target. It starts only when someone chooses Detect WAF and CDN." : null;
   }
-  let It = we && a && ve && !Ye && !et ? /* @__PURE__ */ (0, V.jsxs)(H, {
+  let Ft = Ce && a && ve && !Je && !$e ? /* @__PURE__ */ (0, V.jsxs)(H, {
     size: "sm",
     variant: "secondary",
     "data-focus-key": "td-detect",
@@ -38344,8 +38338,8 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     children: [/* @__PURE__ */ (0, V.jsx)(mn, {
       size: 14,
       "aria-hidden": "true"
-    }), Ue ? "Detect again" : "Detect WAF and CDN"]
-  }) : null, Lt = [
+    }), He ? "Detect again" : "Detect WAF and CDN"]
+  }) : null, It = [
     {
       key: "check",
       label: "Check",
@@ -38353,7 +38347,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         let t = CC(e, ["check_id"], "");
         return /* @__PURE__ */ (0, V.jsxs)("span", {
           className: "entity-cell-stack",
-          children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: He(t) }), /* @__PURE__ */ (0, V.jsx)("small", {
+          children: [/* @__PURE__ */ (0, V.jsx)("strong", { children: Ve(t) }), /* @__PURE__ */ (0, V.jsx)("small", {
             className: "mono",
             children: t
           })]
@@ -38415,9 +38409,9 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           "data-focus-key": `run-${t}`,
           disabled: !t,
           onClick: (t) => {
-            t.stopPropagation(), bt(e);
+            t.stopPropagation(), yt(e);
           },
-          "aria-label": `View evidence for ${He(CC(e, ["check_id"], ""))} run ${t}`,
+          "aria-label": `View evidence for ${Ve(CC(e, ["check_id"], ""))} run ${t}`,
           children: [/* @__PURE__ */ (0, V.jsx)(lt, {
             size: 14,
             "aria-hidden": "true"
@@ -38425,7 +38419,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         });
       }
     }
-  ], Rt = [
+  ], Lt = [
     {
       key: "severity",
       label: "Severity",
@@ -38476,7 +38470,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           variant: "ghost",
           "data-focus-key": `finding-${t}`,
           onClick: (t) => {
-            t.stopPropagation(), xt(e);
+            t.stopPropagation(), bt(e);
           },
           "aria-label": `View evidence for finding ${t}`,
           children: [/* @__PURE__ */ (0, V.jsx)(lt, {
@@ -38486,7 +38480,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         });
       }
     }
-  ], zt = [
+  ], Rt = [
     {
       id: "overview",
       label: "Overview"
@@ -38494,22 +38488,22 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
     {
       id: "validate",
       label: "Validate",
-      count: Ie.length
+      count: Fe.length
     },
     {
       id: "findings",
       label: "Findings",
-      count: Et.length
+      count: Tt.length
     },
     {
       id: "history",
       label: "Changes & history"
     }
-  ], Bt = Be?.maxRequests ?? null;
+  ], zt = ze?.maxRequests ?? null;
   return /* @__PURE__ */ (0, V.jsxs)("div", {
     className: "content target-detail-view",
     children: [
-      Tt(),
+      wt(),
       d ? /* @__PURE__ */ (0, V.jsx)("div", {
         className: "form-banner error",
         role: "alert",
@@ -38520,15 +38514,15 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         tone: p.includes("not found") ? "warn" : "success",
         onDismiss: () => m("")
       }) : null,
-      F && Ne ? /* @__PURE__ */ (0, V.jsx)(PC, {
-        declaration: Me,
+      F && Me ? /* @__PURE__ */ (0, V.jsx)(PC, {
+        declaration: je,
         onCancel: () => ne(!1),
-        onSave: ht
+        onSave: mt
       }) : null,
       /* @__PURE__ */ (0, V.jsx)(Th, {
         ariaLabel: `${_b(L)} workspace`,
         value: _,
-        options: zt,
+        options: Rt,
         onChange: le,
         getPanelId: (e) => `td-panel-${e}`,
         getTabId: (e) => `td-tab-${e}`
@@ -38542,26 +38536,26 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
           _ === "overview" ? /* @__PURE__ */ (0, V.jsxs)("div", {
             className: "td-overview",
             children: [
-              Nt(),
+              Mt(),
               /* @__PURE__ */ (0, V.jsx)(AS, {
-                rows: Ke,
-                effectiveness: qe,
-                originStatus: Je,
-                originDetail: gd(Ge),
-                evaluating: et,
-                note: Ft(),
-                action: It,
-                onInspect: vt
+                rows: Ge,
+                effectiveness: Ke,
+                originStatus: qe,
+                originDetail: gd(We),
+                evaluating: $e,
+                note: Pt(),
+                action: Ft,
+                onInspect: _t
               }),
-              Pt(),
+              Nt(),
               L ? /* @__PURE__ */ (0, V.jsx)(XS, {
                 config: t,
                 session: n,
                 target: L,
                 profile: s?.protection_profile ?? null,
-                canWrite: Ce,
-                canStart: we,
-                ownershipDone: rt,
+                canWrite: Se,
+                canStart: Ce,
+                ownershipDone: nt,
                 onStarted: (e) => {
                   m(e), ce();
                 },
@@ -38586,16 +38580,16 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 })] }), /* @__PURE__ */ (0, V.jsxs)("div", {
                   className: "td-validate-gates",
                   children: [/* @__PURE__ */ (0, V.jsx)(W, {
-                    tone: nt.tone,
-                    children: rt ? "Ownership verified" : nt.label
-                  }), we ? null : /* @__PURE__ */ (0, V.jsx)(W, {
+                    tone: tt.tone,
+                    children: nt ? "Ownership verified" : tt.label
+                  }), Ce ? null : /* @__PURE__ */ (0, V.jsx)(W, {
                     tone: "muted",
                     children: "Read-only role"
                   })]
                 })]
               }),
-              rt ? null : wt(!0),
-              ze ? /* @__PURE__ */ (0, V.jsxs)("div", {
+              nt ? null : Ct(!0),
+              Re ? /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "form-banner",
                 role: "status",
                 children: [
@@ -38608,33 +38602,33 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 ]
               }) : null,
               /* @__PURE__ */ (0, V.jsx)(FS, {
-                rows: Ie,
-                selectedCheckId: Re,
+                rows: Fe,
+                selectedCheckId: Le,
                 canSelect: !0,
                 onSelect: ue,
-                onInspect: yt,
+                onInspect: vt,
                 scan: y,
-                scanActive: Ye,
-                canRun: we,
-                runDisabledReason: st,
+                scanActive: Je,
+                canRun: Ce,
+                runDisabledReason: ot,
                 busy: l === "run-all",
                 onRunAll: () => N({ mode: "all" }),
                 onStop: () => ee(!0),
-                liveNotes: jt,
-                footer: Fe > 0 ? /* @__PURE__ */ (0, V.jsxs)("p", {
+                liveNotes: At,
+                footer: Pe > 0 ? /* @__PURE__ */ (0, V.jsxs)("p", {
                   className: "td-muted",
-                  children: [Fe, " declaration-only checks are not listed because they send no traffic."]
+                  children: [Pe, " declaration-only checks are not listed because they send no traffic."]
                 }) : null
               }),
-              we ? /* @__PURE__ */ (0, V.jsxs)("div", {
+              Ce ? /* @__PURE__ */ (0, V.jsxs)("div", {
                 className: "td-start-bar",
                 role: "region",
                 "aria-label": "Start the selected check",
                 children: [
                   /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "td-start-copy",
-                    children: Be ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
-                      /* @__PURE__ */ (0, V.jsx)("strong", { children: Be.name }),
+                    children: ze ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
+                      /* @__PURE__ */ (0, V.jsx)("strong", { children: ze.name }),
                       " on ",
                       /* @__PURE__ */ (0, V.jsx)("span", {
                         className: "mono",
@@ -38643,20 +38637,20 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                     ] }) : "No check selected"
                   }),
                   /* @__PURE__ */ (0, V.jsxs)(H, {
-                    disabled: !ve || !Re || l !== "" || Ye,
-                    title: ct || void 0,
+                    disabled: !ve || !Le || l !== "" || Je,
+                    title: st || void 0,
                     onClick: () => N({
                       mode: "single",
-                      checkId: Re
+                      checkId: Le
                     }),
                     children: [/* @__PURE__ */ (0, V.jsx)(rn, {
                       size: 15,
                       "aria-hidden": "true"
                     }), "Review and start"]
                   }),
-                  ct ? /* @__PURE__ */ (0, V.jsx)("span", {
+                  st ? /* @__PURE__ */ (0, V.jsx)("span", {
                     className: "td-muted td-start-reason",
-                    children: ct
+                    children: st
                   }) : null
                 ]
               }) : null
@@ -38671,16 +38665,16 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 id: "td-findings-title",
                 children: "Findings on this target"
               }), /* @__PURE__ */ (0, V.jsxs)("p", { children: [
-                Et.length,
+                Tt.length,
                 " open of ",
-                Ae.length,
+                ke.length,
                 " recorded. Each opens the evidence that created it; later results are shown separately."
               ] })] })
             }), /* @__PURE__ */ (0, V.jsx)(Ch, {
-              columns: Rt,
-              items: Ae,
+              columns: Lt,
+              items: ke,
               getRowId: (e) => CC(e, ["id"], ""),
-              getRowProps: (e) => CC(e, ["id"], "") === Ct ? {
+              getRowProps: (e) => CC(e, ["id"], "") === St ? {
                 className: "is-selected",
                 "aria-current": "true"
               } : {},
@@ -38716,28 +38710,28 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                       children: "Recorded check executions"
                     }), /* @__PURE__ */ (0, V.jsx)("p", { children: "Newest first. View opens that execution’s own result and evidence; it never starts anything." })] })
                   }),
-                  Oe.pending ? /* @__PURE__ */ (0, V.jsxs)("div", {
+                  De.pending ? /* @__PURE__ */ (0, V.jsxs)("div", {
                     className: "live-update-pill",
                     role: "status",
                     children: [/* @__PURE__ */ (0, V.jsxs)("span", { children: [
-                      Oe.added ? `${Oe.added} newer execution${Oe.added === 1 ? "" : "s"} recorded.` : "Execution records changed.",
+                      De.added ? `${De.added} newer execution${De.added === 1 ? "" : "s"} recorded.` : "Execution records changed.",
                       " The list is held as of ",
-                      z(Oe.committedAt),
+                      z(De.committedAt),
                       "."
                     ] }), /* @__PURE__ */ (0, V.jsx)(H, {
                       size: "sm",
                       variant: "secondary",
-                      onClick: Oe.apply,
+                      onClick: De.apply,
                       children: "Show updates"
                     })]
                   }) : null,
                   /* @__PURE__ */ (0, V.jsx)("div", {
-                    ...Ee.handlers,
+                    ...Te.handlers,
                     children: /* @__PURE__ */ (0, V.jsx)(Ch, {
-                      columns: Lt,
-                      items: ke,
+                      columns: It,
+                      items: Oe,
                       getRowId: (e) => CC(e, ["run_id", "id"], ""),
-                      getRowProps: (e) => CC(e, ["run_id", "id"], "") === St ? {
+                      getRowProps: (e) => CC(e, ["run_id", "id"], "") === xt ? {
                         className: "is-selected",
                         "aria-current": "true"
                       } : {},
@@ -38757,9 +38751,9 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                     id: "td-ownership-history-title",
                     children: "Ownership transitions"
                   }) })
-                }), je.length ? /* @__PURE__ */ (0, V.jsx)("ul", {
+                }), Ae.length ? /* @__PURE__ */ (0, V.jsx)("ul", {
                   className: "td-observation-history",
-                  children: je.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [/* @__PURE__ */ (0, V.jsx)(dx, {
+                  children: Ae.map((e, t) => /* @__PURE__ */ (0, V.jsxs)("li", { children: [/* @__PURE__ */ (0, V.jsx)(dx, {
                     state: CC(e, ["state"], "unknown"),
                     provenance: `Recorded transition ${CC(e, ["state"], "unknown")}`,
                     label: OC(CC(e, ["state"], "unknown"))
@@ -38807,10 +38801,10 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 className: "mono",
                 children: kC(de)
               }) })] }),
-              /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Target group" }), /* @__PURE__ */ (0, V.jsx)("td", { children: xe ? /* @__PURE__ */ (0, V.jsx)("a", {
+              /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Target group" }), /* @__PURE__ */ (0, V.jsx)("td", { children: be ? /* @__PURE__ */ (0, V.jsx)("a", {
                 className: "td-inline-link",
-                href: Gf("target-group-detail", xe),
-                children: Se
+                href: Gf("target-group-detail", be),
+                children: xe
               }) : "None" })] }),
               s.loa ? /* @__PURE__ */ (0, V.jsxs)("tr", { children: [/* @__PURE__ */ (0, V.jsx)("td", { children: "Group LOA" }), /* @__PURE__ */ (0, V.jsx)("td", { children: TC(CC(s.loa, ["state"], "Not reported")) })] }) : null
             ] })
@@ -38819,26 +38813,26 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
       }),
       /* @__PURE__ */ (0, V.jsx)($f, {
         open: M !== null,
-        title: M?.mode === "detect" ? `Detect WAF and CDN on ${_b(L)}?` : M?.mode === "all" ? `Start ${Pe.length} checks on ${_b(L)}?` : `Start ${Be?.name ?? "this check"} on ${_b(L)}?`,
+        title: M?.mode === "detect" ? `Detect WAF and CDN on ${_b(L)}?` : M?.mode === "all" ? `Start ${Ne.length} checks on ${_b(L)}?` : `Start ${ze?.name ?? "this check"} on ${_b(L)}?`,
         description: /* @__PURE__ */ (0, V.jsx)("div", {
           className: "stack-tight scan-review",
           children: M?.mode === "detect" ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
             /* @__PURE__ */ (0, V.jsx)("p", { children: "One bounded fingerprint run against this exact target: DNS resolution plus benign HTTP requests from the signed worker." }),
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
               "Upper bound: ",
-              Number.isFinite(Number(it?.probe_profile?.max_requests)) ? `${Number(it.probe_profile.max_requests)} requests` : "not recorded in the catalog",
+              Number.isFinite(Number(rt?.probe_profile?.max_requests)) ? `${Number(rt.probe_profile.max_requests)} requests` : "not recorded in the catalog",
               ". Ownership: ",
-              rt ? "verified" : "not verified",
+              nt ? "verified" : "not verified",
               "."
             ] }),
             /* @__PURE__ */ (0, V.jsx)("p", { children: "It identifies providers only. It does not test blocking or capacity." })
           ] }) : M?.mode === "all" ? /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
             /* @__PURE__ */ (0, V.jsxs)("p", { children: [
-              /* @__PURE__ */ (0, V.jsxs)("strong", { children: [Pe.length, " bounded external checks"] }),
+              /* @__PURE__ */ (0, V.jsxs)("strong", { children: [Ne.length, " bounded external checks"] }),
               " across ",
-              pt,
-              " categories, at most ",
               ft,
+              " categories, at most ",
+              ut,
               " probe requests in total."
             ] }),
             /* @__PURE__ */ (0, V.jsx)("p", { children: "They run one at a time inside your safe-run limits; if an hourly limit is reached the run pauses and shows when it resumes. Other runs in this group wait until it finishes, and you can stop it at any time." }),
@@ -38851,15 +38845,15 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
                 children: _b(L)
               })] }),
               /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [
-                Be?.name ?? "Not selected",
+                ze?.name ?? "Not selected",
                 " ",
                 /* @__PURE__ */ (0, V.jsx)("span", {
                   className: "mono",
-                  children: Re
+                  children: Le
                 })
               ] })] }),
-              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Upper bound" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [Bt === null ? "Not recorded in the catalog" : `${Bt} request${Bt === 1 ? "" : "s"}`, Be?.timeoutMs ? `, ${Be.timeoutMs} ms timeout` : ""] })] }),
-              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Ownership" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: rt ? "Verified" : "Not verified" })] })
+              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Upper bound" }), /* @__PURE__ */ (0, V.jsxs)("dd", { children: [zt === null ? "Not recorded in the catalog" : `${zt} request${zt === 1 ? "" : "s"}`, ze?.timeoutMs ? `, ${ze.timeoutMs} ms timeout` : ""] })] }),
+              /* @__PURE__ */ (0, V.jsxs)("div", { children: [/* @__PURE__ */ (0, V.jsx)("dt", { children: "Ownership" }), /* @__PURE__ */ (0, V.jsx)("dd", { children: nt ? "Verified" : "Not verified" })] })
             ]
           }), /* @__PURE__ */ (0, V.jsx)("p", { children: "The server re-checks ownership, safe windows, rate and concurrency gates when you start. A bounded check does not measure volumetric capacity." })] })
         }),
@@ -38867,7 +38861,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         confirmTone: "default",
         busy: l === "run" || l === "run-all",
         onCancel: () => N(null),
-        onConfirm: () => void ut()
+        onConfirm: () => void ct()
       }),
       /* @__PURE__ */ (0, V.jsx)(Gb, {
         scan: P ? y : null,
@@ -38875,7 +38869,7 @@ function LC({ entityId: e, config: t, session: n, checks: r, targetGroups: i = [
         session: n,
         onClose: () => ee(!1),
         onCancelled: (e) => {
-          ee(!1), b(e), m("Multi-check run stopped. Finished results are kept."), at();
+          ee(!1), b(e), m("Multi-check run stopped. Finished results are kept."), it();
         }
       })
     ]

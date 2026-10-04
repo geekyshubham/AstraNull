@@ -163,7 +163,6 @@ test.describe('portal executive clarity', () => {
     const main = page.locator('#portal-main');
     const heading = page.getByRole('heading', { level: 1, name: 'checkout.acme.com' });
     await expect(heading).toBeVisible();
-    await expect(main).toContainText('Domain ownership verified');
     await expect(main).toContainText('Validation unlocked');
     for (const term of ['Purpose', 'Service roles', 'Owner', 'Criticality']) {
       await expect(main.getByRole('term').filter({ hasText: new RegExp(`^${term}$`) })).toBeVisible();
