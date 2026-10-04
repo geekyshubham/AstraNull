@@ -78,11 +78,13 @@ export function captureResponsePayload(deps, common, contentType) {
   let total = 0;
   let captured = Buffer.alloc(0);
   let first = false;
-  const emit = (complete) => {
+  const emit = (complete, available = true) => {
     if (typeof deps.onProbeActivity !== 'function') return;
     const payload = previewBytes(captured, contentType, deps.activitySensitiveValues ?? []);
     try { deps.onProbeActivity({ ...common, stage: complete ? 'response_body_completed' : 'response_payload',
       response_content_type: contentType, response_payload_preview: payload.preview,
+      response_payload_available: available,
+      ...(!available ? { response_payload_preview: '[Response body was not consumed by this check]', reason: 'response_not_consumed' } : {}),
       response_payload_encoding: payload.encoding, response_payload_truncated: !complete || total > captured.length,
       response_bytes_observed: total, response_bytes_captured: captured.length }); } catch { /* Observation cannot alter transport. */ }
   };
@@ -95,5 +97,6 @@ export function captureResponsePayload(deps, common, contentType) {
       if (!first) { first = true; emit(false); }
     },
     complete() { emit(true); },
+    cancelled() { emit(false, captured.length > 0); },
   };
 }

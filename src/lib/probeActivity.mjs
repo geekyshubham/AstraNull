@@ -15,6 +15,7 @@ const FIELDS = new Set(['sequence', 'at', 'stage', 'operation', 'method', 'url',
   'request_content_type', 'response_content_type', 'request_payload_preview', 'request_query_preview', 'response_payload_preview',
   'request_payload_encoding', 'response_payload_encoding', 'request_payload_truncated', 'response_payload_truncated',
   'response_bytes_observed', 'response_bytes_captured']);
+FIELDS.add('response_payload_available');
 const TOKEN = /^[a-zA-Z0-9_.:-]{1,80}$/;
 
 /** Keep the observed destination/path and query names; never retain query values or credentials. */
@@ -67,7 +68,7 @@ export function normalizeProbeActivityItem(item, now = new Date()) {
     if (typeof item[field] !== 'string' || item[field].length > PROBE_PREVIEW_CHARS) return null;
     result[field] = redactPayloadPreview(item[field]);
   }
-  for (const field of ['request_payload_truncated', 'response_payload_truncated']) {
+  for (const field of ['request_payload_truncated', 'response_payload_truncated', 'response_payload_available']) {
     if (item[field] == null) continue;
     if (typeof item[field] !== 'boolean') return null;
     result[field] = item[field];

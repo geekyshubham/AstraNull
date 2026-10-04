@@ -28,7 +28,7 @@ function activityLog(id, at, data, row) {
     data.vector_family ? `vector ${data.vector_family}` : '', data.response_content_type ? `format ${data.response_content_type}` : ''].filter(Boolean).join(' · ');
   const detail = Object.fromEntries(['stage', 'operation', 'method', 'url', 'protocol', 'status_code', 'duration_ms', 'requests_sent', 'error_class', 'reason', 'body_bytes', 'header_names',
     'phase', 'vector_family', 'marker_class', 'request_content_type', 'response_content_type', 'request_payload_preview', 'request_query_preview', 'response_payload_preview',
-    'request_payload_encoding', 'response_payload_encoding', 'request_payload_truncated', 'response_payload_truncated', 'response_bytes_observed', 'response_bytes_captured']
+    'request_payload_encoding', 'response_payload_encoding', 'request_payload_truncated', 'response_payload_truncated', 'response_payload_available', 'response_bytes_observed', 'response_bytes_captured']
     .filter((key) => data[key] != null).map((key) => [key, data[key]]));
   return entry(id, at, level, tag, message, { checkId: row?.checkId, checkName: row?.name,
     detail: JSON.stringify(detail, null, 2),

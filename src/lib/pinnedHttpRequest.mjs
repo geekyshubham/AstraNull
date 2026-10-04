@@ -266,10 +266,22 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
       if (typeof deps.onProbeActivity === 'function') {
         const capture = captureResponsePayload(deps, responseActivity, contentType);
         if (commonActivity.method === 'HEAD' || [204, 304].includes(res.statusCode)) capture.complete();
-        else body = body.pipeThrough(new TransformStream({
-          transform(chunk, controller) { try { capture.chunk(chunk); } catch { /* Bounded observation only. */ } controller.enqueue(chunk); },
-          flush() { capture.complete(); },
-        }));
+        else {
+          const reader = body.getReader();
+          let cancelled = false;
+          body = new ReadableStream({
+            async pull(controller) {
+              try {
+                const next = await reader.read();
+                if (cancelled) return;
+                if (next.done) { capture.complete(); controller.close(); reader.releaseLock(); return; }
+                try { capture.chunk(next.value); } catch { /* Bounded observation only. */ }
+                controller.enqueue(next.value);
+              } catch (error) { controller.error(error); }
+            },
+            async cancel(reason) { cancelled = true; capture.cancelled(); try { await reader.cancel(reason); } finally { reader.releaseLock(); } },
+          }, { highWaterMark: 0 });
+        }
       }
       resolve({
         status: res.statusCode ?? 0,
