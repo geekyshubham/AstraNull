@@ -108,7 +108,12 @@ describe('ui and api smoke', () => {
     assert.ok(navigationSource.includes('routeIdFromHash'), 'React router resolves detail routes with hash query params');
 
     const favicon = await request(baseUrl, 'GET', '/favicon.ico');
-    assert.equal(favicon.status, 204);
+    assert.equal(favicon.status, 200);
+    assert.equal(favicon.headers['content-type'], 'image/x-icon');
+
+    const faviconSvg = await request(baseUrl, 'GET', '/favicon.svg');
+    assert.equal(faviconSvg.status, 200);
+    assert.equal(faviconSvg.headers['content-type'], 'image/svg+xml');
 
     const state = await request(baseUrl, 'GET', '/v1/state', { headers: demoHeaders('admin') });
     assert.equal(state.status, 200);

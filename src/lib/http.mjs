@@ -339,9 +339,15 @@ export async function serveStatic(req, res, url, runtimeConfig) {
     rel = '/index.html';
   }
   if (rel === '/favicon.ico') {
-    res.writeHead(204);
-    res.end();
-    return true;
+    const icoPath = path.join(WEB_ROOT, 'favicon.ico');
+    try {
+      const stats = await stat(icoPath);
+      if (!stats.isFile()) throw new Error('not a file');
+    } catch {
+      res.writeHead(204);
+      res.end();
+      return true;
+    }
   }
   if (rel.includes('..')) {
     text(res, 403, 'Forbidden');
@@ -361,6 +367,8 @@ export async function serveStatic(req, res, url, runtimeConfig) {
       '.mjs': 'application/javascript; charset=utf-8',
       '.svg': 'image/svg+xml',
       '.json': 'application/json',
+      '.ico': 'image/x-icon',
+      '.png': 'image/png',
     };
     const isStaffLoginShell = ext === '.html'
       && rel === '/index.html'

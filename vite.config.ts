@@ -26,6 +26,7 @@ export default defineConfig({
     outDir: '../',
     emptyOutDir: false,
     cssCodeSplit: false,
+    copyPublicDir: false,
     lib: {
       entry: 'src/main.tsx',
       formats: ['es'],
