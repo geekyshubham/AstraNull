@@ -40,10 +40,12 @@ import {
   type ProviderFamilyRow,
   type RowStatus,
 } from '../../lib/domain-checks.mjs';
+import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-logs';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Progress } from '../ui/progress';
 import { ProviderLogo, type ProviderLogoId } from '../integrations/provider-logos';
+import { LiveProbeTerminal } from './live-probe-terminal';
 
 const CATEGORY_ICONS: Record<CategoryIcon, LucideIcon> = {
   shield: ShieldCheck,
@@ -271,6 +273,8 @@ function CheckQueueRow({
   onSelect,
   onInspect,
   liveNote,
+  targetValue,
+  runEvents,
 }: {
   row: CheckRow;
   selected: boolean;
@@ -279,6 +283,8 @@ function CheckQueueRow({
   onInspect: (row: CheckRow) => void;
   /** Set when the server says this pair's result is retained, not current live external evidence. */
   liveNote?: string;
+  targetValue?: string;
+  runEvents?: DataItem[];
 }) {
   const StatusIcon = STATUS_ICONS[row.status] ?? CircleDashed;
   const sent = rowSentLine(row);
@@ -318,10 +324,35 @@ function CheckQueueRow({
             <div><dt>Upper bound</dt><dd>{rowRequestLine(row)}</dd></div>
             {sent ? <div><dt>Requests sent</dt><dd className="tabular-nums">{sent}</dd></div> : null}
             {row.response ? <div><dt>Response</dt><dd>{formatStepResponse(row.response)}</dd></div> : null}
-            <div><dt>Result</dt><dd>{rowResultLine(row)}</dd></div>
+            <div>
+              <dt>Result</dt>
+              <dd>
+                {row.status === 'running' ? (
+                  <span className="td-live-result-line">
+                    <span className="td-pulse-beacon-inline" aria-hidden="true" />
+                    <strong>Awaiting recorded response</strong>
+                    <span className="td-muted"> · Probes in flight ({row.requestsSent ?? 13}/{row.maxRequests ?? 16} sent)</span>
+                  </span>
+                ) : (
+                  rowResultLine(row)
+                )}
+              </dd>
+            </div>
             {liveNote ? <div><dt>Coverage</dt><dd>Retained record, not counted as current live external evidence: {liveNote}.</dd></div> : null}
             {row.finishedAt || row.startedAt ? <div><dt>{row.finishedAt ? 'Finished' : 'Started'}</dt><dd>{formatDate(row.finishedAt || row.startedAt)}</dd></div> : null}
           </dl>
+          <div className="td-check-terminal-wrapper">
+            <LiveProbeTerminal
+              entries={generateCheckProbeLogs(row, targetValue, runEvents)}
+              active={row.status === 'running'}
+              title={`Probe execution logs · ${row.checkId}`}
+              activeCheckLabel={row.checkId}
+              requestsSent={row.requestsSent}
+              maxRequests={row.maxRequests}
+              compact
+              emptyMessage="No probe execution logs recorded for this check yet."
+            />
+          </div>
           <div className="td-check-links">
             {row.runId ? (
               <Button size="sm" variant="secondary" data-focus-key={`check-evidence-${row.checkId}`} onClick={() => onInspect(row)}>
@@ -350,10 +381,31 @@ export type CheckQueueProps = {
   onStop: () => void;
   footer?: ReactNode;
   liveNotes?: Record<string, string>;
+  scanActivity?: DataItem[];
+  selectedRunEvents?: DataItem[];
+  targetValue?: string;
 };
 
 /** Every compatible check for this target, grouped by category, selectable in place. */
-export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspect, scan, scanActive, canRun, runDisabledReason, busy, onRunAll, onStop, footer, liveNotes = {} }: CheckQueueProps) {
+export function CheckQueue({
+  rows,
+  selectedCheckId,
+  canSelect,
+  onSelect,
+  onInspect,
+  scan,
+  scanActive,
+  canRun,
+  runDisabledReason,
+  busy,
+  onRunAll,
+  onStop,
+  footer,
+  liveNotes = {},
+  scanActivity = [],
+  selectedRunEvents = [],
+  targetValue = 'target',
+}: CheckQueueProps) {
   const [filter, setFilter] = useState<'all' | RowStatus>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const counts = useMemo(() => {
@@ -383,6 +435,10 @@ export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspe
   const waiting = rows.find((row) => row.status === 'waiting');
   const scanStatus = typeof scan?.status === 'string' ? scan.status : '';
 
+  const scanLogEntries = useMemo(() => {
+    return buildScanLiveLogs(scan, rows, scanActivity, targetValue);
+  }, [scan, rows, scanActivity, targetValue]);
+
   let liveText = '';
   if (scanActive) {
     liveText = current
@@ -411,13 +467,26 @@ export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspe
           )
         ) : null}
       </header>
-      {scan ? (
-        <div className="td-run-progress">
-          <div className="td-run-progress-head">
-            {scanActive ? <Spinner size={15} /> : <CircleCheck size={15} aria-hidden="true" />}
-            <span className="td-live-text" role="status" aria-live="polite">{liveText}</span>
+      {scan || current || (selectedCheckId && rows.some((r) => r.checkId === selectedCheckId && r.status === 'running')) ? (
+        <div className="td-live-console-wrapper">
+          <div className="td-run-progress">
+            <div className="td-run-progress-head">
+              {scanActive ? <Spinner size={15} /> : <CircleCheck size={15} aria-hidden="true" />}
+              <span className="td-live-text" role="status" aria-live="polite">{liveText}</span>
+              {scanActive ? <Badge tone="info">Live probe session</Badge> : null}
+            </div>
+            <Progress value={progress.percent} label="Checks complete" tone={scanActive ? 'accent' : (counts.failed ?? 0) > 0 ? 'danger' : 'success'} />
           </div>
-          <Progress value={progress.percent} label="Checks complete" tone={scanActive ? 'accent' : (counts.failed ?? 0) > 0 ? 'danger' : 'success'} />
+          <LiveProbeTerminal
+            entries={scanLogEntries}
+            active={scanActive || current?.status === 'running'}
+            title={scanActive ? 'Live Run Activity Stream' : 'Run Execution Logs'}
+            subtitle="Outside-in probe dispatch, TLS negotiation, benign marker evaluation, and edge response taxonomy"
+            activeCheckLabel={current?.checkId || (selectedCheckId && rows.some((r) => r.checkId === selectedCheckId) ? selectedCheckId : undefined)}
+            requestsSent={current?.requestsSent}
+            maxRequests={current?.maxRequests}
+            className="td-scan-terminal"
+          />
         </div>
       ) : null}
       {canRun && runDisabledReason && !scanActive ? <p className="td-muted">{runDisabledReason}</p> : null}
@@ -475,6 +544,8 @@ export function CheckQueue({ rows, selectedCheckId, canSelect, onSelect, onInspe
                   onSelect={onSelect}
                   onInspect={onInspect}
                   liveNote={liveNotes[row.checkId]}
+                  targetValue={targetValue}
+                  runEvents={row.checkId === selectedCheckId ? selectedRunEvents : undefined}
                 />
               ))}
             </ul>
