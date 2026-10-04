@@ -38,3 +38,116 @@ test('scan console uses real audit and worker metadata, with no synthesized chec
   assert.match(logs[1].message, /Not sent.*outside_request_budget/);
   assert.equal(logs.some((item) => item.latencyMs != null), false);
 });
+
+test('check probe logs tag unblocked origin responses as EXPOSED with danger tone and clear gap outcome', () => {
+  const exposedRow = {
+    runId: 'run_waf_1',
+    checkId: 'l7.waf_marker_rule.safe',
+    name: 'WAF Marker Rule (Safe)',
+    status: 'failed',
+    verdict: 'edge_exposed',
+    explanation: 'External probe reached the declared path; the edge did not block traffic before origin.',
+    expectedBehavior: 'must_block_before_origin',
+    startedAt: '2026-10-04T18:39:04.523Z',
+    finishedAt: '2026-10-04T18:40:37.407Z',
+    requestsSent: 1,
+    maxRequests: 1,
+  };
+  const events = [
+    {
+      id: 'evt_probe_1',
+      test_run_id: exposedRow.runId,
+      check_id: exposedRow.checkId,
+      producer_kind: 'signed_probe',
+      signal_type: 'probe_result',
+      timestamp: '2026-10-04T18:39:07.923Z',
+      metadata: {
+        external_result: 'connected',
+        status_code: 200,
+        safety_attestation: { requests_sent: 1 },
+      },
+    },
+  ];
+
+  const logs = generateCheckProbeLogs(exposedRow, 'astranull.site', events);
+  assert.equal(logs.length, 3);
+
+  // Line 1: Started
+  assert.equal(logs[0].tag, 'STATE');
+  assert.match(logs[0].message, /Run recorded.*WAF Marker Rule/);
+
+  // Line 2: Probe result — MUST NOT be a misleading green RECV
+  assert.equal(logs[1].tag, 'EXPOSED');
+  assert.equal(logs[1].tone, 'danger');
+  assert.equal(logs[1].level, 'warn');
+  assert.match(logs[1].message, /reached origin.*connected.*HTTP 200/);
+  assert.match(logs[1].message, /traffic reached origin; edge did not block/);
+
+  // Line 3: Outcome verdict — MUST NOT be a generic state line
+  assert.equal(logs[2].tag, 'GAP');
+  assert.equal(logs[2].tone, 'danger');
+  assert.equal(logs[2].level, 'verdict');
+  assert.match(logs[2].message, /Check outcome: Gap found · edge_exposed/);
+  assert.match(logs[2].message, /External probe reached the declared path/);
+});
+
+test('check probe logs tag blocked responses as BLOCKED with success tone for must_block_before_origin', () => {
+  const protectedRow = {
+    runId: 'run_waf_2',
+    checkId: 'l7.waf_marker_rule.safe',
+    name: 'WAF Marker Rule (Safe)',
+    status: 'passed',
+    verdict: 'edge_protected',
+    explanation: 'External probe was blocked at the edge.',
+    expectedBehavior: 'must_block_before_origin',
+    startedAt: '2026-10-04T18:39:04.523Z',
+    finishedAt: '2026-10-04T18:40:37.407Z',
+  };
+  const events = [
+    {
+      id: 'evt_probe_2',
+      test_run_id: protectedRow.runId,
+      check_id: protectedRow.checkId,
+      producer_kind: 'signed_probe',
+      signal_type: 'probe_result',
+      timestamp: '2026-10-04T18:39:07.923Z',
+      metadata: {
+        external_result: 'blocked',
+        status_code: 403,
+      },
+    },
+  ];
+
+  const logs = generateCheckProbeLogs(protectedRow, 'astranull.site', events);
+  assert.equal(logs[1].tag, 'BLOCKED');
+  assert.equal(logs[1].tone, 'success');
+  assert.match(logs[1].message, /blocked at edge.*blocked.*HTTP 403/);
+  assert.equal(logs[2].tag, 'PASS');
+  assert.equal(logs[2].tone, 'success');
+  assert.match(logs[2].message, /Check outcome: Passed · edge_protected/);
+});
+
+test('check probe logs synthesize probe response from row.response if runEvents is empty', () => {
+  const rowWithResponse = {
+    runId: 'run_scan_step_1',
+    checkId: 'l7.waf_marker_rule.safe',
+    name: 'WAF Marker Rule (Safe)',
+    status: 'failed',
+    verdict: 'edge_exposed',
+    explanation: 'Edge did not block traffic before origin.',
+    expectedBehavior: 'must_block_before_origin',
+    startedAt: '2026-10-04T18:39:04.523Z',
+    finishedAt: '2026-10-04T18:40:37.407Z',
+    response: {
+      external_result: 'connected',
+      status_code: 200,
+    },
+  };
+
+  const logs = generateCheckProbeLogs(rowWithResponse, 'astranull.site', []);
+  assert.equal(logs.length, 3);
+  assert.equal(logs[1].tag, 'EXPOSED');
+  assert.equal(logs[1].tone, 'danger');
+  assert.match(logs[1].message, /Worker probe reached origin: connected · HTTP 200/);
+});
+

@@ -23,6 +23,7 @@ export type LiveLogEntry = {
   timeDisplay: string;
   level: LiveLogLevel;
   tag: string;
+  tone?: 'default' | 'info' | 'success' | 'warn' | 'danger' | 'muted';
   message: string;
   detail?: string;
   checkId?: string;

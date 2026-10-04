@@ -22,6 +22,7 @@ export type CheckRow = {
   tone: Tone;
   verdict: string;
   explanation: string;
+  expectedBehavior?: string;
   reason: string;
   eligibleAt: string;
   runId: string;

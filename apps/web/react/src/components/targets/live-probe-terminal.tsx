@@ -35,15 +35,27 @@ const TAG_TONE: Record<string, 'default' | 'info' | 'success' | 'warn' | 'danger
   DNS: 'info',
   TLS: 'info',
   PROBE: 'info',
-  RECV: 'success',
+  RECV: 'info',
+  PAYLOAD: 'info',
+  SIMULATION: 'info',
   MARKER: 'warn',
   EVASION: 'warn',
   CONFUSION: 'warn',
   BYPASS: 'danger',
+  EXPOSED: 'danger',
+  GAP: 'danger',
+  FAIL: 'danger',
+  PASS: 'success',
+  BLOCKED: 'success',
+  PROTECTED: 'success',
+  OBSERVED: 'muted',
+  SKIPPED: 'muted',
   ANALYSIS: 'default',
-  VERDICT: 'success',
+  VERDICT: 'default',
+  INCONCLUSIVE: 'warn',
   WAIT: 'info',
   START: 'info',
+  STATE: 'default',
   SCAN: 'muted',
   INFO: 'muted',
   WARN: 'warn',
@@ -310,7 +322,7 @@ export function LiveProbeTerminal({
           ) : (
             <ol className="td-terminal-lines">
               {filteredEntries.map((entry, index) => {
-                const tone = TAG_TONE[entry.tag] ?? 'default';
+                const tone = entry.tone ?? TAG_TONE[entry.tag] ?? 'default';
                 return (
                   <li key={entry.id || index} className="td-terminal-line" data-level={entry.level}>
                     <time className="td-term-time" dateTime={entry.timestamp}>

@@ -168,6 +168,7 @@ function rowFromStep(step, check) {
     status: rowStatus,
     verdict: verdictText,
     explanation: text(verdict?.explanation),
+    expectedBehavior: text(step.expected_behavior ?? check.default_expected_behavior),
     reason: text(step.error_code) || text(step.skip_reason),
     eligibleAt: text(step.eligible_at),
     runId: text(step.test_run_id),
@@ -195,13 +196,14 @@ function rowFromRun(run, check) {
     status: rowStatus,
     verdict: published ? verdictText : '',
     explanation: text(record(run.verdict)?.explanation),
+    expectedBehavior: text(run.expected_behavior ?? check.default_expected_behavior),
     reason: '',
     eligibleAt: '',
     runId: text(run.id),
     startedAt: runTime(run),
     finishedAt: text(run.completed_at ?? run.verdict_at),
     request: null,
-    response: null,
+    response: record(run.response ?? run.last_result),
     requestsSent: null,
     requestsSimulated: false,
     source: 'run',
@@ -210,7 +212,7 @@ function rowFromRun(run, check) {
 
 function emptyRow() {
   return {
-    status: 'not_run', verdict: '', explanation: '', reason: '', eligibleAt: '', runId: '', startedAt: '', finishedAt: '',
+    status: 'not_run', verdict: '', explanation: '', expectedBehavior: '', reason: '', eligibleAt: '', runId: '', startedAt: '', finishedAt: '',
     request: null, response: null, requestsSent: null, requestsSimulated: false, source: 'none',
   };
 }
@@ -236,6 +238,7 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
       name: plainCheckName(text(check.name) || checkId),
       description: text(check.description),
       verdictLogic: text(check.verdict_logic),
+      expectedBehavior: text(check.default_expected_behavior ?? base.expectedBehavior),
       tier: tierOf(check),
       probeKind: text(check.probe_profile?.kind),
       maxRequests: Number.isFinite(Number(check.probe_profile?.max_requests)) ? Number(check.probe_profile.max_requests) : null,
