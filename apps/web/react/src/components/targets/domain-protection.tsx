@@ -118,7 +118,19 @@ export type ProviderObservationsProps = {
 
 /** Flat, ruled list: one row per family, each from its own recorded source only. */
 export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect }: ProviderObservationsProps) {
-  const origin = ORIGIN_COPY[originStatus] ?? { label: humanizeReason(originStatus) || 'Not recorded', tone: 'muted' as const, detail: '' };
+  const edgeProxyRow = rows.find(
+    (r) => (r.family === 'cdn' || r.family === 'waf') && r.status === 'detected'
+  );
+  const hasEdgeProxy = Boolean(edgeProxyRow);
+  const detectedProxyName = edgeProxyRow?.providerName || (rows.find((r) => r.providerName)?.providerName ?? '');
+
+  const origin = hasEdgeProxy && originStatus === 'not_tested'
+    ? {
+        label: 'Masked (Not tested)',
+        tone: 'muted' as const,
+        detail: `Origin is masked behind ${detectedProxyName || 'the edge proxy'}. Bind an origin under Origin Relations to test direct reachability.`,
+      }
+    : (ORIGIN_COPY[originStatus] ?? { label: humanizeReason(originStatus) || 'Not recorded', tone: 'muted' as const, detail: '' });
   return (
     <section className="td-observations" aria-labelledby="td-observations-title" aria-busy={evaluating || undefined}>
       <header className="td-section-head">
@@ -130,44 +142,69 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
       </header>
       {note ? <div className="td-callout">{note}</div> : null}
       <ul className="td-provider-list">
-        {rows.map((row) => (
-          <li key={row.family} className="td-provider-row" data-status={row.status}>
-            <span className="td-provider-mark" aria-hidden="true">
-              {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={20} /> : <Shield size={18} />}
-            </span>
-            <span className="td-provider-copy">
-              <span className="td-provider-title">{row.title}</span>
-              <span className="td-provider-value">
-                {evaluating && row.source === 'none' && (row.family === 'waf' || row.family === 'cdn') ? (
-                  <span className="td-evaluating"><Spinner size={14} />Detection running</span>
-                ) : (
-                  <>
-                    <Badge tone={row.tone}>{row.statusLabel}</Badge>
-                    {row.providerName ? <strong>{row.providerName}</strong> : null}
-                    {row.freshness === 'stale' ? <span className="td-provider-stale">Stale</span> : null}
-                  </>
-                )}
+        {rows.map((row) => {
+          let statusLabel = row.statusLabel;
+          let metaText = '';
+
+          if (hasEdgeProxy && row.family === 'cloud' && (row.status === 'not_detected' || row.status === 'not_recorded')) {
+            statusLabel = 'Masked by edge proxy';
+            metaText = `Public traffic routes through ${detectedProxyName || 'the edge proxy'}; direct cloud hosting layer is masked.`;
+          } else if (hasEdgeProxy && row.family === 'origin_hosting' && (row.status === 'unknown' || row.status === 'not_recorded')) {
+            statusLabel = 'Unknown · Masked';
+            metaText = `Origin server is masked behind ${detectedProxyName || 'the edge proxy'}. Bind an origin under Origin Relations to test.`;
+          } else if (hasEdgeProxy && row.family === 'dns' && (row.status === 'unknown' || row.status === 'not_recorded')) {
+            statusLabel = row.statusLabel;
+            metaText = detectedProxyName
+              ? `No DNS connector configured; authoritative DNS is managed or masked behind ${detectedProxyName}.`
+              : 'No DNS connector configured in Integrations; authoritative DNS not recorded.';
+          } else {
+            const timeText = row.observedAt
+              ? `Observed ${formatDate(row.observedAt)}`
+              : row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status)
+                ? 'No recorded observation'
+                : 'Observation time not recorded';
+            const sourceText = row.sources.length
+              ? ` · ${row.sources.map((source) => source.method).join(', ')}`
+              : row.status === 'detected'
+                ? ' · Source not recorded'
+                : '';
+            metaText = `${timeText}${sourceText}`;
+          }
+
+          return (
+            <li key={row.family} className="td-provider-row" data-status={row.status}>
+              <span className="td-provider-mark" aria-hidden="true">
+                {row.logo ? <ProviderLogo provider={row.logo as ProviderLogoId} size={20} /> : <Shield size={18} />}
               </span>
-              <span className="td-provider-meta">
-                {row.observedAt
-                  ? `Observed ${formatDate(row.observedAt)}`
-                  : row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status) ? 'No recorded observation' : 'Observation time not recorded'}
-                {row.sources.length ? ` · ${row.sources.map((source) => source.method).join(', ')}` : row.status === 'detected' ? ' · Source not recorded' : ''}
+              <span className="td-provider-copy">
+                <span className="td-provider-title">{row.title}</span>
+                <span className="td-provider-value">
+                  {evaluating && row.source === 'none' && (row.family === 'waf' || row.family === 'cdn') ? (
+                    <span className="td-evaluating"><Spinner size={14} />Detection running</span>
+                  ) : (
+                    <>
+                      <Badge tone={row.tone}>{statusLabel}</Badge>
+                      {row.providerName ? <strong>{row.providerName}</strong> : null}
+                      {row.freshness === 'stale' ? <span className="td-provider-stale">Stale</span> : null}
+                    </>
+                  )}
+                </span>
+                <span className="td-provider-meta">{metaText}</span>
               </span>
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="td-provider-inspect"
-              data-focus-key={`provider-${row.family}`}
-              aria-label={`How ${row.title} was identified`}
-              onClick={() => onInspect(row)}
-            >
-              <Fingerprint size={14} aria-hidden="true" />
-              {row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status) ? 'What we know' : 'How identified'}
-            </Button>
-          </li>
-        ))}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="td-provider-inspect"
+                data-focus-key={`provider-${row.family}`}
+                aria-label={`How ${row.title} was identified`}
+                onClick={() => onInspect(row)}
+              >
+                <Fingerprint size={14} aria-hidden="true" />
+                {row.source === 'none' || ['not_checked', 'not_recorded', 'unknown'].includes(row.status) ? 'What we know' : 'How identified'}
+              </Button>
+            </li>
+          );
+        })}
         <li className="td-provider-row" data-status={originStatus}>
           <span className="td-provider-mark" aria-hidden="true"><Server size={18} /></span>
           <span className="td-provider-copy">
@@ -175,9 +212,9 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
             <span className="td-provider-value"><Badge tone={origin.tone}>{origin.label}</Badge></span>
             <span className="td-provider-meta">
               {origin.detail}
-              {originDetail && originDetail.reachabilityStatus !== 'not_tested' ? ` Recorded reachability: ${humanizeReason(originDetail.reachabilityStatus).toLowerCase()}${originDetail.testedTargetId ? ` for tested target ${originDetail.testedTargetId}` : ''}${originDetail.scenarioId ? `, scenario ${originDetail.scenarioId}` : ''}.` : ''}
-              {originDetail ? ` Origin assurance: ${originDetail.assurance === 'none' ? 'none' : humanizeReason(originDetail.assurance).toLowerCase()}.` : ''}
-              {originDetail?.limitations.length ? ` Limits: ${originDetail.limitations.map((item) => humanizeReason(item).toLowerCase()).join(', ')}.` : ''}
+              {originDetail && originDetail.reachabilityStatus && originDetail.reachabilityStatus !== 'not_tested' ? ` Recorded reachability: ${humanizeReason(originDetail.reachabilityStatus).toLowerCase()}${originDetail.testedTargetId ? ` for tested target ${originDetail.testedTargetId}` : ''}${originDetail.scenarioId ? `, scenario ${originDetail.scenarioId}` : ''}.` : ''}
+              {originDetail && originDetail.assurance && originDetail.assurance !== 'none' && originDetail.assurance !== 'not_recorded' ? ` Origin assurance: ${humanizeReason(originDetail.assurance).toLowerCase()}.` : ''}
+              {originDetail?.limitations?.length ? ` Limits: ${originDetail.limitations.map((item) => humanizeReason(item).toLowerCase()).join(', ')}.` : ''}
             </span>
           </span>
           <span />

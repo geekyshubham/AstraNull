@@ -35313,7 +35313,11 @@ function DS({ size: e = 16 }) {
   });
 }
 function OS({ rows: e, effectiveness: t, originStatus: n, originDetail: r, evaluating: i, note: a, action: o, onInspect: s }) {
-  let c = ES[n] ?? {
+  let c = e.find((e) => (e.family === "cdn" || e.family === "waf") && e.status === "detected"), l = !!c, u = c?.providerName || (e.find((e) => e.providerName)?.providerName ?? ""), d = l && n === "not_tested" ? {
+    label: "Masked (Not tested)",
+    tone: "muted",
+    detail: `Origin is masked behind ${u || "the edge proxy"}. Bind an origin under Origin Relations to test direct reachability.`
+  } : ES[n] ?? {
     label: ao(n) || "Not recorded",
     tone: "muted",
     detail: ""
@@ -35336,70 +35340,73 @@ function OS({ rows: e, effectiveness: t, originStatus: n, originDetail: r, evalu
       }) : null,
       /* @__PURE__ */ (0, V.jsxs)("ul", {
         className: "td-provider-list",
-        children: [e.map((e) => /* @__PURE__ */ (0, V.jsxs)("li", {
-          className: "td-provider-row",
-          "data-status": e.status,
-          children: [
-            /* @__PURE__ */ (0, V.jsx)("span", {
-              className: "td-provider-mark",
-              "aria-hidden": "true",
-              children: e.logo ? /* @__PURE__ */ (0, V.jsx)(xS, {
-                provider: e.logo,
-                size: 20
-              }) : /* @__PURE__ */ (0, V.jsx)(Pn, { size: 18 })
-            }),
-            /* @__PURE__ */ (0, V.jsxs)("span", {
-              className: "td-provider-copy",
-              children: [
-                /* @__PURE__ */ (0, V.jsx)("span", {
-                  className: "td-provider-title",
-                  children: e.title
-                }),
-                /* @__PURE__ */ (0, V.jsx)("span", {
-                  className: "td-provider-value",
-                  children: i && e.source === "none" && (e.family === "waf" || e.family === "cdn") ? /* @__PURE__ */ (0, V.jsxs)("span", {
-                    className: "td-evaluating",
-                    children: [/* @__PURE__ */ (0, V.jsx)(DS, { size: 14 }), "Detection running"]
-                  }) : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
-                    /* @__PURE__ */ (0, V.jsx)(W, {
-                      tone: e.tone,
-                      children: e.statusLabel
-                    }),
-                    e.providerName ? /* @__PURE__ */ (0, V.jsx)("strong", { children: e.providerName }) : null,
-                    e.freshness === "stale" ? /* @__PURE__ */ (0, V.jsx)("span", {
-                      className: "td-provider-stale",
-                      children: "Stale"
-                    }) : null
-                  ] })
-                }),
-                /* @__PURE__ */ (0, V.jsxs)("span", {
-                  className: "td-provider-meta",
-                  children: [e.observedAt ? `Observed ${z(e.observedAt)}` : e.source === "none" || [
-                    "not_checked",
-                    "not_recorded",
-                    "unknown"
-                  ].includes(e.status) ? "No recorded observation" : "Observation time not recorded", e.sources.length ? ` · ${e.sources.map((e) => e.method).join(", ")}` : e.status === "detected" ? " · Source not recorded" : ""]
-                })
-              ]
-            }),
-            /* @__PURE__ */ (0, V.jsxs)(H, {
-              size: "sm",
-              variant: "ghost",
-              className: "td-provider-inspect",
-              "data-focus-key": `provider-${e.family}`,
-              "aria-label": `How ${e.title} was identified`,
-              onClick: () => s(e),
-              children: [/* @__PURE__ */ (0, V.jsx)(yt, {
-                size: 14,
-                "aria-hidden": "true"
-              }), e.source === "none" || [
-                "not_checked",
-                "not_recorded",
-                "unknown"
-              ].includes(e.status) ? "What we know" : "How identified"]
-            })
-          ]
-        }, e.family)), /* @__PURE__ */ (0, V.jsxs)("li", {
+        children: [e.map((e) => {
+          let t = e.statusLabel, n = "";
+          return l && e.family === "cloud" && (e.status === "not_detected" || e.status === "not_recorded") ? (t = "Masked by edge proxy", n = `Public traffic routes through ${u || "the edge proxy"}; direct cloud hosting layer is masked.`) : l && e.family === "origin_hosting" && (e.status === "unknown" || e.status === "not_recorded") ? (t = "Unknown · Masked", n = `Origin server is masked behind ${u || "the edge proxy"}. Bind an origin under Origin Relations to test.`) : l && e.family === "dns" && (e.status === "unknown" || e.status === "not_recorded") ? (t = e.statusLabel, n = u ? `No DNS connector configured; authoritative DNS is managed or masked behind ${u}.` : "No DNS connector configured in Integrations; authoritative DNS not recorded.") : n = `${e.observedAt ? `Observed ${z(e.observedAt)}` : e.source === "none" || [
+            "not_checked",
+            "not_recorded",
+            "unknown"
+          ].includes(e.status) ? "No recorded observation" : "Observation time not recorded"}${e.sources.length ? ` · ${e.sources.map((e) => e.method).join(", ")}` : e.status === "detected" ? " · Source not recorded" : ""}`, /* @__PURE__ */ (0, V.jsxs)("li", {
+            className: "td-provider-row",
+            "data-status": e.status,
+            children: [
+              /* @__PURE__ */ (0, V.jsx)("span", {
+                className: "td-provider-mark",
+                "aria-hidden": "true",
+                children: e.logo ? /* @__PURE__ */ (0, V.jsx)(xS, {
+                  provider: e.logo,
+                  size: 20
+                }) : /* @__PURE__ */ (0, V.jsx)(Pn, { size: 18 })
+              }),
+              /* @__PURE__ */ (0, V.jsxs)("span", {
+                className: "td-provider-copy",
+                children: [
+                  /* @__PURE__ */ (0, V.jsx)("span", {
+                    className: "td-provider-title",
+                    children: e.title
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("span", {
+                    className: "td-provider-value",
+                    children: i && e.source === "none" && (e.family === "waf" || e.family === "cdn") ? /* @__PURE__ */ (0, V.jsxs)("span", {
+                      className: "td-evaluating",
+                      children: [/* @__PURE__ */ (0, V.jsx)(DS, { size: 14 }), "Detection running"]
+                    }) : /* @__PURE__ */ (0, V.jsxs)(V.Fragment, { children: [
+                      /* @__PURE__ */ (0, V.jsx)(W, {
+                        tone: e.tone,
+                        children: t
+                      }),
+                      e.providerName ? /* @__PURE__ */ (0, V.jsx)("strong", { children: e.providerName }) : null,
+                      e.freshness === "stale" ? /* @__PURE__ */ (0, V.jsx)("span", {
+                        className: "td-provider-stale",
+                        children: "Stale"
+                      }) : null
+                    ] })
+                  }),
+                  /* @__PURE__ */ (0, V.jsx)("span", {
+                    className: "td-provider-meta",
+                    children: n
+                  })
+                ]
+              }),
+              /* @__PURE__ */ (0, V.jsxs)(H, {
+                size: "sm",
+                variant: "ghost",
+                className: "td-provider-inspect",
+                "data-focus-key": `provider-${e.family}`,
+                "aria-label": `How ${e.title} was identified`,
+                onClick: () => s(e),
+                children: [/* @__PURE__ */ (0, V.jsx)(yt, {
+                  size: 14,
+                  "aria-hidden": "true"
+                }), e.source === "none" || [
+                  "not_checked",
+                  "not_recorded",
+                  "unknown"
+                ].includes(e.status) ? "What we know" : "How identified"]
+              })
+            ]
+          }, e.family);
+        }), /* @__PURE__ */ (0, V.jsxs)("li", {
           className: "td-provider-row",
           "data-status": n,
           children: [
@@ -35418,17 +35425,17 @@ function OS({ rows: e, effectiveness: t, originStatus: n, originDetail: r, evalu
                 /* @__PURE__ */ (0, V.jsx)("span", {
                   className: "td-provider-value",
                   children: /* @__PURE__ */ (0, V.jsx)(W, {
-                    tone: c.tone,
-                    children: c.label
+                    tone: d.tone,
+                    children: d.label
                   })
                 }),
                 /* @__PURE__ */ (0, V.jsxs)("span", {
                   className: "td-provider-meta",
                   children: [
-                    c.detail,
-                    r && r.reachabilityStatus !== "not_tested" ? ` Recorded reachability: ${ao(r.reachabilityStatus).toLowerCase()}${r.testedTargetId ? ` for tested target ${r.testedTargetId}` : ""}${r.scenarioId ? `, scenario ${r.scenarioId}` : ""}.` : "",
-                    r ? ` Origin assurance: ${r.assurance === "none" ? "none" : ao(r.assurance).toLowerCase()}.` : "",
-                    r?.limitations.length ? ` Limits: ${r.limitations.map((e) => ao(e).toLowerCase()).join(", ")}.` : ""
+                    d.detail,
+                    r && r.reachabilityStatus && r.reachabilityStatus !== "not_tested" ? ` Recorded reachability: ${ao(r.reachabilityStatus).toLowerCase()}${r.testedTargetId ? ` for tested target ${r.testedTargetId}` : ""}${r.scenarioId ? `, scenario ${r.scenarioId}` : ""}.` : "",
+                    r && r.assurance && r.assurance !== "none" && r.assurance !== "not_recorded" ? ` Origin assurance: ${ao(r.assurance).toLowerCase()}.` : "",
+                    r?.limitations?.length ? ` Limits: ${r.limitations.map((e) => ao(e).toLowerCase()).join(", ")}.` : ""
                   ]
                 })
               ]
