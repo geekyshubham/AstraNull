@@ -2086,7 +2086,7 @@ function HighScaleDetailView({
     <div className="content">
       <DetailPageHeader
         route="queue-detail"
-        eyebrow="SOC-gated validation"
+        eyebrow="Governed validation"
         entityId={entityId}
         title={title}
         actions={packOverall === 'accepted'

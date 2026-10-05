@@ -2058,7 +2058,7 @@ export function TargetGroupDetailView({
           <p className="callout-desc">
             {loaSigned
               ? `${getString(entity.loa as DataItem | undefined, ['signer_name'], getString(entity, ['loa_signer'], '—'))} · ${getString(entity.loa as DataItem | undefined, ['custody_digest_sha256', 'digest'], getString(entity, ['loa_digest'], '—'))} · ${formatDate((entity.loa as DataItem | undefined)?.signed_at ?? entity.loa_signed_at)}`
-              : 'A scoped LOA records authorization and custody for governed workflows. Bounded safe checks still require verified ownership; SOC-gated execution additionally requires an active LOA.'}
+              : 'A scoped LOA records authorization and custody for governed workflows. Bounded safe checks still require verified ownership; high-scale execution additionally requires an active LOA.'}
           </p>
         </div>
         <div className="callout-actions">
@@ -2338,7 +2338,7 @@ export function TargetGroupDetailView({
             <CalendarClock size={18} aria-hidden="true" />
             <div>
               <strong>Authorized validation only</strong>
-              <p>Schedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios remain SOC-gated. They do not authorize or launch unmanaged DDoS traffic.</p>
+              <p>Schedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios require governed authorization. They do not authorize or launch unmanaged DDoS traffic.</p>
             </div>
           </div>
           {data.loadErrors.testPolicies ? (
@@ -2369,7 +2369,7 @@ export function TargetGroupDetailView({
               <EmptyState
                 icon={ShieldHalf}
                 title="No customer-runnable checks"
-                body="The hydrated check catalog does not currently contain a check that can be scheduled by a customer. SOC-gated checks are intentionally excluded."
+                body="The hydrated check catalog does not currently contain a check that can be scheduled by a customer. High-scale governed checks are intentionally excluded."
               />
             }
           />
@@ -2490,7 +2490,7 @@ export function TargetGroupDetailView({
           ) : (
             <div className="schedule-role-note" role="note">
               <strong>Read-only schedule view</strong>
-              <span>An organization owner, administrator, or engineer can create validation policies. SOC-gated scenarios continue through the governed SOC workflow.</span>
+              <span>An organization owner, administrator, or engineer can create validation policies. High-scale scenarios continue through governed authorization workflows.</span>
             </div>
           )}
         </CardContent>

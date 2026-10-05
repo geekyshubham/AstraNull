@@ -131,7 +131,7 @@ function formatVectorFamilyLabel(family: string) {
 
 function formatSafetyClassLabel(safetyClass: string) {
   if (safetyClass === 'safe') return 'Customer-runnable';
-  if (safetyClass === 'soc_gated') return 'SOC request-only';
+  if (safetyClass === 'soc_gated') return 'Governed request-only';
   return safetyClass.replace(/_/g, ' ');
 }
 
@@ -166,7 +166,7 @@ function buildLatestCheckVerdictMap(runs: DataItem[]) {
 
 function formatCheckModeLabel(safetyClass: string) {
   if (safetyClass === 'safe') return 'safe';
-  if (safetyClass === 'soc_gated') return 'SOC-gated';
+  if (safetyClass === 'soc_gated') return 'governed';
   return formatSafetyClassLabel(safetyClass);
 }
 
@@ -397,7 +397,7 @@ const CHECK_FAMILY_FILTER_OPTIONS: { value: CheckFamilyTabId; label: string }[] 
   { value: 'exploit', label: 'Exploit-based DoS' },
   { value: 'delivery-pattern', label: 'Delivery patterns' },
   { value: 'operations', label: 'Operations' },
-  { value: 'high-scale', label: 'High-scale (SOC)' }
+  { value: 'high-scale', label: 'High-scale (governed)' }
 ];
 
 const CHECK_STATUS_FILTER_OPTIONS = [
@@ -405,7 +405,7 @@ const CHECK_STATUS_FILTER_OPTIONS = [
   { value: 'pass', label: 'Pass' },
   { value: 'gap', label: 'Gap' },
   { value: 'review', label: 'Review' },
-  { value: 'request', label: 'SOC request' },
+  { value: 'request', label: 'Governed request' },
   { value: 'untested', label: 'Untested' }
 ];
 
@@ -1046,11 +1046,11 @@ export function ValidationSurfacePage({
           route="checks"
           eyebrow="Validation catalog"
           title="Checks"
-          description="Every bounded customer-runnable check and SOC request-only scenario, with execution class, evidence tier, expected behavior, and latest result."
+          description="Every bounded customer-runnable check and governed scenario, with execution class, evidence tier, expected behavior, and latest result."
           actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>}
         />
         <PageContextSummary>
-          {checksLoadError ? 'Check catalog unavailable' : <><span className="tabular-nums">{data.checks.length}</span> checks · <span className="tabular-nums">{checkSafetyCounts.safe}</span> customer-runnable · <span className="tabular-nums">{checkSafetyCounts.soc}</span> SOC request-only</>}
+          {checksLoadError ? 'Check catalog unavailable' : <><span className="tabular-nums">{data.checks.length}</span> checks · <span className="tabular-nums">{checkSafetyCounts.safe}</span> customer-runnable · <span className="tabular-nums">{checkSafetyCounts.soc}</span> governed</>}
         </PageContextSummary>
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>

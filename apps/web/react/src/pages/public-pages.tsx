@@ -416,7 +416,7 @@ function enterDemoPortal(portalPath: string) {
 
 function PublicShell({
   children,
-  eyebrow = 'No-access-first · Evidence-backed · SOC-gated',
+  eyebrow = 'No-access-first · Evidence-backed · Outside-in',
   activeNav,
   loginHref = '/login',
   signupEnabled = true,

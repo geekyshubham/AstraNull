@@ -129,7 +129,7 @@ function fixTitle(finding: DataItem, targets: DataItem[], checks: DataItem[]) {
   }
   if (context.includes('waf') || context.includes('web firewall')) return `Review web firewall blocking for ${targetName}`;
   if (context.includes('dns')) return `Review DNS protection for ${targetName}`;
-  if (context.includes('authorization') || context.includes('approval')) return `Complete SOC authorization for ${targetName}`;
+  if (context.includes('authorization') || context.includes('approval')) return `Complete authorization for ${targetName}`;
   return `Review ${plainFindingTitle(finding, targets, checks)}`;
 }
 
@@ -698,7 +698,7 @@ export function DashboardPage({
         <span className="tabular-nums">{targetsUnavailable ? UNAVAILABLE : verifiedTargets === null ? '...' : formatNumber(verifiedTargets)}</span>{' '}
         {`ownership verified, `}
         <span className="tabular-nums">{data.loadErrors.evidence ? UNAVAILABLE : formatNumber(data.evidence.length)}</span>{' '}
-        {`evidence ${pluralize(data.evidence.length, 'record')}. High-scale tests stay SOC-gated.`}
+        {`evidence ${pluralize(data.evidence.length, 'record')}. All checks run bounded from the outside in.`}
       </PageContextSummary>
       <Tabs
         value={tab}

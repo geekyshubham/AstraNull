@@ -35,7 +35,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'dashboard',
     label: 'Dashboard',
     group: 'overview',
-    description: 'Readiness score, coverage, vectors, findings, and SOC status.',
+    description: 'Readiness score, coverage, vectors, findings, and validation activity.',
     icon: LayoutDashboard
   },
   {
@@ -63,7 +63,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'test-policies',
     label: 'Validation schedules',
     group: 'validation',
-    description: 'Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
+    description: 'Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect.',
     icon: CalendarClock
   },
   {
@@ -77,7 +77,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'reports',
     label: 'Reports',
     group: 'governance',
-    description: 'Executive, technical, SOC, audit, and compliance report builders.',
+    description: 'Executive, technical, audit, and compliance report builders.',
     icon: FileText
   },
   {
@@ -287,8 +287,8 @@ export const DEFENSIVE_RULES = [
     body: 'Validation runs from external probes against declared targets; nothing is installed in your network.'
   },
   {
-    title: 'SOC-gated high-scale',
-    body: 'Customers request high-scale validation; SOC approves, schedules, coordinates, stops, and closes.'
+    title: 'Governed safety limits',
+    body: 'Validation runs under bounded safety limits, strict timeouts, and tenant kill-switch controls.'
   },
   {
     title: 'Evidence over assumptions',

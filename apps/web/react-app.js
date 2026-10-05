@@ -14638,7 +14638,7 @@ var tc = {
     id: "dashboard",
     label: "Dashboard",
     group: "overview",
-    description: "Readiness score, coverage, vectors, findings, and SOC status.",
+    description: "Readiness score, coverage, vectors, findings, and validation activity.",
     icon: Pt
   },
   {
@@ -14666,7 +14666,7 @@ var tc = {
     id: "test-policies",
     label: "Validation schedules",
     group: "validation",
-    description: "Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.",
+    description: "Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect.",
     icon: ve
   },
   {
@@ -14680,7 +14680,7 @@ var tc = {
     id: "reports",
     label: "Reports",
     group: "governance",
-    description: "Executive, technical, SOC, audit, and compliance report builders.",
+    description: "Executive, technical, audit, and compliance report builders.",
     icon: vt
   },
   {
@@ -15573,7 +15573,7 @@ function Wc({ route: e, session: t, data: n, onRouteChange: r, onRoleChange: i, 
             className: "sidebar-foot",
             children: [
               /* @__PURE__ */ (0, H.jsxs)("span", { children: [/* @__PURE__ */ (0, H.jsx)("b", { children: T }), E ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [" · ", E] }) : null] }),
-              /* @__PURE__ */ (0, H.jsx)("span", { children: "SOC-gated high-scale" }),
+              /* @__PURE__ */ (0, H.jsx)("span", { children: "Outside-in validation" }),
               o ? /* @__PURE__ */ (0, H.jsx)(Lc, {
                 label: "Role (dev)",
                 className: "sidebar-role",
@@ -19716,7 +19716,7 @@ function Cm(e) {
     role: "admin"
   }), Sm(e);
 }
-function wm({ children: e, eyebrow: t = "No-access-first · Evidence-backed · SOC-gated", activeNav: n, loginHref: r = "/login", signupEnabled: i = !0, showAccountNav: a = !0, showEyebrow: o = !0 }) {
+function wm({ children: e, eyebrow: t = "No-access-first · Evidence-backed · Outside-in", activeNav: n, loginHref: r = "/login", signupEnabled: i = !0, showAccountNav: a = !0, showEyebrow: o = !0 }) {
   return /* @__PURE__ */ (0, H.jsxs)("div", {
     className: "public-app",
     children: [
@@ -34121,7 +34121,7 @@ function vS({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               children: nt ? "LOA signed" : "Letter of Authorization required"
             }), /* @__PURE__ */ (0, H.jsx)("p", {
               className: "callout-desc",
-              children: nt ? `${Q(e.loa, ["signer_name"], Q(e, ["loa_signer"], "—"))} · ${Q(e.loa, ["custody_digest_sha256", "digest"], Q(e, ["loa_digest"], "—"))} · ${B(e.loa?.signed_at ?? e.loa_signed_at)}` : "A scoped LOA records authorization and custody for governed workflows. Bounded safe checks still require verified ownership; SOC-gated execution additionally requires an active LOA."
+              children: nt ? `${Q(e.loa, ["signer_name"], Q(e, ["loa_signer"], "—"))} · ${Q(e.loa, ["custody_digest_sha256", "digest"], Q(e, ["loa_digest"], "—"))} · ${B(e.loa?.signed_at ?? e.loa_signed_at)}` : "A scoped LOA records authorization and custody for governed workflows. Bounded safe checks still require verified ownership; high-scale execution additionally requires an active LOA."
             })]
           }),
           /* @__PURE__ */ (0, H.jsx)("div", {
@@ -34516,7 +34516,7 @@ function vS({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             children: [/* @__PURE__ */ (0, H.jsx)(ve, {
               size: 18,
               "aria-hidden": "true"
-            }), /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: "Authorized validation only" }), /* @__PURE__ */ (0, H.jsx)("p", { children: "Schedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios remain SOC-gated. They do not authorize or launch unmanaged DDoS traffic." })] })]
+            }), /* @__PURE__ */ (0, H.jsxs)("div", { children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: "Authorized validation only" }), /* @__PURE__ */ (0, H.jsx)("p", { children: "Schedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios require governed authorization. They do not authorize or launch unmanaged DDoS traffic." })] })]
           }),
           n.loadErrors.testPolicies ? /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "form-banner error",
@@ -34566,7 +34566,7 @@ function vS({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             empty: /* @__PURE__ */ (0, H.jsx)(fp, {
               icon: Nn,
               title: "No customer-runnable checks",
-              body: "The hydrated check catalog does not currently contain a check that can be scheduled by a customer. SOC-gated checks are intentionally excluded."
+              body: "The hydrated check catalog does not currently contain a check that can be scheduled by a customer. High-scale governed checks are intentionally excluded."
             })
           }),
           lt.length > ut.length ? /* @__PURE__ */ (0, H.jsxs)("div", {
@@ -34767,7 +34767,7 @@ function vS({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           }) : /* @__PURE__ */ (0, H.jsxs)("div", {
             className: "schedule-role-note",
             role: "note",
-            children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: "Read-only schedule view" }), /* @__PURE__ */ (0, H.jsx)("span", { children: "An organization owner, administrator, or engineer can create validation policies. SOC-gated scenarios continue through the governed SOC workflow." })]
+            children: [/* @__PURE__ */ (0, H.jsx)("strong", { children: "Read-only schedule view" }), /* @__PURE__ */ (0, H.jsx)("span", { children: "An organization owner, administrator, or engineer can create validation policies. High-scale scenarios continue through governed authorization workflows." })]
           })
         ] })] })
       }),
@@ -44260,7 +44260,7 @@ function ZT({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     children: [
       /* @__PURE__ */ (0, H.jsx)(LT, {
         route: "queue-detail",
-        eyebrow: "SOC-gated validation",
+        eyebrow: "Governed validation",
         entityId: t,
         title: E,
         actions: F === "accepted" ? /* @__PURE__ */ (0, H.jsx)(bc, {
@@ -50167,7 +50167,7 @@ function ek(e) {
   return $O[e] ?? e.replace(/_/g, " ");
 }
 function tk(e) {
-  return e === "safe" ? "Customer-runnable" : e === "soc_gated" ? "SOC request-only" : e.replace(/_/g, " ");
+  return e === "safe" ? "Customer-runnable" : e === "soc_gated" ? "Governed request-only" : e.replace(/_/g, " ");
 }
 function nk(e) {
   let t = e.verdict;
@@ -50195,7 +50195,7 @@ function rk(e) {
   return t;
 }
 function ik(e) {
-  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : tk(e);
+  return e === "safe" ? "safe" : e === "soc_gated" ? "governed" : tk(e);
 }
 function ak(e) {
   return e === "safe" ? "success" : e === "soc_gated" ? "info" : "muted";
@@ -50356,7 +50356,7 @@ var yk = [
   },
   {
     value: "high-scale",
-    label: "High-scale (SOC)"
+    label: "High-scale (governed)"
   }
 ], bk = [
   {
@@ -50377,7 +50377,7 @@ var yk = [
   },
   {
     value: "request",
-    label: "SOC request"
+    label: "Governed request"
   },
   {
     value: "untested",
@@ -50640,7 +50640,7 @@ function Ak({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           route: "checks",
           eyebrow: "Validation catalog",
           title: "Checks",
-          description: "Every bounded customer-runnable check and SOC request-only scenario, with execution class, evidence tier, expected behavior, and latest result.",
+          description: "Every bounded customer-runnable check and governed scenario, with execution class, evidence tier, expected behavior, and latest result.",
           actions: /* @__PURE__ */ (0, H.jsx)(U, {
             variant: "secondary",
             size: "sm",
@@ -50665,7 +50665,7 @@ function Ak({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             className: "tabular-nums",
             children: ye.soc
           }),
-          " SOC request-only"
+          " governed"
         ] }) }),
         /* @__PURE__ */ (0, H.jsx)(xk, {
           message: f,
@@ -57583,7 +57583,7 @@ function Wj(e, t, n) {
     Ij(e, ["check_id"]),
     Ij(e, ["vector_family", "category"])
   ].join(" ").toLowerCase(), i = Ij(e, ["target_id"]), a = Ij(t.find((e) => Ij(e, ["id", "target_id"]) === i) ?? {}, ["value", "hostname"], Ij(e, ["target_hostname", "target_value"], "this target"));
-  return r.includes("origin") && (r.includes("bypass") || r.includes("direct") || r.includes("penetrated")) ? `Block direct access to ${a}` : r.includes("waf") || r.includes("web firewall") ? `Review web firewall blocking for ${a}` : r.includes("dns") ? `Review DNS protection for ${a}` : r.includes("authorization") || r.includes("approval") ? `Complete SOC authorization for ${a}` : `Review ${iu(e, t, n)}`;
+  return r.includes("origin") && (r.includes("bypass") || r.includes("direct") || r.includes("penetrated")) ? `Block direct access to ${a}` : r.includes("waf") || r.includes("web firewall") ? `Review web firewall blocking for ${a}` : r.includes("dns") ? `Review DNS protection for ${a}` : r.includes("authorization") || r.includes("approval") ? `Complete authorization for ${a}` : `Review ${iu(e, t, n)}`;
 }
 function Gj(e, t, n) {
   let r = [], i = e.targetGroups.filter((e) => e.archived_at == null), a = e.runs.some((e) => {
@@ -58206,7 +58206,7 @@ function nM({ data: e, config: t, session: n, onRefresh: r }) {
           children: e.loadErrors.evidence ? Fj : z(e.evidence.length)
         }),
         " ",
-        `evidence ${ma(e.evidence.length, "record")}. High-scale tests stay SOC-gated.`
+        `evidence ${ma(e.evidence.length, "record")}. All checks run bounded from the outside in.`
       ] }),
       /* @__PURE__ */ (0, H.jsx)(Uh, {
         value: i,
