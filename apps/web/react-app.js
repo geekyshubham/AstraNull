@@ -63701,7 +63701,7 @@ function NP({ data: e, session: t, config: n, onRefresh: r }) {
       /* @__PURE__ */ (0, H.jsx)(My, {
         route: "audit",
         title: "Audit log",
-        description: "Who did what, when, and to which resource. Recorded hashes show server-stored entry integrity; filters and paging run across the whole log."
+        description: "Who did what, when, and to which resource. A recorded hash shows what the server stored with each entry. This page does not verify the hash chain. Filters and paging run on the server across the whole log."
       }),
       i ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [
         /* @__PURE__ */ (0, H.jsx)(Py, { children: p.status === "ready" ? /* @__PURE__ */ (0, H.jsxs)(H.Fragment, { children: [
