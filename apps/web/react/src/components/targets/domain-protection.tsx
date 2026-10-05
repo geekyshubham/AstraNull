@@ -381,7 +381,6 @@ export type CheckQueueProps = {
   scan: DataItem | null;
   scanActive: boolean;
   canRun: boolean;
-  runDisabledReason: string;
   busy: boolean;
   onRunAll: () => void;
   onStop: () => void;
@@ -404,7 +403,6 @@ export function CheckQueue({
   scan,
   scanActive,
   canRun,
-  runDisabledReason,
   busy,
   onRunAll,
   onStop,
@@ -471,7 +469,7 @@ export function CheckQueue({
           scanActive ? (
             <Button variant="secondary" onClick={onStop}><Square size={14} aria-hidden="true" />Stop run</Button>
           ) : (
-            <Button variant="secondary" onClick={onRunAll} disabled={Boolean(runDisabledReason) || busy} loading={busy} title={runDisabledReason || undefined}>
+            <Button variant="secondary" onClick={onRunAll} loading={busy}>
               <Play size={15} aria-hidden="true" />Review all {rows.length}
             </Button>
           )
@@ -500,7 +498,6 @@ export function CheckQueue({
           />
         </div>
       ) : null}
-      {canRun && runDisabledReason && !scanActive ? <p className="td-muted">{runDisabledReason}</p> : null}
       <div className="td-filters" role="group" aria-label="Filter checks by result">
         {FILTERS.filter((entry) => entry.id === 'all' || (counts[entry.id] ?? 0) > 0).map((entry) => (
           <button

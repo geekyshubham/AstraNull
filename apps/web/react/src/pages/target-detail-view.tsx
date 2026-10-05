@@ -821,14 +821,6 @@ export function TargetDetailView({
   }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state, targetGroupId]);
 
 
-  const runAllDisabledReason = runAll.length === 0
-    ? 'No runnable checks apply to this kind of target.'
-    : !targetEligible
-      ? 'No runnable checks are eligible for this target.'
-      : edgeEvaluating && !scanActive
-        ? 'WAF/CDN detection is running. Multi-check runs unlock when it finishes.'
-        : '';
-
   const singleDisabledReason = !canStartBoundedRun
     ? 'Your role can inspect evidence but cannot start checks.'
     : !targetEligible
@@ -869,7 +861,6 @@ export function TargetDetailView({
       }
       return;
     }
-    if (runAllDisabledReason) return;
     setBusy('run-all');
     setError('');
     setBanner('');
@@ -1614,7 +1605,6 @@ export function TargetDetailView({
               scan={scan}
               scanActive={scanActive}
               canRun={canStartBoundedRun}
-              runDisabledReason={runAllDisabledReason}
               busy={busy === 'run-all'}
               onRunAll={() => setReview({ mode: 'all' })}
               onStop={() => setStopOpen(true)}
