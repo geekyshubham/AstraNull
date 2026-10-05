@@ -1479,7 +1479,7 @@ export function AuditPage({
   return (
     <div className="content audit-page">
       <CustomerPageStyles />
-      <PageHeader route="audit" title="Audit log" description="Who did what, when, and to which resource. Records are append-only; an audit entry records an action, not proof that an infrastructure change worked." />
+      <PageHeader route="audit" title="Audit log" description="Who did what, when, and to which resource. Recorded hashes show server-stored entry integrity; filters and paging run across the whole log." />
       {!allowed ? (
         <EmptyState icon={Lock} title="Audit access required." body="Owners, admins, SOC, and auditors can read the audit log. Your role cannot, so no events are shown." />
       ) : (
@@ -1487,10 +1487,6 @@ export function AuditPage({
           <PageContextSummary>
             {listState.status === 'ready' ? <>{totalText}{filtersActive ? ' for the applied filters' : ''} · page {formatNumber(pageNumber)}, newest first</> : listState.status === 'loading' ? 'Loading events…' : 'Events unavailable'}
           </PageContextSummary>
-          <div className="callout info" role="note">
-            <Lock size={18} aria-hidden="true" />
-            <span>A recorded hash shows what the server stored with each entry. This page does not verify the hash chain. Filters and paging run on the server across the whole log.</span>
-          </div>
           <form className="audit-filter-toolbar" role="search" aria-label="Audit filters" onSubmit={applyFilters} noValidate>
             <div className="audit-filter-fields">
               <label className="field">

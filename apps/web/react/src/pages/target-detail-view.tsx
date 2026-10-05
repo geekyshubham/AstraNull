@@ -1521,11 +1521,19 @@ export function TargetDetailView({
   return (
     <div className="content target-detail-view">
       {renderHeader()}
-      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+      {error ? (
+        <Toast
+          message={error}
+          tone="error"
+          duration={5000}
+          onDismiss={() => setError('')}
+        />
+      ) : null}
       {banner && !error ? (
         <Toast
           message={banner}
           tone={banner.includes('not found') ? 'warn' : 'success'}
+          duration={5000}
           onDismiss={() => setBanner('')}
         />
       ) : null}

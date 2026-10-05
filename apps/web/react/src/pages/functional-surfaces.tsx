@@ -12,6 +12,7 @@ import { Progress } from '../components/ui/progress';
 import { Select } from '../components/ui/select';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Tabs } from '../components/ui/tabs';
+import { Toast } from '../components/ui/toast';
 import { FindingsListView } from '../components/findings/findings-list';
 import { RunsPageHeadActions, RunsSocGatePanel } from '../components/runs/runs-soc-gate';
 import { ValidationScanLauncher, type ScanLauncherMode } from '../components/runs/validation-scan-launcher';
@@ -431,18 +432,23 @@ function TableSkeleton({ rows = 4, label = 'Loading' }: { rows?: number; label?:
 function MutationFeedbackBanner({
   message,
   error,
-  neutral = false
+  neutral = false,
+  onDismiss
 }: {
   message: string;
   error: string;
   neutral?: boolean;
+  onDismiss?: () => void;
 }) {
-  if (!message && !error) return null;
-  const className = error ? 'form-banner error' : neutral ? 'form-banner neutral' : 'form-banner';
+  const content = error || message;
+  if (!content) return null;
   return (
-    <div className={className} role={error ? 'alert' : 'status'} aria-live="polite">
-      {error || message}
-    </div>
+    <Toast
+      message={content}
+      tone={error ? 'error' : neutral ? 'info' : 'success'}
+      duration={5000}
+      onDismiss={onDismiss}
+    />
   );
 }
 

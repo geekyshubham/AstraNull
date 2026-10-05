@@ -2,6 +2,7 @@ import { isValidElement, useMemo, useState, type HTMLAttributes, type ReactNode 
 import { DataTable, type TableColumn } from '../../components/ui/table';
 import { Select, type SelectOption } from '../../components/ui/select';
 import { Tabs } from '../../components/ui/tabs';
+import { Toast } from '../../components/ui/toast';
 import { VariantSwitch } from '../../components/ui/variant-switch';
 import { classifyVerdict } from '../../lib/dashboard-metrics';
 import type { DesignVariant } from '../../lib/design-variant';
@@ -184,7 +185,11 @@ export function RunsRefined(props: RunsRefinedProps) {
       </section>
 
       {message || error ? (
-        <div className={error ? 'form-banner error' : 'form-banner neutral'} role={error ? 'alert' : 'status'} aria-live="polite">{error || message}</div>
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
       ) : null}
 
       {launchBlocked ? (

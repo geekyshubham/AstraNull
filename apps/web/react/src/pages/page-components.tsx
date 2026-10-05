@@ -46,6 +46,7 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select, type SelectOption } from '../components/ui/select';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
+import { Toast } from '../components/ui/toast';
 import { AnimatedNumber } from '../components/ui/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
@@ -1028,7 +1029,11 @@ export function TargetGroupsPage({
         <KpiCell label="Open findings" value={workspaceOpen === null ? '—' : formatNumber(workspaceOpen)} delta={workspaceOpen === null ? 'Not recorded in the workspace state' : 'Status open, whole workspace, each finding once'} />
       </div>
       {(message || error) && !showCreateGroup && !showAddTarget ? (
-        <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>{error || message}</div>
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
       ) : null}
       <Card>
         <CardHeader>
@@ -1757,7 +1762,11 @@ export function ReportsPage({
         description="Generate a dated snapshot of findings, recorded runs, and declarations for a chosen audience and scope, review it, then export it. A report never changes after generation."
       />
       {(message || error) ? (
-        <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>{error || message}</div>
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
       ) : null}
       {created ? <ReportSnapshotPreview report={created} formats={formatOptions} exporter={exporter} /> : null}
       {canCreateReport ? (
@@ -2270,9 +2279,11 @@ export function SettingsPage({
             getTabId={(id) => `settings-sections-tab-${id}`}
             getPanelId={(id) => `settings-sections-panel-${id}`} />
       {(message || error) && (
-        <div className={error ? 'form-banner error' : 'form-banner'}>
-          {error || message}
-        </div>
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
       )}
       {oneTimeSecret && (
         <Card className="secret-card" role="region" aria-label={oneTimeSecret.label}>
@@ -3911,7 +3922,13 @@ export function StaffSurfacePage({
         route={route}
         eyebrow={route === 'internal-soc' ? 'Staff SOC surface' : 'Staff-only surface'}
       />
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      {(message || error) && (
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
+      )}
       <PageContextSummary>
         Review queue <span className="tabular-nums">{queueDepth === null ? '—' : formatNumber(queueDepth)}</span> ·{' '}
         <span className="tabular-nums">{tenantCount === null ? '—' : formatNumber(tenantCount)}</span> tenants ·{' '}

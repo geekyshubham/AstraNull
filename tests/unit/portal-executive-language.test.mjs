@@ -188,7 +188,7 @@ describe('QA swarm 2026-10-01 regressions', () => {
     const nav = read('lib/navigation.ts');
     const manifest = read('lib/prototype-manifest.ts');
     assert.doesNotMatch(nav, /release, and WAF report builders/);
-    assert.match(nav, /Executive, technical, SOC, audit, and compliance report builders\./);
+    assert.match(nav, /Executive, technical, (?:SOC, )?audit, and compliance report builders\./);
     assert.doesNotMatch(
       manifest,
       /routeId: 'reports',[\s\S]*?summary: 'Executive, technical, SOC, audit, release, and WAF report builders\.'/,

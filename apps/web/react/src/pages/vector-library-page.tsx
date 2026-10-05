@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { EmptyState } from '../components/ui/empty-state';
 import { Select, type SelectOption } from '../components/ui/select';
 import { DataTable, type TableColumn } from '../components/ui/table';
+import { Toast } from '../components/ui/toast';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal } from '../lib/crud-ui';
 import { requestJson } from '../lib/api';
@@ -438,12 +439,26 @@ export function VectorLibraryPage({
         Catalog vectors, runnable checks, and checks that fit a target are different counts. No vector receives a verdict on its own.
       </PageContextSummary>
       {message ? (
-        <div className="form-banner success row-actions" role="status" aria-live="polite">
-          <span>{message.text}</span>
-          {message.targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', message.targetId)}>Open target</AnchorButton> : null}
-        </div>
+        <Toast
+          message={
+            <span className="row-actions">
+              <span>{message.text}</span>
+              {message.targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', message.targetId)}>Open target</AnchorButton> : null}
+            </span>
+          }
+          tone="success"
+          duration={5000}
+          onDismiss={() => setMessage(null)}
+        />
       ) : null}
-      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+      {error ? (
+        <Toast
+          message={error}
+          tone="error"
+          duration={5000}
+          onDismiss={() => setError('')}
+        />
+      ) : null}
 
       <Card className="vector-scope-card">
         <CardHeader>

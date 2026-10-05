@@ -514,14 +514,22 @@ export function TargetsPage({
         </div>
       </div>
 
+      {error ? (
+        <Toast
+          message={error}
+          tone="error"
+          duration={5000}
+          onDismiss={() => setError('')}
+        />
+      ) : null}
       {message && !error ? (
         <Toast
           message={message}
           tone="success"
+          duration={5000}
           onDismiss={() => setMessage('')}
         />
       ) : null}
-      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
 
       {cohort ? (
         <TargetCohortList filters={cohort} config={config} session={session} inventory={targets} onClear={clearCohort} />

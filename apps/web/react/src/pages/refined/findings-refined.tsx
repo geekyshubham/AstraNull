@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Select } from '../../components/ui/select';
 import { DataTable, type TableColumn } from '../../components/ui/table';
+import { Toast } from '../../components/ui/toast';
 import { useInspectorRef, useListReturnState, useOpenInspector, useRestoreListPosition } from '../../components/evidence/use-inspector';
 import { getRouteParam, replaceRouteParams } from '../../lib/route-params';
 import { navScopeKey } from '../../lib/nav-state.mjs';
@@ -655,7 +656,11 @@ export function FindingsRefined(props: FindingsRefinedProps) {
       </section>
 
       {message || error ? (
-        <div className={error ? 'form-banner error' : 'form-banner neutral'} role={error ? 'alert' : 'status'} aria-live="polite">{error || message}</div>
+        <Toast
+          message={error || message}
+          tone={error ? 'error' : 'success'}
+          duration={5000}
+        />
       ) : null}
 
       <section className="rf-section" aria-labelledby="rf-findings-queue">

@@ -8,7 +8,7 @@ export type ToastProps = {
   message: ReactNode;
   tone?: ToastTone;
   duration?: number;
-  onDismiss: () => void;
+  onDismiss?: () => void;
   className?: string;
 };
 
@@ -20,6 +20,7 @@ export function Toast({
   className,
 }: ToastProps) {
   const [exiting, setExiting] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remainingRef = useRef(duration);
   const startTimeRef = useRef<number>(Date.now());
@@ -27,16 +28,18 @@ export function Toast({
   onDismissRef.current = onDismiss;
 
   const triggerDismiss = () => {
-    if (exiting) return;
+    if (exiting || dismissed) return;
     setExiting(true);
     setTimeout(() => {
-      onDismissRef.current();
+      setDismissed(true);
+      onDismissRef.current?.();
     }, 150);
   };
 
   useEffect(() => {
     if (!message || duration <= 0) return;
     setExiting(false);
+    setDismissed(false);
     remainingRef.current = duration;
     startTimeRef.current = Date.now();
 
@@ -67,7 +70,7 @@ export function Toast({
     }
   };
 
-  if (!message) return null;
+  if (!message || dismissed) return null;
 
   const Icon =
     tone === 'error'
