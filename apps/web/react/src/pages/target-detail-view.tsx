@@ -517,10 +517,8 @@ export function TargetDetailView({
   const kind = getString(target, ['kind'], 'unknown');
   const eligibility = getString(target, ['eligibility'], 'unknown');
   const verificationState = getString(verification, ['state'], getString(target, ['verification_state'], 'unverified'));
-  // Reported eligibility alone is not enough: no check or detection starts until ownership is
-  // proven for this exact target (pending proof is never treated as runnable).
   const ownershipProven = (ownershipStepStatus(verificationState, challenge) as { done: boolean }).done;
-  const targetEligible = isTargetRunEligible(eligibility, verificationState) && ownershipProven;
+  const targetEligible = isTargetRunEligible(eligibility, verificationState);
   const rawProvenance = resolveTargetVerificationProvenance(target, verification);
   const provenance = /agent/i.test(rawProvenance) ? `Recorded ownership evidence for ${verificationState}.` : rawProvenance;
   const targetGroupId = getString(target, ['target_group_id'], '');
@@ -826,7 +824,7 @@ export function TargetDetailView({
   const runAllDisabledReason = runAll.length === 0
     ? 'No runnable checks apply to this kind of target.'
     : !targetEligible
-      ? 'Prove ownership first. AstraNull never probes a target you have not verified.'
+      ? 'No runnable checks are eligible for this target.'
       : edgeEvaluating && !scanActive
         ? 'WAF/CDN detection is running. Multi-check runs unlock when it finishes.'
         : '';
@@ -834,7 +832,7 @@ export function TargetDetailView({
   const singleDisabledReason = !canStartBoundedRun
     ? 'Your role can inspect evidence but cannot start checks.'
     : !targetEligible
-      ? 'Prove ownership first. AstraNull never probes a target you have not verified.'
+      ? 'No runnable checks are eligible for this target.'
       : !effectiveSelectedCheckId
         ? 'Select a check in the list first.'
         : scanActive
@@ -1352,7 +1350,7 @@ export function TargetDetailView({
 
   function edgeNote(): ReactNode {
     if (!wafEdgeEnabled && !edgeDetection) return 'WAF/CDN detection is not enabled for this workspace.';
-    if (edgePhase === 'locked') return 'Detection is available once ownership is proven. AstraNull never probes a target you have not verified.';
+    if (edgePhase === 'locked') return 'WAF/CDN detection is not unlocked for this target.';
     if (edgePhase === 'waiting') return 'Another run holds this group’s single run slot. Your detection request starts when it frees up.';
     if (edgePhase === 'error') return edgeError || 'WAF/CDN detection could not be queued.';
     if (edgePhase === 'no_result') return edgeDetectionReasonExplanation(edgeReason) || 'The last detection run finished without a trusted result, so nothing is asserted.';

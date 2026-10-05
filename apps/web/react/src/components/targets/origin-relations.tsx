@@ -153,8 +153,8 @@ export function OriginRelations({
 
   function openReview() {
     const errors: { origin?: string; port?: string; path?: string } = {};
-    const origin = candidates.ready.find((candidate) => candidate.id === originId);
-    if (!origin) errors.origin = 'Choose a verified origin target.';
+    const origin = [...candidates.ready, ...candidates.blocked].find((candidate) => candidate.id === originId);
+    if (!origin) errors.origin = 'Choose an origin target.';
     const scope = originBindingScope({ port, path });
     Object.assign(errors, scope.errors);
     setFormErrors(errors);
@@ -235,21 +235,18 @@ export function OriginRelations({
           {inventory === null ? <div className="skeleton skeleton-row" aria-label="Loading declared origin targets" /> : null}
           {inventory?.error ? <p className="td-form-error" role="alert">{inventory.error}</p> : null}
           {inventory?.truncated ? <p className="td-muted small">Only the first {inventory.items.length} declared IP and URL targets were read. If your origin is missing, narrow your inventory first.</p> : null}
-          {inventory === null || inventory.error ? null : candidates.ready.length ? (
+          {inventory === null || inventory.error ? null : (candidates.ready.length || candidates.blocked.length) ? (
             <label className="td-field">
               <span>Origin target</span>
               <select value={originId} aria-invalid={formErrors.origin ? true : undefined} aria-describedby="td-origin-choice-help" onChange={(event) => setOriginId(event.target.value)}>
-                <option value="">Choose a verified origin target</option>
-                {candidates.ready.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.value} ({candidate.id})</option>)}
+                <option value="">Choose an origin target</option>
+                {[...candidates.ready, ...candidates.blocked].map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.value} ({candidate.id})</option>)}
               </select>
-              <span id="td-origin-choice-help" className={formErrors.origin ? 'td-form-error' : 'td-muted'}>{formErrors.origin ?? 'Only declared IP targets with verified ownership are listed.'}</span>
+              <span id="td-origin-choice-help" className={formErrors.origin ? 'td-form-error' : 'td-muted'}>{formErrors.origin ?? 'Declared origin targets.'}</span>
             </label>
           ) : (
-            <p className="td-muted">No declared origin target has verified ownership. Add the origin IP as a target and prove ownership first. <a href="#targets">Go to targets</a></p>
+            <p className="td-muted">No declared origin target found. Add the origin IP as a target. <a href="#targets">Go to targets</a></p>
           )}
-          {candidates.blocked.length ? (
-            <p className="td-muted small">Not available until ownership is verified: {candidates.blocked.map((candidate) => `${candidate.value} (${candidate.id})`).join(', ')}.</p>
-          ) : null}
           <div className="td-origin-scope">
             <label className="td-field">
               <span>Port (optional)</span>
@@ -283,12 +280,10 @@ export function OriginRelations({
               const chosenId = checkChoice[bindingId] ?? (originChecks.length === 1 ? checkIdOf(originChecks[0]) : '');
               const chosenCheck = originChecks.find((check) => checkIdOf(check) === chosenId) ?? null;
               const checkDisabledReason = !canStart ? 'Your role cannot start checks.'
-                : !authorized ? 'Origin ownership is not currently verified.'
-                  : !ownershipDone ? 'Prove ownership of this target first.'
-                    : approved.state === 'loading' ? 'Loading the approved origin checks for this target.'
-                      : approved.state === 'error' ? `Approved origin checks could not load: ${approved.message}`
-                        : !originChecks.length ? 'No approved origin check is available for this target.'
-                          : !chosenCheck ? 'Choose an approved origin check.' : '';
+                : approved.state === 'loading' ? 'Loading the approved origin checks for this target.'
+                  : approved.state === 'error' ? `Approved origin checks could not load: ${approved.message}`
+                    : !originChecks.length ? 'No approved origin check is available for this target.'
+                      : !chosenCheck ? 'Choose an approved origin check.' : '';
               return (
                 <li key={str(binding, 'id')} className="td-origin-item">
                   <div className="td-origin-pair">

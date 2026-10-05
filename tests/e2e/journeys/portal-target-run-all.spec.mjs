@@ -231,7 +231,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(edgePosts[0]).toEqual({ target_group_id: PORTAL_BASELINE_IDS.targetGroupId, target_id: VERIFIED_FRESH_TARGET });
   });
 
-  test('an unverified domain never probes: detection and runs wait for ownership', async ({ page }) => {
+  test('an unverified domain is also allowed to run checks and detection', async ({ page }) => {
     const posts = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && /\/v1\/(waf\/edge-detection|validation-scans|test-runs)/.test(request.url())) posts.push(request.url());
@@ -239,17 +239,12 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': UNVERIFIED_TARGET } });
 
-    // The ownership step leads the overview when the domain is not yet verified.
+    // The ownership step is shown on overview
     await expect(page.locator('.td-next[data-kind="ownership"]')).toContainText('Prove ownership to unlock validation');
-    await expect(page.locator('.td-observations')).toContainText('Detection is available once ownership is proven');
-    await expect(page.locator('.td-observations').getByRole('button', { name: /Detect/ })).toHaveCount(0);
 
     await page.getByRole('tab', { name: /Validate/ }).click();
-    await expect(page.locator('.td-checks')).toContainText('Prove ownership first');
-    await expect(page.locator('.td-checks').getByRole('button', { name: /^Review all/ })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Review and start' })).toBeDisabled();
-    await page.waitForTimeout(500);
-    expect(posts).toEqual([]);
+    await expect(page.locator('.td-checks')).not.toContainText('Prove ownership first');
+    await expect(page.locator('.td-checks').getByRole('button', { name: /^Review all/ })).toBeEnabled();
   });
 
   test('review all confirms the plan, starts one scan for the exact domain, and shows live progress', async ({ page }) => {
