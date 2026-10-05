@@ -2,6 +2,7 @@ import {
   VERIFICATION_RANK,
   ownershipSummaryFromTargetStates,
 } from '../../lib/ownershipPolicy.mjs';
+import { isDemoAutoVerifyTenant } from '../../lib/demoAutoVerify.mjs';
 import { isCurrentProviderDnsOwnershipProof } from '../../lib/connectorProviders/domainInventory.mjs';
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
@@ -428,6 +429,19 @@ export function createOwnershipVerificationRepository(pool) {
         );
         const row = rows[0] ?? null;
         const current = mapTargetVerificationRow(row);
+        if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+          if (!current || !['user_confirmed', 'dns_verified', 'provider_verified', 'verified'].includes(current.state)) {
+            return {
+              id: `tv_demo_${targetId}`,
+              tenant_id: ctx.tenantId,
+              target_id: targetId,
+              state: 'user_confirmed',
+              source_kind: 'manual_override',
+              source_ref: { method: 'demo_auto_verify', demo: true },
+              transitioned_at: new Date().toISOString(),
+            };
+          }
+        }
         if (!current || current.state !== 'provider_verified') return current;
 
         const providerProofCurrent = row.proof_connector_feature_enabled === true

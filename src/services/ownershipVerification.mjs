@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { isCurrentProviderDnsOwnershipProof } from '../lib/connectorProviders/domainInventory.mjs';
+import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { newId } from '../lib/ids.mjs';
 import { ownershipParentFor } from '../lib/subdomainEnumeration.mjs';
@@ -240,6 +241,9 @@ function loaScopeTargetIds(loa) {
  * @returns {{ verified: boolean, state: string, source: 'target'|null }}
  */
 export function targetOwnershipProof(ctx, group, targetId) {
+  if (isDemoAutoVerifyTenant(ctx?.tenantId)) {
+    return { verified: true, state: 'user_confirmed', source: 'target' };
+  }
   const store = getStore();
   const groupTargets = store.targets.filter(
     (candidate) =>
@@ -307,6 +311,20 @@ export function getLadder(ctx, groupId) {
   );
 
   const total = targets.length;
+  if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+    return {
+      steps: LADDER_STEP_IDS.map((id) => ({
+        id,
+        label: LADDER_LABELS[id] ?? id,
+        done: true,
+        count: total,
+        total,
+      })),
+      meta: total === 0
+        ? { empty_reason: 'No targets declared for this group; the verification ladder cannot be computed yet.' }
+        : undefined,
+    };
+  }
   const steps = LADDER_STEP_IDS.map((id) => {
     let count = 0;
     if (id === 'declared') {

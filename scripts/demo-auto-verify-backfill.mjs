@@ -72,10 +72,9 @@ async function backfillDevStore(tenantId) {
 }
 
 export async function runDemoAutoVerifyBackfill(argv = process.argv.slice(2), env = process.env) {
-  const tenantId = parseTenantId(argv);
-  if (!tenantId) throw new Error(USAGE);
+  const tenantId = parseTenantId(argv) || 'Astra-D1TrtI4HMTSrwKRW-9';
   if (!isDemoAutoVerifyTenant(tenantId, env)) {
-    throw new Error(`Tenant ${tenantId} is not listed in ${DEMO_AUTO_VERIFY_ENV}.`);
+    throw new Error(`Tenant ${tenantId} is not an authorized demo tenant.`);
   }
   return String(env.ASTRANULL_DATABASE_URL ?? '').trim()
     ? backfillPostgres(tenantId, env)

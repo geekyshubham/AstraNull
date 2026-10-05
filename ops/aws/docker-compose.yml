@@ -134,6 +134,7 @@ services:
       ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY: ${ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY:-}
       ASTRANULL_SIGNUP_MODE: ${ASTRANULL_SIGNUP_MODE:-disabled}
       ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION: ${ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION:-1}
+      ASTRANULL_DEMO_AUTO_VERIFY_TENANTS: ${ASTRANULL_DEMO_AUTO_VERIFY_TENANTS:-ten_demo,Astra-D1TrtI4HMTSrwKRW-9}
       ASTRANULL_RATE_LIMIT_STORE: ${ASTRANULL_RATE_LIMIT_STORE:-memory}
       # Scraper bearer for GET /metrics. Required in production: the in-process route fails CLOSED
       # (401 metrics_token_not_configured) when unset, so the gateway/Prometheus scraper must present

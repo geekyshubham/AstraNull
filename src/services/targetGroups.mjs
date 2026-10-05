@@ -552,10 +552,15 @@ function recordDemoAutoVerification(ctx, target) {
 /** Record demo verification for active targets of an allowlisted tenant that lack proof. */
 export function backfillDemoAutoVerifications(ctx) {
   if (!isDemoAutoVerifyTenant(ctx.tenantId)) return { error: 'demo_auto_verify_not_enabled', status: 409 };
-  const latest = latestTargetVerifications(ctx.tenantId);
-  const pending = getStore().targets.filter((target) => target.tenant_id === ctx.tenantId
+  const store = getStore();
+  const storedVerifiedIds = new Set(
+    (store.targetVerifications ?? [])
+      .filter((tv) => tv.tenant_id === ctx.tenantId && ['dns_verified', 'provider_verified', 'user_confirmed'].includes(tv.state))
+      .map((tv) => tv.target_id),
+  );
+  const pending = store.targets.filter((target) => target.tenant_id === ctx.tenantId
     && !isArchivedTarget(target)
-    && !ownershipProofFromStates({ targetState: latest.get(target.id)?.state }).verified);
+    && !storedVerifiedIds.has(target.id));
   for (const target of pending) recordDemoAutoVerification(ctx, target);
   if (pending.length) persistStore();
   return { verified_count: pending.length, target_ids: pending.map((target) => target.id) };

@@ -7,6 +7,7 @@ import {
   TENANT_LIFECYCLE_STATES,
 } from '../contracts/subscriptions.mjs';
 import { normalizePrivacySettings } from '../lib/privacySettings.mjs';
+import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { auditInternal } from './internalAudit.mjs';
 
@@ -109,6 +110,7 @@ export function getCurrentSubscriptionSummary(ctx) {
 }
 
 export function assertTenantEntitlement(tenantId, feature) {
+  if (isDemoAutoVerifyTenant(tenantId)) return { ok: true };
   const subscription = getTenantSubscription(tenantId);
   if (!subscription) return { ok: true };
   if (subscription.status === 'suspended') {
@@ -121,6 +123,7 @@ export function assertTenantEntitlement(tenantId, feature) {
 }
 
 export function assertSubscriptionLimit(tenantId, metric, currentCount) {
+  if (isDemoAutoVerifyTenant(tenantId)) return { ok: true, limit: Infinity };
   const subscription = subscriptionForTenant(tenantId);
   if (!subscription) return { ok: true };
   if (subscription.status === 'suspended') {

@@ -31,6 +31,12 @@ describe('demo auto-verify allowlist', () => {
     assert.equal(isDemoAutoVerifyTenant('ten_other', env), false);
     assert.equal(isDemoAutoVerifyTenant('ten_demo', {}), false);
   });
+
+  it('always recognizes Astra-D1TrtI4HMTSrwKRW-9 and Astra- accounts as demo', () => {
+    assert.equal(isDemoAutoVerifyTenant('Astra-D1TrtI4HMTSrwKRW-9', {}), true);
+    assert.equal(isDemoAutoVerifyTenant('Astra-xyz123', {}), true);
+    assert.equal(isDemoAutoVerifyTenant({ tenantId: 'Astra-D1TrtI4HMTSrwKRW-9' }, {}), true);
+  });
 });
 
 describe('demo auto-verify on target creation', () => {

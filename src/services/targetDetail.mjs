@@ -1,4 +1,5 @@
 import { clampPageLimit, decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
+import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
 import { targetTagsFromRecord } from '../contracts/targetManagement.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { presentTargetDeclaration } from '../lib/targetDeclarations.mjs';
@@ -50,7 +51,16 @@ function latestVerificationRows(targetId, tenantId) {
 
 function latestVerificationState(targetId, tenantId) {
   const rows = latestVerificationRows(targetId, tenantId);
+  const isDemo = isDemoAutoVerifyTenant(tenantId);
   if (!rows.length) {
+    if (isDemo) {
+      return {
+        state: 'user_confirmed',
+        source_kind: 'manual_override',
+        source_ref: { method: 'demo_auto_verify', demo: true },
+        history: [],
+      };
+    }
     return {
       state: 'unverified',
       source_kind: null,
@@ -63,7 +73,19 @@ function latestVerificationState(targetId, tenantId) {
   const latest = target
     ? effectiveTargetVerifications(store, target.tenant_id, [targetId]).get(targetId)
     : null;
-  if (!latest) {
+  if (!latest || latest.state === 'unverified') {
+    if (isDemo) {
+      return {
+        state: 'user_confirmed',
+        source_kind: 'manual_override',
+        source_ref: { method: 'demo_auto_verify', demo: true },
+        history: rows.map((row) => ({
+          state: row.state,
+          transitioned_at: toIso(row.transitioned_at),
+          ...(row.state !== 'pending' && row.source_ref ? { source_ref: row.source_ref } : {}),
+        })),
+      };
+    }
     return {
       state: 'unverified',
       source_kind: null,

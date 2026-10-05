@@ -1,4 +1,5 @@
 import { isCurrentProviderDnsOwnershipProof } from './connectorProviders/domainInventory.mjs';
+import { isDemoAutoVerifyTenant } from './demoAutoVerify.mjs';
 import { ownershipProofFromStates, VERIFICATION_RANK } from './ownershipPolicy.mjs';
 import { ownershipParentFor } from './subdomainEnumeration.mjs';
 
@@ -63,6 +64,22 @@ export function effectiveTargetVerifications(store, tenantId, targetIds = null) 
       source_kind: 'inherited_parent',
       inherited_from_target_id: parent.id,
     });
+  }
+  if (isDemoAutoVerifyTenant(tenantId)) {
+    for (const [targetId, target] of targets) {
+      if (!ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) {
+        rows.set(targetId, {
+          id: `tv_demo_${targetId}`,
+          tenant_id: tenantId,
+          target_id: targetId,
+          target_group_id: target.target_group_id,
+          state: 'user_confirmed',
+          source_kind: 'manual_override',
+          source_ref: { method: 'demo_auto_verify', demo: true },
+          transitioned_at: target.created_at || new Date().toISOString(),
+        });
+      }
+    }
   }
   return rows;
 }

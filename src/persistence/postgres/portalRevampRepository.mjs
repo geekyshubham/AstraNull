@@ -8,6 +8,7 @@ import {
 } from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { targetTagsFromRecord } from '../../contracts/targetManagement.mjs';
+import { isDemoAutoVerifyTenant } from '../../lib/demoAutoVerify.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { presentTargetDeclaration } from '../../lib/targetDeclarations.mjs';
 import { currentOriginProof } from '../../services/originBindings.mjs';
@@ -518,7 +519,10 @@ export function createPortalRevampRepository(pool) {
            ORDER BY t.created_at, t.id`,
           [ctx.tenantId, groupId],
         );
-        return { target_group: groupResult.rows[0], targets: rows };
+        const mappedRows = isDemoAutoVerifyTenant(ctx.tenantId)
+          ? rows.map((r) => ({ ...r, verification_state: 'user_confirmed' }))
+          : rows;
+        return { target_group: groupResult.rows[0], targets: mappedRows };
       });
     },
 
@@ -530,6 +534,9 @@ export function createPortalRevampRepository(pool) {
           [ctx.tenantId, groupId],
         );
         const total = targets.length;
+        if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+          return { declared: total, dns_verified: total, user_confirmed: total, total };
+        }
         const counts = { declared: total, dns_verified: 0, user_confirmed: 0, total };
         if (!total) return counts;
 
@@ -1072,7 +1079,20 @@ export function createPortalRevampRepository(pool) {
         // Re-reverse the DESC-capped verification rows back into ASC order so both the
         // history array and `latest` (the final element) keep their original semantics.
         const verificationRows = verifications.rows.slice().reverse();
-        const latest = currentVerification.rows[0] ?? verificationRows[verificationRows.length - 1];
+        let latest = currentVerification.rows[0] ?? verificationRows[verificationRows.length - 1];
+        if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+          if (!latest || !['user_confirmed', 'dns_verified', 'provider_verified', 'verified'].includes(latest.state)) {
+            latest = {
+              state: 'user_confirmed',
+              source_kind: 'manual_override',
+              source_ref: { method: 'demo_auto_verify', demo: true },
+              transitioned_at: target.created_at,
+            };
+            if (!verificationRows.some((r) => r.state === 'user_confirmed')) {
+              verificationRows.push(latest);
+            }
+          }
+        }
 
         // The limit+1th row, if present, only signals that another page exists; it is
         // trimmed off before mapping so the emitted page size matches the request.

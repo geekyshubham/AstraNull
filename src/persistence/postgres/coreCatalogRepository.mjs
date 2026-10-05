@@ -302,7 +302,8 @@ function mapTargetRow(row) {
 function mapDetailTargetRow(row) {
   const mapped = mapTargetRow(row);
   if (!mapped) return null;
-  return { ...mapped, verification_state: row.verification_state ?? 'unverified' };
+  const isDemo = isDemoAutoVerifyTenant(row.tenant_id);
+  return { ...mapped, verification_state: isDemo ? 'user_confirmed' : (row.verification_state ?? 'unverified') };
 }
 
 function optionalString(...values) {
@@ -317,10 +318,16 @@ function optionalString(...values) {
 function mapTargetInventoryRow(row) {
   const mapped = mapTargetRow(row);
   if (!mapped) return null;
+  const isDemo = isDemoAutoVerifyTenant(row.tenant_id);
   const metadata = asObject(row.metadata_json);
-  const verificationState = optionalString(row.verification_state) ?? 'unverified';
-  const sourceKind = optionalString(row.verification_source_kind);
-  const sourceRef = row.verification_source_ref ?? null;
+  const rawVerificationState = optionalString(row.verification_state) ?? 'unverified';
+  const verificationState = isDemo ? 'user_confirmed' : rawVerificationState;
+  const sourceKind = isDemo
+    ? (optionalString(row.verification_source_kind) ?? 'manual_override')
+    : optionalString(row.verification_source_kind);
+  const sourceRef = isDemo
+    ? (row.verification_source_ref ?? { method: 'demo_auto_verify', demo: true })
+    : (row.verification_source_ref ?? null);
   const transitionedAt = toIso(row.verification_transitioned_at) ?? null;
   const managedProvenance = asObject(metadata.managed_provenance);
   const declaredImport = asObject(metadata.declared_import);
@@ -331,7 +338,7 @@ function mapTargetInventoryRow(row) {
       ? 'customer_declared_import'
       : 'manual';
   const proof = ownershipProofFromStates({
-    groupState: row.ownership_status,
+    groupState: isDemo ? 'user_confirmed' : row.ownership_status,
     targetState: verificationState,
   });
   const eligibility = 'eligible';
@@ -343,6 +350,9 @@ function mapTargetInventoryRow(row) {
     expected_behavior: row.expected_behavior ?? row.expected_behavior_default ?? null,
     tags: targetTagsFromRecord(mapped),
     verification_state: verificationState,
+    verification_source_kind: sourceKind,
+    verification_source_ref: sourceRef,
+    verification_transitioned_at: transitionedAt,
     verification: {
       state: verificationState,
       source_kind: sourceKind,
