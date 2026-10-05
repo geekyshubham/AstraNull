@@ -13,6 +13,13 @@ import {
   presentTargetDeclaration,
 } from '../lib/targetDeclarations.mjs';
 import { newId } from '../lib/ids.mjs';
+import {
+  DEMO_AUTO_VERIFY_SOURCE_KIND,
+  DEMO_AUTO_VERIFY_STATE,
+  demoAutoVerifyAuditEntry,
+  demoAutoVerifySourceRef,
+  isDemoAutoVerifyTenant,
+} from '../lib/demoAutoVerify.mjs';
 import { csvImportRejected, validateTargetImportRows } from '../lib/targetCsvImport.mjs';
 import {
   isCurrentSuccessfulProviderSnapshot,
@@ -219,6 +226,15 @@ export function getTarget(ctx, id) {
  * @param {{ tenantId: string }} ctx
  * @param {{ asOf?: unknown }} [options]
  */
+function edgeCloudFamily(edge) {
+  if (!edge) return null;
+  const legacy = edge.evidence_json?.cloud;
+  const status = typeof edge.cloud_status === 'string' ? edge.cloud_status : legacy?.status;
+  if (typeof status !== 'string') return null;
+  const provider = typeof edge.cloud_provider === 'string' ? edge.cloud_provider : legacy?.provider;
+  return { status, provider: status === 'detected' && provider ? provider : null };
+}
+
 export function listDeclaredAnalyticsRows(ctx, options = {}) {
   const store = getStore();
   const groups = new Map(
@@ -275,6 +291,7 @@ export function listDeclaredAnalyticsRows(ctx, options = {}) {
         verification_state: verifications.get(target.id)?.state ?? null,
         declaration: presentTargetDeclaration(target.declaration_json, group.declaration_json),
         protection_profile: presentDeclaredTargetObservation(raw, { now: options.asOf ?? null }),
+        edge_cloud: edgeCloudFamily(edge),
         findings_count: openFindings.get(target.id) ?? 0,
         last_validation_at: lastValidation.get(target.id) ?? null,
         created_at: toIso(target.created_at),
@@ -514,6 +531,36 @@ export function createTargetGroup(ctx, body = {}) {
   return presentGroup(record);
 }
 
+function recordDemoAutoVerification(ctx, target) {
+  if (!isDemoAutoVerifyTenant(ctx.tenantId)) return;
+  const store = getStore();
+  if (!store.targetVerifications) store.targetVerifications = [];
+  const auditEntry = audit(demoAutoVerifyAuditEntry(ctx, { targetId: target.id, targetGroupId: target.target_group_id }));
+  store.targetVerifications.push({
+    id: newId('tv'),
+    tenant_id: ctx.tenantId,
+    target_id: target.id,
+    state: DEMO_AUTO_VERIFY_STATE,
+    source_kind: DEMO_AUTO_VERIFY_SOURCE_KIND,
+    source_ref: demoAutoVerifySourceRef(),
+    transitioned_at: new Date().toISOString(),
+    transitioned_by: ctx.userId ?? 'system',
+    audit_entry_id: auditEntry.id,
+  });
+}
+
+/** Record demo verification for active targets of an allowlisted tenant that lack proof. */
+export function backfillDemoAutoVerifications(ctx) {
+  if (!isDemoAutoVerifyTenant(ctx.tenantId)) return { error: 'demo_auto_verify_not_enabled', status: 409 };
+  const latest = latestTargetVerifications(ctx.tenantId);
+  const pending = getStore().targets.filter((target) => target.tenant_id === ctx.tenantId
+    && !isArchivedTarget(target)
+    && !ownershipProofFromStates({ targetState: latest.get(target.id)?.state }).verified);
+  for (const target of pending) recordDemoAutoVerification(ctx, target);
+  if (pending.length) persistStore();
+  return { verified_count: pending.length, target_ids: pending.map((target) => target.id) };
+}
+
 export function addTarget(ctx, groupId, body = {}) {
   const group = getStore().targetGroups.find(
     (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
@@ -579,6 +626,7 @@ export function addTarget(ctx, groupId, body = {}) {
       metadata: { target_group_id: groupId, changed_fields: declarationFields },
     });
   }
+  recordDemoAutoVerification(ctx, record);
   persistStore();
   return presentTarget(record, group);
 }
@@ -619,6 +667,7 @@ export function importTargets(ctx, groupId, rows = []) {
       resource_id: record.id,
       metadata: { target_group_id: groupId, changed_fields: ['kind', 'value', 'expected_behavior'], import_source: 'csv', csv_row: row },
     });
+    recordDemoAutoVerification(ctx, record);
     return record;
   });
   group.ownership_status = 'unverified';
@@ -1138,6 +1187,7 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       transitioned_by: ctx.userId ?? 'system',
       audit_entry_id: auditEntry.id,
     });
+    recordDemoAutoVerification(ctx, target);
     imported.push(target);
   }
 

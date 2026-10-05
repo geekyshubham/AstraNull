@@ -112,6 +112,8 @@ import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
 import { formatNotificationRuleForRead } from './lib/notifications.mjs';
 import * as cvePipeline from './services/cvePipeline.mjs';
 import * as externalDiscovery from './services/externalDiscovery.mjs';
+import * as subdomains from './services/subdomains.mjs';
+import { audit as appendDevAudit } from './audit.mjs';
 import * as supplyChainRisk from './services/supplyChainRisk.mjs';
 import * as notificationProviderCredentials from './services/notificationProviderCredentials.mjs';
 import * as notifications from './services/notifications.mjs';
@@ -746,6 +748,27 @@ function findingListQueryError(err) {
 function historyMethod(serviceDeps, name) {
   const fn = serviceDeps.targetHistory?.[name];
   return typeof fn === 'function' ? fn : null;
+}
+
+function subdomainServiceDeps(ctx, runtimeConfig, serviceDeps) {
+  const postgres = runtimeConfig.persistenceMode === 'postgres';
+  const readTarget = postgres ? serviceDeps.targetGroups?.getTarget : targetGroups.getTarget;
+  const createTarget = serviceDeps.targetGroups?.createTargetDirect ?? (postgres ? null : targetGroups.createTargetDirect);
+  const startTestRun = serviceDeps.testRuns?.startTestRun;
+  const recordAudit = postgres
+    ? serviceDeps.audit?.appendAuditEvent?.bind(serviceDeps.audit)
+    : appendDevAudit;
+  if (![readTarget, createTarget, startTestRun, recordAudit].every((fn) => typeof fn === 'function')) return null;
+  return {
+    readTarget,
+    createTarget,
+    startTestRun: (scope, body) => startTestRun(scope, body, runtimeConfig),
+    recordAudit,
+    readCohort: (query) => readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, 'target'),
+    config: runtimeConfig.subdomainDiscovery,
+    detectionEnabled: runtimeConfig.featureFlags?.wafPostureEnabled === true,
+    fetchFn: serviceDeps.subdomainFetch,
+  };
 }
 
 async function readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId) {
@@ -2927,6 +2950,29 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (result?.error) return json(res, result.status ?? 400, result);
     if (!result) return json(res, 404, { error: 'not_found' });
     return json(res, 200, result);
+  }
+
+  const targetSubdomainsMatch = path.match(/^\/v1\/targets\/([^/]+)\/subdomains(?:\/(enumerate|detect))?$/);
+  if (targetSubdomainsMatch) {
+    const action = targetSubdomainsMatch[2] ?? null;
+    if ((action === null && method !== 'GET') || (action !== null && method !== 'POST')) {
+      return json(res, 405, { error: 'method_not_allowed' });
+    }
+    const permission = action === null ? 'target_group:read' : action === 'enumerate' ? 'target_group:write' : 'waf:run';
+    const gate = requirePermission(ctx, permission);
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const deps = subdomainServiceDeps(ctx, runtimeConfig, serviceDeps);
+    if (!deps) return respondPostgresRouteNotWired(res);
+    const targetId = decodeURIComponent(targetSubdomainsMatch[1]);
+    const body = action === null ? null : await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = action === null
+      ? await subdomains.listTargetSubdomains(ctx, targetId, deps)
+      : action === 'enumerate'
+        ? await subdomains.enumerateTargetSubdomains(ctx, targetId, deps)
+        : await subdomains.detectTargetSubdomains(ctx, targetId, body, deps);
+    if (result?.notWired) return respondPostgresRouteNotWired(res);
+    if (result?.error) return json(res, result.status ?? 400, result);
+    return json(res, action === null ? 200 : 202, result);
   }
 
   const compatibleChecksMatch = path.match(/^\/v1\/targets\/([^/]+)\/compatible-checks$/);

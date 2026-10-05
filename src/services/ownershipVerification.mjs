@@ -2,6 +2,7 @@ import { audit } from '../audit.mjs';
 import { isCurrentProviderDnsOwnershipProof } from '../lib/connectorProviders/domainInventory.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { newId } from '../lib/ids.mjs';
+import { ownershipParentFor } from '../lib/subdomainEnumeration.mjs';
 import {
   VERIFICATION_RANK,
   ownershipProofFromStates,
@@ -240,16 +241,28 @@ function loaScopeTargetIds(loa) {
  */
 export function targetOwnershipProof(ctx, group, targetId) {
   const store = getStore();
-  const target = store.targets.find(
+  const groupTargets = store.targets.filter(
     (candidate) =>
-      candidate.id === targetId
-      && candidate.tenant_id === ctx.tenantId
+      candidate.tenant_id === ctx.tenantId
       && candidate.target_group_id === group?.id
       && !candidate.deleted_at,
   );
+  const target = groupTargets.find((candidate) => candidate.id === targetId);
   if (!target) return ownershipProofFromStates({ targetState: null });
 
+  const own = ownTargetOwnershipProof(ctx, store, target);
+  if (own.verified) return own;
+  const parent = ownershipParentFor(target, groupTargets);
+  if (!parent) return own;
+  const inherited = ownTargetOwnershipProof(ctx, store, parent);
+  return inherited.verified
+    ? { ...inherited, source: 'parent', inherited_from_target_id: parent.id }
+    : own;
+}
+
+function ownTargetOwnershipProof(ctx, store, target) {
   const verification = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+  if (verification?.inherited_from_target_id) return { verified: false, state: 'unverified', source: null };
   if (verification?.state !== 'provider_verified') {
     return ownershipProofFromStates({ targetState: verification?.state ?? null });
   }

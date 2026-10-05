@@ -600,6 +600,8 @@ export function edgeDetectionRowFields(projection, { testRunId = null, observedA
     cdn_provider: projection.cdn.provider ?? null,
     cdn_type: projection.cdn.type ?? null,
     cdn_providers: projection.cdn_providers,
+    cloud_status: projection.cloud?.status ?? 'inconclusive',
+    cloud_provider: projection.cloud?.status === 'detected' ? projection.cloud.provider ?? null : null,
     confidence: projection.confidence,
     conflicting_vendor_signals: projection.conflicting_vendor_signals,
     corpus_version: projection.corpus_version || null,

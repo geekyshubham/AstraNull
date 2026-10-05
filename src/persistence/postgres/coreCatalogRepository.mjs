@@ -5,6 +5,13 @@ import {
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
+import {
+  DEMO_AUTO_VERIFY_SOURCE_KIND,
+  DEMO_AUTO_VERIFY_STATE,
+  demoAutoVerifyAuditEntry,
+  demoAutoVerifySourceRef,
+  isDemoAutoVerifyTenant,
+} from '../../lib/demoAutoVerify.mjs';
 import { csvImportRejected, validateTargetImportRows } from '../../lib/targetCsvImport.mjs';
 import {
   isCurrentProviderDnsOwnershipProof,
@@ -95,6 +102,21 @@ async function appendMutationAudit(auditRepository, client, ctx, event, now) {
     actor_role: ctx.role,
     ...event,
   }, { client, now: new Date(now) });
+}
+
+async function recordDemoAutoVerification(auditRepository, client, ctx, { targetId, targetGroupId }, now) {
+  if (!isDemoAutoVerifyTenant(ctx.tenantId)) return;
+  const at = new Date(Date.parse(now) + 1).toISOString();
+  const { tenant_id: _tenant, actor_user_id: _actor, actor_role: _role, ...event } = demoAutoVerifyAuditEntry(ctx, { targetId, targetGroupId });
+  const auditEntry = await appendMutationAudit(auditRepository, client, ctx, event, at);
+  await client.query(
+    `INSERT INTO target_verifications (
+       id, tenant_id, target_id, state, source_kind, source_ref,
+       transitioned_at, transitioned_by, audit_entry_id
+     ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9)`,
+    [newId('tv'), ctx.tenantId, targetId, DEMO_AUTO_VERIFY_STATE, DEMO_AUTO_VERIFY_SOURCE_KIND,
+      JSON.stringify(demoAutoVerifySourceRef()), at, ctx.userId ?? 'system', auditEntry.id],
+  );
 }
 
 async function withCatalogMutation(pool, ctx, callback) {
@@ -839,6 +861,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
               metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
             }, now);
           }
+          await recordDemoAutoVerification(auditRepository, client, ctx, { targetId: id, targetGroupId: groupId }, now);
           rows[0].group_declaration_json = groupResult.rows[0].declaration_json;
           return mapTargetRow(rows[0]);
         } catch (error) {
@@ -891,6 +914,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
             resource_id: id,
             metadata: { target_group_id: groupId, changed_fields: ['kind', 'value', 'expected_behavior'], import_source: 'csv', csv_row: row },
           }, now);
+          await recordDemoAutoVerification(auditRepository, client, ctx, { targetId: id, targetGroupId: groupId }, now);
           created.push(mapTargetRow(inserted[0]));
         }
         await client.query(
@@ -1280,6 +1304,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
               metadata: { target_group_id: groupId, changed_fields: ['declaration'] },
             }, now);
           }
+          await recordDemoAutoVerification(auditRepository, client, ctx, { targetId: id, targetGroupId: groupId }, now);
           rows[0].group_declaration_json = groupDeclaration;
           return mapTargetRow(rows[0]);
         } catch (error) {
@@ -1584,6 +1609,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
                   : connector ? { connector_id: connector.id } : { declared_source: declaredSource }),
                 now, ctx.userId ?? 'system', auditEntry.id],
             );
+            await recordDemoAutoVerification(auditRepository, client, ctx, { targetId, targetGroupId: groupId }, now);
             imported.push({ ...mapTargetRow(inserted.rows[0]), verify_state: verifyState });
           } catch (error) {
             throw error;

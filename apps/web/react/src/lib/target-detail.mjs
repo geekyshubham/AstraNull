@@ -156,6 +156,8 @@ export function uniqueVerificationHistory(items) {
 export function ownershipMethodLabel(verification) {
   const record = asRecord(verification) ?? {};
   const sourceKind = normalize(record.source_kind ?? record.method ?? record.ownership_method);
+  if (asRecord(record.source_ref)?.method === 'demo_auto_verify') return 'Verified (demo)';
+  if (sourceKind === 'inherited_parent') return 'Inherited from parent domain';
   if (sourceKind === 'dns_txt') return 'DNS TXT record';
   if (sourceKind === 'user_attestation' || sourceKind === 'manual_override') return 'Authorized user attestation';
   if (sourceKind) return humanize(sourceKind);

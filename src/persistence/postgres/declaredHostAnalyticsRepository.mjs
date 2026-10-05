@@ -51,6 +51,8 @@ SELECT
   ed.cdn_provider,
   ed.conflicting_vendor_signals,
   ed.observed_at AS edge_observed_at,
+  ed.cloud_status,
+  ed.cloud_provider,
   (
     SELECT COUNT(*)::int
     FROM findings f
@@ -114,6 +116,9 @@ export function presentDeclaredTargetRow(raw, options = {}) {
     last_validation_at: isoOrNull(raw.last_validation_at),
     findings_count: Number.isInteger(findings) && findings >= 0 ? findings : null,
     edge_conflict: raw.conflicting_vendor_signals === true,
+    edge_cloud: raw.edge_id != null && raw.cloud_status != null
+      ? { status: raw.cloud_status, provider: raw.cloud_provider ?? null }
+      : null,
   };
 }
 

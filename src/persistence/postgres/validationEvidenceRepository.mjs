@@ -1024,14 +1024,16 @@ export function createValidationEvidenceRepository(pool) {
              id, tenant_id, target_group_id, target_id, test_run_id, status, reason,
              waf_status, waf_vendor, waf_type, waf_providers,
              cdn_status, cdn_provider, cdn_type, cdn_providers,
-             confidence, conflicting_vendor_signals, corpus_version, evidence_json, observed_at
+             confidence, conflicting_vendor_signals, corpus_version, evidence_json, observed_at,
+             cloud_status, cloud_provider
            )
            SELECT
              $1, $2, authoritative_run.target_group_id, authoritative_run.target_id,
              authoritative_run.id, $6, $7,
              $8, $9, $10, $11,
              $12, $13, $14, $15,
-             $16, $17, $18, $19::jsonb, $20::timestamptz
+             $16, $17, $18, $19::jsonb, $20::timestamptz,
+             $21, $22
            FROM test_runs authoritative_run
            JOIN targets authoritative_target
              ON authoritative_target.tenant_id = authoritative_run.tenant_id
@@ -1054,6 +1056,8 @@ export function createValidationEvidenceRepository(pool) {
              cdn_provider = EXCLUDED.cdn_provider,
              cdn_type = EXCLUDED.cdn_type,
              cdn_providers = EXCLUDED.cdn_providers,
+             cloud_status = EXCLUDED.cloud_status,
+             cloud_provider = EXCLUDED.cloud_provider,
              confidence = EXCLUDED.confidence,
              conflicting_vendor_signals = EXCLUDED.conflicting_vendor_signals,
              corpus_version = EXCLUDED.corpus_version,
@@ -1084,6 +1088,10 @@ export function createValidationEvidenceRepository(pool) {
             record.corpus_version ?? null,
             JSON.stringify(asObject(record.evidence_json)),
             record.observed_at ?? null,
+            ['detected', 'not_detected', 'inconclusive'].includes(record.cloud_status)
+              ? record.cloud_status
+              : 'inconclusive',
+            record.cloud_status === 'detected' ? record.cloud_provider ?? null : null,
           ],
         );
         return rows[0] ?? null;

@@ -31356,7 +31356,7 @@ function Vb(e) {
 }
 function Hb(e) {
   let t = Eb(e) ?? {}, n = Ob(t.source_kind ?? t.method ?? t.ownership_method);
-  return n === "dns_txt" ? "DNS TXT record" : n === "user_attestation" || n === "manual_override" ? "Authorized user attestation" : n ? kb(n) : Ob(t.state) === "unverified" ? "No ownership proof recorded" : "Ownership method not reported";
+  return Eb(t.source_ref)?.method === "demo_auto_verify" ? "Verified (demo)" : n === "inherited_parent" ? "Inherited from parent domain" : n === "dns_txt" ? "DNS TXT record" : n === "user_attestation" || n === "manual_override" ? "Authorized user attestation" : n ? kb(n) : Ob(t.state) === "unverified" ? "No ownership proof recorded" : "Ownership method not reported";
 }
 var Ub = {
   simulation_not_detection: "Simulation mode: the run completed with a simulated probe, which is never treated as edge evidence. Real detection requires a signed probe worker — see docs/operator-local-runbook.md \"Real probe results locally\".",

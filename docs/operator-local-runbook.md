@@ -470,6 +470,10 @@ Runs lint, unit tests, integration tests (including security polish), e2e flows,
 
 Agent update releases require `distribution: { manifest_url, signature_url, artifact_url }` on `POST /v1/agent-updates`; agents polling `GET /v1/agents/:id/update` receive `download` with the same three URLs. In Postgres mode the route family persists through `runtime.services.agentUpdates`; developer validation uses the JSON store. Host apply: `agents/linux/astranull-agent.mjs --download-and-apply-update` (see [`docs/agent/07-agent-lifecycle.md`](agent/07-agent-lifecycle.md)). Production still requires CDN/mirror custody runbooks, unattended daemon restart, and fleet rollout drills.
 
+### Demo tenant ownership auto-verify
+
+Set `ASTRANULL_DEMO_AUTO_VERIFY_TENANTS=ten_demo` to record every new demo target as verified (`user_confirmed`, labeled **Verified (demo)**, audited as `target.ownership_demo_auto_verified`). Backfill existing targets with `node scripts/demo-auto-verify-backfill.mjs --tenant-id ten_demo` (uses Postgres when `ASTRANULL_DATABASE_URL` is set). Applies in every deployment profile, including production. See [ADR-0016](adr/0016-demo-tenant-ownership-auto-verify.md).
+
 ### Troubleshooting (developer validation)
 
 | Symptom | Check |

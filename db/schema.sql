@@ -457,6 +457,10 @@ CREATE TABLE target_edge_detections (
   cdn_provider TEXT,
   cdn_type TEXT,
   cdn_providers TEXT[] NOT NULL DEFAULT '{}',
+  cloud_status TEXT NOT NULL DEFAULT 'inconclusive'
+    CONSTRAINT target_edge_detections_cloud_status_check
+    CHECK (cloud_status IN ('detected', 'not_detected', 'inconclusive')),
+  cloud_provider TEXT,
   confidence NUMERIC NOT NULL DEFAULT 0,
   conflicting_vendor_signals BOOLEAN NOT NULL DEFAULT FALSE,
   corpus_version TEXT,

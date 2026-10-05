@@ -1,5 +1,6 @@
 import { isCurrentProviderDnsOwnershipProof } from './connectorProviders/domainInventory.mjs';
-import { VERIFICATION_RANK } from './ownershipPolicy.mjs';
+import { ownershipProofFromStates, VERIFICATION_RANK } from './ownershipPolicy.mjs';
+import { ownershipParentFor } from './subdomainEnumeration.mjs';
 
 function latestRows(store, tenantId, targetIds = null) {
   const wanted = targetIds ? new Set(targetIds) : null;
@@ -39,14 +40,29 @@ export function effectiveTargetVerification(store, verification, target) {
 }
 
 export function effectiveTargetVerifications(store, tenantId, targetIds = null) {
+  const tenantTargets = (store.targets ?? []).filter((target) => target.tenant_id === tenantId);
   const targets = new Map(
-    (store.targets ?? [])
-      .filter((target) => target.tenant_id === tenantId && (!targetIds || targetIds.includes(target.id)))
+    tenantTargets
+      .filter((target) => !targetIds || targetIds.includes(target.id))
       .map((target) => [target.id, target]),
   );
   const rows = latestRows(store, tenantId, targetIds);
   for (const [targetId, verification] of rows) {
     rows.set(targetId, effectiveTargetVerification(store, verification, targets.get(targetId)));
+  }
+  for (const [targetId, target] of targets) {
+    if (ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) continue;
+    const parent = ownershipParentFor(target, tenantTargets);
+    if (!parent) continue;
+    const parentRow = effectiveTargetVerification(store, latestRows(store, tenantId, [parent.id]).get(parent.id), parent);
+    if (!ownershipProofFromStates({ targetState: parentRow?.state }).verified) continue;
+    rows.set(targetId, {
+      ...parentRow,
+      target_id: targetId,
+      target_group_id: target.target_group_id,
+      source_kind: 'inherited_parent',
+      inherited_from_target_id: parent.id,
+    });
   }
   return rows;
 }

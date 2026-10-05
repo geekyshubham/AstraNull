@@ -34,6 +34,7 @@ import {
 } from '../../lib/safeTestGuards.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
+import { ownershipParentFor } from '../../lib/subdomainEnumeration.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import {
   correlateExternalOnlyVerdict,
@@ -624,6 +625,25 @@ export function createPostgresValidationServices(repositories, options = {}) {
   }
 
   async function authoritativeOwnership(ctx, group, target) {
+    const own = await ownTargetOwnership(ctx, group, target);
+    if (own.verified || own.unavailable) return own;
+    const parent = ownershipParentFor(target, group.targets ?? []);
+    if (!parent) return own;
+    const inherited = await ownTargetOwnership(ctx, group, parent);
+    if (!inherited.verified) return own;
+    return {
+      ...inherited,
+      source: 'parent',
+      inherited_from_target_id: parent.id,
+      ownershipBinding: {
+        ...inherited.ownershipBinding,
+        target_id: target.id,
+        inherited_from_target_id: parent.id,
+      },
+    };
+  }
+
+  async function ownTargetOwnership(ctx, group, target) {
     if (typeof ownershipVerifications?.getCurrentTargetVerification !== 'function') {
       return { verified: false, state: 'unverified', unavailable: true };
     }

@@ -12,6 +12,7 @@ import {
   loadSecretEncryptionKey,
 } from './lib/secrets.mjs';
 import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
+import { boundedMaxResults } from './lib/subdomainEnumeration.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
 
@@ -609,6 +610,15 @@ export function loadRuntimeConfig(env = process.env) {
     'ASTRANULL_EXTERNAL_DISCOVERY_ENABLED',
     false,
   );
+  const virusTotalApiKey = typeof env.ASTRANULL_VIRUSTOTAL_API_KEY === 'string'
+    ? env.ASTRANULL_VIRUSTOTAL_API_KEY.trim()
+    : '';
+  const subdomainDiscovery = Object.freeze({
+    source: 'virustotal',
+    configured: virusTotalApiKey.length > 0,
+    virusTotalApiKey,
+    maxResults: boundedMaxResults(env.ASTRANULL_SUBDOMAIN_MAX_RESULTS),
+  });
   const connectorWorkerConfig = loadConnectorWorkerConfig(env);
   const {
     connectorsEnabledDefault,
@@ -763,6 +773,7 @@ export function loadRuntimeConfig(env = process.env) {
     secretEncryptionConfigured,
     connectorSecretEncryptionKey: connectorWorkerConfig.connectorSecretEncryptionKey,
     connectorSecretEncryptionConfigured: connectorWorkerConfig.connectorSecretEncryptionConfigured,
+    subdomainDiscovery,
     featureFlags: {
       wafPostureEnabled,
       externalDiscoveryEnabled,
