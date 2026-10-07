@@ -25,6 +25,7 @@ const TEST_ENV = {
   // connector Poll control the interaction specs exercise does not exist. `npm run dev:api`
   // sets the same flag, so this matches the surface the app is actually driven on.
   ASTRANULL_CONNECTORS_ENABLED: '1',
+  ASTRANULL_PROTECTION_VALIDATION_ENABLED: '1',
   // Portal E2E drives many route navigations against ONE shared server; each nav
   // fires ~15 parallel /v1 calls via fetchPortalData, so a full-suite run bursts past
   // the default 600-req/60s limiter and starts getting 429s (empty lists → spurious

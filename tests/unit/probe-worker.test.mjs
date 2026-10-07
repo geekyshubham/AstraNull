@@ -35,6 +35,7 @@ import {
   buildResultBody,
   executorNameForProbeKind,
   executeProbeForJob,
+  isPermanentResultRejection,
   fetchHttpHeadWithSafeRedirects,
   parseWorkerConfig,
   pollAndProcessOnce,
@@ -228,6 +229,15 @@ describe('probe worker safety accounting', () => {
     assert.equal(result('timeout', 5051, 5000).error, 'safety_attestation_exceeded');
     assert.equal(result('error', 101).error, 'safety_attestation_exceeded');
     assert.equal(result('connected', 101).error, 'safety_attestation_exceeded');
+    assert.equal(result('blocked', 3002, 3000).ok, true, 'all-filtered port scan finishes on its connect timers (D4)');
+    assert.equal(result('blocked', 3051, 3000).error, 'safety_attestation_exceeded');
+  });
+
+  it('treats a 4xx result rejection as final for that job only (D4)', () => {
+    assert.equal(isPermanentResultRejection(422), true);
+    assert.equal(isPermanentResultRejection(401), false);
+    assert.equal(isPermanentResultRejection(429), false);
+    assert.equal(isPermanentResultRejection(500), false);
   });
 
   it('allows duration-only scheduler overshoot for exact pre-probe resolver deadline errors', () => {
@@ -1178,6 +1188,25 @@ describe('probe worker metadata sanitizer', () => {
     assert.equal(out.nested.error_class, 'timeout');
     assert.equal(out.nested.raw_packet, undefined);
     assert.equal(out.nested.log_line, undefined);
+  });
+
+  it('keeps port lists and graded marker rows so firewall and entry-path evaluators can use them (D3)', () => {
+    const out = sanitizeProbeMetadata({
+      open_ports: [443],
+      filtered_ports: [22, 3389],
+      closed_ports: [8080],
+      exposure_count: 1,
+      marker_results: [{ phase: 'query_marker', blocked: true, denial_signature: { kind: 'vendor', id: 'cloudflare_challenge', vendor: 'cloudflare' }, body: 'x' }],
+      variant_results: [{ label: 'double_url', blocked: false, allowed: true }],
+      phases: [{ phase: 'baseline', status_code: 200 }],
+    });
+    assert.deepEqual(out.open_ports, [443]);
+    assert.deepEqual(out.filtered_ports, [22, 3389]);
+    assert.deepEqual(out.closed_ports, [8080]);
+    assert.equal(out.marker_results[0].denial_signature.id, 'cloudflare_challenge');
+    assert.equal(out.marker_results[0].body, undefined);
+    assert.equal(out.variant_results[0].allowed, true);
+    assert.equal(out.phases[0].status_code, 200);
   });
 
   it('processJob never posts disallowed metadata keys from probe outcomes', async () => {

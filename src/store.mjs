@@ -97,6 +97,11 @@ function emptyStore() {
     internalApprovalRequests: [],
     internalAuditLog: [],
     breakGlassActivations: [],
+    applicationEntryPaths: [],
+    protectionExpectations: [],
+    protectionComparisonBaselines: [],
+    protectionComparisonEvaluations: [],
+    entryPathComparisons: [],
   };
 }
 

@@ -1,3 +1,4 @@
+import { normalizeStoredProtectionConfig } from '../lib/connectorProviders/common.mjs';
 import {
   audit,
   getLatestChainedAuditEntry,
@@ -1609,6 +1610,7 @@ const CONNECTOR_SNAPSHOT_SUMMARY_SAFE_KEYS = new Set([
   'record_ttl',
   'record_rdata',
   'zone',
+  'match_target_order',
 ]);
 
 const CONNECTOR_SNAPSHOT_KINDS = new Set([
@@ -1730,7 +1732,7 @@ function normalizeConnectorSnapshotSummary(raw) {
       continue;
     }
     if (normalized === 'rule_count') {
-      const n = Number(value);
+      const n = value == null || String(value).trim() === '' ? NaN : Number(value);
       if (Number.isFinite(n) && n >= 0) out.rule_count = Math.floor(n);
       continue;
     }
@@ -1751,8 +1753,12 @@ function normalizeConnectorSnapshotSummary(raw) {
       continue;
     }
     if (normalized === 'record_ttl') {
-      const n = Number(value);
+      const n = value == null || String(value).trim() === '' ? NaN : Number(value);
       if (Number.isFinite(n) && n >= 0) out.record_ttl = Math.floor(n);
+      continue;
+    }
+    if (normalized === 'match_target_order') {
+      if (value != null && String(value).trim() !== '' && Number.isInteger(Number(value))) out.match_target_order = Number(value);
       continue;
     }
     if (typeof value === 'string' && value.trim()) {
@@ -2042,6 +2048,10 @@ function normalizePollSnapshotInput(entry, connectorId) {
       ? entry.observed_at.trim()
       : new Date().toISOString();
   const summary_json = normalizeConnectorSnapshotSummary(entry.summary ?? entry.summary_json ?? {});
+  const protectionConfig = normalizeStoredProtectionConfig(
+    entry.protection_config ?? entry.summary?.protection_config ?? entry.summary_json?.protection_config,
+  );
+  if (protectionConfig) summary_json.protection_config = protectionConfig;
   return {
     connector_id: connectorId,
     snapshot_kind,

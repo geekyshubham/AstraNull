@@ -11,8 +11,17 @@ import { scrubFindingForCustomer } from '../lib/outsideInEvidence.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { emitNotificationIfSubscribed } from './notifications.mjs';
 import { presentFindingLineage } from './retestLineage.mjs';
+import {
+  applyProtectionFindingPatch,
+  dedupeProtectionFindingCandidates,
+  deriveProtectionFindingCandidates,
+  isProtectionValidationFinding,
+  planProtectionFindingUpsert,
+  toProtectionFindingRow,
+} from '../lib/protectionValidationFindings.mjs';
 
 export { FINDING_LIFECYCLE, authorizeFindingWrite, planFindingPatch } from '../lib/findingLifecycle.mjs';
+export { applyProtectionFindingPatch } from '../lib/protectionValidationFindings.mjs';
 
 export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   const store = getStore();
@@ -22,7 +31,8 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
       (f.target_group_id ?? null) === (run.target_group_id ?? null) &&
       f.target_id === target.id &&
       f.check_id === run.check_id &&
-      f.status === 'open',
+      f.status === 'open' &&
+      !isProtectionValidationFinding(f),
   );
   if (existing) {
     existing.last_verdict_id = verdict.id;
@@ -74,6 +84,76 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   });
   persistStore();
   return finding;
+}
+
+/**
+ * Derive deduplicated findings from a recorded, digest-verified comparison evaluation.
+ * Passing items only produce observations; nothing here closes a finding or its siblings.
+ */
+export function upsertProtectionFindingsFromEvaluation(ctx, evaluation, {
+  entryPaths = [],
+  expectations = [],
+  baseline = null,
+  now = new Date(),
+} = {}) {
+  const derived = deriveProtectionFindingCandidates({ evaluation, entryPaths, expectations, baseline });
+  if (!derived.ok) return { ok: false, error: derived.error, created: [], updated: [], retained: [] };
+  const store = getStore();
+  const at = new Date(now).toISOString();
+  const created = [];
+  const updated = [];
+  const retained = [];
+  for (const candidate of dedupeProtectionFindingCandidates(derived.candidates)) {
+    if (candidate.tenant_id !== ctx.tenantId) continue;
+    const existing = store.findings.filter((row) => row.tenant_id === ctx.tenantId && isProtectionValidationFinding(row));
+    const plan = planProtectionFindingUpsert({ existingFindings: existing, candidate });
+    const auditMeta = {
+      source: 'protection_validation',
+      dedupe_key: candidate.dedupe_key,
+      finding_class: candidate.finding_class,
+      evaluation_id: candidate.comparison_context.evaluation_id,
+      upsert_action: plan.action,
+    };
+    if (plan.action === 'create') {
+      const row = toProtectionFindingRow(candidate, { id: newId('finding'), now: at, upsert: plan });
+      store.findings.push(row);
+      created.push(row.id);
+      audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId ?? 'system',
+        actor_role: ctx.role ?? 'system',
+        action: 'finding.created',
+        resource_type: 'finding',
+        resource_id: row.id,
+        metadata: auditMeta,
+      });
+      if (['high', 'critical'].includes(row.severity)) {
+        emitNotificationIfSubscribed(ctx, {
+          trigger: 'finding.high_severity',
+          subject: row.title,
+          metadata: { finding_id: row.id, severity: row.severity, source: 'protection_validation' },
+        });
+      }
+      continue;
+    }
+    if (['escalate', 'record_observation', 'exception_retained'].includes(plan.action) && plan.finding_id) {
+      const index = store.findings.findIndex((row) => row.id === plan.finding_id && row.tenant_id === ctx.tenantId);
+      if (index < 0) continue;
+      store.findings[index] = applyProtectionFindingPatch(store.findings[index], plan.patch ?? {}, at);
+      (plan.action === 'exception_retained' ? retained : updated).push(plan.finding_id);
+      audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId ?? 'system',
+        actor_role: ctx.role ?? 'system',
+        action: 'finding.updated',
+        resource_type: 'finding',
+        resource_id: plan.finding_id,
+        metadata: auditMeta,
+      });
+    }
+  }
+  if (created.length || updated.length || retained.length) persistStore();
+  return { ok: true, error: null, created, updated, retained, passing: derived.passing.length, skipped: derived.skipped.length };
 }
 
 function groupMemberIds(tenantId, groupId) {

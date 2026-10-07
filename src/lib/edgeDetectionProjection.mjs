@@ -11,6 +11,14 @@
  */
 
 import { buildEdgeLayers } from './edgeFingerprint.mjs';
+import {
+  EXTERNAL_OBSERVATION_OUTCOMES,
+  directOriginStatusFor,
+  externalObservationLabel,
+  metadataConfirmsApplicationBypass,
+  metadataConfirmsOriginLockdown,
+  originObservationOf,
+} from './externalObservationOutcomes.mjs';
 
 const MAX_LIST_ITEMS = 64;
 const MAX_EVIDENCE_VENDORS = 5;
@@ -113,7 +121,8 @@ export function assessWafEffectiveness({
     'path_traversal_marker',
   ].every((family) => ['blocked', 'passed'].includes(markerClassStatus(rows, family)));
   let status = 'inconclusive';
-  if (!transportError && inconclusiveCount === 0) {
+  // G4: inconclusive marker rows are coverage gaps; they never void the definitive rows beside them.
+  if (!transportError) {
     if (wafPresent === false) status = 'no_waf_detected';
     else if (wafPresent === true && testedCount > 0) {
       if (passedCount > 0) {
@@ -200,19 +209,27 @@ function projectNetworkFirewall(metadata) {
   const attempted = reportedDirect
     ? reportedDirect.status !== 'not_tested'
     : phaseAttempted || metadata.origin_bypass_status_code != null;
-  const reachable = reportedDirect?.reachable === true
-    || metadata.direct_origin_reachable === true
-    || metadata.origin_bypass_confirmed === true;
-  const directStatus = reachable
+  const observation = originObservationOf(metadata);
+  const reachable = observation
+    ? observation.response_observed === true
+    : reportedDirect?.reachable === true || metadata.direct_origin_reachable === true;
+  const legacyStatus = reachable
     ? 'exposed'
     : reportedDirect?.status === 'no_exposure_observed'
       ? 'no_exposure_observed'
       : attempted ? 'inconclusive' : 'not_tested';
+  const directStatus = observation ? directOriginStatusFor(observation) : legacyStatus;
+  const outcome = observation?.outcome
+    ?? (EXTERNAL_OBSERVATION_OUTCOMES.includes(reportedDirect?.outcome) ? reportedDirect.outcome : null)
+    ?? (attempted ? null : 'not_tested');
   const direct = {
     status: directStatus,
+    outcome,
+    label: outcome ? externalObservationLabel(outcome) : null,
     reachable,
-    application_bypass_confirmed: metadata.origin_bypass_confirmed === true
-      || reportedDirect?.application_bypass_confirmed === true,
+    explicit_denial_observed: outcome === 'explicit_denial_observed',
+    application_bypass_confirmed: metadataConfirmsApplicationBypass(metadata),
+    application_bypass_suspected: observation?.application_bypass_suspected === true,
     status_code: Number.isInteger(reportedDirect?.status_code)
       ? reportedDirect.status_code
       : Number.isInteger(metadata.origin_bypass_status_code)
@@ -236,31 +253,32 @@ function projectNetworkFirewall(metadata) {
     ? 'exposed'
     : direct.status === 'inconclusive' || ports.status === 'inconclusive'
       ? 'inconclusive'
-      : direct.status === 'no_exposure_observed' || ports.status === 'no_exposure_observed'
-        ? 'no_exposure_observed'
-        : 'not_tested';
+      : direct.status === 'denied'
+        ? 'denied'
+        : direct.status === 'no_exposure_observed' || ports.status === 'no_exposure_observed'
+          ? 'no_exposure_observed'
+          : 'not_tested';
   return { status, direct_origin_reachability: direct, port_exposure: ports };
 }
 
 function projectProtection(metadata, waf, effectiveness) {
+  const lockdown = metadataConfirmsOriginLockdown(metadata);
   const reported = boundedString(metadata.posture_status, 32).toLowerCase();
   const hasError = boundedString(metadata.error_class)
     || ['error', 'timeout'].includes(boundedString(metadata.external_result).toLowerCase());
   let status = 'detected_only';
   if (hasError || effectiveness.status === 'inconclusive') status = 'inconclusive';
-  else if (metadata.origin_bypass_confirmed === true
+  else if (metadataConfirmsApplicationBypass(metadata)
     || ['present_but_not_effective', 'partially_effective'].includes(effectiveness.status)) {
     status = 'underprotected';
   } else if (waf.status === 'not_detected') status = 'unprotected';
   else if (waf.status !== 'detected') status = 'inconclusive';
   else if (reported === 'unprotected' || reported === 'underprotected') status = reported;
   else if (effectiveness.status === 'effective_for_tested_probes') {
-    status = reported === 'protected' && metadata.origin_lockdown_confirmed === true
-      ? 'protected'
-      : 'edge_protected';
+    status = reported === 'protected' && lockdown ? 'protected' : 'edge_protected';
   }
   const labels = {
-    protected: 'Protected · edge block and origin lockdown',
+    protected: 'Protected for tested probes · edge block and direct-origin denial observed',
     edge_protected: 'Effective at the edge; origin lockdown not verified',
     underprotected: 'Underprotected',
     unprotected: 'Unprotected',
@@ -279,7 +297,8 @@ function projectProtection(metadata, waf, effectiveness) {
     status,
     label: labels[status],
     evidence_tier: tiers[status],
-    origin_lockdown_confirmed: metadata.origin_lockdown_confirmed === true,
+    origin_lockdown_confirmed: lockdown,
+    origin_lockdown_basis: lockdown ? 'explicit_denial_observed' : null,
   };
 }
 

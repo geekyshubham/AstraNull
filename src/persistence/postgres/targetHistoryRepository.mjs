@@ -387,11 +387,15 @@ export function createTargetHistoryRepository(pool) {
     async getFinding(ctx, id) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
-          `SELECT id, tenant_id, target_group_id, target_id, test_run_id, check_id, status, closed_at
+          `SELECT id, tenant_id, target_group_id, target_id, test_run_id, check_id, status, closed_at,
+                  source, protection_validation_json
            FROM findings WHERE tenant_id = $1 AND id = $2`,
           [ctx.tenantId, id],
         );
-        return rows[0] ?? null;
+        const row = rows[0];
+        if (!row) return null;
+        const { protection_validation_json: protection, ...rest } = row;
+        return protection ? { ...rest, protection_validation: protection } : rest;
       });
     },
 
@@ -445,13 +449,15 @@ export function createTargetHistoryRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const inserted = await client.query(
           `INSERT INTO finding_retest_lineage (
-             id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_by, created_at
-           ) VALUES ($1, $2, $3, $4, $5, $6, 'retest', 'retest', $7, $8::timestamptz)
+             id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_by, created_at,
+             comparison_context_json
+           ) VALUES ($1, $2, $3, $4, $5, $6, 'retest', 'retest', $7, $8::timestamptz, $9::jsonb)
            ON CONFLICT (tenant_id, finding_id, test_run_id) DO NOTHING
            RETURNING *`,
           [
             record.id, record.tenant_id, record.finding_id, record.test_run_id, record.target_id,
             record.check_id, record.created_by, record.created_at,
+            record.comparison_context ? JSON.stringify(record.comparison_context) : null,
           ],
         );
         if (inserted.rows[0]) return { ...inserted.rows[0], replayed: false };

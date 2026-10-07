@@ -45,6 +45,35 @@ function countRulesetEntries(rulesets) {
   return count;
 }
 
+const CLOUDFLARE_SECURITY_PHASE = /firewall|ratelimit|ddos|waf/;
+const CLOUDFLARE_CHALLENGE_ACTIONS = new Set(['challenge', 'js_challenge', 'managed_challenge']);
+
+export function cloudflareRuleActionCategory(rule) {
+  if (rule?.enabled === false) return 'disabled';
+  const action = String(rule?.action ?? '').trim().toLowerCase();
+  if (action === 'block') return 'block';
+  if (CLOUDFLARE_CHALLENGE_ACTIONS.has(action)) return 'challenge';
+  if (action === 'log') return 'monitor';
+  if (action === 'skip') return 'bypass';
+  if (action === 'execute') return 'delegated';
+  return 'unknown';
+}
+
+export function cloudflareZoneProtectionConfig(rulesets) {
+  const security = (rulesets ?? []).filter((ruleset) => (
+    CLOUDFLARE_SECURITY_PHASE.test(String(ruleset?.phase ?? '').toLowerCase()) && Array.isArray(ruleset?.rules)
+  ));
+  const rules = security.flatMap((ruleset) => ruleset.rules);
+  const known = security.length > 0;
+  return {
+    enforcementUnit: 'ruleset_rule',
+    actions: known ? rules.map((rule) => cloudflareRuleActionCategory(rule)) : null,
+    attachmentLevel: 'zone',
+    exclusionCount: known ? rules.filter((rule) => cloudflareRuleActionCategory(rule) === 'bypass').length : null,
+    unsupportedFields: ['attachment_paths', 'path_exclusions', 'method_exclusions', 'version'],
+  };
+}
+
 function deriveCloudflarePolicyMode(zone, rulesets) {
   const securityLevel = zone?.security_level ?? zone?.settings?.security_level?.value ?? null;
   if (securityLevel) return normalizePolicyMode(securityLevel);
@@ -150,6 +179,7 @@ function normalizePrefetchedZones(prefetched, config, observedAt) {
       displayRef: zone.name ?? zone.id,
       summary,
       observedAt,
+      protectionConfig: cloudflareZoneProtectionConfig(rulesets),
     }));
   }
   return snapshots;
@@ -221,6 +251,7 @@ export async function pollCloudflare({
         ...(zonePermissionGaps.length > 0 ? { permission_gaps: zonePermissionGaps } : {}),
       },
       observedAt,
+      protectionConfig: cloudflareZoneProtectionConfig(rulesets),
     }));
   }
 

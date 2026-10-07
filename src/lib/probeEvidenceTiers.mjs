@@ -306,6 +306,8 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'waf.crlf_injection_marker.safe',
     'waf.csv_formula_marker.safe',
     'waf.deserialization_marker.safe',
+    'waf.entry_path_api_marker.safe',
+    'waf.entry_path_login_marker.safe',
     'waf.file_upload_marker.safe',
     'waf.http_method_policy_marker.safe',
     'waf.jndi_ldap_marker.safe',

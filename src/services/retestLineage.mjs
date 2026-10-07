@@ -7,6 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { roleHasPermission } from '../contracts/roles.mjs';
+import { isProtectionValidationFinding, protectionRetestContext, protectionRetestRunScopeMatches } from '../lib/protectionValidationFindings.mjs';
 import { requirePermission } from '../rbac.mjs';
 import { normalizeObservationTimestamp } from './targetHistory.mjs';
 import { getStore, persistStore } from '../store.mjs';
@@ -33,7 +34,7 @@ function lineageOf(store) {
   return store.findingRetestLineage;
 }
 
-export function planRetestRegistration({ finding, run, intent, existing = null }) {
+export function planRetestRegistration({ finding, run, intent, existing = null, authorization = null }) {
   if (!finding) return error('unknown_finding', 404);
   if (!run) return error('unknown_run', 404);
   if (finding.tenant_id !== run.tenant_id || finding.target_id !== run.target_id || finding.check_id !== run.check_id) {
@@ -41,7 +42,20 @@ export function planRetestRegistration({ finding, run, intent, existing = null }
   }
   if (intent !== 'retest') return error('intent_required', 400);
   if (existing) return { replayed: true, record: existing };
+  if (isProtectionValidationFinding(finding)) {
+    if (!protectionRetestRunScopeMatches(finding, run)) return error('retest_not_authorized', 409, { reason: 'retest_scope_mismatch' });
+    if (authorization?.ok !== true) {
+      return error('retest_not_authorized', authorization?.status && authorization.status >= 400 ? authorization.status : 409, {
+        reason: authorization?.error ?? 'authorization_not_rechecked',
+      });
+    }
+    return { replayed: false, comparison_context: protectionRetestContext(finding, authorization) };
+  }
   return { replayed: false };
+}
+
+function comparisonContextOf(row) {
+  return row?.comparison_context ?? row?.comparison_context_json ?? null;
 }
 
 export function labelRunRelation({ finding, run, lineage = [] }) {
@@ -90,6 +104,7 @@ export function presentFindingLineage({ finding, runs = [], lineage = [], siblin
       status: sibling.status,
       closed_at: sibling.closed_at ?? null,
     })),
+    ...(comparisonContextOf(finding.protection_validation) ? { comparison_context: comparisonContextOf(finding.protection_validation) } : {}),
     retests: lineage.map((row) => ({
       id: row.id,
       test_run_id: row.test_run_id,
@@ -98,6 +113,7 @@ export function presentFindingLineage({ finding, runs = [], lineage = [], siblin
       intent: 'retest',
       relation: 'retest',
       created_at: row.created_at,
+      ...(comparisonContextOf(row) ? { comparison_context: comparisonContextOf(row) } : {}),
     })),
     later_same_pair: related
       .filter((run) => !explicit.has(run.id))
@@ -138,7 +154,10 @@ export function registerRetestLineage(ctx, input = {}, options = {}) {
   const existing = lineageOf(store).find((row) => row.tenant_id === ctx.tenantId
     && row.finding_id === input.finding_id
     && row.test_run_id === input.test_run_id) ?? null;
-  const planned = planRetestRegistration({ finding, run, intent: input.intent, existing });
+  const authorization = isProtectionValidationFinding(finding)
+    ? (options.authorization ?? options.resolveProtectionRetestAuthorization?.(ctx, finding, run) ?? null)
+    : null;
+  const planned = planRetestRegistration({ finding, run, intent: input.intent, existing, authorization });
   if (planned.error) return planned;
   if (planned.replayed) return { ...planned.record, replayed: true, sibling_closure: false };
   const record = {
@@ -152,6 +171,7 @@ export function registerRetestLineage(ctx, input = {}, options = {}) {
     relation: 'retest',
     created_by: ctx.userId ?? null,
     created_at: normalizeObservationTimestamp(options.now ?? new Date()),
+    ...(planned.comparison_context ? { comparison_context: planned.comparison_context } : {}),
   };
   lineageOf(store).push(record);
   persistStore();

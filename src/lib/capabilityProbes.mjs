@@ -14,6 +14,11 @@ import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
 import { pinnedFetch, pinnedHttp2Request, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 import { startProbeIoAttempt } from './probeAttempt.mjs';
+import {
+  CANARY_NONCE_REQUEST_HEADER,
+  classifyDirectOriginObservation,
+  matchControlDenialSignature,
+} from './externalObservationOutcomes.mjs';
 import { probeQuicReachability } from './safeNetworkProbes.mjs';
 import {
   API_DOC_PATHS,
@@ -29,6 +34,7 @@ import {
   BENIGN_CLASS_MARKERS,
   OUTSIDE_IN_SCAN_DEFAULT_BUDGET,
   readBoundedResponseBody,
+  readSignatureBody,
   runOutsideInWafScan,
 } from './outsideInWafScanner.mjs';
 import { enrichProbeMetadataWithWafCatalog } from './wafProductCatalog.mjs';
@@ -374,7 +380,9 @@ function isExactDnsHostname(value, expected) {
 }
 
 function baseUrlForHost(host, https = true) {
-  return `${https ? 'https' : 'http'}://${host}/`;
+  const literal = String(host ?? '').replace(/^\[|\]$/g, '');
+  const authority = net.isIP(literal) === 6 ? `[${literal}]` : host;
+  return `${https ? 'https' : 'http'}://${authority}/`;
 }
 
 function httpsHeadWithSni(directIp, hostname, {
@@ -944,42 +952,57 @@ export async function probeHostSniBypass(job, deps = {}) {
     });
   }
   const durationMs = observedProbeDurationMs(deps);
-  if (error) {
-    return {
-      external_result: classifyFetchError(error, { reachability: true }),
-      metadata: withKind(job, kind, { error_class: error.code ?? error.name, protected_host: hostname, direct_ip: directIp, duration_ms: durationMs }),
-      requests_sent: 1,
-      duration_ms: durationMs,
-    };
-  }
-  const bypassed = res.status >= 200 && res.status < 500;
-  // The HTTP response alone only proves network ingress to whatever answered on that IP/port —
-  // it does not prove the response came from the protected application. An application-level
-  // bypass claim additionally requires the destination to echo back the marker this probe sent,
-  // which only the target application (not an unrelated listener) would do.
   const expectedMarker = job.probe_profile?.marker ? String(job.probe_profile.marker) : null;
-  const markerEchoed = Boolean(
-    expectedMarker && res.headers?.get?.('x-astranull-marker-echo') === expectedMarker,
-  );
-  const applicationBypassConfirmed = bypassed && markerEchoed;
+  const observation = classifyDirectOriginObservation({
+    attempted: true,
+    response: error ? null : res,
+    error: error ?? null,
+    baseline: null,
+    expectedNonce: job.nonce ?? null,
+    expectedMarker,
+    declaredLockdown: job.probe_profile?.declared_origin_lockdown ?? null,
+    directAddress: pinnedDirectIp,
+    scope: { host: hostname, path: String(requestPath || '/').split('?')[0] || '/', port: requestPort ?? null },
+    observedAt: new Date().toISOString(),
+  });
+  const external = observation.outcome === 'explicit_denial_observed'
+    ? 'blocked'
+    : observation.response_observed
+      ? 'connected'
+      : observation.outcome === 'no_response' ? 'timeout' : 'error';
   return {
-    external_result: bypassed ? 'connected' : 'blocked',
+    external_result: external,
     metadata: withKind(job, kind, {
-      status_code: res.status,
+      ...(observation.status_code != null ? { status_code: observation.status_code } : {}),
+      ...(observation.error_class ? { error_class: observation.error_class } : {}),
       protected_host: hostname,
       direct_ip: directIp,
-      network_reachable: bypassed,
-      application_bypass_confirmed: applicationBypassConfirmed,
-      // Deprecated alias retained for existing consumers; now reflects the network-ingress
-      // signal only. Application-level access requires application_bypass_confirmed
-      // external probe evidence per this check's verdict_logic.
-      bypass_signal: bypassed,
+      observation_outcome: observation.outcome,
+      network_reachable: observation.response_observed,
+      explicit_denial_observed: observation.explicit_denial_observed,
+      denial_signature: observation.denial_signature,
+      response_reason: observation.response_reason,
+      application_bypass_confirmed: observation.application_bypass_confirmed,
+      application_bypass_suspected: observation.application_bypass_suspected,
+      // Deprecated alias: network response observed, never an application bypass or protection claim.
+      bypass_signal: observation.response_observed,
+      origin_observation: observation,
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: 1,
     duration_ms: durationMs,
   };
+}
+
+const PORT_CONNECT_TIMEOUT_MAX_MS = 3000;
+const PORT_SCAN_DEADLINE_MARGIN_MS = 50;
+
+/** Splits what is left of the job deadline across the ports still to sample, so one filtered port cannot starve the rest. */
+export function portConnectTimeoutMs(remainingJobMs, portsLeft) {
+  const usable = Math.floor(Number(remainingJobMs)) - PORT_SCAN_DEADLINE_MARGIN_MS;
+  if (!Number.isFinite(usable) || usable <= 0) return 0;
+  return Math.min(PORT_CONNECT_TIMEOUT_MAX_MS, Math.floor(usable / Math.max(1, portsLeft)));
 }
 
 /**
@@ -1002,6 +1025,7 @@ export async function probePortScanBounded(job, deps = {}) {
   const ports = (job.probe_profile?.ports ?? RISKY_ADMIN_PORTS).slice(0, budget);
   const open_ports = [];
   const filtered_ports = [];
+  const closed_ports = [];
   let requestsSent = 0;
 
   const destination = await vetProbeDestinationHost(host, deps);
@@ -1027,9 +1051,9 @@ export async function probePortScanBounded(job, deps = {}) {
   }
   const resolvedHost = destination.addresses[0];
 
-  for (const port of ports) {
+  for (const [index, port] of ports.entries()) {
     if (requestsSent >= budget) break;
-    const remainingMs = Math.min(3000, remainingProbeTimeoutMs(job, deps));
+    const remainingMs = portConnectTimeoutMs(remainingProbeTimeoutMs(job, deps), Math.min(ports.length, budget) - index);
     if (remainingMs <= 0) {
       return deadlineOutcome(job, kind, deps, requestsSent, {
         scan_host: resolvedHost,
@@ -1047,6 +1071,7 @@ export async function probePortScanBounded(job, deps = {}) {
     );
     if (state === 'open') open_ports.push(port);
     else if (state === 'filtered' || state === 'timeout') filtered_ports.push(port);
+    else if (state === 'closed') closed_ports.push(port);
     if (remainingProbeTimeoutMs(job, deps) <= 0 && requestsSent < ports.length) {
       return deadlineOutcome(job, kind, deps, requestsSent, {
         scan_host: resolvedHost,
@@ -1065,6 +1090,7 @@ export async function probePortScanBounded(job, deps = {}) {
       scan_host: resolvedHost,
       open_ports,
       filtered_ports,
+      closed_ports,
       risky_admin_ports_open: risky_open,
       exposure_count: open_ports.length,
       request_counting_basis: 'logical_operations',
@@ -1105,8 +1131,46 @@ function inertProbeMarker(job) {
   return String(job.nonce_hash ?? job.probe_profile?.marker ?? 'astranull-safe-marker').slice(0, 128);
 }
 
+/** Bounded body prefix for signature matching, raced against the remaining job time; '' when unavailable. */
+async function signatureBodyOf(res, method, job, deps) {
+  const remaining = Math.max(0, Math.min(1_000, remainingProbeTimeoutMs(job, deps)));
+  if (!res || remaining <= 0) return '';
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(''), remaining);
+  });
+  try {
+    return await Promise.race([readSignatureBody(res, method), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function blockedHttpStatus(status) {
   return [400, 401, 403, 405, 406, 409, 413, 414, 429, 431, 501, 503].includes(status);
+}
+
+const MARKER_SIGNATURE_HEADERS = Object.freeze(['x-waf-block', 'x-bot-challenge', 'x-sucuri-block']);
+const UNSIGNED_MARKER_STATUS_REASONS = Object.freeze({
+  401: 'authentication_gate_precedes_inspection',
+  407: 'probe_path_error',
+  421: 'misdirected_request',
+});
+
+/** Benign-marker response class: blocked only with a control-specific signature; unsigned 4xx is at most block_suspected. */
+export function classifyMarkerResponse(res, { baselineStatus = null, declared = null, bodyText = '' } = {}) {
+  const status = Number(res?.status);
+  const out = (fields) => ({ blocked: false, allowed: false, inconclusive: false, block_suspected: false, denial_signature: null, reason: null, ...fields });
+  if (!Number.isInteger(status)) return out({ inconclusive: true, reason: 'rst_or_drop_unattributed' });
+  const header = MARKER_SIGNATURE_HEADERS.find((name) => res.headers?.get?.(name) != null);
+  const signature = matchControlDenialSignature({ statusCode: status, headers: res, bodyText, declared })
+    ?? (header ? { kind: 'vendor', id: `challenge_header:${header}`, vendor: null } : null);
+  if (signature) return out({ blocked: true, denial_signature: signature });
+  if (UNSIGNED_MARKER_STATUS_REASONS[status]) return out({ inconclusive: true, reason: UNSIGNED_MARKER_STATUS_REASONS[status] });
+  if (status >= 500) return out({ inconclusive: true, reason: 'error_not_attributable' });
+  if (status >= 200 && status < 400) return out({ allowed: true });
+  const differs = Number.isInteger(baselineStatus) && baselineStatus >= 200 && baselineStatus < 400 && baselineStatus !== status;
+  return out({ inconclusive: true, block_suspected: differs, reason: differs ? 'unattributed_denial' : 'baseline_not_available' });
 }
 
 /**
@@ -1724,6 +1788,7 @@ export async function probeWafInspectionLimit(job, deps = {}) {
   let requestsSent = 0;
   let baselineStatus = null;
   let baselineBlocked = false;
+  let baselineClass = null;
   let transportError = null;
   const variantResults = [];
 
@@ -1744,7 +1809,8 @@ export async function probeWafInspectionLimit(job, deps = {}) {
       transportError = baseline.error.code ?? baseline.error.name ?? 'probe_transport_error';
     } else {
       baselineStatus = baseline.res.status;
-      baselineBlocked = blockedHttpStatus(baselineStatus);
+      baselineClass = classifyMarkerResponse(baseline.res, { declared: job.probe_profile?.declared_block_signature ?? null });
+      baselineBlocked = baselineClass.blocked;
     }
   }
 
@@ -1785,17 +1851,22 @@ export async function probeWafInspectionLimit(job, deps = {}) {
       break;
     }
     const statusCode = res.status;
+    const bodyText = await signatureBodyOf(res, variant.method, job, deps);
+    const graded = classifyMarkerResponse(res, { declared: job.probe_profile?.declared_block_signature ?? null, bodyText });
     variantResults.push({
       variant: variant.variant,
       status_code: statusCode,
-      blocked: blockedHttpStatus(statusCode),
+      blocked: graded.blocked,
+      allowed: graded.allowed,
+      inconclusive: graded.inconclusive,
+      ...(graded.denial_signature ? { denial_signature: graded.denial_signature } : {}),
+      ...(graded.reason ? { reason: graded.reason } : {}),
     });
   }
 
-  const successfulVariants = variantResults.filter((variant) => !variant.error_class);
-  const inspectionLimitBypassSuspected = baselineBlocked
-    && successfulVariants.some((variant) => !variant.blocked && variant.status_code >= 200 && variant.status_code < 400);
-  const comparisonComplete = baselineBlocked && successfulVariants.length > 0;
+  const gradedVariants = variantResults.filter((variant) => !variant.error_class && !variant.inconclusive);
+  const inspectionLimitBypassSuspected = baselineBlocked && gradedVariants.some((variant) => variant.allowed);
+  const comparisonComplete = baselineBlocked && gradedVariants.length > 0;
   const durationMs = observedProbeDurationMs(deps);
   return {
     external_result: inspectionLimitBypassSuspected
@@ -1806,6 +1877,9 @@ export async function probeWafInspectionLimit(job, deps = {}) {
       probe_path: endpoint.probePath,
       baseline_status: baselineStatus,
       baseline_blocked: baselineBlocked,
+      baseline_denial_signature: baselineClass?.denial_signature ?? null,
+      ...(baselineClass?.reason ? { baseline_reason: baselineClass.reason } : {}),
+      ignored_variant_count: variantResults.filter((variant) => variant.inconclusive).length,
       inspection_limit_bypass_suspected: inspectionLimitBypassSuspected,
       fail_open_signal: inspectionLimitBypassSuspected,
       comparison_complete: comparisonComplete,
@@ -1917,13 +1991,16 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     onPhase: (entry) => deps.onProbeActivity?.({ stage: 'phase_completed', operation: entry.phase,
       ...(Number.isInteger(entry.status_code) && entry.status_code >= 100 ? { status_code: entry.status_code } : {}),
       ...(entry.error_class ? { error_class: entry.error_class } : {}) }),
+    canaryNonce: job.nonce ?? null,
+    declaredBlockSignature: job.probe_profile?.declared_block_signature ?? null,
+    declaredOriginLockdown: job.probe_profile?.declared_origin_lockdown ?? null,
     originBypassFn: directIp && hostname
-      ? async ({ directIp: ip, hostname: host }) => {
+      ? async ({ directIp: ip, hostname: host, canaryNonce }) => {
         try {
           const res = await deadlineFetch(`http://${ip}/`, {
             method: 'HEAD',
             redirect: 'manual',
-            headers: { Host: host },
+            headers: { Host: host, ...(canaryNonce ? { [CANARY_NONCE_REQUEST_HEADER]: canaryNonce } : {}) },
           });
           return { res, error: null };
         } catch (error) {
@@ -1986,7 +2063,7 @@ export async function probeWafEnforcement(job, deps = {}) {
   const { res, error } = await boundedFetch(url, {
     timeoutMs: job.constraints?.timeout_ms ?? 5000,
     fetchOptions: {
-      method: 'HEAD',
+      method: 'GET',
       redirect: 'manual',
       headers: {
         'x-astranull-marker': marker,
@@ -2005,17 +2082,20 @@ export async function probeWafEnforcement(job, deps = {}) {
     };
   }
 
-  const challenged = res.status === 403 || res.status === 401 || res.status === 429;
-  const mitigated = Boolean(res.headers.get('cf-mitigated') ?? res.headers.get('x-waf-block'));
-  const enforced = challenged || mitigated;
-  const monitor_only = res.status >= 200 && res.status < 300 && !enforced;
+  const bodyText = await signatureBodyOf(res, 'GET', job, deps);
+  const graded = classifyMarkerResponse(res, { declared: job.probe_profile?.declared_block_signature ?? null, bodyText });
+  const enforced = graded.blocked;
+  const monitor_only = res.status >= 200 && res.status < 300 && graded.allowed;
 
   return {
-    external_result: enforced ? 'blocked' : 'connected',
+    external_result: enforced ? 'blocked' : graded.allowed ? 'connected' : 'not_run',
     metadata: withKind(job, kind, {
       status_code: res.status,
       waf_enforced: enforced,
       monitor_only_leak: monitor_only,
+      denial_signature: graded.denial_signature,
+      ...(graded.denial_signature?.vendor ? { waf_product_hint: graded.denial_signature.vendor } : {}),
+      ...(graded.inconclusive ? { inconclusive_reason: graded.reason, block_suspected: graded.block_suspected } : {}),
       duration_ms: durationMs,
     }),
     requests_sent: 1,
@@ -2894,6 +2974,11 @@ export async function probeWafClassMarker(job, deps = {}) {
     max_requests: budget,
     timeout_ms: remainingProbeTimeoutMs(job, deps),
     fetchFn: transport.request,
+    declared_block_signature: job.probe_profile?.declared_block_signature ?? null,
+    ...(job.probe_profile?.entry_path_scenario ? {
+      entry_path_scenario: job.probe_profile.entry_path_scenario,
+      expected_nonce: job.nonce ?? null,
+    } : {}),
   });
   const failure = delegatedFailureOutcome(job, kind, deps, state, {
     marker_class: raw?.marker_class ?? job.probe_profile?.marker_class ?? null,
@@ -2973,7 +3058,7 @@ export async function probeWafEvasionMarker(job, deps = {}) {
       observation_only: externalResult === 'not_run',
       readiness_conclusion: ['blocked', 'connected'].includes(externalResult),
       ...(externalResult === 'not_run'
-        ? { not_run_reason: 'insufficient_evasion_comparison', comparison_reason: raw?.metadata?.baseline_blocked === false ? 'baseline_marker_not_blocked' : 'comparison_incomplete' }
+        ? { not_run_reason: 'insufficient_evasion_comparison', comparison_reason: raw?.metadata?.inconclusive_reason ?? (raw?.metadata?.baseline_blocked === false ? 'baseline_marker_not_blocked' : 'comparison_incomplete') }
         : {}),
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',

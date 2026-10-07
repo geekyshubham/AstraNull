@@ -330,7 +330,8 @@ export function validateSafetyAttestation(
     && destinationResolverAttempts > 0
     && ['probe_job_deadline_exceeded', 'probe_destination_dns_timeout']
       .includes(body?.metadata?.error_class);
-  const timeoutToleranceMs = body?.external_result === 'timeout' || resolverDeadlineError
+  const timerDrivenResult = body?.external_result === 'timeout' || body?.external_result === 'blocked';
+  const timeoutToleranceMs = timerDrivenResult || resolverDeadlineError
     ? hardTimeoutSchedulerToleranceMs(timeoutMs)
     : 0;
   const durationCap = Math.min(Number.MAX_SAFE_INTEGER, timeoutMs + timeoutToleranceMs);

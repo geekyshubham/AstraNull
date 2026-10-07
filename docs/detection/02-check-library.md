@@ -32,6 +32,7 @@ Customer-runnable checks declare a **probe_profile** object alongside `probe_sim
 | `marker` | Optional harmless label (for example `astranull-safe-marker`). |
 | `method` | `HEAD` only when `kind` is `http_head`. |
 | `settings_assertion` | Optional allowlisted semantic for `http2_frame_probe`; currently only `hpack_limits`, which performs one SETTINGS exchange and grades negotiated header-table/list bounds without ping, reset, or crafted compressed headers. |
+| `entry_path_scenario` | Optional on `waf_class_marker_probe` and `waf_evasion_marker_probe`: `declared_login_path` or `declared_api_path`. Switches the probe to the declared entry-path plan described below. |
 
 Orchestration copies the catalog profile into signed probe jobs. `canonicalJobSigningPayload()` includes `probe_profile`, so workers reject jobs if profile metadata is tampered after lease. API callers may override only benign keys such as `marker`; they cannot raise `max_requests` or `timeout_ms` above check values.
 
@@ -69,6 +70,22 @@ Orchestration copies the catalog profile into signed probe jobs. `canonicalJobSi
 | gRPC Reflection / Stream | Safe | Whether reflection/stream controls are configured (metadata). | Declared gRPC endpoint. |
 | WebSocket Connection Controls | Safe | Whether WS upgrade/limits are configured (metadata). | Declared WebSocket endpoint. |
 | Agent Placement Baseline | Safe | Whether agent can observe target path. | Agent + canary/baseline path. |
+| Declared Login Path Marker (`waf.entry_path_login_marker.safe`) | Safe | Whether the edge WAF blocks the inert marker on a declared login URL, including percent-encoded, form content-type and padded variants. | URL target declared as a `declared_login_url` entry path (`declared_login_entry_path`), WAF asset, marker approval. |
+| Declared API Path Marker (`waf.entry_path_api_marker.safe`) | Safe | Whether the edge WAF blocks the inert marker on a declared API URL, including double-encoded, JSON content-type and padded variants. | URL target declared as a `declared_api_url` entry path (`declared_api_entry_path`), WAF asset, marker approval. |
+
+### Declared login/API entry-path marker checks
+
+Both checks use `waf_class_marker_probe` with `marker_class: sqli`, `max_requests: 8`, and `default_expected_behavior: must_block_before_origin`. The plan is fixed in `src/lib/vectorProbes/wafClassProbes.mjs`:
+
+1. A permitted `GET` baseline (and a `HEAD` baseline before the first `HEAD` variant). An unhealthy baseline leaves the whole result inconclusive.
+2. Plain reference markers: `query_marker` and `header_marker`.
+3. Dependent variants: percent-encoded (login) or double-encoded (API), form or JSON `content-type`, and the marker after 2 KB query padding or 4 KB header padding (inspection limit). Each variant names its plain reference. It is graded only when that reference was blocked (`blocked_baseline_prerequisite: met`). Otherwise the variant is inconclusive (`not_met` or `not_observed`) and is excluded from enforcement, so missing evidence never counts as protected or exposed.
+
+Safety limits: only `GET` and `HEAD`. No request body, no credential fields, no login submission, no account interaction. Redirects are never followed (`redirect: manual`). The marker appears only in a query parameter or the `x-astranull-marker` header. Host, port and path are taken from the signed target and never change. Graded variants that are all blocked mean `protected`; any graded variant allowed means `exposed`; no graded variant means `inconclusive`.
+
+Entry-path planning (`selectEntryPathCheck`) prefers these checks for `declared_login_url` and `declared_api_url` relations in three cases: the scenario is the marker scenario family, the scenario is a generic marker check (`waf_enforcement_probe`, `outside_in_waf_scan`), or the scenario check has the same marker class. A class-specific scenario such as `waf.ssrf_marker.safe` keeps its own check. Comparisons with the primary route then match on `scenario_version`.
+
+This follows the approach common to WAF test tools such as GoTestWAF: one inert marker placed in each location and encoding, a blocked-baseline pre-check, and unresolved requests left out of the score.
 
 ## SOC-gated high-scale checks
 

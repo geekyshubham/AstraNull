@@ -67,7 +67,7 @@ import { createPostgresValidationScanRepository } from './validationScanReposito
 import { createPostgresValidationScanServices } from './validationScanServiceAdapters.mjs';
 import { createTargetHistoryRepository } from './targetHistoryRepository.mjs';
 import { createPostgresTargetHistoryServices } from './targetHistoryServiceAdapters.mjs';
-import { resolveProbeDispatchConfig } from '../../config.mjs';
+import { loadEntryPathComparisonRunnerConfig, loadRuntimeConfig, resolveProbeDispatchConfig } from '../../config.mjs';
 import { createPostgresSubscriptionServices } from './subscriptionServiceAdapters.mjs';
 import { createPostgresCvePipelineServices } from './cvePipelineServiceAdapters.mjs';
 import { createCvePipelineRepository } from './cvePipelineRepository.mjs';
@@ -76,6 +76,19 @@ import { createPostgresSupplyChainRiskServices } from './supplyChainRiskServiceA
 import { createPostgresActionItemServices } from './actionItemServiceAdapters.mjs';
 import { createPostgresWafCoverageRollupServices } from './wafCoverageRollupServiceAdapters.mjs';
 import { createPostgresWafDriftServices } from './wafDriftServiceAdapters.mjs';
+import { createProtectionValidationRepository } from './protectionValidationRepository.mjs';
+import { createPostgresProtectionValidationBackend } from './protectionValidationServiceAdapters.mjs';
+import { createPostgresFirewallEvidenceReader } from './firewallEvidenceReader.mjs';
+import { createPostgresProtectionFindingsRepository } from './protectionFindingsRepository.mjs';
+import { createProtectionValidationService } from '../../services/protectionValidation.mjs';
+import { createProtectionValidationFacade } from '../../services/protectionValidationFacade.mjs';
+import { createEntryPathComparisonRepository } from './entryPathComparisonRepository.mjs';
+import {
+  createPostgresEntryPathComparisonServices,
+  missingEntryPathComparisonDependencies,
+} from './entryPathComparisonServiceAdapters.mjs';
+import { createProtectionRetestAuthorizer } from '../../services/protectionValidationRetest.mjs';
+import { probeSourceResolverFromEnv } from '../../lib/probeSourcePerspective.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,6 +132,19 @@ export function scanRuntimeConfigFromEnv(env) {
     probeWorkerSecret: resolved.probeWorkerSecret,
     probeConfigError: resolved.error,
   };
+}
+
+/** Server config when readable, else probe dispatch plus PV flags (runner env); null leaves comparisons paused. */
+export function entryPathComparisonRuntimeConfigFromEnv(env) {
+  try {
+    return loadRuntimeConfig(env);
+  } catch {
+    try {
+      return loadEntryPathComparisonRunnerConfig(env);
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**
@@ -191,15 +217,18 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
   let closed = false;
   /** @type {{ close?: () => Promise<void> } | undefined} */
   let validationScansRepo;
+  /** @type {{ close?: () => Promise<void> } | undefined} */
+  let entryPathComparisonRepo;
 
   const close = async () => {
     if (closed) {
       return;
     }
     closed = true;
-    if (validationScansRepo?.close) {
+    for (const lockOwner of [validationScansRepo, entryPathComparisonRepo]) {
+      if (!lockOwner?.close) continue;
       try {
-        await validationScansRepo.close();
+        await lockOwner.close();
       } catch {
         // best-effort: never let lock-pool teardown block the main pool close
       }
@@ -255,7 +284,10 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const catalogServices = createPostgresCatalogServices(repositories);
     const authServices = createPostgresAuthServices(repositories, options.authServiceOptions);
     const passwordAuthServices = createPostgresPasswordAuthServices(repositories);
-    const validationServices = createPostgresValidationServices(repositories);
+    let protectionRetestAuthorizer = null;
+    const validationServices = createPostgresValidationServices(repositories, {
+      resolveProtectionRetestAuthorization: (ctx, finding) => protectionRetestAuthorizer?.(ctx, finding) ?? null,
+    });
     const validationScanServices = createPostgresValidationScanServices(
       {
         validationScans: repositories.validationScans,
@@ -373,6 +405,45 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       repository: createTargetHistoryRepository(pool),
       audit: repositories.audit,
     });
+    const protectionValidationBackend = createPostgresProtectionValidationBackend(
+      createProtectionValidationRepository(pool),
+      repositories.audit,
+    );
+    const protectionValidationBase = createProtectionValidationService({
+      backend: protectionValidationBackend,
+      resolveSourcePerspective: probeSourceResolverFromEnv(env),
+    });
+    protectionRetestAuthorizer = createProtectionRetestAuthorizer({
+      base: protectionValidationBase,
+      backend: protectionValidationBackend,
+    });
+    entryPathComparisonRepo = createEntryPathComparisonRepository(pool, { audit: repositories.audit });
+    const entryPathComparisonDeps = {
+      repository: entryPathComparisonRepo,
+      protectionValidation: protectionValidationBackend,
+      coreCatalog: repositories.coreCatalog,
+      validationEvidence: repositories.validationEvidence,
+      probeJobs: repositories.probeJobs,
+      killSwitch: repositories.killSwitch,
+      testRuns: validationServices.testRuns,
+      resolveSourcePerspective: probeSourceResolverFromEnv(env),
+      runtimeConfig: options.entryPathComparisonRuntimeConfig ?? entryPathComparisonRuntimeConfigFromEnv(env),
+    };
+    // Fail closed: without every dependency the comparison routes stay postgres_route_not_wired.
+    const entryPathComparisons = missingEntryPathComparisonDependencies(entryPathComparisonDeps).length
+      ? null
+      : createPostgresEntryPathComparisonServices(entryPathComparisonDeps);
+    if (entryPathComparisons) {
+      validationServices.testRuns.registerRunTerminalHook((run, context) => entryPathComparisons.onRunTerminal(run, context));
+    }
+    const protectionValidation = createProtectionValidationFacade({
+      base: protectionValidationBase,
+      backend: protectionValidationBackend,
+      evidence: createPostgresFirewallEvidenceReader(pool),
+      resolveSourcePerspective: probeSourceResolverFromEnv(env),
+      comparisons: entryPathComparisons,
+      findings: createPostgresProtectionFindingsRepository(pool, { audit: repositories.audit }),
+    });
     const services = {
       ...catalogServices,
       ...authServices,
@@ -426,7 +497,15 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       },
       ownershipVerification,
       dnsOwnership,
-      targetHistory,
+      targetHistory: {
+        ...targetHistory,
+        registerRetestLineage: (ctx, input, retestOptions = {}) => targetHistory.registerRetestLineage(ctx, input, {
+          resolveProtectionRetestAuthorization: protectionRetestAuthorizer,
+          ...retestOptions,
+        }),
+      },
+      protectionValidation,
+      ...(entryPathComparisons ? { entryPathComparisons } : {}),
       loa: portalRevampServices.loa,
       targetDetail: portalRevampServices.targetDetail,
       remediation: portalRevampServices.remediation,

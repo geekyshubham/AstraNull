@@ -75,6 +75,11 @@ export {
 } from './notificationServiceAdapters.mjs';
 
 export {
+  POSTGRES_ENTRY_PATH_COMPARISON_SERVICE_METHODS,
+  createPostgresEntryPathComparisonServices,
+} from './entryPathComparisonServiceAdapters.mjs';
+
+export {
   STATE_CORE_CATALOG_REPOSITORY_METHODS,
   STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS,
   POSTGRES_STATE_SERVICE_METHODS,

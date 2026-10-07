@@ -322,7 +322,7 @@ describe('declared-host analytics API', () => {
       const exact = await get(baseUrl, `/v1/checks/${MARKER}`);
       assert.equal(exact.status, 200, exact.text);
       assert.equal(exact.json.check.check_id, MARKER);
-      assert.equal(exact.json.check.version, '1.0.0');
+      assert.equal(exact.json.check.version, '1.1.0');
       assert.equal(exact.json.check.supported_targets.includes('fqdn'), true);
       assert.equal(typeof exact.json.check.section_id, 'string');
       assert.equal((await get(baseUrl, '/v1/checks/missing.check.safe')).status, 404);

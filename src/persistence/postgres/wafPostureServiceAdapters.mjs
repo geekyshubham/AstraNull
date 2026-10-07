@@ -1,3 +1,4 @@
+import { normalizeStoredProtectionConfig } from '../../lib/connectorProviders/common.mjs';
 import {
   assertNoRawWafEvidence,
   classifyWafPosture,
@@ -242,6 +243,7 @@ const WAF_CONNECTOR_SNAPSHOT_SUMMARY_ALLOWLIST = new Set([
   'record_ttl',
   'record_rdata',
   'zone',
+  'match_target_order',
 ]);
 
 const WAF_CONNECTOR_SLICE_CAPABILITIES = Object.freeze([
@@ -388,8 +390,10 @@ function normalizeConnectorSnapshotSummary(input) {
         ? value.map((entry) => String(entry).trim()).filter(Boolean)
         : [];
     } else if (normalizedKey === 'rule_count') {
-      const count = Number(value);
+      const count = value == null || String(value).trim() === '' ? NaN : Number(value);
       summary.rule_count = Number.isFinite(count) ? count : null;
+    } else if (normalizedKey === 'match_target_order') {
+      if (value != null && String(value).trim() !== '' && Number.isInteger(Number(value))) summary.match_target_order = Number(value);
     } else if (typeof value === 'string') {
       summary[normalizedKey] = value.trim();
     } else {
@@ -414,7 +418,12 @@ function normalizeConnectorSnapshotInput(entry, provider) {
     throw err;
   }
   const summaryRaw = entry.summary ?? entry.summary_json ?? {};
-  const summary = normalizeConnectorSnapshotSummary(summaryRaw);
+  const { protection_config: summaryProtectionConfig, ...summaryFields } = summaryRaw && typeof summaryRaw === 'object' && !Array.isArray(summaryRaw)
+    ? summaryRaw
+    : {};
+  const summary = normalizeConnectorSnapshotSummary(summaryRaw && typeof summaryRaw === 'object' && !Array.isArray(summaryRaw) ? summaryFields : summaryRaw);
+  const protectionConfig = normalizeStoredProtectionConfig(entry.protection_config ?? summaryProtectionConfig);
+  if (protectionConfig) summary.protection_config = protectionConfig;
   const configHash =
     typeof entry.config_hash === 'string'
       ? entry.config_hash.trim()

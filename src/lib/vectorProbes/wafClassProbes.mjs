@@ -12,7 +12,13 @@
 import {
   BENIGN_CLASS_MARKERS,
   isBlockedOrChallenged,
+  markerBaselineHealth,
+  markerDenialSignature,
+  markerResponseSnapshot,
+  readSignatureBody,
 } from '../outsideInWafScanner.mjs';
+import { CANARY_ECHO_RESPONSE_HEADER, CANARY_NONCE_REQUEST_HEADER } from '../externalObservationOutcomes.mjs';
+import { blockedBaselinePrerequisite } from './evasionProbes.mjs';
 
 export const WAF_CLASS_MARKER_PROBE_KIND = 'waf_class_marker_probe';
 
@@ -121,9 +127,12 @@ export function markerForClass(markerClass) {
  * Build a bounded probe profile for one marker class. max_requests is clamped to
  * WAF_CLASS_PROBE_MAX_REQUESTS; there is no rate, concurrency, or repeat field.
  */
-export function buildWafClassProbeProfile({ marker_class, max_requests, timeout_ms } = {}) {
+export function buildWafClassProbeProfile({ marker_class, max_requests, timeout_ms, entry_path_scenario } = {}) {
   if (!WAF_MARKER_CLASSES.includes(marker_class)) {
     throw new Error(`unknown waf marker_class: ${marker_class}`);
+  }
+  if (entry_path_scenario != null && !ENTRY_PATH_SCENARIOS.includes(entry_path_scenario)) {
+    throw new Error(`unknown entry_path_scenario: ${entry_path_scenario}`);
   }
   const requested = Number.isInteger(max_requests) && max_requests > 0 ? max_requests : WAF_CLASS_PROBE_MAX_REQUESTS;
   const cappedTimeout = Number.isInteger(timeout_ms) && timeout_ms > 0
@@ -139,27 +148,8 @@ export function buildWafClassProbeProfile({ marker_class, max_requests, timeout_
     expected_action: 'block',
     nonce_hash_only: true,
     collect: ['status_code', 'marker_probes', 'posture_status'],
+    ...(entry_path_scenario ? { entry_path_scenario } : {}),
   });
-}
-
-function snapshotFromResponse(res) {
-  if (!res) return { status_code: 0, header_names: [], server_header: null, block_page_signature_id: null, connection_dropped: true };
-  const headerNames = [];
-  if (res.headers && typeof res.headers.forEach === 'function') {
-    res.headers.forEach((_v, k) => headerNames.push(String(k).toLowerCase()));
-  } else if (res.headers && typeof res.headers === 'object') {
-    for (const k of Object.keys(res.headers)) headerNames.push(String(k).toLowerCase());
-  }
-  const serverHeader = res.headers && typeof res.headers.get === 'function'
-    ? res.headers.get('server')
-    : res.headers?.server ?? null;
-  return {
-    status_code: res.status ?? 0,
-    header_names: headerNames,
-    server_header: serverHeader ?? null,
-    block_page_signature_id: null,
-    connection_dropped: false,
-  };
 }
 
 function buildProbeUrl(baseUrl, markerClass, marker, placement) {
@@ -180,6 +170,7 @@ function buildProbeUrl(baseUrl, markerClass, marker, placement) {
  * injectable via `fetchFn`; no real socket is opened in tests.
  */
 export async function runWafClassMarkerProbe(options = {}) {
+  if (options.entry_path_scenario != null) return runEntryPathMarkerProbe(options);
   const url = String(options.url ?? '').trim();
   const markerClass = options.marker_class;
   if (!url) return { error_class: 'unsupported_target', requests_sent: 0, phases: [] };
@@ -205,11 +196,13 @@ export async function runWafClassMarkerProbe(options = {}) {
       : WAF_CLASS_PROBE_MAX_REQUESTS,
     WAF_CLASS_PROBE_MAX_REQUESTS,
   );
+  const declared = options.declared_block_signature ?? null;
+  const grade = (requestUrl, headers) => fetchGrade(fetchFn, requestUrl, headers, timeoutMs, 'GET', null, declared);
   const placements = [
-    { phase: 'baseline', request: () => fetchGrade(fetchFn, url, { ...DEFAULT_HEADERS }, timeoutMs) },
-    { phase: 'query_marker', request: () => fetchGrade(fetchFn, buildProbeUrl(url, markerClass, marker, 'query'), { ...DEFAULT_HEADERS }, timeoutMs) },
-    { phase: 'path_marker', request: () => fetchGrade(fetchFn, buildProbeUrl(url, markerClass, marker, 'path'), { ...DEFAULT_HEADERS }, timeoutMs) },
-    { phase: 'header_marker', request: () => fetchGrade(fetchFn, url, { ...DEFAULT_HEADERS, 'x-astranull-marker': marker }, timeoutMs) },
+    { phase: 'baseline', request: () => grade(url, { ...DEFAULT_HEADERS }) },
+    { phase: 'query_marker', request: () => grade(buildProbeUrl(url, markerClass, marker, 'query'), { ...DEFAULT_HEADERS }) },
+    { phase: 'path_marker', request: () => grade(buildProbeUrl(url, markerClass, marker, 'path'), { ...DEFAULT_HEADERS }) },
+    { phase: 'header_marker', request: () => grade(url, { ...DEFAULT_HEADERS, 'x-astranull-marker': marker }) },
   ];
 
   const phases = [];
@@ -252,20 +245,234 @@ export async function runWafClassMarkerProbe(options = {}) {
   };
 }
 
-async function fetchGrade(fetchFn, requestUrl, headers, timeoutMs) {
+function canaryEchoMatches(res, expectedNonce) {
+  if (!expectedNonce || !res?.headers) return false;
+  const value = typeof res.headers.get === 'function'
+    ? res.headers.get(CANARY_ECHO_RESPONSE_HEADER)
+    : res.headers[CANARY_ECHO_RESPONSE_HEADER];
+  return typeof value === 'string' && value.trim() === expectedNonce;
+}
+
+async function fetchGrade(fetchFn, requestUrl, headers, timeoutMs, method = 'GET', expectedNonce = null, declared = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const safeMethod = ENTRY_PATH_SAFE_METHODS.includes(method) ? method : 'GET';
   try {
     const res = await fetchFn(requestUrl, {
-      method: 'GET',
-      headers,
+      method: safeMethod,
+      headers: expectedNonce ? { ...headers, [CANARY_NONCE_REQUEST_HEADER]: expectedNonce } : headers,
       redirect: 'manual',
       signal: controller.signal,
     });
-    return snapshotFromResponse(res);
+    if (!res || !Number.isInteger(res.status)) return { ...markerResponseSnapshot(null), transport_error: true };
+    const snapshot = markerResponseSnapshot(res, await readSignatureBody(res, safeMethod), declared);
+    return expectedNonce ? { ...snapshot, canary_echo_matched: canaryEchoMatches(res, expectedNonce) } : snapshot;
   } catch {
-    return { ...snapshotFromResponse(null), transport_error: true };
+    return { ...markerResponseSnapshot(null), transport_error: true };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export const ENTRY_PATH_SCENARIOS = Object.freeze(['declared_login_path', 'declared_api_path']);
+
+/** Only safe, non-state-changing methods; no request body is ever sent. */
+export const ENTRY_PATH_SAFE_METHODS = Object.freeze(['GET', 'HEAD']);
+
+export const ENTRY_PATH_QUERY_PADDING_BYTES = 2048;
+export const ENTRY_PATH_HEADER_PADDING_BYTES = 4096;
+
+const ENTRY_PATH_VARIATIONS = Object.freeze({
+  declared_login_path: Object.freeze([
+    Object.freeze({ variation: 'query_marker', method: 'GET', where: 'query', encoding: 'plain' }),
+    Object.freeze({ variation: 'query_marker_percent_encoded', method: 'GET', where: 'query', encoding: 'percent', reference: 'query_marker' }),
+    Object.freeze({ variation: 'header_marker', method: 'HEAD', where: 'header', encoding: 'plain' }),
+    Object.freeze({ variation: 'query_marker_form_content_type', method: 'GET', where: 'query', encoding: 'plain', content_type: 'application/x-www-form-urlencoded', reference: 'query_marker' }),
+    Object.freeze({ variation: 'query_marker_after_padding', method: 'GET', where: 'query', encoding: 'plain', padding_bytes: ENTRY_PATH_QUERY_PADDING_BYTES, reference: 'query_marker' }),
+    Object.freeze({ variation: 'header_marker_after_padding', method: 'HEAD', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, reference: 'header_marker' }),
+  ]),
+  declared_api_path: Object.freeze([
+    Object.freeze({ variation: 'query_marker', method: 'GET', where: 'query', encoding: 'plain', accept: 'application/json' }),
+    Object.freeze({ variation: 'query_marker_double_encoded', method: 'GET', where: 'query', encoding: 'double_percent', accept: 'application/json', reference: 'query_marker' }),
+    Object.freeze({ variation: 'header_marker', method: 'HEAD', where: 'header', encoding: 'plain', accept: 'application/json' }),
+    Object.freeze({ variation: 'query_marker_json_content_type', method: 'GET', where: 'query', encoding: 'plain', content_type: 'application/json', accept: 'application/json', reference: 'query_marker' }),
+    Object.freeze({ variation: 'query_marker_after_padding', method: 'GET', where: 'query', encoding: 'plain', padding_bytes: ENTRY_PATH_QUERY_PADDING_BYTES, accept: 'application/json', reference: 'query_marker' }),
+    Object.freeze({ variation: 'header_marker_after_padding', method: 'HEAD', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, accept: 'application/json', reference: 'header_marker' }),
+  ]),
+});
+
+/** Bounded variation plan for a declared login or API path; pure and network-free. */
+export function entryPathVariations(scenario) {
+  return ENTRY_PATH_VARIATIONS[scenario] ?? null;
+}
+
+function percentEncodeEveryByte(value) {
+  return [...Buffer.from(value, 'utf8')].map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+}
+
+function encodeMarker(marker, encoding) {
+  if (encoding === 'percent') return percentEncodeEveryByte(marker);
+  if (encoding === 'double_percent') return encodeURIComponent(encodeURIComponent(marker));
+  return marker;
+}
+
+/** Marker lands only in a query parameter or benign header; signed host, port, and path never change. */
+export function buildEntryPathRequest(baseUrl, markerClass, variation) {
+  if (!variation || !ENTRY_PATH_SAFE_METHODS.includes(variation.method)) {
+    throw new Error('entry-path variations only use safe methods');
+  }
+  const marker = WAF_CLASS_MARKERS[markerClass];
+  if (!isInertMarker(marker)) throw new Error(`non-inert or unknown marker class: ${markerClass}`);
+  const url = new URL(baseUrl);
+  const headers = {
+    ...DEFAULT_HEADERS,
+    ...(variation.accept ? { accept: variation.accept } : {}),
+    ...(variation.content_type ? { 'content-type': variation.content_type } : {}),
+  };
+  const padding = Number.isInteger(variation.padding_bytes) ? 'a'.repeat(variation.padding_bytes) : null;
+  const value = encodeMarker(marker, variation.encoding);
+  if (variation.where === 'query') {
+    const params = new URLSearchParams(url.search);
+    if (padding) params.set('astranull_pad', padding);
+    const encoded = variation.encoding === 'plain' ? encodeURIComponent(value) : value;
+    const prefix = params.toString();
+    url.search = `${prefix ? `${prefix}&` : ''}astranull_${markerClass}_probe=${encoded}`;
+  } else {
+    if (padding) headers['x-astranull-padding'] = padding;
+    headers['x-astranull-marker'] = value;
+  }
+  return { url: url.href, method: variation.method, headers };
+}
+
+function enforcementFromResults(results) {
+  const graded = results.filter((row) => !row.inconclusive && !row.error_class);
+  const blocked = graded.filter((row) => row.blocked).length;
+  const allowed = graded.filter((row) => row.allowed).length;
+  if (blocked + allowed === 0) return 'unknown';
+  if (allowed === 0) return 'enforced';
+  if (blocked === 0) return 'not_enforced';
+  return 'partial';
+}
+
+function referenceBlocked(row) {
+  if (!row || row.inconclusive || row.error_class) return null;
+  if (row.blocked === true) return true;
+  return row.allowed === true ? false : null;
+}
+
+/** Evasion and inspection-limit variants grade only after their plain reference marker was blocked. */
+export function gateEntryPathVariation(graded, variation, resultsByVariation) {
+  if (!variation?.reference) return { ...graded };
+  const prerequisite = blockedBaselinePrerequisite(referenceBlocked(resultsByVariation.get(variation.reference)));
+  const gate = { reference_variation: variation.reference, blocked_baseline_prerequisite: prerequisite };
+  if (prerequisite === 'met') return { ...graded, ...gate };
+  return { ...graded, blocked: false, challenged: false, allowed: false, inconclusive: true, ...gate };
+}
+
+function baselineSignature(snapshot) {
+  if (!snapshot || snapshot.transport_error) return null;
+  const signature = markerDenialSignature(snapshot, null);
+  if (!signature) return null;
+  const { challenge: _challenge, ...denial } = signature;
+  return denial;
+}
+
+/** Declared login/API scenario: permitted baseline then safe-method marker variations; no body, no redirects, max 8. */
+export async function runEntryPathMarkerProbe(options = {}) {
+  const url = String(options.url ?? '').trim();
+  const scenario = options.entry_path_scenario;
+  const markerClass = options.marker_class ?? 'sqli';
+  const variations = entryPathVariations(scenario);
+  if (!url) return { error_class: 'unsupported_target', requests_sent: 0, phases: [] };
+  if (!variations) return { error_class: 'unknown_entry_path_scenario', requests_sent: 0, phases: [] };
+  if (!WAF_MARKER_CLASSES.includes(markerClass)) return { error_class: 'unknown_marker_class', requests_sent: 0, phases: [] };
+  if (!isInertMarker(WAF_CLASS_MARKERS[markerClass])) return { error_class: 'non_inert_marker_blocked', requests_sent: 0, phases: [] };
+  const fetchFn = options.fetchFn;
+  if (typeof fetchFn !== 'function') return { error_class: 'no_transport', requests_sent: 0, phases: [] };
+  const timeoutMs = Number.isInteger(options.timeout_ms) && options.timeout_ms > 0
+    ? Math.min(options.timeout_ms, DEFAULT_TIMEOUT_MS)
+    : DEFAULT_TIMEOUT_MS;
+  const maxRequests = Math.min(
+    Number.isInteger(options.max_requests) && options.max_requests > 0 ? options.max_requests : WAF_CLASS_PROBE_MAX_REQUESTS,
+    WAF_CLASS_PROBE_MAX_REQUESTS,
+  );
+
+  const phases = [];
+  const markerResults = [];
+  const resultsByVariation = new Map();
+  const baselines = {};
+  let requestsSent = 0;
+  const declared = options.declared_block_signature ?? null;
+  const expectedNonce = typeof options.expected_nonce === 'string' && options.expected_nonce.trim()
+    ? options.expected_nonce.trim()
+    : null;
+  const baselineFor = async (method) => {
+    if (!baselines[method]) {
+      requestsSent += 1;
+      baselines[method] = await fetchGrade(fetchFn, url, { ...DEFAULT_HEADERS }, timeoutMs, method, method === 'GET' ? expectedNonce : null, declared);
+      phases.push({ phase: method === 'GET' ? 'baseline' : `baseline_${method.toLowerCase()}`, method, status_code: baselines[method].status_code });
+    }
+    return baselines[method];
+  };
+  const baseline = await baselineFor('GET');
+  const health = baseline.transport_error ? 'unhealthy' : markerBaselineHealth(baseline);
+
+  if (!baseline.transport_error) {
+    for (const variation of variations) {
+      const needsBaseline = !baselines[variation.method];
+      if (requestsSent + (needsBaseline ? 2 : 1) > maxRequests) break;
+      const methodBaseline = await baselineFor(variation.method);
+      if (methodBaseline.transport_error) break;
+      const request = buildEntryPathRequest(url, markerClass, variation);
+      requestsSent += 1;
+      const snapshot = await fetchGrade(fetchFn, request.url, request.headers, timeoutMs, request.method, null, declared);
+      phases.push({ phase: variation.variation, method: request.method, status_code: snapshot.status_code });
+      const graded = isBlockedOrChallenged(snapshot, methodBaseline);
+      const row = {
+        phase: variation.variation,
+        method: request.method,
+        ...gateEntryPathVariation(graded, variation, resultsByVariation),
+        status_code: snapshot.status_code,
+        ...(snapshot.transport_error ? { error_class: 'transport_error' } : {}),
+      };
+      resultsByVariation.set(variation.variation, row);
+      markerResults.push(row);
+      if (snapshot.transport_error) break;
+    }
+  }
+
+  const enforcement = health === 'healthy' ? enforcementFromResults(markerResults) : 'unknown';
+  const identityConfirmed = health === 'healthy' && baseline.canary_echo_matched === true;
+  const posture = enforcement === 'enforced' ? 'protected'
+    : enforcement === 'not_enforced' || enforcement === 'partial' ? 'exposed'
+      : 'inconclusive';
+  return {
+    entry_path_scenario: scenario,
+    marker_class: markerClass,
+    marker_inert: true,
+    requests_sent: requestsSent,
+    max_requests: maxRequests,
+    methods_used: [...new Set(phases.map((row) => row.method))],
+    redirects_followed: false,
+    permitted_baseline: {
+      status_code: baseline.transport_error ? null : baseline.status_code,
+      health,
+      denial_signature: baselineSignature(baseline),
+    },
+    baseline_health: health,
+    application_identity: {
+      confirmed: identityConfirmed,
+      method: identityConfirmed ? 'nonce_canary' : null,
+      attempted: Boolean(expectedNonce),
+    },
+    enforcement,
+    posture,
+    blocked_count: markerResults.filter((row) => row.blocked).length,
+    allowed_count: markerResults.filter((row) => row.allowed).length,
+    inconclusive_count: markerResults.filter((row) => row.inconclusive).length,
+    gated_variation_count: markerResults.filter((row) => row.blocked_baseline_prerequisite && row.blocked_baseline_prerequisite !== 'met').length,
+    phases,
+    marker_results: markerResults,
+    ...(baseline.transport_error ? { error_class: 'baseline_transport_error' } : {}),
+  };
 }

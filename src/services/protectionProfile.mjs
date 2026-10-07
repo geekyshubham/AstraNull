@@ -762,3 +762,12 @@ export function attachHistoryReadModel(derived, history) {
     },
   };
 }
+
+/**
+ * Optional PV-08 configuration context, kept beside the derived profile. It never feeds
+ * families, effectiveness, vendor detection, readiness, or coverage denominators.
+ */
+export function attachConfigurationContext(payload, configuration) {
+  if (!payload?.protection_profile || !configuration || typeof configuration !== 'object') return payload;
+  return { ...payload, protection_profile: { ...payload.protection_profile, configuration } };
+}

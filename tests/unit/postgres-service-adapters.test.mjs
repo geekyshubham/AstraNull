@@ -54,6 +54,7 @@ import {
   POSTGRES_TEST_POLICY_SERVICE_METHODS,
   createPostgresTestPolicyServices,
 } from '../../src/persistence/postgres/serviceAdapters.mjs';
+import { classifyDirectOriginObservation } from '../../src/lib/externalObservationOutcomes.mjs';
 import {
   buildRetestResultsFromDelegatedRuns,
   upsertDelegationJobByReservation,
@@ -969,6 +970,7 @@ describe('postgres validation service adapters', () => {
       timestamp: FIXED_NOW.toISOString(),
       metadata: {
         external_result: 'blocked',
+        origin_observation: classifyDirectOriginObservation({ response: { status: 403, headers: { get: (name) => (name === 'x-origin-lockdown' ? 'cdn-only' : null) } }, baseline: { status_code: 200 }, declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } } }),
         safety_attestation: {
           requests_sent: 1,
           probe_requests_sent: 1,

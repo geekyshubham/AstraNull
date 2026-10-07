@@ -2,6 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { getCheckById } from '../../src/contracts/checks.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
@@ -33,6 +34,7 @@ const ORIGIN = 'tgt_hist_writers_origin';
 const SIBLING = 'tgt_hist_writers_sib';
 const FOREIGN = 'tgt_hist_writers_foreign';
 const CHECK = 'waf.fingerprint.safe';
+const CATALOG_VERSION = getCheckById(CHECK).version;
 const OPS = 'ops.runbook_contact_validation.safe';
 const ORIGIN_CHECK = 'origin.direct_reachability.safe';
 const DECLARED = '2026-09-01T00:00:00.000Z';
@@ -229,7 +231,7 @@ describe('postgres current-release history writers', () => {
           internal: true,
         }, { probeMode: 'simulation' });
         assert.equal(forgedStart.error, undefined, JSON.stringify(forgedStart));
-        assert.equal(forgedStart.run.check_version, '1.0.0');
+        assert.equal(forgedStart.run.check_version, CATALOG_VERSION);
         assert.equal(forgedStart.run.scenario_version, 'fingerprint');
         assert.equal(forgedStart.run.producer_kind, 'internal_simulation');
         assert.equal(forgedStart.run.expected_behavior, 'must_block_before_origin');
@@ -250,7 +252,7 @@ describe('postgres current-release history writers', () => {
         }, { probeMode: 'signed-worker' });
         assert.equal(ops.error, undefined, JSON.stringify(ops));
         assert.equal(ops.run.producer_kind, 'customer_declaration');
-        assert.equal(ops.run.check_version, '1.0.0');
+        assert.equal(ops.run.check_version, getCheckById(OPS).version);
         assert.equal(ops.run.scenario_version, 'runbook_contacts');
         assert.equal(ops.run.expected_behavior, 'must_block_before_origin');
         assert.equal(ops.probe_job, undefined);
@@ -363,7 +365,7 @@ describe('postgres current-release history writers', () => {
         assert.equal(retest.error, undefined, JSON.stringify(retest));
         assert.equal(retest.run.retest_of_finding_id, 'fnd_a');
         assert.equal(retest.run.producer_kind, 'internal_simulation');
-        assert.equal(retest.run.check_version, '1.0.0');
+        assert.equal(retest.run.check_version, CATALOG_VERSION);
         const lineageRow = await ownerPool.query(
           `SELECT intent, relation FROM finding_retest_lineage
            WHERE tenant_id = $1 AND finding_id = 'fnd_a' AND test_run_id = $2`,

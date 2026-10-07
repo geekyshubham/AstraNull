@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, describe, it } from 'node:test';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+import { classifyDirectOriginObservation } from '../../src/lib/externalObservationOutcomes.mjs';
 import {
   buildSiemEventPayload,
   createActionItem,
@@ -157,6 +158,15 @@ function openWafPostureFindingsForAsset(assetId) {
   );
 }
 
+// Full "protected" needs an explicit direct-origin denial over a healthy baseline (ADR-0008, PV-01).
+function deniedOriginObservation() {
+  return classifyDirectOriginObservation({
+    response: { status: 403, headers: { get: (name) => (name === 'x-origin-lockdown' ? 'cdn-only' : null) } },
+    baseline: { status_code: 200 },
+    declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
+  });
+}
+
 function openWafDriftEventsForAsset(assetId, driftType = null) {
   return getStore().wafDriftEvents.filter(
     (e) =>
@@ -178,9 +188,8 @@ async function finalizeProtectedPosture(baseUrl, headers, asset) {
     metadata: {
       waf_fingerprint_detected: true,
       waf_product_hint: 'cloudflare',
-      // Outside-in only (ADR-0008): full "protected" is derived from external origin-lockdown
-      // evidence (origin not reachable), not an internal agent observation.
       origin_lockdown_confirmed: true,
+      origin_observation: deniedOriginObservation(),
     },
   });
 
@@ -647,6 +656,43 @@ describe('WAF posture API', () => {
     assert.equal(detail.json.scenario_results[0].evidence_summary_json.request_id, probeId);
   });
 
+  it('downgrades to edge_protected when lockdown rests on a legacy flag or a refused origin leg', async () => {
+    const engineer = demoHeaders('engineer');
+    for (const originObservation of [
+      null,
+      classifyDirectOriginObservation({
+        error: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }),
+        baseline: { status_code: 200 },
+      }),
+    ]) {
+      const asset = await createDemoAsset(baseUrl, engineer);
+      const safeRun = await createBoundSafeTestRun(baseUrl, engineer);
+      clearProbeEventsForRun(safeRun.id);
+      injectMetadataProbeEvent({
+        testRunId: safeRun.id,
+        nonceHash: safeRun.correlation?.nonce_hash ?? 'nonce_pv01_silent',
+        externalResult: 'blocked',
+        metadata: {
+          waf_fingerprint_detected: true,
+          waf_product_hint: 'cloudflare',
+          origin_lockdown_confirmed: true,
+          ...(originObservation ? { origin_observation: originObservation } : {}),
+        },
+      });
+      const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+        headers: engineer,
+        body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+      });
+      const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${validation.json.validation_run.id}/finalize`, {
+        headers: engineer,
+        body: { waf_detected: true, validation_passed: true },
+      });
+      assert.equal(finalize.status, 200);
+      assert.notEqual(finalize.json.posture.status, 'protected');
+      assert.equal(finalize.json.posture.status, 'edge_protected');
+    }
+  });
+
   it('finalizes protected posture when bound probe evidence corroborates validation pass', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
@@ -661,6 +707,7 @@ describe('WAF posture API', () => {
         waf_fingerprint_detected: true,
         waf_product_hint: 'cloudflare',
         origin_lockdown_confirmed: true,
+        origin_observation: deniedOriginObservation(),
       },
     });
 
@@ -1511,6 +1558,7 @@ describe('WAF connector API', () => {
               hostnames: ['app.example.com'],
               policy_mode: 'block',
               rule_count: 12,
+              match_target_order: 2,
             },
           },
         ],
@@ -1519,6 +1567,7 @@ describe('WAF connector API', () => {
     assert.equal(poll.status, 202);
     assert.equal(poll.json.snapshots.length, 1);
     assert.equal(poll.json.snapshots[0].summary.rule_count, 12);
+    assert.equal(poll.json.snapshots[0].summary.match_target_order, 2);
     assert.equal(poll.json.poll_job.snapshot_count, 1);
 
     const snapshots = await request(baseUrl, 'GET', `/v1/connectors/${connector.id}/snapshots`, {

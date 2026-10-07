@@ -52,6 +52,110 @@ export function normalizePolicyMode(value) {
   return POLICY_MODE_VALUES.has(raw) ? raw : 'unknown';
 }
 
+export const PROTECTION_CONFIG_SCHEMA = 'protection-config-v1';
+export const PROTECTION_CONFIG_ACTIONS = Object.freeze([
+  'block',
+  'challenge',
+  'monitor',
+  'bypass',
+  'disabled',
+  'delegated',
+  'unknown',
+]);
+export const PROTECTION_CONFIG_ATTACHMENT_LEVELS = Object.freeze(['hostname', 'zone', 'resource', 'unknown']);
+export const PROTECTION_CONFIG_PATH_MATCH = Object.freeze(['include', 'exclude', 'unspecified']);
+export const PROTECTION_CONFIG_FIELDS = Object.freeze([
+  'attachment_scope',
+  'attachment_paths',
+  'enforcement_actions',
+  'path_exclusions',
+  'method_exclusions',
+  'version',
+]);
+export const PROTECTION_CONFIG_MAX_PATTERNS = 32;
+const PROTECTION_CONFIG_PATTERN = /^\/[A-Za-z0-9._~*%/:@!$&'()+,;=-]{0,255}$/;
+const PROTECTION_CONFIG_METHOD = /^[A-Z]{3,10}$/;
+const PROTECTION_CONFIG_TOKEN = /^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,63}$/;
+
+function boundedList(values, pattern, transform = (value) => value) {
+  if (!Array.isArray(values)) return null;
+  const out = [];
+  for (const value of values) {
+    const normalized = transform(String(value ?? '').trim());
+    if (pattern.test(normalized) && !out.includes(normalized)) out.push(normalized);
+    if (out.length >= PROTECTION_CONFIG_MAX_PATTERNS) break;
+  }
+  return out.sort();
+}
+
+export function countProtectionConfigActions(actions) {
+  if (!Array.isArray(actions)) return null;
+  const counts = Object.fromEntries(PROTECTION_CONFIG_ACTIONS.map((action) => [action, 0]));
+  for (const action of actions) {
+    const key = PROTECTION_CONFIG_ACTIONS.includes(action) ? action : 'unknown';
+    counts[key] += 1;
+  }
+  return counts;
+}
+
+export function buildProtectionConfig({
+  enforcementUnit = null,
+  actions = null,
+  attachmentLevel = 'unknown',
+  attachmentPaths = null,
+  pathMatch = 'unspecified',
+  exclusionCount = null,
+  exclusionPaths = null,
+  exclusionMethods = null,
+  configVersion = null,
+  unsupportedFields = [],
+} = {}) {
+  const unit = PROTECTION_CONFIG_TOKEN.test(String(enforcementUnit ?? '')) ? String(enforcementUnit) : null;
+  const count = Number(exclusionCount);
+  const version = PROTECTION_CONFIG_TOKEN.test(String(configVersion ?? '')) ? String(configVersion) : null;
+  return {
+    schema: PROTECTION_CONFIG_SCHEMA,
+    enforcement_unit: unit,
+    action_counts: countProtectionConfigActions(actions),
+    attachment_level: PROTECTION_CONFIG_ATTACHMENT_LEVELS.includes(attachmentLevel) ? attachmentLevel : 'unknown',
+    attachment_paths: boundedList(attachmentPaths, PROTECTION_CONFIG_PATTERN),
+    path_match: PROTECTION_CONFIG_PATH_MATCH.includes(pathMatch) ? pathMatch : 'unspecified',
+    exclusion_count: exclusionCount === null || !Number.isFinite(count) ? null : Math.max(0, Math.floor(count)),
+    exclusion_paths: boundedList(exclusionPaths, PROTECTION_CONFIG_PATTERN),
+    exclusion_methods: boundedList(exclusionMethods, PROTECTION_CONFIG_METHOD, (value) => value.toUpperCase()),
+    config_version: version,
+    unsupported_fields: PROTECTION_CONFIG_FIELDS.filter((field) => (unsupportedFields ?? []).includes(field)),
+  };
+}
+
+const MAX_STORED_ACTION_COUNT = 100_000;
+
+/** Re-validates a stored or submitted protection_config; anything outside the schema yields null. */
+export function normalizeStoredProtectionConfig(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.schema !== PROTECTION_CONFIG_SCHEMA) return null;
+  const rawCounts = value.action_counts;
+  const actionCounts = rawCounts && typeof rawCounts === 'object' && !Array.isArray(rawCounts)
+    ? Object.fromEntries(PROTECTION_CONFIG_ACTIONS.map((action) => {
+      const count = Number(rawCounts[action]);
+      return [action, Number.isFinite(count) && count >= 0 ? Math.min(Math.floor(count), MAX_STORED_ACTION_COUNT) : 0];
+    }))
+    : null;
+  return {
+    ...buildProtectionConfig({
+      enforcementUnit: value.enforcement_unit,
+      attachmentLevel: value.attachment_level,
+      attachmentPaths: value.attachment_paths,
+      pathMatch: value.path_match,
+      exclusionCount: value.exclusion_count ?? null,
+      exclusionPaths: value.exclusion_paths,
+      exclusionMethods: value.exclusion_methods,
+      configVersion: value.config_version,
+      unsupportedFields: Array.isArray(value.unsupported_fields) ? value.unsupported_fields : [],
+    }),
+    action_counts: actionCounts,
+  };
+}
+
 export function buildNormalizedSnapshot({
   provider,
   snapshotKind,
@@ -59,11 +163,12 @@ export function buildNormalizedSnapshot({
   displayRef,
   summary = {},
   observedAt,
+  protectionConfig = null,
 }) {
   const safeSummary = {
     ...(Array.isArray(summary.hostnames) ? { hostnames: summary.hostnames.map((h) => String(h).trim()).filter(Boolean) } : {}),
     ...(summary.policy_mode ? { policy_mode: normalizePolicyMode(summary.policy_mode) } : {}),
-    ...(Number.isFinite(Number(summary.rule_count)) ? { rule_count: Math.max(0, Math.floor(Number(summary.rule_count))) } : {}),
+    ...(summary.rule_count != null && String(summary.rule_count).trim() !== '' && Number.isFinite(Number(summary.rule_count)) ? { rule_count: Math.max(0, Math.floor(Number(summary.rule_count))) } : {}),
     ...(Array.isArray(summary.managed_rule_versions)
       ? { managed_rule_versions: summary.managed_rule_versions.map((v) => String(v).trim()).filter(Boolean) }
       : {}),
@@ -85,7 +190,7 @@ export function buildNormalizedSnapshot({
     ...(typeof summary.record_type === 'string' && summary.record_type.trim()
       ? { record_type: summary.record_type.trim().toUpperCase() }
       : {}),
-    ...(Number.isFinite(Number(summary.record_ttl))
+    ...(summary.record_ttl != null && String(summary.record_ttl).trim() !== '' && Number.isFinite(Number(summary.record_ttl))
       ? { record_ttl: Math.max(0, Math.floor(Number(summary.record_ttl))) }
       : {}),
     ...(Array.isArray(summary.record_rdata)
@@ -94,7 +199,7 @@ export function buildNormalizedSnapshot({
     ...(typeof summary.zone === 'string' && summary.zone.trim()
       ? { zone: summary.zone.trim() }
       : {}),
-    ...(Number.isFinite(Number(summary.match_target_order))
+    ...(summary.match_target_order != null && String(summary.match_target_order).trim() !== '' && Number.isFinite(Number(summary.match_target_order))
       ? { match_target_order: Math.floor(Number(summary.match_target_order)) }
       : {}),
   };
@@ -109,6 +214,7 @@ export function buildNormalizedSnapshot({
     config_hash: configHash,
     observed_at: observedAt ?? new Date().toISOString(),
     provider,
+    ...(protectionConfig ? { protection_config: buildProtectionConfig(protectionConfig) } : {}),
   };
 }
 

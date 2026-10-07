@@ -224,3 +224,5 @@ export function buildProtectionMappings(assets = [], evidence = {}, options = {}
   }
   return assets.map((asset) => buildProtectionMapping(asset, evidence, options));
 }
+
+export { normalizeHostname as normalizeProtectionMappingHostname, hostnameFromCanonicalUrl };

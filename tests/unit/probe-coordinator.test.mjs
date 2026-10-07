@@ -1069,7 +1069,7 @@ describe('signed probe coordinator', () => {
         external_result: 'blocked',
         safety_attestation: {
           ...compliantSafetyAttestation(job),
-          duration_ms: 5001,
+          duration_ms: 5051,
         },
       },
       runtimeSignedWorker(),

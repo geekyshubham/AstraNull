@@ -30,7 +30,7 @@ export function resolveValidationScanRunnerIntervalSeconds(env = process.env) {
   return interval;
 }
 
-const USAGE = `${RUNNER_NAME}: dispatch due validation scans and advance running scans (Postgres mode).
+const USAGE = `${RUNNER_NAME}: dispatch due validation scans, advance running scans, and resume due entry-path comparisons (Postgres mode).
 
 This operator CLI is not a daemon. Schedule it externally (cron, Kubernetes CronJob, CI job).
 It requires signed-worker mode and delegates every step start through the validated test-run service.
@@ -214,6 +214,30 @@ export function summarizeScanAdvance(result) {
   };
 }
 
+/** @param {unknown} result */
+export function summarizeComparisonAdvance(result) {
+  const row = result && typeof result === 'object' ? result : {};
+  return {
+    comparison_id: safeCode(row.id, null),
+    advanced: row.advanced === true,
+    status: safeCode(row.status, null),
+    ...(row.waiting ? { waiting: true } : {}),
+    ...(row.reason ? { reason: safeCode(row.reason, 'advance_skipped') } : {}),
+  };
+}
+
+/** Postgres comparisons have no in-process ticker: resume due comparisons per tenant, pausing (never cancelling) on the gate. */
+export async function advanceEntryPathComparisonsForTenant(service, ctx, limit) {
+  if (typeof service?.advanceDueEntryPathComparisons !== 'function') return null;
+  try {
+    const results = await service.advanceDueEntryPathComparisons(ctx, { limit, pauseWhenGateOff: true });
+    const rows = Array.isArray(results) ? results.filter(Boolean).map(summarizeComparisonAdvance) : [];
+    return { due_count: rows.length, advanced: rows };
+  } catch (err) {
+    return { due_count: 0, advanced: [], error: safeCode(err?.code, 'comparison_advance_failed') ?? 'comparison_advance_failed' };
+  }
+}
+
 /**
  * @param {{
  *   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
@@ -275,12 +299,14 @@ export async function runPostgresValidationScans(options) {
             advancedRows.push(summarizeScanAdvance({ scan_id: scan.id, error: safeCode(err?.code ?? err?.message, 'advance_failed') ?? 'advance_failed' }));
           }
         }
+        const comparisons = await advanceEntryPathComparisonsForTenant(runtime.services?.entryPathComparisons, ctx, options.limit);
         tenants.push({
           tenant_id: tenantId,
           due_count: dispatchRows.length,
           runnable_count: advancedRows.length,
           dispatched: dispatchRows,
           advanced: advancedRows,
+          ...(comparisons ? { comparisons } : {}),
           ...(Array.isArray(dispatched) ? {} : { error: safeCode(dispatched?.error, 'dispatch_failed') ?? 'dispatch_failed' }),
         });
       } catch {
@@ -347,7 +373,7 @@ export async function runValidationScanRunner(env, config, deps = {}) {
     (deps.mkdir ?? mkdirSync)(path.dirname(path.resolve(config.out)), { recursive: true });
     (deps.writeFile ?? writeFileSync)(config.out, `${JSON.stringify(summary, null, 2)}\n`);
   }
-  const failed = tenants.some((tenant) => tenant.error);
+  const failed = tenants.some((tenant) => tenant.error || tenant.comparisons?.error);
   return { summary, exitCode: failed ? 1 : 0 };
 }
 

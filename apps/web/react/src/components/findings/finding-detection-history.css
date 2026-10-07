@@ -222,6 +222,16 @@
   border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+@media (pointer: coarse) {
+  .finding-history-copy-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 .finding-history-copy-btn:hover {

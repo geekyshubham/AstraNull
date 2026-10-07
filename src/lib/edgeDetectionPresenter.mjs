@@ -3,6 +3,7 @@
  * Runtime-agnostic: accepts either the in-memory record or a mapped Postgres row.
  */
 
+import { EXTERNAL_OBSERVATION_OUTCOMES, externalObservationLabel } from './externalObservationOutcomes.mjs';
 import { presentProductDetectionEvidence } from './productDetectionEvidence.mjs';
 
 const PROVIDER_DISPLAY_NAMES = Object.freeze({
@@ -178,9 +179,9 @@ function effectivenessPresentation(raw, wafStatus) {
 
 function protectionPresentation(raw, effectiveness, wafStatus) {
   const value = asRecord(raw);
-  // Outside-in only (ADR-0008): full "protected" rests on external origin-lockdown evidence
-  // (origin not reachable), not on an internal agent.
-  const originLockdownConfirmed = value?.origin_lockdown_confirmed === true;
+  // Stored rows without an explicit-denial basis never present full protection (ADR-0008, PV-01).
+  const originLockdownConfirmed = value?.origin_lockdown_confirmed === true
+    && value?.origin_lockdown_basis === 'explicit_denial_observed';
   const allowedStatuses = new Set([
     'protected',
     'edge_protected',
@@ -203,7 +204,7 @@ function protectionPresentation(raw, effectiveness, wafStatus) {
     }
   }
   const labels = {
-    protected: 'Protected · edge block and origin lockdown',
+    protected: 'Protected for tested probes · edge block and direct-origin denial observed',
     edge_protected: 'Effective at the edge; origin lockdown not verified',
     underprotected: 'Underprotected',
     unprotected: 'Unprotected',
@@ -223,6 +224,7 @@ function protectionPresentation(raw, effectiveness, wafStatus) {
     label: labels[status],
     evidence_tier: tiers[status],
     origin_lockdown_confirmed: originLockdownConfirmed,
+    origin_lockdown_basis: originLockdownConfirmed ? 'explicit_denial_observed' : null,
   };
 }
 
@@ -239,8 +241,12 @@ function networkFirewallPresentation(raw) {
     status: boundedString(value.status, 32) || 'not_tested',
     direct_origin_reachability: {
       status: boundedString(direct.status, 32) || 'not_tested',
+      outcome: EXTERNAL_OBSERVATION_OUTCOMES.includes(direct.outcome) ? direct.outcome : null,
+      label: EXTERNAL_OBSERVATION_OUTCOMES.includes(direct.outcome) ? externalObservationLabel(direct.outcome) : null,
       reachable: direct.reachable === true,
+      explicit_denial_observed: direct.outcome === 'explicit_denial_observed',
       application_bypass_confirmed: direct.application_bypass_confirmed === true,
+      application_bypass_suspected: direct.application_bypass_suspected === true,
       status_code: optionalNumber(direct.status_code),
     },
     port_exposure: {
@@ -320,12 +326,19 @@ function buildPlainLanguageSummary(presented) {
 
   const network = presented.network_firewall;
   let networkFirewall = 'Direct-origin reachability and exposed ports were not tested by this scan.';
-  if (network.direct_origin_reachability.status === 'exposed') {
-    networkFirewall = network.direct_origin_reachability.application_bypass_confirmed
-      ? 'The declared direct origin responded and an application bypass was confirmed.'
-      : 'The declared direct origin responded, so it is reachable at the network layer; an application bypass was not confirmed.';
-  } else if (network.direct_origin_reachability.status === 'inconclusive') {
-    networkFirewall = 'The direct-origin reachability check was inconclusive.';
+  const direct = network.direct_origin_reachability;
+  if (direct.status === 'denied' || (direct.status === 'exposed' && direct.explicit_denial_observed)) {
+    networkFirewall = 'The declared direct origin answered the tested request with an explicit denial for this host, path, source, and time; the responsible control is not identified.';
+  } else if (direct.status === 'exposed') {
+    networkFirewall = direct.application_bypass_confirmed
+      ? 'Origin response observed on the direct path, and application identity was confirmed for the tested request over a healthy permitted-path baseline.'
+      : direct.application_bypass_suspected
+        ? 'Origin response observed on the direct path. A bypass is suspected from supporting signals only; application identity over a healthy baseline was not confirmed.'
+        : 'Origin response observed on the direct path, so it is reachable at the network layer; an application bypass was not confirmed.';
+  } else if (direct.status === 'inconclusive') {
+    networkFirewall = direct.outcome === 'no_response' || direct.outcome === 'transport_error'
+      ? `${direct.label}: the direct-origin check did not establish lockdown.`
+      : 'The direct-origin reachability check was inconclusive.';
   }
   if (network.port_exposure.status === 'exposed') {
     networkFirewall += ` ${network.port_exposure.open_ports.length} exposed port(s) were observed.`;

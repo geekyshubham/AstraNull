@@ -87,7 +87,7 @@ test('a blocking WAF is graded protected', async () => {
   const fetchFn = async (url, init) => {
     calls += 1;
     const carriesMarker = String(url).includes('astranull') || Boolean(init?.headers?.['x-astranull-marker']);
-    return okResponse(carriesMarker ? 403 : 200);
+    return carriesMarker ? okResponse(403, { 'cf-mitigated': 'challenge' }) : okResponse(200);
   };
   const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'ssrf', fetchFn });
   assert.equal(result.posture, 'protected');

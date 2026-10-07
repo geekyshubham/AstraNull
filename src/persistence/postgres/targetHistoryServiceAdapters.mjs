@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { roleHasPermission } from '../../contracts/roles.mjs';
 import { requirePermission } from '../../rbac.mjs';
 import { clampPageLimit } from '../../lib/cursorPagination.mjs';
+import { isProtectionValidationFinding } from '../../lib/protectionValidationFindings.mjs';
 import {
   assessComparability,
   decodeObservationCursor,
@@ -228,7 +229,10 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
       const existing = finding && run
         ? await repository.findLineage(ctx, { findingId: finding.id, testRunId: run.id })
         : null;
-      const planned = planRetestRegistration({ finding, run, intent: input.intent, existing });
+      const authorization = finding && run && !existing && isProtectionValidationFinding(finding)
+        ? (options.authorization ?? (await options.resolveProtectionRetestAuthorization?.(ctx, finding, run)) ?? null)
+        : null;
+      const planned = planRetestRegistration({ finding, run, intent: input.intent, existing, authorization });
       if (planned.error) return planned;
       if (planned.replayed) return { ...existing, replayed: true, sibling_closure: false };
       const record = {
@@ -240,6 +244,7 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
         check_id: finding.check_id,
         created_by: ctx.userId ?? null,
         created_at: normalizeObservationTimestamp(options.now ?? new Date()),
+        ...(planned.comparison_context ? { comparison_context: planned.comparison_context } : {}),
       };
       const stored = await repository.insertLineage(ctx, record);
       if (stored.error) return stored;

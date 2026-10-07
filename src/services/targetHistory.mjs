@@ -12,11 +12,12 @@ import { roleHasPermission } from '../contracts/roles.mjs';
 import { requirePermission } from '../rbac.mjs';
 import { clampPageLimit, decodeCursor, encodeCursor } from '../lib/cursorPagination.mjs';
 import { getStore, persistStore } from '../store.mjs';
+import { originObservationOf } from '../lib/externalObservationOutcomes.mjs';
 
 export const OBSERVATION_FAMILIES = Object.freeze([
   'waf', 'cdn', 'cloud', 'dns', 'origin_hosting', 'maintenance',
 ]);
-export const SUCCESSFUL_OUTCOMES = Object.freeze(['detected', 'not_detected', 'pass', 'fail', 'reachable', 'unreachable']);
+export const SUCCESSFUL_OUTCOMES = Object.freeze(['detected', 'not_detected', 'pass', 'fail', 'reachable', 'unreachable', 'denied']);
 export const TRANSPORT_FAILURE_OUTCOMES = Object.freeze([
   'timeout', 'tls_failure', 'dns_failure', 'transport_failure', 'source_disconnected',
 ]);
@@ -114,13 +115,27 @@ export function transportOutcomeFromProbe(metadata = {}) {
   return null;
 }
 
-/** Origin-check outcome. Unrecognized results are omitted rather than invented. */
+const ORIGIN_OBSERVATION_HISTORY_OUTCOMES = Object.freeze({
+  response_observed: 'reachable',
+  application_identity_confirmed: 'reachable',
+  explicit_denial_observed: 'denied',
+  no_response: 'timeout',
+  transport_error: 'transport_failure',
+});
+
+/**
+ * Origin-check outcome. Unrecognized results are omitted rather than invented. A legacy
+ * `blocked` without explicit denial evidence cannot distinguish refusal from denial, so it is omitted.
+ */
 export function originOutcomeFromProbe(metadata = {}) {
+  const observation = originObservationOf(metadata);
+  if (observation?.outcome === 'transport_error') return transportOutcomeFromProbe(metadata) ?? 'transport_failure';
+  if (observation) return ORIGIN_OBSERVATION_HISTORY_OUTCOMES[observation.outcome] ?? null;
   const transport = transportOutcomeFromProbe(metadata);
   if (transport) return transport;
   const external = String(metadata?.external_result ?? '').toLowerCase();
   if (external === 'connected') return 'reachable';
-  if (external === 'blocked') return 'unreachable';
+  if (external === 'blocked' || external === 'unreachable') return null;
   if (successSet.has(external)) return external;
   return null;
 }
@@ -243,6 +258,8 @@ function directionFor(previous, next) {
   if (previous === 'not_detected' && next === 'detected') return 'appeared';
   if (previous === 'reachable' && next === 'unreachable') return 'disappeared';
   if (previous === 'unreachable' && next === 'reachable') return 'appeared';
+  if (previous === 'reachable' && next === 'denied') return 'disappeared';
+  if (previous === 'denied' && next === 'reachable') return 'appeared';
   return 'unclassified';
 }
 

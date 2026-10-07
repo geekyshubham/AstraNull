@@ -94,7 +94,7 @@
 <body>
   <header class="page">
     <h1>AstraNull Check Library</h1>
-    <p>Reference for every check in <code>CHECK_CATALOG</code> (249 entries).
+    <p>Reference for every check in <code>CHECK_CATALOG</code> (251 entries).
     Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks require authorization and SOC execution.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
@@ -338,7 +338,7 @@
         <dt>What we detect</dt>
         <dd>Open admin/service ports without expected protection create exposure findings.</dd>
         <dt>How we detect</dt>
-        <dd>E3: TCP connect to capped port list on declared host. Max 15 request(s), timeout ≤ 3000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E3: TCP connect to capped port list on declared host. Max 15 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>port_scan_bounded</code></dd>
         <dt>Evidence tier</dt>
@@ -377,7 +377,7 @@
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
-        <dd>ip, fqdn</dd>
+        <dd>ip, fqdn, tcp</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -406,7 +406,7 @@
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
-        <dd>ip, fqdn</dd>
+        <dd>ip, fqdn, tcp</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -464,7 +464,7 @@
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
-        <dd>ip, fqdn</dd>
+        <dd>ip, fqdn, tcp</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
@@ -1584,7 +1584,7 @@
     </article></div>
     </section>
     <section id="family-waf">
-      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(71)</span></h2>
+      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(73)</span></h2>
       <div class="checks">
     <article class="check" id="waf.fingerprint.safe">
       <header>
@@ -2136,6 +2136,64 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.entry_path_login_marker.safe">
+      <header>
+        <h3>WAF Declared Login Path Marker (Safe)</h3>
+        <code class="check-id">waf.entry_path_login_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded inert-marker validation of a customer-declared login URL: GET/HEAD only, no request body, no credentials, no account interaction, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, percent-encoded, with a form content type, and after bounded inspection-limit padding.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Permitted GET/HEAD baselines, then the inert marker in query and header placements with percent-encoding, form content-type, and 2KB/4KB padding variants (max 8 requests). Healthy permitted baseline required; an unhealthy baseline or an unblocked plain marker leaves dependent variants inconclusive, and inconclusive variants are ignored. All graded variants blocked =&gt; protected; any graded variant allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236, ATT-247)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li><li>declared_login_entry_path</li></ul></details>
+    </article>
+    <article class="check" id="waf.entry_path_api_marker.safe">
+      <header>
+        <h3>WAF Declared API Path Marker (Safe)</h3>
+        <code class="check-id">waf.entry_path_api_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded inert-marker validation of a customer-declared API URL: GET/HEAD only with a JSON Accept header, no request body, no credentials, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, double-encoded, with a JSON content type, and after bounded inspection-limit padding.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Permitted GET/HEAD baselines, then the inert marker in query and header placements with double-encoding, JSON content-type, and 2KB/4KB padding variants (max 8 requests). Healthy permitted baseline required; an unhealthy baseline or an unblocked plain marker leaves dependent variants inconclusive, and inconclusive variants are ignored. All graded variants blocked =&gt; protected; any graded variant allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236, ATT-247)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li><li>declared_api_entry_path</li></ul></details>
     </article>
     <article class="check" id="waf.evasion_unicode_normalization.safe">
       <header>
@@ -7426,7 +7484,7 @@
     </section>
   </main>
   <footer>
-    AstraNull · Check catalog v1.0.0 · 232 safe + 17 SOC-gated
+    AstraNull · Check catalog v1.2.0 · 234 safe + 17 SOC-gated
   </footer>
 </body>
 </html>

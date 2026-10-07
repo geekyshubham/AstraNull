@@ -24,6 +24,8 @@ import {
   validateOriginBindingForRun,
 } from './originBindings.mjs';
 import { registerRetestLineage } from './retestLineage.mjs';
+import { isProtectionValidationFinding, protectionRetestRunScopeMatches } from '../lib/protectionValidationFindings.mjs';
+import { resolveDevProtectionRetestAuthorization } from './protectionValidationRetest.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind, resolveOpsReadinessScenario } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
@@ -643,6 +645,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   }
 
   const retestFindingId = typeof body.retest_of_finding_id === 'string' ? body.retest_of_finding_id.trim() : '';
+  let retestAuthorization = null;
   if (retestFindingId) {
     const allowed = authorizeFindingWrite(ctx);
     if (!allowed.ok) return { error: 'forbidden', status: allowed.status ?? 403, permission: 'finding:write' };
@@ -650,6 +653,17 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     if (!finding) return { error: 'unknown_finding', status: 404 };
     if (finding.target_id !== target.id || finding.check_id !== check.check_id) {
       return { error: 'pair_mismatch', status: 409 };
+    }
+    if (isProtectionValidationFinding(finding)) {
+      if (!protectionRetestRunScopeMatches(finding, body)) return { error: 'retest_not_authorized', status: 409, reason: 'retest_scope_mismatch' };
+      retestAuthorization = resolveDevProtectionRetestAuthorization(ctx, finding);
+      if (retestAuthorization?.ok !== true) {
+        return {
+          error: 'retest_not_authorized',
+          status: retestAuthorization?.status >= 400 ? retestAuthorization.status : 409,
+          reason: retestAuthorization?.error ?? 'authorization_not_rechecked',
+        };
+      }
     }
   }
   const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
@@ -728,7 +742,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       finding_id: retestFindingId,
       test_run_id: run.id,
       intent: 'retest',
-    });
+    }, retestAuthorization ? { authorization: retestAuthorization } : {});
     if (lineage?.error) {
       dropStartedRun(run);
       return lineage;

@@ -122,6 +122,45 @@ function parseTenantBooleanMap(raw, name) {
   return out;
 }
 
+/** Probe dispatch plus protection-validation flags only, for background runners that lack the API's auth env. */
+export function loadEntryPathComparisonRunnerConfig(env = process.env) {
+  const dispatch = loadProbeDispatchConfig(env);
+  const protectionValidationEnabledDefault = parseOptionalBoolean(
+    env.ASTRANULL_PROTECTION_VALIDATION_ENABLED,
+    'ASTRANULL_PROTECTION_VALIDATION_ENABLED',
+    false,
+  );
+  const explicitlyOff = String(env.ASTRANULL_PROTECTION_VALIDATION_ENABLED ?? '').trim() !== ''
+    && protectionValidationEnabledDefault === false;
+  return {
+    ...dispatch,
+    featureFlags: {
+      protectionValidationEnabledDefault,
+      protectionValidationEnabledTenants: parseTenantBooleanMap(
+        env.ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS,
+        'ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS',
+      ),
+      ...(explicitlyOff ? { protectionValidationEnabled: false } : {}),
+    },
+  };
+}
+
+/**
+ * Tenant gate for provider-neutral protection validation (entry paths, comparisons, firewall acceptance).
+ * An explicit global `protectionValidationEnabled: false` always wins; otherwise a tenant override, then the default.
+ */
+export function isProtectionValidationEnabledForTenant(runtimeConfig, tenantId) {
+  const flags = runtimeConfig?.featureFlags ?? {};
+  if (flags.protectionValidationEnabled === false) return false;
+  const tenantKey = String(tenantId ?? '').trim();
+  const tenantOverrides = flags.protectionValidationEnabledTenants ?? {};
+  if (tenantKey && Object.prototype.hasOwnProperty.call(tenantOverrides, tenantKey)) {
+    return tenantOverrides[tenantKey] === true;
+  }
+  if (flags.protectionValidationEnabledDefault !== undefined) return flags.protectionValidationEnabledDefault === true;
+  return flags.protectionValidationEnabled === true;
+}
+
 export function isConnectorsEnabledForTenant(runtimeConfig, tenantId) {
   const tenantKey = String(tenantId ?? '').trim();
   const tenantOverrides = runtimeConfig.featureFlags?.connectorsEnabledTenants ?? {};
@@ -610,6 +649,17 @@ export function loadRuntimeConfig(env = process.env) {
     'ASTRANULL_EXTERNAL_DISCOVERY_ENABLED',
     false,
   );
+  const protectionValidationEnabledDefault = parseOptionalBoolean(
+    env.ASTRANULL_PROTECTION_VALIDATION_ENABLED,
+    'ASTRANULL_PROTECTION_VALIDATION_ENABLED',
+    false,
+  );
+  const protectionValidationExplicitlyOff = String(env.ASTRANULL_PROTECTION_VALIDATION_ENABLED ?? '').trim() !== ''
+    && protectionValidationEnabledDefault === false;
+  const protectionValidationEnabledTenants = parseTenantBooleanMap(
+    env.ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS,
+    'ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS',
+  );
   const virusTotalApiKey = typeof env.ASTRANULL_VIRUSTOTAL_API_KEY === 'string'
     ? env.ASTRANULL_VIRUSTOTAL_API_KEY.trim()
     : '';
@@ -779,6 +829,9 @@ export function loadRuntimeConfig(env = process.env) {
       externalDiscoveryEnabled,
       connectorsEnabledDefault,
       connectorsEnabledTenants,
+      protectionValidationEnabledDefault,
+      protectionValidationEnabledTenants,
+      ...(protectionValidationExplicitlyOff ? { protectionValidationEnabled: false } : {}),
     },
   };
 }

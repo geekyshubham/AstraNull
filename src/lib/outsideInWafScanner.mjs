@@ -3,8 +3,9 @@
  * Detects WAF presence, fingerprints vendor/product, validates benign class markers
  * (including safe evasion variants), content-type confusion, optional origin bypass,
  * and emits a posture summary. Outside-in only (ADR-0008): "protected" is derived from
- * external evidence — an edge block plus an origin-lockdown result (direct-origin probe
- * shows the origin is not reachable) — never from an internal agent.
+ * external evidence — a signature-backed edge block plus a declared direct-origin lockdown
+ * response over a healthy baseline — never from bare status codes, silence, transport errors,
+ * or an internal agent.
  */
 
 import { createHash } from 'node:crypto';
@@ -20,11 +21,22 @@ import {
   extractFingerprintHeaderEntries,
 } from './edgeFingerprint.mjs';
 import { assessWafEffectiveness } from './edgeDetectionProjection.mjs';
+import {
+  baselineHealth,
+  classifyDirectOriginObservation,
+  directOriginStatusFor,
+  matchControlDenialSignature,
+} from './externalObservationOutcomes.mjs';
 
 const MAX_BODY_READ_BYTES = 8192;
 const FINGERPRINT_BODY_READ_BYTES = FINGERPRINT_BODY_MAX_LENGTH;
-const BLOCK_STATUSES = new Set([401, 403, 406, 429, 503]);
 const CHALLENGE_HEADERS = ['cf-mitigated', 'x-waf-block', 'x-bot-challenge', 'x-sucuri-block'];
+const SIGNATURE_CHALLENGE_HEADERS = Object.freeze({
+  'cf-mitigated': 'cloudflare',
+  'x-waf-block': null,
+  'x-bot-challenge': null,
+  'x-sucuri-block': 'sucuri',
+});
 const CLASS_MARKER_FAMILIES = Object.freeze({
   sqli: 'sqli_marker',
   xss: 'xss_marker',
@@ -144,6 +156,14 @@ const BLOCK_PAGE_SIGNATURE_RULES = Object.freeze([
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const LOW_SPECIFICITY_BLOCK_PAGE_SIGNATURES = new Set(['block_sig_generic_waf_v1']);
+// Superseded by the stricter shared vendor markers in externalObservationOutcomes (G2); kept for vendor hints only.
+const NON_DENIAL_BLOCK_PAGE_SIGNATURES = new Set([
+  'block_sig_generic_waf_v1',
+  'block_sig_cloudflare_generic_v1',
+  'block_sig_akamai_generic_v1',
+  'block_sig_incapsula_generic_v1',
+  'block_sig_aws_waf_v1',
+]);
 const MAX_BASELINE_REDIRECT_HOPS = 2;
 
 let markerParamSequence = 0;
@@ -264,7 +284,7 @@ export function wafw00fGenericDetection({ baseline, noUserAgent, xss, pathTraver
   return { found: false, reason_code: null, reason: null };
 }
 
-function responseSnapshot(res, bodyText = '') {
+function responseSnapshot(res, bodyText = '', declaredBlockSignature = null) {
   if (!res) {
     return {
       status_code: 0,
@@ -274,6 +294,7 @@ function responseSnapshot(res, bodyText = '') {
       server_header: null,
       block_page_signature_id: null,
       block_page_fingerprint_hash: null,
+      denial_signature: null,
       connection_dropped: true,
       ...fingerprintInputs(null, ''),
     };
@@ -282,6 +303,12 @@ function responseSnapshot(res, bodyText = '') {
   const blockPageSignatureId = matchBlockPageSignature(bodyText);
   return {
     status_code: status,
+    denial_signature: matchControlDenialSignature({
+      statusCode: status,
+      headers: res,
+      bodyText,
+      declared: declaredBlockSignature,
+    }),
     status_code_class: status >= 500 ? '5xx' : status >= 400 ? '4xx' : status >= 300 ? '3xx' : '2xx',
     header_names: headerNamesFromResponse(res),
     cookie_names: cookieNamesFromResponse(res),
@@ -291,6 +318,36 @@ function responseSnapshot(res, bodyText = '') {
     connection_dropped: false,
     ...fingerprintInputs(res, bodyText),
   };
+}
+
+function headersWithGet(res) {
+  const headers = res?.headers;
+  if (!headers || typeof headers.get === 'function') return res;
+  const lower = Object.fromEntries(Object.entries(headers).map(([name, value]) => [String(name).toLowerCase(), value]));
+  return {
+    ...res,
+    headers: {
+      get: (name) => (lower[String(name).toLowerCase()] ?? null),
+      forEach: (fn) => Object.entries(lower).forEach(([name, value]) => fn(value, name)),
+    },
+  };
+}
+
+/** Marker-grading snapshot with control-specific signatures from headers and a bounded body prefix. */
+export function markerResponseSnapshot(res, bodyText = '', declaredBlockSignature = null) {
+  return responseSnapshot(res ? headersWithGet(res) : null, bodyText, declaredBlockSignature);
+}
+
+/** Bounded body prefix for signature matching; HEAD responses and readers that fail yield ''. */
+export async function readSignatureBody(res, method = 'GET') {
+  if (!res || String(method).toUpperCase() === 'HEAD') return '';
+  try {
+    if (res.body?.getReader) return await readBoundedResponseBody(res, MAX_BODY_READ_BYTES);
+    if (typeof res.text === 'function') return String(await res.text()).slice(0, MAX_BODY_READ_BYTES);
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 function challengeHeaderDelta(snapshot, baseline) {
@@ -308,73 +365,83 @@ function specificBlockPageDelta(snapshot, baseline) {
   );
 }
 
+function vendorOfBlockPage(signatureId) {
+  const match = /^block_sig_([a-z0-9]+)_/.exec(String(signatureId ?? ''));
+  return match ? match[1] : null;
+}
+
+/** Control-specific signature on a marker response (G2): shared vendor/declared markers, then new vendor block pages or challenge headers. */
+export function markerDenialSignature(snapshot, baseline = null) {
+  if (!snapshot || snapshot.connection_dropped || snapshot.error_class) return null;
+  if (snapshot.denial_signature) return { ...snapshot.denial_signature, challenge: snapshot.denial_signature.id === 'cloudflare_challenge' };
+  const current = new Set(snapshot.header_names ?? []);
+  const previous = new Set(baseline?.header_names ?? []);
+  // cf-mitigated has one valid value ("challenge"); presence counts only when the value was not captured.
+  const valuesCaptured = Object.hasOwn(snapshot, 'denial_signature');
+  const header = Object.keys(SIGNATURE_CHALLENGE_HEADERS).find((name) => current.has(name) && !previous.has(name)
+    && !(valuesCaptured && name === 'cf-mitigated'));
+  if (header) return { kind: 'vendor', id: `challenge_header:${header}`, vendor: SIGNATURE_CHALLENGE_HEADERS[header], challenge: true };
+  const page = snapshot.block_page_signature_id;
+  if (page && !NON_DENIAL_BLOCK_PAGE_SIGNATURES.has(page) && page !== baseline?.block_page_signature_id) {
+    return { kind: 'vendor', id: page, vendor: vendorOfBlockPage(page), challenge: false };
+  }
+  return null;
+}
+
+/** Permitted-path baseline for marker grading: 2xx/3xx with no block signature of any kind. */
+export function markerBaselineHealth(baseline) {
+  const health = baselineHealth(baseline);
+  if (health !== 'healthy') return health;
+  const blockPage = baseline.block_page_signature_id && !LOW_SPECIFICITY_BLOCK_PAGE_SIGNATURES.has(baseline.block_page_signature_id);
+  const challenge = CHALLENGE_HEADERS.some((name) => baseline.header_names?.includes(name));
+  return blockPage || challenge ? 'unhealthy' : 'healthy';
+}
+
+const UNSIGNED_STATUS_REASONS = Object.freeze({
+  401: 'authentication_gate_precedes_inspection',
+  407: 'probe_path_error',
+  421: 'misdirected_request',
+});
+
+/**
+ * Benign-marker grading: blocked only with a control-specific signature; 2xx/3xx without one is not blocked;
+ * an unsigned 4xx that differs from baseline is only block_suspected; 401/407/421/5xx and drops stay inconclusive.
+ */
 export function isBlockedOrChallenged(snapshot, baseline = null) {
+  const result = (fields) => ({
+    blocked: false,
+    challenged: false,
+    allowed: false,
+    inconclusive: false,
+    block_suspected: false,
+    denial_signature: null,
+    reason: null,
+    ...fields,
+  });
   if (!snapshot || snapshot.connection_dropped || snapshot.error_class) {
-    return {
-      blocked: false,
-      challenged: false,
-      allowed: false,
+    return result({
       inconclusive: true,
+      reason: 'rst_or_drop_unattributed',
       ...(snapshot?.error_class ? { error_class: snapshot.error_class } : {}),
-    };
+    });
+  }
+  if (markerBaselineHealth(baseline) !== 'healthy') return result({ inconclusive: true, reason: 'baseline_unhealthy' });
+  const signature = markerDenialSignature(snapshot, baseline);
+  if (signature) {
+    const { challenge, ...denial } = signature;
+    return result({
+      blocked: true,
+      challenged: challenge === true,
+      denial_signature: denial,
+      ...(denial.vendor ? { waf_product_hint: denial.vendor } : {}),
+    });
   }
   const status = snapshot.status_code;
-  const headerChallenge = challengeHeaderDelta(snapshot, baseline);
-  const blockPage = specificBlockPageDelta(snapshot, baseline);
-  if (headerChallenge || blockPage) {
-    return { blocked: true, challenged: headerChallenge, allowed: false, inconclusive: false };
-  }
-
-  if (baseline && !baseline.connection_dropped && !baseline.error_class) {
-    const repeatedBlockPage = Boolean(
-      snapshot.block_page_signature_id
-      && snapshot.block_page_signature_id === baseline.block_page_signature_id,
-    );
-    const repeatedChallenge = CHALLENGE_HEADERS.some((name) => (
-      snapshot.header_names?.includes(name) && baseline.header_names?.includes(name)
-    ));
-    const unchangedBlockedBaseline = baseline.status_code === status
-      && (BLOCK_STATUSES.has(status) || REDIRECT_STATUSES.has(status));
-    if (unchangedBlockedBaseline || repeatedBlockPage || repeatedChallenge) {
-      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
-    }
-  }
-
-  if (BLOCK_STATUSES.has(status)) {
-    if (!baseline || baseline.connection_dropped || baseline.error_class) {
-      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
-    }
-    return {
-      blocked: baseline.status_code !== status,
-      challenged: baseline.status_code !== status && (status === 403 || status === 401),
-      allowed: false,
-      inconclusive: baseline.status_code === status,
-    };
-  }
-  if (status >= 300 && status < 400) {
-    if (!baseline || baseline.connection_dropped || baseline.status_code === status) {
-      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
-    }
-    return { blocked: true, challenged: true, allowed: false, inconclusive: false };
-  }
-  if (baseline && baseline.status_code !== status) {
-    const baselineOk = baseline.status_code >= 200 && baseline.status_code < 400;
-    const probeOk = status >= 200 && status < 400;
-    const serverHeaderDrift = Boolean(baseline.server_header && snapshot.server_header
-      && baseline.server_header !== snapshot.server_header);
-    // A 404/400/500 on a marker path is the application's own routing or validation, not proof
-    // that a WAF intercepted the request. Only a rewritten Server header ties it to an edge.
-    if (serverHeaderDrift) {
-      return { blocked: true, challenged: false, allowed: false, inconclusive: false };
-    }
-    if (baselineOk !== probeOk) {
-      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
-    }
-  }
-  if (status >= 200 && status < 300) {
-    return { blocked: false, challenged: false, allowed: true, inconclusive: false };
-  }
-  return { blocked: false, challenged: false, allowed: false, inconclusive: true };
+  if (UNSIGNED_STATUS_REASONS[status]) return result({ inconclusive: true, reason: UNSIGNED_STATUS_REASONS[status] });
+  if (status >= 500) return result({ inconclusive: true, reason: 'error_not_attributable' });
+  if (status === baseline.status_code || (status >= 200 && status < 400)) return result({ allowed: true });
+  if (status >= 400) return result({ inconclusive: true, block_suspected: true, reason: 'unattributed_denial' });
+  return result({ inconclusive: true, reason: 'status_not_classifiable' });
 }
 
 export function detectGenericWafPresence({ baseline, attack, noUserAgent } = {}) {
@@ -463,9 +530,8 @@ function detectEvasionBypass(markerResults) {
 
 /**
  * @param {object} input
- * @param {boolean} [input.originLockdownConfirmed=false] — origin-bypass probe ran and the
- *   direct origin was NOT reachable (origin lockdown). This is the external corroboration the
- *   full "protected" tier requires; without it a passing edge scan stays "edge_protected".
+ * @param {boolean} [input.originLockdownConfirmed=false] — declared direct-origin lockdown
+ *   signature over a healthy baseline; silence or errors never qualify, so the scan stays "edge_protected".
  * @param {string} [input.domXssValidation='external_only']
  * @param {object|null} [input.edgeSignature=null] — classifyEdgeFingerprint() result.
  */
@@ -498,9 +564,7 @@ export function buildOutsideInPostureReport({
     && !probeInconclusive;
   const validationFailed = markerResults.length > 0 && (anyMarkerAllowed || evasionBypassSuspected);
 
-  // Outside-in only (ADR-0008): the edge scan proves "edge_protected". Full "protected"
-  // additionally requires external origin-lockdown evidence (origin not reachable), replacing
-  // the old internal agent confirmation.
+  // Full "protected" additionally requires a declared direct-origin lockdown signature (ADR-0008, ADR-0017).
   const edgeValidationPassed = probeValidationPassed && !evasionBypassSuspected;
   const validationPassed = edgeValidationPassed && originLockdownConfirmed;
 
@@ -809,7 +873,7 @@ function resolveRedirectTarget(location, baseUrl) {
 async function runBaselineGet(
   url,
   headers,
-  { followRedirects = false, timeoutMs, requestBudget = 1, deps } = {},
+  { followRedirects = false, timeoutMs, requestBudget = 1, deps, declaredBlockSignature = null } = {},
 ) {
   let currentUrl = url;
   let redirectHops = 0;
@@ -834,7 +898,7 @@ async function runBaselineGet(
     if (error || !res) {
       const snapshot = error
         ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-        : responseSnapshot(res, bodyText);
+        : responseSnapshot(res, bodyText, declaredBlockSignature);
       return {
         snapshot,
         redirect_hops: redirectHops,
@@ -854,7 +918,7 @@ async function runBaselineGet(
     }
 
     return {
-      snapshot: responseSnapshot(res, bodyText),
+      snapshot: responseSnapshot(res, bodyText, declaredBlockSignature),
       redirect_hops: redirectHops,
       final_url_hostname: finalUrlHostname,
       requests_sent: requestsSent,
@@ -983,7 +1047,9 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
  *   resolve4?: typeof resolve4,
  *   tlsConnect?: typeof tls.connect,
  *   tlsHost?: string,
- *   originBypassFn?: (args: object) => Promise<{ res: object|null, error: Error|null }>,
+ *   originBypassFn?: (args: object) => Promise<{ res: object|null, error: Error|null, bodyText?: string }>,
+ *   declaredBlockSignature?: { status_code?: number, body_sha256?: string, header?: { name: string, value?: string } },
+ *   declaredOriginLockdown?: { status_code?: number, body_sha256?: string, header?: { name: string, value?: string }, mtls?: boolean },
  * }} options
  */
 export async function runOutsideInWafScan(options = {}) {
@@ -1021,6 +1087,7 @@ export async function runOutsideInWafScan(options = {}) {
     if (errorClass && !transportErrorClasses.includes(errorClass)) transportErrorClasses.push(errorClass);
   }
 
+  const declaredBlockSignature = options.declaredBlockSignature ?? null;
   const directIp = options.directIp ?? null;
   const hostname = options.hostname ?? (() => {
     try { return new URL(url).hostname; } catch { return null; }
@@ -1064,7 +1131,7 @@ export async function runOutsideInWafScan(options = {}) {
     const { res, bodyText, error } = await boundedRequest(requestUrl, { method: 'GET', headers, activity_phase: phase }, timeoutMs, deps);
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-      : responseSnapshot(res, bodyText);
+      : responseSnapshot(res, bodyText, declaredBlockSignature);
     recordTransportError(snapshot);
     recordPhase({
       phase,
@@ -1090,6 +1157,7 @@ export async function runOutsideInWafScan(options = {}) {
       timeoutMs,
       requestBudget: budget - requestsSent,
       deps,
+      declaredBlockSignature,
     });
     requestsSent += baselineResult.requests_sent;
     baseline = baselineResult.snapshot;
@@ -1273,16 +1341,14 @@ export async function runOutsideInWafScan(options = {}) {
     }, timeoutMs, deps);
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-      : responseSnapshot(res, bodyText);
+      : responseSnapshot(res, bodyText, declaredBlockSignature);
     recordTransportError(snapshot);
     recordPhase({
       phase: 'content_type_confusion',
       status_code: snapshot.status_code,
       ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
     });
-    const contentTypeEval = snapshot.status_code >= 200 && snapshot.status_code < 300
-      ? { blocked: false, challenged: false, allowed: true }
-      : isBlockedOrChallenged(snapshot, baseline);
+    const contentTypeEval = isBlockedOrChallenged(snapshot, baseline);
     recordMarkerResult(markerResults, {
       family: 'content_type_confusion',
       variant: 'json_header_form_body',
@@ -1307,16 +1373,14 @@ export async function runOutsideInWafScan(options = {}) {
     }, timeoutMs, deps);
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-      : responseSnapshot(res, bodyText);
+      : responseSnapshot(res, bodyText, declaredBlockSignature);
     recordTransportError(snapshot);
     recordPhase({
       phase: 'multipart_confusion',
       status_code: snapshot.status_code,
       ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
     });
-    const multipartEval = snapshot.status_code >= 200 && snapshot.status_code < 300
-      ? { blocked: false, challenged: false, allowed: true }
-      : isBlockedOrChallenged(snapshot, baseline);
+    const multipartEval = isBlockedOrChallenged(snapshot, baseline);
     recordMarkerResult(markerResults, {
       family: 'multipart_confusion',
       variant: 'multipart_form_field',
@@ -1325,44 +1389,51 @@ export async function runOutsideInWafScan(options = {}) {
     });
   }
 
-  let originBypassConfirmed = false;
-  let directOriginReachable = false;
   let originBypassAttempted = false;
-  let originBypassStatus = null;
-  let networkIngressConfirmed = false;
-  let applicationSignatureMatch = false;
+  let originResponse = null;
+  let originError = null;
+  let originBodyText = null;
+  const canaryNonce = typeof options.canaryNonce === 'string' && options.canaryNonce.trim()
+    ? options.canaryNonce.trim()
+    : null;
   if (plannedPhases.has('origin_bypass') && directIp && hostname
     && requestsSent < budget && typeof options.originBypassFn === 'function') {
     requestsSent += 1;
     originBypassAttempted = true;
-    const { res, error } = await options.originBypassFn({ directIp, hostname, timeoutMs, deps });
-    originBypassStatus = error ? 0 : (res?.status ?? 0);
-    directOriginReachable = !error && originBypassStatus >= 100;
-    // A response code alone only proves something answered on the direct IP/port — it does not
-    // prove that responder is the protected application rather than an unrelated listener,
-    // load balancer, or default page. Require the direct-origin server header to match the
-    // edge baseline's as corroboration; without it this stays a network-reachability signal.
-    // Outside-in only (ADR-0008): an application-bypass finding rests on this external
-    // server-header match, not on any internal agent observation.
-    const originServerHeader = !error ? headerValue(res, 'server') : null;
-    const baselineServerHeader = baseline?.server_header ?? null;
-    applicationSignatureMatch = Boolean(
-      originServerHeader && baselineServerHeader && originServerHeader === baselineServerHeader,
-    );
-    networkIngressConfirmed = directOriginReachable
-      && originBypassStatus >= 200 && originBypassStatus < 400;
-    originBypassConfirmed = networkIngressConfirmed && applicationSignatureMatch;
-    // An origin-bypass connection failure means the direct origin did not answer — this is the
-    // expected origin-lockdown signal, NOT an edge-probe transport failure. Keep it out of
-    // transportErrorClasses so it never taints edge-marker coverage/inconclusiveness (ADR-0008).
+    ({ res: originResponse, error: originError, bodyText: originBodyText = null } = await options.originBypassFn({
+      directIp, hostname, timeoutMs, deps, canaryNonce,
+    }));
+  }
+  // Origin-leg failures stay out of transportErrorClasses: they are origin evidence, not edge-marker coverage gaps.
+  const originObservation = classifyDirectOriginObservation({
+    attempted: originBypassAttempted,
+    response: originResponse,
+    error: originError,
+    bodyText: typeof originBodyText === 'string' ? originBodyText : null,
+    baseline,
+    expectedNonce: canaryNonce,
+    declaredLockdown: options.declaredOriginLockdown ?? null,
+    directAddress: directIp,
+    scope: { host: hostname, path: '/', port: null },
+    observedAt: originBypassAttempted ? new Date().toISOString() : null,
+  });
+  const originBypassStatus = originBypassAttempted ? (originObservation.status_code ?? 0) : null;
+  const directOriginReachable = originObservation.response_observed;
+  const networkIngressConfirmed = directOriginReachable
+    && originBypassStatus >= 200 && originBypassStatus < 400;
+  const applicationSignatureMatch = originObservation.supporting_signals.includes('server_header_match');
+  const originBypassConfirmed = originObservation.application_bypass_confirmed;
+  if (originBypassAttempted) {
     recordPhase({
       phase: 'origin_bypass',
       status_code: originBypassStatus,
       reachable: directOriginReachable,
       network_ingress_confirmed: networkIngressConfirmed,
       application_signature_match: applicationSignatureMatch,
+      observation_outcome: originObservation.outcome,
+      denial_signature_id: originObservation.denial_signature?.id ?? null,
       bypass_signal: originBypassConfirmed,
-      ...(error ? { error_class: error.name ?? error.code ?? 'origin_probe_failed' } : {}),
+      ...(originObservation.error_class ? { error_class: originObservation.error_class } : {}),
     });
   }
 
@@ -1418,10 +1489,7 @@ export async function runOutsideInWafScan(options = {}) {
   const coverageComplete = phasesDropped.length === 0
     && transportErrorClasses.length === 0
     && plan.every((entry) => phasesExecuted.includes(entry.phase));
-  // Outside-in origin-lockdown evidence: the origin-bypass probe ran against the direct
-  // origin IP and the origin did not answer (locked down). This external result — not an
-  // internal agent — is what elevates a passing edge scan to full "protected" (ADR-0008).
-  const originLockdownConfirmed = originBypassAttempted && !directOriginReachable;
+  const originLockdownConfirmed = originObservation.origin_lockdown_confirmed;
   const posture = buildOutsideInPostureReport({
     wafDetected,
     genericWafDetected: generic.detected,
@@ -1437,16 +1505,19 @@ export async function runOutsideInWafScan(options = {}) {
     probeErrorsPresent: transportErrorClasses.length > 0,
   });
 
+  const directStatus = directOriginStatusFor(originObservation);
   const networkFirewall = {
-    status: directOriginReachable
-      ? 'exposed'
-      : originBypassAttempted ? 'inconclusive' : 'not_tested',
+    status: directStatus,
     direct_origin_reachability: {
-      status: directOriginReachable
-        ? 'exposed'
-        : originBypassAttempted ? 'inconclusive' : 'not_tested',
+      status: directStatus,
+      outcome: originObservation.outcome,
+      label: originObservation.label,
       reachable: directOriginReachable,
+      explicit_denial_observed: originObservation.explicit_denial_observed,
+      denial_signature: originObservation.denial_signature,
+      response_reason: originObservation.response_reason,
       application_bypass_confirmed: originBypassConfirmed,
+      application_bypass_suspected: originObservation.application_bypass_suspected,
       status_code: originBypassStatus,
     },
     port_exposure: {
@@ -1489,6 +1560,8 @@ export async function runOutsideInWafScan(options = {}) {
     origin_bypass_status_code: originBypassStatus,
     origin_bypass_network_ingress_confirmed: networkIngressConfirmed,
     origin_bypass_application_signature_match: applicationSignatureMatch,
+    origin_bypass_suspected: originObservation.application_bypass_suspected,
+    origin_observation: originObservation,
     network_firewall: networkFirewall,
     ...(scanErrorClass ? { error_class: scanErrorClass } : {}),
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),

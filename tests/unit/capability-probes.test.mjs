@@ -424,7 +424,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.application_bypass_confirmed, false);
   });
 
-  it('host/SNI bypass confirms application bypass when the destination echoes the sent marker', async () => {
+  it('host/SNI bypass records marker-echo identity but keeps bypass suspected without a healthy baseline', async () => {
     const outcome = await probeHostSniBypass(
       job({
         probe_profile: {
@@ -442,7 +442,10 @@ describe('capability probes P0/P1', () => {
       },
     );
     assert.equal(outcome.metadata.network_reachable, true);
-    assert.equal(outcome.metadata.application_bypass_confirmed, true);
+    assert.equal(outcome.metadata.origin_observation.application_identity.method, 'marker_echo');
+    assert.equal(outcome.metadata.origin_observation.baseline, 'not_available');
+    assert.equal(outcome.metadata.application_bypass_confirmed, false);
+    assert.equal(outcome.metadata.application_bypass_suspected, true);
   });
 
   it('host/SNI bypass uses HTTPS with TLS SNI when no fetchFn is injected', async () => {
@@ -1008,7 +1011,7 @@ describe('capability probes P0/P1', () => {
     }), {
       fetchFn: async (url, init) => {
         calls.push({ url, init });
-        return httpResponse(calls.length === 1 || calls.length > 2 ? 403 : 200);
+        return calls.length === 1 || calls.length > 2 ? httpResponse(403, { 'cf-mitigated': 'challenge' }) : httpResponse(200);
       },
     });
 
@@ -1024,6 +1027,41 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.variants.length, 4);
     assert.equal(outcome.metadata.inspection_limit_bypass_suspected, true);
     assert.equal(outcome.metadata.fail_open_signal, true);
+  });
+
+  it('WAF inspection-limit probe never treats an unsigned 403 baseline as blocked', async () => {
+    const executor = CAPABILITY_PROBE_DISPATCH.waf_inspection_limit_probe;
+    const outcome = await executor(job({
+      constraints: { max_requests: 6, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://waf.example.test/' },
+      probe_profile: { kind: 'waf_inspection_limit_probe', max_requests: 6 },
+    }), { fetchFn: async () => httpResponse(403) });
+    assert.equal(outcome.metadata.baseline_blocked, false);
+    assert.equal(outcome.metadata.comparison_complete, false);
+    assert.equal(outcome.external_result, 'not_run');
+  });
+
+  it('WAF enforcement marker counts a block only with a control-specific signature', async () => {
+    const run = (status, headers = {}, profile = {}) => probeWafEnforcement(
+      job({ target: { kind: 'url', value: 'https://waf.example.test/' }, probe_profile: { kind: 'waf_enforcement_probe', ...profile } }),
+      { fetchFn: async () => httpResponse(status, headers) },
+    );
+    const challenged = await run(403, { 'cf-mitigated': 'challenge' });
+    assert.equal(challenged.external_result, 'blocked');
+    assert.equal(challenged.metadata.denial_signature.id, 'cloudflare_challenge');
+    assert.equal(challenged.metadata.waf_product_hint, 'cloudflare');
+    for (const [status, reason] of [[401, 'authentication_gate_precedes_inspection'], [403, 'baseline_not_available'], [421, 'misdirected_request'], [407, 'probe_path_error'], [503, 'error_not_attributable']]) {
+      const outcome = await run(status);
+      assert.equal(outcome.external_result, 'not_run', String(status));
+      assert.equal(outcome.metadata.waf_enforced, false);
+      assert.equal(outcome.metadata.inconclusive_reason, reason);
+    }
+    const allowed = await run(200);
+    assert.equal(allowed.external_result, 'connected');
+    assert.equal(allowed.metadata.monitor_only_leak, true);
+    const declared = await run(403, { 'x-block-reason': 'marker' }, { declared_block_signature: { status_code: 403, header: { name: 'x-block-reason', value: 'marker' } } });
+    assert.equal(declared.external_result, 'blocked');
+    assert.equal(declared.metadata.denial_signature.kind, 'declared');
   });
 
   it('WAF inspection-limit probe never reports protection without a usable blocked baseline', async () => {

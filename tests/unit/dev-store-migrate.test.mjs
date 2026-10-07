@@ -336,6 +336,11 @@ describe('dev store migration', () => {
       wafOffensiveRequests: [],
       wafOffensiveReports: [],
       evidenceBundles: [],
+      applicationEntryPaths: [],
+      protectionExpectations: [],
+      protectionComparisonBaselines: [],
+      protectionComparisonEvaluations: [],
+      entryPathComparisons: [],
     };
     resetStoreForTests(data);
     assert.equal(migrateDevStore(getStore()), false);

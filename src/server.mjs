@@ -65,7 +65,7 @@ import {
 } from './services/declaredHostAnalytics.mjs';
 import { DeclaredHostQueryError } from './lib/declaredHostAnalytics.mjs';
 import { AuditQueryError } from './persistence/postgres/auditRepository.mjs';
-import { deriveProtectionProfile } from './services/protectionProfile.mjs';
+import { attachConfigurationContext, deriveProtectionProfile } from './services/protectionProfile.mjs';
 import {
   assessComparability,
   getCurrentFamilyState,
@@ -107,6 +107,13 @@ import {
   isWafEdgeDetectionRoute,
   tryHandleWafEdgeDetectionRoutes,
 } from './routes/wafEdgeDetectionRoutes.mjs';
+import { tryHandleProtectionValidationRoutes } from './routes/protectionValidationRoutes.mjs';
+import {
+  configureProtectionValidationRuntime,
+  devProtectionValidationFacade,
+  startEntryPathComparisonTicker,
+} from './services/protectionValidationRuntime.mjs';
+import { isProtectionValidationEnabled } from './services/tenantDeploymentFeatures.mjs';
 import { isCveFeedInputError, resolveCveFeedItems } from './lib/cveFeedIngest.mjs';
 import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
 import { formatNotificationRuleForRead } from './lib/notifications.mjs';
@@ -186,6 +193,7 @@ function defaultServiceDeps() {
     cvePipeline,
     externalDiscovery,
     supplyChainRisk,
+    protectionValidation: devProtectionValidationFacade,
   };
 }
 
@@ -1127,8 +1135,10 @@ export function createServer(options = {}) {
   if (runtimeConfig.persistenceMode !== 'postgres') {
     seedIfEmpty();
     validationScans.configureValidationScanRuntime(runtimeConfig);
+    configureProtectionValidationRuntime(runtimeConfig, { env });
   } else {
     serviceDeps.validationScans?.configureValidationScanRuntime?.(runtimeConfig);
+    serviceDeps.entryPathComparisons?.configureEntryPathComparisonRuntime?.(runtimeConfig);
   }
 
   const rateLimiter = runtimeConfig.rateLimit.disabled
@@ -1518,6 +1528,17 @@ export function createServer(options = {}) {
     { min: 1_000, max: 300_000 },
   );
 
+  if (runtimeConfig.persistenceMode !== 'postgres') {
+    let stopTicker = null;
+    server.on('listening', () => {
+      stopTicker ??= startEntryPathComparisonTicker(runtimeConfig);
+    });
+    server.on('close', () => {
+      stopTicker?.();
+      stopTicker = null;
+    });
+  }
+
   return server;
 }
 
@@ -1568,6 +1589,25 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       console.warn(`connector feature projection sync failed: ${redactDatabaseUrlInMessage(err)}`);
     }
     return json(res, 200, getTenantDeploymentFeatures(ctx, runtimeConfig));
+  }
+  if (await tryHandleProtectionValidationRoutes(req, res, url, ctx, runtimeConfig, serviceDeps)) return;
+  if (method === 'GET' && path === '/v1/reports/protection-validation') {
+    const gate = requirePermission(ctx, 'report:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (!isProtectionValidationEnabled(ctx, runtimeConfig)) return json(res, 404, { error: 'protection_validation_disabled' });
+    const svc = serviceDeps.protectionValidation;
+    if (typeof svc?.getProtectionValidationReport !== 'function') {
+      return runtimeConfig.persistenceMode === 'postgres' ? respondPostgresRouteNotWired(res) : json(res, 503, { error: 'route_not_wired' });
+    }
+    const format = url.searchParams.get('format') || 'json';
+    if (format !== 'json' && format !== 'csv') return json(res, 400, { error: 'unsupported_format', supported_formats: ['json', 'csv'] });
+    const report = await svc.getProtectionValidationReport(ctx, { ...searchParamsObject(url), format });
+    if (report?.error) return json(res, report.status ?? 400, { error: report.error, ...(report.permission ? { permission: report.permission } : {}) });
+    if (format === 'csv') {
+      text(res, 200, report.content, 'text/csv; charset=utf-8');
+      return;
+    }
+    return json(res, 200, report);
   }
   if (method === 'GET' && path === '/v1/subscription/current') {
     const gate = requirePermission(ctx, 'tenant:read');
@@ -3027,7 +3067,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       findings_cursor: url.searchParams.get('findings_cursor') ?? undefined,
     });
     if (payload?.error) return json(res, payload.status ?? 404, payload);
-    return json(res, 200, presentTargetDetailEligibility(payload));
+    let enriched = payload;
+    try {
+      const configuration = await serviceDeps.protectionValidation?.getTargetConfigurationContext?.(ctx, payload?.target, { runtimeConfig });
+      if (configuration) enriched = attachConfigurationContext(payload, configuration);
+    } catch {
+      incMetric('target_configuration_context_failed');
+    }
+    return json(res, 200, presentTargetDetailEligibility(enriched));
   }
 
   const ownershipConfirmMatch = path.match(/^\/v1\/ownership-verifications\/([^/]+)\/confirm$/);

@@ -8,15 +8,21 @@
  */
 
 import { isLiveCapabilityProbeAuthorized } from '../capabilityProbeAuth.mjs';
-import { BENIGN_CLASS_MARKERS, EVASION_VARIANT_MARKERS } from '../outsideInWafScanner.mjs';
+import {
+  BENIGN_CLASS_MARKERS,
+  EVASION_VARIANT_MARKERS,
+  isBlockedOrChallenged,
+  markerBaselineHealth,
+  markerDenialSignature,
+  markerResponseSnapshot,
+  readSignatureBody,
+} from '../outsideInWafScanner.mjs';
 import { resolveProbeRequestBudget } from '../probeRequestBudget.mjs';
 
 export const WAF_EVASION_PROBE_KIND = 'waf_evasion_marker_probe';
 export const MAX_WAF_EVASION_MARKER_REQUESTS = 8;
 export const EVASION_MARKER_CLASSES = Object.freeze(['sqli', 'xss', 'path_traversal']);
 
-const BLOCK_STATUSES = new Set([400, 401, 403, 405, 406, 409, 413, 414, 429, 431, 501, 503]);
-const CHALLENGE_HEADERS = ['cf-mitigated', 'x-waf-block', 'x-bot-challenge', 'x-sucuri-block'];
 const MARKER_MAX_LEN = 128;
 
 function baseMarker(markerClass) {
@@ -136,13 +142,19 @@ export function applyEvasionTransform(transform, markerClass = 'sqli') {
  * Build a bounded probe profile for a check. The internal budget input can only reduce or
  * cap a generated profile; no rate, concurrency, repeat, or runtime customer knob exists.
  */
+export const EVASION_ENTRY_PATH_SCENARIOS = Object.freeze(['declared_login_path', 'declared_api_path']);
+
 export function buildEvasionMarkerProfile({
   transform,
   marker_class = 'sqli',
   max_requests = 4,
   timeout_ms = 5000,
+  entry_path_scenario = null,
 } = {}) {
   if (!isEvasionTransform(transform)) throw new Error(`unknown evasion transform: ${transform}`);
+  if (entry_path_scenario != null && !EVASION_ENTRY_PATH_SCENARIOS.includes(entry_path_scenario)) {
+    throw new Error(`unknown entry_path_scenario: ${entry_path_scenario}`);
+  }
   const cls = EVASION_MARKER_CLASSES.includes(marker_class) ? marker_class : 'sqli';
   const requested = Number.isInteger(max_requests) && max_requests > 0 ? max_requests : 4;
   const timeout = Number.isInteger(timeout_ms) && timeout_ms > 0
@@ -160,18 +172,8 @@ export function buildEvasionMarkerProfile({
     expected_action: 'block',
     nonce_hash_only: true,
     collect: ['status_code', 'waf_product_hint', 'evasion_bypass_suspected'],
+    ...(entry_path_scenario ? { entry_path_scenario, permitted_baseline: true } : {}),
   });
-}
-
-function isBlocked(response) {
-  if (!response) return false;
-  if (BLOCK_STATUSES.has(Number(response.status))) return true;
-  const headers = response.headers;
-  if (!headers) return false;
-  const get = typeof headers.get === 'function'
-    ? (name) => headers.get(name)
-    : (name) => headers[name] ?? headers[name?.toLowerCase?.()];
-  return CHALLENGE_HEADERS.some((name) => get(name) != null);
 }
 
 function resolveTargetUrl(job) {
@@ -194,15 +196,32 @@ function deadlineExceeded(job, deps) {
 function variantSequence(transform, markerClass) {
   const cls = EVASION_MARKER_CLASSES.includes(markerClass) ? markerClass : 'sqli';
   return [
+    { label: 'permitted_baseline', marker_class: cls, sent_value: null, delivery: { where: 'none', method: 'GET' } },
     { label: 'baseline', marker_class: cls, sent_value: baseMarker(cls), delivery: { where: 'query', method: 'GET' } },
     applyEvasionTransform(transform, cls),
   ];
 }
 
+function permittedSignature(snapshot) {
+  if (!snapshot || snapshot.transport_error) return null;
+  const signature = markerDenialSignature(snapshot, null);
+  if (!signature) return null;
+  const { challenge: _challenge, ...denial } = signature;
+  return denial;
+}
+
+/** An evasion verdict needs the untransformed marker blocked first; anything else stays inconclusive. */
+export function blockedBaselinePrerequisite(baselineBlocked) {
+  if (baselineBlocked === true) return 'met';
+  if (baselineBlocked === false) return 'not_met';
+  return 'not_observed';
+}
+
 /**
  * Run the bounded evasion-marker probe. Sends at most MAX_WAF_EVASION_MARKER_REQUESTS inert
- * markers via the injected fetch function and grades whether the transformed marker is still
- * blocked. Retains only status + hashed length; never a response body.
+ * markers via the injected fetch function and grades each against a permitted baseline: blocked only
+ * with a control-specific signature (a bare status code never counts). Retains status, signature id,
+ * and length only; the bounded body prefix is read for signature matching and never stored.
  */
 export async function runWafEvasionMarkerProbe(job, deps = {}) {
   const kind = WAF_EVASION_PROBE_KIND;
@@ -251,48 +270,64 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
     MAX_WAF_EVASION_MARKER_REQUESTS,
   );
   const variants = variantSequence(transform, markerClass).slice(0, budget);
+  const declared = profile.declared_block_signature ?? null;
 
   const start = typeof deps.now === 'function' ? Number(deps.now()) : Date.now();
   const results = [];
   let requestsSent = 0;
+  let permitted = null;
   let baselineBlocked = null;
-  let transportFailed = false;
 
   for (const variant of variants) {
     if (deadlineExceeded(job, deps)) break;
     const requestUrl = new URL(targetUrl);
-    requestUrl.searchParams.set('probe', variant.sent_value.slice(0, 512));
+    if (variant.sent_value != null) requestUrl.searchParams.set('probe', variant.sent_value.slice(0, 512));
     const method = variant.delivery?.method === 'POST' ? 'GET' : (variant.delivery?.method ?? 'GET');
-    let blocked = false;
-    let status = null;
+    let snapshot;
     try {
       const response = await fetchFn(requestUrl.href, { method, redirect: 'manual', signal: deps.signal });
-      status = Number(response?.status) || null;
-      blocked = isBlocked(response);
+      snapshot = markerResponseSnapshot(response, await readSignatureBody(response, method), declared);
     } catch {
-      transportFailed = true;
+      snapshot = { ...markerResponseSnapshot(null), transport_error: true };
     }
     requestsSent += 1;
-    if (variant.label === 'baseline' && !transportFailed) {
-      baselineBlocked = blocked;
+    if (variant.label === 'permitted_baseline') {
+      permitted = snapshot;
+      if (snapshot.transport_error) break;
+      continue;
     }
+    const graded = isBlockedOrChallenged(snapshot, permitted);
+    if (variant.label === 'baseline' && !graded.inconclusive) baselineBlocked = graded.blocked === true;
     results.push({
       label: variant.label ?? variant.transform,
-      status_code: status,
-      blocked,
+      status_code: snapshot.status_code || null,
+      blocked: graded.blocked,
+      allowed: graded.allowed,
+      inconclusive: graded.inconclusive,
+      block_suspected: graded.block_suspected,
+      reason: graded.reason,
+      denial_signature: graded.denial_signature,
       sent_length: variant.sent_value.length,
+      ...(snapshot.transport_error ? { transport_error: true } : {}),
     });
-    if (transportFailed || requestsSent >= budget) break;
+    if (snapshot.transport_error || requestsSent >= budget) break;
   }
 
-  const transformedResults = results.filter((r) => r.label !== 'baseline');
-  const anyTransformedAllowed = transformedResults.some((r) => !r.blocked);
+  const permittedHealth = permitted ? markerBaselineHealth(permitted) : 'not_available';
+  const prerequisite = blockedBaselinePrerequisite(baselineBlocked);
+  const transformedResults = results.filter((r) => r.label !== 'baseline' && !r.inconclusive && !r.transport_error);
+  const anyTransformedAllowed = transformedResults.some((r) => r.allowed);
   const allTransformedBlocked = transformedResults.length > 0 && transformedResults.every((r) => r.blocked);
 
   let externalResult;
   let evasionSuspected = false;
-  if (baselineBlocked === false) {
+  let inconclusiveReason = null;
+  if (permittedHealth !== 'healthy') {
     externalResult = 'inconclusive';
+    inconclusiveReason = 'permitted_baseline_not_healthy';
+  } else if (prerequisite !== 'met') {
+    externalResult = 'inconclusive';
+    inconclusiveReason = prerequisite === 'not_met' ? 'baseline_marker_not_blocked' : 'baseline_marker_not_graded';
   } else if (anyTransformedAllowed) {
     externalResult = 'external_allowed';
     evasionSuspected = true;
@@ -300,6 +335,7 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
     externalResult = 'external_blocked';
   } else {
     externalResult = 'inconclusive';
+    inconclusiveReason = 'transformed_marker_not_graded';
   }
 
   const end = typeof deps.now === 'function' ? Number(deps.now()) : Date.now();
@@ -311,6 +347,18 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
       evasion_transform: transform,
       marker_class: EVASION_MARKER_CLASSES.includes(markerClass) ? markerClass : 'sqli',
       baseline_blocked: baselineBlocked,
+      blocked_baseline_prerequisite: prerequisite,
+      permitted_baseline_status: permitted && !permitted.connection_dropped ? permitted.status_code : null,
+      permitted_baseline_health: permittedHealth,
+      permitted_baseline: {
+        status_code: permitted && !permitted.connection_dropped ? permitted.status_code : null,
+        health: permittedHealth,
+        denial_signature: permittedSignature(permitted),
+      },
+      ...(inconclusiveReason ? { inconclusive_reason: inconclusiveReason } : {}),
+      ...(profile.entry_path_scenario && EVASION_ENTRY_PATH_SCENARIOS.includes(profile.entry_path_scenario)
+        ? { entry_path_scenario: profile.entry_path_scenario }
+        : {}),
       evasion_bypass_suspected: evasionSuspected,
       variant_results: results,
       request_counting_basis: 'logical_operations',

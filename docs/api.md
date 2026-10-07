@@ -809,3 +809,461 @@ Report `primary` is null unless `summary` or the report row has `primary_test_ru
 Provider `subject` adds `status`, `provider` (null when zero or several), `product`, `source`, `reason`, `confidence`, `conflict`, `corpus`, `observed_at`, and `proof`. `proof` is string arrays, each capped at 16: `{ "matched_signals": [], "methods": [], "cnames": [], "addresses": [], "fingerprints": [] }`. The current summary renderer drops arrays, so read `subject.proof` directly. Each distinct provider is a `provider_layer` alternative with the same scalar fields plus that layer's arrays. `primary` is set only when at least one signal, CNAME, address, or fingerprint is present. A method label alone leaves `primary: null`, `evaluation.status: "not_recorded"`, and `unavailable_reason: "no_refs"`. DNS and origin hosting stay `not_recorded` / `unknown` with `reason: "no_origin_hosting_observation"` until that family has its own observation. Headers, bodies, cookies, and authorization values are not copied.
 
 `request_summary` and `response_summary` copy only recorded primitive fields from the one selected event (`engine`, `method`, `path` with the query removed, `protocol`, `max_requests`, `timeout_ms`, `external_result`, `status_code`, `received_at`). Recorded values are not recased. Missing fields are `{ "status": "not_recorded" }`. Evaluation from a stored verdict forces `confidence: "external_only"`. Responses are passed through `redactObject` again. Raw headers, cookies, authorization, bodies, URL queries, and agent or placement metadata are not returned. `GET /v1/test-runs/:id/events` remains the raw bounded event list and is not this payload.
+
+## Application entry paths and firewall change acceptance
+
+Provider-neutral, outside-in validation of declared application entry paths and firewall change behavior. Decision: [ADR-0017](adr/0017-application-entry-path-validation.md). Spec: [detection/23](detection/23-application-entry-path-validation.md). Contract: `src/contracts/protectionValidation.mjs` (`contract_version: "protection-validation-v1"`). Route names, permissions, and the `passive` flag are pinned by `PROTECTION_VALIDATION_ROUTES` and its unit tests.
+
+Shared rules for every route below:
+
+- All routes are tenant-scoped. A missing id, or an id owned by another tenant, returns `404` (`not_found`, `unknown_target`, or `unknown_origin_binding`) without saying whether the record exists.
+- Postgres mode never falls back to the dev store. An unwired service returns `503 postgres_route_not_wired`.
+- `passive` means the route never dispatches probe traffic or starts runs. Only the `start` mode of `POST /v1/entry-path-comparisons` can start runs.
+- No route here selects a socket destination from relation metadata, redirects, response headers, or discovered endpoints. The keys `direct_ip`, `discovered_endpoint(s)`, `endpoint`, `destination`, `host_override`, `sni_override`, `source_ip`, `spoofed_source`, `inferred_from`, `credentials`, `password`, `api_key`, `token`, `secret`, and `raw_config` are rejected at any depth with `400 scope_not_declared`. The body is not echoed back.
+- Server-owned fields (`id`, `tenant_id`, `status`, `declaration_version`, `declaration_digest`, `expectation_version`, `digest`, `created_at`, `created_by`, `archived_at`, `archived_by`, `contract_version`) in a create body return `400 server_owned_field` with `field`.
+- Validation errors use `{ error, status, field, message }`.
+- List routes accept `?cursor&limit`. `limit` is 1–100 (default 50). The response is `{ items, count, next_cursor }`.
+- Every mutation is audited exactly once in the same transaction. An idempotent replay is not audited again.
+- There is no public observation-write endpoint. Observations come only from signed, finalized runs.
+- Every route is behind the tenant gate `protection_validation` (see [Tenant gate and runtime wiring](#protection-validation-tenant-gate-and-runtime-wiring)). When it is off, every route returns `404 protection_validation_disabled`.
+
+| Method | Path | Permission | Passive |
+|---|---|---|---|
+| GET | `/v1/targets/:targetId/entry-paths` | `target_group:read` | yes |
+| POST | `/v1/targets/:targetId/entry-paths` | `target_group:write` | yes |
+| GET | `/v1/entry-paths/:entryPathId` | `target_group:read` | yes |
+| POST | `/v1/entry-paths/:entryPathId/archive` | `target_group:write` | yes |
+| GET | `/v1/targets/:targetId/protection-validation` | `evidence:read` | yes |
+| POST | `/v1/entry-path-comparisons` | `test_run:start` | no (`mode: "start"` only) |
+| GET | `/v1/entry-path-comparisons` | `evidence:read` | yes |
+| GET | `/v1/entry-path-comparisons/:comparisonId` | `evidence:read` | yes |
+| POST | `/v1/entry-path-comparisons/:comparisonId/cancel` | `test_run:start` | yes (stops; never starts) |
+| GET | `/v1/firewall-expectations` | `target_group:read` | yes |
+| POST | `/v1/firewall-expectations` | `target_group:write` | yes |
+| POST | `/v1/firewall-expectations/:expectationId/archive` | `target_group:write` | yes |
+| POST | `/v1/firewall-baselines` | `target_group:write` | yes |
+| GET | `/v1/firewall-baselines` | `evidence:read` | yes |
+| GET | `/v1/firewall-baselines/:baselineId` | `evidence:read` | yes |
+| POST | `/v1/firewall-comparisons` | `target_group:write` | yes |
+| GET | `/v1/firewall-comparisons` | `evidence:read` | yes |
+| GET | `/v1/firewall-comparisons/:comparisonId` | `evidence:read` | yes |
+
+Viewers and auditors can read. Owners, admins, and engineers can declare, capture, evaluate, and start. SOC holds no write permission here.
+
+### Entry paths
+
+`POST /v1/targets/:targetId/entry-paths` request:
+
+```json
+{
+  "entry_target_id": "tgt_alt",
+  "relation_kind": "alternate_hostname",
+  "owner": "App Team",
+  "purpose": "Legacy hostname kept for partner integrations",
+  "expected_behavior": "must_be_protected_by_layers",
+  "required_layers": ["waf", "cdn_edge"],
+  "origin_binding_id": null
+}
+```
+
+| Field | Rule |
+|---|---|
+| `relation_kind` | `primary_route`, `alternate_hostname`, `declared_api_url`, `declared_login_url`, `origin`, or `fallback_backend_route`. |
+| `expected_behavior` | `must_be_protected_by_layers` needs at least one layer. `intentionally_public` needs zero layers. `must_not_be_reachable` takes any layers. A violation is `400 required_layers_conflict`. |
+| `required_layers` | A subset of `waf`, `cdn_edge`, `network_firewall`, `ddos`, returned in that canonical order. |
+| `origin_binding_id` | Required for `origin` (`400 origin_binding_required`) and forbidden otherwise (`400 origin_binding_not_allowed`). The binding must be active, in the same tenant, and join exactly `:targetId` → `entry_target_id`. A missing or archived binding is `404 unknown_origin_binding`. A binding that joins different targets is `409 origin_binding_mismatch`. |
+| `entry_target_id` | Equals `:targetId` only for `primary_route`. Optional `anchor_target_id` in the body must equal `:targetId`. |
+| `owner` / `purpose` | 1–120 / 1–500 characters. |
+
+Other errors:
+
+- `404 unknown_target`: the anchor or entry target is missing or belongs to another tenant.
+- `409 target_not_active`: the target is deleted.
+- `409 entry_path_conflict`: the same active scope (anchor, entry, kind, binding) already exists with a different declaration digest.
+- `403`: the caller lacks the permission.
+
+`201` returns the relation. Replaying an identical declaration returns `200` with `replayed: true` and no second audit. Audited as `entry_path.created`. Creating a relation never starts a run.
+
+Relation response:
+
+```json
+{
+  "id": "ep_1",
+  "tenant_id": "ten_1",
+  "anchor_target_id": "tgt_app",
+  "entry_target_id": "tgt_alt",
+  "relation_kind": "alternate_hostname",
+  "owner": "App Team",
+  "purpose": "Legacy hostname kept for partner integrations",
+  "expected_behavior": "must_be_protected_by_layers",
+  "required_layers": ["waf", "cdn_edge"],
+  "origin_binding_id": null,
+  "status": "active",
+  "declaration_source": "explicit",
+  "declaration_version": 1,
+  "declaration_digest": "<sha256 hex>",
+  "contract_version": "protection-validation-v1",
+  "currently_authorized": true,
+  "authorization_state": "dns_verified",
+  "created_at": "2026-10-06T00:00:00.000Z",
+  "created_by": "usr_1",
+  "archived_at": null
+}
+```
+
+The `GET` list returns relations where the target is the anchor or the entry. It accepts `?status=active|archived&relation_kind=…`.
+
+`POST /v1/entry-paths/:entryPathId/archive` returns `200` with `status: "archived"` and `archived_at` set. Archiving again is `409 already_archived`. Audited as `entry_path.archived`. An archived relation cannot authorize new checks. `currently_authorized` reflects current ownership proofs and the target lifecycle. It is re-checked at execution time.
+
+### Protection matrix
+
+`GET /v1/targets/:targetId/protection-validation` is a passive per-path, per-layer read model:
+
+```json
+{
+  "target_id": "tgt_app",
+  "contract_version": "protection-validation-v1",
+  "generated_at": "2026-10-06T00:00:00.000Z",
+  "connectors_required": false,
+  "paths": [
+    {
+      "entry_path_id": "ep_1",
+      "anchor_target_id": "tgt_app",
+      "entry_target_id": "tgt_alt",
+      "relation_kind": "alternate_hostname",
+      "expected_behavior": "must_be_protected_by_layers",
+      "required_layers": ["waf", "cdn_edge"],
+      "origin_binding_id": null,
+      "status": "active",
+      "declaration_version": 1,
+      "declaration_digest": "<sha256 hex>",
+      "outcome": "not_tested",
+      "attribution": "unattributed",
+      "layers": [
+        {
+          "layer": "waf",
+          "declared_intent": "required",
+          "vendor_detection": "unknown",
+          "observed_enforcement": "not_tested",
+          "application_identity": "not_tested",
+          "suspected_bypass": "unknown",
+          "confirmed_scoped_bypass": "unknown",
+          "attribution": "not_applicable",
+          "evidence_limitations": ["external_only"],
+          "evidence_refs": [],
+          "freshness": null
+        }
+      ],
+      "evidence_refs": [],
+      "latest_comparison_id": null,
+      "freshness": null,
+      "limitations": ["external_only", "not_capacity_assurance", "firewall_traversal_not_established", "stacked_layer_attribution_not_established", "marker_scope_only", "untested_paths_not_covered"]
+    }
+  ],
+  "counts": { "paths": 1, "by_outcome": { "not_tested": 1 } },
+  "limitations": ["external_only", "not_capacity_assurance"]
+}
+```
+
+Each path lists all four layers (`waf`, `cdn_edge`, `network_firewall`, `ddos`). The layer states are:
+
+| Field | States |
+|---|---|
+| `declared_intent` | `required`, `not_required`, `undeclared` |
+| `vendor_detection` | `detected`, `not_detected`, `unknown` |
+| `observed_enforcement` | `enforced`, `partially_enforced`, `not_enforced`, `inconclusive`, `not_tested` |
+| `application_identity` | `confirmed`, `suspected`, `not_established`, `not_tested` |
+| `suspected_bypass` | `suspected`, `not_suspected`, `unknown` |
+| `confirmed_scoped_bypass` | `confirmed`, `not_confirmed`, `unknown` |
+
+`outcome` is a path validation outcome:
+
+- `intentional_public_access`
+- `reachability_exposure`
+- `weaker_observed_enforcement`
+- `suspected_alternate_application_route`
+- `scoped_application_bypass`
+- `consistent_enforcement`
+- `inconclusive`
+- `not_tested`
+- `skipped`
+
+Rules for the matrix:
+
+- Observed and confirmed states always carry `evidence_refs`.
+- The `ddos` layer always carries `not_capacity_assurance`.
+- A vendor label never sets `observed_enforcement`.
+- The matrix does not attribute stacked layers.
+- The matrix never reports "DDoS protected" or "all controls bypassed".
+
+Evidence refs are reference-only:
+
+```json
+{ "test_run_id": "run_1", "check_id": "waf.marker.sqli", "check_version": "v3", "scenario_version": "s2", "verdict_id": "verdict_1", "evidence_ids": ["ev_1"], "target_id": "tgt_alt", "observed_at": "2026-10-06T00:00:00.000Z", "run_status": "verdicted", "finalized": true, "source_perspective": "public-worker-eu", "worker_id": "worker_eu_1" }
+```
+
+Headers, bodies, cookies, raw configuration, and credentials are never returned.
+
+### Entry-path comparisons
+
+`POST /v1/entry-path-comparisons` request:
+
+```json
+{
+  "mode": "plan",
+  "anchor_target_id": "tgt_app",
+  "primary_entry_path_id": "ep_primary",
+  "entry_path_ids": ["ep_primary", "ep_1", "ep_origin"],
+  "expectation": { "scenario": "waf.sqli.marker", "layer_outcomes": { "waf": "enforce", "cdn_edge": "enforce" } }
+}
+```
+
+| Field | Rule |
+|---|---|
+| `mode` | `plan` (the default) or `start`. |
+| `entry_path_ids` | 1–32 declared, active entry paths of the anchor. `primary_entry_path_id` must be one of them. |
+| `expectation` | A path-validation expectation. The server versions and digests it. |
+| `layer_outcomes` | Maps each layer to `enforce`, `allow`, `not_reachable`, or `no_expectation`. |
+
+`mode: "plan"` is passive. It returns `200` with this body:
+
+```json
+{
+  "mode": "plan",
+  "plan_digest": "<sha256 hex>",
+  "anchor_target_id": "tgt_app",
+  "primary_entry_path_id": "ep_primary",
+  "expectation": { "id": "pvx_1", "scenario": "waf.sqli.marker", "layer_outcomes": { "waf": "enforce", "cdn_edge": "enforce" }, "expectation_version": 1, "digest": "<sha256 hex>" },
+  "items": [
+    { "entry_path_id": "ep_1", "target_id": "tgt_alt", "declaration_digest": "<sha256 hex>", "check_id": "waf.marker.sqli", "check_version": "v3", "origin_binding_id": null, "eligible": true, "ineligible_reason": null }
+  ],
+  "expectation_conflicts": [
+    { "entry_path_id": "ep_1", "conflicts": ["required_layer_not_enforced:waf"] }
+  ],
+  "limitations": ["external_only", "not_capacity_assurance", "firewall_traversal_not_established", "stacked_layer_attribution_not_established", "marker_scope_only", "untested_paths_not_covered"]
+}
+```
+
+`expectation_conflicts` lists one object per conflicting path: `{ entry_path_id, conflicts: string[] }`. Conflict codes are `required_layer_not_enforced:<layer>` (a declared required layer is expected to `allow` or has `no_expectation`), `unreachable_path_allows:<layer>` (a `must_not_be_reachable` path is expected to `allow` a layer), and `anchor_mismatch`. It is `[]` when the expectation matches every declaration. Conflicts never block planning; the portal shows them per path in the review step.
+
+`mode: "start"` requires `reviewed_plan_digest`. The server recomputes the plan from current declarations and authorization. If anything changed, it returns `409 reviewed_plan_mismatch` and starts nothing.
+
+When the digests match, it persists the approved scope and starts the eligible items through the existing signed run start. That start keeps origin-binding scope capture, destination vetting and pinning, request accounting, budgets, deadlines, cooldowns, concurrency, safe windows, cancellation, and kill switches. It returns `202` with `{ id, status: "running", plan_digest, items: [{ entry_path_id, test_run_id | null, outcome: "not_tested" | "skipped" }] }`. Audited as `entry_path_comparison.started`.
+
+Archived relations, deleted targets, and targets whose ownership proof has lapsed are `skipped`. They are not executed.
+
+`GET /v1/entry-path-comparisons` (`?anchor_target_id&cursor&limit`) and `GET /v1/entry-path-comparisons/:comparisonId` return the comparison:
+
+- `id`, `status` (`running`, `completed`, or `cancelled`), `plan_digest`, `expectation`, `baseline` (the primary evidence set).
+- `items[]`: `{ entry_path_id, scenario, outcome, attribution, reasons[], compatibility_reasons[], evidence_refs[], limitations[] }`.
+- `compatibility`: `{ comparable, stale, reasons[] }`.
+- `summary`: `{ total, evaluated, by_status, gaps, accepted }`.
+- `evaluation_digest`, `evaluated_at`.
+
+Rules for comparison results:
+
+- Primary-route success never validates an untested alternate route.
+- `scoped_application_bypass` requires a nonce-bound application identity. Weaker matches are `suspected_alternate_application_route`.
+- Timeouts and transport errors are `inconclusive`.
+- Reads never start runs.
+
+### Firewall expectations
+
+`POST /v1/firewall-expectations` request:
+
+```json
+{
+  "destination_target_id": "tgt_fw",
+  "protocol": "tcp",
+  "port": 443,
+  "expected": "allow",
+  "source_perspective": "public-worker-eu",
+  "change_id": "CHG-1001",
+  "owner": "Network Team",
+  "pre_post_mapping": { "pre_destination_target_id": "tgt_old", "post_destination_target_id": "tgt_fw", "declared_by_customer": true }
+}
+```
+
+| Field | Rule |
+|---|---|
+| `protocol` | `tcp` or `udp` with an integer `port` (1–65535), or `service` with `service_endpoint: { service, port, path? }` and no `port`. The path has no query. |
+| `expected` | `allow` or `deny`. |
+| `pre_post_mapping` | Optional. It must be an explicit customer declaration that includes `destination_target_id`. An inferred IP change is never comparable. |
+| `destination_target_id` | Must be an existing same-tenant target (`404 unknown_target`). |
+
+`201` returns the expectation with `id`, `status: "active"`, `expectation_version`, `digest`, and `contract_version`. An identical replay returns `200` with `replayed: true`. A different digest for the same active scope (change, destination, protocol, port or endpoint, and source) is `409 firewall_expectation_conflict`. Audited as `firewall_expectation.created`.
+
+`GET` lists accept `?change_id&destination_target_id&status`. Archive returns `200` (`409 already_archived` when repeated) and is audited as `firewall_expectation.archived`.
+
+### Firewall baselines
+
+`POST /v1/firewall-baselines` request:
+
+```json
+{ "change_id": "CHG-1001", "expectation_ids": ["fwx_1", "fwx_2"], "test_run_ids": ["run_1", "run_2"], "freshness_window_seconds": 2592000 }
+```
+
+The server captures one immutable baseline per expectation from the listed runs.
+
+- Every referenced run must be finalized (`verdicted` or `completed`). Otherwise the request fails with `409 evidence_not_finalized`.
+- Every run must have a recorded `source_perspective` and `worker_id`, and must belong to the expectation's destination.
+- `freshness_window_seconds` is 3600–15552000 (default 2592000).
+- Capturing a baseline never dispatches traffic.
+
+`201` response:
+
+```json
+{
+  "id": "fwb_1",
+  "kind": "firewall_change",
+  "tenant_id": "ten_1",
+  "change_id": "CHG-1001",
+  "captured_at": "2026-10-06T00:00:00.000Z",
+  "freshness_window_seconds": 2592000,
+  "immutable": true,
+  "baseline_digest": "<sha256 hex>",
+  "entries": [
+    {
+      "kind": "firewall_change",
+      "expectation_id": "fwx_1",
+      "expectation_version": 1,
+      "expectation_digest": "<sha256 hex>",
+      "declaration_digest": null,
+      "target_id": "tgt_fw",
+      "destination_mapping": null,
+      "references": [ { "test_run_id": "run_1", "check_id": "net.tcp.reachability", "check_version": "v3", "scenario_version": null, "verdict_id": "verdict_1", "evidence_ids": ["ev_1"], "target_id": "tgt_fw", "observed_at": "2026-10-05T00:00:00.000Z", "run_status": "verdicted", "finalized": true, "source_perspective": "public-worker-eu", "worker_id": "worker_eu_1" } ],
+      "captured_at": "2026-10-06T00:00:00.000Z",
+      "freshness_window_seconds": 2592000,
+      "baseline_digest": "<sha256 hex>"
+    }
+  ]
+}
+```
+
+Replaying an identical capture returns `200` with `replayed: true`. Audited as `firewall_baseline.captured`. Baselines are never updated. A later declaration or expectation change does not reinterpret them.
+
+### Firewall comparisons
+
+`POST /v1/firewall-comparisons` request:
+
+```json
+{ "baseline_id": "fwb_1", "post_test_run_ids": ["run_9", "run_10"] }
+```
+
+The server evaluates the explicitly selected post-change runs against each baseline entry using `assessComparisonCompatibility`. It records an immutable evaluation and returns `201`. Audited as `firewall_comparison.evaluated`. No traffic is sent.
+
+```json
+{
+  "id": "fwc_1",
+  "kind": "firewall_change",
+  "tenant_id": "ten_1",
+  "baseline_id": "fwb_1",
+  "baseline_digest": "<sha256 hex>",
+  "compatibility": { "comparable": true, "stale": false, "reasons": [] },
+  "items": [
+    {
+      "expectation_id": "fwx_1",
+      "status": "regression",
+      "gap_kind": "required_service_newly_unavailable",
+      "expectation_met": false,
+      "pre_state": "satisfied",
+      "post_state": "not_observed",
+      "reasons": [],
+      "compatibility_reasons": [],
+      "evidence_refs": [],
+      "limitations": ["external_only", "sampled_public_ingress_only", "rule_table_equivalence_not_established", "routing_nat_egress_east_west_not_established", "not_capacity_assurance", "appliance_traversal_not_established", "transport_reachability_not_enforcement"]
+    }
+  ],
+  "summary": { "total": 1, "evaluated": 1, "by_status": { "matched": 0, "regression": 1, "improvement": 0, "inconclusive": 0, "not_tested": 0, "stale": 0, "not_comparable": 0 }, "gaps": { "forbidden_service_newly_reachable": 0, "required_service_newly_unavailable": 1 }, "accepted": false },
+  "limitations": ["external_only", "sampled_public_ingress_only", "rule_table_equivalence_not_established", "routing_nat_egress_east_west_not_established", "not_capacity_assurance", "appliance_traversal_not_established", "transport_reachability_not_enforcement"],
+  "evaluated_at": "2026-10-07T00:00:00.000Z",
+  "evaluation_digest": "<sha256 hex>"
+}
+```
+
+Item `status` is one of `matched`, `regression`, `improvement`, `inconclusive`, `not_tested`, `stale`, or `not_comparable`. Rules:
+
+- `matched` means the post-change side state equals the pre-change side state. Read `expectation_met` to see whether the expectation is satisfied.
+- `gap_kind` is set only on regressions.
+- `compatibility_reasons` uses the contract's `COMPATIBILITY_REASONS`, for example `source_mismatch`, `destination_mapping_missing`, `check_version_mismatch`, `evidence_not_finalized`, or `baseline_stale`. Any such reason forces `stale`, `not_comparable`, or `not_tested`.
+- Expectations without post-change evidence are `not_tested`.
+- Required allow needs a valid service response. Expected deny needs control-specific denial evidence. UDP silence and timeouts remain `inconclusive`. A transport connect shows reachability, not enforcement.
+- `summary.accepted` is true only when at least one item exists and every item is `matched` or `improvement` with `expectation_met: true`.
+
+Other errors:
+
+- `404`: unknown or other-tenant baseline or run.
+- `400 invalid_comparison_request`: malformed body.
+- `409 baseline_not_comparable`: an evaluation would claim equivalence from incompatible evidence.
+
+Reports state that sampled public-ingress behavior was tested. They leave rule-table, routing, NAT, egress, east-west, appliance-traversal, and capacity equivalence unestablished.
+
+`GET /v1/firewall-baselines`, `GET /v1/firewall-comparisons` (`?change_id&baseline_id&cursor&limit`), and the `/:id` reads are passive. They return the stored records unchanged.
+
+### Protection validation tenant gate and runtime wiring
+
+**Tenant gate.** `GET /v1/tenant/deployment-features` returns `protection_validation: boolean`. The gate is resolved in this order:
+
+1. `ASTRANULL_PROTECTION_VALIDATION_ENABLED=0` is a global off switch for every tenant, including demo tenants.
+2. `ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS` (JSON object of `tenant_id` to `true`/`false` or `1`/`0`) overrides the default per tenant.
+3. Otherwise `ASTRANULL_PROTECTION_VALIDATION_ENABLED` (default off). Demo tenants (ADR-0016) are on unless the global switch is off.
+
+When the gate is off, the routes above and `GET /v1/reports/protection-validation` return `404 protection_validation_disabled`, and the portal hides the target sections with an explicit "not enabled" notice. Turning the gate off never deletes declarations, baselines, evaluations, or findings. A running comparison of a tenant whose gate is off starts nothing more: its next advance skips pending and deferred paths with `skip_reason: "protection_validation_disabled"` and finishes as `cancelled`. Already-started runs stay cancellable through `POST /v1/test-runs/:id/cancel`. Operator procedure: [protection validation rollout](backend/protection-validation-rollout.md).
+
+**Persistence modes.**
+
+| Route family | dev-json | Postgres |
+|---|---|---|
+| Entry paths, firewall expectations, baselines, comparisons, matrix, report | wired | wired |
+| `POST/GET /v1/entry-path-comparisons*` (plan, start, list, get, cancel) | wired | wired (migration `0071_entry_path_comparison_lifecycle.sql`); `503 postgres_route_not_wired` only when a runtime dependency is missing |
+
+**Postgres comparison lifecycle.** The dev store and Postgres run the same lifecycle code (`src/services/entryPathComparisons.mjs`). In Postgres mode:
+
+- `POST /v1/entry-path-comparisons` with `mode: "start"` accepts an optional `Idempotency-Key` header. Repeating it with the same reviewed plan returns `200` with `replayed: true` and the original comparison; the same key with a different plan is `409 idempotency_conflict` with `existing_id`. A tenant has at most one running comparison per reviewed plan digest, so concurrent identical starts replay that comparison. A replay of a still-running comparison also advances it once.
+- The background advance runs from the Postgres validation-scan runner (`npm run validation-scan:runner`, also run on every `test-policy-runner` tick). Each tick resumes deferred paths, settles paths whose runs ended while another worker held the comparison lock, and retries evaluation links. When the tenant gate reads as off in the runner, the comparison is paused, not cancelled; only the API process cancels on the gate.
+- `POST /v1/entry-path-comparisons/:comparisonId/cancel` waits up to 5 seconds for the comparison lock and otherwise returns `409 comparison_busy`.
+- A path that keeps being deferred (hourly cap or cooldown) is retried until 24 hours after the comparison started, then skipped with `skip_reason: "deferral_limit_reached"` so the comparison can finish. Deferrals do not count as start attempts.
+- Path state names are stored as `running`/`completed`/`cancelled`/`failed`; the API keeps the dev names (`started`, `finalized`, `skipped`) and always returns `skip_reason`.
+
+**Comparison stop.** `POST /v1/entry-path-comparisons/:comparisonId/cancel` (body `{ reason? }`) skips every pending or deferred path and cancels started runs through the existing run cancel path. It returns `200` with the comparison view (`status: "cancelled"`). A finished comparison is `409 not_cancellable`. It never starts traffic. On every delegated protection-validation route the path parameter is authoritative: a body or query field that repeats a path parameter (`comparisonId`, `targetId`) with a different value returns `400 path_parameter_mismatch` with `field`, and nothing runs.
+
+**Declaration responses** add `digest_verified`, `currently_authorized`, `authorization_state`, `authorization_reason`, and `entry_target_value`. Create routes accept an optional `Idempotency-Key` header; reusing a key with a different body is `409 idempotency_conflict`. Firewall baseline lists and reads return full capture records with `entry_count`.
+
+**Comparison start** responses add `scope_digest` and per-item `execution_state` (`pending`, `deferred`, `started`, `finalized`, `skipped`), `skip_reason` (for example `kill_switch_active`, `protection_validation_disabled`, `comparison_cancelled`, `run_cancelled`, `approved_scope_invalid`, `entry_path_archived`, `ownership_not_verified`, `safe_window_closed`, `deferral_limit_reached`, `start_interrupted`), and `deferred_until`. Plans mark a declared login or API path ineligible with `login_path_state_change_risk` or `api_path_state_change_risk` when the only matching check would send a body or a non-GET/HEAD method; declared login and API paths only run `waf_class_marker_probe`, `waf_evasion_marker_probe`, `waf_enforcement_probe` or `http_head` checks. For the generic `marker` scenario they select `waf.entry_path_login_marker.safe` or `waf.entry_path_api_marker.safe` (GET/HEAD only, no body, no redirects). Start errors add `423 kill_switch_active` and `409 no_eligible_entry_paths`. Reads add `execution[]` and `attempts[]` (reference-only observations per path). A leg that answered without usable evidence keeps its gap outcome in `attempts[].observation` (for example `not_applicable` when a CDN edge answered a direct-origin request) instead of `not_tested`.
+
+**Comparison views** add `evaluation_id` (the recorded `pvc_` evaluation once finished) and `items[].test_run_id`. A finished comparison is recorded through the same evaluation store as firewall comparisons; its stored evaluation keeps `expectation_id` and `comparison_id`.
+
+**Firewall baselines and comparisons** use the PV-05 classifier (`classifier_version: "firewall-acceptance-v3"`; v1/v2 baselines are `check_version_mismatch` and need a fresh capture):
+
+- Each baseline entry adds `classifier_version`, `observations[]` (`{ evidence_id, test_run_id, check_id, observation_class, evidence_tier, source_perspective, worker_id, destination_fingerprint, observed_at }`), and `observations_digest`.
+- Capture requires current ownership of each baseline destination (`409 ownership_not_verified`). Unknown expectations are `404 unknown_firewall_expectation`; unknown runs are `404 unknown_test_run`.
+- A valid service response comes only from a completed TLS handshake (`tls_audit`) or a non-5xx `host_sni_bypass` origin observation. TCP connects, open ports, and UDP replies are transport-only (E2) and never satisfy a required allow.
+- Repeated TCP or service silence before a change is `pre_state: "not_observed"` for an expected deny; a later response is a `forbidden_service_newly_reachable` regression with reason `baseline_denial_not_control_specific`. Silence on both sides stays `inconclusive`.
+- Comparisons add `post_test_run_ids`, `classifier_version`, `readiness_effect: "none"`, `observations` (per-expectation pre/post summaries; dropped with `observations_truncated: true` when too large), and `statement` (`{ headline, gaps, scope, not_established, readiness_effect }`). Active expectations of the same change that are not in the baseline are listed as `not_tested` with reason `not_in_baseline`; baselined expectations with no post-change sample are `not_tested` with reason `post_change_not_sampled`. Deny expectations are satisfied only by `icmp_admin_prohibited`; a refusal after an open baseline is an observed service change (`rst_after_change`), never firewall enforcement. Any HTTP status, TLS reply or banner is reachable. A refusal without an open baseline stays unverified (`rst_without_open_baseline`). Port scans report `open_ports`, `filtered_ports` and `closed_ports`.
+- An identical evaluation request returns `200` with `replayed: true` and the stored record.
+
+**Origin observation semantics (PV-01).** Edge-detection `network_firewall.direct_origin_reachability` adds `outcome` (`response_observed`, `application_identity_confirmed`, `explicit_denial_observed`, `no_response`, `transport_error`, `not_tested`), `label`, `explicit_denial_observed`, and `application_bypass_suspected`; its `status` can be `denied`. `protection.origin_lockdown_basis` is `explicit_denial_observed` or `null`, and lockdown is shown only with that basis. The five origin/WAF checks that use these executors are version `1.1.0`; historical verdicts are not rewritten. A `host_sni_bypass` explicit denial earns the readiness verdict `edge_protected` only when the observation also confirms origin lockdown (healthy permitted-path baseline); without a baseline the verdict is `inconclusive` and no protection credit is given. In bound WAF validation runs, every direct-origin result is recorded in the `origin_bypass` scenario family (`observed_action` `deny`, `origin_response`, or `inconclusive`) and never counts as an edge marker failure; only a nonce-confirmed application bypass sets `origin_bypass_confirmed`.
+
+**Status-code semantics (`external-observation-v2`, 2026-10-06).** A bare HTTP status is never a denial. `direct_origin_reachability.outcome` adds `misdirected_request` (421), `probe_path_error` (407) and `not_applicable` (a CDN or WAF edge answered; `not_applicable_reason: "cdn_edge_ip"`, `edge_signal`). Observations add `denial_signature` (`{ kind: "vendor" | "declared", id, vendor }` or `null`), `response_reason` (`authentication_challenge` for 401, `unattributed_denial` for other unsigned 4xx, `generic_error_response` for 5xx) and `error_reason` (`connection_refused`). `origin_lockdown_confirmed` needs a customer-declared lockdown signature (status plus header or body hash, or a declared mTLS rejection) over a healthy baseline. Stored v1 observations are re-read under these rules and never edited.
+
+Marker probes (`waf_class_marker_probe`, `waf_evasion_marker_probe`, `waf_enforcement_probe`, `waf_inspection_limit_probe`, `outside_in_waf_scan`) grade a marker as blocked only with a vendor or declared signature, read from headers and a bounded body prefix (at most 8 KB, never stored). A block page served with HTTP 200 (for example F5 ASM) counts as blocked. Without a signature: 2xx/3xx is allowed; 401 is inconclusive (`authentication_gate_precedes_inspection`); another 4xx that differs from the baseline is `block_suspected` (neither enforcement nor gap); 421, 407, 5xx and drops are inconclusive. Grading needs a healthy, unsigned permitted baseline. Marker rows add `blocked`, `allowed`, `inconclusive`, `block_suspected`, `reason`, `denial_signature` and `waf_product_hint`. Evasion results add `permitted_baseline` (`{ status_code, health, denial_signature }`), `permitted_baseline_health` and `inconclusive_reason` (`permitted_baseline_not_healthy`, `baseline_marker_not_blocked`, `baseline_marker_not_graded`, `transformed_marker_not_graded`). The WAF enforcement probe sends one GET (previously HEAD) so body signatures are visible. A signed denial on the permitted baseline of a marker leg is recorded as `explicit_denial_observed`, so a `must_not_be_reachable` login or API path that the edge blocks is `consistent_enforcement`. Version bumps: the 41 `waf.evasion_*.safe` checks and `l3.firewall_exposure_scan.safe` are `1.1.0` (this round); the host/SNI checks and `waf.fingerprint.safe` are `1.2.0`; WAF enforcement, inspection-limit and class-marker checks are `1.1.0`.
+
+Other correlation rules from the 2026-10-06 staging run: a completed TLS handshake (`tls_audit`) is a TLS-profile result (`protected`, or `exposed` with the listed profile issues), never "blocked at the edge"; a bounded port scan whose only open ports are 80/443 is `allowed_as_expected` with no finding; WAF effectiveness ignores inconclusive marker rows instead of voiding the definitive ones. `l3.forbidden_tcp_port.safe`, `l3.forbidden_udp_port.safe` and `l3.ipv6_reachability.safe` also accept `tcp` (`host:port` or `[IPv6]:port`) targets; an unbracketed IPv6 literal is never split into host and port.
+
+**Source perspectives.** A run's source perspective is resolved on the server from the signed worker id, never from worker-submitted metadata. With `ASTRANULL_APPROVED_PROBE_SOURCES` (JSON object of perspective to worker ids), only registered workers have a source; unknown workers are `source_missing`. Without it, every signed worker belongs to the shared pool `astranull-signed-public-worker`.
+
+**Matrix.** `GET /v1/targets/:targetId/protection-validation` lists active paths anchored on the target. Rows add `entry_target_value`, `scenarios[]` (current item per scenario with `evaluation_id` and `freshness`), and `layers[].configuration`. `configuration` is explanation-only connector evidence (`evidence_role: "explanation_only"`, `absence_means: "unknown"`); it never changes `vendor_detection` or `observed_enforcement`. The response adds `counts`, `exclusions`, and `configuration_access` (`granted`, `redacted`, or `disabled`). Configuration uses the same gate as connector snapshots: `ASTRANULL_WAF_POSTURE_ENABLED`, tenant connectors, and the `waf:connector_read` permission (and API-key scope). When access is `redacted` (for example `viewer` or `soc`), rows omit `layers[].configuration` and `GET /v1/targets/:id` attaches only `protection_profile.configuration: { "configuration_access": "redacted" }`. A layer's `observed_enforcement` is set only when the driving check measures that layer (WAF/edge markers and direct-origin or HEAD checks measure `waf` and `cdn_edge`; bounded port checks measure `network_firewall`; nothing measures `ddos`). Other declared layers stay `not_tested` with the `layer_not_measured_by_scenario` limitation.
+
+**Report.** `GET /v1/reports/protection-validation` (`report:read`; `?format=json|csv`, `?anchor_target_ids=a,b`) is a passive projection over the same predicates as the matrix (`report_kind: "protection_validation"`, `passive: true`, `executes_checks: false`, `sends_notifications: false`). Units are counted separately (applications, hosts, entry paths, target/check pairs, firewall expectations); vendor detection is reported apart from enforcement. CSV cells are escaped against spreadsheet formula injection. Each conclusion has `ignored_for_findings`, and the CSV has a matching `ignored_for_findings` column after `readiness_eligible`. The `unknowns` section adds `ignored_for_findings`, `creates_findings: false`, `counts_as_validated: false` and a `statement`. A passing result without finalized evidence reports as `unknown` (`inconclusive` for firewall) under reason `evidence_not_finalized`. For each firewall expectation the report uses the newest evaluation that sampled it; a later partial comparison that did not sample an expectation does not hide an earlier sampled result.
+
+**Findings.** Every newly recorded evaluation (firewall comparison or finished entry-path comparison) derives deduplicated findings. Results with missing evidence create no finding and never update, escalate, close or reopen an existing one: path outcomes `inconclusive`, `not_tested`, `skipped`; firewall statuses `inconclusive`, `not_tested`, `stale`, `not_comparable`; and any item without a finalized evidence reference. Findings carry `source: "protection_validation"`, `dedupe_key` (`pvf_<sha256>`), `finding_class` (`confirmed_exposure`, `observed_enforcement_gap`, `observed_availability_gap`, `suspected_bypass`; stored legacy `unavailable_evidence` rows stay readable), `priority` (`p1`–`p4`), and `protection_validation` (comparison context, evidence references, limitations, candidate explanations marked not corroborated). A replayed evaluation creates nothing. Passing items never close a finding or its siblings; closing stays an explicit lifecycle action. Ordinary verdict findings never attach to a protection finding. In Postgres these columns come from migration `0069_protection_findings.sql`.
+
+**Retests.** `POST /v1/test-runs` with `retest_of_finding_id` for a protection finding rechecks current execution authorization first: the active relation or expectation with the same scope, active same-tenant targets, an intact declaration digest, and current ownership. A failure returns `409 retest_not_authorized` with `reason` (for example `entry_path_archived`, `expectation_not_active`, `retest_scope_mismatch`, `target_not_authorized`) and starts nothing. The retest lineage stores `comparison_context`.
+
+### Protection-validation review corrections (2026-10-07)
+
+- Matrix responses add `scope_complete` and `source_truncation` for capped entry-path, evaluation, and expectation inputs. Counts describe the returned scope; a truncated view never represents the complete estate. The portal displays the partial-view state.
+- Protection-validation JSON reports add `scope.source_records_complete` and `scope.source_truncation`; `incomplete_scope.reasons` includes `source_records_truncated` when needed. CSV includes `source_records_complete`. Unique-host counts deduplicate hostname and URL records by normalized hostname; target/check and entry-path units remain separate.
+- A path evaluation uses its captured `expectation_id` to explain layer intent, not the latest expectation for the same scenario.
+- Origin protection-finding retests with a missing or different `origin_binding_id` return `409 retest_not_authorized` with `retest_scope_mismatch` before dispatch. Mapped firewall findings and retests bind to the declared post-change target.
+- A malformed or explicitly empty `ASTRANULL_APPROVED_PROBE_SOURCES` admits no workers; conflicting assignments give that worker no perspective. An unset registry alone uses the shared public pool. Explicit false tenant feature overrides also apply to demo tenants.

@@ -157,6 +157,7 @@ describe('outside-in WAF scanner', () => {
         return mockResponse(403, {
           server: 'cloudflare',
           'cf-ray': 'blocked',
+          'cf-mitigated': 'challenge',
           __body: 'Cloudflare',
         });
       },
@@ -271,7 +272,8 @@ describe('outside-in WAF scanner', () => {
     assert.equal(challenged.reason, 'waf_challenge_header');
   });
 
-  it('treats unchanged origin 403/429 responses and transport failures as inconclusive', () => {
+  it('treats an unhealthy 403/429 baseline and transport failures as inconclusive', () => {
+    const empty = { blocked: false, challenged: false, allowed: false, inconclusive: true, block_suspected: false, denial_signature: null };
     for (const status_code of [403, 429]) {
       const baseline = {
         status_code,
@@ -279,24 +281,13 @@ describe('outside-in WAF scanner', () => {
         server_header: 'nginx',
         connection_dropped: false,
       };
-      assert.deepEqual(isBlockedOrChallenged({ ...baseline }, baseline), {
-        blocked: false,
-        challenged: false,
-        allowed: false,
-        inconclusive: true,
-      });
+      assert.deepEqual(isBlockedOrChallenged({ ...baseline }, baseline), { ...empty, reason: 'baseline_unhealthy' });
     }
     assert.deepEqual(isBlockedOrChallenged({
       status_code: 0,
       connection_dropped: true,
       error_class: 'AbortError',
-    }), {
-      blocked: false,
-      challenged: false,
-      allowed: false,
-      inconclusive: true,
-      error_class: 'AbortError',
-    });
+    }), { ...empty, reason: 'rst_or_drop_unattributed', error_class: 'AbortError' });
   });
 
   it('does not classify generic differential origin 403/429 responses as a WAF', async () => {
@@ -319,7 +310,12 @@ describe('outside-in WAF scanner', () => {
       assert.equal(outcome.edge_signature.waf_present, false, `status ${status}`);
       assert.equal(outcome.block_page_signature_id, null, `status ${status}`);
       assert.equal(outcome.block_page_fingerprint_hash, null, `status ${status}`);
-      assert.equal(outcome.waf_effectiveness.status, 'no_waf_detected', `status ${status}`);
+      assert.notEqual(outcome.waf_effectiveness.status, 'effective_for_tested_probes', `status ${status}`);
+      assert.equal(outcome.waf_effectiveness.blocked_count ?? 0, 0, `status ${status}`);
+      const sqli = outcome.marker_probes.find((row) => row.family === 'sqli_marker');
+      assert.equal(sqli.blocked, false, `status ${status}`);
+      assert.equal(sqli.block_suspected, true, `status ${status}`);
+      assert.equal(sqli.reason, 'unattributed_denial', `status ${status}`);
       assert.notEqual(outcome.posture_status, 'protected', `status ${status}`);
     }
   });
@@ -369,18 +365,73 @@ describe('outside-in WAF scanner', () => {
       fetchFn: async (url, init) => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         if (!isBaseline) {
-          return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
         }
         return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
       },
-      // Origin lockdown: the direct-origin probe cannot reach the origin (connection refused).
-      originBypassFn: async () => ({ res: null, error: new Error('ECONNREFUSED') }),
+      declaredOriginLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
+      originBypassFn: async () => ({ res: mockResponse(403, { server: 'origin-nginx', 'x-origin-lockdown': 'cdn-only' }), error: null }),
     });
     assert.equal(outcome.posture_label, 'Protected');
     assert.equal(outcome.validation_passed, true);
     assert.equal(outcome.origin_lockdown_confirmed, true);
-    assert.equal(outcome.direct_origin_reachable, false);
+    assert.equal(outcome.origin_observation.outcome, 'explicit_denial_observed');
+    assert.equal(outcome.origin_observation.denial_signature.kind, 'declared');
+    assert.equal(outcome.network_firewall.direct_origin_reachability.status, 'denied');
     assert.equal(outcome.coverage_complete, true);
+  });
+
+  it('never reports Protected from an undeclared direct-origin 401 or 403', async () => {
+    const baseUrl = 'https://shop.example.test/';
+    for (const [status, reason, directStatus] of [[401, 'authentication_challenge', 'exposed'], [403, 'unattributed_denial', 'inconclusive']]) {
+      const outcome = await runOutsideInWafScan({
+        url: baseUrl,
+        budget: 13,
+        timeoutMs: 1000,
+        directIp: '198.51.100.7',
+        hostname: 'shop.example.test',
+        fetchFn: async (url, init) => {
+          const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
+          return isBaseline
+            ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+            : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
+        },
+        originBypassFn: async () => ({ res: mockResponse(status, { server: 'origin-nginx' }), error: null }),
+      });
+      assert.equal(outcome.origin_observation.outcome, 'response_observed', String(status));
+      assert.equal(outcome.origin_observation.response_reason, reason);
+      assert.equal(outcome.origin_lockdown_confirmed, false);
+      assert.equal(outcome.posture_label, 'Edge protected · origin lockdown unverified');
+      assert.equal(outcome.network_firewall.direct_origin_reachability.status, directStatus);
+    }
+  });
+
+  it('never reports Protected when the direct-origin leg is refused or silent', async () => {
+    const baseUrl = 'https://shop.example.test/';
+    for (const error of [
+      Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }),
+      Object.assign(new Error('timed out'), { name: 'AbortError' }),
+    ]) {
+      const outcome = await runOutsideInWafScan({
+        url: baseUrl,
+        budget: 13,
+        timeoutMs: 1000,
+        directIp: '198.51.100.7',
+        hostname: 'shop.example.test',
+        fetchFn: async (url, init) => {
+          const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
+          return isBaseline
+            ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+            : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
+        },
+        originBypassFn: async () => ({ res: null, error }),
+      });
+      assert.equal(outcome.posture_label, 'Edge protected · origin lockdown unverified');
+      assert.equal(outcome.origin_lockdown_confirmed, false);
+      assert.equal(outcome.direct_origin_reachable, false);
+      assert.equal(outcome.network_firewall.status, 'inconclusive');
+      assert.equal(outcome.coverage_complete, true);
+    }
   });
 
   it('reports protected class evidence while optional phase coverage is incomplete', async () => {
@@ -393,7 +444,7 @@ describe('outside-in WAF scanner', () => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         return isBaseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
 
@@ -417,7 +468,7 @@ describe('outside-in WAF scanner', () => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         return isBaseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
 
@@ -441,7 +492,7 @@ describe('outside-in WAF scanner', () => {
           return mockResponse(200, { server: 'nginx' });
         }
         if (init?.method === 'POST') return mockResponse(200, { server: 'nginx' });
-        return mockResponse(403, { server: 'nginx', __body: 'blocked' });
+        return mockResponse(403, { server: 'nginx', 'x-waf-block': '1', __body: 'blocked' });
       },
     });
     assert.equal(outcome.evasion_bypass_suspected, true);
@@ -464,7 +515,7 @@ describe('outside-in WAF scanner', () => {
           && init?.headers?.['User-Agent'];
         return baseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': 'baseline' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': 'blocked', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': 'blocked', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
     assert.ok(methods.includes('POST'));
@@ -488,7 +539,7 @@ describe('outside-in WAF scanner', () => {
           && init?.headers?.['User-Agent'];
         return baseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
     assert.equal(outcome.evasion_bypass_suspected, true);
@@ -612,7 +663,7 @@ describe('outside-in WAF scanner', () => {
     assert.notEqual(outcome.posture_label, 'Bypass Risk');
   });
 
-  it('reports bypass risk when the direct origin echoes the same application signature as the edge', async () => {
+  it('treats a shared application Server header as supporting evidence only, never a confirmed bypass', async () => {
     const outcome = await runOutsideInWafScan({
       url: 'https://edge.example.test/',
       budget: 10,
@@ -632,11 +683,13 @@ describe('outside-in WAF scanner', () => {
     });
 
     assert.equal(outcome.origin_bypass_application_signature_match, true);
-    assert.equal(outcome.origin_bypass_confirmed, true);
-    assert.equal(outcome.posture_label, 'Bypass Risk');
+    assert.equal(outcome.origin_bypass_confirmed, false);
+    assert.equal(outcome.origin_bypass_suspected, true);
+    assert.notEqual(outcome.posture_label, 'Bypass Risk');
+    assert.equal(outcome.network_firewall.status, 'exposed');
   });
 
-  it('reports any direct-origin HTTP response as network reachability without inventing bypass', async () => {
+  it('reports an undeclared direct-origin 403 as reachable without lockdown, bypass, or exposure', async () => {
     const outcome = await runOutsideInWafScan({
       url: 'https://edge.example.test/',
       budget: 13,
@@ -648,7 +701,7 @@ describe('outside-in WAF scanner', () => {
           && init?.headers?.['User-Agent'];
         return baseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
       originBypassFn: async () => ({
         res: mockResponse(403, { server: 'origin-nginx' }),
@@ -658,7 +711,10 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.direct_origin_reachable, true);
     assert.equal(outcome.origin_bypass_confirmed, false);
-    assert.equal(outcome.network_firewall.status, 'exposed');
+    assert.equal(outcome.network_firewall.status, 'inconclusive');
+    assert.equal(outcome.network_firewall.direct_origin_reachability.explicit_denial_observed, false);
+    assert.equal(outcome.network_firewall.direct_origin_reachability.response_reason, 'unattributed_denial');
+    assert.equal(outcome.network_firewall.direct_origin_reachability.denial_signature, null);
     assert.equal(outcome.network_firewall.direct_origin_reachability.status_code, 403);
     assert.equal(outcome.network_firewall.port_exposure.status, 'not_tested');
   });
@@ -703,7 +759,7 @@ describe('outside-in WAF scanner', () => {
       fetchFn: async (url, init) => {
         const isBaseline = url === 'https://edge.example.test/' && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         if (!isBaseline) {
-          return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
         }
         return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
       },
@@ -728,7 +784,7 @@ describe('outside-in WAF scanner', () => {
         const isBaseline = url === 'https://edge.example.test/' && init?.headers?.['User-Agent'] && init?.method !== 'POST';
         return isBaseline
           ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
-          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
 
@@ -842,14 +898,92 @@ describe('outside-in WAF scanner false-positive guards', () => {
     assert.equal(isBlockedOrChallenged(blocked, baseline).blocked, true);
   });
 
-  it('treats a status change with a rewritten Server header as an edge block', () => {
+  it('treats an unsigned status change, even with a rewritten Server header, as block_suspected only', () => {
     const baseline = { status_code: 200, header_names: ['server'], server_header: 'nginx' };
     const snapshot = { status_code: 406, header_names: ['server'], server_header: 'edge-waf' };
-    assert.equal(isBlockedOrChallenged(snapshot, baseline).blocked, true);
+    assert.equal(isBlockedOrChallenged(snapshot, baseline).blocked, false);
+    assert.equal(isBlockedOrChallenged(snapshot, baseline).block_suspected, true);
     const appError = { status_code: 404, header_names: ['server'], server_header: 'nginx' };
     assert.deepEqual(
       { blocked: isBlockedOrChallenged(appError, baseline).blocked, inconclusive: isBlockedOrChallenged(appError, baseline).inconclusive },
       { blocked: false, inconclusive: true },
     );
+  });
+});
+
+describe('benign-marker grading needs a control-specific signature', () => {
+  const baseline = { status_code: 200, header_names: ['server'], server_header: 'nginx', denial_signature: null };
+  const snap = (status_code, extra = {}) => ({ status_code, header_names: ['server'], server_header: 'nginx', denial_signature: null, ...extra });
+
+  it('maps unsigned statuses to the research decision table', () => {
+    const cases = [
+      [200, { allowed: true, reason: null }],
+      [302, { allowed: true, reason: null }],
+      [401, { inconclusive: true, reason: 'authentication_gate_precedes_inspection' }],
+      [403, { inconclusive: true, block_suspected: true, reason: 'unattributed_denial' }],
+      [404, { inconclusive: true, block_suspected: true, reason: 'unattributed_denial' }],
+      [406, { inconclusive: true, block_suspected: true, reason: 'unattributed_denial' }],
+      [407, { inconclusive: true, reason: 'probe_path_error' }],
+      [421, { inconclusive: true, reason: 'misdirected_request' }],
+      [503, { inconclusive: true, reason: 'error_not_attributable' }],
+    ];
+    for (const [status, expected] of cases) {
+      const graded = isBlockedOrChallenged(snap(status), baseline);
+      assert.equal(graded.blocked, false, String(status));
+      for (const [key, value] of Object.entries(expected)) assert.equal(graded[key], value, `${status} ${key}`);
+    }
+  });
+
+  it('blocks on a vendor signature at any status, including F5 with 200', () => {
+    const f5 = isBlockedOrChallenged(snap(200, { denial_signature: { kind: 'vendor', id: 'f5_asm_rejection', vendor: 'f5' } }), baseline);
+    assert.equal(f5.blocked, true);
+    assert.equal(f5.waf_product_hint, 'f5');
+    assert.deepEqual(f5.denial_signature, { kind: 'vendor', id: 'f5_asm_rejection', vendor: 'f5' });
+    const namesOnly = { status_code: 403, header_names: ['server', 'cf-mitigated'], server_header: 'nginx' };
+    const challenge = isBlockedOrChallenged(namesOnly, baseline);
+    assert.equal(challenge.blocked, true);
+    assert.equal(challenge.challenged, true);
+    assert.equal(isBlockedOrChallenged({ ...namesOnly, denial_signature: null }, baseline).blocked, false);
+  });
+
+  it('never grades against a baseline that is unhealthy or itself carries a block signature', () => {
+    for (const bad of [{ ...baseline, status_code: 403 }, { ...baseline, header_names: ['server', 'cf-mitigated'] }, { ...baseline, denial_signature: { kind: 'vendor', id: 'cloudflare_challenge', vendor: 'cloudflare' } }]) {
+      const graded = isBlockedOrChallenged(snap(403, { denial_signature: { kind: 'vendor', id: 'cloudflare_challenge', vendor: 'cloudflare' } }), bad);
+      assert.equal(graded.blocked, false);
+      assert.equal(graded.reason, 'baseline_unhealthy');
+    }
+  });
+
+  it('records a matched customer-declared block response on the marker row', async () => {
+    const baseUrl = 'https://declared.example.test/';
+    const outcome = await runOutsideInWafScan({
+      url: baseUrl,
+      budget: 5,
+      timeoutMs: 1000,
+      declaredBlockSignature: { status_code: 406, header: { name: 'x-block-id', value: 'marker' } },
+      fetchFn: async (url, init) => (url === baseUrl && init?.headers?.['User-Agent']
+        ? mockResponse(200, { server: 'nginx' })
+        : mockResponse(406, { server: 'nginx', 'x-block-id': 'marker' })),
+    });
+    const sqli = outcome.marker_probes.find((row) => row.family === 'sqli_marker');
+    assert.equal(sqli.blocked, true);
+    assert.equal(sqli.denial_signature.kind, 'declared');
+  });
+
+  it('aistripped.com fixture: XSS and SQLi markers answered 200 without cf-mitigated are not blocked', async () => {
+    const baseUrl = 'https://aistripped.com/';
+    const outcome = await runOutsideInWafScan({
+      url: baseUrl,
+      budget: 5,
+      timeoutMs: 1000,
+      fetchFn: async () => mockResponse(200, { server: 'cloudflare', 'cf-ray': 'synthetic', __body: '<html><div id="root"></div></html>' }),
+    });
+    for (const family of ['sqli_marker', 'xss_marker']) {
+      const row = outcome.marker_probes.find((entry) => entry.family === family);
+      assert.equal(row.allowed, true, family);
+      assert.equal(row.blocked, false, family);
+    }
+    assert.equal(outcome.class_posture.sqli, 'underprotected');
+    assert.notEqual(outcome.posture_status, 'protected');
   });
 });

@@ -53,6 +53,7 @@ import {
   parseFindingListQuery,
 } from '../../lib/findingList.mjs';
 import { authorizeFindingWrite, planFindingPatch } from '../../lib/findingLifecycle.mjs';
+import { isProtectionValidationFinding, protectionRetestContext, protectionRetestRunScopeMatches } from '../../lib/protectionValidationFindings.mjs';
 import { currentOriginProof, validateOriginBindingForRun } from '../../services/originBindings.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
@@ -1541,6 +1542,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       target = finalValidation.target;
 
       const retestFindingId = typeof body.retest_of_finding_id === 'string' ? body.retest_of_finding_id.trim() : '';
+      let retestComparisonContext = null;
       if (retestFindingId) {
         const allowed = authorizeFindingWrite(ctx);
         if (!allowed.ok) {
@@ -1552,6 +1554,20 @@ export function createPostgresValidationServices(repositories, options = {}) {
         if (!finding) return { error: 'unknown_finding', status: 404 };
         if (finding.tenant_id !== ctx.tenantId || finding.target_id !== target.id || finding.check_id !== check.check_id) {
           return { error: 'pair_mismatch', status: 409 };
+        }
+        if (isProtectionValidationFinding(finding)) {
+          if (!protectionRetestRunScopeMatches(finding, body)) return { error: 'retest_not_authorized', status: 409, reason: 'retest_scope_mismatch' };
+          const authorization = typeof options.resolveProtectionRetestAuthorization === 'function'
+            ? await options.resolveProtectionRetestAuthorization(ctx, finding)
+            : null;
+          if (authorization?.ok !== true) {
+            return {
+              error: 'retest_not_authorized',
+              status: authorization?.status >= 400 ? authorization.status : 409,
+              reason: authorization?.error ?? 'authorization_not_rechecked',
+            };
+          }
+          retestComparisonContext = protectionRetestContext(finding, authorization);
         }
       }
       const originBindingId = typeof body.origin_binding_id === 'string' ? body.origin_binding_id.trim() : '';
@@ -1632,6 +1648,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
           : (stamp.provenance_json ?? null),
         origin_binding_id: originBindingId || null,
         retest_of_finding_id: retestFindingId || null,
+        ...(retestComparisonContext ? { retest_comparison_context: retestComparisonContext } : {}),
       };
       let run = await validationEvidence.createTestRun(ctx, runRecord);
       if (run?.error) return run;

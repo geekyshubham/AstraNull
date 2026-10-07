@@ -157,6 +157,7 @@ export const EDGE_DETECTION_SHAPE = {
     label: 'string',
     evidence_tier: 'string',
     origin_lockdown_confirmed: 'boolean',
+    'origin_lockdown_basis?': ['string', 'null'],
   },
   network_firewall: {
     status: 'string',
@@ -165,6 +166,10 @@ export const EDGE_DETECTION_SHAPE = {
       reachable: 'boolean',
       application_bypass_confirmed: 'boolean',
       status_code: ['number', 'null'],
+      'outcome?': ['string', 'null'],
+      'label?': ['string', 'null'],
+      'explicit_denial_observed?': 'boolean',
+      'application_bypass_suspected?': 'boolean',
     },
     port_exposure: {
       status: 'string',
@@ -427,6 +432,7 @@ export const TARGET_DETAIL_SHAPE = {
       scope: { target_id: 'string', plan_version: 'string' },
     }],
     ...HISTORY_READ_FIELDS,
+    'configuration?': 'object',
   },
   coverage: {
     unit: 'string',
@@ -516,6 +522,7 @@ export const FINDING_LINEAGE_SHAPE = {
   closed_at: NULLABLE_STRING,
   sibling_closure: 'boolean',
   siblings: [{ id: 'string', target_id: 'string', status: 'string', closed_at: NULLABLE_STRING }],
+  'comparison_context?': 'object',
   retests: [{
     id: 'string',
     test_run_id: 'string',
@@ -524,6 +531,7 @@ export const FINDING_LINEAGE_SHAPE = {
     intent: 'string',
     relation: 'string',
     created_at: 'string',
+    'comparison_context?': 'object',
   }],
   later_same_pair: [{
     test_run_id: 'string',

@@ -8,6 +8,16 @@ import {
   protectedFinalizeEvidenceRequired,
   stripClientAssertedAgentEvidence,
 } from '../../src/lib/wafProtectedEvidence.mjs';
+import { classifyDirectOriginObservation } from '../../src/lib/externalObservationOutcomes.mjs';
+
+const HEALTHY_BASELINE = { status_code: 200, server_header: 'edge' };
+const responseWith = (status, headers = {}) => ({ status, headers: { get: (name) => headers[String(name).toLowerCase()] ?? null } });
+const deniedOriginObservation = () => classifyDirectOriginObservation({
+  response: responseWith(403, { 'x-origin-lockdown': 'cdn-only' }),
+  baseline: HEALTHY_BASELINE,
+  scope: { host: 'shop.example.test', path: '/' },
+  declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
+});
 
 describe('waf protected evidence corroboration (outside-in, external-only)', () => {
   it('strips client-asserted origin/agent flags from evidence summaries', () => {
@@ -60,6 +70,7 @@ describe('waf protected evidence corroboration (outside-in, external-only)', () 
           external_result: 'blocked',
           waf_fingerprint_detected: true,
           origin_lockdown_confirmed: true,
+          origin_observation: deniedOriginObservation(),
         },
       }],
     });
@@ -70,6 +81,36 @@ describe('waf protected evidence corroboration (outside-in, external-only)', () 
       normalizedScenarios: [scenario],
       corroboration,
     }), null);
+  });
+
+  it('downgrades to edge-only when lockdown rests on a refused or timed-out origin leg', () => {
+    const scenario = {
+      passed: true,
+      evidence_summary_json: { nonce_hash: 'nonce_1', request_id: 'evt_probe_1' },
+    };
+    for (const error of [
+      Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }),
+      Object.assign(new Error('timed out'), { name: 'AbortError' }),
+    ]) {
+      const corroboration = buildWafEvidenceCorroboration({
+        probes: [{
+          id: 'evt_probe_1',
+          nonce_hash: 'nonce_1',
+          metadata: {
+            external_result: 'blocked',
+            waf_fingerprint_detected: true,
+            origin_lockdown_confirmed: true,
+            origin_observation: classifyDirectOriginObservation({ error, baseline: HEALTHY_BASELINE }),
+          },
+        }],
+      });
+      assert.equal(corroboration.originLockdownConfirmed, false);
+      assert.equal(protectedFinalizeEvidenceRequired({
+        validationPassed: true,
+        normalizedScenarios: [scenario],
+        corroboration,
+      })?.downgrade_to_edge_protected, true);
+    }
   });
 
   it('rejects self-asserted lockdown without stored external probe evidence', () => {

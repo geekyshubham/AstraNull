@@ -62,6 +62,35 @@ describe('correlateExternalOnlyVerdict', () => {
   });
 });
 
+describe('evidence gaps are ignored for verdicts', () => {
+  it('keeps unsigned marker responses inconclusive with the recorded reason and no finding', () => {
+    for (const reason of ['authentication_gate_precedes_inspection', 'unattributed_denial', 'misdirected_request', 'probe_path_error', 'error_not_attributable']) {
+      const r = correlateExternalOnlyVerdict({
+        externalResult: 'not_run',
+        expectedBehavior: 'must_block_before_origin',
+        probeKind: 'waf_enforcement_probe',
+        probeIoObserved: true,
+        probeMetadata: { inconclusive_reason: reason },
+      });
+      assert.equal(r.verdict, 'inconclusive', reason);
+      assert.equal(r.createsFinding, false);
+      assert.doesNotMatch(r.explanation, /protected/i);
+    }
+  });
+
+  it('keeps a CDN-edge answer on the direct-origin leg out of origin verdicts', () => {
+    const r = correlateExternalOnlyVerdict({
+      externalResult: 'error',
+      expectedBehavior: 'must_block_before_origin',
+      probeKind: 'host_sni_bypass',
+      probeIoObserved: true,
+      probeMetadata: { origin_observation: { semantics_version: 'external-observation-v2', outcome: 'not_applicable', status_code: 403 } },
+    });
+    assert.equal(r.verdict, 'inconclusive');
+    assert.match(r.explanation, /CDN or WAF edge answered/);
+  });
+});
+
 describe('correlateOpsReadinessVerdict', () => {
   it('protected/high when ops_validation_ok is true', () => {
     const r = correlateOpsReadinessVerdict({ externalResult: 'connected', opsValidationOk: true });

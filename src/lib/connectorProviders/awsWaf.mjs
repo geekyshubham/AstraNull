@@ -130,6 +130,42 @@ function countAwsRules(webAcl) {
   return Array.isArray(rules) ? rules.length : 0;
 }
 
+export function awsRuleActionCategory(rule) {
+  const action = rule?.Action ?? rule?.action ?? null;
+  if (action && typeof action === 'object') {
+    if (action.Block || action.block) return 'block';
+    if (action.Captcha || action.captcha || action.Challenge || action.challenge) return 'challenge';
+    if (action.Count || action.count) return 'monitor';
+    if (action.Allow || action.allow) return 'bypass';
+  }
+  const override = rule?.OverrideAction ?? rule?.overrideAction ?? null;
+  if (override && typeof override === 'object') {
+    if (override.Count || override.count) return 'monitor';
+    if (override.None || override.none) return 'delegated';
+  }
+  return 'unknown';
+}
+
+function awsRuleExclusionCount(rule) {
+  const managed = rule?.Statement?.ManagedRuleGroupStatement ?? rule?.statement?.managedRuleGroupStatement ?? null;
+  if (!managed || typeof managed !== 'object') return 0;
+  const excluded = Array.isArray(managed.ExcludedRules) ? managed.ExcludedRules.length : 0;
+  const overrides = Array.isArray(managed.RuleActionOverrides) ? managed.RuleActionOverrides.length : 0;
+  return excluded + overrides;
+}
+
+export function awsWebAclProtectionConfig(webAcl) {
+  const rules = webAcl?.Rules ?? webAcl?.rules ?? null;
+  const known = Array.isArray(rules);
+  return {
+    enforcementUnit: 'rule',
+    actions: known ? rules.map((rule) => awsRuleActionCategory(rule)) : null,
+    attachmentLevel: 'resource',
+    exclusionCount: known ? rules.reduce((sum, rule) => sum + awsRuleExclusionCount(rule), 0) : null,
+    unsupportedFields: ['attachment_paths', 'path_exclusions', 'method_exclusions', 'version'],
+  };
+}
+
 async function awsWafJsonRequest({
   region,
   target,
@@ -274,6 +310,7 @@ function normalizePrefetchedWebAcls(prefetched, config, observedAt) {
         ...(Array.isArray(webAcl.permission_gaps) ? { permission_gaps: webAcl.permission_gaps } : {}),
       },
       observedAt,
+      protectionConfig: awsWebAclProtectionConfig(webAcl),
     }));
   }
   return snapshots;
@@ -365,6 +402,7 @@ export async function pollAwsWaf({
         ...(permissionGaps.length > 0 ? { permission_gaps: permissionGaps } : {}),
       },
       observedAt,
+      protectionConfig: awsWebAclProtectionConfig(webAcl === summary ? null : webAcl),
     }));
   }
 

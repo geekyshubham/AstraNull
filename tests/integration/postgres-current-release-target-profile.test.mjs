@@ -125,11 +125,14 @@ describe('postgres current-release target profile', () => {
         `UPDATE test_runs SET check_version = '1.0.0', scenario_version = 'fingerprint', producer_kind = 'signed_probe',
            completed_at = now() WHERE id = 'run_target_profile'`,
       );
+      assert.equal((await pairFor()).pair_reason, 'check_version_mismatch');
+      const currentVersion = getCheckById('waf.fingerprint.safe').version;
+      await pool.query(`UPDATE test_runs SET check_version = $1 WHERE id = 'run_target_profile'`, [currentVersion]);
       const live = await pairFor();
       assert.equal(live.state, 'conclusive');
       assert.equal(live.provenance, 'external');
       assert.equal(live.live_external, true);
-      assert.equal(live.retained.check_version, '1.0.0');
+      assert.equal(live.retained.check_version, currentVersion);
       assert.equal(live.retained.scenario_version, 'fingerprint');
       await pool.query(`UPDATE test_runs SET producer_kind = 'internal_simulation' WHERE id = 'run_target_profile'`);
       assert.equal((await pairFor()).live_external, false);

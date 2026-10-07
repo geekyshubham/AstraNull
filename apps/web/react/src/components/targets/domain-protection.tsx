@@ -96,9 +96,11 @@ const FILTERS: Array<{ id: 'all' | RowStatus; label: string }> = [
 
 const ORIGIN_COPY: Record<string, { label: string; tone: 'muted' | 'danger' | 'success' | 'warn'; detail: string }> = {
   not_tested: { label: 'Not tested', tone: 'muted', detail: 'No authorized check has tested a declared origin for this target.' },
-  reachable: { label: 'Directly reachable', tone: 'danger', detail: 'A declared origin answered directly, so traffic can bypass the edge.' },
-  exposed: { label: 'Directly reachable', tone: 'danger', detail: 'A declared origin answered directly, so traffic can bypass the edge.' },
-  not_reachable: { label: 'Not reachable in this observation', tone: 'success', detail: 'The declared origin did not answer direct requests during the recorded check.' },
+  reachable: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
+  exposed: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
+  denied: { label: 'Explicit denial observed', tone: 'muted', detail: 'The declared origin explicitly denied the recorded direct request for this host, path, source and time. The responsible control is not identified.' },
+  unreachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'An earlier check version recorded no direct answer. Silence does not prove a firewall or lockdown is enforcing; rerun the current check version.' },
+  not_reachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'The declared origin did not answer the recorded direct request. Silence does not prove a firewall or lockdown is enforcing.' },
   inconclusive: { label: 'Inconclusive', tone: 'warn', detail: 'The recorded origin check did not reach a conclusion.' },
   unknown: { label: 'Reachability recorded, no assurance', tone: 'muted', detail: 'A direct-origin reachability result is recorded, but no authorized origin binding exists, so it is not an origin lockdown.' },
 };

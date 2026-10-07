@@ -1,3 +1,4 @@
+import { originObservation, originObservationLabel } from './origin-observation.mjs';
 import type { DataItem } from './types';
 // @ts-ignore Plain ESM keeps terminology directly testable with node:test.
 import { plainVerdictLabel } from './plain-language.mjs';
@@ -119,6 +120,10 @@ export function summarizeExternalProbeEvidence(probeEvents: DataItem[]) {
       const externalResult = event.external_result ?? meta.external_result;
       if (externalResult) parts.push(`external_result ${String(externalResult)}`);
       if (meta.probe_profile_kind) parts.push(`profile ${String(meta.probe_profile_kind)}`);
+      const observation = originObservation(meta);
+      if (observation) parts.push(originObservationLabel(meta));
+      const signature = getNestedString(observation, ['denial_signature', 'id']);
+      if (signature) parts.push(`denial signature ${signature}`);
       if (meta.simulation) parts.push(String(meta.simulation));
       if (meta.note) parts.push(String(meta.note));
       return parts.length ? parts.join(' · ') : getString(event, ['signal_type'], 'probe_result');

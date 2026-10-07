@@ -89,7 +89,32 @@ function policyModeFromAttackGroups(attackGroups) {
   return 'unknown';
 }
 
-function matchTargetSnapshot({ configEntry, productionVersion, matchTarget, policyModesById, observedAt }) {
+export function akamaiActionCategory(value) {
+  const action = String(value ?? '').trim().toLowerCase();
+  if (action === 'deny' || action.startsWith('deny_custom_')) return 'block';
+  if (action === 'alert') return 'monitor';
+  if (action === 'none') return 'disabled';
+  return 'unknown';
+}
+
+function matchTargetProtectionConfig(matchTarget, productionVersion, actions) {
+  const filePaths = Array.isArray(matchTarget?.filePaths) ? matchTarget.filePaths : null;
+  return {
+    enforcementUnit: 'attack_group',
+    actions,
+    attachmentLevel: 'hostname',
+    attachmentPaths: filePaths,
+    pathMatch: filePaths ? (matchTarget?.isNegativePathMatch === true ? 'exclude' : 'include') : 'unspecified',
+    configVersion: `production_version:${productionVersion}`,
+    unsupportedFields: [
+      ...(filePaths ? [] : ['attachment_paths']),
+      'path_exclusions',
+      'method_exclusions',
+    ],
+  };
+}
+
+function matchTargetSnapshot({ configEntry, productionVersion, matchTarget, policyModesById, policyActionsById, observedAt }) {
   const hostnames = Array.isArray(matchTarget?.hostnames)
     ? matchTarget.hostnames.map((h) => String(h).trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean)
     : [];
@@ -114,6 +139,11 @@ function matchTargetSnapshot({ configEntry, productionVersion, matchTarget, poli
       ],
     },
     observedAt,
+    protectionConfig: matchTargetProtectionConfig(
+      matchTarget,
+      productionVersion,
+      policyId != null ? policyActionsById?.get(String(policyId)) ?? null : null,
+    ),
   });
 }
 
@@ -178,6 +208,7 @@ export async function pollAkamaiApplicationSecurity({
     // Enforcement mode is derived per policy from its attack-group actions (alert/deny/none),
     // not from webApplicationFirewallMode (which only describes ruleset update mechanics).
     const policyModesById = new Map();
+    const policyActionsById = new Map();
     for (const policyEntry of policies) {
       const policyId = String(policyEntry?.policyId ?? '');
       if (!policyId) continue;
@@ -197,6 +228,7 @@ export async function pollAkamaiApplicationSecurity({
             ? attackGroupsBody
             : [];
         policyModesById.set(policyId, policyModeFromAttackGroups(attackGroups));
+        policyActionsById.set(policyId, attackGroups.map((group) => akamaiActionCategory(group?.action)));
       } catch (error) {
         permissionGaps.add(error?.code === 'auth_failed' ? 'permission_insufficient' : 'attack_group_fetch_failed');
         policyModesById.set(policyId, 'unknown');
@@ -226,7 +258,14 @@ export async function pollAkamaiApplicationSecurity({
 
     for (const matchTarget of matchTargets) {
       if (snapshots.length >= CONNECTOR_POLL_MAX_INVENTORY_ITEMS) break;
-      const snapshot = matchTargetSnapshot({ configEntry, productionVersion, matchTarget, policyModesById, observedAt });
+      const snapshot = matchTargetSnapshot({
+        configEntry,
+        productionVersion,
+        matchTarget,
+        policyModesById,
+        policyActionsById,
+        observedAt,
+      });
       if (snapshot) snapshots.push(snapshot);
     }
   }

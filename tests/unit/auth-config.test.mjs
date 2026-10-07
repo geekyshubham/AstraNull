@@ -48,6 +48,8 @@ describe('runtime auth config', () => {
       externalDiscoveryEnabled: false,
       connectorsEnabledDefault: false,
       connectorsEnabledTenants: {},
+      protectionValidationEnabledDefault: false,
+      protectionValidationEnabledTenants: {},
     });
   });
 

@@ -1761,13 +1761,8 @@ export function ReportsPage({
         eyebrow="Snapshots on the record"
         description="Generate a dated snapshot of findings, recorded runs, and declarations for a chosen audience and scope, review it, then export it. A report never changes after generation."
       />
-      {(message || error) ? (
-        <Toast
-          message={error || message}
-          tone={error ? 'error' : 'success'}
-          duration={5000}
-        />
-      ) : null}
+      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+      {message && !error ? <Toast message={message} tone="success" duration={5000} /> : null}
       {created ? <ReportSnapshotPreview report={created} formats={formatOptions} exporter={exporter} /> : null}
       {canCreateReport ? (
         <Card>

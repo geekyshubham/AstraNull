@@ -26,7 +26,7 @@ const VERDICT_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, verdic
 
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
-  created_at, updated_at, closed_at`;
+  created_at, updated_at, closed_at, source, dedupe_key, finding_class, priority, protection_validation_json`;
 
 const HISTORY_TIME_SKIPS = new Set([
   'before_declaration', 'future_timestamp', 'declaration_time_unknown', 'invalid_timestamp',
@@ -267,6 +267,13 @@ function mapFindingRow(row) {
     created_at: toIso(row.created_at),
     updated_at: row.updated_at == null ? null : toIso(row.updated_at),
     closed_at: row.closed_at == null ? null : toIso(row.closed_at),
+    ...(row.source ? {
+      source: row.source,
+      dedupe_key: row.dedupe_key ?? null,
+      finding_class: row.finding_class ?? null,
+      priority: row.priority ?? null,
+      protection_validation: asObject(row.protection_validation_json),
+    } : {}),
   };
 }
 
@@ -514,8 +521,9 @@ export function createValidationEvidenceRepository(pool) {
         if (record.retest_of_finding_id) {
           await client.query(
             `INSERT INTO finding_retest_lineage (
-               id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_by, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, 'retest', 'retest', $7, $8::timestamptz)
+               id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_by, created_at,
+               comparison_context_json
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'retest', 'retest', $7, $8::timestamptz, $9::jsonb)
              ON CONFLICT (tenant_id, finding_id, test_run_id) DO NOTHING`,
             [
               record.lineage_id ?? `rtln_${randomBytes(8).toString('hex')}`,
@@ -526,6 +534,7 @@ export function createValidationEvidenceRepository(pool) {
               record.check_id,
               record.created_by ?? null,
               record.created_at,
+              record.retest_comparison_context ? JSON.stringify(record.retest_comparison_context) : null,
             ],
           );
         }
@@ -1824,7 +1833,8 @@ export function createValidationEvidenceRepository(pool) {
         const mapped = mapFindingRow(finding.rows[0] ?? null);
         if (!mapped) return null;
         const lineage = await client.query(
-          `SELECT id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_at
+          `SELECT id, tenant_id, finding_id, test_run_id, target_id, check_id, intent, relation, created_at,
+                  comparison_context_json
            FROM finding_retest_lineage WHERE tenant_id = $1 AND finding_id = $2`,
           [ctx.tenantId, findingId],
         );

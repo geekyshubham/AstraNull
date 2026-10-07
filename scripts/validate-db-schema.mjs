@@ -382,6 +382,13 @@ const TENANT_RLS_TABLES = [
   'waf_action_items',
   'waf_coverage_daily_rollups',
   'waf_scenario_intakes',
+  'application_entry_paths',
+  'protection_expectations',
+  'protection_comparison_baselines',
+  'protection_comparison_evaluations',
+  'protection_comparison_evidence_refs',
+  'entry_path_comparisons',
+  'entry_path_comparison_items',
 ];
 
 const REQUIRED_MIGRATION_FILES = [
@@ -494,6 +501,8 @@ const REQUIRED_RLS = [
   /ALTER TABLE tenants FORCE ROW LEVEL SECURITY/,
   /CREATE POLICY tenant_isolation_tenants ON tenants[\s\S]*?USING \(id = current_setting\('app\.tenant_id', true\)\)/m,
   /tenant_isolation_probe_jobs/,
+  /CREATE POLICY tenant_isolation_entry_path_comparisons ON entry_path_comparisons/,
+  /CREATE POLICY tenant_isolation_entry_path_comparison_items ON entry_path_comparison_items/,
 ];
 
 const FORBIDDEN_SCHEMA_PATTERNS = [
@@ -558,6 +567,12 @@ export const TENANT_PARENT_UNIQUE_KEYS = [
   'target_edge_detections_tenant_id_id_key',
   'waf_coverage_daily_rollups_tenant_id_id_key',
   'waf_scenario_intakes_tenant_id_id_key',
+  'application_entry_paths_tenant_id_id_key',
+  'protection_expectations_tenant_id_id_key',
+  'protection_comparison_baselines_tenant_id_id_key',
+  'protection_comparison_evaluations_tenant_id_id_key',
+  'protection_comparison_evidence_refs_tenant_id_id_key',
+  'entry_path_comparisons_tenant_id_id_key',
 ];
 
 /** Named composite FK constraints enforced in schema + baseline migration. */
@@ -644,6 +659,37 @@ export const TENANT_CONSISTENT_FK_CONSTRAINTS = [
   'fk_external_asset_candidates_entity',
   'fk_waf_action_items_cve_pipeline_item_tenant',
   'fk_waf_action_items_waf_asset_tenant',
+  'fk_application_entry_paths_anchor_target_tenant',
+  'fk_application_entry_paths_entry_target_tenant',
+  'fk_application_entry_paths_origin_binding_tenant',
+  'fk_protection_expectations_anchor_target_tenant',
+  'fk_protection_expectations_destination_target_tenant',
+  'fk_protection_expectations_pre_destination_tenant',
+  'fk_protection_expectations_post_destination_tenant',
+  'fk_protection_comparison_baselines_target_tenant',
+  'fk_protection_comparison_baselines_anchor_target_tenant',
+  'fk_protection_comparison_baselines_entry_path_tenant',
+  'fk_protection_comparison_baselines_expectation_tenant',
+  'fk_protection_comparison_baselines_pre_destination_tenant',
+  'fk_protection_comparison_baselines_post_destination_tenant',
+  'fk_protection_comparison_evaluations_baseline_tenant',
+  'fk_protection_comparison_evaluations_anchor_target_tenant',
+  'fk_protection_comparison_evaluations_primary_entry_path_tenant',
+  'fk_protection_comparison_evidence_refs_baseline_tenant',
+  'fk_protection_comparison_evidence_refs_evaluation_tenant',
+  'fk_protection_comparison_evidence_refs_expectation_tenant',
+  'fk_protection_comparison_evidence_refs_entry_path_tenant',
+  'fk_protection_comparison_evidence_refs_run_tenant',
+  'fk_protection_comparison_evidence_refs_verdict_tenant',
+  'fk_protection_comparison_evidence_refs_target_tenant',
+  'fk_protection_comparison_evidence_refs_origin_binding_tenant',
+  'fk_entry_path_comparisons_anchor_target_tenant',
+  'fk_entry_path_comparisons_evaluation_tenant',
+  'fk_entry_path_comparison_items_comparison_tenant',
+  'fk_entry_path_comparison_items_target_tenant',
+  'fk_entry_path_comparison_items_origin_binding_tenant',
+  'fk_entry_path_comparison_items_run_tenant',
+  'fk_entry_path_comparison_items_probe_job_tenant',
 ];
 
 const TENANT_FK_COMPOSITE_SHAPE =

@@ -19,21 +19,25 @@ const SAFE_ALERT_PAYLOAD_TYPE = 'astranull_alert_workflow_ping';
  */
 export function parseNetworkEndpoint(job) {
   const target = job.target ?? {};
-  const value = String(target.value ?? '');
-  const portFromTarget = target.port != null ? Number(target.port) : null;
+  const value = String(target.value ?? '').trim();
+  const portFromTarget = validNetworkPort(target.port != null ? Number(target.port) : null);
+  if (!value) return null;
 
-  if (value.includes(':')) {
-    const lastColon = value.lastIndexOf(':');
-    const host = value.slice(0, lastColon);
-    const port = Number(value.slice(lastColon + 1));
-    if (host && Number.isInteger(port) && port > 0 && port <= 65535) {
-      return { host, port };
-    }
+  const bracketed = value.match(/^\[([^\]]+)\](?::(\d{1,5}))?$/);
+  if (bracketed) {
+    if (net.isIP(bracketed[1]) !== 6) return null;
+    const port = bracketed[2] != null ? validNetworkPort(Number(bracketed[2])) : portFromTarget;
+    return port ? { host: bracketed[1], port } : null;
   }
-  if (portFromTarget && Number.isInteger(portFromTarget) && value) {
-    return { host: value, port: portFromTarget };
+  // An unbracketed IPv6 literal never carries a port; splitting at its last colon would dial a different address.
+  if (net.isIP(value) === 6) return portFromTarget ? { host: value, port: portFromTarget } : null;
+  const hostPort = value.match(/^([^:\s]+):(\d{1,5})$/);
+  if (hostPort) {
+    const port = validNetworkPort(Number(hostPort[2]));
+    return port ? { host: hostPort[1], port } : null;
   }
-  return null;
+  if (value.includes(':')) return null;
+  return portFromTarget ? { host: value, port: portFromTarget } : null;
 }
 
 function resolveHostForJob(job) {

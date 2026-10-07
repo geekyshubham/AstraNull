@@ -291,7 +291,8 @@ describe('postgres origin job binding (signed scope serialization + snapshot fin
       const finalized = await testRuns.finalizeTestRun(CTX, runId, { force: true });
       assert.equal(finalized?.error, undefined, JSON.stringify(finalized));
       assert.equal(finalized.verdict.verdict, 'edge_exposed');
-      assert.equal(finalized.verdict.explanation.includes('did not block traffic before origin'), true);
+      assert.match(finalized.verdict.explanation, /Origin response observed/);
+      assert.match(finalized.verdict.explanation, /application identity was not confirmed/);
 
       // --- 3b. Catalog drifts after start; a new stamped run keeps the start snapshot ---
       const drifted = await testRuns.startTestRun(

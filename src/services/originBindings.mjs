@@ -18,7 +18,7 @@ import { getStore, persistStore } from '../store.mjs';
 
 const BANNED_KEYS = new Set(['direct_ip', 'discovered_endpoint', 'discovered_endpoints', 'endpoint', 'destination']);
 const PROTECTED_KINDS = new Set(['fqdn', 'hostname', 'domain']);
-const REACHABLE_OUTCOMES = new Set(['reachable', 'unreachable', 'pass', 'fail']);
+const REACHABLE_OUTCOMES = new Set(['reachable', 'unreachable', 'denied', 'pass', 'fail']);
 
 /** Only a catalog check whose probe profile is host_sni_bypass may prove a bound origin. */
 function isApprovedHostSniCheck(checkId) {
@@ -439,6 +439,12 @@ export function assessOriginReachability(binding, observations = [], proof = nul
     reason: null,
     observation_id: latest.id,
     scope: { host: binding.host, sni: binding.sni, port: binding.port ?? null, path: binding.path ?? null },
-    limitations: ['scoped_to_bound_host_sni_port_path', 'not_capacity_assurance', 'not_origin_lockdown'],
+    limitations: [
+      'scoped_to_bound_host_sni_port_path',
+      'not_capacity_assurance',
+      'not_origin_lockdown',
+      ...(latest.outcome === 'denied' ? ['responsible_control_not_identified'] : []),
+      ...(latest.outcome === 'unreachable' ? ['legacy_result_enforcement_unverified'] : []),
+    ],
   };
 }

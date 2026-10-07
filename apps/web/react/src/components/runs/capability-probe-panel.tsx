@@ -8,6 +8,7 @@ import {
   postureLabelTone,
   probeEventMetadata,
 } from '../../lib/capability-probe-labels';
+import { originIdentityLabel, originObservation, originObservationLabel } from '../../lib/origin-observation.mjs';
 import type { DataItem } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
@@ -137,7 +138,9 @@ function outsideInWafScanRows(meta: DataItem): EvidenceRow[] {
     { label: 'Vendor candidates', value: formatVendorCandidates(meta) },
     { label: 'Probe validation', value: formatBool(meta.probe_validation_passed) },
     { label: 'Evasion bypass', value: formatBool(meta.evasion_bypass_suspected) },
-    { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
+    { label: 'Direct-origin result', value: originObservationLabel(meta, 'Not tested') },
+    { label: 'Application identity', value: originIdentityLabel(meta) },
+    { label: 'Origin bypass confirmed', value: formatBool(originObservation(meta)?.application_bypass_confirmed) },
     {
       label: 'DOM XSS validation',
       value: domXssValidationLabel(getString(meta, ['dom_xss_validation'])),
@@ -161,7 +164,9 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
       return [
         { label: 'Protected host', value: getString(meta, ['protected_host']) },
         { label: 'Direct IP', value: getString(meta, ['direct_ip']) },
-        { label: 'Bypass signal', value: formatBool(meta.bypass_signal) },
+        { label: 'Direct-origin result', value: originObservationLabel(meta) },
+        { label: 'Application identity', value: originIdentityLabel(meta) },
+        { label: 'Application bypass confirmed', value: formatBool(meta.application_bypass_confirmed) },
         { label: 'Status code', value: getString(meta, ['status_code']) },
       ];
     case 'port_scan_bounded':

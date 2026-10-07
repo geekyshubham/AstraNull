@@ -1,3 +1,8 @@
+import {
+  metadataConfirmsApplicationBypass,
+  metadataConfirmsOriginLockdown,
+  originObservationOf,
+} from './externalObservationOutcomes.mjs';
 import { isTrustedProducerEvent } from './trustedEventProvenance.mjs';
 
 export const EXTERNAL_WAF_PASS = new Set([
@@ -28,13 +33,19 @@ function hasWafFingerprintHint(metadata) {
   );
 }
 
-/**
- * Outside-in only (ADR-0008): origin lockdown is proven by an external origin-bypass probe that
- * could not reach the direct origin, not by an internal agent. The scanner records this on the
- * probe metadata as `origin_lockdown_confirmed`.
- */
+// Origin lockdown needs explicit direct-origin denial over a healthy baseline; silence and legacy flags never qualify.
 function probeConfirmsOriginLockdown(metadata) {
-  return (metadata ?? {}).origin_lockdown_confirmed === true;
+  return metadataConfirmsOriginLockdown(metadata);
+}
+
+function isDirectOriginProbe(metadata) {
+  return metadata?.probe_kind === 'host_sni_bypass' || metadata?.profile_kind === 'host_sni_bypass';
+}
+
+function directOriginAction(outcome) {
+  if (outcome === 'explicit_denial_observed') return 'deny';
+  if (outcome === 'response_observed' || outcome === 'application_identity_confirmed') return 'origin_response';
+  return 'inconclusive';
 }
 
 /**
@@ -42,15 +53,14 @@ function probeConfirmsOriginLockdown(metadata) {
  *
  * "Edge protected" comes from an external edge block on a fingerprinted WAF. Full "protected"
  * additionally requires external origin-lockdown evidence in the same bound run (an origin-bypass
- * probe that did not reach the direct origin). No agent/internal corroboration is used.
+ * leg that observed an explicit denial over a healthy baseline). Silence never qualifies.
  *
  * @param {{ probes: Array<{ id: string, nonce_hash?: string|null, metadata?: object }> }} input
  */
 export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
   const trustedProbes = probes.filter(isTrustedProducerEvent);
 
-  // Origin lockdown is a run-level external signal: any trusted probe in the bound run whose
-  // origin-bypass leg found the origin unreachable proves the origin is not directly exposed.
+  // Run-level signal: any trusted probe whose origin leg observed an explicit denial over a healthy baseline.
   const originLockdownConfirmed = trustedProbes.some(
     (probe) => probeConfirmsOriginLockdown(probe.metadata),
   );
@@ -74,6 +84,31 @@ export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
 
     const nonce = probe.nonce_hash ?? null;
 
+    // Direct-origin results are origin evidence only; they never count as edge WAF blocks or marker failures.
+    if (isDirectOriginProbe(probe.metadata)) {
+      const outcome = originObservationOf(probe.metadata)?.outcome ?? null;
+      const bypassConfirmed = metadataConfirmsApplicationBypass(probe.metadata);
+      if (bypassConfirmed) originBypassConfirmed = true;
+      scenarioResults.push({
+        scenario_family: 'origin_bypass',
+        expected_action: 'block',
+        observed_action: directOriginAction(outcome),
+        passed: bypassConfirmed ? false : null,
+        confidence: bypassConfirmed ? 0.8 : 0,
+        evidence_summary: {
+          request_id: probe.id,
+          nonce_hash: nonce ?? undefined,
+          marker_result: external,
+          blocked: false,
+          allowed: bypassConfirmed,
+          origin_lockdown_confirmed: probeConfirmsOriginLockdown(probe.metadata),
+          test_run_id: probe.metadata?.test_run_id ?? undefined,
+          probe_job_id: probe.metadata?.probe_job_id ?? probe.id,
+        },
+      });
+      continue;
+    }
+
     let passed = null;
     let observed_action = 'inconclusive';
     if (EXTERNAL_WAF_FAIL.has(external)) {
@@ -82,7 +117,7 @@ export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
       observed_action = 'allow';
       // Origin bypass is confirmed by the external probe itself reaching the origin.
       if ((external === 'reached_origin' || external === 'delivered' || external === 'connected')
-        && probe.metadata?.origin_bypass_confirmed === true) {
+        && metadataConfirmsApplicationBypass(probe.metadata)) {
         originBypassConfirmed = true;
       }
     } else if (EXTERNAL_WAF_PASS.has(external)) {

@@ -12,6 +12,10 @@ import {
   scrubVerdictForReportExport,
 } from '../lib/outsideInEvidence.mjs';
 import { newId } from '../lib/ids.mjs';
+import {
+  buildProtectionValidationReport,
+  protectionValidationReportCsv,
+} from '../lib/protectionValidationReport.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { computeReadiness } from './readiness.mjs';
 import { listSocNotes } from './highScale.mjs';
@@ -157,6 +161,42 @@ export function loadDevReportWorld(store, tenantId, parsed, bounds) {
     evidence: evidencePool.slice(0, MAX_SNAPSHOT_EVIDENCE),
     evidence_total: evidencePool.length,
   };
+}
+
+/**
+ * Passive protection-validation projection over already-loaded tenant records (dev or Postgres).
+ * It never runs checks, records evaluations, or emits notifications.
+ */
+export function buildProtectionValidationReportProjection({
+  tenantId,
+  generatedAt = new Date(),
+  targets = [],
+  entryPaths = [],
+  expectations = [],
+  evaluations = [],
+  detections = [],
+  checkCatalog = [],
+  scope = {},
+  format = 'json',
+} = {}) {
+  const owned = (rows) => asArray(rows).filter((row) => row?.tenant_id === tenantId);
+  const tenantExpectations = owned(expectations);
+  const tenantEvaluations = owned(evaluations);
+  const report = buildProtectionValidationReport({
+    tenantId,
+    generatedAt,
+    targets: owned(targets),
+    entryPaths: owned(entryPaths),
+    pathEvaluations: tenantEvaluations.filter((row) => row.kind === 'path_validation'),
+    pathExpectations: tenantExpectations.filter((row) => row.kind === 'path_validation'),
+    firewallExpectations: tenantExpectations.filter((row) => row.kind === 'firewall_change'),
+    firewallEvaluations: tenantEvaluations.filter((row) => row.kind === 'firewall_change'),
+    detections,
+    checkCatalog,
+    scope,
+  });
+  if (format === 'csv') return { format: 'csv', content: protectionValidationReportCsv(report), report_kind: report.report_kind };
+  return report;
 }
 
 export function createReport(ctx, body) {

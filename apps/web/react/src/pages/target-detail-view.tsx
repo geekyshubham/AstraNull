@@ -77,6 +77,7 @@ import {
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
 import { TargetChangesHistory } from '../components/targets/target-history';
 import { OriginRelations } from '../components/targets/origin-relations';
+import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
 import { ProbeActivity } from '../components/targets/probe-activity';
 import { DECLARATION_LIMITS, validateDeclarationDraft } from '../lib/domain-checks.mjs';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
@@ -427,6 +428,7 @@ export function TargetDetailView({
   checks,
   targetGroups = [],
   wafEdgeEnabled = false,
+  protectionValidationEnabled = false,
   onRefresh,
 }: {
   entityId: string;
@@ -436,6 +438,8 @@ export function TargetDetailView({
   targetGroups?: DataItem[];
   /** Tenant deployment feature `waf_posture`; WAF/CDN detection routes 404 without it. */
   wafEdgeEnabled?: boolean;
+  /** Tenant deployment feature `protection_validation`; entry-path and firewall change routes 404 without it. */
+  protectionValidationEnabled?: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [detail, setDetail] = useState<TargetDetailPayload | null>(null);
@@ -1567,6 +1571,22 @@ export function TargetDetailView({
                 onChanged={() => { void reload(); }}
               />
             ) : null}
+            {target && !protectionValidationEnabled ? (
+              <p className="td-muted small" role="status" data-testid="protection-validation-disabled">
+                Declared entry paths and entry-path comparisons are not enabled for this workspace. Nothing is checked until an administrator enables them.
+              </p>
+            ) : null}
+            {target && protectionValidationEnabled ? (
+              <DeclaredEntryPaths
+                config={config}
+                session={session}
+                target={target}
+                canWrite={canWrite}
+                canStart={canStartBoundedRun}
+                ownershipDone={ownershipDone}
+                onStarted={(text) => { setBanner(text); void reload(); }}
+              />
+            ) : null}
           </div>
         ) : null}
 
@@ -1755,6 +1775,17 @@ export function TargetDetailView({
               checkName={(checkId) => plainCheckName(getString(checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? {}, ['name', 'title'], checkId))}
               onInspectRun={(runId, checkId, focusKey) => openInspector({ entry: 'check_result', target_id: entityId, check_id: checkId, test_run_id: runId }, focusKey)}
             />
+            {target && protectionValidationEnabled ? (
+              <FirewallChangeComparison
+                config={config}
+                session={session}
+                target={target}
+                canWrite={canWrite}
+                canStart={canStartBoundedRun}
+                ownershipDone={ownershipDone}
+                onStarted={(text) => { setBanner(text); void reload(); }}
+              />
+            ) : null}
             <section aria-labelledby="td-runs-title">
               <header className="td-section-head">
                 <div>

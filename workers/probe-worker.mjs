@@ -18,6 +18,7 @@ import {
 import { pinnedFetch, resolvePinnedDestination } from '../src/lib/pinnedHttpRequest.mjs';
 import { createProbePreAttempt, startProbeIoAttempt } from '../src/lib/probeAttempt.mjs';
 import {
+  parseNetworkEndpoint,
   probeAlertWebhookPing,
   probeHttp2Settings,
   probeQuicReachability,
@@ -307,6 +308,16 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'dns_cname_chain',
   'dns_resolved_ips',
   'marker_probes',
+  'marker_results',
+  'variant_results',
+  'variants',
+  'phases',
+  'methods_used',
+  'open_ports',
+  'filtered_ports',
+  'closed_ports',
+  'origin_observation.limitations',
+  'origin_observation.supporting_signals',
   'edge_signature.layers',
   'edge_signature.waf_providers',
   'edge_signature.cdn_providers',
@@ -423,22 +434,7 @@ function resolveHttpUrl(job) {
 }
 
 function parseTcpEndpoint(job) {
-  const target = job.target ?? {};
-  const value = String(target.value ?? '');
-  const portFromTarget = target.port != null ? Number(target.port) : null;
-
-  if (value.includes(':')) {
-    const lastColon = value.lastIndexOf(':');
-    const host = value.slice(0, lastColon);
-    const port = Number(value.slice(lastColon + 1));
-    if (host && Number.isInteger(port) && port > 0 && port <= 65535) {
-      return { host, port };
-    }
-  }
-  if (portFromTarget && Number.isInteger(portFromTarget) && value) {
-    return { host: value, port: portFromTarget };
-  }
-  return null;
+  return parseNetworkEndpoint(job);
 }
 
 function dnsQueryName(job) {
@@ -1428,7 +1424,15 @@ export async function executeProbeForJob(job, deps = {}) {
       timing.controller.abort(error);
       outcome = jobDeadlineOutcome(job, error.code, accounting.probeLogicalAttempts);
     } else {
-      throw error;
+      outcome = {
+        external_result: 'error',
+        metadata: withProfileKind(job, {
+          probe_kind: job?.probe_profile?.kind ?? 'unknown',
+          error_class: 'probe_execution_failed',
+        }),
+        requests_sent: accounting.probeLogicalAttempts,
+        duration_ms: 1,
+      };
     }
   } finally {
     deps.cancellationSignal?.removeEventListener('abort', cancel);
@@ -1470,6 +1474,11 @@ export async function processJob(config, job, deps = {}) {
   });
 }
 
+/** A 4xx other than auth or rate limiting is final for that job; the worker keeps serving the rest of the batch. */
+export function isPermanentResultRejection(status) {
+  return Number.isInteger(status) && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+}
+
 export async function pollAndProcessOnce(config) {
   const listed = await signedFetch(config, 'GET', '/internal/probe/jobs');
   if (listed.status !== 200) {
@@ -1490,6 +1499,11 @@ export async function pollAndProcessOnce(config) {
     if (cancellation.signal.aborted) { results.push({ job_id: job.id, external_result: 'stopped' }); continue; }
     const resultPath = `/internal/probe/jobs/${job.id}/result`;
     const posted = await signedFetch(config, 'POST', resultPath, body);
+    if (isPermanentResultRejection(posted.status)) {
+      console.error(`Probe result rejected (${posted.status}) for ${job.id}: ${redactSecrets(posted.text?.slice(0, 200), config.secret)}`);
+      results.push({ job_id: job.id, external_result: body.external_result, rejected: posted.status });
+      continue;
+    }
     if (posted.status !== 201) {
       throw new Error(
         `Probe result post failed (${posted.status}) for ${job.id}: ${redactSecrets(

@@ -1,3 +1,4 @@
+import { metadataConfirmsOriginLockdown } from './externalObservationOutcomes.mjs';
 import { EXTERNAL_WAF_PASS } from './wafBoundRunCorrelation.mjs';
 import { isTrustedProducerEvent } from './trustedEventProvenance.mjs';
 
@@ -32,9 +33,7 @@ function hasWafFingerprintHint(metadata) {
 }
 
 /**
- * Outside-in only (ADR-0008): full "protected" is corroborated by external origin-lockdown
- * evidence — an origin-bypass probe that did not reach the direct origin — recorded on the
- * probe metadata as `origin_lockdown_confirmed`, not by any internal agent observation.
+ * Full "protected" is corroborated only by explicit direct-origin denial over a healthy baseline (ADR-0008, PV-01).
  *
  * @param {{ probes?: object[] }} input
  */
@@ -53,7 +52,7 @@ export function buildWafEvidenceCorroboration({ probes = [] } = {}) {
       bucket.push(probe);
       probesByNonce.set(probe.nonce_hash, bucket);
     }
-    if (probe?.metadata?.origin_lockdown_confirmed === true) {
+    if (metadataConfirmsOriginLockdown(probe?.metadata)) {
       originLockdownConfirmed = true;
     }
   }
@@ -88,7 +87,7 @@ function matchingVerifiedExternalProbePass(scenario, corroboration) {
 
 /**
  * Full protected means the bound external edge block is corroborated by external origin-lockdown
- * evidence in the same run (origin not reachable). External edge-only evidence is handled by
+ * evidence in the same run (explicit direct-origin denial). External edge-only evidence is handled by
  * corroborateEdgeProtectedScenarioEvidence.
  */
 export function corroborateProtectedScenarioEvidence(scenario, corroboration) {

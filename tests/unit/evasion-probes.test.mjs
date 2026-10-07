@@ -30,20 +30,26 @@ const FORBIDDEN_SUBSTRINGS = [
 
 const BENIGN_MARKER_VALUES = new Set(Object.values(BENIGN_CLASS_MARKERS));
 
-function fakeResponse(status, headers = {}) {
-  return { status, headers };
+const SIGNED_BLOCK = Object.freeze({ status: 403, headers: { 'cf-mitigated': 'challenge', 'cf-ray': '8a1-LHR', server: 'cloudflare' } });
+const OK = Object.freeze({ status: 200, headers: {} });
+
+function fakeResponse(spec) {
+  if (spec === 'block') return { ...SIGNED_BLOCK, headers: { ...SIGNED_BLOCK.headers } };
+  if (spec === 'ok') return { ...OK, headers: {} };
+  if (typeof spec === 'number') return { status: spec, headers: {} };
+  return spec;
 }
 
-function countingFetch(statusesByIndex) {
+function countingFetch(specsByIndex) {
   let index = 0;
   const calls = [];
   const fetchFn = async (url, opts) => {
     calls.push({ url, opts });
-    const status = typeof statusesByIndex === 'function'
-      ? statusesByIndex(index)
-      : (statusesByIndex[index] ?? 403);
+    const spec = typeof specsByIndex === 'function'
+      ? specsByIndex(index)
+      : (specsByIndex[index] ?? 'block');
     index += 1;
-    return fakeResponse(status);
+    return fakeResponse(spec);
   };
   return { fetchFn, calls: () => calls };
 }
@@ -138,7 +144,7 @@ test('runner: requires signed worker / injectable deps (fails closed)', async ()
 });
 
 test('runner: evasion resisted when transformed marker still blocked', async () => {
-  const { fetchFn, calls } = countingFetch([403, 403]);
+  const { fetchFn, calls } = countingFetch(['ok', 'block', 'block']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) };
   const res = await runWafEvasionMarkerProbe(job, { fetchFn });
   assert.equal(res.external_result, 'external_blocked');
@@ -147,7 +153,7 @@ test('runner: evasion resisted when transformed marker still blocked', async () 
 });
 
 test('runner: evasion suspected when transformed marker passes but baseline blocked', async () => {
-  const { fetchFn } = countingFetch([403, 200]);
+  const { fetchFn } = countingFetch(['ok', 'block', 'ok']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'html_entity', marker_class: 'xss' }) };
   const res = await runWafEvasionMarkerProbe(job, { fetchFn });
   assert.equal(res.external_result, 'external_allowed');
@@ -155,10 +161,52 @@ test('runner: evasion suspected when transformed marker passes but baseline bloc
 });
 
 test('runner: inconclusive when baseline not blocked', async () => {
-  const { fetchFn } = countingFetch([200, 200]);
+  const { fetchFn } = countingFetch(['ok', 'ok', 'ok']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) };
   const res = await runWafEvasionMarkerProbe(job, { fetchFn });
   assert.equal(res.external_result, 'inconclusive');
+  assert.equal(res.metadata.inconclusive_reason, 'baseline_marker_not_blocked');
+});
+
+const LOGIN_PROFILE = () => buildEvasionMarkerProfile({ transform: 'unicode_normalization', entry_path_scenario: 'declared_login_path' });
+
+test('runner: a login URL that answers 401 to everything is inconclusive, never evasion resisted', async () => {
+  const { fetchFn } = countingFetch(() => 401);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test/login' }, probe_profile: LOGIN_PROFILE() }, { fetchFn });
+  assert.equal(res.external_result, 'inconclusive');
+  assert.equal(res.metadata.permitted_baseline_health, 'unhealthy');
+  assert.notEqual(res.metadata.blocked_baseline_prerequisite, 'met');
+  assert.equal(res.metadata.inconclusive_reason, 'permitted_baseline_not_healthy');
+});
+
+test('runner: unsigned 403 markers after a healthy baseline are only block_suspected', async () => {
+  const { fetchFn } = countingFetch(['ok', 403, 403]);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  assert.equal(res.external_result, 'inconclusive');
+  assert.equal(res.metadata.baseline_blocked, null);
+  assert.ok(res.metadata.variant_results.every((row) => row.blocked === false && row.block_suspected === true));
+});
+
+test('runner: an outage that returns 503 to everything is inconclusive', async () => {
+  const { fetchFn } = countingFetch(() => 503);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  assert.equal(res.external_result, 'inconclusive');
+  assert.equal(res.metadata.permitted_baseline_health, 'unhealthy');
+});
+
+test('runner: an F5 block page served with HTTP 200 counts as a signed block from the bounded body', async () => {
+  const f5 = () => ({ status: 200, headers: {}, text: async () => '<html>The requested URL was rejected. Please consult with your administrator. Your support ID is: 1234</html>' });
+  const { fetchFn } = countingFetch(['ok', f5(), f5()]);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  assert.equal(res.external_result, 'external_blocked');
+  assert.equal(res.metadata.variant_results[0].denial_signature.vendor, 'f5');
+});
+
+test('runner: a signed vendor block on the permitted baseline is recorded and leaves the result inconclusive', async () => {
+  const { fetchFn } = countingFetch(() => 'block');
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  assert.equal(res.external_result, 'inconclusive');
+  assert.equal(res.metadata.permitted_baseline.denial_signature.id, 'cloudflare_challenge');
 });
 
 test('runner: request budget is hard-bounded and retains no response body', async () => {
@@ -171,12 +219,13 @@ test('runner: request budget is hard-bounded and retains no response body', asyn
   assert.ok(res.requests_sent <= MAX_WAF_EVASION_MARKER_REQUESTS);
   assert.ok(calls().length <= MAX_WAF_EVASION_MARKER_REQUESTS);
   for (const entry of res.metadata.variant_results) {
-    assert.deepEqual(Object.keys(entry).sort(), ['blocked', 'label', 'sent_length', 'status_code']);
+    assert.deepEqual(Object.keys(entry).sort(), ['allowed', 'block_suspected', 'blocked', 'denial_signature', 'inconclusive', 'label', 'reason', 'sent_length', 'status_code']);
   }
+  assert.equal(JSON.stringify(res.metadata).includes('cf-ray'), false);
 });
 
 test('runner: preserves the signed target path/query and honors a worker cap of one', async () => {
-  const { fetchFn, calls } = countingFetch([403, 403]);
+  const { fetchFn, calls } = countingFetch(['ok', 'block']);
   const job = {
     target: { value: 'https://example.test/signed/path?keep=1' },
     constraints: { max_requests: 99, max_probe_requests: 1 },
@@ -189,7 +238,7 @@ test('runner: preserves the signed target path/query and honors a worker cap of 
   const sent = new URL(calls()[0].url);
   assert.equal(sent.pathname, '/signed/path');
   assert.equal(sent.searchParams.get('keep'), '1');
-  assert.ok(sent.searchParams.has('probe'));
+  assert.equal(sent.searchParams.has('probe'), false);
 });
 
 test('runner: stops after the first transport failure', async () => {

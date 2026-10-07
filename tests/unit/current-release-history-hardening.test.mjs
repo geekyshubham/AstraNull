@@ -303,7 +303,7 @@ describe('provenance header and credential string redaction', () => {
         check_version: undefined,
         origin_binding_id: undefined,
         provenance: { provider: value },
-      }), { tenantId: TENANT, target: getStore().targets.find((row) => row.id === 'tgt_app') });
+      }), { tenantId: TENANT, target: getStore().targets.find((row) => row.id === 'tgt_app' && row.tenant_id === TENANT) });
       assert.equal(prepared.error, undefined, value);
       assert.equal(prepared.record.provenance.provider, undefined, value);
     }
@@ -314,7 +314,7 @@ describe('provenance header and credential string redaction', () => {
       check_version: undefined,
       origin_binding_id: undefined,
       provenance: { provider: 'fastly' },
-    }), { tenantId: TENANT, target: getStore().targets.find((row) => row.id === 'tgt_app') });
+    }), { tenantId: TENANT, target: getStore().targets.find((row) => row.id === 'tgt_app' && row.tenant_id === TENANT) });
     assert.equal(safe.record.provenance.provider, 'fastly');
   });
 });
