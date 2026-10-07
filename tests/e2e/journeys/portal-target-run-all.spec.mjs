@@ -86,11 +86,12 @@ async function expectNoBlockingAxeViolations(page, selector) {
   await waitForPortalRouteSettled(page);
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).include(selector).analyze();
   const blocking = results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''));
-  expect(blocking.map((violation) => `${violation.id}: ${violation.help}`)).toEqual([]);
+  expect(blocking.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => ({ target: node.target, summary: node.failureSummary })) }))).toEqual([]);
 }
 
 test.describe('target workspace: recorded attribution, checks and reviewed runs (FT-DOMAIN-01)', () => {
-  test.beforeEach(async () => {
+  test.beforeEach(async ({ page }) => {
+    page.on('pageerror', (error) => console.error('browser-runtime-error:', error.stack));
     await startPortalPlaywrightServer();
   });
 
@@ -267,6 +268,14 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
+    await expect(panel).toContainText('251 checks in the full catalog');
+    await panel.locator('.td-catalog-requirements summary').click();
+    await expect(panel.locator('.td-catalog-requirements')).toContainText('origin.direct_bypass.safe');
+    await expect(panel.locator('.td-catalog-requirements')).toContainText('Requires SOC approval');
+    await expect(panel.locator('input[name=target-run-check][value="dns.authoritative_response.safe"]')).toHaveCount(1);
+    await page.setViewportSize({ width: 375, height: 950 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 950 });
     await panel.getByRole('button', { name: /^Review all/ }).click();
     const dialog = page.locator('dialog.modal-confirm[open]');
     await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
@@ -278,11 +287,12 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const body = scanBodies[0];
     expect(body.target_group_id).toBe(PORTAL_BASELINE_IDS.targetGroupId);
     expect(body.target_id).toBe(PORTAL_BASELINE_IDS.targetId);
-    expect(body.check_ids).not.toContain('waf.fingerprint.safe');
-    expect(body.check_ids[0]).toMatch(/^origin\./);
-    expect(body.check_ids.length).toBeGreaterThan(50);
+    expect(body.check_ids).toContain('waf.fingerprint.safe');
+    expect(body.check_ids[0]).toBe('waf.fingerprint.safe');
+    expect(body.check_ids.length).toBeGreaterThan(112);
+    expect(body.check_ids).toContain('dns.authoritative_response.safe');
 
-    await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: Origin/);
+    await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: WAF and CDN Fingerprint/);
     await expect(panel.getByRole('button', { name: 'Stop run' })).toBeVisible();
     await expect(panel.locator('.td-check[data-status="running"]')).toHaveCount(1);
 

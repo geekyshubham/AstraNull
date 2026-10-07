@@ -3286,7 +3286,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (path === '/v1/checks' && method === 'GET') {
     const gate = requirePermission(ctx, 'check:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, { items: await serviceDeps.testRuns.listChecks() });
+    return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope: url.searchParams.get('scope') === 'all' ? 'all' : 'selectable' }) });
   }
   const checkByIdMatch = path.match(/^\/v1\/checks\/([^/]+)$/);
   if (checkByIdMatch && method === 'GET') {

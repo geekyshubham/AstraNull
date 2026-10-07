@@ -11,10 +11,13 @@ Opening Validate showed the recorded activity; the detection action did not navi
 ## Changes
 
 - [ADR-0018](../adr/0018-provider-fingerprints-as-observations.md): provider-only fingerprint with one GET, bounded counted CNAME work, and the unchanged five-second deadline.
-- Versioned fingerprint observation excluded from readiness; efficacy checks remain separately runnable.
+- Full catalog browsing exposes all 251 definitions and setup/SOC/target-kind requirements. The full reviewed assessment includes every compatible automatic network check, including E2 observations; declarations and governed checks are visible with their dedicated workflow requirements.
+- Versioned fingerprint observation excluded from readiness scoring; efficacy checks remain separately runnable.
 - Detection opens Validate and selects its own check. Active standalone observations are followed even when excluded from readiness Run all.
-- Individually runnable E2 observations remain in the check list; readiness batches and their progress denominator exclude them.
+- Individually runnable E2 observations remain in the check list; the full assessment includes them while readiness scoring excludes them. Progress uses the actual planned steps.
 - The console shows recorded transport results neutrally, then the published verdict separately. Missing request counts stay missing; request activity cannot suppress a recorded final result.
+- Redacted/missing setup labels render as “Not reported” instead of crashing the expanded catalog.
+- Shared buttons apply foreground/background colors together during theme changes; independent color transitions caused a reproducible temporary contrast failure in the coverage review button. Border and press motion remain.
 - Activity responses from a previously opened target are ignored after navigation.
 - An unrun selection falls back to actual active/latest activity; a selection with historical evidence stays pinned.
 - Re-detection progress wins over cached provider observations, and polling stops on the new request's terminal state.
@@ -23,7 +26,7 @@ Opening Validate showed the recorded activity; the detection action did not navi
 
 ## Catalogue validation
 
-The catalogue contains 251 checks. All declared executable probe kinds are mapped to workers; the registry validates 249 vectors and all 721 canonical vector rows. Declaration-only and SOC-governed entries retain their execution boundaries. Tests cover signed request/resolver/duration accounting, destination pinning, protocol executors, correlation, and tenant-scoped persistence.
+The catalogue contains 251 checks. On the reported FQDN, the full automatic network assessment contains 147 checks (111 readiness checks plus 36 observations), with 104 declaration/setup/compatibility/governance entries visible separately. All declared executable probe kinds are mapped to workers; the registry validates 249 vectors and all 721 canonical vector rows. Declaration-only and SOC-governed entries retain their execution boundaries. Tests cover signed request/resolver/duration accounting, destination pinning, protocol executors, correlation, and tenant-scoped persistence.
 
 The [per-check audit](check-execution-audit-2026-10-08.json) records all 251 definitions, execution mappings, bounds, target-kind compatibility, and required setup.
 
@@ -31,4 +34,4 @@ This is an implementation audit, not a claim that every protocol on this web dom
 
 ## Verification and rollout
 
-Local verification passed: 4,748 unit tests, 459 integration tests (one explicitly opt-in live-DNS test skipped), 21 Node E2E tests, 16 contract tests, and 19 focused browser journeys including dark/light themes and 375–1440px viewports. Typecheck/build, lint, portal lint, safety, schema, tenant-query audit, taxonomy, generated catalogue, and corpus parity passed. Deployment uses the repository's CI-triggered AWS workflow. Exact deployment revision and live retest results will be recorded after rollout. Logs and metadata-only reproduction details are under `/tmp/astranull-live-repair-20261008/`.
+Local verification passed: 4,750 unit tests, 459 integration tests (one explicitly opt-in live-DNS test skipped), 21 Node E2E tests, 16 contract tests, and 19 focused browser journeys including dark/light themes and 375–1440px viewports. Typecheck/build, lint, portal lint, safety, schema, tenant-query audit, taxonomy, generated catalogue, and corpus parity passed. CI initially stopped on the new `source-map-js` advisory [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q). The existing transitive dependency was updated from 1.2.1 to the patched 1.2.2; full and production-only npm audits report zero vulnerabilities, and that dependency upgrade alone leaves the portal bundle unchanged. Deployment uses the repository's CI-triggered AWS workflow. Exact deployment revision and live retest results will be recorded after rollout. Logs and metadata-only reproduction details are under `/tmp/astranull-live-repair-20261008/`.

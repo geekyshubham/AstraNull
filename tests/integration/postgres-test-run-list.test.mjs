@@ -7,6 +7,7 @@ import { createProbeJobRepository } from '../../src/persistence/postgres/probeJo
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createValidationEvidenceRepository } from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
 import { createPostgresValidationServices } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
+import { CHECK_CATALOG, customerSelectableChecks } from '../../src/contracts/checks.mjs';
 import { listTestRuns as listDevTestRuns } from '../../src/services/testRuns.mjs';
 import { resetStoreForTests } from '../../src/store.mjs';
 import { resolvePostgresHarnessAvailability, withEphemeralPostgres } from '../helpers/pg-harness.mjs';
@@ -81,6 +82,9 @@ describe('postgres test-run list parity', () => {
         killSwitch: createKillSwitchRepository(pool),
       });
 
+      assert.equal(testRuns.listChecks({ scope: 'all' }).length, CHECK_CATALOG.length);
+      assert.equal(testRuns.listChecks().length, customerSelectableChecks(CHECK_CATALOG).length);
+      assert.equal(testRuns.listChecks({ scope: 'all' }).find((check) => check.check_id === 'origin.direct_bypass.safe').requires_additional_input, true);
       const all = await testRuns.listTestRuns(CTX, {});
       assert.equal(all.length, 7, 'tenant-scoped: other tenant runs never appear');
       assert.equal(all[0].id, 'run_tgt_a1_0', 'newest started run sorts first even when created earlier');

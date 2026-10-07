@@ -311,9 +311,9 @@ describe('createServer service injection — service accounts', () => {
 function makeFakeValidationServices(handlers = {}) {
   const calls = [];
   const testRuns = {
-    async listChecks() {
-      calls.push({ group: 'testRuns', fn: 'listChecks' });
-      return handlers.listChecks?.() ?? [{ check_id: 'chk_fake' }];
+    async listChecks(options) {
+      calls.push({ group: 'testRuns', fn: 'listChecks', options });
+      return handlers.listChecks?.(options) ?? [{ check_id: 'chk_fake' }];
     },
     async listTestRuns(ctx) {
       calls.push({ group: 'testRuns', fn: 'listTestRuns', ctx });
@@ -431,6 +431,10 @@ describe('createServer service injection — validation, evidence, findings, rep
     const checks = await request(baseUrl, 'GET', '/v1/checks', { headers });
     assert.equal(checks.status, 200);
     assert.deepEqual(checks.json.items, [{ check_id: 'chk_fake' }]);
+    const fullChecks = await request(baseUrl, 'GET', '/v1/checks?scope=all', { headers });
+    assert.equal(fullChecks.status, 200);
+    assert.ok(validationCalls.some((call) => call.fn === 'listChecks' && call.options?.scope === 'all'));
+    assert.ok(validationCalls.some((call) => call.fn === 'listChecks' && call.options?.scope === 'selectable'));
 
     const runs = await request(baseUrl, 'GET', '/v1/test-runs', { headers });
     assert.equal(runs.status, 200);

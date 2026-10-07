@@ -6163,9 +6163,7 @@ a.card:active,
 .btn,
 [data-ui='button'].btn {
   transition:
-    background var(--motion-fast) var(--ease-out-soft),
     border-color var(--motion-fast) var(--ease-out-soft),
-    color var(--motion-fast) var(--ease-out-soft),
     box-shadow var(--motion-fast) var(--ease-out-soft),
     transform var(--motion-micro) var(--ease-out-soft);
 }

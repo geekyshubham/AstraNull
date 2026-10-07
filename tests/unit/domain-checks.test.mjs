@@ -16,6 +16,8 @@ import {
   retainedCoveragePairs,
   runAllChecks,
   individualChecks,
+  assessmentChecks,
+  targetCheckRequirement,
   shouldAutoDetectEdge,
 } from '../../apps/web/react/src/lib/domain-checks.mjs';
 
@@ -218,4 +220,19 @@ it('individual selection retains compatible observations without adding them to 
   assert.ok(checks.every((check) => (check.supported_targets ?? []).includes('fqdn')));
   assert.equal(new Set(checks.map((check) => check.check_id)).size, checks.length);
   assert.ok(runAllChecks(CATALOG, DOMAIN).every((check) => checks.includes(check)));
+});
+
+it('full assessments include every compatible automatic network check, while readiness ignores observations', () => {
+  const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: ['host_sni_bypass'].includes(check.probe_profile?.kind) || check.required_customer_setup?.some((value) => value.startsWith('declared_') && value.endsWith('_probe_path')) }));
+  const assessment = assessmentChecks(full, DOMAIN);
+  assert.equal(assessment[0].check_id, EDGE_DETECTION_CHECK_ID);
+  assert.deepEqual(new Set(assessment.map((check) => check.check_id)), new Set(individualChecks(CATALOG, DOMAIN).map((check) => check.check_id)));
+  const plan = planScanSteps({ checks: assessment, targets: [DOMAIN], targetId: DOMAIN.id });
+  assert.equal(plan.steps.length, assessment.length);
+  assert.equal(plan.excluded.length, 0);
+  const remaining = full.filter((check) => targetCheckRequirement(check, DOMAIN));
+  assert.equal(remaining.length + assessment.length, CHECK_CATALOG.length);
+  assert.match(targetCheckRequirement({ ...byId('origin.leak_scan.safe'), requires_additional_input: true }, DOMAIN), /Declare/);
+  assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), risk_class: 'soc_gated' }, DOMAIN), /SOC approval/);
+  assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), supported_targets: ['ip'] }, DOMAIN), /compatible endpoint/);
 });

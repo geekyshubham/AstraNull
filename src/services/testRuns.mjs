@@ -2,6 +2,7 @@ import {
   audit } from '../audit.mjs';
 import {
   customerSelectableChecks,
+  checkRequiresAdditionalInput,
   evaluateCheckPrerequisites,
   getCheckById,
   isCustomerRunnable,
@@ -55,8 +56,10 @@ import {
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 import { assertSubscriptionLimit, getTenantAccount } from './subscriptions.mjs';
 
-export function listChecks() {
-  return customerSelectableChecks(getStore().checkCatalog ?? []).map(withCheckSection);
+export function listChecks(options = {}) {
+  const catalog = getStore().checkCatalog ?? [];
+  if (options.scope === 'all') return catalog.map((check) => ({ ...withCheckSection(check), requires_additional_input: checkRequiresAdditionalInput(check) }));
+  return customerSelectableChecks(catalog).map(withCheckSection);
 }
 
 const DEFAULT_TEST_RUN_LIST_LIMIT = 100;

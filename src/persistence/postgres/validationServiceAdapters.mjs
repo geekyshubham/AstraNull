@@ -1,6 +1,7 @@
 import {
   CHECK_CATALOG,
   customerSelectableChecks,
+  checkRequiresAdditionalInput,
   evaluateCheckPrerequisites,
   getCheckById,
   isCustomerRunnable,
@@ -1119,7 +1120,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
   }
 
   const testRuns = {
-    listChecks() {
+    listChecks(options = {}) {
+      if (options.scope === 'all') return CHECK_CATALOG.map((check) => ({ ...withCheckSection(check), requires_additional_input: checkRequiresAdditionalInput(check) }));
       return customerSelectableChecks(CHECK_CATALOG).map(withCheckSection);
     },
     registerRunTerminalHook(hook) {

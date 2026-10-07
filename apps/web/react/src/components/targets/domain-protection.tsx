@@ -377,6 +377,7 @@ function CheckQueueRow({
 export type CheckQueueProps = {
   rows: CheckRow[];
   runAllCount?: number;
+  catalogCount?: number;
   selectedCheckId: string;
   canSelect: boolean;
   onSelect: (checkId: string) => void;
@@ -400,6 +401,7 @@ export type CheckQueueProps = {
 export function CheckQueue({
   rows,
   runAllCount = rows.length,
+  catalogCount,
   selectedCheckId,
   canSelect,
   onSelect,
@@ -468,7 +470,7 @@ export function CheckQueue({
       <header className="td-section-head">
         <div>
           <h2 id="td-checks-title">Checks for this target</h2>
-          <p>{rows.length} bounded external checks are compatible with this target kind. Select one to see what it sends, its last result and its evidence.</p>
+          <p>{catalogCount != null ? `${catalogCount} checks in the full catalog. ` : ''}{rows.length} bounded external checks can be assessed on this target, including observation checks. Select one to see what it sends, its last result and its evidence.</p>
         </div>
         {canRun ? (
           scanActive ? (

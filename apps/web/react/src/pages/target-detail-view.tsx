@@ -60,14 +60,14 @@ import {
   EDGE_DETECTION_CHECK_ID,
   buildCheckRows,
   countRowStatuses,
-  declarationOnlyChecks,
   edgeDetectionPhase,
   markerEffectiveness,
   originExposureDetail,
   originExposureStatus,
   providerFamilyRows,
   retainedCoveragePairs,
-  runAllChecks,
+  assessmentChecks,
+  targetCheckRequirement,
   individualChecks,
   targetTabFromParam,
   validationScansPathForTarget,
@@ -144,8 +144,8 @@ function asDataItem(value: unknown): DataItem | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as DataItem) : null;
 }
 
-function formatLabel(value: string, fallback = 'Not reported') {
-  const trimmed = value.trim();
+function formatLabel(value: unknown, fallback = 'Not reported') {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!trimmed) return fallback;
   const friendly: Record<string, string> = {
     fqdn: 'Domain name',
@@ -454,6 +454,8 @@ export function TargetDetailView({
   const [selectedRunEvents, setSelectedRunEvents] = useState<DataItem[]>([]);
   const [targetRuns, setTargetRuns] = useState<DataItem[]>([]);
   const [runsError, setRunsError] = useState('');
+  const [fullCatalog, setFullCatalog] = useState<DataItem[] | null>(null);
+  const [catalogError, setCatalogError] = useState('');
   const [edgeLocal, setEdgeLocal] = useState<EdgeLocalState>('');
   const [edgeError, setEdgeError] = useState('');
   const [edgeReason, setEdgeReason] = useState('');
@@ -557,8 +559,8 @@ export function TargetDetailView({
   const declaration = detail?.declaration ?? null;
   const declared = declarationSummary(declaration);
 
-  const runAll = useMemo(() => (target ? runAllChecks(checks, target) as DataItem[] : []), [checks, target]);
-  const declarationOnlyCount = useMemo(() => (target ? declarationOnlyChecks(checks, target).length : 0), [checks, target]);
+  const runAll = useMemo(() => (target ? assessmentChecks(checks, target) as DataItem[] : []), [checks, target]);
+  const remainingCatalog = useMemo(() => (fullCatalog ?? []).filter((check) => targetCheckRequirement(check, target)), [fullCatalog, target]);
   const selectableChecks = useMemo(() => target ? individualChecks(checks, target) as DataItem[] : [], [checks, target]);
   const checkRows = useMemo(() => buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[], [selectableChecks, scan, targetRuns]);
   const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
@@ -642,6 +644,15 @@ export function TargetDetailView({
     setStopSingleRun(null);
     edgeRetriesRef.current = 0;
   }, [entityId]);
+
+  useEffect(() => {
+    let stopped = false;
+    setFullCatalog(null); setCatalogError('');
+    void requestJson(config, session, '/v1/checks?scope=all').then((payload) => {
+      if (!stopped && Array.isArray((payload as DataItem).items)) setFullCatalog((payload as DataItem).items as DataItem[]);
+    }).catch((err) => { if (!stopped) setCatalogError(apiErrorMessage(err, 'The full check catalog could not load.')); });
+    return () => { stopped = true; };
+  }, [config, session]);
 
   useEffect(() => { void loadTargetActivity(); }, [loadTargetActivity]);
 
@@ -1271,7 +1282,7 @@ export function TargetDetailView({
             {cell('Excluded', 'excluded_count')}
           </dl>
           {Number(coverage.observation_only_count) > 0 ? (
-            <p className="td-copy">{String(coverage.observation_only_count)} transport or liveness checks are observations only. They remain available under Validate and are excluded from conclusive coverage and Run all checks.</p>
+            <p className="td-copy">{String(coverage.observation_only_count)} transport or liveness checks are observations only. They are included in the full assessment under Validate and remain excluded from conclusive readiness coverage.</p>
           ) : null}
           {Array.isArray(coverage.inconclusive_reasons) && coverage.inconclusive_reasons.length > 0 ? (
             <div className="td-retained" role="note">
@@ -1629,6 +1640,7 @@ export function TargetDetailView({
             <CheckQueue
               rows={checkRows}
               runAllCount={runAll.length}
+              catalogCount={fullCatalog?.length}
               selectedCheckId={effectiveSelectedCheckId}
               canSelect
               onSelect={selectCheck}
@@ -1642,7 +1654,19 @@ export function TargetDetailView({
               onStopCheck={canStartBoundedRun ? openStopCheck : undefined}
               onActivity={(row) => { selectCheck(row.checkId); document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' }); }}
               liveNotes={liveNotes}
-              footer={declarationOnlyCount > 0 ? <p className="td-muted">{declarationOnlyCount} declaration-only checks are not listed because they send no traffic.</p> : null}
+              footer={<>
+                {catalogError ? <p role="alert">{catalogError}</p> : null}
+                {remainingCatalog.length ? <details className="td-retained td-catalog-requirements">
+                  <summary>{remainingCatalog.length} more catalog checks · requirements and applicability</summary>
+                  <p>Every catalog check is listed here or in the runnable list above. Required setup never counts as passed protection.</p>
+                  <ul>{remainingCatalog.map((check) => <li key={getString(check, ['check_id'], '')}>
+                    <strong>{getString(check, ['name'], '')}</strong> <code>{getString(check, ['check_id'], '')}</code>
+                    <p>{targetCheckRequirement(check, target)}</p>
+                    {Array.isArray(check.required_customer_setup) && check.required_customer_setup.length ? <p className="td-muted">Required setup: {(check.required_customer_setup as string[]).map((value) => formatLabel(value)).join(', ')}</p> : null}
+                  </li>)}</ul>
+                  <Button size="sm" variant="secondary" onClick={() => setTab('overview')}>Declare origin and entry paths</Button>
+                </details> : null}
+              </>}
               scanActivity={scanActivity}
               selectedRunEvents={selectedRunEvents}
               targetValue={targetDisplayValue(target)}
@@ -1874,6 +1898,7 @@ export function TargetDetailView({
             ) : review?.mode === 'all' ? (
               <>
                 <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
+                <p>Includes provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
                 <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the run pauses and shows when it resumes. Other runs in this group wait until it finishes, and you can stop it at any time.</p>
                 <p>The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
               </>

@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { listChecks } from '../../src/services/testRuns.mjs';
+import { freshStore } from '../helpers/reset.mjs';
 import {
   CHECK_CATALOG,
   checkRequiresAdditionalInput,
@@ -45,4 +47,17 @@ test('definitions remain resolvable for internal/orchestrator use', () => {
   for (const id of INPUT_REQUIRING) {
     assert.ok(getCheckById(id), `${id} must remain in CHECK_CATALOG for getCheckById`);
   }
+});
+
+test('full catalog browsing exposes setup requirements without broadening default dispatch selection', () => {
+  freshStore();
+  const defaults = listChecks();
+  const full = listChecks({ scope: 'all' });
+  assert.equal(full.length, CHECK_CATALOG.length);
+  for (const id of INPUT_REQUIRING) {
+    assert.equal(full.find((check) => check.check_id === id).requires_additional_input, true);
+    assert.ok(!defaults.some((check) => check.check_id === id));
+  }
+  assert.ok(full.some((check) => check.risk_class === 'soc_gated'));
+  assert.equal(listChecks({ scope: 'unknown' }).length, defaults.length);
 });

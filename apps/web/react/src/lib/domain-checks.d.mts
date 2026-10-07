@@ -76,6 +76,8 @@ export const ROW_STATUS_META: Readonly<Record<RowStatus, { label: string; tone: 
 export const ROW_STATUS_ORDER: RowStatus[];
 export function categoryForCheck(check: DataItem | null | undefined): CheckCategory;
 export function isDeclarationOnlyCheck(check: DataItem | null | undefined): boolean;
+export function assessmentChecks(checks: DataItem[], target: DataItem | null): DataItem[];
+export function targetCheckRequirement(check: DataItem, target: DataItem | null): string;
 export function individualChecks(checks: DataItem[], target: DataItem | null): DataItem[];
 export function runAllChecks(checks: DataItem[], target: DataItem | null): DataItem[];
 export function declarationOnlyChecks(checks: DataItem[], target: DataItem | null): DataItem[];

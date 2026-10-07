@@ -101,9 +101,30 @@ export function individualChecks(checks, target) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
     && !checkExclusionReason(check)
     && checkSupportsTarget(check, target)
+    && check.requires_additional_input !== true
     && check.probe_profile?.kind !== 'ops_readiness'
     && !isDeclarationOnlyCheck(check));
   return [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
+}
+
+/** Complete bounded network assessment, including observation checks, without changing scoring. */
+export function assessmentChecks(checks, target) {
+  return individualChecks(checks, target)
+    .map((check, index) => ({ check, index }))
+    .sort((left, right) => runOrder(left.check) - runOrder(right.check) || left.index - right.index)
+    .slice(0, MAX_SCAN_CHECKS)
+    .map(({ check }) => check);
+}
+
+/** Explanation for catalog entries outside this target's automatic network assessment. */
+export function targetCheckRequirement(check, target) {
+  const restriction = checkExclusionReason(check);
+  if (restriction === 'soc_gated') return 'Requires SOC approval and a governed execution workflow.';
+  if (restriction) return 'Requires a dedicated workflow; direct customer execution is unavailable.';
+  if (!checkSupportsTarget(check, target)) return `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}).`;
+  if (check.requires_additional_input) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
+  if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return 'Declaration or operational evidence only; sends no external traffic.';
+  return '';
 }
 
 /** Readiness checks ordered with origin exposure first, capped at the scan contract limit. */
