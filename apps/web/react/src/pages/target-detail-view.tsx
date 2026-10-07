@@ -68,6 +68,7 @@ import {
   providerFamilyRows,
   retainedCoveragePairs,
   runAllChecks,
+  individualChecks,
   targetTabFromParam,
   validationScansPathForTarget,
   type CheckRow,
@@ -92,7 +93,7 @@ type StatTone = NonNullable<BadgeProps['tone']>;
 type EdgeLocalState = '' | 'pending' | 'blocked' | 'error';
 type ReviewPlan = { mode: 'single'; checkId: string } | { mode: 'all' } | { mode: 'detect' } | null;
 
-const TARGET_RUNS_LIMIT = 500;
+const TARGET_RUNS_LIMIT = 100;
 const EDGE_POLL_MS = 4_000;
 const EDGE_POLL_MAX_MS = 3 * 60 * 1000;
 const EDGE_BLOCKED_RETRY_MS = 15_000;
@@ -504,15 +505,15 @@ export function TargetDetailView({
     };
   }, []);
 
-  function setTab(next: TargetTab) {
+  const setTab = useCallback((next: TargetTab) => {
     setTabState(next);
     replaceRouteParams({ tab: next === 'overview' ? null : next });
-  }
+  }, []);
 
-  function selectCheck(checkId: string) {
+  const selectCheck = useCallback((checkId: string) => {
     setSelectedCheckId(checkId);
     replaceRouteParams({ check: checkId || null });
-  }
+  }, []);
 
   const target = detail?.target ?? null;
   const verification = detail?.verification ?? null;
@@ -558,7 +559,8 @@ export function TargetDetailView({
 
   const runAll = useMemo(() => (target ? runAllChecks(checks, target) as DataItem[] : []), [checks, target]);
   const declarationOnlyCount = useMemo(() => (target ? declarationOnlyChecks(checks, target).length : 0), [checks, target]);
-  const checkRows = useMemo(() => buildCheckRows({ checks: runAll, scan, runs: targetRuns }) as CheckRow[], [runAll, scan, targetRuns]);
+  const selectableChecks = useMemo(() => target ? individualChecks(checks, target) as DataItem[] : [], [checks, target]);
+  const checkRows = useMemo(() => buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[], [selectableChecks, scan, targetRuns]);
   const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
   const effectiveSelectedCheckId = checkRows.some((row) => row.checkId === selectedCheckId) ? selectedCheckId : '';
   const selectedCheckMissing = Boolean(selectedCheckId) && !effectiveSelectedCheckId && checkRows.length > 0;
@@ -576,15 +578,15 @@ export function TargetDetailView({
   const effectiveness = useMemo(() => markerEffectiveness(profileInput), [detail?.protection_profile, edgeDetection]); // eslint-disable-line react-hooks/exhaustive-deps
   const originStatus = originExposureStatus(profileInput);
   const scanActive = isScanActive(scan);
-  const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))
-    && runAll.some((check) => getString(check, ['check_id'], '') === getString(run, ['check_id'], ''))) ?? null;
+  const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
   const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
   const currentScanStep = Array.isArray(scan?.steps) ? (scan.steps as DataItem[]).find((step) => ['running', 'collecting', 'starting'].includes(getString(step, ['status'], '')) && getString(step, ['test_run_id'], '')) ?? null : null;
   const latestTargetRun = targetRuns[0] ?? null;
   const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId === getString(latestTargetRun, ['id'], '')) ?? null;
-  const activityRunId = selectedRow ? selectedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '';
-  const activityRunning = selectedRow ? selectedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
-  const activityCheckName = selectedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : activityRow?.name || (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : ''));
+  const activityPinnedRow = selectedRow?.runId ? selectedRow : null;
+  const activityRunId = activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '';
+  const activityRunning = activityPinnedRow ? activityPinnedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
+  const activityCheckName = activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : activityRow?.name || ''));
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -605,12 +607,14 @@ export function TargetDetailView({
 
   const loadTargetActivity = useCallback(async () => {
     if (!targetGroupId) return;
+    const generation = loadGeneration.current;
     const [scanList, runList] = await Promise.all([
       requestJson(config, session, validationScansPathForTarget(targetGroupId, entityId)).catch(() => null) as Promise<DataItem | null>,
       requestJson(config, session, `/v1/test-runs?target_id=${encodeURIComponent(entityId)}&limit=${TARGET_RUNS_LIMIT}`)
-        .then((value) => { setRunsError(''); return value; })
-        .catch((err) => { setRunsError(apiErrorMessage(err, 'Recorded check results could not load.')); return null; }) as Promise<DataItem | null>,
+        .then((value) => { if (generation === loadGeneration.current) setRunsError(''); return value; })
+        .catch((err) => { if (generation === loadGeneration.current) setRunsError(apiErrorMessage(err, 'Recorded check results could not load.')); return null; }) as Promise<DataItem | null>,
     ]);
+    if (generation !== loadGeneration.current) return;
     if (scanList && Array.isArray(scanList.items)) {
       const activeScan = (scanList.items[0] as DataItem | undefined) ?? null;
       setScan(activeScan);
@@ -618,7 +622,7 @@ export function TargetDetailView({
       if (activeScanId) {
         void requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(activeScanId)}/activity`)
           .then((act) => {
-            if (act && Array.isArray((act as DataItem).items)) setScanActivity((act as DataItem).items as DataItem[]);
+            if (generation === loadGeneration.current && act && Array.isArray((act as DataItem).items)) setScanActivity((act as DataItem).items as DataItem[]);
           })
           .catch(() => undefined);
       }
@@ -707,6 +711,7 @@ export function TargetDetailView({
       return undefined;
     }
     let stopped = false;
+    setSelectedRunEvents([]);
     const fetchRunEvents = () => {
       requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/events`)
         .then((res) => {
@@ -729,6 +734,7 @@ export function TargetDetailView({
 
   const queueEdgeDetection = useCallback(async () => {
     if (!targetGroupId) return;
+    const generation = loadGeneration.current;
     setEdgeLocal('pending');
     setEdgeError('');
     setEdgeReason('');
@@ -737,10 +743,14 @@ export function TargetDetailView({
         method: 'POST',
         body: { target_group_id: targetGroupId, target_id: entityId },
       });
+      if (generation !== loadGeneration.current) return;
       edgeRetriesRef.current = 0;
+      selectCheck(EDGE_DETECTION_CHECK_ID);
+      setTab('validate');
       await reload().catch(() => undefined);
       void loadTargetActivity();
     } catch (err) {
+      if (generation !== loadGeneration.current) return;
       if (apiErrorCode(err) === 'concurrent_run_blocked') {
         setEdgeLocal('blocked');
         return;
@@ -748,22 +758,22 @@ export function TargetDetailView({
       setEdgeLocal('error');
       setEdgeError(apiErrorMessage(err, 'WAF/CDN detection could not be queued.'));
     }
-  }, [config, session, entityId, targetGroupId, loadTargetActivity, reload]);
+  }, [config, session, entityId, targetGroupId, loadTargetActivity, reload, selectCheck, setTab]);
 
   // Only after the user explicitly started detection: wait for the group's single run slot.
   useEffect(() => {
-    if (edgeLocal !== 'blocked' || edgeDetection || scanActive) return undefined;
+    if (edgeLocal !== 'blocked' || scanActive) return undefined;
     if (edgeRetriesRef.current >= EDGE_BLOCKED_MAX_RETRIES) return undefined;
     const timer = window.setTimeout(() => {
       edgeRetriesRef.current += 1;
       void queueEdgeDetection();
     }, EDGE_BLOCKED_RETRY_MS);
     return () => window.clearTimeout(timer);
-  }, [edgeLocal, edgeDetection, scanActive, queueEdgeDetection]);
+  }, [edgeLocal, scanActive, queueEdgeDetection]);
 
   // While user-started detection is in flight, re-read the target until the result is persisted.
   useEffect(() => {
-    if (!edgeEvaluating || edgeDetection || fingerprintStepActive) return undefined;
+    if (!edgeEvaluating || fingerprintStepActive) return undefined;
     let stopped = false;
     const startedAt = Date.now();
     const timer = window.setInterval(() => {
@@ -776,7 +786,7 @@ export function TargetDetailView({
       void reload()
         .then((next) => {
           const status = getString(next?.edge_detection_request ?? null, ['run_status'], '').toLowerCase();
-          if (next?.edge_detection || (status && !['pending', 'planned', 'queued', 'running', 'collecting'].includes(status))) {
+          if (status && !['pending', 'planned', 'queued', 'running', 'collecting'].includes(status)) {
             setEdgeLocal('');
             void loadTargetActivity();
           }
@@ -787,7 +797,7 @@ export function TargetDetailView({
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [edgeEvaluating, edgeDetection, fingerprintStepActive, loadTargetActivity, reload]);
+  }, [edgeEvaluating, fingerprintStepActive, loadTargetActivity, reload]);
 
   useEffect(() => {
     if (edgePhase !== 'no_result' || !edgeRequestRunId || !wafEdgeEnabled) return undefined;
@@ -893,7 +903,7 @@ export function TargetDetailView({
     const max = Number((check.probe_profile as DataItem | undefined)?.max_requests);
     return total + (Number.isFinite(max) ? max : 0);
   }, 0);
-  const runAllCategoryCount = new Set(checkRows.map((row) => row.category.id)).size;
+  const runAllCategoryCount = new Set(checkRows.filter((row) => runAll.some((check) => check.check_id === row.checkId)).map((row) => row.category.id)).size;
 
   async function stopSingleCheck() {
     if (!stopSingleRun) return;
@@ -1618,6 +1628,7 @@ export function TargetDetailView({
             />
             <CheckQueue
               rows={checkRows}
+              runAllCount={runAll.length}
               selectedCheckId={effectiveSelectedCheckId}
               canSelect
               onSelect={selectCheck}

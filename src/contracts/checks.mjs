@@ -31,6 +31,7 @@ export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'graphql_posture_probe',
   'websocket_upgrade_posture',
   'outside_in_waf_scan',
+  'waf_fingerprint_observation',
   'grpc_reflection_probe',
   'reflection_service_probe',
   'dns_wire_query',
@@ -420,7 +421,7 @@ export function buildProbeProfile({
   }
   // Signed outside-in execution has a static, pre-reserved HTTP plan. Keep redirect expansion
   // disabled even when a legacy catalog or caller override requests it.
-  if (kind === 'outside_in_waf_scan') profile.follow_redirects = false;
+  if (kind === 'outside_in_waf_scan' || kind === 'waf_fingerprint_observation') profile.follow_redirects = false;
   return profile;
 }
 
@@ -739,20 +740,20 @@ export const CHECK_CATALOG = [
   }),
   safeCheck({
     check_id: 'waf.fingerprint.safe',
-    version: '1.2.0',
-    name: 'Outside-In WAF Scanner (Safe)',
+    version: '2.0.0',
+    name: 'WAF and CDN Fingerprint (Safe)',
     vector_family: 'waf',
     description:
-      'Bounded AstraNull outside-in scan: WAF fingerprint evaluation over destination-pinned benign HTTP probes, CDN/WAF/cloud classification from vetted addresses and a counted CNAME chain, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, and a posture report.',
+      'Provider observations from one destination-pinned ordinary GET, vetted addresses and at most three counted CNAME lookups. WAF effectiveness and origin checks run separately.',
     supported_targets: ['url', 'fqdn', 'ip'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_fingerprint_probe'],
     evidence_required: ['probe_result'],
     verdict_logic:
-      'Up to thirteen bounded GET/POST/HEAD probes plus up to three CNAME lookups use AstraNull edge fingerprinting, validate plain and evasion-class markers, test content-type confusion and origin bypass, and emit posture (external probe evidence only).',
+      'Observe HTTP/DNS/address fingerprint signals only. Provider detection does not establish blocking, origin lockdown or DDoS capacity.',
     probe_profile: {
-      kind: 'outside_in_waf_scan',
-      max_requests: 16,
-      timeout_ms: 15000,
+      kind: 'waf_fingerprint_observation',
+      max_requests: 4,
+      timeout_ms: 5000,
       scenario_family: 'fingerprint',
       expected_action: 'block',
       nonce_hash_only: true,
@@ -760,15 +761,10 @@ export const CHECK_CATALOG = [
       collect: [
         'status_code',
         'waf_product_hint',
-        'marker_probes',
-        'posture_status',
-        'posture_label',
-        'origin_bypass_confirmed',
-        'evasion_bypass_suspected',
         'edge_signature',
       ],
     },
-    safety_constraints: { max_events: 16, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
+    safety_constraints: { max_events: 4, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),

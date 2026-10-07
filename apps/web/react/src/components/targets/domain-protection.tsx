@@ -337,7 +337,7 @@ function CheckQueueRow({
                   <span className="td-live-result-line">
                     <span className="td-pulse-beacon-inline" aria-hidden="true" />
                     <strong>Awaiting recorded response</strong>
-                    <span className="td-muted"> · Probes in flight ({row.requestsSent ?? 13}/{row.maxRequests ?? 16} sent)</span>
+                    <span className="td-muted">{row.requestsSent != null ? ` · ${row.requestsSent}${row.maxRequests != null ? `/${row.maxRequests}` : ''} requests sent` : ' · Request count not recorded yet'}</span>
                   </span>
                 ) : (
                   rowResultLine(row)
@@ -376,6 +376,7 @@ function CheckQueueRow({
 
 export type CheckQueueProps = {
   rows: CheckRow[];
+  runAllCount?: number;
   selectedCheckId: string;
   canSelect: boolean;
   onSelect: (checkId: string) => void;
@@ -398,6 +399,7 @@ export type CheckQueueProps = {
 /** Every compatible check for this target, grouped by category, selectable in place. */
 export function CheckQueue({
   rows,
+  runAllCount = rows.length,
   selectedCheckId,
   canSelect,
   onSelect,
@@ -440,7 +442,8 @@ export function CheckQueue({
   // A category's default open state is captured the first time it renders, so a status change
   // (for example running to passed) never collapses rows the user is reading.
   const defaultsRef = useRef<Record<string, boolean>>({});
-  const progress = rowProgress(rows);
+  const scanCheckIds = new Set(Array.isArray(scan?.steps) ? (scan.steps as DataItem[]).map((step) => step.check_id) : []);
+  const progress = rowProgress(scan ? rows.filter((row) => scanCheckIds.has(row.checkId)) : rows);
   const current = rows.find((row) => row.status === 'running');
   const waiting = rows.find((row) => row.status === 'waiting');
   const scanStatus = typeof scan?.status === 'string' ? scan.status : '';
@@ -471,8 +474,8 @@ export function CheckQueue({
           scanActive ? (
             <Button variant="secondary" onClick={onStop}><Square size={14} aria-hidden="true" />Stop run</Button>
           ) : (
-            <Button variant="secondary" onClick={onRunAll} loading={busy}>
-              <Play size={15} aria-hidden="true" />Review all {rows.length}
+            <Button variant="secondary" onClick={onRunAll} loading={busy} disabled={runAllCount === 0}>
+              <Play size={15} aria-hidden="true" />Review all {runAllCount}
             </Button>
           )
         ) : null}

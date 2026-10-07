@@ -154,9 +154,15 @@ export function projectRunActivity(run, events, limit = 200) {
         observations: Object.fromEntries(['query_name', 'qtype', 'rcode', 'response_bytes', 'response_received',
           'tls_protocol', 'tls_cipher', 'cipher', 'authorized', 'tls_authorized', 'cert_expiry', 'port', 'protocol', 'http_method', 'http_version',
           'dns_rcode', 'dns_qtype', 'record_count', 'alpn_protocol', 'reply_received', 'websocket_status',
-          'redirect_hops', 'axfr_leak', 'websocket_upgrade', 'grpc_status', 'amplification_ratio']
+          'redirect_hops', 'axfr_leak', 'websocket_upgrade', 'grpc_status', 'amplification_ratio',
+          'dns_cname_lookups', 'baseline_status_code', 'audit_host', 'query_type', 'dnssec_enabled',
+          'waf_detected', 'cdn_detected', 'detected_vendor', 'detected_product', 'response_reason',
+          'phases_completed', 'request_counting_basis', 'enforcement', 'baseline_blocked']
           .filter((field) => ['string', 'boolean', 'number'].includes(typeof metadata[field]))
           .map((field) => [field, typeof metadata[field] === 'string' ? metadata[field].slice(0, 253) : metadata[field]])),
+        port_observations: Object.fromEntries(['open_ports', 'filtered_ports', 'closed_ports']
+          .filter((field) => Array.isArray(metadata[field]))
+          .map((field) => [field, metadata[field].filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535).slice(0, 15)])),
       });
     }
   }

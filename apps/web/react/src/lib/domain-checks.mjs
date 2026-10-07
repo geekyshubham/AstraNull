@@ -96,20 +96,21 @@ function runOrder(check) {
   return tierOf(check) === 'E3' ? 2 : 3;
 }
 
-/**
- * Customer-runnable, target-compatible, network-observable checks for one target, ordered so the
- * WAF/CDN fingerprint runs first and origin exposure next. Capped at the scan contract limit.
- */
-export function runAllChecks(checks, target) {
+/** Customer-runnable network checks, including observations, available individually. */
+export function individualChecks(checks, target) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
     && !checkExclusionReason(check)
     && checkSupportsTarget(check, target)
-    && tierOf(check) !== 'E2'
-    && !OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind)
     && check.probe_profile?.kind !== 'ops_readiness'
     && !isDeclarationOnlyCheck(check));
-  const unique = [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
-  return unique
+  return [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
+}
+
+/** Readiness checks ordered with origin exposure first, capped at the scan contract limit. */
+export function runAllChecks(checks, target) {
+  return individualChecks(checks, target)
+    .filter((check) => tierOf(check) !== 'E2'
+      && !OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind))
     .map((check, index) => ({ check, index }))
     .sort((left, right) => runOrder(left.check) - runOrder(right.check) || left.index - right.index)
     .slice(0, MAX_SCAN_CHECKS)
@@ -478,12 +479,12 @@ export function edgeEvidenceSignals(edge) {
  * (pending, blocked, error) so the card says "Evaluating" the moment detection is queued.
  */
 export function edgeDetectionPhase({ eligible, edge, request = null, localRequest = '', scanFingerprintActive = false } = {}) {
-  if (record(edge)) return text(edge.status) || 'inconclusive';
   if (localRequest === 'pending' || scanFingerprintActive) return 'evaluating';
-  if (ACTIVE_RUN_STATUSES.has(text(record(request)?.run_status).toLowerCase())) return 'evaluating';
-  if (!eligible) return 'locked';
   if (localRequest === 'blocked') return 'waiting';
   if (localRequest === 'error') return 'error';
+  if (ACTIVE_RUN_STATUSES.has(text(record(request)?.run_status).toLowerCase())) return 'evaluating';
+  if (record(edge)) return text(edge.status) || 'inconclusive';
+  if (!eligible) return 'locked';
   if (record(request)) return 'no_result';
   return 'not_started';
 }

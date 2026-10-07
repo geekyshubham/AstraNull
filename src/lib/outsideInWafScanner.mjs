@@ -1094,7 +1094,7 @@ export async function runOutsideInWafScan(options = {}) {
   })();
   const plan = buildOutsideInScanPlan(budget, { hasDirectIp: Boolean(directIp && hostname) });
   const plannedPhases = new Set(plan.map((entry) => entry.phase));
-  const phasesPlanned = OUTSIDE_IN_SCAN_PHASES.filter(
+  const phasesPlanned = (options.fingerprintOnly === true ? ['baseline'] : OUTSIDE_IN_SCAN_PHASES).filter(
     (phase) => Boolean(directIp && hostname) || phase !== 'origin_bypass',
   );
   const phasesDropped = phasesPlanned.filter((phase) => !plannedPhases.has(phase));

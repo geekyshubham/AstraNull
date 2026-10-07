@@ -81,10 +81,11 @@ function mockResponse(status, headers = {}) {
   });
 
 describe('outside-in WAF scanner', () => {
-  it('waf.fingerprint.safe maps to outside_in_waf_scan with 13 HTTP + 3 CNAME operations', () => {
+  it('provider detection uses one ordinary HTTP request and up to three CNAME operations', () => {
     const check = getCheckById('waf.fingerprint.safe');
-    assert.equal(check.probe_profile.kind, 'outside_in_waf_scan');
-    assert.equal(check.probe_profile.max_requests, 16);
+    assert.equal(check.probe_profile.kind, 'waf_fingerprint_observation');
+    assert.equal(check.probe_profile.max_requests, 4);
+    assert.equal(check.probe_profile.timeout_ms, 5000);
     assert.equal(check.probe_profile.follow_redirects, false);
   });
 

@@ -43,17 +43,16 @@ reserved and attested as routing safety work, not stored as a DNS hint.
 
 ## Signed safe fingerprint algorithm
 
-1. Load the exact customer-approved target from the signed job.
-2. Reserve and attest the bounded A/AAAA destination-classification attempts, reject any unsafe
-   address, and pin the accepted address set for HTTP. These routing checks emit no fingerprint hint.
-3. Execute the static, pre-reserved HTTP GET/POST/HEAD plan against that pinned destination with
-   `followRedirects=false` and `collectNetworkHints=false`.
-4. Compare HTTP status, safe header/cookie names, and authorized block-page fingerprints against the
-   WAF product catalog; do not run standalone CNAME/A/AAAA or TLS collectors.
-5. Score each vendor/product candidate from those HTTP signals.
-6. If connector snapshots or separately governed evidence exist, reconcile them outside the signed
-   fingerprint job.
-7. Store the best candidate, alternatives, confidence, evidence summary, and initial coverage.
+Provider detection uses `waf.fingerprint.safe` version 2.0.0, kind `waf_fingerprint_observation` ([ADR-0018](../adr/0018-provider-fingerprints-as-observations.md)).
+
+1. Load the exact approved target from its signed job.
+2. Reserve and attest bounded A/AAAA destination classification, reject unsafe addresses, and pin the accepted address set.
+3. Collect at most three counted CNAME operations and one ordinary GET against the pinned endpoint, within the existing five-second job deadline. Redirect following and standalone TLS collectors stay disabled.
+4. Compare the response's safe header/cookie names, bounded block-page fingerprints, vetted address set, and counted CNAME chain against the versioned provider corpus.
+5. Record candidate providers, confidence, and observed evidence. Detection is E2 observation-only; it does not grade marker enforcement, origin lockdown, or capacity.
+6. Reconcile optional configuration snapshots separately. Run marker, evasion, enforcement, and origin checks explicitly through their own approved profiles.
+
+Legacy `outside_in_waf_scan` profiles remain readable/executable under their original bounds, and old verdicts are not rewritten. A current result needs a new versioned run.
 
 ## Confidence scoring
 

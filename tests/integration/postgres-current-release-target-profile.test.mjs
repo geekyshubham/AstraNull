@@ -5,7 +5,7 @@ import { createAuditRepository } from '../../src/persistence/postgres/auditRepos
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
-import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
+import { approvedScenarioVersion, deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
 import {
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
@@ -112,6 +112,10 @@ describe('postgres current-release target profile', () => {
     if (!availability.available) { t.skip(availability.reason); return; }
     await withEphemeralPostgres(async (pool) => {
       await seed(pool);
+      const checkId = 'waf.inspection_limit.safe';
+      const check = getCheckById(checkId);
+      const scenarioVersion = approvedScenarioVersion(check);
+      await pool.query(`UPDATE test_runs SET check_id = $1 WHERE id = 'run_target_profile'`, [checkId]);
       const portal = createPortalRevampRepository(pool);
       await pool.query(
         `INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, confidence, evidence_ids)
@@ -119,21 +123,21 @@ describe('postgres current-release target profile', () => {
         [TENANT],
       );
       const pairFor = async () => (await portal.getTargetDetailBundle(CTX, TARGET, {})).coverage.pairs
-        .find((pair) => pair.check_id === 'waf.fingerprint.safe');
+        .find((pair) => pair.check_id === checkId);
       assert.equal((await pairFor()).pair_reason, 'missing_check_version');
       await pool.query(
-        `UPDATE test_runs SET check_version = '1.0.0', scenario_version = 'fingerprint', producer_kind = 'signed_probe',
-           completed_at = now() WHERE id = 'run_target_profile'`,
+        `UPDATE test_runs SET check_version = '0.0.0', scenario_version = $1, producer_kind = 'signed_probe',
+           completed_at = now() WHERE id = 'run_target_profile'`, [scenarioVersion],
       );
       assert.equal((await pairFor()).pair_reason, 'check_version_mismatch');
-      const currentVersion = getCheckById('waf.fingerprint.safe').version;
+      const currentVersion = check.version;
       await pool.query(`UPDATE test_runs SET check_version = $1 WHERE id = 'run_target_profile'`, [currentVersion]);
       const live = await pairFor();
       assert.equal(live.state, 'conclusive');
       assert.equal(live.provenance, 'external');
       assert.equal(live.live_external, true);
       assert.equal(live.retained.check_version, currentVersion);
-      assert.equal(live.retained.scenario_version, 'fingerprint');
+      assert.equal(live.retained.scenario_version, scenarioVersion);
       await pool.query(`UPDATE test_runs SET producer_kind = 'internal_simulation' WHERE id = 'run_target_profile'`);
       assert.equal((await pairFor()).live_external, false);
       assert.equal((await pairFor()).pair_reason, 'internal_simulation');

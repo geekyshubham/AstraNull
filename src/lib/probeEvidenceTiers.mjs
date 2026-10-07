@@ -14,6 +14,7 @@ export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
   'websocket_upgrade_posture',
   'http_method_matrix',
   'http3_control_probe',
+  'waf_fingerprint_observation',
 ]);
 
 const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
@@ -226,7 +227,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'origin.dns_hostname_bypass.readiness',
     'origin.leak_scan.safe',
   ]),
-  outside_in_waf_scan: Object.freeze(['waf.fingerprint.safe']),
+  waf_fingerprint_observation: Object.freeze(['waf.fingerprint.safe']),
   port_scan_bounded: Object.freeze(['l3.firewall_exposure_scan.safe']),
   quic_reachability: Object.freeze([
     'protocol.http3_quic_exposure.safe',

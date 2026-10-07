@@ -1267,3 +1267,9 @@ Other correlation rules from the 2026-10-06 staging run: a completed TLS handsha
 - A path evaluation uses its captured `expectation_id` to explain layer intent, not the latest expectation for the same scenario.
 - Origin protection-finding retests with a missing or different `origin_binding_id` return `409 retest_not_authorized` with `retest_scope_mismatch` before dispatch. Mapped firewall findings and retests bind to the declared post-change target.
 - A malformed or explicitly empty `ASTRANULL_APPROVED_PROBE_SOURCES` admits no workers; conflicting assignments give that worker no perspective. An unset registry alone uses the shared public pool. Explicit false tenant feature overrides also apply to demo tenants.
+
+### Provider detection and live activity correction (2026-10-08)
+
+`POST /v1/waf/edge-detection` retains its exact target-ID request shape and asynchronous response. It now starts `waf.fingerprint.safe` version `2.0.0`, kind `waf_fingerprint_observation`: one ordinary pinned GET and up to three counted CNAME lookups, with a five-second deadline. Detection is observation-only and outside readiness coverage; it never starts marker, POST, evasion, or origin-bypass requests. Historical versions remain retained.
+
+`GET /v1/test-runs/:id/activity?limit=256` uses the existing bounded passive read. Final result items add safe protocol primitives in `observations` and `port_observations` with at most 15 valid port numbers per array (`open_ports`, `filtered_ports`, `closed_ports`). These fields do not enter correlation as new evidence. All existing tenant, provenance, preview redaction, and execution bounds remain unchanged.

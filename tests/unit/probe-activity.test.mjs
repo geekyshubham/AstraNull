@@ -43,6 +43,17 @@ test('activity read keeps unsigned claims out, preserves zero, and does not cons
   assert.equal(zero.requests_sent, 0);
 });
 
+test('final activity retains bounded protocol and port observations without exposing arbitrary metadata', () => {
+  const run = { id: 'run_protocol_activity', tenant_id: 'ten_demo', target_id: 'target_1', check_id: 'l3.firewall_exposure_scan.safe', status: 'verdicted' };
+  const event = { id: 'evt_protocol_activity', tenant_id: run.tenant_id, test_run_id: run.id, signal_type: 'probe_result', producer_kind: 'signed_probe', timestamp: new Date().toISOString(),
+    metadata: { external_result: 'connected', open_ports: [443, '22', -1, 65536], filtered_ports: [22], closed_ports: [3389], query_type: 'SOA', record_count: 2, password: 'never-render-this' } };
+  const result = projectRunActivity(run, [event]);
+  assert.deepEqual(result.items[0].port_observations, { open_ports: [443], filtered_ports: [22], closed_ports: [3389] });
+  assert.equal(result.items[0].observations.query_type, 'SOA');
+  assert.equal(result.items[0].observations.record_count, 2);
+  assert.equal(JSON.stringify(result).includes('never-render-this'), false);
+});
+
 test('pinned HTTP logs capture actual method, MIME format, redacted payloads, and preserve the original response', async () => {
   const body = JSON.stringify({ marker: 'astranull-inert', password: 'private-password' });
   const responseBody = JSON.stringify({ message: 'Request blocked', token: 'private-token' });

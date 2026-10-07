@@ -229,6 +229,11 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await dialog.getByRole('button', { name: 'Start detection' }).click();
     await expect.poll(() => edgePosts.length).toBe(1);
     expect(edgePosts[0]).toEqual({ target_group_id: PORTAL_BASELINE_IDS.targetGroupId, target_id: VERIFIED_FRESH_TARGET });
+    await expect(page.getByRole('tab', { name: /^Validate/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.probe-activity')).toBeVisible();
+    await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).toBeChecked();
+    await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint (Safe)');
+    await expect(page.getByText(/The linked check.*is not compatible/)).toHaveCount(0);
   });
 
   test('an unverified domain is also allowed to run checks and detection', async ({ page }) => {
@@ -273,10 +278,11 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const body = scanBodies[0];
     expect(body.target_group_id).toBe(PORTAL_BASELINE_IDS.targetGroupId);
     expect(body.target_id).toBe(PORTAL_BASELINE_IDS.targetId);
-    expect(body.check_ids[0]).toBe('waf.fingerprint.safe');
+    expect(body.check_ids).not.toContain('waf.fingerprint.safe');
+    expect(body.check_ids[0]).toMatch(/^origin\./);
     expect(body.check_ids.length).toBeGreaterThan(50);
 
-    await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: Outside-In WAF Scanner/);
+    await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: Origin/);
     await expect(panel.getByRole('button', { name: 'Stop run' })).toBeVisible();
     await expect(panel.locator('.td-check[data-status="running"]')).toHaveCount(1);
 

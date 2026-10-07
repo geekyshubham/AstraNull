@@ -1,0 +1,4441 @@
+{
+  "target_id": "tgt_bbcda0fadb91a1b3",
+  "target_kind": "fqdn",
+  "check_count": 251,
+  "executor_gaps": [],
+  "scope": "Static execution, compatibility and budget audit. This does not certify live protocol endpoints or mark exclusions as passes.",
+  "checks": [
+    {
+      "check_id": "origin.direct_reachability.safe",
+      "name": "Direct Origin Reachability (Safe)",
+      "version": "1.2.0",
+      "kind": "host_sni_bypass",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_origin_target",
+        "literal_ip_target_for_signed_worker"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "origin.direct_bypass.safe",
+      "name": "Direct-Origin Bypass (Safe)",
+      "version": "1.2.0",
+      "kind": "host_sni_bypass",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_origin_target",
+        "literal_ip_target_for_signed_worker"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "origin.host_sni_bypass.safe",
+      "name": "Host/SNI Bypass (Safe)",
+      "version": "1.2.0",
+      "kind": "host_sni_bypass",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_host_sni_target",
+        "literal_ip_target_for_signed_worker"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "origin.leak_scan.safe",
+      "name": "Origin Leak Scan (Safe)",
+      "version": "1.0.0",
+      "kind": "origin_leak_scan",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 15,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_apex_domain"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.firewall_exposure_scan.safe",
+      "name": "Firewall Exposure Scan (Safe)",
+      "version": "1.1.0",
+      "kind": "port_scan_bounded",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 15,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_scan_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "path.protected_canary.safe",
+      "name": "Protected-Path Canary (Safe)",
+      "version": "1.0.0",
+      "kind": "http_head",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": false,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "full_canary_url_behind_protected_path"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.forbidden_tcp_port.safe",
+      "name": "Forbidden TCP Port (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_forbidden_tcp_port",
+        "expected_block_behavior"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.forbidden_udp_port.safe",
+      "name": "Forbidden UDP Port (Safe)",
+      "version": "1.0.0",
+      "kind": "udp_probe",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_forbidden_udp_port"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.basic_deny_rule.safe",
+      "name": "Basic Deny-Rule Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_deny_rule_target"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.authoritative_response.safe",
+      "name": "DNS Authoritative Response (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_authoritative_zone"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.random_prefix_nxdomain.safe",
+      "name": "DNS Random-Prefix / NXDOMAIN (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_zone_for_random_prefix"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.open_recursion_behavior.safe",
+      "name": "Open Recursion Behavior (Safe)",
+      "version": "1.1.0",
+      "kind": "dns_open_recursion",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_resolver_target"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.waf_marker_rule.safe",
+      "name": "WAF Marker Rule (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_enforcement_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_waf_marker_rule"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.fingerprint.safe",
+      "name": "WAF and CDN Fingerprint (Safe)",
+      "version": "2.0.0",
+      "kind": "waf_fingerprint_observation",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_fingerprint_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.marker_rule.safe",
+      "name": "WAF Marker Rule Posture (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_enforcement_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_waf_marker_rule"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.origin_bypass.safe",
+      "name": "WAF Origin Bypass (Safe)",
+      "version": "1.2.0",
+      "kind": "host_sni_bypass",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_direct_origin_target",
+        "literal_ip_target_for_signed_worker",
+        null
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.low_rate_limit.safe",
+      "name": "WAF Low-Rate Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_rate_limit_threshold"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http_method_restriction.safe",
+      "name": "HTTP Method Restriction (Safe)",
+      "version": "1.0.0",
+      "kind": "http_method_matrix",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "url_target_with_method_policy"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.header_size_boundary.safe",
+      "name": "Header/Size Boundary (Safe)",
+      "version": "1.0.0",
+      "kind": "header_size_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "url_target"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.low_rate_rate_limit.safe",
+      "name": "Low-Rate Rate-Limit Check (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "customer_rate_limit_threshold"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.profile_exposure.safe",
+      "name": "TLS Profile Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "tls_audit",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_terminated_endpoint"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.http2_readiness.safe",
+      "name": "HTTP/2 Readiness Metadata (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_settings",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.http3_quic_exposure.safe",
+      "name": "HTTP/3 Alt-Svc Observation (Safe)",
+      "version": "1.0.0",
+      "kind": "quic_reachability",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_quic_exposure_intent"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "ops.alert_workflow_marker.safe",
+      "name": "Alert Workflow Webhook Ping (Safe)",
+      "version": "1.0.0",
+      "kind": "alert_webhook_ping",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "alert_webhook_or_siem_hook"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "ops.runbook_contact_validation.safe",
+      "name": "Runbook / Emergency Contact Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "ops_readiness",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "current_runbook_artifact",
+        "emergency_contact_roster"
+      ],
+      "actual_worker_executor": "control_plane_only"
+    },
+    {
+      "check_id": "ops.kill_switch_drill.safe",
+      "name": "Kill Switch Drill Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "ops_readiness",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "kill_switch_runbook",
+        "declared_drill_scope"
+      ],
+      "actual_worker_executor": "control_plane_only"
+    },
+    {
+      "check_id": "l3.ipv6_reachability.safe",
+      "name": "IPv6 Declared Reachability (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_ipv6_target",
+        "expected_ipv6_protection_behavior"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.amplification_exposure.safe",
+      "name": "DNS Amplification Exposure (Safe Metadata)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_authoritative_or_resolver_target",
+        "customer_amplification_policy_intent"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.dnssec_expensive_query.safe",
+      "name": "DNSSEC / Expensive Query Readiness (Safe)",
+      "version": "2.0.0",
+      "kind": "dnssec_posture",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_query_type",
+        "authoritative_or_resolver_target"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.secondary_failover.safe",
+      "name": "Secondary DNS Failover (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_failover_posture",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 3,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_secondary_dns_targets",
+        "failover_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.zone_transfer_exposure.safe",
+      "name": "Zone Transfer Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_axfr_leak",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_zone_for_axfr_check",
+        "customer_authorizes_axfr_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.cache_busting.safe",
+      "name": "Cache Busting Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "cache_abuse_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 3,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_cache_bust_path",
+        "cache_policy_expectation"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.expensive_endpoint.safe",
+      "name": "Expensive Endpoint (Safe)",
+      "version": "1.0.0",
+      "kind": "http_head",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_expensive_endpoint_url",
+        "expected_rate_or_challenge_behavior"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.login_abuse_flow.safe",
+      "name": "Login / OTP / Signup Abuse-Sensitive Flow (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_login_probe_path",
+        "isolated_synthetic_test_identity",
+        "customer_approves_auth_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.password_reset.safe",
+      "name": "Password Reset Abuse-Sensitive Flow (Safe)",
+      "version": "1.0.0",
+      "kind": "http_head",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_password_reset_endpoint",
+        "isolated_synthetic_test_identity"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.api_quota_exhaustion.safe",
+      "name": "API Quota Exhaustion Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_api_probe_path",
+        "test_api_identity_or_key_scope"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.graphql_complexity.safe",
+      "name": "GraphQL Complexity Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "graphql_posture_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_graphql_endpoint",
+        "customer_provided_safe_query_descriptor"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.bot_challenge_marker.safe",
+      "name": "Bot / Challenge Marker (Safe)",
+      "version": "1.0.0",
+      "kind": "bot_challenge_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_protected_url",
+        "bot_management_expectation"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.slow_header_body_timeout.safe",
+      "name": "Slow Header/Body Timeout Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "slow_header_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_terminated_endpoint",
+        "declared_idle_or_slow_client_policy"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.idle_connection_timeout.safe",
+      "name": "Idle Connection Timeout Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "tls_session",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_terminated_endpoint",
+        "connection_idle_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.http2_rapid_reset_readiness.safe",
+      "name": "HTTP/2 Rapid Reset Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_settings",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "rapid_reset_mitigation_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.http2_stream_concurrency.safe",
+      "name": "HTTP/2 Stream Concurrency (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_settings",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "stream_limit_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.grpc_reflection_stream.safe",
+      "name": "gRPC Reflection / Stream Readiness (Safe)",
+      "version": "1.1.0",
+      "kind": "grpc_reflection_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_grpc_endpoint",
+        "grpc_reflection_policy_intent"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.websocket_connection_controls.safe",
+      "name": "WebSocket Connection Controls (Safe)",
+      "version": "1.0.0",
+      "kind": "websocket_upgrade_posture",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_websocket_endpoint",
+        "connection_limit_expectation"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.full_audit.safe",
+      "name": "TLS Full Audit (Safe)",
+      "version": "1.0.0",
+      "kind": "tls_audit",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_terminated_endpoint"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.api_surface_scan.safe",
+      "name": "API Surface Scan (Safe)",
+      "version": "1.0.0",
+      "kind": "api_surface_scan",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_api_base_url"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.cors_posture.safe",
+      "name": "CORS Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "cors_posture_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_api_base_url"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.enforcement.safe",
+      "name": "WAF Enforcement Probe (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_enforcement_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_waf_marker_rule"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.connection_table_exhaustion.request_only",
+      "name": "Connection Table Exhaustion (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "declared_target_group_scope",
+        "connection_limit_abort_criteria"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "high_scale.dns_high_query.request_only",
+      "name": "DNS High-Query Simulation (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "declared_dns_zone_scope",
+        "provider_approval_artifact"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "ops.runbook_contact_validation.request_only",
+      "name": "Runbook / Emergency Contact Validation (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "current_runbook_artifact",
+        "emergency_contact_roster",
+        "soc_authorization_pack"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "ops.kill_switch_drill.request_only",
+      "name": "Kill Switch Drill (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "kill_switch_runbook",
+        "declared_drill_scope"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "ops.provider_telemetry.request_only",
+      "name": "Provider Telemetry Validation (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "provider_approval_artifact",
+        "telemetry_endpoint_declaration",
+        "soc_authorization_pack"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "high_scale.multi_vector.request_only",
+      "name": "Multi-Vector Simulation (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "multi_vector_scope_declaration",
+        "provider_approval_artifact"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "high_scale.degradation_recovery.request_only",
+      "name": "Degradation / Recovery Drill (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "recovery_runbook",
+        "declared_degradation_objectives"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "high_scale.volumetric.request_only",
+      "name": "Volumetric L3/L4 (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "declared_target_group_scope",
+        "provider_approval_artifact"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_sqli.soc",
+      "name": "WAF SQLi Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_xss.soc",
+      "name": "WAF XSS Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_rce.soc",
+      "name": "WAF RCE Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_path_traversal.soc",
+      "name": "WAF Path Traversal Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_command_injection.soc",
+      "name": "WAF Command Injection Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_ldap_injection.soc",
+      "name": "WAF LDAP Injection Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_ssti.soc",
+      "name": "WAF SSTI Offensive Suite (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "waf.offensive_combined.soc",
+      "name": "WAF Combined Offensive Bundle (SOC Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "waf_offensive_authorization_pack",
+        "declared_waf_asset",
+        "staging_isolation"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "high_scale.application.request_only",
+      "name": "Application-Layer High-Scale (SOC Request Only)",
+      "version": "1.0.0",
+      "kind": null,
+      "tier": "E4",
+      "customer_runnable": false,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": null,
+      "timeout_ms": null,
+      "required_setup": [
+        "soc_authorization_pack",
+        "declared_l7_scope",
+        "provider_approval_artifact"
+      ],
+      "actual_worker_executor": "soc_governed"
+    },
+    {
+      "check_id": "l3.icmp_flood.readiness",
+      "name": "ICMP Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "icmp_filtering_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.gre_esp_flood.readiness",
+      "name": "GRE / ESP Tunnel Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tunnel_protocol_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.ipv6_volumetric.readiness",
+      "name": "IPv6 Volumetric Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "ipv6_protection_parity_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.sip_voip_flood.readiness",
+      "name": "SIP / VoIP Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "udp_probe",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_sip_port",
+        "sip_filtering_expectation"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.sctp_exposure.readiness",
+      "name": "SCTP Exposure Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "sctp_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.multicast_broadcast_storm.readiness",
+      "name": "Multicast / Broadcast Storm Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "broadcast_suppression_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.ack_flood.readiness",
+      "name": "ACK Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "stateful_filtering_declaration",
+        "pps_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.rst_flood.readiness",
+      "name": "RST Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "rst_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.syn_ack_flood.readiness",
+      "name": "SYN-ACK Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "syn_ack_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.tcp_flag_anomaly.readiness",
+      "name": "TCP Flag Anomaly Handling (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "flag_anomaly_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.out_of_state_tcp.readiness",
+      "name": "Out-of-State TCP Filtering (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "stateful_firewall_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.fragmentation_flood.readiness",
+      "name": "Fragmentation Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "fragment_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.syn_flood.readiness",
+      "name": "SYN Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "syn_protection_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.tcp_connection_flood.readiness",
+      "name": "TCP Connection Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "concurrent_connection_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.nat_state_table.readiness",
+      "name": "NAT / State Table Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "nat_capacity_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.smtp_connection_flood.readiness",
+      "name": "SMTP Connection Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_smtp_port",
+        "smtp_limits_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.ssh_connection_flood.readiness",
+      "name": "SSH Connection Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_ssh_port",
+        "ssh_limits_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.ftp_connection_flood.readiness",
+      "name": "FTP Connection Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_ftp_port",
+        "ftp_limits_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l3.ike_ipsec_negotiation.readiness",
+      "name": "IKE / IPsec Negotiation Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "ike_rate_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.connection_hoarding.readiness",
+      "name": "Application Connection Hoarding Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "app_connection_limits_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.ping_of_death.posture",
+      "name": "Legacy Oversized-Packet Filtering Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "edge_filtering_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.teardrop.posture",
+      "name": "Overlapping-Fragment Filtering Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "fragment_validation_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.ip_options.posture",
+      "name": "IP Options Filtering Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "ip_options_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.malformed_quic.posture",
+      "name": "QUIC Parser Robustness Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "quic_edge_version_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.land_attack.posture",
+      "name": "Spoofed Same-Source Filtering Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "anti_spoofing_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "exploit.quic_migration.posture",
+      "name": "QUIC Migration Abuse Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "quic_migration_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.ssdp_exposure.safe",
+      "name": "SSDP / UPnP Reflector Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_ssdp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.snmp_exposure.safe",
+      "name": "SNMP Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_snmp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.chargen_qotd_exposure.safe",
+      "name": "CHARGEN / QOTD / Echo Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_chargen_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.mdns_netbios_wsdiscovery_exposure.safe",
+      "name": "mDNS / NetBIOS / WS-Discovery Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_mdns_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.portmap_service_exposure.safe",
+      "name": "Portmapper / RIPv1 / RPC Service Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_portmap_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.dtls_sip_rdp_tftp_exposure.safe",
+      "name": "DTLS / SIP / RDP / TFTP Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_tftp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.quic_reflection_exposure.safe",
+      "name": "QUIC Alt-Svc Advertisement Observation (Safe)",
+      "version": "1.0.0",
+      "kind": "quic_reachability",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_quic_exposure_intent"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.tcp_middlebox_exposure.safe",
+      "name": "TCP Middlebox Reflection Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_tcp_fingerprint_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.mssql_resolver_exposure.safe",
+      "name": "MSSQL Resolver Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_mssql_resolver_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.jenkins_discovery_exposure.safe",
+      "name": "Jenkins / CI Discovery Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_jenkins_discovery_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.coap_iot_exposure.safe",
+      "name": "CoAP IoT Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_coap_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.legacy_device_discovery_exposure.safe",
+      "name": "Legacy Device / Game Discovery Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_ws_discovery_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.stun_turn_exposure.safe",
+      "name": "STUN / TURN Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_stun_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.ipmi_bmc_exposure.safe",
+      "name": "IPMI / BMC Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_ipmi_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.redis_direct_exposure.safe",
+      "name": "Open Redis Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "tcp_connect",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_tcp_fingerprint_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.openvpn_wireguard_exposure.safe",
+      "name": "OpenVPN / WireGuard Responder Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_openvpn_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.ntp_exposure.safe",
+      "name": "NTP Mode Restriction Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_ntp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.cldap_exposure.safe",
+      "name": "CLDAP Exposure Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_cldap_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.memcached_exposure.safe",
+      "name": "Memcached Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_memcached_udp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.dns_any_txt_exposure.safe",
+      "name": "DNS ANY/TXT Response-Class Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.smurf_broadcast_exposure.safe",
+      "name": "Directed Broadcast Filtering Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "broadcast_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "amp.authoritative_resolver_exposure.safe",
+      "name": "Authoritative / Resolver Amplification Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone",
+        "rrl_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.laundering.readiness",
+      "name": "DNS Laundering Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone",
+        "resolver_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.garbage_flood.readiness",
+      "name": "DNS Garbage-Query Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 3,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.phantom_domain.readiness",
+      "name": "Phantom Domain Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "resolver_timeout_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.domain_lockup.readiness",
+      "name": "Domain Lock-Up Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "resolver_loop_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.nxns_attack.readiness",
+      "name": "NXNSAttack Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.dnsbomb.readiness",
+      "name": "DNSBomb Pulsing Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone",
+        "dns_telemetry_endpoint_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.qname_minimization.readiness",
+      "name": "QNAME Minimization Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "resolver_qname_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.doh_dot_exposure.readiness",
+      "name": "DoH / DoT Endpoint Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_doh_dot_endpoints"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.tcp_fallback.readiness",
+      "name": "DNS TCP Fallback Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.zone_walking.readiness",
+      "name": "DNS Zone-Walking Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_dns_zone",
+        "dnssec_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http_get_flood.validation",
+      "name": "HTTP GET Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "rps_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http_post_flood.validation",
+      "name": "HTTP POST Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_post_endpoints",
+        "post_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.slowloris.readiness",
+      "name": "Slow Header Client Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "slow_header_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "header_timeout_declaration",
+        "header_timeout_at_or_below_probe_window"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.slow_post.readiness",
+      "name": "Slow Body Client Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "body_timeout_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.slow_read.readiness",
+      "name": "Slow Read Response Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "response_timeout_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.low_and_slow.readiness",
+      "name": "Low-and-Slow Header Timeout Sample (Safe)",
+      "version": "1.0.0",
+      "kind": "slow_header_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "header_timeout_declaration",
+        "header_timeout_at_or_below_probe_window"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.large_body_post.readiness",
+      "name": "Large Body Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "body_size_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.file_upload_abuse.readiness",
+      "name": "File Upload Abuse Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_upload_endpoints",
+        "upload_limits_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.json_xml_bomb.readiness",
+      "name": "Parser Depth Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "parser_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.search_abuse.validation",
+      "name": "Search Endpoint Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_search_probe_path",
+        "search_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.export_abuse.validation",
+      "name": "Export / Report Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_export_probe_path",
+        "export_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.batch_api_abuse.validation",
+      "name": "Batch API Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_batch_endpoints",
+        "batch_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.oauth_token_abuse.validation",
+      "name": "OAuth / Token Endpoint Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_token_probe_path",
+        "token_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.checkout_abuse.validation",
+      "name": "Checkout Endpoint Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_checkout_endpoints",
+        "checkout_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.otp_sms_cost.readiness",
+      "name": "OTP / SMS Cost Guardrail Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "otp_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.signup_registration_abuse.validation",
+      "name": "Signup Endpoint Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "rate_limit_sequence",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": true,
+      "executor_mapped": true,
+      "max_probe_requests": 5,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_signup_probe_path",
+        "signup_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.elasticsearch_abuse.readiness",
+      "name": "Search-Cluster Query Cost Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "search_cluster_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.health_check_flood.readiness",
+      "name": "Health-Check Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "health_endpoint_declaration",
+        "autoscaling_guardrail_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.wordpress_xmlrpc.readiness",
+      "name": "XML-RPC Endpoint Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "http_head",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "xmlrpc_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.webhook_flood.readiness",
+      "name": "Webhook Callback Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "webhook_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http_pipelining.readiness",
+      "name": "HTTP Pipelining Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "pipelining_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http_range_abuse.readiness",
+      "name": "Range Request Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "range_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.conditional_revalidation.readiness",
+      "name": "Conditional Revalidation Cost Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "revalidation_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.captcha_challenge_abuse.readiness",
+      "name": "Challenge Endpoint Cost Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "challenge_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.mqtt_broker_exposure.readiness",
+      "name": "MQTT Broker Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "mqtt_broker_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.redos.readiness",
+      "name": "Regex Complexity Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "regex_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.graphql_batch_abuse.validation",
+      "name": "GraphQL Batch / Alias Limit Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "graphql_posture_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "graphql_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.handshake_rate.readiness",
+      "name": "TLS Handshake Rate Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "handshake_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.renegotiation.readiness",
+      "name": "TLS Renegotiation Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "tls_session",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_endpoint_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.zero_rtt.readiness",
+      "name": "TLS 0-RTT Early Data Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "early_data_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "tls.ocsp_stapling.readiness",
+      "name": "OCSP Stapling Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "tls_audit",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "tls_endpoint_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http2_rapid_reset.validation",
+      "name": "HTTP/2 Rapid Reset Mitigation Validation (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_frame_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "rapid_reset_mitigation_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http2_made_you_reset.readiness",
+      "name": "HTTP/2 MadeYouReset Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_frame_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "flow_control_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http2_continuation.readiness",
+      "name": "HTTP/2 CONTINUATION Flood Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_frame_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "header_frame_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http2_priority_abuse.readiness",
+      "name": "HTTP/2 Priority Abuse Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "priority_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.hpack_bomb.readiness",
+      "name": "HPACK Advertised Limits Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "http2_frame_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http2_enabled_endpoint",
+        "hpack_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.http2_push_promise.readiness",
+      "name": "HTTP/2 Server Push Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "push_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.qpack_bomb.readiness",
+      "name": "QPACK Compression Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "qpack_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.sse_stream.readiness",
+      "name": "SSE Stream Limit Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "sse_policy_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.http3_control_stream.readiness",
+      "name": "HTTP/3 Alt-Svc Posture Observation (Safe)",
+      "version": "1.0.0",
+      "kind": "http3_control_probe",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http3_endpoint_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "protocol.websocket_message_rate.readiness",
+      "name": "WebSocket Message Rate Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "websocket_rate_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "origin.cdn_bypass.readiness",
+      "name": "CDN Bypass Coverage Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "origin_leak_scan",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 15,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_apex_domain",
+        "declared_cdn_hostnames"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "origin.dns_hostname_bypass.readiness",
+      "name": "DNS Hostname Bypass Sample (Safe)",
+      "version": "1.0.0",
+      "kind": "origin_leak_scan",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 15,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_apex_domain",
+        "declared_hostname_inventory"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.carpet_bombing.readiness",
+      "name": "Carpet Bombing Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "scrubbing_coverage_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.pulse_wave.readiness",
+      "name": "Pulse-Wave Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "pulse_readiness_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.spoofed_source.readiness",
+      "name": "Spoofed Source Filtering Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "ingress_filtering_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.ransom_ddos.readiness",
+      "name": "Ransom DDoS Runbook Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "extortion_runbook_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.rate_limit_evasion.readiness",
+      "name": "Rate-Limit Evasion Resistance (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "aggregate_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.adaptive_evasion.readiness",
+      "name": "Adaptive Evasion Resistance (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "behavioral_detection_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "pattern.residential_proxy.readiness",
+      "name": "Residential Proxy Resistance (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "asn_reputation_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "ops.autoscaling_cost.readiness",
+      "name": "Autoscaling Cost Guardrail Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "autoscaling_budget_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "ops.attack_alert_coverage.readiness",
+      "name": "Attack Alert Coverage Readiness (Safe)",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "alert_route_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.slp_amplification_exposure.safe",
+      "name": "SLP Amplification Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_slp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.tp240_amplification_exposure.safe",
+      "name": "TP240 PhoneHome Amplification Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_tp240_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.l2tp_reflection_exposure.safe",
+      "name": "L2TP Reflection Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_l2tp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.natpmp_amplification_exposure.safe",
+      "name": "NAT-PMP Amplification Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_natpmp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "reflect.ipp_callback_exposure.safe",
+      "name": "CUPS/IPP Reflector Exposure (Safe)",
+      "version": "1.0.0",
+      "kind": "reflection_service_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 3000,
+      "required_setup": [
+        "declared_ipp_responder_host"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "dns.multi_question_oversized.safe",
+      "name": "DNS Multi-Question / Oversized Parser Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "dns_wire_query",
+      "tier": "E2",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_zone_for_parser_posture"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.http_method_policy_marker.safe",
+      "name": "WAF HTTP Method/Protocol Policy Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.request_smuggling_marker.safe",
+      "name": "WAF Request-Smuggling Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.crlf_injection_marker.safe",
+      "name": "WAF CRLF/Response-Splitting Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.open_redirect_marker.safe",
+      "name": "WAF Open-Redirect / Parameter-Policy Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.nosql_injection_marker.safe",
+      "name": "WAF NoSQL Injection Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.xpath_injection_marker.safe",
+      "name": "WAF XPath/XML Injection Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.jndi_ldap_marker.safe",
+      "name": "WAF JNDI/LDAP (Log4Shell) Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.csv_formula_marker.safe",
+      "name": "WAF CSV/Formula & Data-Channel Injection Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.prototype_pollution_marker.safe",
+      "name": "WAF Prototype-Pollution Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.deserialization_marker.safe",
+      "name": "WAF Unsafe-Deserialization Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.ssrf_marker.safe",
+      "name": "WAF SSRF Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.xxe_marker.safe",
+      "name": "WAF XXE Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.file_upload_marker.safe",
+      "name": "WAF File-Upload Signature Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.jwt_tamper_marker.safe",
+      "name": "WAF/API-Gateway JWT Tamper Marker (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.entry_path_login_marker.safe",
+      "name": "WAF Declared Login Path Marker (Safe)",
+      "version": "1.0.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": false,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe",
+        "declared_login_entry_path"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.entry_path_api_marker.safe",
+      "name": "WAF Declared API Path Marker (Safe)",
+      "version": "1.0.0",
+      "kind": "waf_class_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": false,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 8,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe",
+        "declared_api_entry_path"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_unicode_normalization.safe",
+      "name": "WAF Evasion \u2014 Unicode Normalization (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_homoglyph.safe",
+      "name": "WAF Evasion \u2014 Homoglyph (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_overlong_utf8.safe",
+      "name": "WAF Evasion \u2014 Overlong Utf8 (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_alt_charset.safe",
+      "name": "WAF Evasion \u2014 ALT Charset (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_html_entity.safe",
+      "name": "WAF Evasion \u2014 Html Entity (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_js_escape.safe",
+      "name": "WAF Evasion \u2014 JS Escape (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_json_unicode_escape.safe",
+      "name": "WAF Evasion \u2014 Json Unicode Escape (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_css_escape.safe",
+      "name": "WAF Evasion \u2014 CSS Escape (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_base64_wrap.safe",
+      "name": "WAF Evasion \u2014 Base64 Wrap (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_numeric_repr.safe",
+      "name": "WAF Evasion \u2014 Numeric Repr (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_whitespace.safe",
+      "name": "WAF Evasion \u2014 Whitespace (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_lexical_operator.safe",
+      "name": "WAF Evasion \u2014 Lexical Operator (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_lexical_tautology.safe",
+      "name": "WAF Evasion \u2014 Lexical Tautology (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_lexical_literal.safe",
+      "name": "WAF Evasion \u2014 Lexical Literal (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_control_char.safe",
+      "name": "WAF Evasion \u2014 Control Char (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_path_matrix.safe",
+      "name": "WAF Evasion \u2014 Path Matrix (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_path_suffix.safe",
+      "name": "WAF Evasion \u2014 Path Suffix (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_ip_representation.safe",
+      "name": "WAF Evasion \u2014 IP Representation (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_parser_hpp.safe",
+      "name": "WAF Evasion \u2014 Parser HPP (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_parser_json_dup.safe",
+      "name": "WAF Evasion \u2014 Parser Json DUP (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_parser_header_dup.safe",
+      "name": "WAF Evasion \u2014 Parser Header DUP (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_framing_cl_te.safe",
+      "name": "WAF Evasion \u2014 Framing CL TE (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_framing_transfer_coding.safe",
+      "name": "WAF Evasion \u2014 Framing Transfer Coding (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_framing_h2_h1.safe",
+      "name": "WAF Evasion \u2014 Framing H2 H1 (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_framing_line_ending.safe",
+      "name": "WAF Evasion \u2014 Framing Line Ending (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_framing_chunk_ext.safe",
+      "name": "WAF Evasion \u2014 Framing Chunk EXT (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_body_gzip.safe",
+      "name": "WAF Evasion \u2014 Body Gzip (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_body_nested_encoding.safe",
+      "name": "WAF Evasion \u2014 Body Nested Encoding (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_content_type_binary.safe",
+      "name": "WAF Evasion \u2014 Content Type Binary (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_struct_type_confusion.safe",
+      "name": "WAF Evasion \u2014 Struct Type Confusion (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_struct_deep_nesting.safe",
+      "name": "WAF Evasion \u2014 Struct Deep Nesting (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_parameter_location.safe",
+      "name": "WAF Evasion \u2014 Parameter Location (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_method_override.safe",
+      "name": "WAF Evasion \u2014 Method Override (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_protocol_version.safe",
+      "name": "WAF Evasion \u2014 Protocol Version (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_protocol_upgrade.safe",
+      "name": "WAF Evasion \u2014 Protocol Upgrade (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_benign_padding.safe",
+      "name": "WAF Evasion \u2014 Benign Padding (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_polyglot_content.safe",
+      "name": "WAF Evasion \u2014 Polyglot Content (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_protocol_h3_h1.safe",
+      "name": "WAF Evasion \u2014 Protocol H3 H1 (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_protocol_qpack_hpack.safe",
+      "name": "WAF Evasion \u2014 Protocol Qpack Hpack (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_multipart_charset.safe",
+      "name": "WAF Evasion \u2014 Multipart Charset (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_xml_attribute.safe",
+      "name": "WAF Evasion \u2014 XML Attribute (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_evasion_marker_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 4,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.inspection_limit.safe",
+      "name": "WAF Inspection-Limit / Fail-Open (Safe)",
+      "version": "1.1.0",
+      "kind": "waf_inspection_limit_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 6,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "customer_approves_waf_marker_probe"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_cache_key_mismatch.posture",
+      "name": "WAF Evasion Posture \u2014 Cache-key / routing mismatch",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_cache_key_normalization"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_reassembly_differential.posture",
+      "name": "WAF Evasion Posture \u2014 IP fragmentation / TCP segmentation differential",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_edge_reassembly_policy"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_rule_gap.posture",
+      "name": "WAF Evasion Posture \u2014 Zero-day / rule-gap evasion",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_managed_ruleset"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_second_order.posture",
+      "name": "WAF Evasion Posture \u2014 Stored / deferred second-order payload",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_stored_content_inspection"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_encrypted_payload.posture",
+      "name": "WAF Evasion Posture \u2014 Application-layer encrypted / opaque payload",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_app_layer_decryption"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_signed_structured_data.posture",
+      "name": "WAF Evasion Posture \u2014 Signed but malicious structured data",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_schema_signature_validation"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_connection_coalescing.posture",
+      "name": "WAF Evasion Posture \u2014 Connection coalescing identity confusion",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_per_host_policy"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.evasion_ech_routing_metadata.posture",
+      "name": "WAF Evasion Posture \u2014 Encrypted ClientHello / hidden routing-metadata gap",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_ech_sni_inspection"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.compressed_request_decompression.posture",
+      "name": "Compressed Request Decompression Acceptance Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "l7_resource_posture_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 2,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http_endpoint",
+        "decompression_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "l7.request_parser_size.posture",
+      "name": "Request URI / Parameter Size Limit Posture (Safe)",
+      "version": "1.0.0",
+      "kind": "l7_resource_posture_probe",
+      "tier": "E3",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "http_endpoint",
+        "request_size_limit_declaration"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.http_routing_trust.posture",
+      "name": "WAF HTTP Routing & Proxy-Trust Posture",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_proxy_trust_boundary"
+      ],
+      "actual_worker_executor": "mapped"
+    },
+    {
+      "check_id": "waf.jsonp_css_policy.posture",
+      "name": "WAF JSONP & CSS-Injection Policy Posture",
+      "version": "1.0.0",
+      "kind": "metadata_marker",
+      "tier": "E1",
+      "customer_runnable": true,
+      "kind_compatible": true,
+      "additional_input": false,
+      "executor_mapped": true,
+      "max_probe_requests": 1,
+      "timeout_ms": 5000,
+      "required_setup": [
+        "declared_waf_asset",
+        "declared_content_security_policy"
+      ],
+      "actual_worker_executor": "mapped"
+    }
+  ]
+}

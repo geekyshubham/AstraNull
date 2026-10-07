@@ -39,7 +39,7 @@ test('scan console uses real audit and worker metadata, with no synthesized chec
   assert.equal(logs.some((item) => item.latencyMs != null), false);
 });
 
-test('check probe logs tag unblocked origin responses as EXPOSED with danger tone and clear gap outcome', () => {
+test('check probe logs keep raw connected responses neutral and display the published gap separately', () => {
   const exposedRow = {
     runId: 'run_waf_1',
     checkId: 'l7.waf_marker_rule.safe',
@@ -76,12 +76,10 @@ test('check probe logs tag unblocked origin responses as EXPOSED with danger ton
   assert.equal(logs[0].tag, 'STATE');
   assert.match(logs[0].message, /Run recorded.*WAF Marker Rule/);
 
-  // Line 2: Probe result — MUST NOT be a misleading green RECV
-  assert.equal(logs[1].tag, 'EXPOSED');
-  assert.equal(logs[1].tone, 'danger');
-  assert.equal(logs[1].level, 'warn');
-  assert.match(logs[1].message, /reached origin.*connected.*HTTP 200/);
-  assert.match(logs[1].message, /traffic reached origin; edge did not block/);
+  assert.equal(logs[1].tag, 'RECV');
+  assert.equal(logs[1].tone, 'info');
+  assert.match(logs[1].message, /Worker result recorded: connected.*HTTP 200/);
+  assert.doesNotMatch(logs[1].message, /reached origin|edge did not block/);
 
   // Line 3: Outcome verdict — MUST NOT be a generic state line
   assert.equal(logs[2].tag, 'GAP');
@@ -91,7 +89,7 @@ test('check probe logs tag unblocked origin responses as EXPOSED with danger ton
   assert.match(logs[2].message, /External probe reached the declared path/);
 });
 
-test('check probe logs tag blocked responses as BLOCKED with success tone for must_block_before_origin', () => {
+test('check probe logs keep raw blocked responses neutral and display the published pass separately', () => {
   const protectedRow = {
     runId: 'run_waf_2',
     checkId: 'l7.waf_marker_rule.safe',
@@ -119,15 +117,15 @@ test('check probe logs tag blocked responses as BLOCKED with success tone for mu
   ];
 
   const logs = generateCheckProbeLogs(protectedRow, 'astranull.site', events);
-  assert.equal(logs[1].tag, 'BLOCKED');
-  assert.equal(logs[1].tone, 'success');
-  assert.match(logs[1].message, /blocked at edge.*blocked.*HTTP 403/);
+  assert.equal(logs[1].tag, 'RECV');
+  assert.equal(logs[1].tone, 'info');
+  assert.match(logs[1].message, /Worker result recorded: blocked.*HTTP 403/);
   assert.equal(logs[2].tag, 'PASS');
   assert.equal(logs[2].tone, 'success');
   assert.match(logs[2].message, /Check outcome: Passed · edge_protected/);
 });
 
-test('check probe logs synthesize probe response from row.response if runEvents is empty', () => {
+test('check probe logs show recorded probe response from row.response if runEvents is empty', () => {
   const rowWithResponse = {
     runId: 'run_scan_step_1',
     checkId: 'l7.waf_marker_rule.safe',
@@ -146,8 +144,22 @@ test('check probe logs synthesize probe response from row.response if runEvents 
 
   const logs = generateCheckProbeLogs(rowWithResponse, 'astranull.site', []);
   assert.equal(logs.length, 3);
-  assert.equal(logs[1].tag, 'EXPOSED');
-  assert.equal(logs[1].tone, 'danger');
-  assert.match(logs[1].message, /Worker probe reached origin: connected · HTTP 200/);
+  assert.equal(logs[1].tag, 'RECV');
+  assert.equal(logs[1].tone, 'info');
+  assert.match(logs[1].message, /Worker result recorded: connected · HTTP 200/);
 });
 
+
+test('a received activity event does not suppress the recorded final observation result', () => {
+  const observed = { ...row, status: 'observed', verdict: 'inconclusive', expectedBehavior: 'must_block_before_origin', finishedAt: at,
+    response: { external_result: 'connected', status_code: 200 } };
+  const events = [{ id: 'received', test_run_id: row.runId, check_id: row.checkId, producer_kind: 'signed_probe', signal_type: 'probe_activity', timestamp: at,
+    metadata: { activity: { stage: 'response_received', status_code: 200 } } }];
+  const logs = generateCheckProbeLogs(observed, 'owned.test', events);
+  assert.equal(logs.length, 3);
+  assert.equal(logs.filter((log) => /Worker result recorded/.test(log.message)).length, 1);
+  assert.ok(logs.some((log) => log.tag === 'OBSERVED'));
+  assert.ok(logs.every((log) => log.tag !== 'EXPOSED' && !/reached origin/.test(log.message)));
+  const resultEvent = { ...events[0], id: 'final', signal_type: 'probe_result', metadata: { external_result: 'connected' } };
+  assert.equal(generateCheckProbeLogs(observed, 'owned.test', [...events, resultEvent]).filter((log) => /Worker result recorded/.test(log.message)).length, 1);
+});

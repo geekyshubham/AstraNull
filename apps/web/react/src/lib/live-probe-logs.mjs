@@ -71,81 +71,19 @@ function activityLog(id, at, data, row) {
 function formatProbeResultEntry(eventId, at, metadata, producerKind, row) {
   const simulated = producerKind === 'internal_simulation';
   const extResult = safeText(metadata?.external_result);
-  const extKey = extResult.toLowerCase();
   const statusCode = Number.isInteger(metadata?.status_code) ? metadata.status_code : null;
   const statusStr = statusCode !== null ? ` · HTTP ${statusCode}` : '';
   const count = metadata?.safety_attestation?.requests_sent;
-
-  // Expected behavior: must_block_before_origin vs must_reach_canary
-  const isBlockExpected =
-    row?.expectedBehavior === 'must_block_before_origin' ||
-    row?.verdict === 'edge_exposed' ||
-    row?.verdict === 'edge_protected';
-  const isCanaryExpected = row?.expectedBehavior === 'must_reach_canary';
-
-  // Determine if this result represents an unblocked exposure (a security gap)
-  const isExposure =
-    (isBlockExpected && extKey === 'connected') ||
-    row?.status === 'failed' ||
-    row?.verdict === 'edge_exposed' ||
-    row?.verdict === 'bypassable';
-
-  // Determine if this result represents a successful block
-  const isBlockSuccess =
-    (isBlockExpected && extKey === 'blocked') ||
-    (row?.status === 'passed' && extKey === 'blocked') ||
-    row?.verdict === 'edge_protected';
-
-  // Determine if canary reached as expected
-  const isCanarySuccess =
-    (isCanaryExpected && extKey === 'connected') ||
-    (row?.status === 'passed' && isCanaryExpected);
-
-  let tag = simulated ? 'SIMULATION' : 'RECV';
-  let level = 'recv';
-  let tone = undefined;
-  let summary = '';
-  let note = '';
-
-  if (simulated) {
-    tag = 'SIMULATION';
-    tone = 'info';
-    summary = `Simulation result; no target traffic${extResult ? `: ${extResult}` : ''}${statusStr}`;
-  } else if (isExposure) {
-    tag = 'EXPOSED';
-    tone = 'danger';
-    level = 'warn';
-    summary = `Worker probe reached origin: ${extResult || 'connected'}${statusStr}`;
-    note = ' (traffic reached origin; edge did not block)';
-  } else if (isBlockSuccess) {
-    tag = 'BLOCKED';
-    tone = 'success';
-    summary = `Worker probe blocked at edge: ${extResult || 'blocked'}${statusStr}`;
-    note = ' (blocked at edge as expected)';
-  } else if (isCanarySuccess) {
-    tag = 'PASS';
-    tone = 'success';
-    summary = `Worker probe reached canary: ${extResult || 'connected'}${statusStr}`;
-    note = ' (canary reached as expected)';
-  } else {
-    tag = 'RECV';
-    tone = 'info';
-    summary = `Worker result recorded${extResult ? `: ${extResult}` : ''}${statusStr}`;
-  }
-
-  return entry(
-    safeText(eventId),
-    at,
-    level,
-    tag,
-    `${summary}${note}`,
-    {
+  // Transport results do not establish an origin bypass or enforcement location.
+  // Only the separately published verdict supplies a protection outcome.
+  const summary = simulated ? 'Simulation result; no target traffic' : 'Worker result recorded';
+  return entry(safeText(eventId), at, 'recv', simulated ? 'SIMULATION' : 'RECV',
+    `${summary}${extResult ? `: ${extResult}` : ''}${statusStr}`, {
       checkId: row?.checkId,
-      tone,
+      tone: 'info',
       ...(statusCode !== null ? { statusCode } : {}),
       ...(Number.isInteger(count) ? { requestsSent: count } : {}),
-    }
-  );
+    });
 }
 
 function formatVerdictEntry(id, at, row) {
@@ -215,6 +153,7 @@ export function generateCheckProbeLogs(row, _targetValue = 'target', runEvents =
     );
   }
 
+  let hasProbeResult = false;
   for (const event of Array.isArray(runEvents) ? runEvents : []) {
     if (!row.runId || event.test_run_id !== row.runId || event.check_id !== row.checkId) continue;
     const at = safeText(event.timestamp);
@@ -234,6 +173,7 @@ export function generateCheckProbeLogs(row, _targetValue = 'target', runEvents =
       event.signal_type === 'probe_result' &&
       ['signed_probe', 'internal_simulation'].includes(event.producer_kind)
     ) {
+      hasProbeResult = true;
       result.push(
         formatProbeResultEntry(
           event.id,
@@ -246,10 +186,7 @@ export function generateCheckProbeLogs(row, _targetValue = 'target', runEvents =
     }
   }
 
-  // Synthesize probe result from row.response if not already captured from runEvents
-  const hasProbeResult = result.some((e) =>
-    ['RECV', 'EXPOSED', 'BLOCKED', 'PASS', 'SIMULATION'].includes(e.tag)
-  );
+  // Show the recorded result snapshot when no trusted result event was included.
   if (!hasProbeResult && row.response && (row.response.external_result || row.response.status_code)) {
     const probeAt =
       safeText(row.response.received_at) ||

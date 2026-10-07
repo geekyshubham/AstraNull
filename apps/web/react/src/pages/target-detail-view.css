@@ -505,7 +505,7 @@
   font-family: var(--font-mono);
   font-size: 11px;
   width: 110px;
-  transition: width var(--motion-fast) var(--ease-out-soft), border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
+  transition: border-color var(--motion-fast) var(--ease-out-soft), box-shadow var(--motion-fast) var(--ease-out-soft);
 }
 .target-detail-view .td-terminal-search input::placeholder,
 .td-terminal .td-terminal-search input::placeholder {
@@ -1062,5 +1062,4 @@
   align-items: center;
   gap: var(--space-2);
 }
-
 

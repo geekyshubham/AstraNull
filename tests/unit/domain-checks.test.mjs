@@ -15,6 +15,7 @@ import {
   rowProgress,
   retainedCoveragePairs,
   runAllChecks,
+  individualChecks,
   shouldAutoDetectEdge,
 } from '../../apps/web/react/src/lib/domain-checks.mjs';
 
@@ -41,9 +42,9 @@ function row(rows, id) {
 describe('run-all check set for a domain', () => {
   const runAll = runAllChecks(CATALOG, DOMAIN);
 
-  it('runs the fingerprint first, origin next, and never declaration-only or SOC-gated checks', () => {
-    assert.equal(runAll[0].check_id, EDGE_DETECTION_CHECK_ID);
-    assert.equal(runAll[1].vector_family, 'origin');
+  it('runs origin first and keeps provider-only detection outside readiness checks', () => {
+    assert.ok(!runAll.some((check) => check.check_id === EDGE_DETECTION_CHECK_ID));
+    assert.equal(runAll[0].vector_family, 'origin');
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'metadata_marker'));
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E2'));
     assert.ok(runAll.every((check) => check.probe_profile?.kind !== 'ops_readiness'));
@@ -194,6 +195,10 @@ describe('edge evidence and detection phase', () => {
     assert.equal(edgeDetectionPhase({ eligible: true, edge: null, request: { run_status: 'collecting' } }), 'evaluating');
     assert.equal(edgeDetectionPhase({ eligible: true, edge: null, request: { run_status: 'completed' } }), 'no_result');
     assert.equal(edgeDetectionPhase({ eligible: true, edge: { status: 'detected' } }), 'detected');
+    assert.equal(edgeDetectionPhase({ eligible: true, edge: { status: 'detected' }, localRequest: 'pending' }), 'evaluating');
+    assert.equal(edgeDetectionPhase({ eligible: true, edge: { status: 'detected' }, request: { run_status: 'collecting' } }), 'evaluating');
+    assert.equal(edgeDetectionPhase({ eligible: true, edge: { status: 'detected' }, localRequest: 'blocked' }), 'waiting');
+    assert.equal(edgeDetectionPhase({ eligible: true, edge: { status: 'detected' }, localRequest: 'error' }), 'error');
     const base = { eligible: true, featureEnabled: true, canRun: true, edge: null, request: null, scanActive: false, attempted: false, hasPriorRuns: false };
     assert.equal(shouldAutoDetectEdge(base), true);
     assert.equal(shouldAutoDetectEdge({ ...base, eligible: false }), false);
@@ -202,4 +207,15 @@ describe('edge evidence and detection phase', () => {
     assert.equal(shouldAutoDetectEdge({ ...base, attempted: true }), false);
     assert.equal(shouldAutoDetectEdge({ ...base, hasPriorRuns: true }), false, 'only freshly onboarded domains auto-detect');
   });
+});
+
+it('individual selection retains compatible observations without adding them to readiness scans', () => {
+  const checks = individualChecks(CATALOG, DOMAIN);
+  assert.ok(checks.some((check) => check.check_id === EDGE_DETECTION_CHECK_ID));
+  assert.ok(checks.some((check) => check.evidence_tier === 'E2'));
+  assert.ok(checks.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'ops_readiness'));
+  assert.ok(checks.every((check) => check.safety_class === 'safe' && check.risk_class !== 'soc_gated'));
+  assert.ok(checks.every((check) => (check.supported_targets ?? []).includes('fqdn')));
+  assert.equal(new Set(checks.map((check) => check.check_id)).size, checks.length);
+  assert.ok(runAllChecks(CATALOG, DOMAIN).every((check) => checks.includes(check)));
 });

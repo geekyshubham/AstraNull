@@ -38,7 +38,7 @@ export const WORKER_EXECUTED_KIND_BY_DECLARED_KIND = Object.freeze(
     'dnssec_posture', 'dns_open_recursion', 'dns_failover_posture', 'dns_axfr_leak',
     'tls_audit', 'cache_abuse_probe', 'api_surface_scan', 'cors_posture_probe',
     'bot_challenge_probe', 'graphql_posture_probe', 'websocket_upgrade_posture',
-    'outside_in_waf_scan', 'grpc_reflection_probe', 'reflection_service_probe',
+    'outside_in_waf_scan', 'waf_fingerprint_observation', 'grpc_reflection_probe', 'reflection_service_probe',
     'dns_wire_query', 'http_method_matrix', 'header_size_probe', 'slow_header_probe',
     'http2_frame_probe', 'http3_control_probe', 'waf_inspection_limit_probe',
     'waf_class_marker_probe', 'waf_evasion_marker_probe', 'l7_resource_posture_probe',

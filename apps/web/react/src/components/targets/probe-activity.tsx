@@ -50,7 +50,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [expanded, setExpanded] = useState<string | null>(null);
-  useEffect(() => { setSnapshot(null); setError(''); setExpanded(null); }, [runId]);
+  useEffect(() => { setSnapshot(null); setError(''); setExpanded(null); setPaused(false); }, [runId]);
   useEffect(() => {
     if (!runId || paused) return undefined;
     const controller = new AbortController();
@@ -59,7 +59,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
     const poll = async () => {
       let active = running;
       try {
-        const data = await requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/activity?limit=200`, { signal: controller.signal }) as DataItem;
+        const data = await requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/activity?limit=256`, { signal: controller.signal }) as DataItem;
         if (controller.signal.aborted) return;
         setSnapshot(data); setError(''); failures = 0;
         active = ['running', 'collecting', 'planned'].includes(text(data.status));
@@ -75,7 +75,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
   }, [config, session, runId, running, paused]);
   const items = useMemo(() => (Array.isArray(snapshot?.items) ? snapshot.items as DataItem[] : notSent ? [{ id: 'scan-decision', stage: 'request_not_sent', source: 'scan_state', reason: notSent.reason, at: notSent.at } as DataItem] : [])
     .filter((item) => filter === 'all' || severity(item) === filter)
-    .filter((item) => !search.trim() || [item.operation, item.method, item.url, item.stage, item.status_code, item.error_class, item.reason].join(' ').toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((item) => !search.trim() || [item.operation, item.method, item.url, item.stage, item.status_code, item.error_class, item.reason, item.vector_family, item.marker_class, item.phase, item.request_content_type, item.response_content_type].join(' ').toLowerCase().includes(search.trim().toLowerCase()))
     .slice().reverse(), [snapshot, filter, search, notSent]);
   return (
     <section className="probe-activity" aria-labelledby="probe-activity-title">
@@ -121,7 +121,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
           </tbody>
         </table>
       </div>
-      <p className="probe-activity-note">{snapshot?.truncated ? 'Showing the latest 200 events. ' : ''}Expand an event for the method, vector, format, status and captured payload. Previews retain up to 2 KiB; credentials and declared private query values are redacted. Non-HTTP checks show their recorded protocol fields.</p>
+      <p className="probe-activity-note">{snapshot?.truncated ? `Showing the latest ${String(snapshot.count)} events. ` : ''}Expand an event for the method, vector, format, status and captured payload. Previews retain up to 2 KiB; credentials and declared private query values are redacted. Non-HTTP checks show their recorded protocol fields.</p>
     </section>
   );
 }

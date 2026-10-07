@@ -363,8 +363,8 @@ describe('probe worker safety accounting', () => {
     });
 
     assert.equal(verifyProbeJobSignature(signedJob, WORKER_SECRET), true);
-    assert.equal(signedJob.probe_profile.kind, 'outside_in_waf_scan');
-    assert.equal(signedJob.probe_profile.max_requests, 16);
+    assert.equal(signedJob.probe_profile.kind, 'waf_fingerprint_observation');
+    assert.equal(signedJob.probe_profile.max_requests, 4);
     assert.equal(signedJob.probe_profile.follow_redirects, false);
     assert.equal(signedJob.probe_profile.collect.includes('dns_chain_hint'), false);
     assert.equal(signedJob.probe_profile.collect.includes('tls_fingerprint_hint'), false);
@@ -373,9 +373,9 @@ describe('probe worker safety accounting', () => {
       max_destination_resolver_attempts: signedJob.constraints.max_destination_resolver_attempts,
       max_total_operations: signedJob.constraints.max_total_operations,
     }, {
-      max_probe_requests: 16,
+      max_probe_requests: 4,
       max_destination_resolver_attempts: 2,
-      max_total_operations: 18,
+      max_total_operations: 6,
     });
 
     const calls = {
@@ -445,7 +445,7 @@ describe('probe worker safety accounting', () => {
     assert.deepEqual(calls, {
       destinationA: 1,
       destinationAAAA: 1,
-      http: 12,
+      http: 1,
       cnameLookup: 2,
       cnameHint: 0,
       addressHintA: 0,
@@ -461,19 +461,22 @@ describe('probe worker safety accounting', () => {
     }
     const actualInitializerCalls = Object.values(calls)
       .reduce((total, count) => total + count, 0);
-    assert.equal(actualInitializerCalls, 16);
+    assert.equal(actualInitializerCalls, 5);
     assert.deepEqual({
       requests_sent: body.safety_attestation.requests_sent,
       probe_requests_sent: body.safety_attestation.probe_requests_sent,
       destination_resolver_attempts: body.safety_attestation.destination_resolver_attempts,
       total_operations: body.safety_attestation.total_operations,
     }, {
-      requests_sent: 16,
-      probe_requests_sent: 14,
+      requests_sent: 5,
+      probe_requests_sent: 3,
       destination_resolver_attempts: 2,
-      total_operations: 16,
+      total_operations: 5,
     });
     assert.equal(actualInitializerCalls, body.safety_attestation.total_operations);
+    assert.ok(httpOptions.every((entry) => entry.method === 'GET' && entry.path === '/signed-path'));
+    assert.deepEqual(body.metadata.marker_probes, []);
+    assert.equal(body.external_result, 'connected');
     assert.equal(body.metadata.network_hints_collected, false);
     assert.equal(body.metadata.redirect_following_enabled, false);
     assert.deepEqual(body.metadata.dns_cname_chain, [
@@ -1829,7 +1832,7 @@ describe('executeProbeForJob routing', () => {
     { kind: 'port_scan_bounded', check_id: 'l3.firewall_exposure_scan.safe', vector_family: 'l3_l4' },
     { kind: 'rate_limit_sequence', check_id: 'l7.low_rate_rate_limit.safe', vector_family: 'l7' },
     { kind: 'waf_enforcement_probe', check_id: 'waf.enforcement.safe', vector_family: 'waf' },
-    { kind: 'outside_in_waf_scan', check_id: 'waf.fingerprint.safe', vector_family: 'waf' },
+    { kind: 'waf_fingerprint_observation', check_id: 'waf.fingerprint.safe', vector_family: 'waf' },
     { kind: 'dnssec_posture', check_id: 'dns.dnssec_expensive_query.safe', vector_family: 'dns' },
     { kind: 'dns_open_recursion', check_id: 'dns.open_recursion_behavior.safe', vector_family: 'dns' },
     { kind: 'dns_failover_posture', check_id: 'dns.secondary_failover.safe', vector_family: 'dns' },

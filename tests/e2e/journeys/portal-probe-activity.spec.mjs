@@ -86,6 +86,45 @@ test('a read-only viewer can inspect logs but has no Stop controls', async ({ pa
   await expect(page.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
 });
 
+test('an unrun selection does not hide an active provider observation from the live window', async ({ page }) => {
+  await fixture(page);
+  await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': TARGET } });
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=l7.cors_posture.safe`);
+  await expect(page.locator('.probe-activity')).toContainText('HTTP 418');
+  await expect(page.locator('.probe-activity')).toContainText('WAF and CDN Fingerprint');
+  await expect(page.getByRole('button', { name: 'Stop current check', exact: true })).toBeVisible();
+});
+
+test('the selected provider observation shows real request logs and no invented sent count', async ({ page }) => {
+  await fixture(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`);
+  const selected = page.locator('.td-check[data-selected=true]');
+  await expect(selected).toContainText('Request count not recorded yet');
+  await expect(selected).not.toContainText('13/16');
+  await expect(selected).toContainText('HTTP 418');
+  await expect(selected).toContainText('outside_request_budget');
+  await expect(selected).not.toContainText('reached origin');
+});
+
+test('a pause on an older run cannot leave the next active run with an empty live window', async ({ page }) => {
+  await fixture(page);
+  const panel = page.locator('.probe-activity');
+  await expect(panel).toContainText('HTTP 418');
+  await panel.getByRole('button', { name: 'Pause updates' }).click();
+  await expect(panel).toContainText('Updates paused');
+  const next = 'run_next_activity';
+  await page.route('**/v1/test-runs?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('target_id') !== TARGET) return route.fallback();
+    await route.fulfill({ json: { items: [{ id: next, target_id: TARGET, check_id: CHECK, status: 'collecting', created_at: new Date().toISOString() }], count: 1 } });
+  });
+  await page.route(`**/v1/test-runs/${next}/activity?*`, (route) => route.fulfill({ json: {
+    run_id: next, check_id: CHECK, target_id: TARGET, status: 'collecting', telemetry_recorded: true,
+    items: [{ id: 'next_log', stage: 'request_started', method: 'GET', phase: 'replacement', at: AT, source: 'signed_worker' }], count: 1,
+  } }));
+  await expect(panel).toContainText('replacement', { timeout: 12000 });
+  await expect(panel.getByRole('button', { name: 'Pause updates' })).toBeVisible();
+});
+
 for (const width of [375, 768, 1024, 1440]) {
   for (const theme of ['dark', 'light']) {
     test(`activity table stays accessible and contained at ${width}px in ${theme}`, async ({ page }) => {

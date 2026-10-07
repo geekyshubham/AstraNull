@@ -1900,7 +1900,10 @@ export async function probeWafInspectionLimit(job, deps = {}) {
  * Outside-in WAF scanner: fingerprint, benign class markers, optional origin bypass, posture report.
  */
 export async function probeOutsideInWafScan(job, deps = {}) {
-  const kind = 'outside_in_waf_scan';
+  const fingerprintOnly = job.probe_profile?.kind === 'waf_fingerprint_observation';
+  const kind = fingerprintOnly ? 'waf_fingerprint_observation' : 'outside_in_waf_scan';
+  const budgetFailure = mandatoryBudgetFailure(job, kind);
+  if (budgetFailure) return budgetFailure;
   const targetValue = String(job.target?.value ?? '').trim();
   const url = targetValue.startsWith('http') ? targetValue : baseUrlForHost(apexDomain(job) ?? '');
   if (!url) {
@@ -1936,7 +1939,8 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     vettedAddresses: primaryDestination.addresses,
   };
 
-  const { hostname, directIp } = resolveHostSniTargets(job);
+  const { hostname, directIp: declaredDirectIp } = resolveHostSniTargets(job);
+  const directIp = fingerprintOnly ? null : declaredDirectIp;
   let pinnedDirectIp = null;
   if (directIp) {
     const directDestination = await vetProbeDestinationHost(directIp, primaryDeps);
@@ -1958,11 +1962,11 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     pinnedDirectIp = directDestination.addresses[0];
   }
   const totalBudget = resolveProbeRequestBudget(job);
-  const cnameHopBudget = Math.max(0, Math.min(OUTSIDE_IN_CNAME_HOPS_MAX, totalBudget - OUTSIDE_IN_SCAN_DEFAULT_BUDGET));
+  const cnameHopBudget = Math.max(0, Math.min(OUTSIDE_IN_CNAME_HOPS_MAX, totalBudget - (fingerprintOnly ? 1 : OUTSIDE_IN_SCAN_DEFAULT_BUDGET)));
   const cnameResult = net.isIP(primaryHost ?? '') === 0 && cnameHopBudget > 0
     ? await resolveCnameChain(primaryHost, primaryDeps, cnameHopBudget)
     : { chain: [], lookups: 0 };
-  const budget = totalBudget - cnameResult.lookups;
+  const budget = fingerprintOnly ? 1 : totalBudget - cnameResult.lookups;
   const rawFetch = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, primaryDeps));
   const deadlineFetch = async (input, init = {}) => {
     const { res, error } = await boundedFetch(input, {
@@ -1979,13 +1983,14 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     resolvedIps: primaryDestination.addresses,
     cnameChain: cnameResult.chain,
     budget,
+    fingerprintOnly,
     timeoutMs: remainingProbeTimeoutMs(job, deps),
     // Signed outside-in jobs authorize only the statically planned, pre-reserved HTTP probes.
     // Legacy profiles may still carry hint/redirect fields, but raw CNAME/A/AAAA/TLS collectors
     // and redirect expansion remain disabled until each operation has its own signed accounting.
     followRedirects: false,
     collectNetworkHints: false,
-    wafRequired: job.probe_profile?.waf_required !== false,
+    wafRequired: fingerprintOnly ? false : job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
     fetchFn: deadlineFetch,
     onPhase: (entry) => deps.onProbeActivity?.({ stage: 'phase_completed', operation: entry.phase,
@@ -2028,7 +2033,9 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     };
   }
 
-  const external = ['blocked', 'connected', 'timeout', 'error', 'not_run']
+  const external = fingerprintOnly && !scan.error_class && Number(scan.baseline_status_code) >= 100
+    ? 'connected'
+    : ['blocked', 'connected', 'timeout', 'error', 'not_run']
     .includes(scan.external_result)
     ? scan.external_result
     : scan.error_class ? 'error' : 'not_run';
@@ -3114,6 +3121,7 @@ export async function probeDelegatedL7ResourcePosture(job, deps = {}) {
 }
 
 export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
+  waf_fingerprint_observation: probeOutsideInWafScan,
   outside_in_waf_scan: probeOutsideInWafScan,
   origin_leak_scan: probeOriginLeakScan,
   host_sni_bypass: probeHostSniBypass,
