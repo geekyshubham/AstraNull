@@ -1676,7 +1676,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Tenant-scoped detection_request."
+            "description": "Tenant-scoped run status and recorded detection. Fingerprint v2.1.0 can preserve typed DNS provider evidence on a deadline: overall inconclusive, supported CDN/cloud detected, WAF unknown, effectiveness untested."
           },
           "404": {
             "description": "No visible detection request or feature unavailable."

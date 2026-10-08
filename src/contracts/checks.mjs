@@ -740,7 +740,7 @@ export const CHECK_CATALOG = [
   }),
   safeCheck({
     check_id: 'waf.fingerprint.safe',
-    version: '2.0.0',
+    version: '2.1.0',
     name: 'WAF and CDN Fingerprint (Safe)',
     vector_family: 'waf',
     description:

@@ -1,0 +1,57 @@
+import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { startPortalPlaywrightServer, stopPortalPlaywrightServer, getPortalPlaywrightBaseUrl } from '../../helpers/portal-playwright-server.mjs';
+import { injectPortalDevHeadersSession, gotoPortalRoute, waitForPortalRouteSettled } from '../../helpers/portal-playwright-session.mjs';
+import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+
+let sourceCalls = 0;
+test.beforeEach(async () => {
+  await startPortalPlaywrightServer({
+    env: { ASTRANULL_VIRUSTOTAL_API_KEY: 'fixture-key' },
+    services: { subdomainFetch: async (url) => {
+      sourceCalls += 1;
+      const domain = decodeURIComponent(new URL(url).pathname.split('/').at(-2));
+      return { status: 200, json: async () => ({ data: [{ id: `api.${domain}` }] }) };
+    } },
+    mutate: (store) => {
+      const parent = store.targets.find((target) => target.id === PORTAL_BASELINE_IDS.targetId);
+      store.targetVerifications.push({ id: 'tv_subdomains', tenant_id: parent.tenant_id, target_id: parent.id,
+        state: 'dns_verified', source_kind: 'dns_txt', transitioned_at: new Date(Date.now() + 1000).toISOString() });
+    },
+  });
+});
+test.afterEach(() => stopPortalPlaywrightServer());
+
+for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
+  test(`target subdomains review, import and bounded detection (${theme}, ${width}px)`, async ({ page }) => {
+    const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.setViewportSize({ width, height: 1000 });
+    await injectPortalDevHeadersSession(page, { mode: 'dev-headers', principal: 'customer',
+      tenant_id: PORTAL_BASELINE_IDS.tenantId, user_id: 'usr_admin', role: 'admin' });
+    await page.addInitScript((value) => localStorage.setItem('astranull.theme', value), theme);
+    await gotoPortalRoute(page, `target-detail?id=${PORTAL_BASELINE_IDS.targetId}&tab=subdomains`, getPortalPlaywrightBaseUrl());
+    await waitForPortalRouteSettled(page);
+    await expect(page.getByRole('tab', { name: 'Subdomains' })).toHaveAttribute('aria-selected', 'true');
+    const panel = page.locator('#td-panel-subdomains');
+    await expect(panel.getByRole('button', { name: 'Discover and add subdomains' })).toBeEnabled();
+    const before = sourceCalls;
+    await panel.getByRole('button', { name: 'Discover and add subdomains' }).click();
+    await expect(page.getByRole('dialog')).toContainText('No external detection starts until you review');
+    await page.getByRole('dialog').getByRole('button', { name: 'Discover and add', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('Added');
+    await expect(panel.locator('tbody')).toContainText('api.');
+    expect(sourceCalls).toBe(before + 1);
+    await expect(panel.locator('tbody')).toContainText('Verified through parent');
+    await expect(panel.locator('tbody')).not.toContainText(/Protected|Exposed/);
+    await panel.getByRole('button', { name: 'Detect unchecked hosts' }).click();
+    await expect(page.getByRole('dialog')).toContainText('own ownership, signed-worker, rate and safety checks');
+    await page.getByRole('dialog').getByRole('button', { name: 'Start bounded detection' }).click();
+    await expect(panel.getByRole('status').first()).toContainText('Queued 1');
+    await expect(panel.locator('tbody a').first()).toHaveAttribute('href', /target-detail\?id=/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+    const axe = await new AxeBuilder({ page }).include('#td-panel-subdomains').analyze();
+    expect(axe.violations).toEqual([]);
+    await page.screenshot({ path: `/tmp/astranull-subdomains-${theme}-${width}.png`, fullPage: true });
+  });
+}

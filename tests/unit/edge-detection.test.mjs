@@ -291,7 +291,7 @@ describe('edge-detection service delegation', () => {
     assert.equal(presenceOnly.status, 'detected');
     assert.equal(presenceOnly.detection.waf.status, 'detected');
     assert.equal(presenceOnly.detection.effectiveness.status, 'inconclusive');
-    assert.equal(presenceOnly.detection.protection.status, 'inconclusive');
+    assert.equal(presenceOnly.detection.protection.status, 'detected_only');
 
     service.getRunEvents = async () => [trustedEdgeEvent(run.id, {
       metadata: {
@@ -308,6 +308,24 @@ describe('edge-detection service delegation', () => {
     assert.equal(timeout.status, 'error');
     assert.equal(timeout.reason, 'worker_result_error');
     assert.equal(timeout.detection, null);
+  });
+
+  it('exposes trusted partial DNS provider observations while HTTP timeout stays inconclusive', async () => {
+    const run = edgeRun({ status: 'completed' });
+    const result = await getEdgeDetection({ tenantId: 'ten_demo' }, run.id, {
+      runtimeConfig: RUNTIME_CONFIG,
+      testRuns: { getTestRun: async () => run, getRunEvents: async () => [trustedEdgeEvent(run.id, {
+        metadata: { external_result: 'timeout', error_class: 'probe_job_deadline_exceeded',
+          profile_kind: 'waf_fingerprint_observation', partial_provider_observation: true,
+          edge_signature: { waf_present: null, cdn_detected: true, dns_observed: true,
+            cdn_providers: ['akamai'], asn_matches: [{ family: 'cdn', provider: 'akamai', asn: 20940 }] },
+        },
+      })] },
+    });
+    assert.equal(result.status, 'inconclusive');
+    assert.equal(result.detection.cdn.provider, 'akamai');
+    assert.equal(result.detection.waf.status, 'inconclusive');
+    assert.equal(result.detection.protection.status, 'inconclusive');
   });
 
   it('rejects raw host/private-IP input before startTestRun can run', async () => {

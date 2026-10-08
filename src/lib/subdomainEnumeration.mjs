@@ -90,13 +90,22 @@ async function fetchPage(url, { apiKey, fetchFn, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchFn(url, {
+    const response = await fetchFn(url, {
       method: 'GET',
       headers: { accept: 'application/json', 'x-apikey': apiKey },
       redirect: 'manual',
       signal: controller.signal,
     });
-  } catch {
+    if (response.status !== 200) return response;
+    try {
+      const payload = await response.json();
+      return { status: response.status, json: async () => payload };
+    } catch {
+      if (!controller.signal.aborted) throw new SubdomainSourceError('subdomain_source_failed', 'VirusTotal returned an unreadable response.');
+      throw new SubdomainSourceError('subdomain_source_unreachable', 'VirusTotal did not respond within the time limit.');
+    }
+  } catch (error) {
+    if (error instanceof SubdomainSourceError) throw error;
     throw new SubdomainSourceError('subdomain_source_unreachable', 'VirusTotal did not respond within the time limit.');
   } finally {
     clearTimeout(timer);
@@ -134,13 +143,16 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
   let pages = 0;
   let reported = null;
   let stopReason = null;
+  const cursors = new Set();
+  const maxPages = Math.ceil(maxResults / VIRUSTOTAL_PAGE_SIZE);
 
   while (true) {
     if (pages > 0 && (options.now ?? Date.now)() >= deadline) {
       stopReason = 'deadline';
       break;
     }
-    const response = await fetchPage(pageUrl(parent, cursor), { apiKey, fetchFn, timeoutMs });
+    const response = await fetchPage(pageUrl(parent, cursor), { apiKey, fetchFn,
+      timeoutMs: Math.min(timeoutMs, Math.max(1, deadline - (options.now ?? Date.now)())) });
     if (response.status !== 200) {
       const error = sourceErrorForStatus(response.status);
       if (!error) break;
@@ -168,7 +180,10 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
       break;
     }
     const next = typeof payload?.meta?.cursor === 'string' ? payload.meta.cursor : '';
-    if (!next || next === cursor) break;
+    if (!next) break;
+    if (cursors.has(next) || next === cursor) { stopReason = 'cursor_loop'; break; }
+    if (pages >= maxPages) { stopReason = 'max_pages'; break; }
+    cursors.add(next);
     cursor = next;
   }
 
@@ -207,9 +222,9 @@ function familyOf(profile, family) {
 /** Exposure verdict for one subdomain from its current edge row. */
 export function subdomainExposure({ waf, cdn, observed }) {
   if (!observed) return 'not_checked';
-  if (waf.status === 'detected') return 'protected';
+  if (waf.status === 'detected') return 'waf_detected';
   if (cdn.status === 'detected') return 'cdn_only';
-  if (waf.status === 'not_detected' && cdn.status === 'not_detected') return 'exposed';
+  if (waf.status === 'not_detected' && cdn.status === 'not_detected') return 'no_edge_detected';
   return 'inconclusive';
 }
 
@@ -235,13 +250,14 @@ export function presentSubdomainRow(row, parentTargetId) {
     cloud,
     exposure: subdomainExposure({ waf, cdn, observed: Boolean(observedAt) }),
     observed_at: observedAt,
+    latest_detection_run_id: profile?.families?.cdn?.test_run_id ?? profile?.families?.waf?.test_run_id ?? null,
     findings_count: Number.isInteger(row.findings_count) ? row.findings_count : 0,
     last_validation_at: row.last_validation_at ?? null,
   };
 }
 
 export function summarizeSubdomains(rows) {
-  const exposure = { protected: 0, cdn_only: 0, exposed: 0, inconclusive: 0, not_checked: 0 };
+  const exposure = { waf_detected: 0, cdn_only: 0, no_edge_detected: 0, inconclusive: 0, not_checked: 0 };
   const providers = new Map();
   for (const row of rows) {
     exposure[row.exposure] = (exposure[row.exposure] ?? 0) + 1;

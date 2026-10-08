@@ -276,7 +276,7 @@ describe('cdncheck address and CNAME semantics', () => {
     );
   });
 
-  it('returns explicit upstream WAF type for CNAME-only Akamai and CloudFront', () => {
+  it('retains upstream CNAME diagnostics without treating CDN hostnames as WAF evidence', () => {
     assert.deepEqual(classifyEdgeByCnameChain('shop.akamaiedge.net'), [
       { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net', host: 'shop.akamaiedge.net' },
     ]);
@@ -289,8 +289,8 @@ describe('cdncheck address and CNAME semantics', () => {
       ['assets.cloudfront.net', 'amazon', 'cloudfront'],
     ]) {
       const result = classifyEdgeFingerprint({ cnameChain: [host] });
-      assert.equal(result.waf_present, true);
-      assert.deepEqual(result.waf_providers, [provider]);
+      assert.equal(result.waf_present, false);
+      assert.deepEqual(result.waf_providers, []);
       assert.equal(result.cdn_detected, true);
       assert.deepEqual(result.cdn_providers, [cdnProvider]);
       assert.deepEqual(result.address_matches, []);
@@ -303,10 +303,10 @@ describe('cdncheck address and CNAME semantics', () => {
       { provider: 'edgecast', type: 'waf', suffix: 'edgesuite.net', host: 'asset.edgesuite.net' },
     ]);
     const result = classifyEdgeFingerprint({ cnameChain: ['asset.edgesuite.net'] });
-    assert.equal(result.waf_present, true);
-    assert.deepEqual(result.waf_providers, ['akamai', 'edgecast']);
+    assert.equal(result.waf_present, false);
+    assert.deepEqual(result.waf_providers, []);
     assert.equal(result.cdn_detected, true);
-    assert.deepEqual(result.cdn_providers, ['akamai', 'edgecast']);
+    assert.deepEqual(result.cdn_providers, ['akamai']);
   });
 
   it('requires a hostname boundary and ignores IP literals for CNAME matching', () => {
@@ -326,7 +326,7 @@ describe('combined edge fingerprint', () => {
     assert.equal(result.corpus_version, EDGE_SIGNATURE_CORPUS_VERSION);
     assert.equal(result.metadata_only, true);
     assert.equal(result.waf_present, true);
-    assert.deepEqual(result.waf_providers, ['akamai', 'cloudflare']);
+    assert.deepEqual(result.waf_providers, ['cloudflare']);
     assert.equal(result.cdn_detected, true);
     // `server: cloudflare` is a proxied Cloudflare edge (curated header layer) as well as a WAF hit.
     // CNAME `example.com.akamaiedge.net` adds `akamai` CDN, and IP `108.138.5.5` adds `cloudfront`.
@@ -348,6 +348,7 @@ describe('combined edge fingerprint', () => {
       headerEntries: [
         { name: 'server', value: 'cloudflare' },
         { name: 'x-amz-id', value: 'request-1' },
+        { name: 'x-blocked-by-waf', value: 'Blocked_by_custom_response_for_AWSManagedRulesCommonRuleSet' },
       ],
       resolvedIps: ['108.138.5.5'],
       cnameChain: ['edge.cloudflare.com'],
@@ -362,17 +363,16 @@ describe('combined edge fingerprint', () => {
       [
         ['cdn', 'cloudflare'],
         ['cdn', 'cloudfront'],
-        ['waf', 'cloudflare'],
         ['waf', 'awswaf'],
+        ['waf', 'cloudflare'],
         ['cloud', 'aws'],
       ],
     );
     const cloudflare = result.layers.find((layer) => (
       layer.family === 'waf' && layer.provider === 'cloudflare'
     ));
-    assert.deepEqual(cloudflare.sources, ['response_fingerprint', 'cname_suffix']);
-    assert.equal(cloudflare.evidence_consistency, 'agreement');
-    assert.ok(cloudflare.confidence > result.layers.find((layer) => layer.provider === 'awswaf').confidence);
+    assert.deepEqual(cloudflare.sources, ['response_fingerprint']);
+    assert.equal(cloudflare.evidence_consistency, 'single_source');
     assert.equal(result.evidence_consistency, 'agreement');
   });
 
@@ -388,19 +388,44 @@ describe('combined edge fingerprint', () => {
     assert.deepEqual(layer.sources, [
       'response_fingerprint',
       'address_range',
-      'cname_suffix',
     ]);
     assert.equal(layer.evidence_consistency, 'agreement');
-    assert.equal(layer.confidence, 0.9);
-    assert.equal(result.confidence, 0.9);
+    assert.equal(layer.confidence, 0.8);
+    assert.equal(result.confidence, 0.95);
   });
 
-  it('discounts confidence when one CNAME suffix ambiguously maps to multiple providers', () => {
+  it('corrects the upstream duplicate edgesuite mapping to a single Akamai CDN layer', () => {
     const result = classifyEdgeFingerprint({ cnameChain: ['asset.edgesuite.net'] });
-    assert.equal(result.conflicting_provider_signals, true);
-    assert.equal(result.evidence_consistency, 'conflict');
-    assert.ok(result.confidence < Math.max(...result.layers.map((layer) => layer.confidence)));
-    assert.deepEqual(result.waf_providers, ['akamai', 'edgecast']);
+    assert.equal(result.conflicting_provider_signals, false);
+    assert.deepEqual(result.cdn_providers, ['akamai']);
+    assert.deepEqual(result.waf_providers, []);
+  });
+
+  it('does not promote generic cloud-routing and DNS hostnames to WAF or CDN presence', () => {
+    for (const host of ['origin.amazonaws.com', 'app.trafficmanager.net', 'dns.dnsv1.com', 'app.huaweicloud.com']) {
+      const result = classifyEdgeFingerprint({ cnameChain: [host] });
+      assert.equal(result.waf_present, false, host);
+      assert.equal(result.cdn_detected, false, host);
+    }
+  });
+
+  it('separates CloudFront and ELB fingerprints from explicit AWS WAF rule evidence', () => {
+    for (const headerEntries of [
+      [{ name: 'server', value: 'CloudFront' }, { name: 'x-amz-cf-id', value: 'example' }],
+      [{ name: 'x-amz-request-id', value: 'example' }],
+      [{ name: 'set-cookie', value: 'AWSALB=example; Path=/' }],
+    ]) {
+      const result = classifyEdgeFingerprint({ normal: { headerEntries, statusCode: 200 } });
+      assert.equal(result.waf_present, false);
+      assert.equal(result.best_vendor, null);
+      assert.ok(result.vendor_matches.length > 0, 'retains upstream diagnostic candidates');
+      assert.equal(result.layers.some((layer) => layer.family === 'waf'), false);
+    }
+    const waf = classifyEdgeFingerprint({ normal: { statusCode: 403, headerEntries: [
+      { name: 'x-blocked-by-waf', value: 'Blocked_by_custom_response_for_AWSManagedRulesCommonRuleSet' },
+    ] } });
+    assert.equal(waf.waf_present, true);
+    assert.deepEqual(waf.waf_providers, ['awswaf']);
   });
 
   it('does not promote an uncorroborated generic status heuristic to WAF presence', () => {
@@ -484,6 +509,9 @@ describe('curated CDN / edge-platform header layers', async () => {
     assert.deepEqual(classifyEdgeByResponseHeaders(headers({ server: 'nginx', via: '1.1 varnish' })), []);
     assert.deepEqual(classifyEdgeByResponseHeaders(headers({ server: 'cloudflare-nginx-clone' })), []);
     assert.deepEqual(classifyEdgeByResponseHeaders(headers({ 'cf-ray': 'not a ray id' })), []);
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ 'x-served-by': 'origin-1', 'x-check-cacheable': 'YES' })), []);
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ 'x-served-by': 'cache-bom4730-BOM' })).map((m) => m.provider), ['fastly']);
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ 'x-served-by': 'cache-iad-kiad7000138-IAD, cache-lga-kjfk8660077-LGA' })).map((m) => m.provider), ['fastly']);
   });
 
   it('extracts curated header names from a real response for classification', () => {

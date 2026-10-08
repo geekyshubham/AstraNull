@@ -1321,6 +1321,7 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
 
 export async function executeProbeForJob(job, deps = {}) {
   const timing = createProbeDeadline(job);
+  let providerObservation = null;
   const cancel = () => timing.controller.abort(Object.assign(new Error('Probe stopped.'), { code: 'probe_stopped' }));
   if (deps.cancellationSignal?.aborted) cancel();
   else deps.cancellationSignal?.addEventListener('abort', cancel, { once: true });
@@ -1389,6 +1390,7 @@ export async function executeProbeForJob(job, deps = {}) {
     jobDeadlineSignal: timing.controller.signal,
     remainingJobTimeoutMs: () => timing.remainingMs(),
     observedJobDurationMs: () => timing.durationMs(),
+    onProviderObservation: (metadata) => { providerObservation = metadata; },
     recordProbeLogicalAttempt,
     beforeProbeIoAttempt,
     recordDestinationResolverAttempt: () => {
@@ -1437,6 +1439,12 @@ export async function executeProbeForJob(job, deps = {}) {
   } finally {
     deps.cancellationSignal?.removeEventListener('abort', cancel);
     timing.close();
+  }
+  if (job.probe_profile?.kind === 'waf_fingerprint_observation'
+    && (outcome?.external_result === 'timeout'
+      || (outcome?.external_result === 'error' && outcome.metadata?.error_class === 'probe_job_deadline_exceeded'))
+    && providerObservation) {
+    outcome.metadata = { ...outcome.metadata, ...providerObservation, partial_provider_observation: true };
   }
   return finalizeProbeOutcome(outcome, timing, accounting);
 }

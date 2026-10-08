@@ -72,19 +72,35 @@ Implementation status: `GET /v1/waf/coverage` returns status counts in developer
 
 ## Edge detection API (declared target → WAF/CDN observation)
 
-The portal selects an exact declared target. The server resolves its retained execution policy and delegates the fixed fingerprint check to the signed worker; the control plane performs no customer-directed network requests.
+The portal selects an exact declared target. The server resolves its retained execution policy and
+delegates the fixed fingerprint check to the signed worker; the control plane performs no
+customer-directed network requests. The signature corpus is described in ADR-0005.
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| POST | `/v1/waf/edge-detection` | `waf:run` | `{ target_id }`; legacy `target_group_id` remains optional for compatibility. | `202 { detection_request }` after durable acceptance. |
-| GET | `/v1/waf/edge-detection/:id` | `waf:read` | - | `200 { detection_request }`; tenant-scoped polling. |
+| POST | `/v1/waf/edge-detection` | `waf:run` | `{ target_id, target_group_id? }` (legacy internal grouping is bound by the route) | `202 { detection_request }` after durable acceptance. |
+| GET | `/v1/waf/edge-detection/:runId` | `waf:read` | — | `200 { test_run_id, run_status, status, reason, detection }`, tenant-scoped. |
 
-- Raw hostnames, URLs, IP destinations, timeout overrides, and arbitrary probe controls are rejected. Target IDs must identify an active same-tenant declaration.
-- Version `2.0.0` is observation-only: one pinned ordinary GET, no redirects, up to three counted CNAME lookups, and the existing five-second worker deadline. No marker or efficacy check is started by detection.
-- Ownership, subscription, safe-window, rate, concurrency, kill-switch, signed-worker, and audit gates remain enforced by the shared run service. Acceptance does not imply a completed observation or a protection verdict.
-- The response supplies the accepted run reference and polling locations. The portal's Detect WAF and CDN action opens Validate for the recorded activity. Polling and opening a target are passive.
-- Evidence is metadata only. Provider identification does not establish blocking, origin lockdown, or volumetric capacity. Original signed results and custody artifacts are preserved.
-- The same target-bound path is wired in dev-json and Postgres modes, under the WAF feature gate. See [direct domain workflows](../api.md#direct-domain-workflows-2026-10-08).
+Behavior contract:
+
+- Raw hostnames, URLs, IP destinations, timeout overrides and arbitrary probe controls are rejected.
+  The control plane delegates the tenant-owned, ownership-verified target through `startTestRun`.
+- `waf.fingerprint.safe` v2.1.0 executes one destination-pinned ordinary GET plus at most three
+  counted CNAME operations, within the unchanged five-second deadline. No redirects, markers,
+  POST, evasion, direct-origin requests or standalone TLS hints.
+- Passive signatures and an already-observed vendor-specific denial page can identify a WAF;
+  generic HTTP status codes cannot. CDN ranges, typed CNAMEs and the offline CDN ASN snapshot
+  identify network providers independently of WAF enablement.
+- Results retain bounded label-only evidence, corpus/ASN dataset versions and matched ASN facts.
+  Target detail exposes the current detection plus `evidence.asn`, `asn_matches`,
+  `asn_dataset_version` and `cname_cdn_matches` (see [API reference](../api.md)).
+- Presence-only WAF evidence is `detected_only`. A missing fingerprint with no enforcement
+  attempts is inconclusive protection, never `unprotected`; effectiveness remains untested.
+- The existing run creation/dispatch/result audit and signed-worker lease, operation reservation,
+  ownership, subscription, safe-window, destination safety, rate, concurrency, kill-switch and tenant gates apply. Dev-json simulations are explicitly
+  inconclusive. Feature gate: `ASTRANULL_WAF_POSTURE_ENABLED`; action: Detect WAF and CDN on target detail.
+- The Detect action opens Validate for recorded activity; polling and opening a target are passive.
+  See [direct domain workflows](../api.md#direct-domain-workflows-2026-10-08).
 
 ## Baseline and drift APIs
 

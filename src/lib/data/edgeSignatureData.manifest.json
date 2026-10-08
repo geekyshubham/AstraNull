@@ -1,10 +1,10 @@
 {
   "manifest_version": 2,
   "format": "astranull-edge-signature-corpus-manifest-v2",
-  "output_version": 3,
+  "output_version": 4,
   "generator": {
     "path": "scripts/generate-edge-signatures.mjs",
-    "sha256": "619f3b246cc6582fc64fb5f988a441bfa550039ff712b45303b715f037c9f177"
+    "sha256": "4a453d5a3a03dcf4c05809ce0098df5c344738c0b6f2fc11cc5b2768e9d844f1"
   },
   "sources": {
     "wafw00f": {
@@ -724,7 +724,7 @@
     },
     "cdncheck": {
       "repository": "https://github.com/projectdiscovery/cdncheck",
-      "commit": "dac12984ef12fa5663c2b7591d0a304ef27c659b",
+      "commit": "a06260a272dc92cec0747f2f369b697088899bc7",
       "ported_categories": [
         "cdn",
         "waf",
@@ -735,7 +735,7 @@
       "inputs": [
         {
           "path": "sources_data.json",
-          "sha256": "4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3"
+          "sha256": "64641dd6d6af84c8d240a5860fe7cf05cad6d7634f8892bf007cbadb8c2670a5"
         },
         {
           "path": "other.go",
@@ -761,13 +761,13 @@
   "outputs": [
     {
       "path": "src/lib/data/edgeSignatureData.mjs",
-      "sha256": "610589e92e702d7df283f61619510cad13b17d36bc619c8283b4ef28c3479892",
-      "bytes": 339369
+      "sha256": "850ddb21568eb6d7497f595268d7db09d93879d6e8a25c2abdf327739c031089",
+      "bytes": 340846
     },
     {
       "path": "src/lib/data/edgeCloudRangeData.mjs",
-      "sha256": "0dbc9687af5234aa645a7961b61ef38ed8b36442b1df0dd15e2a0809466fd176",
-      "bytes": 1811626
+      "sha256": "2d4e602e55157a1ffd955a15d220420d8153b57685918ecbbf76b82615e1e4f9",
+      "bytes": 1675451
     }
   ]
 }

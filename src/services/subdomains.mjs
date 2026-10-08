@@ -53,6 +53,7 @@ async function readGroupHosts(ctx, parent, deps) {
       ...(cursor ? { cursor } : {}),
     });
     if (result?.notWired) return { notWired: true };
+    if (result?.error) return { error: fail(result.error, result.status ?? 503) };
     rows.push(...(Array.isArray(result?.items) ? result.items : []));
     cursor = result?.next_cursor ?? null;
     if (!cursor) break;
@@ -63,6 +64,7 @@ async function readGroupHosts(ctx, parent, deps) {
     rows: rows.filter((row) => row.target_group_id === parent.target_group_id
       && row.kind === 'fqdn'
       && isStrictSubdomain(hostnameOf(row), parentHost)),
+    truncated: Boolean(cursor),
   };
 }
 
@@ -73,11 +75,10 @@ function parentProof(parent) {
 
 function withInheritedVerification(row, parent) {
   const own = ownershipProofFromStates({ targetState: row.verification_state });
-  if (own.verified || row.origin !== 'discovered') return row;
   const inherited = parentProof(parent);
-  return inherited.verified
-    ? { ...row, verification_state: inherited.state, verification_inherited: true }
-    : row;
+  return row.origin === 'discovered' && inherited.verified
+    ? { ...row, verification_state: own.verified ? row.verification_state : inherited.state, verification_inherited: true, ownership_verified: true }
+    : { ...row, ownership_verified: own.verified };
 }
 
 /** Current subdomain inventory for one domain target, with the latest edge result per host. */
@@ -86,6 +87,7 @@ export async function listTargetSubdomains(ctx, parentTargetId, deps) {
   if (loaded.error) return loaded.error;
   const hosts = await readGroupHosts(ctx, loaded.parent, deps);
   if (hosts.notWired) return { notWired: true };
+  if (hosts.error) return hosts.error;
   const parent = hosts.parent;
   if (isDiscoveredSubdomain(parent)) return parentIsSubdomainError();
   const items = hosts.rows
@@ -99,10 +101,12 @@ export async function listTargetSubdomains(ctx, parentTargetId, deps) {
       ownership_verified: parentProof(parent).verified,
     },
     source: { name: SUBDOMAIN_SOURCE, configured: deps.config?.configured === true },
+    detection_enabled: deps.detectionEnabled !== false,
     items,
     count: items.length,
     summary: summarizeSubdomains(items),
     meta: {
+      truncated: hosts.truncated,
       empty_reason: items.length ? null : 'No subdomains have been discovered or declared under this domain yet.',
     },
   };
@@ -124,14 +128,15 @@ async function queueDetection(ctx, rows, deps) {
 }
 
 /**
- * Pull subdomains from the configured source, declare the new ones as child targets, and queue
- * CDN/WAF detection for them. Hosts already declared in the group are left untouched.
+ * Explicitly import bounded subdomains as child declarations. Detection is a separate reviewed
+ * action so the caller can inspect the imported scope before any external worker request.
  */
 export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
   const loaded = await loadParent(ctx, parentTargetId, deps);
   if (loaded.error) return loaded.error;
   const hosts = await readGroupHosts(ctx, loaded.parent, deps);
   if (hosts.notWired) return { notWired: true };
+  if (hosts.error) return hosts.error;
   const parent = hosts.parent;
   if (isDiscoveredSubdomain(parent)) return parentIsSubdomainError();
   const parentHost = hostnameOf(parent);
@@ -169,9 +174,7 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
     created.push({ target_id: result.id, target_group_id: result.target_group_id ?? parent.target_group_id, hostname });
   }
 
-  const detection = deps.detectionEnabled === false
-    ? { queued: [], skipped: [], deferred: created.length }
-    : await queueDetection(ctx, created, deps);
+  const detection = { queued: [], skipped: [], deferred: created.length };
 
   await deps.recordAudit({
     tenant_id: ctx.tenantId,
@@ -211,9 +214,12 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
 export async function detectTargetSubdomains(ctx, parentTargetId, body, deps) {
   const listed = await listTargetSubdomains(ctx, parentTargetId, deps);
   if (listed.error || listed.notWired) return listed;
+  if (deps.detectionEnabled === false) return fail('waf_feature_disabled', 404);
   const scope = body?.scope === 'all' ? 'all' : 'unchecked';
   const rows = listed.items.filter((row) => scope === 'all' || row.exposure === 'not_checked');
-  const detection = await queueDetection(ctx, rows, deps);
+  const unverified = rows.filter((row) => row.ownership_verified !== true);
+  const detection = await queueDetection(ctx, rows.filter((row) => row.ownership_verified === true), deps);
+  detection.skipped.push(...unverified.map((row) => ({ target_id: row.target_id, hostname: row.hostname, reason: 'target_ownership_not_verified' })));
   await deps.recordAudit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,

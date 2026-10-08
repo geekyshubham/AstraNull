@@ -96,6 +96,21 @@ describe('fetchVirusTotalSubdomains', () => {
     assert.equal(result.hostnames.length, 5);
     assert.equal(result.stop_reason, 'max_results');
   });
+
+  it('caps empty/foreign pages and rejects cursor cycles without unbounded source requests', async () => {
+    let requests = 0;
+    const capped = await fetchVirusTotalSubdomains('example.com', { apiKey: 'k', maxResults: 80,
+      fetchFn: async () => jsonResponse(200, { data: [{ id: 'foreign.net' }], meta: { cursor: `c${++requests}` } }),
+    });
+    assert.equal(requests, 2);
+    assert.equal(capped.stop_reason, 'max_pages');
+    let page = 0;
+    const looped = await fetchVirusTotalSubdomains('example.com', { apiKey: 'k',
+      fetchFn: async () => jsonResponse(200, { data: [], meta: { cursor: ['one', 'two', 'one'][page++] } }),
+    });
+    assert.equal(page, 3);
+    assert.equal(looped.stop_reason, 'cursor_loop');
+  });
 });
 
 describe('subdomain rows', () => {
@@ -106,12 +121,12 @@ describe('subdomain rows', () => {
       presentSubdomainRow({ ...base, id: 't2', value: 'b.example.com', protection_profile: { families: { waf: { status: 'not_detected', observed_at: 'x' }, cdn: { status: 'not_detected' } } } }, 'tgt_p'),
       presentSubdomainRow({ id: 't3', target_group_id: 'tg', tags: [], value: 'c.example.com' }, 'tgt_p'),
     ];
-    assert.deepEqual(rows.map((row) => row.exposure), ['protected', 'exposed', 'not_checked']);
+    assert.deepEqual(rows.map((row) => row.exposure), ['waf_detected', 'no_edge_detected', 'not_checked']);
     assert.deepEqual(rows.map((row) => row.origin), ['discovered', 'discovered', 'declared']);
     assert.equal(rows[0].cloud.provider, 'AWS');
     const summary = summarizeSubdomains(rows);
-    assert.equal(summary.exposure.protected, 1);
-    assert.equal(summary.exposure.exposed, 1);
+    assert.equal(summary.exposure.waf_detected, 1);
+    assert.equal(summary.exposure.no_edge_detected, 1);
     assert.ok(summary.providers.some((entry) => entry.layer === 'cloud' && entry.provider === 'AWS'));
   });
 });

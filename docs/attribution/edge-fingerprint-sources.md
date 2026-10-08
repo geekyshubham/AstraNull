@@ -12,7 +12,7 @@ ported/excluded categories, and the generated module byte length/SHA-256.
 | Source | Exact revision | Ported input | License |
 |---|---|---|---|
 | [wafw00f](https://github.com/EnableSecurity/wafw00f) | `69fbe3956bba47a172cf87e40e9037535d32a130` | All 172 `wafw00f/plugins/*.py` files except `__init__.py` (matcher calls plus `is_waf`/helper decision flow), `wafprio.py` checklist order, and `lib/evillib.py` `MAX_RESPONSE_SIZE` | BSD-3-Clause |
-| [cdncheck](https://github.com/projectdiscovery/cdncheck) | `dac12984ef12fa5663c2b7591d0a304ef27c659b` | `sources_data.json` CDN/WAF/cloud CIDRs and `common` CNAME suffixes; `other.go` supplies the explicit CNAME item type; `cdncheck.go` supplies check order and resolvers | MIT |
+| [cdncheck](https://github.com/projectdiscovery/cdncheck) | `a06260a272dc92cec0747f2f369b697088899bc7` | `sources_data.json` CDN/WAF/cloud CIDRs and `common` CNAME suffixes; `other.go` supplies the explicit CNAME item type; `cdncheck.go` supplies check order and resolvers | MIT |
 
 Complete, unmodified notices are retained at:
 
@@ -25,7 +25,7 @@ Pinned SHA-256 values:
 |---|---|
 | wafw00f plugin inventory (`sorted-path-length-content-length-v1`) | `44f4379d119d7cd688b2b8f68e5a1cd9e5bcf150491f46cb438d8a71f223b002` |
 | wafw00f `LICENSE` | `fdaaf8393afcbab5a0db158ae742e76ec3803a7c72af19489f5bd521d3db08ea` |
-| cdncheck `sources_data.json` | `4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3` |
+| cdncheck `sources_data.json` | `64641dd6d6af84c8d240a5860fe7cf05cad6d7634f8892bf007cbadb8c2670a5` |
 | cdncheck `other.go` | `37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a` |
 | cdncheck `LICENSE.md` | `cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb` |
 | wafw00f `wafw00f/wafprio.py` | `91f396bb667b3e15ecf64461a096cc35b3e266fe5a822f406bbf4afcd079bb50` |
@@ -50,7 +50,7 @@ Generation fails closed when any of the following occurs: wrong git revision or 
 omitted plugin, an unreachable helper, an unrepresented matcher call, unsupported statements or
 expressions, an invalid/unsupported regex, invalid CIDR/CNAME data, or an inventory mismatch. At
 the pinned revisions the output contains **172/172 plugins**, **518/518 matcher calls** (188 passive,
-330 block-page), 2,462 CDN ranges, 1,071 WAF ranges, 129,127 cloud ranges, and 103 CNAME
+330 block-page), 2,491 CDN ranges, 1,103 WAF ranges, 116,097 cloud ranges, and 103 CNAME
 suffixes. Runtime decision-flow semantics are specified in ADR-0005 Amendment 1.
 
 ### Response tiers and private evidence
@@ -87,7 +87,7 @@ git clone https://github.com/EnableSecurity/wafw00f.git /tmp/astranull-wafw00f
 git -C /tmp/astranull-wafw00f checkout --detach 69fbe3956bba47a172cf87e40e9037535d32a130
 
 git clone https://github.com/projectdiscovery/cdncheck.git /tmp/astranull-cdncheck
-git -C /tmp/astranull-cdncheck checkout --detach dac12984ef12fa5663c2b7591d0a304ef27c659b
+git -C /tmp/astranull-cdncheck checkout --detach a06260a272dc92cec0747f2f369b697088899bc7
 
 node scripts/generate-edge-signatures.mjs \
   --wafw00f /tmp/astranull-wafw00f \
@@ -104,3 +104,7 @@ identical pinned inputs, generator, and Node/Python JSON behavior. The manifest 
 it cannot be replaced together with hand-edited output without also violating the pinned generator
 hash and per-input inventory checks. Increment the output version only when the generated format or
 corpus behavior changes.
+
+## Fidelity audit and corpus v4
+
+The [2026-10-08 fidelity audit](../detection/edge-port-fidelity-audit-2026-10-08.md) separates complete matcher/data coverage from bounded collection. Exhaustive decision comparison: 6,774 cases across all 172 plugins; representative regex comparison: 2,215 cases across 443 patterns; zero mismatches. Corpus v4 refreshes cdncheck to the revision above, including Huawei CDN ranges. The raw upstream diagnostic CNAME type remains inspectable, while canonical provider families exclude known CDN/generic cloud suffixes from WAF claims. CDN/ELB fingerprints cannot establish WAF enablement. An ordinary GET's already-observed vendor denial can supply bounded block evidence without sending a marker.

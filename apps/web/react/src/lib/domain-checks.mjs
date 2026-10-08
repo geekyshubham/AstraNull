@@ -673,6 +673,7 @@ const TAB_ALIASES = Object.freeze({
   checks: 'validate',
   run: 'validate',
   findings: 'findings',
+  subdomains: 'subdomains',
   history: 'history',
   changes: 'history',
   runs: 'history',

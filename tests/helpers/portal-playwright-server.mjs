@@ -123,7 +123,7 @@ export async function startPortalPlaywrightServer(options = {}) {
   await stopPortalPlaywrightServer();
   seedPortalPlaywrightStore(options.mutate ?? applyPortalBaselineReadinessBoost);
 
-  const server = createServer({ env: { ...process.env, ...TEST_ENV } });
+  const server = createServer({ env: { ...process.env, ...TEST_ENV, ...options.env }, services: options.services });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);

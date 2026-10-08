@@ -77,6 +77,7 @@ import {
 } from '../lib/domain-checks.mjs';
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
 import { TargetChangesHistory } from '../components/targets/target-history';
+import { TargetSubdomains } from '../components/targets/target-subdomains';
 import { TargetAuthorization } from '../components/targets/target-authorization';
 import { OriginRelations } from '../components/targets/origin-relations';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
@@ -1517,6 +1518,7 @@ export function TargetDetailView({
     { id: 'overview' as const, label: 'Overview' },
     { id: 'validate' as const, label: 'Validate', count: checkRows.length },
     { id: 'findings' as const, label: 'Findings', count: openFindings.length },
+    ...(kind === 'fqdn' ? [{ id: 'subdomains' as const, label: 'Subdomains' }] : []),
     { id: 'history' as const, label: 'Changes & history' },
   ];
 
@@ -1555,6 +1557,9 @@ export function TargetDetailView({
       />
 
       <div className="td-panel" role="tabpanel" id={`td-panel-${tab}`} aria-labelledby={`td-tab-${tab}`}>
+        {tab === 'subdomains' && target ? (
+          <TargetSubdomains key={entityId} target={target} config={config} session={session} canWrite={canWrite} canStart={canStartBoundedRun} />
+        ) : null}
         {tab === 'overview' ? (
           <div className="td-overview">
             {renderNextAction()}

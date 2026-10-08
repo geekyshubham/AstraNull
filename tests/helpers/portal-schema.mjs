@@ -189,6 +189,10 @@ export const EDGE_DETECTION_SHAPE = {
   observed_at: ['string', 'null'],
   updated_at: ['string', 'null'],
   evidence: {
+    asn_dataset_version: ['string', 'null'],
+    asn: [{ asn: ['number', 'null'], name: 'string', org: 'string', provider: 'string', country: 'string' }, 'null'],
+    asn_matches: [{ provider: 'string', asn: ['number', 'null'], org: 'string', name: 'string' }],
+    cname_cdn_matches: [{ provider: 'string', family: 'string', suffix: 'string' }],
     vendor_matches: [{
       vendor: 'string',
       name: 'string',

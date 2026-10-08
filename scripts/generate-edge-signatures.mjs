@@ -28,10 +28,10 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const EDGE_CORPUS_OUTPUT_VERSION = 3;
+export const EDGE_CORPUS_OUTPUT_VERSION = 4;
 export const EDGE_CORPUS_MANIFEST_VERSION = 2;
 export const WAFW00F_COMMIT = '69fbe3956bba47a172cf87e40e9037535d32a130';
-export const CDNCHECK_COMMIT = 'dac12984ef12fa5663c2b7591d0a304ef27c659b';
+export const CDNCHECK_COMMIT = 'a06260a272dc92cec0747f2f369b697088899bc7';
 
 const GENERATED_MODULE_PATH = 'src/lib/data/edgeSignatureData.mjs';
 const GENERATED_CLOUD_MODULE_PATH = 'src/lib/data/edgeCloudRangeData.mjs';
@@ -48,7 +48,7 @@ const PINNED_INPUTS = Object.freeze({
     requestEngineSha256: '7c8b5187ff34324588654b82e6c22ea05f2b6d7a13d93f98730596342d79136b',
   }),
   cdncheck: Object.freeze({
-    sourcesDataSha256: '4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3',
+    sourcesDataSha256: '64641dd6d6af84c8d240a5860fe7cf05cad6d7634f8892bf007cbadb8c2670a5',
     cnameImplementationSha256: '37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a',
     engineSha256: '94ace4a1b96fc70be7c603e8e4cb3f3e2c563e86700e32c904364b0fcf5694ec',
     licenseSha256: 'cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb',
@@ -773,7 +773,7 @@ function countWafSignatures(vendors) {
 function renderModule({ vendors, wafReport, ranges, generatorSha256, cloudModuleSha256 }) {
   const manifest = {
     output_version: EDGE_CORPUS_OUTPUT_VERSION,
-    format: 'astranull-edge-signature-corpus-v3',
+    format: 'astranull-edge-signature-corpus-v4',
     generator: GENERATOR_PATH,
     generator_sha256: generatorSha256,
     output_manifest: 'src/lib/data/edgeSignatureData.manifest.json',

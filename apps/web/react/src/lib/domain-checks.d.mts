@@ -123,7 +123,7 @@ export type MarkerEffectiveness = {
   percentage: number | null;
   source: 'protection_profile' | 'edge_detection';
 };
-export type TargetTab = 'overview' | 'validate' | 'findings' | 'history';
+export type TargetTab = 'overview' | 'validate' | 'findings' | 'history' | 'subdomains';
 export const PROVIDER_FAMILY_ORDER: readonly ProviderFamily[];
 export function providerFamilyRows(input: { protection_profile?: DataItem | null; edge_detection?: DataItem | null }): ProviderFamilyRow[];
 export function markerEffectiveness(input: { protection_profile?: DataItem | null; edge_detection?: DataItem | null }): MarkerEffectiveness | null;

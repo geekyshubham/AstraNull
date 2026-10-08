@@ -20,3 +20,19 @@ The live Detect WAF and CDN action queued a signed `waf.fingerprint.safe` job, b
 Provider identification no longer depends on completion of unrelated effectiveness probes. A detected WAF/CDN is not a blocking or capacity claim. A target with previously current fingerprint coverage needs an explicit retest for the new version; its old verdict remains retained history. Other checks can still correctly be inconclusive when a declared protocol endpoint, blocked baseline, or customer setup is absent.
 
 No rate, concurrency, request-volume, SOC, or destination-authorization limit is raised.
+
+## Addendum: independent DNS evidence on an HTTP deadline
+
+Qantas produced completed Akamai DNS evidence but no HTTP response within the same five-second
+deadline. A fingerprint-only worker now retains its already-completed, vetted address/CNAME
+observation in memory before starting the GET. On a transport deadline it carries that evidence
+through the existing signed result, with `partial_provider_observation: true`; no new request,
+longer deadline, or earlier durable publication is introduced. WAF presence stays null and no WAF
+layer is derived from the unfinished HTTP operation. The overall observation and protection are
+inconclusive, while supported CDN/cloud families can be detected independently.
+
+The API and both persistence modes accept such a partial observation only for the fingerprint
+profile with actual typed, positive address/CNAME/ASN evidence and observed DNS. Untyped flags,
+simulations, unrelated profiles and failures without provider evidence retain the existing failure
+behavior. Existing run/result audits, signed operation attestations, and tenant/nonce/lease checks
+remain authoritative. This is observation history, never enforcement or readiness evidence.

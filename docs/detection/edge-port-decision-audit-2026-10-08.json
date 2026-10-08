@@ -1,0 +1,9 @@
+{
+  "upstream_commit": "69fbe3956bba47a172cf87e40e9037535d32a130",
+  "plugins": 172,
+  "exhaustive_boolean_cases": 6774,
+  "regex_patterns": 443,
+  "regex_witness_cases": 2215,
+  "mismatches": 0,
+  "scope": "Exhaustive complete-signal decisions and representative regex witnesses. Bounded signal collection and unavailable-response semantics are separately tested deliberate deviations."
+}

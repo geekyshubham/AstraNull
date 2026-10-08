@@ -38,6 +38,7 @@ import {
   runOutsideInWafScan,
 } from './outsideInWafScanner.mjs';
 import { enrichProbeMetadataWithWafCatalog } from './wafProductCatalog.mjs';
+import { classifyEdgeFingerprint, EDGE_SIGNATURE_CORPUS_VERSION } from './edgeFingerprint.mjs';
 import {
   WAF_CLASS_PROBE_MAX_REQUESTS,
   runWafClassMarkerProbe as runRawWafClassMarkerProbe,
@@ -558,6 +559,7 @@ async function resolveCnameChain(host, deps, maxHops) {
     }
     if (!next || chain.includes(next)) break;
     chain.push(next);
+    deps.onCnameObservation?.(chain);
   }
   return { chain, lookups };
 }
@@ -1962,10 +1964,28 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     pinnedDirectIp = directDestination.addresses[0];
   }
   const totalBudget = resolveProbeRequestBudget(job);
+  const reportProviderObservation = (chain = []) => {
+    if (!fingerprintOnly || typeof deps.onProviderObservation !== 'function') return;
+    const edge = classifyEdgeFingerprint({ resolvedIps: primaryDestination.addresses, cnameChain: chain, dnsObserved: true });
+    deps.onProviderObservation(enrichProbeMetadataWithWafCatalog(withKind(job, kind, {
+      edge_signature: { ...edge, waf_present: null, waf_providers: [], layers: edge.layers.filter((layer) => layer.family !== 'waf') },
+      edge_signature_corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
+      dns_resolved_ips: primaryDestination.addresses,
+      dns_cname_chain: chain,
+      baseline_status_code: 0,
+      waf_detected: null,
+      waf_fingerprint_detected: null,
+      detected_vendor: null,
+    }), job.check_id));
+  };
+  reportProviderObservation();
   const cnameHopBudget = Math.max(0, Math.min(OUTSIDE_IN_CNAME_HOPS_MAX, totalBudget - (fingerprintOnly ? 1 : OUTSIDE_IN_SCAN_DEFAULT_BUDGET)));
   const cnameResult = net.isIP(primaryHost ?? '') === 0 && cnameHopBudget > 0
-    ? await resolveCnameChain(primaryHost, primaryDeps, cnameHopBudget)
+    ? await resolveCnameChain(primaryHost, { ...primaryDeps,
+      ...(fingerprintOnly ? { onCnameObservation: reportProviderObservation } : {}),
+    }, cnameHopBudget)
     : { chain: [], lookups: 0 };
+  reportProviderObservation(cnameResult.chain);
   const budget = fingerprintOnly ? 1 : totalBudget - cnameResult.lookups;
   const rawFetch = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, primaryDeps));
   const deadlineFetch = async (input, init = {}) => {

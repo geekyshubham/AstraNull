@@ -43,7 +43,7 @@ reserved and attested as routing safety work, not stored as a DNS hint.
 
 ## Signed safe fingerprint algorithm
 
-Provider detection uses `waf.fingerprint.safe` version 2.0.0, kind `waf_fingerprint_observation` ([ADR-0018](../adr/0018-provider-fingerprints-as-observations.md)).
+Provider detection uses `waf.fingerprint.safe` version 2.1.0, kind `waf_fingerprint_observation` ([ADR-0018](../adr/0018-provider-fingerprints-as-observations.md)).
 
 1. Load the exact approved target from its signed job.
 2. Reserve and attest bounded A/AAAA destination classification, reject unsafe addresses, and pin the accepted address set.
@@ -166,12 +166,15 @@ Beyond the versioned product catalog, AstraNull vendors a generated edge signatu
 - **WAF vendors:** 172 vendor signature sets ported from AstraNull WAF fingerprint plugin data (188 passive
   header/cookie signatures decidable from one ordinary GET; 330 block-page signatures evaluated
   only against block evidence an authorized bounded check already captured).
-- **Address + CNAME:** AstraNull edge classifier CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
-  suffixes remain available to isolated helper tests and future separately governed collectors.
-  Signed `waf.fingerprint.safe` jobs do **not** run standalone CNAME/A/AAAA or TLS hint collectors:
-  those operations are not independently signed, pre-reserved, counted, deadline-bounded, and
-  destination-pinned. Signed results therefore make no DNS/TLS-hint claim and use only evidence
-  captured by the pre-reserved pinned HTTP fingerprint requests; CDN posture can remain inconclusive.
+- **Address + CNAME:** signed jobs classify their vetted destination addresses and up to three counted
+  CNAME lookups. They perform no additional A/AAAA or TLS hint collection. The separate, generated
+  `asnEdgeData.mjs` snapshot covers dedicated Akamai (AS16625/AS20940), Cloudflare (AS13335), and
+  Fastly (AS54113) CDN networks and AWS AS16509 cloud ownership missing from the upstream address
+  data; it adds no runtime requests.
+  Matches retain the actual matched ASN and `asn_dataset_version`. CDN ownership never establishes
+  WAF enablement. The pinned cdncheck `waf` label on known CDN/generic cloud CNAMEs is retained as
+  an upstream diagnostic but excluded from WAF providers and layers. `edgesuite.net` identifies
+  Akamai, not Edgecast. Generic DNS/traffic-manager suffixes do not establish CDN presence.
 - **Module:** `src/lib/edgeFingerprint.mjs` over the generated `src/lib/data/edgeSignatureData.mjs`;
   scanner results carry `edge_signature` and `edge_signature_corpus_version`, and signed
   `waf.fingerprint.safe` probe jobs carry corpus version metadata.
@@ -187,6 +190,19 @@ Beyond the versioned product catalog, AstraNull vendors a generated edge signatu
 
 Classification from the corpus never sends traffic by itself and never manufactures block
 evidence; per-signal provenance is retained so operators can audit any vendor match.
+
+An ordinary GET that already received a vendor-specific denial can supply block-page evidence
+without a marker request. A bare 403 or ordinary redirect cannot. With zero marker attempts,
+effectiveness is inconclusive and protection is `detected_only` for a matched WAF or `inconclusive`
+for a fingerprint miss; it cannot be `unprotected`. Historic stored fingerprint misses receive
+this corrected presentation without changing signed events or custody. See the
+[Barclays diagnosis](../backend/waf-cdn-detection-repair-2026-10-08.md).
+
+Generic CloudFront/ELB fingerprints and header-name-only catalog candidates do not establish WAF
+presence. The AWS managed-rule custom-response header can establish an AWS WAF fingerprint.
+Framer edge-hosting and both Fastly cache-node header formats have separate CDN signatures.
+Typed positive DNS provider evidence survives an HTTP deadline as an explicitly partial,
+inconclusive observation; WAF remains unknown and effectiveness untested.
 
 ## Done criteria
 

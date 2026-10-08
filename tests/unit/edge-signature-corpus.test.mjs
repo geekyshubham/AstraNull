@@ -77,9 +77,9 @@ function sha256File(relativePath) {
 
 describe('edge signature corpus provenance and inventory', () => {
   it('embeds exact commits, inputs, generator bytes, output hash, notices, and versions', () => {
-    assert.equal(EDGE_SIGNATURE_CORPUS_VERSION, '3');
-    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version, 3);
-    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.format, 'astranull-edge-signature-corpus-v3');
+    assert.equal(EDGE_SIGNATURE_CORPUS_VERSION, '4');
+    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version, 4);
+    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.format, 'astranull-edge-signature-corpus-v4');
     assert.equal(
       EDGE_SIGNATURE_CORPUS_MANIFEST.output_manifest,
       'src/lib/data/edgeSignatureData.manifest.json',
@@ -87,7 +87,7 @@ describe('edge signature corpus provenance and inventory', () => {
 
     assert.equal(OUTPUT_MANIFEST.manifest_version, 2);
     assert.equal(OUTPUT_MANIFEST.format, 'astranull-edge-signature-corpus-manifest-v2');
-    assert.equal(OUTPUT_MANIFEST.output_version, 3);
+    assert.equal(OUTPUT_MANIFEST.output_version, 4);
     assert.equal(OUTPUT_MANIFEST.generator.path, 'scripts/generate-edge-signatures.mjs');
     assert.equal(OUTPUT_MANIFEST.generator.sha256, sha256File(OUTPUT_MANIFEST.generator.path));
     assert.equal(
@@ -113,9 +113,9 @@ describe('edge signature corpus provenance and inventory', () => {
 
     const { wafw00f, cdncheck } = EDGE_SIGNATURE_CORPUS_MANIFEST.sources;
     assert.equal(wafw00f.commit, '69fbe3956bba47a172cf87e40e9037535d32a130');
-    assert.equal(cdncheck.commit, 'dac12984ef12fa5663c2b7591d0a304ef27c659b');
+    assert.equal(cdncheck.commit, 'a06260a272dc92cec0747f2f369b697088899bc7');
     assert.equal(wafw00f.plugin_tree_sha256, '44f4379d119d7cd688b2b8f68e5a1cd9e5bcf150491f46cb438d8a71f223b002');
-    assert.equal(cdncheck.sources_data_sha256, '4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3');
+    assert.equal(cdncheck.sources_data_sha256, '64641dd6d6af84c8d240a5860fe7cf05cad6d7634f8892bf007cbadb8c2670a5');
     assert.equal(cdncheck.cname_implementation_sha256, '37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a');
     assert.equal(cdncheck.cname_item_type, 'waf');
     assert.deepEqual(cdncheck.ported_categories, ['cdn', 'waf', 'cloud', 'common']);
@@ -172,25 +172,25 @@ describe('edge signature corpus provenance and inventory', () => {
       waf_vendors: 172,
       passive_signatures: 188,
       block_page_signatures: 330,
-      cdn_providers: 16,
+      cdn_providers: 17,
       waf_range_providers: 3,
       cloud_providers: 12,
       cname_providers: 32,
-      cdn_ranges: 2462,
-      waf_ranges: 1071,
-      cloud_ranges: 129127,
+      cdn_ranges: 2491,
+      waf_ranges: 1103,
+      cloud_ranges: 116097,
       cname_suffixes: 103,
     });
     assert.equal(Object.keys(WAF_VENDOR_SIGNATURES).length, 172);
     assert.equal(signatures.length, 518);
     assert.equal(signatures.filter((signature) => signature.tier === 'passive').length, 188);
     assert.equal(signatures.filter((signature) => signature.tier === 'block_page').length, 330);
-    assert.equal(countEntries(CDN_ADDRESS_RANGES), 2462);
-    assert.equal(countEntries(WAF_ADDRESS_RANGES), 1071);
+    assert.equal(countEntries(CDN_ADDRESS_RANGES), 2491);
+    assert.equal(countEntries(WAF_ADDRESS_RANGES), 1103);
     assert.equal(EDGE_CNAME_RULES.reduce((sum, rule) => sum + rule.suffixes.length, 0), 103);
     assert.equal(
       Object.values(CLOUD_ADDRESS_RANGES_PACKED).reduce((sum, provider) => sum + provider.count, 0),
-      129127,
+      116097,
     );
   });
 
