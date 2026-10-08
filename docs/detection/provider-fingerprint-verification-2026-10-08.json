@@ -1,0 +1,2317 @@
+{
+  "kind": "operator_public_http_dns_diagnostic",
+  "not_a_signed_platform_run": true,
+  "deployed_commit": "a845930fdf232bc66efde8143d220d9511e67593",
+  "fixed_check_version": "2.1.0",
+  "reclassified_at": "2026-10-08T05:23:54.273Z",
+  "additional_header_observation": {
+    "hostname": "www.westpac.com.au",
+    "probe_location": "production probe worker network",
+    "observed_on": "2026-10-08",
+    "header": "x-served-by",
+    "matched_format": "Fastly cache chain with ICAO datacenter codes"
+  },
+  "observations": [
+    {
+      "hostname": "qantas.com",
+      "observed_at": "2026-10-08T05:07:29.565Z",
+      "probe_location": "operator workstation",
+      "http_status": null,
+      "error_class": "timeout",
+      "dns_resolved_ips": [
+        "23.206.173.51",
+        "23.206.173.26"
+      ],
+      "dns_cname_chain": [
+        "qantas.com"
+      ],
+      "header_names": [],
+      "classification": {
+        "status": "inconclusive",
+        "reason": "worker_result_error",
+        "waf": {
+          "status": "inconclusive"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "akamai",
+          "type": "asn_lookup"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "akamai",
+            "display_name": "Akamai",
+            "sources": [
+              "asn_lookup"
+            ],
+            "confidence": 0.7,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "akamai"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.7,
+        "evidence_consistency": "single_source",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 20940,
+            "name": "Akamai",
+            "org": "Akamai International B.V.",
+            "provider": "akamai",
+            "country": "NL"
+          },
+          "asn_matches": [
+            {
+              "provider": "akamai",
+              "asn": 20940,
+              "org": "Akamai International B.V.",
+              "name": "Akamai"
+            }
+          ],
+          "cname_cdn_matches": [],
+          "vendor_matches": [],
+          "address_matches": [],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": false,
+            "provider": null,
+            "item_type": null,
+            "source": null,
+            "value": null
+          },
+          "dns_cname_chain": [
+            "qantas.com"
+          ],
+          "dns_resolved_ips": [
+            "23.206.173.51",
+            "23.206.173.26"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": false,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Akamai (CDN). WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Akamai (CDN).",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.qantas.com",
+      "observed_at": "2026-10-08T05:07:34.657Z",
+      "probe_location": "operator workstation",
+      "http_status": null,
+      "error_class": "timeout",
+      "dns_resolved_ips": [
+        "23.206.173.51",
+        "23.206.173.26"
+      ],
+      "dns_cname_chain": [
+        "www.qantas.com",
+        "www.qantas.com.edgekey.net",
+        "e72018.x.akamaiedge.net"
+      ],
+      "header_names": [],
+      "classification": {
+        "status": "inconclusive",
+        "reason": "worker_result_error",
+        "waf": {
+          "status": "inconclusive"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "akamai",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "akamai",
+            "display_name": "Akamai",
+            "sources": [
+              "cname_suffix",
+              "asn_lookup"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "akamai"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.8,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 20940,
+            "name": "Akamai",
+            "org": "Akamai International B.V.",
+            "provider": "akamai",
+            "country": "NL"
+          },
+          "asn_matches": [
+            {
+              "provider": "akamai",
+              "asn": 20940,
+              "org": "Akamai International B.V.",
+              "name": "Akamai"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "akamai",
+              "family": "cdn",
+              "suffix": "edgekey.net"
+            },
+            {
+              "provider": "akamai",
+              "family": "cdn",
+              "suffix": "akamaiedge.net"
+            }
+          ],
+          "vendor_matches": [],
+          "address_matches": [],
+          "cname_matches": [
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "edgekey.net"
+            },
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "akamaiedge.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "akamai",
+            "item_type": "waf",
+            "source": "cname",
+            "value": "www.qantas.com.edgekey.net"
+          },
+          "dns_cname_chain": [
+            "www.qantas.com",
+            "www.qantas.com.edgekey.net",
+            "e72018.x.akamaiedge.net"
+          ],
+          "dns_resolved_ips": [
+            "23.206.173.51",
+            "23.206.173.26"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": false,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Akamai (CDN). WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Akamai (CDN).",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "westpac.com.au",
+      "observed_at": "2026-10-08T05:07:34.864Z",
+      "probe_location": "operator workstation",
+      "http_status": 301,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "13.225.5.5",
+        "13.225.5.123",
+        "13.225.5.46",
+        "13.225.5.122"
+      ],
+      "dns_cname_chain": [
+        "westpac.com.au"
+      ],
+      "header_names": [
+        "location",
+        "server",
+        "via"
+      ],
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "not_detected"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudfront",
+          "type": "address_range"
+        },
+        "cloud": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "address_range"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudfront",
+            "display_name": null,
+            "sources": [
+              "response_header",
+              "address_range"
+            ],
+            "confidence": 0.9,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cloud",
+            "provider": "aws",
+            "display_name": "AWS",
+            "sources": [
+              "address_range",
+              "asn_lookup"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "cloudfront"
+        ],
+        "cloud_providers": [
+          "aws"
+        ],
+        "confidence": 0.9,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 16509,
+            "name": "AWS",
+            "org": "Amazon.com, Inc.",
+            "provider": "aws",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "aws",
+              "asn": 16509,
+              "org": "Amazon.com, Inc.",
+              "name": "AWS"
+            }
+          ],
+          "cname_cdn_matches": [],
+          "vendor_matches": [
+            {
+              "vendor": "cloudfront",
+              "name": "Cloudfront (Amazon)",
+              "confidence": 0.65,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                },
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "cdn",
+              "provider": "cloudfront"
+            },
+            {
+              "family": "cloud",
+              "provider": "aws"
+            }
+          ],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [
+              "cloudfront"
+            ],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudfront",
+            "item_type": "cdn",
+            "source": "a",
+            "value": "13.225.5.5"
+          },
+          "dns_cname_chain": [
+            "westpac.com.au"
+          ],
+          "dns_resolved_ips": [
+            "13.225.5.5",
+            "13.225.5.123",
+            "13.225.5.46",
+            "13.225.5.122"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Amazon CloudFront (CDN). No WAF was detected. WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Amazon CloudFront (CDN). No WAF was detected.",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.westpac.com.au",
+      "observed_at": "2026-10-08T05:07:35.142Z",
+      "probe_location": "operator workstation",
+      "http_status": 200,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "13.225.5.5",
+        "13.225.5.123",
+        "13.225.5.122",
+        "13.225.5.46"
+      ],
+      "dns_cname_chain": [
+        "www.westpac.com.au",
+        "dplenhq18279.cloudfront.net"
+      ],
+      "header_names": [
+        "server",
+        "via"
+      ],
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "not_detected"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudfront",
+          "type": "address_range"
+        },
+        "cloud": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "address_range"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudfront",
+            "display_name": null,
+            "sources": [
+              "response_header",
+              "cname_suffix",
+              "address_range"
+            ],
+            "confidence": 0.95,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cloud",
+            "provider": "aws",
+            "display_name": "AWS",
+            "sources": [
+              "address_range",
+              "asn_lookup"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "cloudfront"
+        ],
+        "cloud_providers": [
+          "aws"
+        ],
+        "confidence": 0.95,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 16509,
+            "name": "AWS",
+            "org": "Amazon.com, Inc.",
+            "provider": "aws",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "aws",
+              "asn": 16509,
+              "org": "Amazon.com, Inc.",
+              "name": "AWS"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "cloudfront",
+              "family": "cdn",
+              "suffix": "cloudfront.net"
+            }
+          ],
+          "vendor_matches": [
+            {
+              "vendor": "cloudfront",
+              "name": "Cloudfront (Amazon)",
+              "confidence": 0.65,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                },
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "cdn",
+              "provider": "cloudfront"
+            },
+            {
+              "family": "cloud",
+              "provider": "aws"
+            }
+          ],
+          "cname_matches": [
+            {
+              "provider": "amazon",
+              "type": "waf",
+              "suffix": "cloudfront.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [
+              "cloudfront"
+            ],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudfront",
+            "item_type": "cdn",
+            "source": "a",
+            "value": "13.225.5.5"
+          },
+          "dns_cname_chain": [
+            "www.westpac.com.au",
+            "dplenhq18279.cloudfront.net"
+          ],
+          "dns_resolved_ips": [
+            "13.225.5.5",
+            "13.225.5.123",
+            "13.225.5.122",
+            "13.225.5.46"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Amazon CloudFront (CDN). No WAF was detected. WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Amazon CloudFront (CDN). No WAF was detected.",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "jagex.com",
+      "observed_at": "2026-10-08T05:09:34.327Z",
+      "probe_location": "operator workstation",
+      "http_status": 308,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "31.43.161.19",
+        "31.43.160.19"
+      ],
+      "dns_cname_chain": [
+        "jagex.com"
+      ],
+      "header_names": [
+        "location",
+        "server"
+      ],
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "not_detected"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "framer",
+          "type": "response_header"
+        },
+        "cloud": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "asn_lookup"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "framer",
+            "display_name": null,
+            "sources": [
+              "response_header"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cloud",
+            "provider": "aws",
+            "display_name": "AWS",
+            "sources": [
+              "asn_lookup"
+            ],
+            "confidence": 0.7,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "framer"
+        ],
+        "cloud_providers": [
+          "aws"
+        ],
+        "confidence": 0.8,
+        "evidence_consistency": "multiple_layers",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 16509,
+            "name": "AWS",
+            "org": "Amazon.com, Inc.",
+            "provider": "aws",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "aws",
+              "asn": 16509,
+              "org": "Amazon.com, Inc.",
+              "name": "AWS"
+            }
+          ],
+          "cname_cdn_matches": [],
+          "vendor_matches": [],
+          "address_matches": [],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": false,
+            "provider": null,
+            "item_type": null,
+            "source": null,
+            "value": null
+          },
+          "dns_cname_chain": [
+            "jagex.com"
+          ],
+          "dns_resolved_ips": [
+            "31.43.161.19",
+            "31.43.160.19"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Framer (CDN). No WAF was detected. WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Framer (CDN). No WAF was detected.",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.jagex.com",
+      "observed_at": "2026-10-08T05:09:34.656Z",
+      "probe_location": "operator workstation",
+      "http_status": 200,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "104.18.40.92",
+        "172.64.147.164"
+      ],
+      "dns_cname_chain": [
+        "www.jagex.com",
+        "www.jagex.com.cdn.cloudflare.net"
+      ],
+      "header_names": [
+        "server"
+      ],
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "response_fingerprint"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudflare",
+            "display_name": "Cloudflare",
+            "sources": [
+              "response_header",
+              "cname_suffix",
+              "asn_lookup"
+            ],
+            "confidence": 0.95,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "cloudflare",
+            "display_name": "Cloudflare",
+            "sources": [
+              "response_fingerprint",
+              "address_range"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [
+          "cloudflare"
+        ],
+        "cdn_providers": [
+          "cloudflare"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.95,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 13335,
+            "name": "Cloudflare",
+            "org": "Cloudflare, Inc.",
+            "provider": "cloudflare",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "cloudflare",
+              "asn": 13335,
+              "org": "Cloudflare, Inc.",
+              "name": "Cloudflare"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "cloudflare",
+              "family": "cdn",
+              "suffix": "cloudflare.net"
+            }
+          ],
+          "vendor_matches": [
+            {
+              "vendor": "cloudflare",
+              "name": "Cloudflare (Cloudflare Inc.)",
+              "confidence": 0.45,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "waf",
+              "provider": "cloudflare"
+            }
+          ],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": true,
+            "firewall": "Cloudflare",
+            "manufacturer": "Cloudflare Inc.",
+            "plugin": "cloudflare",
+            "all_matches": [
+              "cloudflare"
+            ],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudflare",
+            "item_type": "waf",
+            "source": "a",
+            "value": "104.18.40.92"
+          },
+          "dns_cname_chain": [
+            "www.jagex.com",
+            "www.jagex.com.cdn.cloudflare.net"
+          ],
+          "dns_resolved_ips": [
+            "104.18.40.92",
+            "172.64.147.164"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "detected_only",
+          "label": "WAF detected; effectiveness not established",
+          "evidence_tier": "presence_only",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Cloudflare (CDN and WAF). WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Cloudflare (CDN and WAF).",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.qantas.com",
+      "observed_at": "2026-10-08T05:14:30.854Z",
+      "probe_location": "production probe worker network",
+      "http_status": null,
+      "error_class": "timeout",
+      "dns_resolved_ips": [
+        "2.18.67.159",
+        "2.18.67.163"
+      ],
+      "dns_cname_chain": [
+        "www.qantas.com",
+        "www.qantas.com.edgekey.net",
+        "e72018.x.akamaiedge.net"
+      ],
+      "header_names": [],
+      "deployed_classification": {
+        "status": "inconclusive",
+        "reason": "worker_result_error",
+        "waf": {
+          "status": "detected",
+          "provider": "akamai",
+          "type": "cname_suffix"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "akamai",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "akamai",
+            "display_name": null,
+            "sources": [
+              "cname_suffix"
+            ],
+            "confidence": 0.65,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "akamai",
+            "display_name": null,
+            "sources": [
+              "cname_suffix"
+            ],
+            "confidence": 0.65,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [
+          "akamai"
+        ],
+        "cdn_providers": [
+          "akamai"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.65,
+        "evidence_consistency": "multiple_layers",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "vendor_matches": [],
+          "address_matches": [],
+          "cname_matches": [
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "edgekey.net"
+            },
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "akamaiedge.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [],
+            "generic": {
+              "found": true,
+              "reason_code": "connection_level_blocking",
+              "reason": "Blocking is being done at connection/packet level."
+            }
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "akamai",
+            "item_type": "waf",
+            "source": "cname",
+            "value": "www.qantas.com.edgekey.net"
+          },
+          "dns_cname_chain": [
+            "www.qantas.com",
+            "www.qantas.com.edgekey.net",
+            "e72018.x.akamaiedge.net"
+          ],
+          "dns_resolved_ips": [
+            "2.18.67.159",
+            "2.18.67.163"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": false,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Akamai (CDN and WAF). WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+        "summary": {
+          "edge": "Detected Akamai (CDN and WAF).",
+          "effectiveness": "WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      },
+      "classification": {
+        "status": "inconclusive",
+        "reason": "worker_result_error",
+        "waf": {
+          "status": "inconclusive"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "akamai",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "akamai",
+            "display_name": "Akamai",
+            "sources": [
+              "cname_suffix",
+              "asn_lookup"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "akamai"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.8,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 20940,
+            "name": "Akamai",
+            "org": "Akamai International B.V.",
+            "provider": "akamai",
+            "country": "NL"
+          },
+          "asn_matches": [
+            {
+              "provider": "akamai",
+              "asn": 20940,
+              "org": "Akamai International B.V.",
+              "name": "Akamai"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "akamai",
+              "family": "cdn",
+              "suffix": "edgekey.net"
+            },
+            {
+              "provider": "akamai",
+              "family": "cdn",
+              "suffix": "akamaiedge.net"
+            }
+          ],
+          "vendor_matches": [],
+          "address_matches": [],
+          "cname_matches": [
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "edgekey.net"
+            },
+            {
+              "provider": "akamai",
+              "type": "waf",
+              "suffix": "akamaiedge.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "akamai",
+            "item_type": "waf",
+            "source": "cname",
+            "value": "www.qantas.com.edgekey.net"
+          },
+          "dns_cname_chain": [
+            "www.qantas.com",
+            "www.qantas.com.edgekey.net",
+            "e72018.x.akamaiedge.net"
+          ],
+          "dns_resolved_ips": [
+            "2.18.67.159",
+            "2.18.67.163"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": false,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Akamai (CDN). WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Akamai (CDN).",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.westpac.com.au",
+      "observed_at": "2026-10-08T05:14:30.940Z",
+      "probe_location": "production probe worker network",
+      "http_status": 200,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "18.165.83.68",
+        "18.165.83.9",
+        "18.165.83.74",
+        "18.165.83.47"
+      ],
+      "dns_cname_chain": [
+        "www.westpac.com.au",
+        "dplenhq18279.cloudfront.net"
+      ],
+      "header_names": [
+        "server",
+        "via",
+        "x-served-by"
+      ],
+      "deployed_classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "response_fingerprint"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudfront",
+          "type": "address_range"
+        },
+        "cloud": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "address_range"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudfront",
+            "display_name": null,
+            "sources": [
+              "response_header",
+              "cname_suffix",
+              "address_range"
+            ],
+            "confidence": 0.95,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cdn",
+            "provider": "fastly",
+            "display_name": null,
+            "sources": [
+              "response_header"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "amazon",
+            "display_name": null,
+            "sources": [
+              "cname_suffix"
+            ],
+            "confidence": 0.65,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "cloudfront",
+            "display_name": "Cloudfront",
+            "sources": [
+              "response_fingerprint"
+            ],
+            "confidence": 0.65,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 2,
+            "conflicting": false
+          },
+          {
+            "family": "cloud",
+            "provider": "aws",
+            "display_name": null,
+            "sources": [
+              "address_range"
+            ],
+            "confidence": 0.7,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [
+          "amazon",
+          "cloudfront"
+        ],
+        "cdn_providers": [
+          "cloudfront",
+          "fastly"
+        ],
+        "cloud_providers": [
+          "aws"
+        ],
+        "confidence": 0.95,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "vendor_matches": [
+            {
+              "vendor": "cloudfront",
+              "name": "Cloudfront (Amazon)",
+              "confidence": 0.65,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                },
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "cdn",
+              "provider": "cloudfront"
+            },
+            {
+              "family": "cloud",
+              "provider": "aws"
+            }
+          ],
+          "cname_matches": [
+            {
+              "provider": "amazon",
+              "type": "waf",
+              "suffix": "cloudfront.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": true,
+            "firewall": "Cloudfront",
+            "manufacturer": "Amazon",
+            "plugin": "cloudfront",
+            "all_matches": [
+              "cloudfront"
+            ],
+            "generic": {
+              "found": false,
+              "reason_code": null,
+              "reason": null
+            }
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudfront",
+            "item_type": "cdn",
+            "source": "a",
+            "value": "18.165.83.68"
+          },
+          "dns_cname_chain": [
+            "www.westpac.com.au",
+            "dplenhq18279.cloudfront.net"
+          ],
+          "dns_resolved_ips": [
+            "18.165.83.68",
+            "18.165.83.9",
+            "18.165.83.74",
+            "18.165.83.47"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Amazon CloudFront (CDN and WAF), Fastly (CDN), and Amazon (WAF). WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+        "summary": {
+          "edge": "Detected Amazon CloudFront (CDN and WAF), Fastly (CDN), and Amazon (WAF).",
+          "effectiveness": "WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      },
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "not_detected"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudfront",
+          "type": "address_range"
+        },
+        "cloud": {
+          "status": "detected",
+          "provider": "aws",
+          "type": "address_range"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudfront",
+            "display_name": null,
+            "sources": [
+              "response_header",
+              "cname_suffix",
+              "address_range"
+            ],
+            "confidence": 0.95,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cdn",
+            "provider": "fastly",
+            "display_name": null,
+            "sources": [
+              "response_header"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "single_source",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "cloud",
+            "provider": "aws",
+            "display_name": "AWS",
+            "sources": [
+              "address_range",
+              "asn_lookup"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [],
+        "cdn_providers": [
+          "cloudfront",
+          "fastly"
+        ],
+        "cloud_providers": [
+          "aws"
+        ],
+        "confidence": 0.95,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 16509,
+            "name": "AWS",
+            "org": "Amazon.com, Inc.",
+            "provider": "aws",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "aws",
+              "asn": 16509,
+              "org": "Amazon.com, Inc.",
+              "name": "AWS"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "cloudfront",
+              "family": "cdn",
+              "suffix": "cloudfront.net"
+            }
+          ],
+          "vendor_matches": [
+            {
+              "vendor": "cloudfront",
+              "name": "Cloudfront (Amazon)",
+              "confidence": 0.65,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                },
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "cdn",
+              "provider": "cloudfront"
+            },
+            {
+              "family": "cloud",
+              "provider": "aws"
+            }
+          ],
+          "cname_matches": [
+            {
+              "provider": "amazon",
+              "type": "waf",
+              "suffix": "cloudfront.net"
+            }
+          ],
+          "waf_fingerprint": {
+            "detected": false,
+            "firewall": "None",
+            "manufacturer": "None",
+            "plugin": null,
+            "all_matches": [
+              "cloudfront"
+            ],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudfront",
+            "item_type": "cdn",
+            "source": "a",
+            "value": "18.165.83.68"
+          },
+          "dns_cname_chain": [
+            "www.westpac.com.au",
+            "dplenhq18279.cloudfront.net"
+          ],
+          "dns_resolved_ips": [
+            "18.165.83.68",
+            "18.165.83.9",
+            "18.165.83.74",
+            "18.165.83.47"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Amazon CloudFront (CDN) and Fastly (CDN). No WAF was detected. WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Amazon CloudFront (CDN) and Fastly (CDN). No WAF was detected.",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    },
+    {
+      "hostname": "www.jagex.com",
+      "observed_at": "2026-10-08T05:14:31.041Z",
+      "probe_location": "production probe worker network",
+      "http_status": 200,
+      "error_class": null,
+      "dns_resolved_ips": [
+        "104.18.40.92",
+        "172.64.147.164"
+      ],
+      "dns_cname_chain": [
+        "www.jagex.com",
+        "www.jagex.com.cdn.cloudflare.net"
+      ],
+      "header_names": [
+        "server"
+      ],
+      "deployed_classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "response_fingerprint"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudflare",
+            "display_name": null,
+            "sources": [
+              "response_header",
+              "cname_suffix"
+            ],
+            "confidence": 0.9,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "cloudflare",
+            "display_name": "Cloudflare",
+            "sources": [
+              "response_fingerprint",
+              "address_range"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 2,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [
+          "cloudflare"
+        ],
+        "cdn_providers": [
+          "cloudflare"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.9,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "vendor_matches": [
+            {
+              "vendor": "cloudflare",
+              "name": "Cloudflare (Cloudflare Inc.)",
+              "confidence": 0.65,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                },
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "waf",
+              "provider": "cloudflare"
+            }
+          ],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": true,
+            "firewall": "Cloudflare",
+            "manufacturer": "Cloudflare Inc.",
+            "plugin": "cloudflare",
+            "all_matches": [
+              "cloudflare"
+            ],
+            "generic": {
+              "found": false,
+              "reason_code": null,
+              "reason": null
+            }
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudflare",
+            "item_type": "waf",
+            "source": "a",
+            "value": "104.18.40.92"
+          },
+          "dns_cname_chain": [
+            "www.jagex.com",
+            "www.jagex.com.cdn.cloudflare.net"
+          ],
+          "dns_resolved_ips": [
+            "104.18.40.92",
+            "172.64.147.164"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "evidence_tier": "insufficient_evidence",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Cloudflare (CDN and WAF). WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+        "summary": {
+          "edge": "Detected Cloudflare (CDN and WAF).",
+          "effectiveness": "WAF effectiveness is inconclusive because the scan did not produce enough usable marker evidence.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      },
+      "classification": {
+        "status": "detected",
+        "reason": null,
+        "waf": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "response_fingerprint"
+        },
+        "cdn": {
+          "status": "detected",
+          "provider": "cloudflare",
+          "type": "cname_suffix"
+        },
+        "cloud": {
+          "status": "not_detected"
+        },
+        "layers": [
+          {
+            "family": "cdn",
+            "provider": "cloudflare",
+            "display_name": "Cloudflare",
+            "sources": [
+              "response_header",
+              "cname_suffix",
+              "asn_lookup"
+            ],
+            "confidence": 0.95,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          },
+          {
+            "family": "waf",
+            "provider": "cloudflare",
+            "display_name": "Cloudflare",
+            "sources": [
+              "response_fingerprint",
+              "address_range"
+            ],
+            "confidence": 0.8,
+            "evidence_consistency": "agreement",
+            "matched_signal_count": 1,
+            "conflicting": false
+          }
+        ],
+        "waf_providers": [
+          "cloudflare"
+        ],
+        "cdn_providers": [
+          "cloudflare"
+        ],
+        "cloud_providers": [],
+        "confidence": 0.95,
+        "evidence_consistency": "agreement",
+        "conflicting_vendor_signals": false,
+        "conflicting_provider_signals": false,
+        "corpus_version": "3",
+        "test_run_id": null,
+        "observed_at": null,
+        "updated_at": null,
+        "evidence": {
+          "asn_dataset_version": "sha256:fb1733d1f010b84581adf298e6e030f2c54124ffb5c58f47e20d0eefb79a2aaf",
+          "asn": {
+            "asn": 13335,
+            "name": "Cloudflare",
+            "org": "Cloudflare, Inc.",
+            "provider": "cloudflare",
+            "country": "US"
+          },
+          "asn_matches": [
+            {
+              "provider": "cloudflare",
+              "asn": 13335,
+              "org": "Cloudflare, Inc.",
+              "name": "Cloudflare"
+            }
+          ],
+          "cname_cdn_matches": [
+            {
+              "provider": "cloudflare",
+              "family": "cdn",
+              "suffix": "cloudflare.net"
+            }
+          ],
+          "vendor_matches": [
+            {
+              "vendor": "cloudflare",
+              "name": "Cloudflare (Cloudflare Inc.)",
+              "confidence": 0.45,
+              "matched_signals": [
+                {
+                  "signal": "header",
+                  "tier": "passive"
+                }
+              ]
+            }
+          ],
+          "address_matches": [
+            {
+              "family": "waf",
+              "provider": "cloudflare"
+            }
+          ],
+          "cname_matches": [],
+          "waf_fingerprint": {
+            "detected": true,
+            "firewall": "Cloudflare",
+            "manufacturer": "Cloudflare Inc.",
+            "plugin": "cloudflare",
+            "all_matches": [
+              "cloudflare"
+            ],
+            "generic": null
+          },
+          "edge_classifier": {
+            "matched": true,
+            "provider": "cloudflare",
+            "item_type": "waf",
+            "source": "a",
+            "value": "104.18.40.92"
+          },
+          "dns_cname_chain": [
+            "www.jagex.com",
+            "www.jagex.com.cdn.cloudflare.net"
+          ],
+          "dns_resolved_ips": [
+            "104.18.40.92",
+            "172.64.147.164"
+          ]
+        },
+        "effectiveness": {
+          "status": "inconclusive",
+          "label": "Inconclusive",
+          "attempted_count": 0,
+          "tested_count": 0,
+          "blocked_count": 0,
+          "passed_count": 0,
+          "inconclusive_count": 0,
+          "percentage": null,
+          "coverage_complete": true,
+          "required_class_coverage_complete": false,
+          "per_class": {
+            "sqli": "not_tested",
+            "xss": "not_tested",
+            "path_traversal": "not_tested",
+            "evasion_variants": "not_tested",
+            "content_type_confusion": "not_tested",
+            "multipart_confusion": "not_tested",
+            "inspection_limit": "not_tested"
+          }
+        },
+        "protection": {
+          "status": "detected_only",
+          "label": "WAF detected; effectiveness not established",
+          "evidence_tier": "presence_only",
+          "origin_lockdown_confirmed": false,
+          "origin_lockdown_basis": null
+        },
+        "network_firewall": {
+          "status": "not_tested",
+          "direct_origin_reachability": {
+            "status": "not_tested",
+            "outcome": "not_tested",
+            "label": "Not tested",
+            "reachable": false,
+            "explicit_denial_observed": false,
+            "application_bypass_confirmed": false,
+            "application_bypass_suspected": false,
+            "status_code": null
+          },
+          "port_exposure": {
+            "status": "not_tested",
+            "open_ports": [],
+            "tested_count": 0,
+            "reason": "separate_bounded_port_scan_required"
+          }
+        },
+        "plain_language_summary": "Detected Cloudflare (CDN and WAF). WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+        "summary": {
+          "edge": "Detected Cloudflare (CDN and WAF).",
+          "effectiveness": "WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.",
+          "network_firewall": "Direct-origin reachability and exposed ports were not tested by this scan. Exposed ports require the separate bounded firewall scan."
+        }
+      }
+    }
+  ]
+}

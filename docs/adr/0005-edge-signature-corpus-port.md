@@ -163,3 +163,31 @@ Relying solely on cdncheck static feeds left these providers unrecognized (`clou
 - Target detail views, protection summaries, and probe worker metadata now cleanly surface both CDN
   and hosting infrastructure (e.g. `AS24940 · Hetzner Online GmbH`).
 
+## Addendum 3: CDN ASN coverage and observation correctness (2026-10-08)
+
+The Barclays fingerprint observation returned HTTP 302 on an Akamai address absent from cdncheck's
+CDN ranges. The ASN registry contained Akamai, but the generated offline lookup contained only
+hosting providers. `asnEdgeData.mjs` now separately packs current RIPE RIS-announced prefixes for
+AS16625/AS20940, AS13335, AS54113 and AWS AS16509 (cloud ownership). Regeneration is `node scripts/generate-asn-cloud-data.mjs --edge`;
+it rejects failed/empty responses, excludes withdrawn routes, preserves the matched ASN, and records
+source times plus a content hash. This supplements the pinned corpus without altering its upstream
+data or parity diagnostic. It introduces no runtime I/O. Network ownership alone is never WAF proof.
+
+The historical cdncheck `waf` result for known CDN suffixes and generic cloud/DNS suffixes is excluded
+from canonical WAF providers/layers. The diagnostic remains available, but the canonical result
+corrects `edgesuite.net` to Akamai alone and no longer calls generic traffic-manager/DNS hostnames
+CDNs. Ordinary GET responses with a recognized vendor denial may supply existing block-page evidence;
+a generic 403 may not. Generic cache headers do not identify a provider by themselves.
+
+The fingerprint check becomes version 2.1.0. Zero enforcement attempts cannot establish an
+unprotected posture. Stored rows receive corrected presentation without rewriting original signed
+events; a new versioned run is required for corrected provider detection. API fields and existing
+JSONB evidence carry ASN provenance without a database migration or new authorization path.
+
+The Westpac/Jagex regression pass additionally excludes generic CloudFront and ELB plugin matches
+from canonical WAF claims; AWS managed-rule-specific evidence is required for the ELB plugin.
+Header-name-only product catalog candidates remain advisory and cannot override canonical WAF
+evidence. Framer server/CNAME signals identify its documented edge hosting independently of
+CloudFront/Cloudflare. Both old and current Fastly cache-node header formats are supported, while
+generic `X-Served-By` values remain insufficient. Multiple CDN layers are retained without inferring
+their order or WAF enforcement. Original upstream matcher diagnostics remain inspectable.

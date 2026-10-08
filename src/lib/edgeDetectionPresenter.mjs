@@ -25,6 +25,7 @@ const PROVIDER_DISPLAY_NAMES = Object.freeze({
   cloudflare: 'Cloudflare',
   cloudfront: 'Amazon CloudFront',
   fastly: 'Fastly',
+  framer: 'Framer',
   gcp: 'Google Cloud',
   google: 'Google Cloud',
   modsecurity: 'ModSecurity',
@@ -152,7 +153,10 @@ function presentedLayers(evidence, record) {
 
 function effectivenessPresentation(raw, wafStatus) {
   const value = asRecord(raw);
-  const status = boundedString(value?.status, 48)
+  const attemptedCount = boundedNumber(value?.attempted_count);
+  const status = attemptedCount === 0 && boundedNumber(value?.tested_count) === 0
+    ? 'inconclusive'
+    : boundedString(value?.status, 48)
     || (wafStatus === 'not_detected' ? 'no_waf_detected' : 'inconclusive');
   const testedCount = boundedNumber(value?.tested_count);
   const percentage = testedCount > 0
@@ -161,8 +165,9 @@ function effectivenessPresentation(raw, wafStatus) {
   const perClass = asRecord(value?.per_class) ?? {};
   return {
     status,
-    label: boundedString(value?.label) || (status === 'no_waf_detected' ? 'No WAF detected' : 'Inconclusive'),
-    attempted_count: boundedNumber(value?.attempted_count),
+    label: status === 'inconclusive' ? 'Inconclusive'
+      : boundedString(value?.label) || (status === 'no_waf_detected' ? 'No WAF detected' : 'Inconclusive'),
+    attempted_count: attemptedCount,
     tested_count: testedCount,
     blocked_count: boundedNumber(value?.blocked_count),
     passed_count: boundedNumber(value?.passed_count),
@@ -194,6 +199,9 @@ function protectionPresentation(raw, effectiveness, wafStatus) {
   let status = allowedStatuses.has(reportedStatus)
     ? reportedStatus
     : (wafStatus === 'not_detected' ? 'unprotected' : 'inconclusive');
+  if (status === 'unprotected' && effectiveness.attempted_count === 0 && effectiveness.tested_count === 0) {
+    status = 'inconclusive';
+  }
   if (status === 'protected' || status === 'edge_protected') {
     if (['present_but_not_effective', 'partially_effective'].includes(effectiveness.status)) {
       status = 'underprotected';
@@ -292,7 +300,6 @@ function buildPlainLanguageSummary(presented) {
   const cloudLabels = [...new Set(presented.layers
     .filter((layer) => layer.family === 'cloud')
     .map(providerDisplayName))];
-  const hasWaf = presented.waf.status === 'detected';
   const hasCdn = presented.cdn.status === 'detected';
   let edge;
   if (presented.conflicting_provider_signals && labels.length) {
@@ -300,7 +307,7 @@ function buildPlainLanguageSummary(presented) {
   } else if (labels.length) {
     const prefix = presented.protection.status === 'protected' ? 'Protected by' : 'Detected';
     edge = `${prefix} ${englishList(labels)}.`;
-    if (!hasWaf && hasCdn) edge += ' No WAF was detected.';
+    if (presented.waf.status === 'not_detected' && hasCdn) edge += ' No WAF was detected.';
   } else if (cloudLabels.length) {
     edge = `Resolved addresses map to ${englishList(cloudLabels)} cloud infrastructure. No WAF or CDN was detected.`;
   } else if (presented.waf.status === 'not_detected' && presented.cdn.status === 'not_detected') {
@@ -313,7 +320,9 @@ function buildPlainLanguageSummary(presented) {
 
   const effect = presented.effectiveness;
   let effectiveness;
-  if (effect.status === 'present_but_not_effective') {
+  if (effect.attempted_count === 0 && effect.tested_count === 0) {
+    effectiveness = 'WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.';
+  } else if (effect.status === 'present_but_not_effective') {
     effectiveness = `A WAF is present but not effective: it blocked ${effect.blocked_count} of ${effect.tested_count} safe test probes (${effect.percentage ?? 0}%).`;
   } else if (['effective_for_tested_probes', 'partially_effective'].includes(effect.status)
     && effect.tested_count > 0 && effect.percentage !== null) {
@@ -398,6 +407,10 @@ export function presentTargetEdgeDetection(row) {
     observed_at: isoOrNull(record.observed_at),
     updated_at: isoOrNull(record.updated_at),
     evidence: {
+      asn_dataset_version: boundedString(evidence.asn_dataset_version, 80) || null,
+      asn: asRecord(evidence.asn),
+      asn_matches: Array.isArray(evidence.asn_matches) ? evidence.asn_matches : [],
+      cname_cdn_matches: Array.isArray(evidence.cname_cdn_matches) ? evidence.cname_cdn_matches : [],
       vendor_matches: Array.isArray(evidence.vendor_matches) ? evidence.vendor_matches : [],
       address_matches: Array.isArray(evidence.address_matches) ? evidence.address_matches : [],
       cname_matches: Array.isArray(evidence.cname_matches) ? evidence.cname_matches : [],

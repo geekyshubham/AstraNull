@@ -123,7 +123,8 @@ export function assessWafEffectiveness({
   let status = 'inconclusive';
   // G4: inconclusive marker rows are coverage gaps; they never void the definitive rows beside them.
   if (!transportError) {
-    if (wafPresent === false) status = 'no_waf_detected';
+    if (rows.length === 0) status = 'inconclusive';
+    else if (wafPresent === false) status = 'no_waf_detected';
     else if (wafPresent === true && testedCount > 0) {
       if (passedCount > 0) {
         status = blockedCount === 0 && requiredClassCoverageComplete
@@ -267,7 +268,10 @@ function projectProtection(metadata, waf, effectiveness) {
   const hasError = boundedString(metadata.error_class)
     || ['error', 'timeout'].includes(boundedString(metadata.external_result).toLowerCase());
   let status = 'detected_only';
-  if (hasError || effectiveness.status === 'inconclusive') status = 'inconclusive';
+  if (hasError) status = 'inconclusive';
+  else if (effectiveness.attempted_count === 0 && !metadataConfirmsApplicationBypass(metadata)) {
+    status = waf.status === 'detected' ? 'detected_only' : 'inconclusive';
+  } else if (effectiveness.status === 'inconclusive') status = 'inconclusive';
   else if (metadataConfirmsApplicationBypass(metadata)
     || ['present_but_not_effective', 'partially_effective'].includes(effectiveness.status)) {
     status = 'underprotected';
@@ -358,6 +362,7 @@ function evidenceSummary(edgeSignature) {
     ? edgeSignature.vendor_matches.slice(0, MAX_EVIDENCE_VENDORS)
     : [];
   return {
+    asn_dataset_version: boundedString(edgeSignature.asn_dataset_version, 80) || null,
     vendor_matches: vendorMatches.map((raw) => {
       const match = asRecord(raw) ?? {};
       return {
@@ -472,6 +477,8 @@ export function projectEdgeDetection(metadata = {}) {
   const meta = asRecord(metadata) ?? {};
   const edgeSignature = asRecord(meta.edge_signature) ?? {};
   const bestVendor = asRecord(edgeSignature.best_vendor);
+  const transportError = Boolean(boundedString(meta.error_class))
+    || ['error', 'timeout'].includes(boundedString(meta.external_result).toLowerCase());
 
   // `edge_signature` is canonical. Legacy top-level posture summaries may be recomputed during
   // agent enrichment without that nested input, so consult them only when the canonical boolean
@@ -480,6 +487,9 @@ export function projectEdgeDetection(metadata = {}) {
   const wafSignal = explicitEdgeBoolean(typeof edgeSignature.waf_present === 'boolean'
     ? [edgeSignature.waf_present || genericWaf]
     : [meta.waf_fingerprint_detected, meta.waf_detected]);
+  if (transportError && !wafSignal.value && !(Number(meta.baseline_status_code) >= 100)) {
+    wafSignal.observed = false;
+  }
   // A missing or null CDN answer means DNS was never observed: inconclusive, never not_detected.
   const cdnSignal = explicitEdgeBoolean('cdn_detected' in edgeSignature
     ? [edgeSignature.cdn_detected]
@@ -530,8 +540,6 @@ export function projectEdgeDetection(metadata = {}) {
     && !wafSignal.conflict && !cdnSignal.conflict
     && !wafSignal.value && !cdnSignal.value;
   const baseStatus = positive ? 'detected' : completeNoMatch ? 'not_detected' : 'inconclusive';
-  const transportError = Boolean(boundedString(meta.error_class))
-    || ['error', 'timeout'].includes(boundedString(meta.external_result).toLowerCase());
   const status = transportError ? 'inconclusive' : baseStatus;
   const directEffectiveness = meta.waf_effectiveness && typeof meta.waf_effectiveness === 'object' && Number(meta.waf_effectiveness.tested_count) > 0
     ? meta.waf_effectiveness
@@ -596,9 +604,26 @@ export function projectEdgeDetection(metadata = {}) {
  * Should a signed probe result be recorded as a durable per-target detection?
  * Only trusted, non-simulated `waf.fingerprint.safe` worker results with a real edge signature.
  */
+export function isPartialProviderObservation(metadata = {}) {
+  const meta = asRecord(metadata) ?? {};
+  const edge = asRecord(meta.edge_signature) ?? {};
+  return meta.partial_provider_observation === true
+    && meta.profile_kind === 'waf_fingerprint_observation'
+    && (meta.external_result === 'timeout'
+      || (meta.external_result === 'error' && meta.error_class === 'probe_job_deadline_exceeded'))
+    && edge.dns_observed === true && edge.waf_present === null
+    && ['address_matches', 'cname_cdn_matches', 'asn_matches'].some((field) => (
+      Array.isArray(edge[field]) && edge[field].slice(0, MAX_LIST_ITEMS).some((match) => (
+        ['cdn', 'cloud'].includes(match?.family) && boundedString(match?.provider)
+        && edge[match.family === 'cdn' ? 'cdn_detected' : 'cloud_hosted'] === true
+      ))
+    ));
+}
+
 export function isPersistableEdgeDetection(metadata = {}) {
   const meta = asRecord(metadata) ?? {};
   if (meta.simulation === 'SAFE_PROBE_SIMULATION') return false;
+  if (isPartialProviderObservation(meta)) return true;
   const externalResult = boundedString(meta.external_result).toLowerCase();
   if (externalResult === 'error' || externalResult === 'timeout') return false;
   if (boundedString(meta.error_class)) return false;

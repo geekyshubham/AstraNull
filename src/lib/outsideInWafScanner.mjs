@@ -569,17 +569,16 @@ export function buildOutsideInPostureReport({
   const validationPassed = edgeValidationPassed && originLockdownConfirmed;
 
   const effectiveWafDetected = wafDetected || genericWafDetected
-    || Boolean(vendorClassification?.best)
-    || edgeSignature?.waf_present === true;
+    || (typeof edgeSignature?.waf_present === 'boolean'
+      ? edgeSignature.waf_present : Boolean(vendorClassification?.best));
   const posture = classifyWafPosture({
     wafDetected: effectiveWafDetected,
     validationPassed,
     validationFailed,
     originBypassConfirmed,
     wafRequired,
-    // This report is only built after an outside-in probe scan actually executed against the
-    // target, so "no WAF detected" here reflects a completed check, not silence.
-    coverageGapEvidence: true,
+    // A provider-only observation cannot establish an enforcement gap.
+    coverageGapEvidence: markerResults.length > 0,
   });
 
   const reason_codes = [...posture.reason_codes];
@@ -620,7 +619,7 @@ export function buildOutsideInPostureReport({
     posture_label = 'Underprotected';
   }
 
-  const best = vendorClassification?.best ?? null;
+  const best = effectiveWafDetected ? vendorClassification?.best ?? null : null;
   const edgeBest = edgeSignature?.best_vendor ?? null;
   const corpusWafPresent = edgeSignature?.waf_present === true;
   const corpusDetected = corpusWafPresent || edgeSignature?.cdn_detected === true;
@@ -648,7 +647,7 @@ export function buildOutsideInPostureReport({
     waf_detected: effectiveWafDetected,
     waf_fingerprint_detected: Boolean(best) || wafDetected || genericWafDetected || Boolean(edgeBest),
     generic_waf_detected: genericWafDetected,
-    detected_vendor: best?.vendor ?? edgeBest?.vendor ?? null,
+    detected_vendor: edgeBest?.vendor ?? best?.vendor ?? null,
     detected_product: best?.product ?? null,
     waf_product_hint: best ? `${best.vendor}/${best.product}` : (edgeBest ? `corpus:${edgeBest.vendor}` : null),
     waf_confidence: wafConfidence,
@@ -1460,7 +1459,10 @@ export async function runOutsideInWafScan(options = {}) {
   };
   const edgeSignature = classifyEdgeFingerprint({
     normal: wafw00fResponseEvidence(baseline),
-    attack: wafw00fResponseEvidence(combined ?? sqli ?? xss ?? pathTraversal),
+    // A vendor-signed denial on the ordinary GET is already-captured block evidence.
+    // Do not discard its block-page signatures merely because no marker request was sent.
+    attack: wafw00fResponseEvidence(combined ?? sqli ?? xss ?? pathTraversal
+      ?? (baseline?.denial_signature?.kind === 'vendor' ? baseline : null)),
     resolvedIps,
     cnameChain,
     dnsObserved,
@@ -1483,7 +1485,7 @@ export async function runOutsideInWafScan(options = {}) {
     matched_signals: candidate.matched_signals ?? [],
   }));
 
-  const wafDetected = Boolean(vendorClassification.best) || generic.detected || edgeSignature.waf_present;
+  const wafDetected = generic.detected || edgeSignature.waf_present;
   const evasionBypassSuspected = detectEvasionBypass(markerResults);
   const phasesExecuted = phaseLog.map((entry) => entry.phase);
   const coverageComplete = phasesDropped.length === 0
@@ -1567,6 +1569,7 @@ export async function runOutsideInWafScan(options = {}) {
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),
     ...(collectNetworkHints ? { vendor_chain_hints: vendorChainHints } : {}),
     edge_signature: {
+      asn_dataset_version: edgeSignature.asn_dataset_version,
       waf_present: edgeSignature.waf_present,
       waf_providers: edgeSignature.waf_providers,
       waf_generic_detected: edgeSignature.waf_generic_detected,

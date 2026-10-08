@@ -833,7 +833,9 @@ describe('outside-in WAF scanner', () => {
       fetchFn: async () => mockResponse(403, { server: 'akamai', 'x-akamai-request-id': '1', __body: 'Access Denied' }),
     });
     assert.equal(outcome.metadata.probe_kind, 'outside_in_waf_scan');
-    assert.equal(outcome.metadata.detected_vendor, 'akamai');
+    assert.equal(outcome.metadata.detected_vendor, null, 'a header-name catalog candidate is not a WAF fingerprint');
+    assert.equal(outcome.metadata.waf_detected, false);
+    assert.ok(outcome.metadata.vendor_candidates.some((candidate) => candidate.vendor === 'akamai'));
   });
 
   it('buildOutsideInPostureReport maps validation failures to underprotected', () => {

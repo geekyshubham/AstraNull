@@ -77,20 +77,27 @@ AstraNull WAF fingerprint + AstraNull edge classifier signature corpus (`src/lib
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| POST | `/v1/waf/edge-detection` | `waf:run` | `{ hostname, timeout_ms? }` | `200 { detection }`. |
+| POST | `/v1/waf/edge-detection` | `waf:run` | `{ target_id, target_group_id? }` (legacy internal grouping is bound by the route) | `202 { detection_request }` after durable acceptance. |
+| GET | `/v1/waf/edge-detection/:runId` | `waf:read` | — | `200 { test_run_id, run_status, status, reason, detection }`, tenant-scoped. |
 
 Behavior contract:
 
-- `hostname` is a declared hostname or IP literal; URLs/credentials/paths/ports → `400 invalid_hostname`.
-- Exactly **one** bounded passive GET (HTTPS except loopback; no redirects followed, ≤8KB body read in memory only).
-- Passive signature tier only: block-page signatures are never evaluated here and no marker or
-  attack traffic is sent. The result is detection, never a validation verdict.
-- DNS metadata: bounded CNAME chain (≤4 hops) plus A/AAAA; address/CNAME classification carries
-  per-signal provenance against the AstraNull edge classifier corpus.
-- Metadata-only: header values and body text never appear in the response or the audit record;
-  audits `waf.edge_detection_ran` with booleans, vendor key, and counts.
-- Stateless — works identically in dev-json and Postgres modes; feature-gated by
-  `ASTRANULL_WAF_POSTURE_ENABLED`; portal action: "Detect edge" on target-group detail.
+- Raw hostnames, URLs, IP destinations, timeout overrides and arbitrary probe controls are rejected.
+  The control plane delegates the tenant-owned, ownership-verified target through `startTestRun`.
+- `waf.fingerprint.safe` v2.1.0 executes one destination-pinned ordinary GET plus at most three
+  counted CNAME operations, within the unchanged five-second deadline. No redirects, markers,
+  POST, evasion, direct-origin requests or standalone TLS hints.
+- Passive signatures and an already-observed vendor-specific denial page can identify a WAF;
+  generic HTTP status codes cannot. CDN ranges, typed CNAMEs and the offline CDN ASN snapshot
+  identify network providers independently of WAF enablement.
+- Results retain bounded label-only evidence, corpus/ASN dataset versions and matched ASN facts.
+  Target detail exposes the current detection plus `evidence.asn`, `asn_matches`,
+  `asn_dataset_version` and `cname_cdn_matches` (see [API reference](../api.md)).
+- Presence-only WAF evidence is `detected_only`. A missing fingerprint with no enforcement
+  attempts is inconclusive protection, never `unprotected`; effectiveness remains untested.
+- The existing run creation/dispatch/result audit and signed-worker lease, operation reservation,
+  destination safety, rate, kill-switch and tenant gates apply. Dev-json simulations are explicitly
+  inconclusive. Feature gate: `ASTRANULL_WAF_POSTURE_ENABLED`; action: Detect WAF and CDN on target detail.
 
 ## Baseline and drift APIs
 

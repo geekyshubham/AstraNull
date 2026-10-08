@@ -15,6 +15,7 @@ import {
 } from '../../src/services/targetEdgeDetectionStore.mjs';
 import { getStore } from '../../src/store.mjs';
 import { getTargetDetail } from '../../src/services/targetDetail.mjs';
+import { recordProbeResultEdgeDetection } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
 
 function edgeMetadata(overrides = {}) {
   return {
@@ -48,6 +49,37 @@ function edgeMetadata(overrides = {}) {
 }
 
 describe('edge detection projection', () => {
+  it('accepts only typed, completed DNS evidence for partial fingerprint persistence', () => {
+    const metadata = { external_result: 'timeout', error_class: 'probe_job_deadline_exceeded',
+      profile_kind: 'waf_fingerprint_observation', partial_provider_observation: true,
+      edge_signature: { dns_observed: true, waf_present: null, cdn_detected: true,
+        asn_matches: [{ family: 'cdn', provider: 'akamai', asn: 20940 }] } };
+    assert.equal(isPersistableEdgeDetection(metadata), true);
+    assert.equal(projectEdgeDetection(metadata).waf.status, 'inconclusive');
+    assert.equal(isPersistableEdgeDetection({ ...metadata, profile_kind: 'outside_in_waf_scan' }), false);
+    assert.equal(isPersistableEdgeDetection({ ...metadata, simulation: 'SAFE_PROBE_SIMULATION' }), false);
+    assert.equal(isPersistableEdgeDetection({ ...metadata, edge_signature: { ...metadata.edge_signature, asn_matches: [] } }), false);
+    assert.equal(isPersistableEdgeDetection({ ...metadata, edge_signature: { ...metadata.edge_signature, waf_present: false } }), false);
+  });
+  it('does not present historical fingerprint misses as unprotected with zero enforcement attempts', () => {
+    const presented = presentTargetEdgeDetection({
+      waf_status: 'not_detected', cdn_status: 'not_detected',
+      evidence_json: {
+        protection: { status: 'unprotected' },
+        effectiveness: { status: 'no_waf_detected', label: 'No WAF detected', tested_count: 0, attempted_count: 0 },
+      },
+    });
+    assert.equal(presented.protection.status, 'inconclusive');
+    assert.equal(presented.effectiveness.status, 'inconclusive');
+    assert.equal(presented.effectiveness.label, 'Inconclusive');
+  });
+
+  it('keeps presence-only WAF fingerprints separate from effectiveness', () => {
+    const projection = projectEdgeDetection(edgeMetadata({ marker_probes: [] }));
+    assert.equal(projection.waf.status, 'detected');
+    assert.equal(projection.protection.status, 'detected_only');
+    assert.equal(projection.effectiveness.status, 'inconclusive');
+  });
   it('keeps WAF and CDN answers independent and typed', () => {
     const projection = projectEdgeDetection(edgeMetadata());
     assert.equal(projection.status, 'detected');
@@ -145,7 +177,7 @@ describe('edge detection projection', () => {
     const presented = presentTargetEdgeDetection(edgeDetectionRowFields(projection));
     assert.equal(
       presented.plain_language_summary,
-      'No WAF or CDN was detected. WAF effectiveness was not scored because no WAF was detected.',
+      'No WAF or CDN was detected. WAF effectiveness was not tested. A missing fingerprint does not establish that a WAF is absent.',
     );
   });
 
@@ -195,6 +227,32 @@ describe('per-target edge detection persistence', () => {
     getStore().targetEdgeDetections = [];
     getStore().targets = (getStore().targets ?? []).filter((row) => row.id !== 'tgt-summary');
     getStore().targetGroups = (getStore().targetGroups ?? []).filter((row) => row.id !== 'g-summary');
+  });
+
+  it('retains partial DNS observations in dev-json and the Postgres ingest transaction', async () => {
+    const metadata = { external_result: 'timeout', error_class: 'probe_job_deadline_exceeded',
+      profile_kind: 'waf_fingerprint_observation', partial_provider_observation: true,
+      edge_signature: { dns_observed: true, waf_present: null, cdn_detected: true,
+        cdn_providers: ['akamai'], asn_matches: [{ family: 'cdn', provider: 'akamai', asn: 20940 }] } };
+    const dev = recordTargetEdgeDetectionFromEvent({ tenantId: 't1', targetGroupId: 'g1',
+      targetId: 'tgt-1', testRunId: 'run-partial', metadata });
+    assert.equal(dev.status, 'inconclusive');
+    assert.equal(dev.cdn_provider, 'akamai');
+    assert.equal(dev.waf_status, 'inconclusive');
+    const client = {};
+    let history;
+    const postgres = await recordProbeResultEdgeDetection({
+      appendAcceptedEdgeHistory: async (_ctx, spec, options) => { assert.equal(options.client, client); history = spec; return null; },
+      upsertTargetEdgeDetection: async (_ctx, row, options) => { assert.equal(options.client, client); return row; },
+    }, { tenantId: 't1' }, {
+      run: { id: 'run-partial', target_group_id: 'g1' },
+      job: { target_id: 'tgt-1', check_id: 'waf.fingerprint.safe' },
+      probeMetadata: metadata, observedAt: '2026-10-08T00:00:00Z', newIdFn: () => 'edge-partial', client,
+    });
+    assert.equal(postgres.status, 'inconclusive');
+    assert.equal(postgres.cdn_provider, 'akamai');
+    assert.equal(postgres.waf_status, 'inconclusive');
+    assert.deepEqual(history.families.map((family) => [family.family, family.outcome]), [['waf', 'inconclusive'], ['cdn', 'detected']]);
   });
 
   it('stores one current detection per target and updates it in place', () => {

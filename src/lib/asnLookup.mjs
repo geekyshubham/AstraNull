@@ -18,8 +18,9 @@ import {
   ASN_REGISTRY,
   ASN_PROVIDER_METADATA,
 } from './data/asnCloudData.mjs';
+import { ASN_EDGE_ADDRESS_RANGES_PACKED, ASN_EDGE_DATA_MANIFEST, ASN_EDGE_DATA_VERSION } from './data/asnEdgeData.mjs';
 
-export { ASN_REGISTRY, ASN_PROVIDER_METADATA };
+export { ASN_REGISTRY, ASN_PROVIDER_METADATA, ASN_EDGE_DATA_MANIFEST, ASN_EDGE_DATA_VERSION };
 
 const ASN_MAP_BY_NUMBER = new Map(ASN_REGISTRY.map((entry) => [entry.asn, entry]));
 
@@ -140,6 +141,10 @@ function getAsnAddressIndex() {
     unpackFamily(families.v4, 4, provider, rows);
     unpackFamily(families.v6, 6, provider, rows);
   }
+  for (const [asn, families] of Object.entries(ASN_EDGE_ADDRESS_RANGES_PACKED)) {
+    unpackFamily(families.v4, 4, `AS${asn}`, rows);
+    unpackFamily(families.v6, 6, `AS${asn}`, rows);
+  }
   compiledAsnIndex = { v4: sortAndPack(rows.v4), v6: sortAndPack(rows.v6) };
   return compiledAsnIndex;
 }
@@ -183,6 +188,11 @@ export function lookupAsnForIp(ip) {
     }
   }
   if (!bestMatch) return null;
+  if (bestMatch.provider.startsWith('AS')) {
+    const registry = ASN_MAP_BY_NUMBER.get(Number(bestMatch.provider.slice(2)));
+    if (!registry) return null;
+    return { ...registry, source: 'asn_range' };
+  }
   const meta = ASN_PROVIDER_METADATA[bestMatch.provider];
   const primaryAsn = meta?.primaryAsn ?? null;
   const reg = primaryAsn ? ASN_MAP_BY_NUMBER.get(primaryAsn) : null;
@@ -220,8 +230,9 @@ export function classifyCloudByAsn(ips) {
       }
     }
   }
-  results.cloud_hosted = results.length > 0;
-  results.cloud_providers = [...new Set(results.map((r) => r.provider))].sort();
+  const cloudMatches = results.filter((result) => result.family === 'cloud');
+  results.cloud_hosted = cloudMatches.length > 0;
+  results.cloud_providers = [...new Set(cloudMatches.map((r) => r.provider))].sort();
   results.asn_matches = [...results];
   results.primary_asn = results[0] ?? null;
   return results;

@@ -343,6 +343,72 @@ describe('probe worker safety accounting', () => {
     }).ok, true);
   });
 
+  it('preserves Akamai CDN ownership and ASN provenance through the signed observation result', async () => {
+    const check = getCheckById('waf.fingerprint.safe');
+    const signedJob = buildSignedProbeJobRecord({
+      run: { id: 'run_akamai', tenant_id: 'ten_demo', safety_constraints: check.safety_constraints },
+      check, target: { id: 'tgt_akamai', kind: 'fqdn', value: 'barclays.com' },
+      probeWorkerSecret: WORKER_SECRET, now: new Date('2026-10-08T00:00:00Z'), newId: () => 'pjob_akamai',
+    });
+    let httpRequests = 0;
+    const result = await processJob({ secret: WORKER_SECRET }, signedJob, {
+      resolve4Fn: async () => ['69.192.16.127'], resolve6Fn: async () => [],
+      resolveCnameFn: async () => { throw Object.assign(new Error('no data'), { code: 'ENODATA' }); },
+      httpsRequestFn: (options, callback) => {
+        httpRequests += 1;
+        assert.equal(options.hostname, '69.192.16.127');
+        assert.equal(options.servername, 'barclays.com');
+        const request = new EventEmitter();
+        request.write = () => {};
+        request.destroy = (error) => { if (error) request.emit('error', error); };
+        request.end = () => {
+          const response = new PassThrough();
+          response.statusCode = 302;
+          response.headers = { location: 'https://home.barclays/' };
+          callback(response);
+          response.end();
+        };
+        return request;
+      },
+    });
+    assert.equal(httpRequests, 1);
+    assert.equal(result.external_result, 'connected');
+    assert.deepEqual(result.metadata.edge_signature.cdn_providers, ['akamai']);
+    assert.equal(result.metadata.edge_signature.waf_present, false);
+    assert.equal(result.metadata.edge_signature.asn.asn, 16625);
+    assert.equal(result.metadata.edge_signature.asn_matches[0].family, 'cdn');
+    assert.match(result.metadata.edge_signature.asn_dataset_version, /^sha256:/);
+    assert.equal(result.metadata.waf_effectiveness.status, 'inconclusive');
+    assert.equal(validateProbeResultBody(result, signedJob.constraints, {
+      probeKind: signedJob.probe_profile.kind, probeProfile: signedJob.probe_profile, target: signedJob.target,
+    }).ok, true);
+  });
+
+  it('preserves completed DNS evidence on HTTP or CNAME deadlines without a negative WAF claim', async () => {
+    for (const hang of ['http', 'cname', 'cname_after_hit']) {
+      const job = baseJob({ check_id: 'waf.fingerprint.safe',
+        target: { kind: 'fqdn', value: 'www.qantas.com' },
+        constraints: { max_requests: 4, timeout_ms: 50 } });
+      const result = await processJob({ secret: WORKER_SECRET }, job, {
+        resolve4Fn: async () => [hang === 'cname_after_hit' ? '203.0.113.10' : '23.206.173.51'], resolve6Fn: async () => [],
+        resolveCnameFn: hang === 'cname' ? () => new Promise(() => {})
+          : hang === 'cname_after_hit' ? (host) => host === 'www.qantas.com' ? ['e123.akamaiedge.net'] : new Promise(() => {})
+            : async () => [],
+        fetchFn: () => new Promise(() => {}),
+      });
+      assert.equal(result.external_result, 'timeout', hang);
+      assert.equal(result.metadata.partial_provider_observation, true, hang);
+      assert.equal(result.metadata.edge_signature.waf_present, null, hang);
+      assert.deepEqual(result.metadata.edge_signature.cdn_providers, ['akamai']);
+      if (hang === 'cname_after_hit') assert.ok(result.metadata.dns_cname_chain.includes('e123.akamaiedge.net'));
+      assert.ok(result.safety_attestation.total_operations <= 6);
+      assert.ok(result.safety_attestation.probe_requests_sent <= 4);
+      assert.equal(validateProbeResultBody(result, job.constraints, {
+        probeKind: job.probe_profile.kind, probeProfile: job.probe_profile, target: job.target,
+      }).ok, true);
+    }
+  });
+
   it('real-catalog outside-in jobs pin and attest every initializer, counting CNAME hops, without raw TLS hints', async () => {
     const check = getCheckById('waf.fingerprint.safe');
     const signedJob = buildSignedProbeJobRecord({

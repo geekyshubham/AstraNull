@@ -12,7 +12,7 @@ import {
   WAF_EDGE_DETECTION_CHECK_ID,
 } from '../lib/edgeDetection.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
-import { projectEdgeDetection } from '../lib/edgeDetectionProjection.mjs';
+import { projectEdgeDetection, isPartialProviderObservation } from '../lib/edgeDetectionProjection.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 'collecting']);
 const SUCCESSFUL_TERMINAL_RUN_STATUSES = new Set(['completed', 'verdicted']);
@@ -96,7 +96,9 @@ function projectWorkerResult(run, events) {
 
   const externalResult = boundedString(metadata.external_result).toLowerCase();
   const errorClass = boundedString(metadata.error_class);
-  if (externalResult === 'error' || externalResult === 'timeout' || errorClass) {
+  const partialProviderResult = isPartialProviderObservation(metadata);
+  if ((externalResult === 'error' || externalResult === 'timeout' || errorClass)
+    && !partialProviderResult) {
     return {
       status: 'error',
       reason: 'worker_result_error',
@@ -104,7 +106,7 @@ function projectWorkerResult(run, events) {
       ...(errorClass ? { error_class: errorClass } : {}),
     };
   }
-  if (!['blocked', 'connected', 'not_run'].includes(externalResult)) {
+  if (!['blocked', 'connected', 'not_run'].includes(externalResult) && !partialProviderResult) {
     return { status: 'inconclusive', reason: 'worker_result_incomplete', detection: null };
   }
   if (

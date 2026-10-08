@@ -277,7 +277,7 @@ export async function recordProbeResultEdgeDetection(
   if (!edgeCheck) return null;
 
   const transport = transportOutcomeFromProbe(probeMetadata);
-  if (transport || !isPersistableEdgeDetection(probeMetadata)) {
+  if (!isPersistableEdgeDetection(probeMetadata)) {
     if (transport) {
       const families = ['waf', 'cdn'];
       if (typeof probeMetadata?.edge_signature?.cloud_hosted === 'boolean') families.push('cloud');

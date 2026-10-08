@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 import { runOutsideInWafScan } from '../../src/lib/outsideInWafScanner.mjs';
 import { EDGE_SIGNATURE_CORPUS_VERSION } from '../../src/lib/edgeFingerprint.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../src/lib/wafProductCatalog.mjs';
+import { projectEdgeDetection, edgeDetectionRowFields } from '../../src/lib/edgeDetectionProjection.mjs';
+import { presentTargetEdgeDetection } from '../../src/lib/edgeDetectionPresenter.mjs';
 
 function mockResponse(status, headers = {}) {
   const normalized = Object.fromEntries(
@@ -44,6 +46,43 @@ const TLS_STUB = (options) => {
 };
 
 describe('outside-in WAF scanner — edge signature corpus integration', () => {
+  it('fingerprints an existing vendor block page on the ordinary GET without issuing markers', async () => {
+    const scan = await runOutsideInWafScan({
+      url: 'https://blocked.example.test/', fingerprintOnly: true, budget: 1,
+      fetchFn: async () => mockResponse(403, {
+        __body: 'The requested URL was rejected. Please consult with your administrator. Your support ID is: 123456.',
+      }),
+    });
+    assert.equal(scan.requests_sent, 1);
+    assert.equal(scan.edge_signature.waf_present, true);
+    assert.ok(scan.edge_signature.vendor_matches.some((match) => match.vendor === 'f5bigipasm'));
+    assert.equal(scan.marker_probes.length, 0);
+    assert.equal(projectEdgeDetection(scan).protection.status, 'detected_only');
+  });
+  it('projects the reported headerless 302 as Akamai CDN with no WAF effectiveness claim', async () => {
+    let requests = 0;
+    const scan = await runOutsideInWafScan({
+      url: 'https://barclays.com/', hostname: 'barclays.com',
+      fingerprintOnly: true, budget: 1, collectNetworkHints: false, followRedirects: false,
+      resolvedIps: ['69.192.16.127'], cnameChain: ['barclays.com'],
+      fetchFn: async () => { requests += 1; return mockResponse(302, { location: 'https://home.barclays/' }); },
+    });
+    assert.equal(requests, 1);
+    assert.deepEqual(scan.phases.map((phase) => phase.phase), ['baseline']);
+    assert.equal(scan.waf_effectiveness.status, 'inconclusive');
+    const result = projectEdgeDetection({ ...scan, external_result: 'connected' });
+    assert.equal(result.status, 'detected');
+    assert.equal(result.cdn.provider, 'akamai');
+    assert.equal(result.cdn.type, 'asn_lookup');
+    assert.equal(result.waf.status, 'not_detected');
+    assert.equal(result.protection.status, 'inconclusive');
+    const presented = presentTargetEdgeDetection(edgeDetectionRowFields(result));
+    assert.equal(presented.cdn.provider, 'akamai');
+    assert.equal(presented.evidence.asn.asn, 16625);
+    assert.match(presented.evidence.asn_dataset_version, /^sha256:/);
+    assert.match(presented.summary.effectiveness, /was not tested/);
+    assert.doesNotMatch(presented.plain_language_summary, /Unprotected|Kona/);
+  });
   it('classifies a Cloudflare edge from passive headers and CDN range evidence', async () => {
     const cfRay = 'ray-value-never-persist-42';
     const outcome = await runOutsideInWafScan({
@@ -102,7 +141,7 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
       'AAAA records reach the address corpus',
     );
     assert.equal(outcome.edge_signature.cdn_detected, true);
-    assert.deepEqual(outcome.edge_signature.cdn_providers, ['cloudfront']);
+    assert.deepEqual(outcome.edge_signature.cdn_providers, ['cloudflare', 'cloudfront']);
     assert.deepEqual(
       outcome.edge_signature.cname_matches,
       [{ provider: 'amazon', type: 'waf', suffix: 'cloudfront.net', host: 'd123.cloudfront.net' }],
