@@ -79,7 +79,7 @@ export function vectorTargetAvailability(vector, checks, target) {
     return {
       id: 'select_target',
       label: 'Select exact target',
-      detail: 'Choose a declared target group and exact target to evaluate compatible bounded checks.',
+      detail: 'Choose an exact declared domain or endpoint to evaluate compatible bounded checks.',
       tone: 'info',
       runnableChecks: [],
     };

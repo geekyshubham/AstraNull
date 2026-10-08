@@ -1,7 +1,7 @@
 import { getStore } from '../store.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from './highScale.mjs';
 import { runVerdictSupportsReadiness } from '../lib/readinessVerdicts.mjs';
-import { activeTargetGroupsForTenant } from './targetGroups.mjs';
+import { activeTargetGroupsForTenant, isArchivedTarget } from './targetGroups.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 
 /** Evidence older than this window earns no freshness credit. */
@@ -289,7 +289,8 @@ export function computeReadiness(tenantId) {
   // Persisted readiness rollups are unversioned and can predate scoring/evidence rules.
   // Recompute from authoritative tenant state; store.readiness remains an output cache only.
   const nowMs = Date.now();
-  const groups = activeTargetGroupsForTenant(tenantId);
+  const policyIds = new Set(activeTargetGroupsForTenant(tenantId).map((policy) => policy.id));
+  const targets = store.targets.filter((target) => target.tenant_id === tenantId && !isArchivedTarget(target) && policyIds.has(target.target_group_id));
   const runs = store.testRuns.filter((r) => r.tenant_id === tenantId);
   const findings = store.findings.filter((f) => f.tenant_id === tenantId && f.status === 'open');
   const verdicts = runs
@@ -298,8 +299,9 @@ export function computeReadiness(tenantId) {
 
   const factors = [];
 
-  const declaredGroupIds = new Set(groups.map((g) => g.id));
-  const coveredGroupIds = new Set();
+  const declaredTargetIds = new Set(targets.map((target) => target.id));
+  const policyByTarget = new Map(targets.map((target) => [target.id, target.target_group_id]));
+  const coveredTargetIds = new Set();
   let staleBackedRuns = 0;
   let recentBackedRuns = 0;
 
@@ -308,35 +310,35 @@ export function computeReadiness(tenantId) {
     if (!freshness.backed) continue;
     if (
       freshness.recent &&
-      run.target_group_id &&
-      declaredGroupIds.has(run.target_group_id)
+      run.target_id &&
+      declaredTargetIds.has(run.target_id) && policyByTarget.get(run.target_id) === run.target_group_id
     ) {
-      coveredGroupIds.add(run.target_group_id);
+      coveredTargetIds.add(run.target_id);
       recentBackedRuns += 1;
     } else if (freshness.stale) {
       staleBackedRuns += 1;
     }
   }
 
-  const totalGroups = groups.length;
-  const coveredCount = coveredGroupIds.size;
-  const coverageRatio = totalGroups ? coveredCount / totalGroups : 0;
+  const totalTargets = targets.length;
+  const coveredCount = coveredTargetIds.size;
+  const coverageRatio = totalTargets ? coveredCount / totalTargets : 0;
   const coverageScore = Math.round(Math.min(WEIGHT_COVERAGE, coverageRatio * WEIGHT_COVERAGE));
 
   let coverageDetail;
-  if (!totalGroups) {
-    coverageDetail = 'No declared target groups.';
+  if (!totalTargets) {
+    coverageDetail = 'No declared domains.';
   } else if (coveredCount === 0) {
     if (staleBackedRuns > 0) {
-      coverageDetail = `0 of ${totalGroups} target group(s) covered by recent evidence-backed validations; stale evidence exists on ${staleBackedRuns} run(s).`;
+      coverageDetail = `0 of ${totalTargets} domain(s) covered by recent evidence-backed validations; stale evidence exists on ${staleBackedRuns} run(s).`;
     } else {
-      coverageDetail = `0 of ${totalGroups} target group(s) have evidence-backed validations in the last ${RECENT_EVIDENCE_WINDOW_DAYS} days.`;
+      coverageDetail = `0 of ${totalTargets} domain(s) have evidence-backed validations in the last ${RECENT_EVIDENCE_WINDOW_DAYS} days.`;
     }
   } else {
-    const missing = totalGroups - coveredCount;
-    coverageDetail = `${coveredCount} of ${totalGroups} target group(s) have recent evidence-backed validations.`;
+    const missing = totalTargets - coveredCount;
+    coverageDetail = `${coveredCount} of ${totalTargets} domain(s) have recent evidence-backed validations.`;
     if (missing > 0) {
-      coverageDetail += ` ${missing} group(s) lack recent validation evidence.`;
+      coverageDetail += ` ${missing} domain(s) lack recent validation evidence.`;
     }
   }
 
@@ -384,7 +386,7 @@ export function computeReadiness(tenantId) {
   let freshnessDetail;
   if (recentBackedRuns > 0 || coveredCount > 0) {
     freshnessScore = WEIGHT_EVIDENCE_FRESHNESS;
-    freshnessDetail = `Recent evidence-backed validation within ${RECENT_EVIDENCE_WINDOW_DAYS} days (${recentBackedRuns} run(s), ${coveredCount} target group(s)).`;
+    freshnessDetail = `Recent evidence-backed validation within ${RECENT_EVIDENCE_WINDOW_DAYS} days (${recentBackedRuns} run(s), ${coveredCount} domain(s)).`;
   } else if (staleBackedRuns > 0) {
     freshnessScore = 0;
     freshnessDetail = `Evidence exists but is stale (older than ${RECENT_EVIDENCE_WINDOW_DAYS} days); no freshness credit awarded.`;

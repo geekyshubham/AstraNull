@@ -46,13 +46,6 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Crosshair
   },
   {
-    id: 'target-groups',
-    label: 'Target groups',
-    group: 'scope',
-    description: 'Targets sharing validation settings: safe windows, expected behavior, and authorization.',
-    icon: Target
-  },
-  {
     id: 'checks',
     label: 'Check library',
     group: 'validation',
@@ -169,13 +162,6 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     icon: ClipboardList
   },
   {
-    id: 'target-group-detail',
-    label: 'Target group detail',
-    group: 'scope',
-    description: 'Ownership ladder, DNS TXT, declared targets, findings, and runs for one group.',
-    icon: Target
-  },
-  {
     id: 'target-detail',
     label: 'Target detail',
     group: 'scope',
@@ -248,6 +234,7 @@ function routeIdFromHash(hash: string): RouteId | null {
   const raw = hash.replace(/^#/, '');
   if (!raw) return null;
   const routePart = raw.includes('?') ? raw.slice(0, raw.indexOf('?')) : raw;
+  if (routePart === 'target-groups' || routePart === 'target-group-detail') return 'targets';
   return ROUTE_BY_ID.has(routePart as RouteId) ? routePart as RouteId : null;
 }
 
@@ -271,7 +258,11 @@ export function getRouteFromHash(): RouteId {
 }
 
 export function getRouteFromLocation(): RouteId {
-  return resolvePortalRoute(window.location.pathname, window.location.hash);
+  const route = resolvePortalRoute(window.location.pathname, window.location.hash);
+  if (/^#target-groups?(?:\?|$)|^#target-group-detail(?:\?|$)/.test(window.location.hash)) {
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#targets`);
+  }
+  return route;
 }
 
 export const PLATFORM_PROMISE =

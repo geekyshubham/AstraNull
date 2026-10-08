@@ -511,7 +511,7 @@ describe('server cohorts: dashboard analytics and filtered target lists', () => 
     assert.match(source, /earlier rows are not kept as a snapshot/);
     const findings = read('apps/web/react/src/pages/refined/findings-refined.tsx');
     // The group filter is one server predicate shared by the totals, the paged list and the grouped read.
-    assert.match(findings, /target_group_id: groupFilter === 'all' \? '' : groupFilter/);
+    assert.match(findings, /target_id: targetFilter === 'all' \? '' : targetFilter/);
     assert.match(findings, /Groups and their counts are partial until every matching finding is read\./);
   });
 });

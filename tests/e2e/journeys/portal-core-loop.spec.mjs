@@ -32,19 +32,19 @@ test.describe('portal core loop (Playwright)', () => {
     await expect(page.getByText(String(apiScore), { exact: true }).first()).toBeVisible();
   });
 
-  test('target-groups lists baseline seed group name', async ({ page }) => {
+  test('targets lists the exact baseline domain declared through the API', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
-    const groupsRes = await fetch(`${baseUrl}/v1/target-groups`, { headers: portalOwnerHeaders() });
-    expect(groupsRes.ok).toBeTruthy();
-    const groupsJson = await groupsRes.json();
-    const seededGroup = (groupsJson.items ?? []).find((item) => item.id === PORTAL_BASELINE_IDS.targetGroupId);
-    expect(seededGroup?.name).toBe('edge-checkout');
+    const targetsRes = await fetch(`${baseUrl}/v1/targets`, { headers: portalOwnerHeaders() });
+    expect(targetsRes.ok).toBeTruthy();
+    const targetsJson = await targetsRes.json();
+    const seededTarget = (targetsJson.items ?? []).find((item) => item.id === PORTAL_BASELINE_IDS.targetId);
+    expect(seededTarget?.value).toBe('checkout.acme.com');
 
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-groups', baseUrl);
+    await gotoPortalRoute(page, 'targets', baseUrl);
 
-    await expect(page.getByRole('heading', { name: 'Target groups', exact: true })).toBeVisible();
-    // The group name is its own link; the open-count link in the same row also names the group.
-    await expect(page.getByRole('link', { name: 'edge-checkout', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Targets', exact: true })).toBeVisible();
+    // The declared domain links directly to its target workspace.
+    await expect(page.getByRole('link', { name: 'Open target checkout.acme.com', exact: true })).toBeVisible();
   });
 });

@@ -110,6 +110,7 @@ export function buildGetStatePayload({
     // Readiness rollups have no scoring/input version; current recomputation is authoritative.
     readiness: computed.readiness,
     target_groups: Number(rollup?.target_groups ?? computed.target_groups),
+    ...(Number.isFinite(computed.targets) ? { targets: computed.targets } : {}),
     recent_runs: Array.isArray(rollup?.recent_runs) ? rollup.recent_runs : computed.recent_runs,
     open_findings: Number(rollup?.open_findings ?? computed.open_findings),
     high_scale_requests: requestCount,

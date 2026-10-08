@@ -229,7 +229,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     dialog = page.locator('dialog.modal-confirm[open]');
     await dialog.getByRole('button', { name: 'Start detection' }).click();
     await expect.poll(() => edgePosts.length).toBe(1);
-    expect(edgePosts[0]).toEqual({ target_group_id: PORTAL_BASELINE_IDS.targetGroupId, target_id: VERIFIED_FRESH_TARGET });
+    expect(edgePosts[0]).toEqual({ target_id: VERIFIED_FRESH_TARGET });
     await expect(page.getByRole('tab', { name: /^Validate/ })).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('.probe-activity')).toBeVisible();
     await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).toBeChecked();
@@ -285,7 +285,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await expect.poll(() => scanBodies.length).toBe(1);
     const body = scanBodies[0];
-    expect(body.target_group_id).toBe(PORTAL_BASELINE_IDS.targetGroupId);
+    expect(body.target_group_id).toBeUndefined();
     expect(body.target_id).toBe(PORTAL_BASELINE_IDS.targetId);
     expect(body.check_ids).toContain('waf.fingerprint.safe');
     expect(body.check_ids[0]).toBe('waf.fingerprint.safe');

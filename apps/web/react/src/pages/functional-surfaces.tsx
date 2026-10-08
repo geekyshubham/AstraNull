@@ -1117,9 +1117,9 @@ export function ValidationSurfacePage({
         }
       },
       {
-        key: 'group',
-        label: 'Target group',
-        render: (item) => resolveTargetGroupName(data.targetGroups, getString(item, ['target_group_id']))
+        key: 'domain',
+        label: 'Domain',
+        render: (item) => getString(data.targets.find((target) => getString(target, ['id']) === getString(item, ['target_id'])), ['value'], getString(item, ['target_id']))
       },
       {
         key: 'checks',
@@ -1223,9 +1223,9 @@ export function ValidationSurfacePage({
         }
       }
     ];
-    const canOpenVectorLibrary = data.targetGroups.length > 0 && data.checks.some((check) => getString(check, ['safety_class']) === 'safe');
-    const startDisabledReason = data.targetGroups.length === 0
-      ? 'Declare a target group first.'
+    const canOpenVectorLibrary = data.targets.length > 0 && data.checks.some((check) => getString(check, ['safety_class']) === 'safe');
+    const startDisabledReason = data.targets.length === 0
+      ? 'Declare a domain first.'
       : !data.checks.some((check) => getString(check, ['safety_class']) === 'safe')
         ? 'No customer-runnable check in catalog.'
         : '';
@@ -1323,7 +1323,7 @@ export function ValidationSurfacePage({
           config={config}
           session={session}
           checks={data.checks}
-          targetGroups={data.targetGroups}
+          targets={data.targets}
           onClose={() => setScanLauncher(null)}
           onScheduled={(scan, mode) => {
             setScanLauncher(null);
@@ -1479,7 +1479,7 @@ export function ValidationSurfacePage({
             <Badge tone={findingKpis.slaBreachCount > 0 ? 'danger' : 'muted'}>{findingKpis.slaBreachCount} SLA breached</Badge>
           </CardHeader>
           <CardContent className="findings-surface-wrap">
-            <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} targets={data.targets} loadError={findingsLoadError} onRetry={() => void handleSurfaceRefresh()} />
+            <FindingsListView findings={data.findings} checks={data.checks} targets={data.targets} loadError={findingsLoadError} onRetry={() => void handleSurfaceRefresh()} />
           </CardContent>
         </Card>
       </div>

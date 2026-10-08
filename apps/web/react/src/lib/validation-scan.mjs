@@ -23,9 +23,9 @@ export const SCAN_ERROR_COPY = Object.freeze({
   scan_has_no_runnable_steps: 'None of the selected checks apply to the targets in this scope, so no step could be planned.',
   scan_too_large: 'This scan plans too many check and target steps. Narrow the scope or select fewer checks.',
   invalid_validation_scan: 'The scan request was rejected. Check the values entered and try again.',
-  target_group_not_found: 'That target group no longer exists or is archived. Refresh and choose another.',
-  target_not_found: 'That exact target no longer exists in the selected group. Refresh and choose another.',
-  concurrent_scan_blocked: 'A scan or run is already active for this target group. Wait for it to finish or stop it before starting another.',
+  target_group_not_found: 'That domain scope is no longer available. Refresh and choose declared domains.',
+  target_not_found: 'That exact domain is no longer available. Refresh and choose another.',
+  concurrent_scan_blocked: 'A scan or run is already using a selected domain’s execution slot. Wait for it to finish or stop it before starting another.',
   scan_not_editable: 'Only scans that are still scheduled can be edited. Refresh to see the current status.',
   not_cancellable: 'This scan has already finished and cannot be stopped.',
 });
@@ -38,13 +38,6 @@ function humanizeCode(value) {
   const words = text(value).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!words) return '';
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
-}
-
-export const GROUP_SCAN_LIST_LIMIT = 200;
-
-export function validationScansPathForGroup(targetGroupId, limit = GROUP_SCAN_LIST_LIMIT) {
-  const params = new URLSearchParams({ target_group_id: String(targetGroupId ?? ''), limit: String(limit) });
-  return `/v1/validation-scans?${params.toString()}`;
 }
 
 export function humanizeReason(code) {
@@ -183,13 +176,10 @@ export function nextPollDelay({ status, errorCount = 0 } = {}) {
 }
 
 export function scopeLabel(scan) {
-  if (!scan) return 'Scope not recorded';
-  const group = text(scan.target_group?.name) || text(scan.target_group_id) || 'target group';
-  if (scan.target_id) {
-    const target = text(scan.target?.value) || text(scan.target_id);
-    return `Exact target ${target} in ${group}`;
-  }
-  return `Whole group ${group}`;
+  if (!scan) return 'Domains not recorded';
+  const ids = Array.isArray(scan.target_ids) ? scan.target_ids : scan.target_id ? [scan.target_id] : [];
+  if (ids.length === 1) return `Domain ${text(scan.target?.value) || text(scan.targets?.[0]?.value) || text(ids[0])}`;
+  return ids.length ? `${ids.length} selected domains` : 'Domain selection not recorded';
 }
 
 export function recurrenceLabel(recurrence) {
@@ -228,9 +218,7 @@ export function minScheduleLocalValue(now = Date.now()) {
 
 export function emptyScanForm(overrides = {}) {
   return {
-    targetGroupId: '',
-    scope: 'group',
-    targetId: '',
+    targetIds: [],
     checkIds: [],
     name: '',
     schedule: 'now',
@@ -244,9 +232,7 @@ export function emptyScanForm(overrides = {}) {
 export function scanFormFromScan(scan, mode = 'edit') {
   const recurrence = scan?.recurrence && typeof scan.recurrence === 'object' ? scan.recurrence : null;
   return emptyScanForm({
-    targetGroupId: text(scan?.target_group_id),
-    scope: scan?.target_id ? 'target' : 'group',
-    targetId: text(scan?.target_id),
+    targetIds: Array.isArray(scan?.target_ids) ? scan.target_ids.map(text).filter(Boolean) : scan?.target_id ? [text(scan.target_id)] : [...new Set((scan?.steps ?? []).map((step) => text(step.target_id)).filter(Boolean))],
     checkIds: Array.isArray(scan?.check_ids) ? scan.check_ids.map(text).filter(Boolean) : [],
     name: text(scan?.name),
     schedule: 'later',
@@ -259,8 +245,8 @@ export function scanFormFromScan(scan, mode = 'edit') {
 export function validateScanForm(form, { now = Date.now() } = {}) {
   const errors = {};
   const nowMs = now instanceof Date ? now.getTime() : Number(now);
-  if (!text(form?.targetGroupId)) errors.target_group_id = 'Select a target group.';
-  if (form?.scope === 'target' && !text(form?.targetId)) errors.target_id = 'Select an exact target or switch to the whole group.';
+  if (!Array.isArray(form?.targetIds) || form.targetIds.length === 0) errors.target_ids = 'Select a domain or domains.';
+  else if (form.targetIds.length > 500) errors.target_ids = 'Select at most 500 declared domains.';
   const ids = [...new Set((Array.isArray(form?.checkIds) ? form.checkIds : []).map(text).filter(Boolean))];
   if (ids.length === 0) errors.check_ids = 'Select at least one check.';
   if (ids.length > MAX_SCAN_CHECKS) errors.check_ids = `Select at most ${MAX_SCAN_CHECKS} checks per scan.`;
@@ -279,10 +265,10 @@ export function validateScanForm(form, { now = Date.now() } = {}) {
 
 export function buildScanPayload(form) {
   const payload = {
-    target_group_id: text(form?.targetGroupId),
+    target_ids: [...new Set((Array.isArray(form?.targetIds) ? form.targetIds : []).map(text).filter(Boolean))],
     check_ids: [...new Set((Array.isArray(form?.checkIds) ? form.checkIds : []).map(text).filter(Boolean))],
   };
-  if (form?.scope === 'target' && text(form?.targetId)) payload.target_id = text(form.targetId);
+
   if (text(form?.name)) payload.name = text(form.name);
   if (form?.schedule === 'later') {
     payload.scheduled_for = localDatetimeToIso(form?.scheduledForLocal);
@@ -297,9 +283,8 @@ export function buildScanPayload(form) {
 export function buildScanPatch(scan, form) {
   const next = buildScanPayload(form);
   const patch = {};
-  const currentTargetId = text(scan?.target_id) || null;
-  const nextTargetId = next.target_id ?? null;
-  if (currentTargetId !== nextTargetId) patch.target_id = nextTargetId;
+  const currentTargets = scanFormFromScan(scan).targetIds;
+  if (JSON.stringify(currentTargets) !== JSON.stringify(next.target_ids)) patch.target_ids = next.target_ids;
   const currentChecks = Array.isArray(scan?.check_ids) ? scan.check_ids.map(text) : [];
   if (JSON.stringify(currentChecks) !== JSON.stringify(next.check_ids)) patch.check_ids = next.check_ids;
   const currentName = text(scan?.name) || null;

@@ -245,7 +245,7 @@ test.describe('current release: evidence inspector and target workspace', () => 
     const dialog = page.getByRole('dialog', { name: 'Review this retest' });
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('Origin Leak Scan');
-    await expect(dialog).toContainText('never closes other targets');
+    await expect(dialog).toContainText('never closes other domains');
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(page).not.toHaveURL(/retest=review/);
     expect(mutating(calls)).toEqual([]);
@@ -594,19 +594,19 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
     await expect(cohort(page).locator('tbody tr')).toHaveCount(0);
   });
 
-  test('the findings group alias applies the server target group predicate', async ({ page }) => {
+  test('the findings domain alias applies the exact server target predicate', async ({ page }) => {
     test.setTimeout(120_000);
     const findingReads = [];
     page.on('request', (request) => {
       const url = new URL(request.url());
-      if (url.pathname === '/v1/findings' && url.searchParams.has('target_group_id')) findingReads.push(url.searchParams.get('target_group_id'));
+      if (url.pathname === '/v1/findings' && url.searchParams.has('target_id')) findingReads.push(url.searchParams.get('target_id'));
     });
-    await open(page, `findings?group=${ids.targetGroupId}`);
-    await expect(page.getByRole('button', { name: 'Target group', exact: true })).toContainText('edge-checkout');
-    // A linked group predicate is exact: every status, no remembered search, and every read carries it.
+    await open(page, `findings?target=${ids.targetId}`);
+    await expect(page.getByRole('button', { name: 'Domain', exact: true })).toContainText('checkout.acme.com');
+    // A linked domain predicate is exact: every status, no remembered search, and every read carries it.
     await expect(page.getByRole('group', { name: 'Finding status filters' }).getByRole('button', { name: /^All/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.rf-result-count').first()).toContainText(/matching findings?\./);
-    expect(findingReads).toContain(ids.targetGroupId);
+    expect(findingReads).toContain(ids.targetId);
   });
 
   test('audit filters survive inspector rewrites while credential-like params are dropped', async ({ page }) => {
@@ -887,7 +887,7 @@ test.describe('current release: target history, origin relations and retest line
     await expect(dialog).toContainText('1 requests');
     await dialog.getByRole('button', { name: 'Start origin check' }).click();
     await expect.poll(() => starts.length).toBe(1);
-    expect(starts[0]).toEqual({ check_id: 'origin.direct_bypass.safe', target_group_id: ids.targetGroupId, target_id: ORIGIN_IP, origin_binding_id: binding.id });
+    expect(starts[0]).toEqual({ check_id: 'origin.direct_bypass.safe', target_id: ORIGIN_IP, origin_binding_id: binding.id });
     archiveOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, binding.id);
   });
 
@@ -945,7 +945,7 @@ test.describe('current release: target history, origin relations and retest line
     await expect(dialog).toContainText('Retest of this finding (same target and check)');
     await dialog.getByRole('button', { name: 'Start retest' }).click();
     await expect.poll(() => starts.length).toBe(1);
-    expect(starts[0]).toMatchObject({ retest_of_finding_id: 'fnd_checkout_1', target_id: ids.targetId, check_id: ids.checkId, target_group_id: ids.targetGroupId });
+    expect(starts[0]).toMatchObject({ retest_of_finding_id: 'fnd_checkout_1', target_id: ids.targetId, check_id: ids.checkId });
   });
 
   test('a closed finding shows its recorded closure time without claiming a fix', async ({ page }) => {

@@ -195,6 +195,8 @@ function planSnapshot(plan) {
   return {
     checks,
     group_safety_policy: normalizeSafetyPolicy(plan.group.safety_policy),
+    target_ids: plan.targets.map((target) => target.id),
+    target_policy_bindings: Object.fromEntries(plan.targets.map((target) => [target.id, target.target_group_id ?? plan.group.id])),
     excluded: plan.excluded,
   };
 }
@@ -279,11 +281,36 @@ export function createPostgresValidationScanServices(repositories, options = {})
   }
 
   async function buildPlan(ctx, input) {
-    const group = await loadGroup(ctx, input.target_group_id);
+    let policyId = input.target_group_id;
+    if (!policyId) {
+      if (typeof coreCatalog.getTarget !== 'function') return { error: 'target_selection_unavailable', status: 503 };
+      const selected = await coreCatalog.getTarget(ctx, input.target_id ?? input.target_ids?.[0]);
+      if (!selected || selected.tenant_id !== ctx.tenantId) return { error: 'target_not_found', status: 404 };
+      policyId = selected.target_group_id;
+    }
+    const group = await loadGroup(ctx, policyId);
     if (!group) return { error: 'target_group_not_found', status: 404 };
     const resolved = resolveChecks(input.check_ids);
     if (resolved.error) return resolved;
-    const targets = (group.targets ?? []).filter((target) => !target.deleted_at);
+    let targets = (group.targets ?? []).filter((target) => !target.deleted_at);
+    if (input.target_ids) {
+      const scopes = new Map([[group.id, group]]);
+      const selected = [];
+      for (const id of input.target_ids) {
+        let target = targets.find((candidate) => candidate.id === id);
+        if (!target) {
+          if (typeof coreCatalog.getTarget !== 'function') return { error: 'target_selection_unavailable', status: 503 };
+          const binding = await coreCatalog.getTarget(ctx, id);
+          if (!binding || binding.tenant_id !== ctx.tenantId) return { error: 'target_not_found', status: 404 };
+          if (!scopes.has(binding.target_group_id)) scopes.set(binding.target_group_id, await loadGroup(ctx, binding.target_group_id));
+          target = scopes.get(binding.target_group_id)?.targets?.find((candidate) => candidate.id === id && !candidate.deleted_at);
+        }
+        if (!target) return { error: 'target_not_found', status: 404 };
+        selected.push(target);
+      }
+      targets = selected;
+      if ((targets[0].target_group_id ?? group.id) !== group.id) return { error: 'target_selection_conflict', status: 400 };
+    }
     if (input.target_id && !targets.some((target) => target.id === input.target_id)) {
       return { error: 'target_not_found', status: 404 };
     }
@@ -304,7 +331,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       };
     }
     if (!plan.steps.length) return { error: 'scan_has_no_runnable_steps', status: 400, excluded: plan.excluded };
-    return { group, targets, checks: resolved.checks, steps: plan.steps, excluded: plan.excluded };
+    return { group, targets: input.target_id ? targets.filter((target) => target.id === input.target_id) : targets, checks: resolved.checks, steps: plan.steps, excluded: plan.excluded };
   }
 
   class ScanState {
@@ -453,17 +480,18 @@ export function createPostgresValidationScanServices(repositories, options = {})
   async function deferStep(actor, state, step, result, now) {
     const execCtx = execCtxFor(state.scan);
     const code = result?.error ?? 'safe_min_interval_active';
-    const group = await loadGroup(execCtx, state.scan.target_group_id);
+    const policyId = state.scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? state.scan.target_group_id;
+    const group = await loadGroup(execCtx, policyId);
     const policy = normalizeSafetyPolicy(group?.safety_policy);
     const recentRuns = await validationEvidence.listTestRuns(
       execCtx,
-      isHourlyCapDenial(code) ? { limit: 500 } : { targetGroupId: state.scan.target_group_id, limit: 5 },
+      isHourlyCapDenial(code) ? { limit: 500 } : { targetGroupId: policyId, limit: 5 },
     );
     const eligibleAt = deferredStepEligibleAt({
       code,
       runs: recentRuns,
       tenantId: state.scan.tenant_id,
-      targetGroupId: state.scan.target_group_id,
+      targetGroupId: policyId,
       minSecondsBetweenRuns: policy.min_seconds_between_runs,
       now,
     });
@@ -534,7 +562,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
     try {
       result = await testRuns.startTestRun(
         execCtxFor(state.scan),
-        { check_id: step.check_id, target_group_id: state.scan.target_group_id, target_id: step.target_id },
+        { check_id: step.check_id, target_group_id: state.scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? state.scan.target_group_id, target_id: step.target_id },
         runtimeConfig,
         { scanDispatch: { scan_id: state.scan.id, step_id: step.id, lease_token: leaseToken } },
       );
@@ -877,15 +905,17 @@ export function createPostgresValidationScanServices(repositories, options = {})
     if (await tenantSuspended(state.scan.tenant_id)) return scheduleDenied(actor, state, 'tenant_suspended', now);
     const group = await loadGroup(execCtx, state.scan.target_group_id);
     if (!group) return scheduleDenied(actor, state, 'target_group_not_found', now);
-    if ((group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, now.getTime())) {
-      return scheduleDenied(actor, state, 'safe_window_closed', now);
-    }
-    if (await activeRunForGroup(execCtx, group.id) || await activeScanForGroup(execCtx, group.id, state.scan.id)) {
-      return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
+    const policyIds = [...new Set([state.scan.target_group_id, ...Object.values(state.scan.plan_snapshot?.target_policy_bindings ?? {})])];
+    for (const policyId of policyIds) {
+      const policy = await loadGroup(execCtx, policyId);
+      if (!policy) return scheduleDenied(actor, state, 'target_execution_policy_unavailable', now);
+      if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(actor, state, 'safe_window_closed', now);
+      if (await activeRunForGroup(execCtx, policy.id) || await activeScanForGroup(execCtx, policy.id, state.scan.id)) return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
     }
     const plan = await buildPlan(execCtx, {
       target_group_id: state.scan.target_group_id,
       target_id: state.scan.target_id,
+      target_ids: state.scan.plan_snapshot?.target_ids ?? [...new Set(state.steps.map((step) => step.target_id))],
       check_ids: state.scan.check_ids,
     });
     if (plan.error) return scheduleDenied(actor, state, plan.error, now, { check_id: plan.check_id ?? null });
@@ -1007,6 +1037,10 @@ export function createPostgresValidationScanServices(repositories, options = {})
       }
       const group = groupCache.get(scan.target_group_id);
       const targetById = new Map((group?.targets ?? []).map((target) => [target.id, target]));
+      for (const policyId of new Set(Object.values(scan.plan_snapshot?.target_policy_bindings ?? {}))) {
+        if (!groupCache.has(policyId)) groupCache.set(policyId, await loadGroup(ctx, policyId));
+        for (const target of groupCache.get(policyId)?.targets ?? []) targetById.set(target.id, target);
+      }
       const steps = stepsByScan.get(scan.id) ?? [];
       const target = scan.target_id ? targetById.get(scan.target_id) ?? null : null;
       projected.push({
@@ -1017,6 +1051,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
         target_group_id: scan.target_group_id,
         target_group: group ? { id: group.id, name: group.name, environment_id: group.environment_id ?? null } : null,
         target_id: scan.target_id ?? null,
+        target_ids: scan.plan_snapshot?.target_ids ?? [...new Set(steps.map((step) => step.target_id))],
         target: target ? { id: target.id, kind: target.kind, value: target.value } : null,
         check_ids: [...scan.check_ids],
         scheduled_for: scan.scheduled_for ?? null,
@@ -1088,9 +1123,10 @@ export function createPostgresValidationScanServices(repositories, options = {})
         }
         return plan;
       }
-      if (!input.scheduled_for
-        && (await activeScanForGroup(ctx, plan.group.id) || await activeRunForGroup(ctx, plan.group.id))) {
-        return { error: 'concurrent_scan_blocked', status: 409 };
+      if (!input.scheduled_for) {
+        for (const policyId of new Set(plan.targets.map((target) => target.target_group_id ?? plan.group.id))) {
+          if (await activeScanForGroup(ctx, policyId) || await activeRunForGroup(ctx, policyId)) return { error: 'concurrent_scan_blocked', status: 409 };
+        }
       }
       const id = newId('scan');
       const steps = materializeSteps(plan.steps, plan.checks, now);
@@ -1179,8 +1215,9 @@ export function createPostgresValidationScanServices(repositories, options = {})
         return scanValidationResponse(err);
       }
       const merged = {
-        target_group_id: scan.target_group_id,
-        target_id: input.target_id !== undefined ? input.target_id : scan.target_id,
+        target_group_id: input.target_group_id ?? scan.target_group_id,
+        target_id: input.target_ids ? (input.target_id ?? null) : input.target_id !== undefined ? input.target_id : scan.target_id,
+        target_ids: input.target_ids ?? (input.target_id !== undefined ? (input.target_id ? [input.target_id] : undefined) : scan.plan_snapshot?.target_ids ?? [...new Set((await repo.listSteps(ctx, scan.id)).map((step) => step.target_id))]),
         check_ids: input.check_ids ?? scan.check_ids,
         name: input.name !== undefined ? input.name : scan.name,
         scheduled_for: input.scheduled_for !== undefined ? input.scheduled_for : scan.scheduled_for,
@@ -1194,6 +1231,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       const changedFields = Object.keys(input).filter((key) => JSON.stringify(input[key]) !== JSON.stringify(scan[key]));
       const steps = materializeSteps(plan.steps, plan.checks, now);
       const updated = await repo.updateScanWithSteps(ctx, scan.id, {
+        target_group_id: plan.group.id,
         target_id: merged.target_id ?? null,
         check_ids: merged.check_ids,
         name: merged.name ?? null,

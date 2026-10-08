@@ -89,15 +89,14 @@ export function readTargetTags(target: DataItem | null): string[] {
 async function fetchOwnershipChallenge(
   config: PortalConfig,
   session: Session,
-  targetGroupId: string,
   targetId: string,
 ): Promise<OwnershipChallenge> {
-  if (!targetGroupId || !targetId) return null;
+  if (!targetId) return null;
   try {
     const payload = await requestJson(
       config,
       session,
-      `/v1/target-groups/${encodeURIComponent(targetGroupId)}/dns-ownership`,
+      `/v1/targets/${encodeURIComponent(targetId)}/dns-ownership`,
     ) as DataItem;
     const items = Array.isArray(payload.items) ? (payload.items as DataItem[]) : [];
     const mine = items
@@ -134,14 +133,13 @@ async function fetchOwnershipChallenge(
 export async function issueOwnershipChallenge(
   config: PortalConfig,
   session: Session,
-  targetGroupId: string,
   targetId: string,
 ) {
   const payload = await requestJson(
     config,
     session,
-    `/v1/target-groups/${encodeURIComponent(targetGroupId)}/dns-ownership/issue`,
-    { method: 'POST', body: { target_id: targetId } },
+    `/v1/targets/${encodeURIComponent(targetId)}/dns-ownership/issue`,
+    { method: 'POST', body: {} },
   ) as DataItem;
   return asRecord(payload.challenge) ?? payload;
 }
@@ -150,47 +148,22 @@ export async function issueOwnershipChallenge(
 export async function verifyOwnershipChallenge(
   config: PortalConfig,
   session: Session,
-  targetGroupId: string,
+  targetId: string,
   challengeId: string,
 ) {
   return requestJson(
     config,
     session,
-    `/v1/target-groups/${encodeURIComponent(targetGroupId)}/dns-ownership/verify`,
+    `/v1/targets/${encodeURIComponent(targetId)}/dns-ownership/verify`,
     { method: 'POST', body: { challenge_id: challengeId } },
   ) as Promise<DataItem>;
 }
 
-/**
- * Patch tags for a target. ADR-0008 defines `PATCH /v1/targets/:id`, but baselines that predate it
- * return 404. Fall back to the group-scoped target patch so tag edits still land.
- */
-export async function patchTargetTags(
-  config: PortalConfig,
-  session: Session,
-  targetGroupId: string,
-  targetId: string,
-  tags: string[],
-) {
-  try {
-    return await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`, {
-      method: 'PATCH',
-      body: { tags },
-    }) as DataItem;
-  } catch (err) {
-    const status = (err as { status?: number; payload?: DataItem })?.status
-      ?? (err as { payload?: DataItem })?.payload?.status;
-    if (status === 404 && targetGroupId) {
-      return await requestJson(
-        config,
-        session,
-        `/v1/target-groups/${encodeURIComponent(targetGroupId)}/targets/${encodeURIComponent(targetId)}`,
-        { method: 'PATCH', body: { tags } },
-      ) as DataItem;
-    }
-    throw err;
-  }
+/** Patch tags on the declared target directly. */
+export async function patchTargetTags(config: PortalConfig, session: Session, targetId: string, tags: string[]) {
+  return requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`, { method: 'PATCH', body: { tags } }) as Promise<DataItem>;
 }
+
 
 export async function populateTargetDetail(
   config: PortalConfig,
@@ -252,8 +225,7 @@ export async function populateTargetDetail(
       };
     }
 
-    const targetGroupId = getString(target, ['target_group_id']);
-    const ownershipChallenge = await fetchOwnershipChallenge(config, session, targetGroupId, entityId);
+    const ownershipChallenge = await fetchOwnershipChallenge(config, session, entityId);
 
     return {
       target,

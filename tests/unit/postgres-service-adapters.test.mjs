@@ -2701,7 +2701,7 @@ describe('postgres report service adapters', () => {
         return persisted;
       },
     });
-    repositories.coreCatalog = { listTargetGroups: async () => [{ id: 'tg_1', tenant_id: 'ten_demo' }] };
+    repositories.coreCatalog = { listTargetGroups: async () => [{ id: 'tg_1', tenant_id: 'ten_demo' }], listTargets: async () => [{ id: 'tgt_1', tenant_id: 'ten_demo', target_group_id: 'tg_1' }] };
     repositories.highScale = {
       listHighScaleRequests: async () => [],
     };

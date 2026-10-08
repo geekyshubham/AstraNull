@@ -239,18 +239,18 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   // An explicit address predicate (for example a dashboard count) wins over remembered filters.
   const urlStatus = getRouteParam('status');
   const urlSeverity = getRouteParam('severity');
-  // Canonical target-group filter; `group` and `target_group` are accepted aliases.
-  const urlGroupRaw = getRouteParam('target_group_id') || getRouteParam('target_group') || getRouteParam('group');
-  const urlGroup = /^[A-Za-z0-9_.:-]{1,128}$/.test(urlGroupRaw) ? urlGroupRaw : '';
+  // Exact-domain links override remembered filters.
+  const urlTargetRaw = getRouteParam('target_id') || getRouteParam('target');
+  const urlTarget = /^[A-Za-z0-9_.:-]{1,128}$/.test(urlTargetRaw) ? urlTargetRaw : '';
   // A linked count opens exactly its own predicate, so remembered search, filters and page do not mix in.
-  const [urlPredicate] = useState(() => Boolean(urlStatus || urlSeverity || urlGroup));
+  const [urlPredicate] = useState(() => Boolean(urlStatus || urlSeverity || urlTarget));
   const initialFilters: Record<string, string> = urlPredicate
-    ? { ...(urlStatus ? { status: urlStatus } : {}), ...(urlSeverity ? { severity: urlSeverity } : {}), ...(urlGroup ? { group: urlGroup } : {}) }
+    ? { ...(urlStatus ? { status: urlStatus } : {}), ...(urlSeverity ? { severity: urlSeverity } : {}), ...(urlTarget ? { target: urlTarget } : {}) }
     : { ...(initial.filters ?? {}) };
   const [view, setView] = useState<ViewMode>(() => (initial.view === 'all' || initial.view === 'grouped' ? initial.view : readStoredView()));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => initialStatus(initialFilters.status, urlPredicate));
   const [severityFilter, setSeverityFilter] = useState(() => severityChoice(initialFilters.severity));
-  const [groupFilter, setGroupFilter] = useState(initialFilters.group ?? 'all');
+  const [targetFilter, setTargetFilter] = useState(initialFilters.target ?? 'all');
   const [search, setSearch] = useState(initialFilters.q ?? '');
   const [debouncedSearch, setDebouncedSearch] = useState((initialFilters.q ?? '').trim());
   const [sort, setSort] = useState<FindingGroupSortKey>(() => (SORT_KEYS.includes(initial.sort as FindingGroupSortKey) ? initial.sort as FindingGroupSortKey : 'severity'));
@@ -272,20 +272,20 @@ export function FindingsRefined(props: FindingsRefinedProps) {
 
   // A new linked predicate while this page is open (for example from the inspector) replaces the
   // current filters the same way a cold link does; other address changes leave them alone.
-  const linkedRef = useRef(urlPredicate ? `${urlStatus}|${urlSeverity}|${urlGroup}` : '');
+  const linkedRef = useRef(urlPredicate ? `${urlStatus}|${urlSeverity}|${urlTarget}` : '');
   useEffect(() => {
     function onHashChange() {
       const status = getRouteParam('status');
       const severity = getRouteParam('severity');
-      const rawGroup = getRouteParam('target_group_id') || getRouteParam('target_group') || getRouteParam('group');
-      const group = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawGroup) ? rawGroup : '';
-      if (!status && !severity && !group) return;
-      const linked = `${status}|${severity}|${group}`;
+      const rawTarget = getRouteParam('target_id') || getRouteParam('target');
+      const target = /^[A-Za-z0-9_.:-]{1,128}$/.test(rawTarget) ? rawTarget : '';
+      if (!status && !severity && !target) return;
+      const linked = `${status}|${severity}|${target}`;
       if (linked === linkedRef.current) return;
       linkedRef.current = linked;
       setStatusFilter(initialStatus(status, true));
       setSeverityFilter(severityChoice(severity));
-      setGroupFilter(group || 'all');
+      setTargetFilter(target || 'all');
       setSearch('');
       setDebouncedSearch('');
     }
@@ -302,16 +302,16 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     setPage(1);
     setGroupPage(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, statusFilter, severityFilter, groupFilter, debouncedSearch, pageSize]);
+  }, [view, statusFilter, severityFilter, targetFilter, debouncedSearch, pageSize]);
 
   // Once the predicate itself changes (not the view or page size), the linked one no longer describes
   // the address; a repeat link applies again.
-  const predicateKey = `${statusFilter}|${severityFilter}|${groupFilter}|${debouncedSearch}`;
+  const predicateKey = `${statusFilter}|${severityFilter}|${targetFilter}|${debouncedSearch}`;
   const shownPredicate = useRef(predicateKey);
   useEffect(() => {
     if (shownPredicate.current === predicateKey) return;
     shownPredicate.current = predicateKey;
-    replaceRouteParams({ status: null, severity: null, target_group_id: null, target_group: null, group: null });
+    replaceRouteParams({ status: null, severity: null, target_id: null, target: null });
     linkedRef.current = '';
   }, [predicateKey]);
 
@@ -325,19 +325,19 @@ export function FindingsRefined(props: FindingsRefinedProps) {
       sort,
       page,
       pageSize,
-      filters: { status: statusFilter, severity: severityFilter, group: groupFilter, q: debouncedSearch },
+      filters: { status: statusFilter, severity: severityFilter, target: targetFilter, q: debouncedSearch },
     });
-  }, [save, view, sort, page, pageSize, statusFilter, severityFilter, groupFilter, debouncedSearch]);
+  }, [save, view, sort, page, pageSize, statusFilter, severityFilter, targetFilter, debouncedSearch]);
 
   // Every count and list below is a server predicate. The same filters drive the status totals,
   // the paged list and the grouped read, so a count always opens the rows it reports.
   const baseFilters = useMemo(() => ({
     q: debouncedSearch,
     severity: severityFilter === 'all' ? '' : severityFilter,
-    target_group_id: groupFilter === 'all' ? '' : groupFilter,
-  }), [debouncedSearch, severityFilter, groupFilter]);
+    target_id: targetFilter === 'all' ? '' : targetFilter,
+  }), [debouncedSearch, severityFilter, targetFilter]);
   const listFilters = useMemo(() => ({ ...baseFilters, status: statusFilter === 'all' ? '' : statusFilter }), [baseFilters, statusFilter]);
-  const filtered = Boolean(baseFilters.q || baseFilters.severity || baseFilters.target_group_id);
+  const filtered = Boolean(baseFilters.q || baseFilters.severity || baseFilters.target_id);
   const statusTotals = useFindingStatusTotals(config, session, baseFilters, reloadKey);
   // The summary strip is the whole tenant; it needs its own read only while a filter is applied.
   const unfilteredTotals = useFindingStatusTotals(config, session, {}, reloadKey, filtered);
@@ -370,8 +370,8 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   }
 
   const groupIndex = useMemo(
-    () => createFindingGroupIndex({ targets: data.targets, checks: data.checks, targetGroups: data.targetGroups }),
-    [data.targets, data.checks, data.targetGroups]
+    () => createFindingGroupIndex({ targets: data.targets, checks: data.checks }),
+    [data.targets, data.checks]
   );
 
   // Groups are built from the rows read so far. Until every matching row is read they are labelled
@@ -393,14 +393,11 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     return keys.size;
   }, [openGroups]);
 
-  const groupOptions = useMemo(() => {
-    const options = [{ value: 'all', label: 'All groups' }, ...data.targetGroups.flatMap((group) => {
-      const id = getString(group, ['id']);
-      return id ? [{ value: id, label: getString(group, ['name', 'id'], id) }] : [];
-    })];
-    if (groupFilter !== 'all' && !options.some((option) => option.value === groupFilter)) options.push({ value: groupFilter, label: `Group ${groupFilter}` });
+  const targetOptions = useMemo(() => {
+    const options = [{ value: 'all', label: 'All domains' }, ...data.targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))];
+    if (targetFilter !== 'all' && !options.some((option) => option.value === targetFilter)) options.push({ value: targetFilter, label: 'Unavailable domain' });
     return options;
-  }, [data.targetGroups, groupFilter]);
+  }, [data.targets, targetFilter]);
 
   const envelope = view === 'all' ? serverPage.envelope : grouped.envelope;
   const matchTotal = envelope?.total ?? null;
@@ -499,7 +496,6 @@ export function FindingsRefined(props: FindingsRefinedProps) {
         <FindingCard
           finding={finding}
           checks={data.checks}
-          targetGroups={data.targetGroups}
           targets={data.targets}
           active={getString(finding, ['id']) === inspectedFindingId}
           onOpen={() => inspectFinding(finding)}
@@ -576,7 +572,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   function clearFilters() {
     setStatusFilter('all');
     setSeverityFilter('all');
-    setGroupFilter('all');
+    setTargetFilter('all');
     setSearch('');
   }
 
@@ -708,7 +704,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
               </span>
             </label>
             <Select label="Severity" value={severityFilter} options={SEVERITY_OPTIONS} onChange={setSeverityFilter} />
-            <Select label="Target group" value={groupFilter} options={groupOptions} onChange={setGroupFilter} />
+            <Select label="Domain" value={targetFilter} options={targetOptions} onChange={setTargetFilter} />
             {view === 'grouped' ? <Select label="Sort groups" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as FindingGroupSortKey)} /> : null}
           </div>
           <p className="rf-result-count" aria-live="polite">

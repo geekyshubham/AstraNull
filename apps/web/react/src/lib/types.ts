@@ -5,9 +5,7 @@ export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'governance' | '
 export type RouteId =
   | 'not-found'
   | 'dashboard'
-  | 'target-groups'
   | 'targets'
-  | 'target-group-detail'
   | 'target-detail'
   | 'checks'
   | 'check-detail'
@@ -38,7 +36,6 @@ export type PortalDataset =
   | 'state'
   | 'tenant'
   | 'deploymentFeatures'
-  | 'targetGroups'
   | 'targets'
   | 'checks'
   | 'testPolicies'
@@ -86,37 +83,34 @@ export const CORE_PORTAL_DATASETS = [
 
 export const PORTAL_ROUTE_DATASETS = {
   'not-found': [],
-  dashboard: ['targetGroups', 'targets', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
-  'target-groups': ['targetGroups', 'runs', 'findings', 'evidence'],
-  targets: ['targets', 'targetGroups'],
-  'target-group-detail': ['targetGroups', 'checks', 'testPolicies', 'connectors', 'validationScans'],
-  'target-detail': ['checks', 'targetGroups'],
-  checks: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
-  'check-detail': ['checks', 'runs'],
-  'test-policies': ['targetGroups', 'checks', 'testPolicies'],
-  'policy-detail': ['checks', 'testPolicies'],
-  runs: ['targetGroups', 'checks', 'runs', 'findings', 'evidence', 'highScale', 'validationScans'],
-  'run-detail': ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
-  'scan-detail': ['targetGroups', 'checks'],
-  findings: ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
-  // targetGroups: the rule-wide asset table labels groups by recorded name, so a cold deep link must load them.
-  'finding-detail': ['targetGroups', 'targets', 'checks', 'findings', 'wafActionItems'],
+  dashboard: ['targets', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
+  targets: ['targets'],
+  'target-detail': ['checks'],
+  checks: ['targets', 'checks', 'runs', 'findings', 'evidence'],
+  'check-detail': ['targets', 'checks', 'runs'],
+  'test-policies': ['targets', 'checks', 'testPolicies'],
+  'policy-detail': ['targets', 'checks', 'testPolicies'],
+  runs: ['targets', 'checks', 'runs', 'findings', 'evidence', 'highScale', 'validationScans'],
+  'run-detail': ['targets', 'checks', 'runs', 'findings', 'evidence'],
+  'scan-detail': ['targets', 'checks'],
+  findings: ['targets', 'checks', 'runs', 'findings', 'evidence'],
+  'finding-detail': ['targets', 'checks', 'findings', 'wafActionItems'],
   // Grouped Refined view: same datasets as the findings list it is derived from.
-  'finding-group-detail': ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence'],
+  'finding-group-detail': ['targets', 'checks', 'runs', 'findings', 'evidence'],
   'evidence-detail': ['evidence', 'findings'],
   reports: ['reports', 'audit'],
-  'report-detail': ['targetGroups', 'runs', 'findings', 'reports'],
-  integrations: ['connectors', 'secrets', 'targetGroups'],
+  'report-detail': ['runs', 'findings', 'reports'],
+  integrations: ['connectors', 'secrets'],
   notifications: ['notifications'],
   audit: ['audit'],
   'release-evidence': ['releaseEvidence', 'releaseAttestation'],
-  settings: ['targetGroups', 'evidence', 'secrets', 'serviceAccounts'],
+  settings: ['evidence', 'secrets', 'serviceAccounts'],
   support: ['subscriptionSummary'],
   subscription: ['subscriptionSummary'],
   admin: ['internalOverview', 'internalSignupRequests', 'internalTenants', 'internalApprovalRequests', 'internalAudit'],
   'tenant-detail': ['internalTenants', 'internalApprovalRequests'],
   'internal-soc': ['findings', 'highScale', 'internalApprovalRequests'],
-  'queue-detail': ['targetGroups', 'highScale']
+  'queue-detail': ['targets', 'highScale']
 } as const satisfies Record<RouteId, readonly PortalDataset[]>;
 
 export type NavItem = {
@@ -210,8 +204,6 @@ export type FindingsListMeta = {
 export type PortalData = {
   state: StatePayload | null;
   tenant: DataItem | null;
-  targetGroups: DataItem[];
-  targetGroupsMeta: DataItem | null;
   targets: DataItem[];
   targetsMeta: DataItem | null;
   checks: DataItem[];

@@ -6,7 +6,7 @@ import {
   applicableResourceFamilyCheckIds,
   resourceFamilyCheckIds,
   resourceFamilyVerdictState,
-  resourceMatrixGroups,
+  resourceMatrixTargets,
 } from '../../apps/web/react/src/lib/resource-matrix.mjs';
 import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
 import { EXHAUSTED_RESOURCE_FAMILIES } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
@@ -23,7 +23,7 @@ function iso(millisecondsAgo = 0) {
 function storedRun({
   id = 'run_1',
   checkId = CHECK_A,
-  groupId = 'tg_1',
+  targetId = 'tgt_1',
   verdict = 'protected',
   at = iso(DAY),
   status = 'completed',
@@ -31,14 +31,13 @@ function storedRun({
   return {
     id,
     check_id: checkId,
-    target_group_id: groupId,
-    target_id: 'tgt_1',
+    target_id: targetId,
     status,
     completed_at: at,
     verdict: {
       test_run_id: id,
       check_id: checkId,
-      target_id: 'tgt_1',
+      target_id: targetId,
       verdict,
       evidence_ids: [`evt_${id}`],
       created_at: at,
@@ -46,8 +45,8 @@ function storedRun({
   };
 }
 
-function state({ checkIds = new Set([CHECK_A]), runs = [], evidence = [], groupId = 'tg_1' } = {}) {
-  return resourceFamilyVerdictState({ checkIds, groupId, runs, evidence, nowMs: NOW });
+function state({ checkIds = new Set([CHECK_A]), runs = [], evidence = [], targetId = 'tgt_1' } = {}) {
+  return resourceFamilyVerdictState({ checkIds, targetId, runs, evidence, nowMs: NOW });
 }
 
 describe('resource-exhaustion matrix (DET-024)', () => {
@@ -127,18 +126,18 @@ describe('resource-exhaustion matrix (DET-024)', () => {
     assert.equal(resourceFamilyCheckIds(checks, { id: 'dns_exhaustion' }).has('multi'), false);
     assert.ok(resourceFamilyCheckIds(checks, { id: 'dns_exhaustion' }).has('legacy'));
 
-    const targets = [{ target_group_id: 'tg_1', kind: 'fqdn' }];
+    const targets = [{ target_id: 'tgt_1', kind: 'fqdn' }];
     assert.ok(applicableResourceFamilyCheckIds({
-      checks, family: { id: 'delivery_pattern' }, groupId: 'tg_1', targets,
+      checks, family: { id: 'delivery_pattern' }, targetId: 'tgt_1', targets,
     }).has('multi'));
   });
 
   it('renders every active target group without a five-column cap', () => {
-    const groups = Array.from({ length: 8 }, (_, index) => ({ id: `tg_${index + 1}` }));
+    const groups = Array.from({ length: 8 }, (_, index) => ({ id: `tgt_${index + 1}` }));
     groups.push({ id: 'tg_archived', archived_at: iso() });
     groups.push({ id: 'tg_deleted', deleted_at: iso() });
-    assert.deepEqual(resourceMatrixGroups(groups).map((group) => group.id), [
-      'tg_1', 'tg_2', 'tg_3', 'tg_4', 'tg_5', 'tg_6', 'tg_7', 'tg_8',
+    assert.deepEqual(resourceMatrixTargets(groups).map((group) => group.id), [
+      'tgt_1', 'tgt_2', 'tgt_3', 'tgt_4', 'tgt_5', 'tgt_6', 'tgt_7', 'tgt_8',
     ]);
   });
 
@@ -151,23 +150,23 @@ describe('resource-exhaustion matrix (DET-024)', () => {
       { check_id: 'dns', exhausted_resource: 'dns_exhaustion', supported_targets: ['hostname'] },
     ];
     const targets = [
-      { target_group_id: 'tg_1', kind: 'url' },
-      { target_group_id: 'tg_other', kind: 'fqdn' },
+      { target_id: 'tgt_1', kind: 'url' },
+      { target_id: 'tg_other', kind: 'fqdn' },
     ];
 
     assert.deepEqual(
-      [...applicableResourceFamilyCheckIds({ checks, family, groupId: 'tg_1', targets })].sort(),
+      [...applicableResourceFamilyCheckIds({ checks, family, targetId: 'tgt_1', targets })].sort(),
       [CHECK_B, 'generic'].sort(),
     );
     assert.equal(
-      applicableResourceFamilyCheckIds({ checks, family, groupId: 'tg_empty', targets }).size,
+      applicableResourceFamilyCheckIds({ checks, family, targetId: 'tg_empty', targets }).size,
       0,
     );
     assert.deepEqual(
       [...applicableResourceFamilyCheckIds({
         checks,
         family,
-        groupId: 'tg_1',
+        targetId: 'tgt_1',
         targets: [],
         targetInventoryLoaded: false,
       })].sort(),
@@ -187,10 +186,10 @@ describe('resource-exhaustion matrix (DET-024)', () => {
 
   it('does not treat policy, lifecycle activity, or an unbound verdict as coverage', () => {
     // Policies are intentionally not accepted by the verdict helper at all.
-    assert.equal(state({ runs: [{ id: 'run_1', check_id: CHECK_A, target_group_id: 'tg_1' }] }).status, 'not_run');
+    assert.equal(state({ runs: [{ id: 'run_1', check_id: CHECK_A, target_id: 'tgt_1' }] }).status, 'not_run');
     assert.equal(state({ runs: [storedRun({ status: 'running' })] }).status, 'not_run');
     assert.equal(state({ runs: [{
-      id: 'run_1', check_id: CHECK_A, target_group_id: 'tg_1', status: 'completed',
+      id: 'run_1', check_id: CHECK_A, target_id: 'tgt_1', status: 'completed',
       verdict: 'protected', completed_at: iso(),
     }] }).status, 'not_run');
     assert.equal(state({ runs: [{
@@ -207,7 +206,7 @@ describe('resource-exhaustion matrix (DET-024)', () => {
     assert.equal(state({ runs: [{
       id: 'run_nested',
       check: { check_id: CHECK_A },
-      target_group: { id: 'tg_1' },
+      target: { id: 'tgt_1' },
       target_id: 'tgt_1',
       status: 'verdicted',
       verdict: {
@@ -221,7 +220,7 @@ describe('resource-exhaustion matrix (DET-024)', () => {
     }] }).status, 'inconclusive');
 
     const legacyRun = {
-      id: 'run_legacy', check_id: CHECK_A, target_group_id: 'tg_1', status: 'completed',
+      id: 'run_legacy', check_id: CHECK_A, target_id: 'tgt_1', status: 'completed',
       verdict: 'edge_exposed', completed_at: iso(),
     };
     assert.equal(state({
@@ -230,14 +229,14 @@ describe('resource-exhaustion matrix (DET-024)', () => {
     }).status, 'exposed');
     assert.equal(state({
       runs: [legacyRun],
-      evidence: [{ test_run_id: 'run_other', check_id: CHECK_A, target_group_id: 'tg_1' }],
+      evidence: [{ test_run_id: 'run_other', check_id: CHECK_A, target_id: 'tgt_1' }],
     }).status, 'not_run');
   });
 
   it('keeps other checks and target groups from leaking into a cell', () => {
     const runs = [
       storedRun({ id: 'wrong_check', checkId: CHECK_B, verdict: 'failed' }),
-      storedRun({ id: 'wrong_group', groupId: 'tg_2', verdict: 'failed' }),
+      storedRun({ id: 'wrong_group', targetId: 'tg_2', verdict: 'failed' }),
     ];
     assert.equal(state({ runs }).status, 'not_run');
   });

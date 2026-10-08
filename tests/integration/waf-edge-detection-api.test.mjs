@@ -542,3 +542,26 @@ describe('WAF edge detection Postgres service parity', () => {
     assert.equal(detected.json.detection.cdn.provider, 'fastly');
   });
 });
+
+
+describe('direct-domain edge detection contract', () => {
+  it('binds only the declared target, queues the fixed check and omits grouping identity in the direct response', async () => {
+    freshStore();
+    const starts = [];
+    const { server, baseUrl } = startServer(wafEnabledEnv(), {
+      testRuns: { startTestRun: async (_ctx, body) => { starts.push(body); return { run: edgeRun('run_direct_detection') }; } },
+    });
+    try {
+      const headers = { ...demoHeaders('admin'), 'x-astranull-target-model': 'direct' };
+      const result = await request(baseUrl, 'POST', '/v1/waf/edge-detection', { headers, body: { target_id: 'tgt_1' } });
+      assert.equal(result.status, 202, JSON.stringify(result.json));
+      assert.deepEqual(starts, [{ check_id: WAF_EDGE_DETECTION_CHECK_ID, target_group_id: 'tg_1', target_id: 'tgt_1' }]);
+      assert.equal(JSON.stringify(result.json).includes('target_group_id'), false);
+      const denied = await request(baseUrl, 'POST', '/v1/waf/edge-detection', { headers, body: { target_id: 'foreign' } });
+      assert.equal(denied.status, 404);
+      const raw = await request(baseUrl, 'POST', '/v1/waf/edge-detection', { headers, body: { target_id: 'tgt_1', hostname: 'other.example' } });
+      assert.equal(raw.status, 400);
+      assert.equal(starts.length, 1);
+    } finally { await closeServer(server); }
+  });
+});

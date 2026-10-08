@@ -40,7 +40,7 @@ export function stringValue(item, key) {
  * for the current callers: neither `id` nor `check_id` exists on an array, so those lookups
  * already yield ''. It only bites for a nested key an array does own (`length`), so do not read
  * the guard as the thing keeping array shapes out of the counts — `itemCheckId` /
- * `itemTargetGroupId` returning '' is. Case is preserved — unlike `stringValue`, this feeds
+ * `itemTargetId` returning '' is. Case is preserved — unlike `stringValue`, this feeds
  * identity comparisons, not substring matching.
  *
  * @param {Record<string, unknown>} item
@@ -72,9 +72,9 @@ export function itemCheckId(item) {
  *
  * @param {Record<string, unknown>} item
  */
-export function itemTargetGroupId(item) {
+export function itemTargetId(item) {
   return String(
-    item.target_group_id ?? item.targetGroupId ?? nestedString(item, 'target_group', 'id') ?? '',
+    item.target_id ?? item.targetId ?? nestedString(item, 'target', 'id') ?? '',
   );
 }
 
@@ -133,16 +133,16 @@ export function familyCheckIds(checks, family) {
  * Status is the strongest evidence present — evidence beats a run, a run beats a policy —
  * because a policy that has produced evidence is more than merely declared.
  *
- * @param {{ checkIds: Set<string>, groupId: string,
+ * @param {{ checkIds: Set<string>, targetId: string,
  *   testPolicies: Record<string, unknown>[], runs: Record<string, unknown>[],
  *   evidence: Record<string, unknown>[] }} input
  * @returns {FamilyCoverage}
  */
-export function familyCoverage({ checkIds, groupId, testPolicies, runs, evidence }) {
-  if (!groupId || checkIds.size === 0) {
+export function familyCoverage({ checkIds, targetId, testPolicies, runs, evidence }) {
+  if (!targetId || checkIds.size === 0) {
     return { status: 'no-data', policyCount: 0, runCount: 0, evidenceCount: 0 };
   }
-  const inCell = (item) => itemTargetGroupId(item) === groupId && checkIds.has(itemCheckId(item));
+  const inCell = (item) => itemTargetId(item) === targetId && checkIds.has(itemCheckId(item));
   const policyCount = testPolicies.filter(inCell).length;
   const runCount = runs.filter(inCell).length;
   const evidenceCount = evidence.filter(inCell).length;

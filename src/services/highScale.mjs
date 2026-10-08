@@ -41,6 +41,7 @@ import {
   syncChecklistFromProviderArtifactReview,
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
+  normalizeHighScaleTargetSelection,
   validateScenarioFamilyAuthorization,
   validateGovernedAuthorization,
   governedAuthorizationFailure,
@@ -178,7 +179,7 @@ function notifyStateChange(ctx, req, action) {
   });
 }
 
-function validateHighScaleTargetScope(tenantId, targetGroupId) {
+function validateHighScaleTargetScope(tenantId, targetGroupId, targetIds = null) {
   if (!targetGroupId) {
     return { error: 'missing_target_group_id', status: 400 };
   }
@@ -187,8 +188,10 @@ function validateHighScaleTargetScope(tenantId, targetGroupId) {
     return { error: 'target_group_not_found', status: 404 };
   }
   const targets = getStore().targets.filter(
-    (t) => t.tenant_id === tenantId && t.target_group_id === targetGroupId,
+    (t) => t.tenant_id === tenantId && !t.deleted_at && (targetIds == null ? t.target_group_id === targetGroupId : targetIds.includes(t.id)),
   );
+  if (targets.some((target) => !getStore().targetGroups.some((policy) => policy.id === target.target_group_id && policy.tenant_id === tenantId && !policy.deleted_at && !policy.archived_at))) return { error: 'target_execution_policy_unavailable', status: 409 };
+  if (targetIds && targetIds.some((id) => !targets.some((target) => target.id === id))) return { error: 'target_not_found', status: 404 };
   if (targets.length === 0) {
     return { error: 'target_group_empty', status: 400 };
   }
@@ -196,7 +199,9 @@ function validateHighScaleTargetScope(tenantId, targetGroupId) {
 }
 
 export function createHighScaleRequest(ctx, body) {
-  const scopeError = validateHighScaleTargetScope(ctx.tenantId, body.target_group_id);
+  const selection = normalizeHighScaleTargetSelection(body);
+  if (selection.error) return selection;
+  const scopeError = validateHighScaleTargetScope(ctx.tenantId, body.target_group_id, selection.target_ids);
   if (scopeError) return scopeError;
 
   const intake = validateHighScaleIntakeFields(body);
@@ -208,6 +213,7 @@ export function createHighScaleRequest(ctx, body) {
     id,
     tenant_id: ctx.tenantId,
     target_group_id: body.target_group_id,
+    ...(selection.target_ids ? { target_ids: selection.target_ids } : {}),
     reason: text,
     objective: text,
     requested_window: intake.requested_window,
@@ -220,7 +226,7 @@ export function createHighScaleRequest(ctx, body) {
     audit_trail: [],
     scheduled_window: null,
     artifacts: [],
-    scope_hash: computeTargetGroupScopeHash(ctx.tenantId, body.target_group_id),
+    scope_hash: computeTargetGroupScopeHash(ctx.tenantId, body.target_group_id, selection.target_ids),
     soc_approvals: [],
     provider_approval_checklist: buildProviderApprovalChecklist(body),
     environment: intake.environment,
@@ -501,6 +507,11 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
   const req = getHighScaleRequest(ctx.tenantId, id);
   if (!req) return null;
 
+  if (req.target_ids && ['approve', 'schedule', 'start'].includes(action)) {
+    const scopeError = validateHighScaleTargetScope(ctx.tenantId, req.target_group_id, req.target_ids);
+    if (scopeError) return scopeError;
+  }
+
   const allowed = {
     approve: ['submitted', 'under_review'],
     schedule: ['approved'],
@@ -552,7 +563,7 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
       return { error: 'duplicate_soc_approval', status: 409 };
     }
     if (distinctSocApprovalCount(req) === 1) {
-      const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+      const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
       const governed = validateGovernedAuthorization(req, { currentScopeHash });
       if (!governed.ok) return governedAuthorizationFailure(req, governed);
     }
@@ -569,7 +580,7 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
         metadata: { approvals: distinctSocApprovalCount(req) },
       });
     } else {
-      req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+      req.scope_hash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
       resolvedState = 'approved';
       audit({
         tenant_id: ctx.tenantId,
@@ -593,7 +604,7 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
       return { error: 'missing_scope_hash', status: 409 };
     }
     const scheduledWindow = { window_start, window_end, scope_hash: req.scope_hash };
-    const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+    const currentScopeHash = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
     const governed = validateGovernedAuthorization(req, { currentScopeHash, scheduledWindow });
     if (!governed.ok) return governedAuthorizationFailure(req, governed);
     req.scheduled_window = scheduledWindow;
@@ -609,23 +620,16 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
   }
 
   if (action === 'start') {
-    const activeLoa = (getStore().loaSignatures ?? []).find(
-      (row) => row.tenant_id === ctx.tenantId && row.target_group_id === req.target_group_id,
-    );
-    const scopedTargets = getStore().targets.filter(
-      (target) => target.tenant_id === ctx.tenantId
-        && target.target_group_id === req.target_group_id
-        && !target.deleted_at,
-    );
-    const loaAuthorization = validateActiveLoaAuthorization(
-      activeLoa,
-      scopedTargets.map((target) => target.id),
-    );
-    if (!loaAuthorization.ok) {
-      auditStartGateDenied(ctx, req, loaAuthorization.error, {
-        missing_target_ids: loaAuthorization.missing_target_ids ?? [],
-      });
-      return { error: loaAuthorization.error, status: 409 };
+    const scopedTargets = getStore().targets.filter((target) => target.tenant_id === ctx.tenantId && !target.deleted_at
+      && (req.target_ids ? req.target_ids.includes(target.id) : target.target_group_id === req.target_group_id));
+    for (const target of scopedTargets) {
+      const records = (getStore().loaSignatures ?? []).filter((row) => row.tenant_id === ctx.tenantId && row.target_group_id === target.target_group_id);
+      const activeLoa = records.find((row) => validateActiveLoaAuthorization(row, [target.id]).ok) ?? records[0];
+      const loaAuthorization = validateActiveLoaAuthorization(activeLoa, [target.id]);
+      if (!loaAuthorization.ok) {
+        auditStartGateDenied(ctx, req, loaAuthorization.error, { missing_target_ids: loaAuthorization.missing_target_ids ?? [] });
+        return { error: loaAuthorization.error, status: 409 };
+      }
     }
     if (distinctSocApprovalCount(req) < 2) {
       auditStartGateDenied(ctx, req, 'insufficient_soc_approvals');
@@ -646,7 +650,7 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
       });
       return { error: 'outside_schedule_window', status: 409 };
     }
-    const currentScope = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id);
+    const currentScope = computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id, req.target_ids ?? null);
     if (currentScope !== req.scope_hash) {
       auditStartGateDenied(ctx, req, 'scope_hash_mismatch', { expected: req.scope_hash, actual: currentScope });
       return { error: 'scope_hash_mismatch', status: 409 };

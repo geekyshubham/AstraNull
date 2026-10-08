@@ -518,8 +518,8 @@ export function shouldAutoDetectEdge({ eligible, featureEnabled, canRun, edge, r
   return Boolean(eligible && featureEnabled && canRun && !hasPriorRuns && !record(edge) && !record(request) && !scanActive && !attempted);
 }
 
-export function validationScansPathForTarget(targetGroupId, targetId) {
-  const params = new URLSearchParams({ target_group_id: text(targetGroupId), target_id: text(targetId), limit: '1' });
+export function validationScansPathForTarget(targetId) {
+  const params = new URLSearchParams({ target_id: text(targetId), limit: '1' });
   return `/v1/validation-scans?${params.toString()}`;
 }
 

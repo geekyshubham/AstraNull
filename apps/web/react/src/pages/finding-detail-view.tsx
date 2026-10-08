@@ -34,7 +34,6 @@ import {
   isFindingSlaBreach,
   resolveFindingRetestAction
 } from '../lib/findings-helpers';
-import { buildTargetGroupNameMap, resolveTargetGroupLabel } from '../lib/finding-group-labels.mjs';
 import '../components/findings/findings-groups.css';
 import { ConfirmModal, useConfirmModal } from '../lib/crud-ui';
 import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
@@ -240,7 +239,6 @@ export function FindingDetailView({
   const severity = getString(entity, ['severity'], 'unknown');
   const findingStatus = readFindingStatus(entity);
   const owner = getString(entity, ['assignee', 'rem_owner'], 'unassigned');
-  const targetGroupId = getString(entity, ['target_group_id'], '');
   const targetId = getString(entity, ['target_id'], '');
   const testRunId = getString(entity, ['test_run_id'], '');
   const checkId = getString(entity, ['check_id'], '');
@@ -296,11 +294,7 @@ export function FindingDetailView({
   const ruleAssetCount = countFindingAssets(ruleSiblings, data.targets ?? []);
   const ruleHasSiblings = ruleSiblings.length > 1;
   const findingsListError = data.loadErrors?.findings ?? '';
-  const targetGroupsLoadError = data.loadErrors?.targetGroups ?? '';
-  const targetGroupNames = useMemo(() => buildTargetGroupNameMap(data.targetGroups ?? []), [data.targetGroups]);
-  const ruleGroupNamesUnavailable = Boolean(targetGroupsLoadError) && ruleSiblings.some((item) => (
-    resolveTargetGroupLabel(getString(item, ['target_group_id'], ''), { names: targetGroupNames, loadError: targetGroupsLoadError }).state === 'unavailable'
-  ));
+
 
   // A grouped queue row opens #finding-detail?id=...&focus=rule-assets; bring the asset list into view.
   useEffect(() => {
@@ -339,24 +333,15 @@ export function FindingDetailView({
       setAffectedTargetsLoading(false);
       return undefined;
     }
-    // Fallback: resolve exact declared-target linkage through this finding's target group.
-    const groupId = getString(entity, ['target_group_id'], '');
-    if (!groupId) {
-      setAffectedTargetsLoading(false);
-      return undefined;
-    }
+    // Missing embedded context can be read only from the finding's exact declared target.
+    const targetId = getString(entity, ['target_id'], '');
+    if (!targetId) { setAffectedTargetsLoading(false); return undefined; }
     setAffectedTargetsLoading(true);
-    requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}`)
+    requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`)
       .then((payload) => {
         if (cancelled) return;
-        const targets = coerceItemArray((payload as DataItem).targets) ?? [];
-        const directTargetId = getString(entity, ['target_id'], '');
-        const matched = populateFindingAffectedTargets(entityId, targets);
-        if (directTargetId && !matched.some((target) => getString(target, ['id'], '') === directTargetId)) {
-          const direct = targets.find((target) => getString(target, ['id'], '') === directTargetId);
-          if (direct) matched.unshift(direct);
-        }
-        setAffectedTargets(matched);
+        const target = (payload as DataItem).target as DataItem | undefined;
+        setAffectedTargets(target && getString(target, ['id'], '') === targetId ? [target] : []);
       })
       .catch((err) => {
         if (!cancelled) setAffectedTargetsError(err instanceof Error ? err.message : 'Could not load affected targets.');
@@ -480,21 +465,6 @@ export function FindingDetailView({
         if (!itemCheckId) return <span className="rule-asset-meta">Not reported</span>;
         const itemCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === itemCheckId);
         return <span className="rule-asset-stack"><span>{plainCheckName(getString(itemCheck ?? {}, ['name', 'title'], itemCheckId))}</span><small className="mono">{itemCheckId}</small></span>;
-      }
-    },
-    {
-      key: 'group',
-      label: 'Target group',
-      render: (item) => {
-        const group = resolveTargetGroupLabel(getString(item, ['target_group_id'], ''), { names: targetGroupNames, loadError: targetGroupsLoadError });
-        if (group.state === 'ungrouped') return <span className="rule-asset-meta">Ungrouped</span>;
-        if (group.state === 'named') {
-          return <span className="rule-asset-stack"><span>{group.name}</span><small className="mono">{group.id}</small></span>;
-        }
-        if (group.state === 'unavailable') {
-          return <span className="rule-asset-stack"><span className="mono">{group.id}</span><small>Group name unavailable</small></span>;
-        }
-        return <span className="mono">{group.id}</span>;
       }
     },
     {
@@ -644,7 +614,6 @@ export function FindingDetailView({
             {entity.updated_at ? <div className="finding-summary-fact"><dt>Updated</dt><dd>{formatDate(entity.updated_at)}</dd></div> : null}
           </dl>
           <div className="finding-relations" aria-label="Finding relationships">
-            {targetGroupId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', targetGroupId)}>Target group</AnchorButton> : null}
             {targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', targetId)}>Target</AnchorButton> : null}
           </div>
           <section className="finding-lineage" aria-label="Original evidence and later results">
@@ -783,7 +752,7 @@ export function FindingDetailView({
                     <div><dt>Upper bound</dt><dd>{retestAction?.kind === 'safe-run' ? (Number.isFinite(retestBound) ? `${retestBound} requests` : 'Not recorded in the catalog') : retestAction?.kind === 'waf-validation' ? 'WAF marker validation for the linked asset' : 'CVE pipeline retest'}</dd></div>
                   </dl>
                   <p>This starts a new bounded check on the same target and check. The server re-checks ownership, safe windows, rate, concurrency and kill-switch gates now; an expired scope is not replayed.</p>
-                  <p>The original evidence stays. A passing retest is shown as a later result and never closes other targets in this group.</p>
+                  <p>The original evidence stays. A passing retest is shown as a later result and never closes other domains.</p>
                 </div>
               )}
               confirmLabel="Start retest"
@@ -804,7 +773,7 @@ export function FindingDetailView({
                     await requestJson(config, session, retest.retestUrl, { method: 'POST' });
                   } else if (retest.kind === 'safe-run') {
                     if (!targetId) throw new Error('This finding has no declared target, so a retest cannot be recorded against it.');
-                    await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: targetGroupId, target_id: targetId, retest_of_finding_id: entityId } });
+                    await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_id: targetId, retest_of_finding_id: entityId } });
                   } else {
                     throw new Error('Unsupported retest kind for this finding.');
                   }
@@ -838,14 +807,14 @@ export function FindingDetailView({
 
       <Card>
         <CardHeader>
-          <div><CardTitle>Affected targets</CardTitle><CardDescription>Embedded finding links first; exact target-group linkage is the fallback.</CardDescription></div>
+          <div><CardTitle>Affected targets</CardTitle><CardDescription>Embedded finding links first; the recorded target is the fallback.</CardDescription></div>
         </CardHeader>
         <CardContent>
           {affectedTargetsLoading ? <PortalLoadingSkeleton rows={2} /> : affectedTargetsError ? (
             <EmptyState
               icon={TriangleAlert}
               title="Affected targets unavailable"
-              body={`Could not load the target-group fallback: ${affectedTargetsError}`}
+              body={`Could not load the recorded target: ${affectedTargetsError}`}
               actionLabel="Retry"
               onAction={() => setAffectedTargetsReloadToken((value) => value + 1)}
             />
@@ -853,7 +822,7 @@ export function FindingDetailView({
             <EmptyState
               icon={TriangleAlert}
               title="No declared targets matched."
-              body="It may apply at the target-group level, for example zone-wide or edge-wide, rather than to a single declared target."
+              body="This finding does not record a matching declared target. No affected domain is inferred."
             />
           ) : (
             <DataTable
@@ -886,11 +855,7 @@ export function FindingDetailView({
               Could not load the finding list, so other assets for this rule may be missing: {findingsListError}
             </div>
           ) : null}
-          {ruleHasSiblings && ruleGroupNamesUnavailable ? (
-            <div className="form-banner error" role="status">
-              Target group names are unavailable because target groups could not be loaded, so group IDs are shown instead: {targetGroupsLoadError}
-            </div>
-          ) : null}
+
           <p className="rule-assets-summary">
             {ruleHasSiblings ? (
               <>

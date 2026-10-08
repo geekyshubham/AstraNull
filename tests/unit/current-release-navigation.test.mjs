@@ -90,9 +90,10 @@ describe('scoped list return state (EI-05, TF return)', () => {
 });
 
 describe('customer navigation (shared-shell P2, contract)', () => {
-  it('puts Targets before Target groups', () => {
+  it('exposes direct Targets without group navigation', () => {
     const ids = NAV_ITEMS.map((item) => item.id);
-    assert.ok(ids.indexOf('targets') < ids.indexOf('target-groups'));
+    assert.ok(ids.includes('targets'));
+    assert.ok(!ids.includes('target-groups'));
   });
 
   it('removes deferred execution history from the sidebar but keeps its address resolving', () => {

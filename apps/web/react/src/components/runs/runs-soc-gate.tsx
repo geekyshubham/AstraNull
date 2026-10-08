@@ -54,9 +54,9 @@ function governedLimitDisplay(item: DataItem) {
   return [rate, duration].filter(Boolean).join(' · ') || '—';
 }
 
-function targetGroupDisplayName(data: PortalData, groupId: string) {
-  const group = data.targetGroups.find((item) => getString(item, ['id'], '') === groupId);
-  return getString(group ?? {}, ['name', 'title'], groupId || '—');
+function requestDomainDisplay(data: PortalData, item: DataItem) {
+  const ids = Array.isArray(item.target_ids) ? item.target_ids.map(String) : item.target_id ? [String(item.target_id)] : [];
+  return ids.length ? ids.map((id) => getString(data.targets.find((target) => getString(target, ['id'], '') === id), ['value'], 'Domain not recorded')).join(', ') : 'Domain scope not recorded';
 }
 
 function packBadgeTone(overall: string): 'success' | 'warn' | 'danger' | 'muted' {
@@ -179,7 +179,7 @@ export function RunsSocGatePanel({
       }
     },
     { key: 'policy', label: 'Policy', render: (item) => { const policy = getString(item, ['policy_id'], ''); const scenario = getString(item, ['requested_scenario_families'], 'soc_gated'); return <span title={policy || undefined}>{policy ? 'Scheduled policy' : plainCodeLabel(scenario)}</span>; } },
-    { key: 'group', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },
+    { key: 'domains', label: 'Domains', render: (item) => requestDomainDisplay(data, item) },
     { key: 'limits', label: 'Governed limits', render: (item) => governedLimitDisplay(item) },
     {
       key: 'pack',
@@ -250,7 +250,7 @@ export function RunsPageHeadActions({
   safeRunDisabled?: boolean;
 }) {
   const safeRunDisabledReason = safeRunDisabled
-    ? 'Vector library launch is unavailable until a declared target group and customer-runnable bounded check are ready.'
+    ? 'Vector library launch is unavailable until a declared domain and customer-runnable bounded check are ready.'
     : '';
   return (
     <>

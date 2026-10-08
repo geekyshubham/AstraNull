@@ -253,7 +253,7 @@ export function FirewallChangeComparison({
         if (written.record.id) setComparisonId(written.record.id);
         setForm('');
       } else {
-        await startReviewedRetest(config, session, { check_id: review.ref.check_id, target_group_id: str(target, 'target_group_id'), target_id: review.ref.target_id });
+        await startReviewedRetest(config, session, { check_id: review.ref.check_id, target_id: review.ref.target_id });
         onStarted('Retest started for the exact check and target. Select its finalized run as post-change evidence when it finishes.');
       }
       setReview(null);

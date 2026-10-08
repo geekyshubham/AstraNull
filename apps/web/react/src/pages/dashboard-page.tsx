@@ -136,7 +136,7 @@ function fixTitle(finding: DataItem, targets: DataItem[], checks: DataItem[]) {
 /** `priority` is the server's most severe open findings; `findingsUnavailable` when their read failed. */
 function buildNextSteps(data: PortalData, priority: DataItem[], findingsUnavailable: boolean): NextStep[] {
   const steps: NextStep[] = [];
-  const activeGroups = data.targetGroups.filter((group) => group.archived_at == null);
+  const activeTargets = data.targets.filter((target) => !target.archived_at && !target.deleted_at);
   const hasEvidence = data.runs.some((run) => {
     const status = getString(run, ['status']).toLowerCase();
     const verdict = typeof run.verdict === 'string' ? run.verdict : getString(run.verdict as DataItem, ['verdict', 'status']);
@@ -184,7 +184,7 @@ function buildNextSteps(data: PortalData, priority: DataItem[], findingsUnavaila
       tone: 'info'
     });
   }
-  if (steps.length < 3 && !data.loadErrors.runs && !hasEvidence && activeGroups.length > 0) {
+  if (steps.length < 3 && !data.loadErrors.runs && !hasEvidence && activeTargets.length > 0) {
     steps.push({
       key: 'first-run',
       title: 'Run the first bounded check on a target',
@@ -724,7 +724,7 @@ export function DashboardPage({
             <KpiCard
               label="Readiness"
               value={<>{score ?? UNAVAILABLE}{score !== null ? <span className="unit">/100</span> : null}</>}
-              sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">Published score over target groups with evidence in the last 30 days. Not a protection guarantee.</span></>}
+              sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">Published workspace score from evidence in the last 30 days. Not a protection guarantee.</span></>}
               onActivate={() => {
                 handleTabChange('risk-trends');
                 // The KPI unmounts with the overview panel; hand focus to the tab it opened.
@@ -1002,12 +1002,12 @@ export function DashboardPage({
             <Card>
               <CardHeader>
                 <CardTitle>Vector coverage matrix</CardTitle>
-                <CardDescription>Coverage by vector family and declared target group.</CardDescription>
+                <CardDescription>Coverage by vector family and declared domain.</CardDescription>
               </CardHeader>
               <CardContent>
                 <VectorHeatmap
                   checks={data.checks}
-                  targetGroups={data.targetGroups}
+                  targets={data.targets}
                   testPolicies={data.testPolicies}
                   runs={data.runs}
                   evidence={data.evidence}
@@ -1023,12 +1023,12 @@ export function DashboardPage({
               <CardContent>
                 <ResourceMatrix
                   checks={data.checks}
-                  targetGroups={data.targetGroups}
+                  targets={data.targets}
                   runs={data.runs}
                   evidence={data.evidence}
                   config={config}
                   session={session}
-                  dataLoadError={[data.loadErrors.checks, data.loadErrors.targetGroups, data.loadErrors.runs, data.loadErrors.evidence].filter(Boolean).join(' ') || null}
+                  dataLoadError={[data.loadErrors.checks, data.loadErrors.targets, data.loadErrors.runs, data.loadErrors.evidence].filter(Boolean).join(' ') || null}
                   onRefresh={onRefresh}
                 />
               </CardContent>

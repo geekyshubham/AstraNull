@@ -5,7 +5,7 @@ import {
   buildDefensePath,
   buildTargetPostureRows,
   classifyVerdict,
-  countActiveTargetGroups,
+  countActiveTargets,
   countHighScaleRequests,
   countOpenFindings,
   findingSeverityBuckets,
@@ -23,7 +23,6 @@ function portalData(overrides = {}) {
   return {
     state: null,
     tenant: null,
-    targetGroups: [],
     targets: [],
     checks: [],
     testPolicies: [],
@@ -39,7 +38,7 @@ function portalData(overrides = {}) {
 
 describe('dashboard-metrics', () => {
   it('derives list-backed counts with the same semantics as GET /v1/state', () => {
-    const targetGroups = [
+    const targets = [
       { id: 'tg_active', archived_at: null },
       { id: 'tg_archived', archived_at: '2026-01-01T00:00:00.000Z' }
     ];
@@ -49,33 +48,34 @@ describe('dashboard-metrics', () => {
     ];
     const highScale = [{ id: 'hs1' }, { id: 'hs2' }];
 
-    assert.equal(countActiveTargetGroups(targetGroups), 1);
+    assert.equal(countActiveTargets(targets), 1);
     assert.equal(countOpenFindings(findings), 1);
     assert.equal(countHighScaleRequests(highScale), 2);
 
-    const metrics = resolveDashboardMetrics(portalData({ targetGroups, findings, highScale }));
-    assert.deepEqual(metrics, { targetGroups: 1, openFindings: 1, highScaleRequests: 2 });
+    const metrics = resolveDashboardMetrics(portalData({ targets, findings, highScale }));
+    assert.deepEqual(metrics, { targets: 1, openFindings: 1, highScaleRequests: 2 });
     assert.equal(Object.hasOwn(metrics, 'agentsOnline'), false, 'agents are removed outside-in');
   });
 
   it('prefers /v1/state metrics when present', () => {
     const metrics = resolveDashboardMetrics(portalData({
       state: { target_groups: 4, open_findings: 2, high_scale_requests: 1 },
-      targetGroups: [{ id: 'tg1' }],
+      targets: [{ id: 'tg1' }],
       findings: [{ id: 'f1', status: 'open' }]
     }));
-    assert.deepEqual(metrics, { targetGroups: 4, openFindings: 2, highScaleRequests: 1 });
+    assert.deepEqual(metrics, { targets: 1, openFindings: 2, highScaleRequests: 1 });
   });
 
   it('keeps 10k groups and 33,334 findings distinct at scale', () => {
     const metrics = resolveDashboardMetrics(portalData({
-      state: { target_groups: 10_000, open_findings: 33_334, high_scale_requests: 0 }
+      state: { target_groups: 10_000, open_findings: 33_334, high_scale_requests: 0 },
+      targets: Array.from({ length: 10_000 }, (_, index) => ({ id: `target_${index}` }))
     }));
-    assert.equal(metrics.targetGroups, 10_000);
+    assert.equal(metrics.targets, 10_000);
     assert.equal(metrics.openFindings, 33_334);
-    assert.equal(formatNumber(metrics.targetGroups), '10,000');
+    assert.equal(formatNumber(metrics.targets), '10,000');
     assert.equal(formatNumber(metrics.openFindings), '33,334');
-    assert.equal(Object.hasOwn(metrics, 'targets'), false, 'state has no target count to expose');
+    assert.equal(Object.hasOwn(metrics, 'targetGroups'), false, 'the obsolete grouping metric is not presented');
   });
 
   it('prefers state recent_runs over the full runs list', () => {

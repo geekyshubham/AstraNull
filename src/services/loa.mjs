@@ -119,7 +119,8 @@ export function sign(ctx, groupId, payload) {
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && isActiveSignedLoa(row, signedAtMs),
+      && isActiveSignedLoa(row, signedAtMs)
+      && scope_snapshot.targets.some((id) => (row.scope_snapshot?.targets ?? []).some((entry) => (typeof entry === 'object' ? entry?.target_id : entry) === id)),
   );
   if (active) return { error: 'loa_active', status: 409 };
 
@@ -224,12 +225,13 @@ export function revoke(ctx, loaId, reason) {
  * @param {import('../context.mjs').TenantScope} ctx
  * @param {string} groupId
  */
-export function getActive(ctx, groupId) {
+export function getActive(ctx, groupId, targetId = null) {
   const loa = (getStore().loaSignatures ?? []).find(
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && isActiveSignedLoa(row),
+      && isActiveSignedLoa(row)
+      && (!targetId || (row.scope_snapshot?.targets ?? []).some((entry) => (typeof entry === 'object' ? entry?.target_id : entry) === targetId)),
   ) ?? null;
   return {
     loa: formatLoa(loa),

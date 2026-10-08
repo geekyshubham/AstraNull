@@ -221,8 +221,8 @@ describe('findings-helpers', () => {
       assert.equal(findingAssetLabel({ target_id: 'tgt_ip' }, targets), '203.0.113.10');
       assert.equal(findingAssetLabel({ target_id: 'tgt_missing', title: 'Finding: exposed on cdn.example.com' }, targets), 'cdn.example.com');
       assert.equal(findingAssetLabel({ target_hostname: 'edge.example.com', target_id: 'tgt_api' }, targets), 'edge.example.com');
-      assert.equal(findingAssetLabel({ target_group_id: 'tg_a' }, targets), 'Target-group scope tg_a');
-      assert.equal(findingAssetLabel({ target_group_id: 'tg_a' }, targets, [{ id: 'tg_a', name: 'Payments' }]), 'Payments (target-group scope)');
+      assert.equal(findingAssetLabel({ target_group_id: 'tg_a' }, targets), 'Asset not recorded');
+      assert.equal(findingAssetLabel({ target_group_id: 'tg_a' }, targets, [{ id: 'tg_a', name: 'Payments' }]), 'Asset not recorded');
       assert.equal(findingAssetLabel({}, targets), 'Asset not recorded');
       assert.equal(findingRuleTitle({ title: 'Origin direct bypass' }), 'Origin direct bypass');
     });
@@ -301,16 +301,16 @@ describe('findings-helpers', () => {
     it('counts two group-scoped findings in different groups as two assets', () => {
       const [group] = groupFindingsByRule(groupScoped, { targetGroups: [{ id: 'g1', name: 'Payments' }] });
       assert.deepEqual(group.assets, [
-        { key: 'group:g1', label: 'Payments (target-group scope)' },
-        { key: 'group:g2', label: 'Target-group scope g2' }
+        { key: 'finding:f_g1', label: 'Asset not recorded' },
+        { key: 'finding:f_g2', label: 'Asset not recorded' }
       ]);
       assert.equal(countFindingAssets(groupScoped), 2);
     });
 
-    it('merges findings scoped to the same group into one asset', () => {
+    it('keeps legacy records without an exact domain distinct instead of inventing an asset', () => {
       const same = [groupScoped[0], { ...groupScoped[1], id: 'f_g1b', target_group_id: 'g1' }];
-      assert.equal(groupFindingsByRule(same)[0].assets.length, 1);
-      assert.equal(countFindingAssets(same), 1);
+      assert.equal(groupFindingsByRule(same)[0].assets.length, 2);
+      assert.equal(countFindingAssets(same), 2);
     });
 
     it('never merges unscoped records with each other', () => {

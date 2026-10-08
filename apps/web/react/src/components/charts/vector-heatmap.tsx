@@ -13,7 +13,7 @@ import './charts.css';
 
 type VectorHeatmapProps = {
   checks: Record<string, unknown>[];
-  targetGroups: Record<string, unknown>[];
+  targets: Record<string, unknown>[];
   testPolicies: Record<string, unknown>[];
   runs: Record<string, unknown>[];
   evidence: Record<string, unknown>[];
@@ -37,12 +37,12 @@ const COVERAGE_LABEL: Record<FamilyCoverageStatus, string> = {
 
 function coverageTitle(coverage: FamilyCoverage) {
   if (coverage.status === 'no-data') {
-    return 'No checks mapped to this vector family for this target group.';
+    return 'No checks mapped to this vector family for this domain.';
   }
   return `${coverage.evidenceCount} evidence · ${coverage.runCount} runs · ${coverage.policyCount} policies`;
 }
 
-function HeatmapCell({ coverage, groupName, familyName }: { coverage: FamilyCoverage; groupName: string; familyName: string }) {
+function HeatmapCell({ coverage, domainName, familyName }: { coverage: FamilyCoverage; domainName: string; familyName: string }) {
   const tone = COVERAGE_TONE[coverage.status];
   const detail = coverageTitle(coverage);
   return (
@@ -50,7 +50,7 @@ function HeatmapCell({ coverage, groupName, familyName }: { coverage: FamilyCove
       className={`heatmap-cell heatmap-${tone} matrix-cell`}
       data-status={coverage.status}
       title={detail}
-      aria-label={`${groupName}, ${familyName}: ${COVERAGE_LABEL[coverage.status]}. ${detail}`}
+      aria-label={`${domainName}, ${familyName}: ${COVERAGE_LABEL[coverage.status]}. ${detail}`}
     >
       <strong>{COVERAGE_LABEL[coverage.status]}</strong>
       {coverage.status === 'no-data' ? null : (
@@ -71,15 +71,15 @@ function HeatmapLegend() {
   );
 }
 
-export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, evidence }: VectorHeatmapProps) {
-  const groups = targetGroups;
+export function VectorHeatmap({ checks, targets, testPolicies, runs, evidence }: VectorHeatmapProps) {
+  const domains = targets;
 
-  if (groups.length === 0) {
+  if (domains.length === 0) {
     return (
       <EmptyState
         icon={Target}
-        title="No declared target groups yet."
-        body="Declare target groups before coverage can be calculated from policies, runs, or evidence."
+        title="No declared domains yet."
+        body="Declare domains before coverage can be calculated from policies, runs, or evidence."
       />
     );
   }
@@ -97,11 +97,11 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
       >
         <table className="matrix-table">
           <caption className="sr-only">
-            Vector coverage by declared target group: {groups.length} groups across {VECTOR_FAMILIES.length} vector families.
+            Vector coverage by declared domain: {domains.length} domains across {VECTOR_FAMILIES.length} vector families.
           </caption>
           <thead>
             <tr>
-              <th scope="col"><span className="heatmap-head matrix-corner">Target group</span></th>
+              <th scope="col"><span className="heatmap-head matrix-corner">Domain</span></th>
               {VECTOR_FAMILIES.map((family) => (
                 <th scope="col" key={family.label}>
                   <span className="heatmap-head">{plainCheckName(family.label)}</span>
@@ -110,23 +110,23 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
             </tr>
           </thead>
           <tbody>
-            {groups.map((group, groupIndex) => {
-              const groupId = String(group.id ?? '');
-              const groupName = String(group.name ?? group.id ?? 'Declared group');
+            {domains.map((domain, domainIndex) => {
+              const targetId = String(domain.id ?? '');
+              const domainName = String(domain.value ?? domain.id ?? 'Declared domain');
               return (
-                <tr key={groupId || `group-${groupIndex}`}>
-                  <th scope="row"><span className="heatmap-name">{groupName}</span></th>
+                <tr key={targetId || `group-${domainIndex}`}>
+                  <th scope="row"><span className="heatmap-name">{domainName}</span></th>
                   {VECTOR_FAMILIES.map((family) => {
                     const coverage = familyCoverage({
                       checkIds: familyCheckIds(checks, family),
-                      groupId,
+                      targetId,
                       testPolicies,
                       runs,
                       evidence,
                     });
                     return (
-                      <td key={`${groupIndex}-${family.label}`}>
-                        <HeatmapCell coverage={coverage} groupName={groupName} familyName={plainCheckName(family.label)} />
+                      <td key={`${domainIndex}-${family.label}`}>
+                        <HeatmapCell coverage={coverage} domainName={domainName} familyName={plainCheckName(family.label)} />
                       </td>
                     );
                   })}

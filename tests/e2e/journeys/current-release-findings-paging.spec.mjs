@@ -1,7 +1,7 @@
 /**
  * Current release findings paging against the real dev API: more than one server page of findings,
  * exact predicate totals, page 2, search, status filters, grouped and group-member reads past the
- * first page, Target groups server counts and their exact Findings link. Isolated dev store; UI from
+ * first page, Direct domain predicates and exact Findings counts. Isolated dev store; UI from
  * live source via Vite. Reads only: no write, probe or notification is issued.
  */
 import path from 'node:path';
@@ -65,11 +65,13 @@ function applyPagingFixture(store) {
       opened_at: stamp(index + 10),
     });
   }
+  store.targets.push({ id: 'tgt_paging_side', tenant_id: T, target_group_id: SIDE_GROUP, kind: 'fqdn', value: 'paging-side.example.test' });
   for (let index = 0; index < 10; index += 1) {
     store.findings.push({
       id: `fnd_pg_side_${index}`,
       tenant_id: T,
       target_group_id: SIDE_GROUP,
+      target_id: 'tgt_paging_side',
       check_id: 'paging.side.check',
       severity: 's3',
       title: 'Side group finding',
@@ -276,47 +278,19 @@ test.describe('current-release findings paging against the real API', () => {
     expect(writes).toEqual([]);
   });
 
-  test('target groups: server open counts, workspace total from state, keyboard link to the exact predicate', async ({ page }) => {
-    const { writes } = recordFindingsReads(page);
-    await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-groups', sourceBaseUrl);
-
-    const kpi = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
-    await expect(kpi.locator('.kpi-value')).toHaveText(String(expected.stateOpen));
-    await expect(kpi).toContainText('Status open, whole workspace, each finding once');
-
-    const checkoutCell = page.getByRole('row').filter({ hasText: 'edge-checkout' }).locator('td[data-label="Open findings"]');
-    await expect(checkoutCell).toHaveText(String(expected.groupCounts[GROUP]));
-    const sideCell = page.getByRole('row').filter({ hasText: 'paging-side' }).locator('td[data-label="Open findings"]');
-    await expect(sideCell).toHaveText('7');
-
-    const link = checkoutCell.getByRole('link');
-    await expect(link).toHaveAttribute('href', `#findings?target_group_id=${GROUP}&status=open`);
-    await expect(link).toHaveAccessibleName(`${expected.groupCounts[GROUP]} open findings in edge-checkout. Open Findings filtered to this group.`);
-    await link.focus();
-    await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(new RegExp(`#findings\\?target_group_id=${GROUP}&status=open$`));
-
-    await expect(statusChip(page, 'Open')).toHaveAttribute('aria-pressed', 'true');
-    await expect(statusChip(page, 'Open').locator('.rf-tab-count')).toHaveText(String(expected.groupOpen));
-    await expect(statusChip(page, 'In progress').locator('.rf-tab-count')).toHaveText(String(expected.groupInProgress));
-    await expect(page.getByRole('button', { name: 'Target group', exact: true })).toContainText('edge-checkout');
-    expect(writes).toEqual([]);
-  });
-
-  test('a linked group predicate replaces remembered filters and clears from the address once changed', async ({ page }) => {
+  test('a linked domain predicate replaces remembered filters and clears from the address once changed', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'findings', sourceBaseUrl);
     await page.getByRole('searchbox', { name: /Search findings/ }).fill('Needle');
     await expect(page.locator('.rf-result-count').first()).toContainText('1 matching finding');
 
-    await page.goto(`${sourceBaseUrl}/app#findings?target_group_id=${SIDE_GROUP}&status=open`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#findings?target_id=tgt_paging_side&status=open`, { waitUntil: 'networkidle' });
     await expect(page.getByRole('searchbox', { name: /Search findings/ })).toHaveValue('');
     await expect(statusChip(page, 'Open').locator('.rf-tab-count')).toHaveText('7');
     await expect(statusChip(page, 'In progress').locator('.rf-tab-count')).toHaveText('3');
 
     await statusChip(page, 'In progress').click();
-    await expect(page).not.toHaveURL(/target_group_id=/);
+    await expect(page).not.toHaveURL(/target_id=/);
   });
 
   test('severity filter offers each server class once and folds S2 and high together', async ({ page }) => {
@@ -332,23 +306,6 @@ test.describe('current-release findings paging against the real API', () => {
     expect(options.map((text) => text.trim())).toEqual(['All severities', 'Critical', 'High', 'Medium', 'Low', 'Info', 'Not recorded or unrecognized']);
   });
 
-  test('target groups: a missing server count reads Not recorded, never zero', async ({ page }) => {
-    await page.route('**/v1/target-groups', async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.items = body.items.map((group) => {
-        if (group.id !== SIDE_GROUP) return group;
-        const { open_findings_count: _omitted, ...rest } = group;
-        return rest;
-      });
-      await route.fulfill({ response, json: body });
-    });
-    await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-groups', sourceBaseUrl);
-    await expect(page.getByRole('row').filter({ hasText: 'paging-side' }).locator('td[data-label="Open findings"]')).toHaveText('Not recorded');
-    await expect(page.getByRole('row').filter({ hasText: 'edge-checkout' }).locator('td[data-label="Open findings"]')).toHaveText(String(expected.groupCounts[GROUP]));
-  });
-
   test('dashboard open count is the exact server total, not the first page', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', sourceBaseUrl);
@@ -357,8 +314,8 @@ test.describe('current-release findings paging against the real API', () => {
   });
 
   for (const mode of [
-    { route: 'target-groups', width: 1440, theme: 'dark' },
-    { route: 'target-groups', width: 375, theme: 'light' },
+    { route: 'targets', width: 1440, theme: 'dark' },
+    { route: 'targets', width: 375, theme: 'light' },
     { route: 'findings', width: 1440, theme: 'light' },
     { route: 'findings', width: 375, theme: 'dark' },
   ]) {

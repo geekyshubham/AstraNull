@@ -33,7 +33,7 @@ describe('portal error humanizer', () => {
     const banner = apiErrorMessage(apiError({ error: 'concurrent_run_blocked' }), 'Action failed.');
     assert.equal(
       banner,
-      'A run is already in progress for this target group. Cancel or finalize it before starting another.',
+      'A run is already using this target’s execution slot. Cancel or finalize it before starting another.',
     );
     assert.doesNotMatch(banner, /concurrent_run_blocked/);
   });

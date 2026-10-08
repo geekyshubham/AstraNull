@@ -34,8 +34,7 @@ import {
   effectivePolicyTargetKind,
   isPolicyTargetCompatible,
   policySupportedTargetKinds,
-  TargetGroupPicker,
-} from '../components/policies/target-group-picker';
+} from '../lib/policy-targets';
 import { EmptyState } from '../components/ui/empty-state';
 import { EvidenceGuide } from '../components/ui/evidence-guide';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
@@ -381,7 +380,7 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .release-dimensions dt { color: var(--meta); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: var(--tracking-caps); text-transform: uppercase; }
 .release-dimensions dd { margin: 0; color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; overflow-wrap: anywhere; }
 .release-dimensions dd.release-dimension-hint { margin: 0; color: var(--fg-2); font-family: var(--font-body); font-size: var(--text-xs); font-weight: 400; line-height: 1.45; }
-.release-evidence-page .audit-search-pill, .target-groups-page .audit-search-pill, .audit-page .audit-search-pill { flex: 0 1 auto; width: min(100%, 520px); }
+.release-evidence-page .audit-search-pill, .audit-page .audit-search-pill { flex: 0 1 auto; width: min(100%, 520px); }
 .release-ledger { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .release-filter button { min-height: 36px; }
 @media (min-width: 1180px) {
@@ -414,7 +413,7 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .audit-event-detail:focus { outline: none; }
 body .settings-page .tab-panel[hidden] { display: none; }
 @media (pointer: coarse) {
-  .target-groups-page td a, .reports-page td a, .support-page .support-event-row a, .audit-page td a, .report-detail-page td a {
+  .reports-page td a, .support-page .support-event-row a, .audit-page td a, .report-detail-page td a {
     display: inline-flex; align-items: center; min-height: 44px;
   }
 }
@@ -684,11 +683,6 @@ function evidenceFeedRows(data: PortalData, limit = 10) {
     .slice(0, limit);
 }
 
-function targetGroupDisplayName(data: PortalData, groupId: string) {
-  const group = data.targetGroups.find((item) => getString(item, ['id'], '') === groupId);
-  return getString(group ?? {}, ['name', 'title'], groupId || '—');
-}
-
 function targetDisplayName(data: PortalData, targetId: string, fallback = '') {
   const target = data.targets.find((item) => getString(item, ['id', 'target_id'], '') === targetId);
   return getString(target ?? {}, ['hostname', 'value', 'name', 'label'], fallback || targetId || 'Target not reported');
@@ -703,8 +697,7 @@ function runDisplayLabel(data: PortalData, run: DataItem) {
   const checkName = checkDisplayName(data, getString(run, ['check_id']));
   const targetId = getString(run, ['target_id'], '');
   const embeddedTarget = getString(run, ['target_hostname', 'target_value'], '');
-  const targetName = targetDisplayName(data, targetId, embeddedTarget)
-    || targetGroupDisplayName(data, getString(run, ['target_group_id']));
+  const targetName = targetDisplayName(data, targetId, embeddedTarget);
   return `${checkName} · ${targetName}`;
 }
 
@@ -715,468 +708,9 @@ function evidenceDisplayLabel(item: DataItem) {
 function highScaleRequestLabel(data: PortalData, request: DataItem) {
   const objective = getString(request, ['objective', 'reason'], '').trim();
   if (objective) return objective;
-  return targetGroupDisplayName(data, getString(request, ['target_group_id']));
+  const ids = Array.isArray(request.target_ids) ? request.target_ids.map(String) : request.target_id ? [String(request.target_id)] : [];
+  return ids.length ? ids.map((id) => targetDisplayName(data, id)).join(', ') : 'Domain scope not recorded';
 }
-
-export function TargetGroupsPage({
-  data,
-  config,
-  session,
-  onRefresh
-}: {
-  data: PortalData;
-  config: PortalConfig;
-  session: Session;
-  onRefresh: () => Promise<void>;
-}) {
-  const [addTargetGroupId, setAddTargetGroupId] = useState('');
-  const [addTargetKind, setAddTargetKind] = useState('fqdn');
-  const [showCreateMoreOptions, setShowCreateMoreOptions] = useState(false);
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [createNameError, setCreateNameError] = useState('');
-  const [addValueError, setAddValueError] = useState('');
-  const [query, setQuery] = useState(() => getHashQueryParam('q'));
-  const [showArchived, setShowArchived] = useState(() => getHashQueryParam('view') === 'archived');
-  const [showCreateGroup, setShowCreateGroup] = useState(false);
-  const [showAddTarget, setShowAddTarget] = useState(false);
-  const canWriteTargetGroups = sessionHasPermission(session, 'target_group:write');
-  const activeGroups = data.targetGroups.filter((group) => group.archived_at == null && group.deleted_at == null);
-  const archivedCount = data.targetGroups.length - activeGroups.length;
-  const queryText = query.trim().toLowerCase();
-  const filteredGroups = (showArchived ? data.targetGroups : activeGroups).filter((group) => {
-    if (!queryText) return true;
-    return `${getString(group, ['name'], '')} ${getString(group, ['description'], '')} ${getString(group, ['id'], '')}`.toLowerCase().includes(queryText);
-  });
-  const targetCountValues = activeGroups.map((group) => getOptionalNumber(group, ['target_count', 'targets_count']));
-  const declaredTargetCount = targetCountValues.every((value) => value !== null)
-    ? targetCountValues.reduce<number>((sum, value) => sum + (value ?? 0), 0)
-    : null;
-  const runsUnavailable = Boolean(data.loadErrors.runs);
-  // Whole-workspace open count from the state read, counted once per finding. Group counts can overlap.
-  const workspaceOpen = typeof data.state?.open_findings === 'number' && Number.isFinite(data.state.open_findings) ? data.state.open_findings : null;
-  const loadedRunCount = data.runs.length;
-
-  useEffect(() => {
-    replaceRouteParams({ q: query.trim() || null, view: showArchived ? 'archived' : null });
-  }, [query, showArchived]);
-
-  // Per-group evidence summary from the loaded runs; coverage counts distinct targets, never the group.
-  const groupEvidence = new Map<string, { latest: DataItem | null; checkedTargets: Set<string>; runCount: number }>();
-  for (const group of data.targetGroups) {
-    groupEvidence.set(getString(group, ['id'], ''), { latest: null, checkedTargets: new Set(), runCount: 0 });
-  }
-  for (const run of data.runs) {
-    const entry = groupEvidence.get(getString(run, ['target_group_id'], ''));
-    if (!entry) continue;
-    entry.runCount += 1;
-    if (!hasEvidenceBackedVerdict(run, data.evidence)) continue;
-    const targetId = getString(run, ['target_id'], '');
-    if (targetId) entry.checkedTargets.add(targetId);
-    const at = String(run.completed_at ?? run.updated_at ?? run.started_at ?? run.created_at ?? '');
-    const latestAt = entry.latest ? String(entry.latest.completed_at ?? entry.latest.updated_at ?? entry.latest.started_at ?? entry.latest.created_at ?? '') : '';
-    if (!entry.latest || at.localeCompare(latestAt) > 0) entry.latest = run;
-  }
-
-  function extractRunVerdict(run: DataItem) {
-    const verdictField = run.verdict;
-    if (typeof verdictField === 'string' && verdictField) return verdictField;
-    if (verdictField && typeof verdictField === 'object' && !Array.isArray(verdictField)) {
-      return getString(verdictField as DataItem, ['verdict', 'status', 'result'], '');
-    }
-    return getString(run, ['verdict'], '');
-  }
-
-  function verdictTone(verdict: string): UiBadgeTone {
-    const key = verdict.trim().toLowerCase();
-    if (['pass', 'passed', 'protected', 'success', 'ok'].includes(key)) return 'success';
-    if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return 'danger';
-    if (['review', 'warn', 'warning', 'partial', 'inconclusive', 'manual_review'].includes(key)) return 'warn';
-    return 'muted';
-  }
-
-  const groupColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'name',
-      label: 'Group',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const description = getString(item, ['description'], '');
-        const archived = item.archived_at != null || item.deleted_at != null;
-        return (
-          <div className="tg-name-cell">
-            <a className="tg-name-link" href={buildDetailHref('target-group-detail', id)}>{getString(item, ['name'], 'Unnamed group')}</a>
-            {description ? <span className="muted small tg-description">{description}</span> : <span className="muted small">No purpose declared</span>}
-            <span className="mono muted small">{id}{archived ? ' · archived' : ''}</span>
-          </div>
-        );
-      }
-    },
-    {
-      key: 'targets',
-      label: 'Targets',
-      render: (item) => {
-        const count = getOptionalNumber(item, ['target_count', 'targets_count']);
-        return count === null ? <span className="muted">Not returned</span> : <span className="num">{formatNumber(count)}</span>;
-      }
-    },
-    {
-      key: 'coverage',
-      label: 'Targets with a result',
-      render: (item) => {
-        if (runsUnavailable) return <span className="muted">Unavailable</span>;
-        const entry = groupEvidence.get(getString(item, ['id'], ''));
-        const checked = entry?.checkedTargets.size ?? 0;
-        const total = getOptionalNumber(item, ['target_count', 'targets_count']);
-        if (checked === 0) return <span className="muted">None checked</span>;
-        return (
-          <span className="tg-coverage">
-            <span className="num">{formatNumber(checked)}{total !== null ? ` of ${formatNumber(total)}` : ''}</span>
-            <span className="muted small">in recent runs</span>
-          </span>
-        );
-      }
-    },
-    {
-      key: 'latest',
-      label: 'Latest result',
-      render: (item) => {
-        if (runsUnavailable) return <Badge tone="muted">Unavailable</Badge>;
-        const latest = groupEvidence.get(getString(item, ['id'], ''))?.latest ?? null;
-        if (!latest) return <span className="muted">Not checked</span>;
-        const verdict = extractRunVerdict(latest);
-        const targetId = getString(latest, ['target_id'], '');
-        return (
-          <div className="tg-latest">
-            <Badge tone={verdictTone(verdict)}>{plainVerdictLabel(verdict)}</Badge>
-            <span className="small">{checkDisplayName(data, getString(latest, ['check_id'], ''))}</span>
-            <span className="muted small">on {targetId ? targetDisplayName(data, targetId, getString(latest, ['target_value', 'target_hostname'], targetId)) : 'an unrecorded target'} · {formatDate(latest.completed_at ?? latest.updated_at ?? latest.started_at ?? latest.created_at)}</span>
-          </div>
-        );
-      }
-    },
-    {
-      key: 'open',
-      label: 'Open findings',
-      render: (item) => {
-        // Server count of open findings in the group (stored group or member target); equals the linked status=open total.
-        const open = getOptionalNumber(item, ['open_findings_count']);
-        if (open === null) return <span className="muted">Not recorded</span>;
-        const id = getString(item, ['id'], '');
-        const name = getString(item, ['name'], id);
-        if (!id) return <span className="num">{formatNumber(open)}</span>;
-        return (
-          <a
-            className="num tg-open-link"
-            href={`#findings?target_group_id=${encodeURIComponent(id)}&status=open`}
-            aria-label={`${formatNumber(open)} open ${open === 1 ? 'finding' : 'findings'} in ${name}. Open Findings filtered to this group.`}
-          >
-            {formatNumber(open)}
-          </a>
-        );
-      }
-    },
-    {
-      key: 'owner',
-      label: 'Owner · criticality',
-      render: (item) => {
-        const owner = getString(item, ['owner', 'business_owner'], '');
-        const criticality = getString(item, ['criticality', 'business_criticality'], '');
-        return (
-          <span className="tg-declared">
-            <span className={owner ? '' : 'muted'}>{owner || 'Owner not declared'}</span>
-            <span className={criticality ? 'small' : 'muted small'}>{criticality ? `${criticality.charAt(0).toUpperCase()}${criticality.slice(1)} criticality` : 'Criticality not declared'}</span>
-          </span>
-        );
-      }
-    }
-  ];
-
-  async function runTargetAction<T>(label: string, action: () => Promise<T>, success: string) {
-    setBusy(label);
-    setError('');
-    setMessage('');
-    try {
-      const result = await action();
-      setMessage(success);
-      await onRefresh();
-      return result;
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Action failed. Your input is kept.'));
-      return null;
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function handleCreateGroup(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canWriteTargetGroups) return;
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const name = String(form.get('name') ?? '').trim();
-    if (!name) {
-      setCreateNameError('Enter a group name, for example the service these targets belong to.');
-      return;
-    }
-    setCreateNameError('');
-    const created = await runTargetAction('create-target-group', () => requestJson(config, session, '/v1/target-groups', {
-      method: 'POST',
-      body: {
-        name,
-        description: String(form.get('description') ?? '').trim(),
-        timezone: String(form.get('timezone') ?? 'UTC').trim() || 'UTC',
-        safety_policy: {
-          max_concurrent_runs: Number(form.get('max_concurrent_runs') ?? 1),
-          min_seconds_between_runs: Number(form.get('min_seconds_between_runs') ?? 300)
-        }
-      }
-    }), `Target group "${name}" created.`);
-    if (created && typeof created === 'object' && 'id' in created) {
-      formElement.reset();
-      setShowCreateGroup(false);
-    }
-  }
-
-  async function handleAddTarget(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canWriteTargetGroups) return;
-    if (!addTargetGroupId) {
-      setError('Choose the group this target belongs to.');
-      return;
-    }
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const value = String(form.get('value') ?? '').trim();
-    if (!value) {
-      setAddValueError('Enter the hostname, URL, or IP address to declare.');
-      return;
-    }
-    setAddValueError('');
-    const groupName = getString(activeGroups.find((group) => getString(group, ['id'], '') === addTargetGroupId) ?? {}, ['name'], addTargetGroupId);
-    const added = await runTargetAction(`add-target-${addTargetGroupId}`, () => requestJson(config, session, `/v1/target-groups/${addTargetGroupId}/targets`, {
-      method: 'POST',
-      body: {
-        kind: String(form.get('kind') ?? 'fqdn'),
-        value
-      }
-    }), `Declared ${value} in ${groupName}. Verify ownership on the target before running checks.`);
-    if (added) {
-      formElement.reset();
-      setShowAddTarget(false);
-    }
-  }
-
-  const listEmpty = data.targetGroups.length > 0 && filteredGroups.length === 0 ? (
-    <EmptyState
-      icon={Target}
-      title="No groups match."
-      body={queryText ? `No ${showArchived ? '' : 'active '}group name, purpose, or ID contains "${query.trim()}".` : 'All groups are archived.'}
-      actionLabel={queryText ? 'Clear search' : 'Show archived'}
-      onAction={() => (queryText ? setQuery('') : setShowArchived(true))}
-    />
-  ) : emptyStateFromApi({
-    icon: Target,
-    meta: data.targetGroupsMeta,
-    actionHref: readMetaAction(data.targetGroupsMeta, 'empty_action_href'),
-    actionLabel: readMetaAction(data.targetGroupsMeta, 'empty_action_label')
-  });
-
-  return (
-    <div className="content target-groups-page">
-      <CustomerPageStyles />
-      <PageHeader
-        route="target-groups"
-        title="Target groups"
-        eyebrow="Declared scope"
-        description={<>Groups share validation settings across declared targets. They are optional: you can declare targets first on <a className="cp-link" href="#targets">Targets</a>. AstraNull never discovers inventory or needs cloud credentials.</>}
-        actions={canWriteTargetGroups ? (
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy !== '' || activeGroups.length === 0}
-              onClick={() => {
-                setError('');
-                setMessage('');
-                setAddValueError('');
-                setShowAddTarget(true);
-              }}
-            >
-              Add target to a group
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              disabled={busy !== ''}
-              onClick={() => {
-                setError('');
-                setMessage('');
-                setCreateNameError('');
-                setShowCreateGroup(true);
-              }}
-            >
-              Create target group
-            </Button>
-          </>
-        ) : undefined}
-      />
-      <div className="kpi-row" aria-label="Declared target group summary">
-        <KpiCell label="Active groups" value={data.loadErrors.targetGroups ? '—' : formatNumber(activeGroups.length)} delta={archivedCount > 0 ? `${formatNumber(archivedCount)} archived` : 'Customer-declared'} />
-        <KpiCell label="Declared targets" value={data.loadErrors.targetGroups || declaredTargetCount === null ? '—' : formatNumber(declaredTargetCount)} delta={declaredTargetCount === null ? 'Count not returned for every group' : 'In active groups'} />
-        <KpiCell label="Recent runs loaded" value={runsUnavailable ? '—' : formatNumber(loadedRunCount)} delta={runsUnavailable ? 'Run data unavailable' : 'Basis for result and coverage columns'} />
-        <KpiCell label="Open findings" value={workspaceOpen === null ? '—' : formatNumber(workspaceOpen)} delta={workspaceOpen === null ? 'Not recorded in the workspace state' : 'Status open, whole workspace, each finding once'} />
-      </div>
-      {(message || error) && !showCreateGroup && !showAddTarget ? (
-        <Toast
-          message={error || message}
-          tone={error ? 'error' : 'success'}
-          duration={5000}
-        />
-      ) : null}
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Groups</CardTitle>
-            <CardDescription>
-              A group result is one check on one target at one time. It does not mean every member was tested; see targets with a result.
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="stack-tight">
-          <div className="tg-toolbar">
-            <label className="audit-search-pill">
-              <Search size={15} aria-hidden="true" />
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search name, purpose, or ID"
-                aria-label="Search target groups"
-              />
-            </label>
-            {archivedCount > 0 ? (
-              <label className="check-row">
-                <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
-                <span>Show {formatNumber(archivedCount)} archived</span>
-              </label>
-            ) : null}
-            <span className="muted small" aria-live="polite">{formatNumber(filteredGroups.length)} shown</span>
-          </div>
-          <p className="muted small tg-count-note">
-            Group counts are open findings on the group or its targets, so one finding can count toward two groups. Select a count to see them; in-progress findings are under Active there.
-          </p>
-          <DataTable
-            columns={groupColumns}
-            items={filteredGroups}
-            loadError={data.loadErrors.targetGroups}
-            onRetry={() => void onRefresh()}
-            getRowId={(item) => getString(item, ['id'], '')}
-            getRowProps={(item) => {
-              const id = getString(item, ['id'], '');
-              return id ? detailRowProps('target-group-detail', id, `Open target group ${getString(item, ['name'], id)}`) : {};
-            }}
-            empty={listEmpty}
-          />
-        </CardContent>
-      </Card>
-      <FormModal
-        open={canWriteTargetGroups && showCreateGroup}
-        title="Create target group"
-        description="Name the service or scope these targets share. Targets are declared by you; nothing is discovered."
-        onClose={() => { if (busy === '') setShowCreateGroup(false); }}
-      >
-        {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-        <form className="product-form" onSubmit={handleCreateGroup} noValidate>
-          <label className="full">
-            <span>Name</span>
-            <input
-              name="name"
-              placeholder="Retail checkout, production"
-              autoFocus
-              aria-invalid={createNameError ? true : undefined}
-              aria-describedby={createNameError ? 'tg-create-name-error' : undefined}
-              onChange={() => { if (createNameError) setCreateNameError(''); }}
-            />
-            {createNameError ? <span className="field-error" id="tg-create-name-error" role="alert">{createNameError}</span> : null}
-          </label>
-          <details className="full" open={showCreateMoreOptions} onToggle={(event) => setShowCreateMoreOptions((event.currentTarget as HTMLDetailsElement).open)}>
-            <summary>More options</summary>
-            <label className="full">
-              <span>Purpose</span>
-              <textarea name="description" rows={3} placeholder="Business service and known protection context." />
-            </label>
-            <label>
-              <span>Timezone (IANA)</span>
-              <input name="timezone" defaultValue="UTC" spellCheck={false} />
-            </label>
-            <label>
-              <span>Max concurrent runs</span>
-              <input name="max_concurrent_runs" type="number" min="1" max="5" defaultValue="1" />
-            </label>
-            <label>
-              <span>Cooldown between runs (seconds)</span>
-              <input name="min_seconds_between_runs" type="number" min="60" defaultValue="300" />
-            </label>
-          </details>
-          <div className="form-actions full">
-            <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowCreateGroup(false)}>Cancel</Button>
-            <Button type="submit" loading={busy === 'create-target-group'}>Create group</Button>
-          </div>
-        </form>
-      </FormModal>
-      <FormModal
-        open={canWriteTargetGroups && showAddTarget}
-        title="Add target to a group"
-        description="Declare a hostname, URL, IP/port, DNS service, or canary endpoint in an existing group."
-        onClose={() => { if (busy === '') setShowAddTarget(false); }}
-      >
-        {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-        <form className="product-form" onSubmit={handleAddTarget} noValidate>
-          <input type="hidden" name="kind" value={addTargetKind} />
-          <Select
-            className="full"
-            label="Group"
-            value={addTargetGroupId}
-            options={[
-              { value: '', label: 'Choose a group' },
-              ...activeGroups.map((group) => ({
-                value: getString(group, ['id']),
-                label: getString(group, ['name', 'id']),
-                description: getString(group, ['id'])
-              }))
-            ]}
-            onChange={setAddTargetGroupId}
-            error={error && !addTargetGroupId ? 'Choose a group' : undefined}
-          />
-          <Select
-            label="Target type"
-            value={addTargetKind}
-            options={TARGET_KIND_SELECT_OPTIONS}
-            onChange={setAddTargetKind}
-          />
-          <label>
-            <span>Value</span>
-            <input
-              name="value"
-              placeholder="checkout.example.com"
-              aria-invalid={addValueError ? true : undefined}
-              aria-describedby={addValueError ? 'tg-add-value-error' : undefined}
-              onChange={() => { if (addValueError) setAddValueError(''); }}
-            />
-            {addValueError ? <span className="field-error" id="tg-add-value-error" role="alert">{addValueError}</span> : null}
-          </label>
-          <div className="form-actions full">
-            <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowAddTarget(false)}>Cancel</Button>
-            <Button type="submit" loading={busy.startsWith('add-target-')} disabled={busy !== ''}>Add target</Button>
-          </div>
-        </form>
-      </FormModal>
-    </div>
-  );
-}
-
 
 type ReportExportFormat = 'json' | 'markdown' | 'html';
 
@@ -1498,7 +1032,7 @@ export function ReportExportResult({ exporter }: { exporter: ReturnType<typeof u
   );
 }
 
-type ReportScopeMode = 'tenant' | 'groups' | 'targets';
+type ReportScopeMode = 'tenant' | 'targets';
 type ScopeList = { status: 'idle' | 'loading' | 'loaded' | 'error'; items: DataItem[]; error: string };
 
 /** Plain description of a scope rejection, keeping the server's exact ids and limits. */
@@ -1507,13 +1041,11 @@ export function describeReportScopeError(payload: DataItem | null | undefined) {
   const ids = (key: string) => (Array.isArray(payload?.[key]) ? (payload![key] as unknown[]).map(String).join(', ') : '');
   switch (code) {
     case 'unknown_target': return `These targets were not found in this workspace: ${ids('target_ids')}. Remove them from the scope.`;
-    case 'unknown_target_group': return `These target groups were not found in this workspace: ${ids('target_group_ids')}. Remove them from the scope.`;
+    case 'unknown_target_group': return 'This saved scope is unavailable. Select declared domains directly.';
     case 'inactive_target': return `These targets are removed and cannot be reported on: ${ids('target_ids')}.`;
-    case 'inactive_target_group': return `These target groups are archived or removed: ${ids('target_group_ids')}.`;
-    case 'scope_too_large': return `The scope is too large: ${getString(payload ?? {}, ['count'], 'more than allowed')} ${getString(payload ?? {}, ['field'], 'items') === 'declared_members' ? 'declared targets' : 'entries'}, limit ${getString(payload ?? {}, ['limit'], 'set by the server')}. Choose fewer groups or targets.`;
-    case 'scope_mismatch': return getString(payload ?? {}, ['reason'], '') === 'target_not_in_group'
-      ? `These targets are not in the selected groups: ${ids('target_ids')}.`
-      : `These groups have no selected target: ${ids('target_group_ids')}.`;
+    case 'inactive_target_group': return 'This saved scope is unavailable. Select active declared domains.';
+    case 'scope_too_large': return `The scope is too large: ${getString(payload ?? {}, ['count'], 'more than allowed')} ${getString(payload ?? {}, ['field'], 'items') === 'declared_members' ? 'declared targets' : 'entries'}, limit ${getString(payload ?? {}, ['limit'], 'set by the server')}. Choose fewer domains.`;
+    case 'scope_mismatch': return 'The selected domain scope is inconsistent. Review the declared domains.';
     case 'invalid_scope': return `The scope was rejected (${getString(payload ?? {}, ['field'], 'scope')}: ${getString(payload ?? {}, ['reason'], 'invalid').replaceAll('_', ' ')}).`;
     case 'unrecognized_scope': return `The scope used unsupported fields: ${ids('fields')}.`;
     case 'unsupported_period': return 'That period is not supported. Choose a listed period.';
@@ -1560,7 +1092,7 @@ export function ReportSnapshotPreview({ report, formats, exporter }: { report: D
         )}
       />
       <CardContent className="kv-list">
-        <div><span>Scope</span><strong>{mode === 'tenant' || !mode ? 'Whole workspace' : mode === 'target_groups' ? `${formatNumber(Array.isArray(scope?.target_group_ids) ? (scope!.target_group_ids as unknown[]).length : 0)} target group(s)` : mode === 'targets' ? `${formatNumber(Array.isArray(scope?.target_ids) ? (scope!.target_ids as unknown[]).length : 0)} target(s)` : mode.replaceAll('_', ' ')}</strong></div>
+        <div><span>Scope</span><strong>{mode === 'tenant' || !mode ? 'Whole workspace' : mode === 'target_groups' ? 'Historical domain scope' : mode === 'targets' ? `${formatNumber(Array.isArray(scope?.target_ids) ? (scope!.target_ids as unknown[]).length : 0)} target(s)` : mode.replaceAll('_', ' ')}</strong></div>
         <div><span>Declared targets captured</span><strong>{count(members)}</strong></div>
         <div><span>Runs captured</span><strong>{count(runCapture)}{getString(runCapture ?? {}, ['limit'], '') ? ` (most recent, limit ${getString(runCapture ?? {}, ['limit'], '')})` : ''}</strong></div>
         <div><span>Findings captured</span><strong>{count(findingsSnapshot)}</strong></div>
@@ -1589,12 +1121,10 @@ export function ReportsPage({
   const [reportPeriod, setReportPeriod] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [created, setCreated] = useState<DataItem | null>(null);
-  const [caller] = useState(() => ({ groupId: getHashQueryParam('group'), targetId: getHashQueryParam('target') }));
-  const [scopeMode, setScopeMode] = useState<ReportScopeMode>(() => (caller.targetId ? 'targets' : caller.groupId ? 'groups' : 'tenant'));
-  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>(() => (caller.groupId && !caller.targetId ? [caller.groupId] : []));
+  const [caller] = useState(() => ({ targetId: getHashQueryParam('target'), scoped: Boolean(getHashQueryParam('target') || getHashQueryParam('group')) }));
+  const [scopeMode, setScopeMode] = useState<ReportScopeMode>(() => (caller.scoped ? 'targets' : 'tenant'));
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>(() => (caller.targetId ? [caller.targetId] : []));
   const [scopeQuery, setScopeQuery] = useState('');
-  const [groupList, setGroupList] = useState<ScopeList>({ status: 'idle', items: [], error: '' });
   const [targetList, setTargetList] = useState<ScopeList>({ status: 'idle', items: [], error: '' });
   const [scopeReload, setScopeReload] = useState(0);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -1618,7 +1148,7 @@ export function ReportsPage({
   const memberCap = getOptionalNumber(scopeCaps, ['declared_members_cap']);
   const runCaptureLimit = getOptionalNumber(getNestedItem(data.reportCapabilities ?? {}, ['capture']), ['runs_when_run_ids_omitted']);
   const modeSupported = (mode: ReportScopeMode) => mode === 'tenant'
-    || (scopeLimit !== null && scopeFields.includes(mode === 'groups' ? 'target_group_ids' : 'target_ids'));
+    || (scopeLimit !== null && scopeFields.includes('target_ids'));
   const scopeModeSupported = modeSupported(scopeMode);
 
   useEffect(() => {
@@ -1633,7 +1163,6 @@ export function ReportsPage({
         if (!cancelled) set({ status: 'error', items: [], error: apiErrorMessage(err, 'Could not load the list.') });
       }
     };
-    if (scopeMode === 'groups' && groupList.status === 'idle') void load('/v1/target-groups', setGroupList);
     if (scopeMode === 'targets' && targetList.status === 'idle') void load('/v1/targets', setTargetList);
     return () => { cancelled = true; };
     // Lists load once per mode on demand; Retry resets them to idle.
@@ -1644,26 +1173,21 @@ export function ReportsPage({
     if (reviewing) reviewHeadingRef.current?.focus();
   }, [reviewing]);
 
-  const activeList = scopeMode === 'groups' ? groupList : targetList;
-  const selectedIds = scopeMode === 'groups' ? selectedGroupIds : selectedTargetIds;
-  const isGroupActive = (group: DataItem) => group.archived_at == null && group.deleted_at == null;
-  const listItems = scopeMode === 'groups'
-    ? groupList.items.filter(isGroupActive)
-    : targetList.items.filter((target) => target.deleted_at == null);
-  const itemLabel = (item: DataItem) => scopeMode === 'groups'
-    ? getString(item, ['name'], getString(item, ['id'], ''))
-    : getString(item, ['value', 'hostname'], getString(item, ['id'], ''));
+  const activeList = targetList;
+  const selectedIds = selectedTargetIds;
+  const listItems = targetList.items.filter((target) => !target.deleted_at && !target.archived_at);
+  const itemLabel = (item: DataItem) => getString(item, ['value', 'hostname'], 'Declared domain');
   const knownIds = new Set(listItems.map((item) => getString(item, ['id'], '')));
   const unresolvedIds = activeList.status === 'loaded' ? selectedIds.filter((id) => !knownIds.has(id)) : [];
   const scopeQueryText = scopeQuery.trim().toLowerCase();
   const visibleItems = listItems
-    .filter((item) => !scopeQueryText || `${itemLabel(item)} ${getString(item, ['id'], '')} ${getString(item, ['target_group_name'], '')}`.toLowerCase().includes(scopeQueryText))
+    .filter((item) => !scopeQueryText || `${itemLabel(item)} ${getString(item, ['id'], '')}`.toLowerCase().includes(scopeQueryText))
     .slice(0, 200);
   const scopeReady = scopeMode === 'tenant'
     || (scopeModeSupported && scopeLimit !== null && selectedIds.length > 0 && selectedIds.length <= scopeLimit && unresolvedIds.length === 0 && activeList.status === 'loaded');
   const scopeSummary = scopeMode === 'tenant'
     ? 'Whole workspace (no scope sent)'
-    : `${formatNumber(selectedIds.length)} ${scopeMode === 'groups' ? 'target group' : 'target'}${selectedIds.length === 1 ? '' : 's'} selected`;
+    : `${formatNumber(selectedIds.length)} ${'domain'}${selectedIds.length === 1 ? '' : 's'} selected`;
   const generateBlocked = !selectedReportKind || !scopeReady;
 
   function setMode(next: ReportScopeMode) {
@@ -1675,8 +1199,7 @@ export function ReportsPage({
   function toggleSelection(id: string) {
     setReviewing(false);
     const update = (current: string[]) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id];
-    if (scopeMode === 'groups') setSelectedGroupIds(update);
-    else setSelectedTargetIds(update);
+    setSelectedTargetIds(update);
   }
 
   const reportColumns: TableColumn<DataItem>[] = [
@@ -1710,10 +1233,10 @@ export function ReportsPage({
         const mode = getString(scope ?? {}, ['mode'], '');
         if (!scope) return <span className="muted">Not recorded (legacy report)</span>;
         if (mode === 'tenant') return 'Whole workspace';
-        const groups = Array.isArray(scope.target_group_ids) ? scope.target_group_ids.length : 0;
+        const legacyScope = scope.mode === 'target_groups';
         const targets = Array.isArray(scope.target_ids) ? scope.target_ids.length : 0;
         const runs = getNestedItem(item, ['summary', 'run_capture']);
-        return [groups ? `${formatNumber(groups)} group${groups === 1 ? '' : 's'}` : '', targets ? `${formatNumber(targets)} target${targets === 1 ? '' : 's'}` : '', mode === 'runs' ? `${getString(runs ?? {}, ['included'], '?')} runs` : ''].filter(Boolean).join(' · ') || mode.replaceAll('_', ' ');
+        return [legacyScope ? 'Historical domain scope' : '', targets ? `${formatNumber(targets)} target${targets === 1 ? '' : 's'}` : '', mode === 'runs' ? `${getString(runs ?? {}, ['included'], '?')} runs` : ''].filter(Boolean).join(' · ') || mode.replaceAll('_', ' ');
       }
     },
     { key: 'generated', label: 'Generated', render: (item) => <span className="mono">{formatDate(getNestedItem(item, ['summary'])?.as_of ?? item.created_at ?? item.generated_at)}</span> },
@@ -1727,7 +1250,6 @@ export function ReportsPage({
     setMessage('');
     setCreated(null);
     const body: Record<string, unknown> = { title: reportTitle, kind: selectedReportKind, period: selectedReportPeriod };
-    if (scopeMode === 'groups') body.target_group_ids = [...selectedGroupIds];
     if (scopeMode === 'targets') body.target_ids = [...selectedTargetIds];
     try {
       const result = await requestJson(config, session, '/v1/reports', { method: 'POST', body }) as DataItem;
@@ -1800,24 +1322,23 @@ export function ReportsPage({
               <legend>3. Scope</legend>
               <div className="cp-toolbar" role="radiogroup" aria-label="Report scope">
                 <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'tenant'} onChange={() => setMode('tenant')} /><span>Whole workspace</span></label>
-                <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'groups'} disabled={!modeSupported('groups')} onChange={() => setMode('groups')} /><span>Selected target groups{modeSupported('groups') ? '' : ' (not offered by this server)'}</span></label>
-                <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'targets'} disabled={!modeSupported('targets')} onChange={() => setMode('targets')} /><span>Selected targets{modeSupported('targets') ? '' : ' (not offered by this server)'}</span></label>
+                <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'targets'} disabled={!modeSupported('targets')} onChange={() => setMode('targets')} /><span>Selected domains{modeSupported('targets') ? '' : ' (not offered by this server)'}</span></label>
               </div>
               {!scopeModeSupported ? (
                 <div className="form-banner error" role="alert">
-                  {data.reportCapabilities ? 'This server does not advertise' : 'Report capabilities could not be read, so this page cannot confirm support for'} {scopeMode === 'groups' ? 'target-group' : 'target'}-scoped reports. {caller.groupId || caller.targetId ? `${caller.groupId || caller.targetId} was not applied and nothing else was selected in its place. ` : ''}Choose Whole workspace explicitly to continue.
+                  {data.reportCapabilities ? 'This server does not advertise' : 'Report capabilities could not be read, so this page cannot confirm support for'} domain-scoped reports. {caller.scoped ? 'The saved scope was not applied and no other domain was selected. ' : ''}Choose Whole workspace explicitly to continue.
                 </div>
               ) : null}
-              {caller.targetId || caller.groupId ? (
-                <p className="cp-note">Started from {caller.targetId ? 'a target' : 'a target group'}; that exact {caller.targetId ? 'target' : 'group'} is preselected.</p>
+              {caller.targetId ? (
+                <p className="cp-note">Started from a declared domain; that exact domain is preselected.</p>
               ) : null}
               {scopeMode !== 'tenant' && scopeModeSupported ? (
                 <div className="report-scope-picker stack-tight">
-                  {activeList.status === 'loading' || activeList.status === 'idle' ? <p className="muted small" role="status">Loading {scopeMode === 'groups' ? 'target groups' : 'targets'}…</p> : null}
+                  {activeList.status === 'loading' || activeList.status === 'idle' ? <p className="muted small" role="status">Loading declared domains…</p> : null}
                   {activeList.status === 'error' ? (
                     <div className="form-banner error row-actions" role="alert">
                       <span>{activeList.error}</span>
-                      <Button size="sm" variant="secondary" onClick={() => { if (scopeMode === 'groups') setGroupList({ status: 'idle', items: [], error: '' }); else setTargetList({ status: 'idle', items: [], error: '' }); setScopeReload((count) => count + 1); }}>Retry</Button>
+                      <Button size="sm" variant="secondary" onClick={() => { setTargetList({ status: 'idle', items: [], error: '' }); setScopeReload((count) => count + 1); }}>Retry</Button>
                     </div>
                   ) : null}
                   {unresolvedIds.length ? (
@@ -1829,14 +1350,14 @@ export function ReportsPage({
                   {activeList.status === 'loaded' ? (
                     <>
                       <label className="field">
-                        <span>Find {scopeMode === 'groups' ? 'a target group' : 'a target'}</span>
-                        <input className="input" type="search" value={scopeQuery} onChange={(event) => setScopeQuery(event.target.value)} placeholder={scopeMode === 'groups' ? 'Group name or ID' : 'Hostname, URL, IP, or group'} autoComplete="off" />
+                        <span>Find a domain</span>
+                        <input className="input" type="search" value={scopeQuery} onChange={(event) => setScopeQuery(event.target.value)} placeholder="Hostname, URL, or IP" autoComplete="off" />
                       </label>
                       <p className="muted small" aria-live="polite">{scopeSummary}{scopeLimit !== null && selectedIds.length > scopeLimit ? ` · more than ${formatNumber(scopeLimit)} is not allowed` : ''}{listItems.length > visibleItems.length ? ` · first ${visibleItems.length} of ${listItems.length} matches shown` : ''}</p>
                       {listItems.length === 0 ? (
-                        <p className="cp-note">No active {scopeMode === 'groups' ? 'target groups' : 'targets'} are declared.</p>
+                        <p className="cp-note">No active domains have been declared.</p>
                       ) : (
-                        <ul className="report-scope-options" aria-label={scopeMode === 'groups' ? 'Target groups' : 'Targets'}>
+                        <ul className="report-scope-options" aria-label="Declared domains">
                           {visibleItems.map((item) => {
                             const id = getString(item, ['id'], '');
                             return (
@@ -1845,7 +1366,7 @@ export function ReportsPage({
                                   <input type="checkbox" checked={selectedIds.includes(id)} onChange={() => toggleSelection(id)} />
                                   <span className="cp-stack">
                                     <span>{itemLabel(item)}</span>
-                                    <span className="muted small mono">{id}{scopeMode === 'targets' && getString(item, ['target_group_name'], '') ? ` · in ${getString(item, ['target_group_name'], '')}` : ''}</span>
+                                    <span className="muted small mono">{id}</span>
                                   </span>
                                 </label>
                               </li>
@@ -1856,15 +1377,15 @@ export function ReportsPage({
                     </>
                   ) : null}
                   <p className="muted small">
-                    Up to {scopeLimit !== null ? formatNumber(scopeLimit) : 'the server limit of'} {scopeMode === 'groups' ? 'groups' : 'targets'} per report
-                    {scopeMode === 'groups' && memberCap !== null ? `, and at most ${formatNumber(memberCap)} declared targets across them` : ''}. The server rejects a larger scope rather than trimming it.
+                    Up to {scopeLimit !== null ? formatNumber(scopeLimit) : 'the server limit of'} domains per report
+                    . The server rejects a larger scope rather than trimming it.
                   </p>
                 </div>
               ) : scopeMode === 'tenant' ? <p className="cp-note">Covers every declared target. No scope is sent with the request.</p> : null}
             </fieldset>
             <div className="row-actions">
               <Button variant="secondary" disabled={!selectedReportKind || !scopeReady || busy !== ''} onClick={() => setReviewing(true)}>Review report</Button>
-              {!selectedReportKind ? <span className="muted small">Choose an audience or framework first.</span> : !scopeModeSupported ? <span className="muted small">This scope is not offered; choose Whole workspace.</span> : !scopeReady ? <span className="muted small">Select at least one {scopeMode === 'groups' ? 'target group' : 'target'} that is visible in this workspace.</span> : null}
+              {!selectedReportKind ? <span className="muted small">Choose an audience or framework first.</span> : !scopeModeSupported ? <span className="muted small">This scope is not offered; choose Whole workspace.</span> : !scopeReady ? <span className="muted small">Select at least one domain that is visible in this workspace.</span> : null}
             </div>
             {reviewing && selectedReportKind && scopeReady ? (
               <section className="report-review" aria-labelledby="report-review-heading">
@@ -2675,8 +2196,7 @@ export function PolicyPage({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [policyTargetGroupIds, setPolicyTargetGroupIds] = useState<string[]>([]);
-  const [policyTargetBindings, setPolicyTargetBindings] = useState<Record<string, PolicyTargetBinding>>({});
+  const [policyTargetIds, setPolicyTargetIds] = useState<string[]>([]);
   const [policyCheckId, setPolicyCheckId] = useState('');
   const [policyCadence, setPolicyCadence] = useState('weekly');
   const [policyExpectedVerdict, setPolicyExpectedVerdict] = useState('pass');
@@ -2685,7 +2205,6 @@ export function PolicyPage({
   const [showCreateSchedule, setShowCreateSchedule] = useState(false);
   const [callerPrefill, setCallerPrefill] = useState(() => ({
     checkId: getHashQueryParam('check'),
-    groupId: getHashQueryParam('group'),
     targetId: getHashQueryParam('target')
   }));
   const canWritePolicies = sessionHasPermission(session, 'test_policy:write');
@@ -2701,115 +2220,25 @@ export function PolicyPage({
   const selectedPolicyCheck = safeChecks.find(
     (check) => getString(check, ['check_id', 'id'], '') === policyCheckId
   ) ?? null;
-  const activePolicyTargetGroups = data.targetGroups.filter(
-    (group) => group.archived_at == null && group.deleted_at == null
-  );
-  const policyBindingsReady = policyTargetGroupIds.length > 0 && policyTargetGroupIds.every((groupId) => {
-    const groupIsActive = activePolicyTargetGroups.some(
-      (group) => getString(group, ['id'], '') === groupId
-    );
-    const binding = policyTargetBindings[groupId];
-    return Boolean(
-      groupIsActive
-      && binding
-      && !binding.loading
-      && !binding.error
-      && binding.selectedTargetId
-      && binding.targets.some(
-        (target) => getString(target, ['id'], '') === binding.selectedTargetId
-          && isPolicyTargetCompatible(selectedPolicyCheck, target)
-      )
-    );
+  const activePolicyTargets = data.targets.filter((target) => !target.archived_at && !target.deleted_at);
+  const policySelectionReady = policyTargetIds.length > 0 && policyTargetIds.every((id) => {
+    const target = activePolicyTargets.find((candidate) => getString(candidate, ['id'], '') === id);
+    return target && isPolicyTargetCompatible(selectedPolicyCheck, target);
   });
 
-  // A caller (check detail, target) may hand over an exact check and target; nothing is guessed.
+  // Carry only the caller's exact declared domain; never infer or select other targets.
   useEffect(() => {
     if (!canWritePolicies || !callerPrefill.checkId) return;
-    if (!safeChecks.some((check) => getString(check, ['check_id'], '') === callerPrefill.checkId)) return;
-    setPolicyCheckId(callerPrefill.checkId);
-    setShowCreateSchedule(true);
-    if (callerPrefill.groupId && activePolicyTargetGroups.some((group) => getString(group, ['id'], '') === callerPrefill.groupId)) {
-      const callerCheck = safeChecks.find((check) => getString(check, ['check_id'], '') === callerPrefill.checkId) ?? null;
-      setPolicyTargetGroupIds([callerPrefill.groupId]);
-      void loadPolicyTargetsForGroup(callerPrefill.groupId, callerPrefill.targetId, callerCheck);
-    }
-    setCallerPrefill({ checkId: '', groupId: '', targetId: '' });
+    const check = safeChecks.find((candidate) => getString(candidate, ['check_id'], '') === callerPrefill.checkId);
+    if (!check) return;
+    setPolicyCheckId(callerPrefill.checkId); setShowCreateSchedule(true);
+    const target = activePolicyTargets.find((candidate) => getString(candidate, ['id'], '') === callerPrefill.targetId);
+    if (target && isPolicyTargetCompatible(check, target)) setPolicyTargetIds([callerPrefill.targetId]);
+    setCallerPrefill({ checkId: '', targetId: '' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canWritePolicies, callerPrefill.checkId, safeChecks.length, activePolicyTargetGroups.length]);
+  }, [canWritePolicies, callerPrefill.checkId, safeChecks.length, activePolicyTargets.length]);
 
-  async function loadPolicyTargetsForGroup(targetGroupId: string, preferredTargetId = '', preferredCheck: DataItem | null = null) {
-    setPolicyTargetBindings((current) => ({
-      ...current,
-      [targetGroupId]: {
-        targets: current[targetGroupId]?.targets ?? [],
-        selectedTargetId: current[targetGroupId]?.selectedTargetId ?? '',
-        loading: true,
-        error: ''
-      }
-    }));
-    try {
-      const detail = await requestJson(
-        config,
-        session,
-        `/v1/target-groups/${encodeURIComponent(targetGroupId)}`
-      ) as DataItem;
-      const targets = (Array.isArray(detail.targets) ? detail.targets as DataItem[] : []).filter(
-        (target) => target.deleted_at == null && target.archived_at == null
-      );
-      setPolicyTargetBindings((current) => {
-        const retained = current[targetGroupId]?.selectedTargetId ?? '';
-        const preferred = preferredTargetId && targets.some(
-          (target) => getString(target, ['id'], '') === preferredTargetId && isPolicyTargetCompatible(preferredCheck, target)
-        ) ? preferredTargetId : '';
-        const candidate = retained || preferred;
-        // Only an exact, compatible caller target is carried over; nothing is picked on the user's behalf.
-        const selectedTargetId = targets.some((target) => getString(target, ['id'], '') === candidate) ? candidate : '';
-        return {
-          ...current,
-          [targetGroupId]: { targets, selectedTargetId, loading: false, error: '' }
-        };
-      });
-    } catch (err) {
-      setPolicyTargetBindings((current) => ({
-        ...current,
-        [targetGroupId]: {
-          targets: current[targetGroupId]?.targets ?? [],
-          selectedTargetId: current[targetGroupId]?.selectedTargetId ?? '',
-          loading: false,
-          error: apiErrorMessage(err, 'Active targets could not be loaded.')
-        }
-      }));
-    }
-  }
-
-  function handlePolicyTargetGroupChange(nextIds: string[]) {
-    const newlySelected = nextIds.filter((id) => !policyTargetGroupIds.includes(id));
-    setPolicyTargetGroupIds(nextIds);
-    for (const targetGroupId of newlySelected) void loadPolicyTargetsForGroup(targetGroupId);
-  }
-
-  function handlePolicyCheckChange(nextCheckId: string) {
-    const nextCheck = safeChecks.find(
-      (check) => getString(check, ['check_id', 'id'], '') === nextCheckId
-    ) ?? null;
-    setPolicyCheckId(nextCheckId);
-    setPolicyTargetBindings((current) => Object.fromEntries(
-      Object.entries(current).map(([targetGroupId, binding]) => {
-        const selectedTarget = binding.targets.find(
-          (target) => getString(target, ['id'], '') === binding.selectedTargetId
-        );
-        return [
-          targetGroupId,
-          {
-            ...binding,
-            selectedTargetId: nextCheck && selectedTarget && isPolicyTargetCompatible(nextCheck, selectedTarget)
-              ? binding.selectedTargetId
-              : ''
-          }
-        ];
-      })
-    ));
-  }
+  function handlePolicyCheckChange(nextCheckId: string) { setPolicyCheckId(nextCheckId); }
 
   async function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2817,12 +2246,12 @@ export function PolicyPage({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const checkId = String(form.get('check_id') ?? '').trim();
-    if (policyTargetGroupIds.length === 0) {
-      setError('Select at least one declared target group before creating schedules.');
+    if (policyTargetIds.length === 0) {
+      setError('Select a declared domain or domains before creating schedules.');
       return;
     }
-    if (!policyBindingsReady) {
-      setError('Select one exact active target for every selected target group before creating schedules.');
+    if (!policySelectionReady) {
+      setError('Select active domains compatible with this check before creating schedules.');
       return;
     }
     if (!checkId) {
@@ -2863,19 +2292,17 @@ export function PolicyPage({
     setError('');
     setMessage('');
     try {
-      const successes: Array<{ targetGroupId: string; targetId: string; result: unknown }> = [];
-      const failures: Array<{ targetGroupId: string; targetId: string; message: string }> = [];
-      for (const targetGroupId of policyTargetGroupIds) {
-        const targetId = policyTargetBindings[targetGroupId]?.selectedTargetId ?? '';
+      const successes: Array<{ targetId: string; result: unknown }> = [];
+      const failures: Array<{ targetId: string; message: string }> = [];
+      for (const targetId of policyTargetIds) {
         try {
           const result = await requestJson(config, session, '/v1/test-policies', {
             method: 'POST',
-            body: { ...bodyBase, target_group_id: targetGroupId, target_id: targetId }
+            body: { ...bodyBase, target_id: targetId }
           });
-          successes.push({ targetGroupId, targetId, result });
+          successes.push({ targetId, result });
         } catch (err) {
           failures.push({
-            targetGroupId,
             targetId,
             message: apiErrorMessage(err, 'Schedule creation failed.')
           });
@@ -2892,20 +2319,13 @@ export function PolicyPage({
       }
 
       if (failures.length > 0) {
-        const failedGroupIds = new Set(failures.map((failure) => failure.targetGroupId));
-        setPolicyTargetGroupIds([...failedGroupIds]);
-        setPolicyTargetBindings((current) => {
-          const retained: Record<string, PolicyTargetBinding> = {};
-          for (const [targetGroupId, binding] of Object.entries(current)) {
-            if (failedGroupIds.has(targetGroupId)) retained[targetGroupId] = binding;
-          }
-          return retained;
-        });
+        const failedIds = new Set(failures.map((failure) => failure.targetId));
+        setPolicyTargetIds([...failedIds]);
         const failedResults = failures
-          .map((failure) => `${failure.targetGroupId}/${failure.targetId}: ${failure.message}`)
+          .map((failure) => `${targetDisplayName(data, failure.targetId)}: ${failure.message}`)
           .join(' ');
         setError(
-          `Created ${successes.length} of ${policyTargetGroupIds.length} policies. `
+          `Created ${successes.length} of ${policyTargetIds.length} policies. `
           + `Failed ${failures.length}: ${failedResults} `
           + 'Successful writes were retained; only failed exact target bindings remain selected for retry.'
           + (refreshFailure ? ` ${refreshFailure}` : '')
@@ -2916,15 +2336,13 @@ export function PolicyPage({
       const lastResult = successes.at(-1)?.result ?? null;
       const success = `Created ${successes.length} validation ${successes.length === 1 ? 'schedule' : 'schedules'}. The scheduler recorded each first run time shown in the list.`;
       if (refreshFailure) {
-        setPolicyTargetGroupIds([]);
-        setPolicyTargetBindings({});
+        setPolicyTargetIds([]);
         formElement.reset();
         setError(`${success} ${refreshFailure} The writes succeeded; refresh the page instead of creating them again.`);
         return;
       }
       setMessage(formatMutationSuccessMessage(success, lastResult));
-      setPolicyTargetGroupIds([]);
-      setPolicyTargetBindings({});
+      setPolicyTargetIds([]);
       setPolicyWindowDay('');
       formElement.reset();
       setShowCreateSchedule(false);
@@ -2957,21 +2375,10 @@ export function PolicyPage({
       open: canWritePolicies && showCreateSchedule,
       onClose: () => setShowCreateSchedule(false),
       onSubmit: (event) => void handleCreatePolicy(event),
-      targetGroups: activePolicyTargetGroups,
-      selectedGroupIds: policyTargetGroupIds,
-      onTargetGroupsChange: handlePolicyTargetGroupChange,
-      bindings: policyTargetBindings,
-      onSelectTarget: (targetGroupId, selectedTargetId) => setPolicyTargetBindings((current) => ({
-        ...current,
-        [targetGroupId]: {
-          targets: current[targetGroupId]?.targets ?? [],
-          selectedTargetId,
-          loading: false,
-          error: ''
-        }
-      })),
-      onRetryTargets: (targetGroupId) => void loadPolicyTargetsForGroup(targetGroupId),
-      bindingsReady: policyBindingsReady,
+      targets: activePolicyTargets,
+      selectedTargetIds: policyTargetIds,
+      onTargetsChange: setPolicyTargetIds,
+      selectionReady: policySelectionReady,
       selectedCheck: selectedPolicyCheck,
       checkId: policyCheckId,
       checkOptions: policyCheckOptions,
@@ -3425,8 +2832,6 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
   };
   const safeRunsLimit = getNestedNumber(subscription, ['limits', 'safe_runs_per_hour'], -1);
   const safeRunsUsed = readUsage('safe_runs_started_last_hour');
-  const targetGroupLimit = getNestedNumber(subscription, ['limits', 'target_groups'], -1);
-  const targetGroupUsage = readUsage('target_groups');
   const usersLimit = getNestedNumber(subscription, ['limits', 'users'], -1);
   const usersUsed = readUsage('users');
   const openFindings = readUsage('open_findings');
@@ -3464,7 +2869,6 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
   const enabledEntitlements = recordedEntitlements.filter((row) => row.effective_enabled === true).length;
   const usageRows = [
     { label: 'Bounded checks started', description: 'Unit: checks · window: last 60 minutes', used: safeRunsUsed, limit: safeRunsLimit },
-    { label: 'Target groups', description: 'Unit: declared groups · current count', used: targetGroupUsage, limit: targetGroupLimit },
     { label: 'Users', description: 'Unit: workspace members · current count', used: usersUsed, limit: usersLimit }
   ];
   const recordedUsageCount = usageRows.filter((row) => row.used !== null).length;

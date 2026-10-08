@@ -14,15 +14,11 @@ export const SCAN_POLL_BASE_MS: number;
 export const SCAN_POLL_MAX_MS: number;
 export const SCAN_POLL_SCHEDULED_MS: number;
 export const SCAN_ERROR_COPY: Readonly<Record<string, string>>;
-export const GROUP_SCAN_LIST_LIMIT: number;
-export function validationScansPathForGroup(targetGroupId: string, limit?: number): string;
 
 export type ScanTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 
 export type ScanForm = {
-  targetGroupId: string;
-  scope: 'group' | 'target';
-  targetId: string;
+  targetIds: string[];
   checkIds: string[];
   name: string;
   schedule: 'now' | 'later';
@@ -32,7 +28,7 @@ export type ScanForm = {
 };
 
 export type ScanPayload = {
-  target_group_id: string;
+  target_ids: string[];
   check_ids: string[];
   target_id?: string;
   name?: string;
@@ -41,7 +37,7 @@ export type ScanPayload = {
 };
 
 export type ScanPatch = Partial<{
-  target_id: string | null;
+  target_ids: string[];
   check_ids: string[];
   name: string | null;
   scheduled_for: string | null;

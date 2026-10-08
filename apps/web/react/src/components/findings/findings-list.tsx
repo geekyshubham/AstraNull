@@ -126,14 +126,12 @@ function StatusFilterTabs({
 export function FindingsListView({
   findings,
   checks,
-  targetGroups,
   targets,
   loadError = null,
   onRetry
 }: {
   findings: DataItem[];
   checks: DataItem[];
-  targetGroups: DataItem[];
   targets: DataItem[];
   loadError?: string | null;
   onRetry?: () => void;
@@ -141,7 +139,7 @@ export function FindingsListView({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [ownerFilter, setOwnerFilter] = useState('all');
-  const [groupFilter, setGroupFilter] = useState('all');
+  const [targetFilter, setTargetFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sort, setSort] = useState<SortKey>('severity');
@@ -155,11 +153,11 @@ export function FindingsListView({
 
   useEffect(() => {
     setPage(0);
-  }, [statusFilter, severityFilter, ownerFilter, groupFilter, debouncedSearch, sort, pageSize]);
+  }, [statusFilter, severityFilter, ownerFilter, targetFilter, debouncedSearch, sort, pageSize]);
 
   const owners = useMemo(() => [...new Set(findings.map((finding) => getString(finding, ['assignee', 'owner', 'rem_owner'], 'unassigned')))].sort(), [findings]);
   const severities = useMemo(() => [...new Set(findings.map((finding) => getString(finding, ['severity'], 'unknown')))].sort(), [findings]);
-  const groupLabels = useMemo(() => new Map(targetGroups.map((group) => [getString(group, ['id'], ''), getString(group, ['name', 'id'], 'Unnamed group')])), [targetGroups]);
+
 
   // Status tabs count findings (one per asset), so they agree with the page KPIs and the API.
   const statusCounts = useMemo(() => ({
@@ -175,26 +173,25 @@ export function FindingsListView({
     if (!statusMatches(finding, statusFilter)) return false;
     const severity = getString(finding, ['severity'], 'unknown');
     const owner = getString(finding, ['assignee', 'owner', 'rem_owner'], 'unassigned');
-    const groupId = getString(finding, ['target_group_id'], '');
+    const targetId = getString(finding, ['target_id'], '');
     if (severityFilter !== 'all' && severity !== severityFilter) return false;
     if (ownerFilter !== 'all' && owner !== ownerFilter) return false;
-    if (groupFilter !== 'all' && groupId !== groupFilter) return false;
+    if (targetFilter !== 'all' && targetId !== targetFilter) return false;
     if (!debouncedSearch) return true;
     return [
       getString(finding, ['id']),
       getString(finding, ['title', 'summary']),
       findingRuleTitle(finding, checks),
-      findingAssetLabel(finding, targets, targetGroups),
+      findingAssetLabel(finding, targets),
       getString(finding, ['check_id']),
       owner,
-      groupId,
-      groupLabels.get(groupId) ?? ''
+      targetId
     ].join(' ').toLowerCase().includes(debouncedSearch);
-  }), [findings, statusFilter, severityFilter, ownerFilter, groupFilter, debouncedSearch, groupLabels, checks, targets, targetGroups]);
+  }), [findings, statusFilter, severityFilter, ownerFilter, targetFilter, debouncedSearch, checks, targets]);
 
   const ruleGroups = useMemo(
-    () => sortFindingRuleGroups(groupFindingsByRule(matchedFindings, { targets, checks, targetGroups }), sort),
-    [matchedFindings, targets, checks, targetGroups, sort]
+    () => sortFindingRuleGroups(groupFindingsByRule(matchedFindings, { targets, checks }), sort),
+    [matchedFindings, targets, checks, sort]
   );
 
   const pageCount = Math.max(1, Math.ceil(ruleGroups.length / pageSize));
@@ -219,19 +216,6 @@ export function FindingsListView({
       key: 'severity',
       label: 'Worst severity',
       render: (group) => <Badge tone={severityTone(group.worstSeverity)}>{formatSeverityLabel(group.worstSeverity)}</Badge>
-    },
-    {
-      key: 'target-group',
-      label: 'Target group',
-      render: (group) => {
-        const [firstId] = group.targetGroupIds;
-        if (!firstId) return <span className="finding-cell-stack"><strong>Ungrouped</strong></span>;
-        const label = groupLabels.get(firstId) ?? firstId;
-        if (group.targetGroupIds.length === 1) {
-          return <span className="finding-cell-stack"><strong>{label}</strong><small className="mono">{firstId}</small></span>;
-        }
-        return <span className="finding-cell-stack"><strong>{label}</strong><small>+{group.targetGroupIds.length - 1} more {group.targetGroupIds.length - 1 === 1 ? 'group' : 'groups'}</small></span>;
-      }
     },
     {
       key: 'owner',
@@ -296,14 +280,14 @@ export function FindingsListView({
               className="input"
               type="search"
               value={search}
-              aria-label="Filter findings by id, title, asset, check, owner, or group"
+              aria-label="Filter findings by id, title, domain, check, or owner"
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search title, asset, owner, check, or group"
+              placeholder="Search title, domain, owner, or check"
             />
           </label>
           <Select className="ft-field" label="Severity" value={severityFilter} options={[{ value: 'all', label: 'All severities' }, ...severities.map((severity) => ({ value: severity, label: formatSeverityLabel(severity) }))]} onChange={setSeverityFilter} />
           <Select className="ft-field" label="Owner" value={ownerFilter} options={[{ value: 'all', label: 'All owners' }, ...owners.map((owner) => ({ value: owner, label: owner }))]} onChange={setOwnerFilter} />
-          <Select className="ft-field" label="Target group" value={groupFilter} options={[{ value: 'all', label: 'All groups' }, ...targetGroups.flatMap((group) => { const id = getString(group, ['id'], ''); return id ? [{ value: id, label: getString(group, ['name', 'id'], id) }] : []; })]} onChange={setGroupFilter} />
+          <Select className="ft-field" label="Domain" value={targetFilter} options={[{ value: 'all', label: 'All domains' }, ...targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))]} onChange={setTargetFilter} />
           <Select className="ft-field" label="Sort" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as SortKey)} />
         </div>
         <p className="findings-result-count" aria-live="polite">
@@ -319,7 +303,7 @@ export function FindingsListView({
         getRowProps={rowProps}
         loadError={loadError}
         onRetry={onRetry}
-        empty={<EmptyState icon={TriangleAlert} title="No matching findings" body={findings.length ? 'Adjust the status, severity, owner, group, or search filters.' : 'Findings appear only after validation publishes an evidence-backed gap.'} actionLabel="Open test runs" actionHref="#runs" />}
+        empty={<EmptyState icon={TriangleAlert} title="No matching findings" body={findings.length ? 'Adjust the status, severity, owner, domain, or search filters.' : 'Findings appear only after validation publishes an evidence-backed gap.'} actionLabel="Open test runs" actionHref="#runs" />}
       />
 
       <div className="findings-pager">

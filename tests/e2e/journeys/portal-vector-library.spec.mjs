@@ -113,10 +113,10 @@ test.describe('target-first check library workflow', () => {
     await confirm.getByRole('button', { name: 'Start bounded check' }).click();
     await expect.poll(() => runBodies.length).toBe(1);
     expect(runBodies[0]).toMatchObject({
-      target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
       target_id: PORTAL_BASELINE_IDS.targetId,
     });
     expect(runBodies[0].check_id).toBeTruthy();
+    expect(runBodies[0]).not.toHaveProperty('target_group_id');
     await expect(page.getByRole('status').filter({ hasText: 'started on' })).toBeVisible();
   });
 

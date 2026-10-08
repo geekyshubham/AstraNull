@@ -391,7 +391,7 @@ function assetIdentity(finding, target, groupsById) {
   const name = pick(embedded, ['name', 'label']) || pick(target ?? {}, ['name', 'label', 'display_name']);
   const targetGroupId = pick(finding, ['target_group_id']) || pick(target ?? {}, ['target_group_id']);
   const targetGroupName = targetGroupId ? pick(groupsById.get(targetGroupId) ?? {}, ['name', 'display_name']) : '';
-  const label = name || host || targetId || 'Target-group scope';
+  const label = name || host || targetId || 'Target not recorded';
   const key = targetId
     ? `target:${targetId}`
     : host

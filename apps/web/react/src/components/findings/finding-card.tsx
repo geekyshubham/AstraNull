@@ -24,14 +24,12 @@ function verdictTone(verdict: string) {
 export function FindingCard({
   finding,
   checks,
-  targetGroups,
   targets,
   active = false,
   onOpen
 }: {
   finding: DataItem;
   checks: DataItem[];
-  targetGroups: DataItem[];
   targets: DataItem[];
   active?: boolean;
   onOpen?: (id: string) => void;
@@ -44,9 +42,7 @@ export function FindingCard({
   const checkId = getString(finding, ['check_id', 'check'], '');
   const check = checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
   const checkLabel = checkId ? plainCheckName(getString(check ?? {}, ['name', 'title'], checkId)) : '';
-  const groupId = getString(finding, ['target_group_id'], '');
-  const group = targetGroups.find((entry) => getString(entry, ['id']) === groupId);
-  const groupLabel = getString(group ?? {}, ['name', 'id'], groupId || 'Ungrouped');
+
   const openedAt = finding.created_at ?? finding.opened_at;
   const href = id ? buildDetailHref('finding-detail', id) : '#findings';
 
@@ -71,7 +67,6 @@ export function FindingCard({
       <span className="fc-facets">
         {checkLabel ? <span><span className="fc-key">Check:</span> {checkLabel}</span> : null}
         {checkLabel ? <span className="fc-sep" aria-hidden="true">·</span> : null}
-        <span><span className="fc-key">Group:</span> {groupLabel}</span>
         <span className="fc-sep" aria-hidden="true">·</span>
         <span><span className="fc-key">Opened:</span> {formatDate(openedAt)}</span>
       </span>

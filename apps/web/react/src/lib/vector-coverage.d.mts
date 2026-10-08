@@ -25,7 +25,7 @@ export declare function nestedString(
 
 export declare function itemCheckId(item: Record<string, unknown>): string;
 
-export declare function itemTargetGroupId(item: Record<string, unknown>): string;
+export declare function itemTargetId(item: Record<string, unknown>): string;
 
 export declare function checkMatchesFamily(
   check: Record<string, unknown>,
@@ -39,7 +39,7 @@ export declare function familyCheckIds(
 
 export declare function familyCoverage(input: {
   checkIds: Set<string>;
-  groupId: string;
+  targetId: string;
   testPolicies: Record<string, unknown>[];
   runs: Record<string, unknown>[];
   evidence: Record<string, unknown>[];

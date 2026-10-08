@@ -16,7 +16,7 @@ import {
   applicableResourceFamilyCheckIds,
   resourceFamilyCheckIds,
   resourceFamilyVerdictState,
-  resourceMatrixGroups,
+  resourceMatrixTargets,
 } from '../../lib/resource-matrix.mjs';
 import { Badge } from '../ui/badge';
 import { EmptyState } from '../ui/empty-state';
@@ -24,7 +24,7 @@ import './charts.css';
 
 type ResourceMatrixProps = {
   checks: Record<string, unknown>[];
-  targetGroups: Record<string, unknown>[];
+  targets: Record<string, unknown>[];
   runs: Record<string, unknown>[];
   evidence: Record<string, unknown>[];
   config: PortalConfig;
@@ -89,9 +89,9 @@ function checkId(item: Record<string, unknown>) {
   return String(item.check_id ?? item.checkId ?? nested?.check_id ?? '');
 }
 
-function groupId(item: Record<string, unknown>) {
-  const nested = asRecord(item.target_group);
-  return String(item.target_group_id ?? item.targetGroupId ?? nested?.id ?? '');
+function targetId(item: Record<string, unknown>) {
+  const nested = asRecord(item.target);
+  return String(item.target_id ?? item.targetId ?? nested?.id ?? '');
 }
 
 function evidenceRunId(item: Record<string, unknown>) {
@@ -153,7 +153,7 @@ function cellDescription(family: ResourceFamily, state: ResourceFamilyVerdictSta
     ? 'Included in DDoS readiness posture.'
     : 'Validation-only coverage; excluded from DDoS readiness scoring.';
   if (state.status === 'not_applicable') {
-    return `${plainCheckName(family.label)}: no mapped checks support this target group's declared target kinds. ${family.description} ${scope}`;
+    return `${plainCheckName(family.label)}: no mapped checks support this domain's declared target kinds. ${family.description} ${scope}`;
   }
   if (state.status === 'not_run') {
     return `${plainCheckName(family.label)}: no stored verdict found in the loaded records for ${state.applicableCheckCount} applicable checks. ${family.description} ${scope}`;
@@ -216,7 +216,7 @@ function MatrixLegend() {
 
 export function ResourceMatrix({
   checks,
-  targetGroups,
+  targets,
   runs,
   evidence,
   config,
@@ -225,7 +225,7 @@ export function ResourceMatrix({
   onRefresh,
 }: ResourceMatrixProps) {
   const descriptionId = useId();
-  const groups = useMemo(() => resourceMatrixGroups(targetGroups), [targetGroups]);
+  const domains = useMemo(() => resourceMatrixTargets(targets), [targets]);
   const readinessFamilyCount = RESOURCE_FAMILIES.filter((family) => family.scoredForDdosReadiness).length;
   const validationFamilyCount = RESOURCE_FAMILIES.length - readinessFamilyCount;
   const mappedCheckIds = useMemo(() => {
@@ -244,7 +244,7 @@ export function ResourceMatrix({
 
   useEffect(() => {
     let cancelled = false;
-    if (groups.length === 0 || mappedCheckIds.size === 0) {
+    if (domains.length === 0 || mappedCheckIds.size === 0) {
       setHydration({ status: 'ready', targets: [], runs });
       return () => { cancelled = true; };
     }
@@ -254,7 +254,7 @@ export function ResourceMatrix({
     }
 
     setHydration((current) => ({ ...current, status: 'loading' }));
-    const activeGroupIds = new Set(groups.map((group) => String(group.id ?? '')).filter(Boolean));
+    const activeTargetIds = new Set(domains.map((domain) => String(domain.id ?? '')).filter(Boolean));
     const listedById = new Map<string, Record<string, unknown>>();
     for (const run of runs) {
       const id = recordId(run);
@@ -266,7 +266,7 @@ export function ResourceMatrix({
       const status = String(run.status ?? '').toLowerCase();
       if (
         !TERMINAL_RUN_STATUSES.has(status)
-        || !activeGroupIds.has(groupId(run))
+        || !activeTargetIds.has(targetId(run))
         || !mappedCheckIds.has(checkId(run))
       ) continue;
       const id = recordId(run);
@@ -297,7 +297,7 @@ export function ResourceMatrix({
       });
 
     return () => { cancelled = true; };
-  }, [attempt, checks, config, dataLoadError, evidence, groups, mappedCheckIds, runs, session]);
+  }, [attempt, checks, config, dataLoadError, evidence, domains, mappedCheckIds, runs, session]);
 
   const retry = () => {
     void (async () => {
@@ -321,12 +321,12 @@ export function ResourceMatrix({
     );
   }
 
-  if (groups.length === 0) {
+  if (domains.length === 0) {
     return (
       <EmptyState
         icon={ShieldCheck}
-        title="No declared target groups yet."
-        body="Resource-exhaustion posture is assessed per active target group. Declare one to evaluate applicable checks."
+        title="No declared domains yet."
+        body="Resource-exhaustion posture is assessed per active domain. Declare one to evaluate applicable checks."
       />
     );
   }
@@ -342,7 +342,7 @@ export function ResourceMatrix({
   }
 
   if (hydration.status === 'loading') {
-    return <MatrixSkeleton columns={RESOURCE_FAMILIES.length} rows={groups.length} />;
+    return <MatrixSkeleton columns={RESOURCE_FAMILIES.length} rows={domains.length} />;
   }
 
   return (
@@ -355,17 +355,17 @@ export function ResourceMatrix({
       <div
         className="heatmap"
         role="region"
-        aria-label={`Resource-exhaustion verdict matrix for ${groups.length} target groups`}
+        aria-label={`Resource-exhaustion verdict matrix for ${domains.length} domains`}
         aria-describedby={descriptionId}
         tabIndex={0}
       >
         <table className="matrix-table matrix-table--resource">
           <caption>
-            All {groups.length} active target groups across all {RESOURCE_FAMILIES.length} shipped exhausted-resource families. Scroll horizontally to review every family.
+            All {domains.length} active domains across all {RESOURCE_FAMILIES.length} shipped exhausted-resource families. Scroll horizontally to review every family.
           </caption>
           <thead>
             <tr>
-              <th scope="col"><span className="heatmap-head matrix-corner">Target group</span></th>
+              <th scope="col"><span className="heatmap-head matrix-corner">Domain</span></th>
               {RESOURCE_FAMILIES.map((family) => (
                 <th scope="col" key={family.id} title={family.description}>
                   <span className="heatmap-head">
@@ -379,28 +379,28 @@ export function ResourceMatrix({
             </tr>
           </thead>
           <tbody>
-            {groups.map((group, groupIndex) => {
-              const currentGroupId = String(group.id ?? '');
+            {domains.map((domain, domainIndex) => {
+              const currentTargetId = String(domain.id ?? '');
               return (
-                <tr key={currentGroupId || `group-${groupIndex}`}>
+                <tr key={currentTargetId || `group-${domainIndex}`}>
                   <th scope="row">
-                    <span className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</span>
+                    <span className="heatmap-name">{String(domain.value ?? domain.id ?? 'Declared domain')}</span>
                   </th>
                   {RESOURCE_FAMILIES.map((family) => {
                     const state = resourceFamilyVerdictState({
                       checkIds: applicableResourceFamilyCheckIds({
                         checks,
                         family,
-                        groupId: currentGroupId,
+                        targetId: currentTargetId,
                         targets: hydration.targets,
                         targetInventoryLoaded: true,
                       }),
-                      groupId: currentGroupId,
+                      targetId: currentTargetId,
                       runs: hydration.runs,
                       evidence,
                     });
                     return (
-                      <td key={`${currentGroupId || groupIndex}-${family.id}`}>
+                      <td key={`${currentTargetId || domainIndex}-${family.id}`}>
                         <MatrixCell family={family} state={state} />
                       </td>
                     );

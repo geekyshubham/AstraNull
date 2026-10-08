@@ -156,17 +156,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     summary: 'Readiness score, vectors, target coverage, recent evidence, and governance summary.'
   },
   {
-    id: 'target-groups',
-    label: 'Target Groups',
-    route: '/app#target-groups',
-    routeId: 'target-groups',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/page-components.tsx',
-    status: 'React implemented',
-    summary: 'Customer-declared business services, expected behavior, owners, and run context.'
-  },
-  {
     id: 'targets',
     label: 'Targets',
     route: '/app#targets',
@@ -175,18 +164,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'scope',
     source: 'pages/targets-page.tsx',
     status: 'React implemented',
-    summary: 'Declared targets with ownership, eligibility, provenance, and group context.'
-  },
-  {
-    id: 'target-group-detail',
-    label: 'Target Group Detail',
-    route: '/app#target-group-detail?id=:id',
-    routeId: 'target-group-detail',
-    audience: 'Customer',
-    group: 'scope',
-    source: 'pages/target-group-detail-view.tsx',
-    status: 'React implemented',
-    summary: 'Per-service scope, ownership, checks, runs, findings, and settings.'
+    summary: 'Declared targets with ownership, eligibility, provenance, and domain context.'
   },
   {
     id: 'target-detail',
@@ -480,15 +458,6 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'overview', label: 'Overview', summary: 'Readiness score, open gaps, and current operating state.', evidence: 'Readiness factors, findings, runs, and WAF summary.' },
     { id: 'risk-trends', label: 'Risk trends', summary: 'Score trend, vector coverage, and aging finding pressure.', evidence: 'Run and finding history.' }
   ],
-  'target-groups': [
-    { id: 'overview', label: 'Overview', summary: 'Declared target groups with readiness and owner context.', evidence: 'Customer-provided scope declaration.' },
-    { id: 'targets', label: 'Targets', summary: 'Manual, CSV, or automation-imported targets only.', evidence: 'Declared targets and explicit expected behavior.' },
-    { id: 'expected-behavior', label: 'Expected Behavior', summary: 'Expected paths, health signals, and protective baseline.', evidence: 'Customer declaration and observed checks.' },
-    { id: 'checks', label: 'Checks', summary: 'Check bindings and coverage.', evidence: 'Check catalog and policy bindings.' },
-    { id: 'runs', label: 'Runs', summary: 'Recent validation activity.', evidence: 'Run timeline and verdicts.' },
-    { id: 'findings', label: 'Findings', summary: 'Open and closed gaps for this group.', evidence: 'Finding custody references.' },
-    { id: 'settings', label: 'Settings', summary: 'Archive, owners, windows, and safety policy.', evidence: 'Audited tenant action.' }
-  ],
   checks: [
     { id: 'recommended', label: 'Recommended', summary: 'Starter checks based on declared service context.', evidence: 'Check catalog safety class and target bindings.' },
     { id: 'origin-bypass', label: 'Origin Bypass', summary: 'Bounded origin protection checks.', evidence: 'Probe metadata.' },
@@ -501,14 +470,14 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   ],
   'test-policies': [
     { id: 'cadence', label: 'Cadence', summary: 'Manual, daily, weekly, and monthly validation windows.', evidence: 'Policy schedule and target binding.' },
-    { id: 'bindings', label: 'Target Bindings', summary: 'Policies bind only to declared target groups.', evidence: 'Declared target-group reference.' },
+    { id: 'bindings', label: 'Target Bindings', summary: 'Policies bind only to declared domains.', evidence: 'Declared exact target reference.' },
     { id: 'expected-verdicts', label: 'Expected Verdicts', summary: 'Expected pass, warn, or fail behavior for each check.', evidence: 'Customer declaration and check contract.' },
     { id: 'windows', label: 'Safe Windows', summary: 'Local maintenance and observation windows.', evidence: 'Policy record and audit.' },
     { id: 'guardrails', label: 'Guardrails', summary: 'Schedule and authorization settings.', evidence: 'Test policy enforcement.' },
     { id: 'soc-gates', label: 'SOC Gates', summary: 'High-scale policies remain request-only for customers.', evidence: 'Authorization and SOC decision artifacts.' }
   ],
   runs: [
-    { id: 'summary', label: 'Summary', summary: 'Current verdict, target group, check family, and guardrail state.', evidence: 'Run record and policy snapshot.' },
+    { id: 'summary', label: 'Summary', summary: 'Current verdict, domain, check family, and guardrail state.', evidence: 'Run record and policy snapshot.' },
     { id: 'timeline', label: 'Timeline', summary: 'Ordered run lifecycle from scheduling through final verdict.', evidence: 'Run events and audit entries.' },
     { id: 'probe-results', label: 'Probe Results', summary: 'Outside observations from probes.', evidence: 'Probe result records.' },
     { id: 'correlation', label: 'Correlation', summary: 'Truth table explaining why the verdict was assigned.', evidence: 'Observed facts and correlation logic.' },
@@ -517,7 +486,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   ],
   findings: [
     { id: 'open', label: 'Open', summary: 'Unresolved gaps with severity and owner.', evidence: 'Finding records and run evidence.' },
-    { id: 'target-group', label: 'By Target Group', summary: 'Group findings by declared business service.', evidence: 'Target group mapping.' },
+    { id: 'target', label: 'By Domain', summary: 'Review findings by their declared domain.', evidence: 'Domain mapping.' },
     { id: 'vector', label: 'By Vector', summary: 'Group findings by vector family and safety class.', evidence: 'Check catalog and verdict.' },
     { id: 'accepted-risk', label: 'Accepted Risk', summary: 'Owner-approved exceptions with expiry.', evidence: 'Accepted-risk artifact and audit entry.' },
     { id: 'closed', label: 'Closed', summary: 'Resolved findings with closure evidence.', evidence: 'Retest or explicit closure record.' },
@@ -586,12 +555,6 @@ export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'artifacts', label: 'Artifacts', summary: 'Metadata-only authorization artifacts.', evidence: 'Artifact ledger.' },
     { id: 'notes', label: 'Notes', summary: 'SOC execution notes thread.', evidence: 'Recorded SOC notes.' }
   ],
-  'target-group-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Readiness, runs, and declaration metadata for this service.', evidence: 'Recorded target-group details.' },
-    { id: 'scope', label: 'Scope & behavior', summary: 'Declared targets and expected protection behavior.', evidence: 'Customer-provided scope declaration.' },
-    { id: 'validation', label: 'Validation', summary: 'Policies, runs, and findings for this group.', evidence: 'Run and finding records.' },
-    { id: 'settings', label: 'Settings', summary: 'Archive, owners, and safety policy.', evidence: 'Audited tenant action.' }
-  ],
   'run-detail': PAGE_TAB_SETS.runs,
   'tenant-detail': [
     { id: 'overview', label: 'Overview', summary: 'Lifecycle, plan, and subscription summary.', evidence: 'Recorded staff tenant details.' },
@@ -621,10 +584,10 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     title: 'Declared Scope And Onboarding',
     summary: 'Core onboarding keeps target scope customer-declared and evidence-backed.',
     items: [
-      { name: 'Tenant and tag management', surface: 'Settings, Targets', status: 'Partial', relationship: 'Tags express membership that scopes target groups and run history.' },
-      { name: 'Target groups and declared targets', surface: 'Target Groups, Target Detail', status: 'Visible', relationship: 'The declared target group is the unit of validation.' },
-      { name: 'Expected behavior model', surface: 'Target Groups', status: 'Visible', relationship: 'Expected paths and health signals support verdict interpretation.' },
-      { name: 'CSV or automation import for declared scope', surface: 'Target groups and automation', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
+      { name: 'Tenant and tag management', surface: 'Settings, Targets', status: 'Partial', relationship: 'Tags express membership that scopes declared domains and run history.' },
+      { name: 'Declared targets', surface: 'Targets, Target Detail', status: 'Visible', relationship: 'The declared domain is the unit of validation.' },
+      { name: 'Expected behavior model', surface: 'Targets', status: 'Visible', relationship: 'Expected paths and health signals support verdict interpretation.' },
+      { name: 'CSV or automation import for declared scope', surface: 'Domains and automation', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
       { name: 'Guided first test run', surface: 'Onboarding', status: 'Visible', relationship: 'Connects setup to first validation evidence.' },
       { name: 'Role-based navigation and permissions', surface: 'Portal Shell', status: 'Partial', relationship: 'Controls SOC, audit, and release evidence visibility.' }
     ]
@@ -645,7 +608,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     items: [
       { name: 'Check catalog', surface: 'Checks Library', status: 'Visible', relationship: 'Customer-runnable and SOC-gated checks are clearly separated.' },
       { name: 'Check families', surface: 'Checks Library', status: 'Visible', relationship: 'Origin, L3/L4, DNS, application layer, TLS, protocol, operations, and high-scale families.' },
-      { name: 'Test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, target group, and schedule windows.' },
+      { name: 'Test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, domain, and schedule windows.' },
       { name: 'Run detail visualizations', surface: 'Test Runs, Run Detail', status: 'Visible', relationship: 'Timeline, probe results, observations, correlation, evidence, and events.' },
       { name: 'Correlation engine and verdict logic', surface: 'Runs, Evidence, Dashboard', status: 'Partial', relationship: 'Verdicts link to observed facts instead of assumptions.' },
       { name: 'Readiness scoring', surface: 'Dashboard, Reports', status: 'Visible', relationship: 'Aggregates coverage, findings, freshness, and SOC readiness.' },
@@ -690,7 +653,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'CVE stage, retest, playbook approval', surface: 'CVE pipeline automation', status: 'Connected', relationship: 'Supports multi-vendor mitigation approval and validation.' },
       { name: 'Enhanced discovery modes', surface: 'Discovery', status: 'Visible', relationship: 'D0-D4 modes remain approval-gated and never required for core inventory.' },
       { name: 'Discovery candidate inbox', surface: 'Discovery, Discovery Entity', status: 'Visible', relationship: 'Candidates require decision before import into declared scope.' },
-      { name: 'Approved candidate import', surface: 'Discovery', status: 'Partial', relationship: 'Imports approved candidates into existing declared target groups.' },
+      { name: 'Approved candidate import', surface: 'Discovery', status: 'Partial', relationship: 'Imports approved candidates as declared targets.' },
       { name: 'Supply-chain risk detection', surface: 'Supply Chain', status: 'Visible', relationship: 'Tracks dangling CNAME, deleted app, dependency, redirect, vendor, and subdomain risks.' },
       { name: 'Supply-chain active-protection phases', surface: 'Supply-chain automation', status: 'Connected', relationship: 'Phase authorization governs any active-protection transition.' }
     ]
@@ -756,7 +719,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
 export const RELATIONSHIP_FLOWS: RelationshipFlow[] = [
   {
     title: 'Declared Scope To First Verdict',
-    steps: ['Target', 'Target group', 'Expected behavior', 'External probe', 'Check', 'Run correlation', 'Evidence vault'],
+    steps: ['Domain', 'Expected behavior', 'External probe', 'Check', 'Run correlation', 'Evidence vault'],
     outcome: 'A readiness verdict backed by customer declaration, external probe result, and custody reference.'
   },
   {

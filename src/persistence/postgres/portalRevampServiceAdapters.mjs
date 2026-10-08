@@ -447,7 +447,7 @@ export function createPostgresPortalRevampServices(deps) {
         return { error: 'invalid_scope_ack', status: 400 };
       }
 
-      const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId);
+      const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId, scope_snapshot.targets);
       if (active) return { error: 'loa_active', status: 409 };
       const signed_at = nowFn().toISOString();
       const custody_digest_sha256 = buildLoaCustodyDigest({
@@ -490,8 +490,8 @@ export function createPostgresPortalRevampServices(deps) {
       if (!record) return { error: 'not_found', status: 404 };
       return { loa: record, audit_entry_id: record.audit_entry_id };
     },
-    async getActive(ctx, groupId) {
-      const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId);
+    async getActive(ctx, groupId, targetId = null) {
+      const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId, targetId);
       return {
         loa: active,
         meta: active ? undefined : { empty_reason: 'no_active_loa' },

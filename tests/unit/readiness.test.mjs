@@ -108,13 +108,13 @@ describe('readiness scoring', () => {
     resetStoreForTests(boostedStore);
 
     const boosted = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(boosted.score, 100);
+    assert.equal(boosted.score, 65, 'one of five declared domains has recent evidence');
     assert.equal(factor(boosted, 'soc_readiness').score, WEIGHT_SOC_GOVERNANCE);
     assert.match(factor(boosted, 'soc_readiness').detail, /hsr_demo_approved: authorization pack accepted/);
-    assert.equal(factor(boosted, 'coverage').score, 44);
+    assert.equal(factor(boosted, 'coverage').score, 9);
     assert.equal(factor(boosted, 'verdicts').score, WEIGHT_VERDICTS);
     assert.equal(factor(boosted, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-    assert.match(factor(boosted, 'evidence_freshness').detail, /1 run\(s\), 1 target group\(s\)/);
+    assert.match(factor(boosted, 'evidence_freshness').detail, /1 run\(s\), 1 domain\(s\)/);
 
     const unmappedTenant = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
     assert.equal(unmappedTenant.score, 0);
@@ -144,7 +144,7 @@ describe('readiness scoring', () => {
 
     resetStoreForTests(penalizedStore);
     const penalized = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(penalized.score, 72);
+    assert.equal(penalized.score, 37);
     assert.equal(factor(penalized, 'verdicts').score, 0);
     assert.equal(factor(penalized, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
   });
@@ -392,7 +392,7 @@ describe('readiness scoring', () => {
     const r = computeReadiness('ten_demo');
     assert.equal(factor(r, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
     assert.equal(factor(r, 'coverage').score, 44);
-    assert.match(factor(r, 'coverage').detail, /1 of 1 target group/);
+    assert.match(factor(r, 'coverage').detail, /1 of 1 domain/);
   });
 
   it('preserves readiness credit for an evidence-bound ops readiness verdict', () => {
@@ -560,7 +560,7 @@ describe('readiness scoring', () => {
 
     const r = computeReadiness('ten_demo');
     assert.equal(factor(r, 'coverage').score, 0);
-    assert.match(factor(r, 'coverage').detail, /0 of 1 target group/);
+    assert.match(factor(r, 'coverage').detail, /0 of 1 domain/);
   });
 
   it('recent verdict with no open findings earns full verdict factor', () => {
@@ -664,4 +664,16 @@ describe('readiness scoring', () => {
     assert.match(factor(r, 'verdicts').detail, /stale/i);
     assert.match(factor(r, 'verdicts').detail, /does not support full posture credit/i);
   });
+});
+it('coverage credits one declared domain without claiming evidence for its untested sibling', () => {
+  freshStore();
+  const store = getStore();
+  store.targets.push({ ...store.targets[0], id: 'tgt_sibling', value: 'untested.test' });
+  const at = new Date().toISOString();
+  store.testRuns.push({ id: 'domain_evidence', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'origin.direct_reachability.safe', status: 'verdicted', completed_at: at, created_at: at });
+  const evidenceId = addTrustedVerdictEvidence(store, 'domain_evidence', 'domain_event', at);
+  store.verdicts.push({ id: 'domain_verdict', tenant_id: 'ten_demo', test_run_id: 'domain_evidence', verdict: 'protected', evidence_ids: [evidenceId], created_at: at });
+  const readiness = computeReadiness('ten_demo');
+  assert.equal(factor(readiness, 'coverage').score, 22);
+  assert.match(factor(readiness, 'coverage').detail, /1 of 2 domain/);
 });

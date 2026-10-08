@@ -9,9 +9,9 @@ export function computeScopeHashFromTargets(targetGroupId, targets) {
   return createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
-export function computeTargetGroupScopeHash(tenantId, targetGroupId) {
+export function computeTargetGroupScopeHash(tenantId, targetGroupId, targetIds = null) {
   const targets = getStore().targets.filter(
-    (t) => t.tenant_id === tenantId && t.target_group_id === targetGroupId && !t.deleted_at,
+    (t) => t.tenant_id === tenantId && !t.deleted_at && (targetIds == null ? t.target_group_id === targetGroupId : targetIds.includes(t.id)),
   );
   return computeScopeHashFromTargets(targetGroupId, targets);
 }

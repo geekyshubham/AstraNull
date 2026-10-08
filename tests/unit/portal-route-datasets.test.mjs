@@ -14,23 +14,17 @@ describe('portal route dataset policy', () => {
     assert.deepEqual(PORTAL_ROUTE_DATASETS['not-found'], []);
   });
 
-  it('places Targets immediately above Target groups with bounded inventory hydration', () => {
+  it('places direct Targets in scope with bounded inventory hydration', () => {
     // Current release: targets-first scope (ADR-0008, shared-shell review); groups are secondary.
     const targetsIndex = NAV_ITEMS.findIndex((item) => item.id === 'targets');
 
     assert.notEqual(targetsIndex, -1);
-    assert.equal(NAV_ITEMS[targetsIndex + 1]?.id, 'target-groups');
-    assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets', 'targetGroups']);
+    assert.equal(NAV_ITEMS.some((item) => item.id === 'target-groups'), false);
+    assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets']);
   });
 
-  it('hydrates every dataset rendered by Target Groups', () => {
-    const routeDatasets = PORTAL_ROUTE_DATASETS['target-groups'];
-
-    assert.deepEqual(routeDatasets, ['targetGroups', 'runs', 'findings', 'evidence']);
-    assert.ok(
-      CORE_PORTAL_DATASETS.length + routeDatasets.length <= 12,
-      'Target Groups hydration must stay within the global route bound',
-    );
+  it('never hydrates a customer target-group dataset on any route', () => {
+    for (const datasets of Object.values(PORTAL_ROUTE_DATASETS)) assert.ok(!datasets.includes('targetGroups'));
   });
 
   it('keeps a representative route hydrate bounded', () => {
@@ -39,7 +33,7 @@ describe('portal route dataset policy', () => {
 
     // Findings render from authoritative records, and coverage is only counted from verdicts
     // with evidence bound to the exact run, so the finding-related datasets are required.
-    assert.deepEqual(routeDatasets, ['targetGroups', 'targets', 'checks', 'runs', 'findings', 'evidence']);
+    assert.deepEqual(routeDatasets, ['targets', 'checks', 'runs', 'findings', 'evidence']);
     assert.deepEqual(requestDatasets, [...CORE_PORTAL_DATASETS, ...routeDatasets]);
     assert.ok(requestDatasets.length <= 10, `findings requested ${requestDatasets.length} datasets`);
   });

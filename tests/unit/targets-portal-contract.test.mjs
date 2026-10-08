@@ -15,7 +15,7 @@ describe('Targets portal contract', () => {
       'Ownership',
       'Last validation',
       'Tags',
-      'Target group',
+
       'Added from',
       'Added',
     ]) {
@@ -28,7 +28,7 @@ describe('Targets portal contract', () => {
     assert.doesNotMatch(source, /: 'Never'/);
     // ADR-0008: direct target creation via POST /v1/targets with top-level tags + optional group.
     assert.match(source, /requestJson\(config, session, '\/v1\/targets', \{ method: 'POST', body \}\)/);
-    assert.match(source, /body\.target_group_id = groupId/);
+    assert.doesNotMatch(source, /body\.target_group_id|label: 'Target group'/);
     // Per-target tag edit via PATCH /v1/targets/:id (kind/value immutable).
     assert.match(source, /\/v1\/targets\/\$\{encodeURIComponent\(editTargetId\)\}/);
     assert.match(source, /method: 'PATCH'/);
@@ -44,33 +44,18 @@ describe('Targets portal contract', () => {
 
   it('uses explicit Open target links instead of focusable or clickable native rows', () => {
     const targets = readPage('targets-page.tsx');
-    const targetGroup = readPage('target-group-detail-view.tsx');
     const finding = readPage('finding-detail-view.tsx');
 
-    for (const source of [targetGroup, finding]) {
+    for (const source of [finding]) {
       assert.match(source, /aria-label={`Open target \$\{getString\(item,/);
     }
     // Targets leads each row with one explicit link: Open, or Verify ownership while pending.
     assert.match(targets, /aria-label=\{verified \? `Open target \$\{value\}` : `Verify ownership of \$\{value\}`\}/);
     assert.match(targets, /href=\{verified \? buildDetailHref\('target-detail', id\)/);
     assert.doesNotMatch(targets, /function rowProps|getRowProps=\{\(item\) => rowProps/);
-    assert.doesNotMatch(targetGroup, /targetRowNavProps|tg-target-row|isNestedInteractiveTarget/);
     assert.doesNotMatch(finding, /targetRowNavProps/);
-    assert.match(targetGroup, />\s*Verify\s*<\/Button>[\s\S]*>\s*Run test\s*<\/Button>[\s\S]*Remove/m);
   });
 
-  it('keeps target-group scheduling and removal on bounded, real APIs', () => {
-    const source = readPage('target-group-detail-view.tsx');
-
-    assert.match(source, /const \{ confirm \} = useConfirmModal\(\)/);
-    assert.match(source, /if \(!await confirm\(\{/);
-    assert.doesNotMatch(source, /window\.confirm\(/);
-    assert.match(source, /method: 'DELETE'/);
-    assert.match(source, /requestJson\(config, session, '\/v1\/test-policies'/);
-    assert.match(source, /safe_windows: \[\{ day, start, end, timezone \}\]/);
-    assert.match(source, /customer-runnable check/);
-    assert.match(source, /They do not authorize or launch unmanaged DDoS traffic/);
-  });
 
   it('exposes disclosure semantics on the Add target toggle (A11Y-01)', () => {
     const source = readPage('targets-page.tsx');

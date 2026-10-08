@@ -4,14 +4,14 @@ This file tells implementation agents how to build AstraNull without losing cont
 
 ## Mission
 
-Build **AstraNull**, a no-access-first, **outside-in** DDoS readiness validation platform. The system validates customer-declared targets (with tags) and target groups using external probes, SOC-gated high-scale workflows, evidence correlation, and readiness scoring. Per [ADR-0008](docs/adr/0008-outside-in-only-targets-first.md), there are **no agents and no environments** — verdicts come from external probe evidence only (`external_only` confidence).
+Build **AstraNull**, a no-access-first, **outside-in** DDoS readiness validation platform. The system validates customer-declared targets (with tags), selected individually or as explicit domain sets using external probes, SOC-gated high-scale workflows, evidence correlation, and readiness scoring. Per [ADR-0019](docs/adr/0019-direct-domain-selection.md), customer workflows select targets directly; no group screens or selectors. Per [ADR-0008](docs/adr/0008-outside-in-only-targets-first.md), there are **no agents and no environments** — verdicts come from external probe evidence only (`external_only` confidence).
 
 ## Non-negotiable product rules
 
 | Rule | Meaning |
 |---|---|
 | No default cloud access | Do not design core functionality around AWS/GCP/Azure/CDN credentials. Optional integrations can be added later. |
-| No IP inventory discovery | Customer declares targets/target groups manually or via CSV/API import. Do not reintroduce automatic discovery as a required feature. |
+| No IP inventory discovery | Customer declares targets and explicit domain sets manually or via CSV/API import. Do not reintroduce automatic discovery as a required feature. |
 | Outside-in only, no agents | Per [ADR-0008](docs/adr/0008-outside-in-only-targets-first.md), do not reintroduce an internal agent, agent control plane, bootstrap tokens, placement diagnostics, or environments. Membership is expressed as target tags. |
 | SOC gates high-scale tests | Customers can request high-scale tests. Only SOC can approve, schedule, execute, coordinate, stop, and close them. |
 | Evidence over assumptions | Every verdict must be tied to observed external probe data, health signal, approval artifact, or explicit customer-provided declaration. |

@@ -24,7 +24,6 @@ function between(source, start, end) {
 }
 
 const pageComponents = read('pages/page-components.tsx');
-const targetGroupsPage = between(pageComponents, 'export function TargetGroupsPage(', 'type ReportExportFormat');
 const detail = read('pages/detail-pages.tsx');
 const reportLive = between(detail, 'function ReportLiveOpenFindings(', 'export function ReportDetailPage(');
 const findingsPage = read('pages/refined/findings-refined.tsx');
@@ -121,46 +120,20 @@ describe('findings list envelope: totals are the server predicate, never the pag
   });
 });
 
-describe('target groups: authoritative server counts, not the loaded page', () => {
-  it('reads each group count from open_findings_count and keeps a missing field distinct from zero', () => {
-    assert.match(targetGroupsPage, /getOptionalNumber\(item, \['open_findings_count'\]\)/);
-    assert.match(targetGroupsPage, /Not recorded/);
-    assert.doesNotMatch(targetGroupsPage, /data\.findings/);
-    assert.doesNotMatch(targetGroupsPage, /isFindingOpen/);
-  });
-
-  it('links each count to the exact group predicate with a self-describing name', () => {
-    assert.match(targetGroupsPage, /href=\{`#findings\?target_group_id=\$\{encodeURIComponent\(id\)\}&status=open`\}/);
-    assert.match(targetGroupsPage, /`\$\{formatNumber\(open\)\} open \$\{open === 1 \? 'finding' : 'findings'\} in \$\{name\}/);
-    assert.doesNotMatch(targetGroupsPage, /open or in progress|include open and in-progress/);
-  });
-
-  it('takes the workspace total from the state read, never a sum of overlapping group counts', () => {
-    assert.match(targetGroupsPage, /data\.state\?\.open_findings/);
-    assert.match(targetGroupsPage, /Status open, whole workspace, each finding once/);
-    assert.doesNotMatch(targetGroupsPage, /open_findings_count[^\n]*reduce/);
-  });
-
-  it('lets a focused link inside a clickable row keep its own Enter activation', () => {
-    const rowProps = between(pageComponents, 'function detailRowProps(', 'export function');
-    assert.match(rowProps, /if \(event\.target !== event\.currentTarget\) return;/);
-  });
-});
-
 describe('findings page: a linked predicate is exact', () => {
   it('replaces remembered filters and page with the linked predicate', () => {
-    assert.match(findingsPage, /const \[urlPredicate\] = useState\(\(\) => Boolean\(urlStatus \|\| urlSeverity \|\| urlGroup\)\)/);
+    assert.match(findingsPage, /const \[urlPredicate\] = useState\(\(\) => Boolean\(urlStatus \|\| urlSeverity \|\| urlTarget\)\)/);
     assert.match(findingsPage, /urlPredicate \? 1 : Math\.max\(1, initial\.page \?\? 1\)/);
   });
 
   it('clears the linked predicate from the address only when the predicate itself changes', () => {
-    assert.match(findingsPage, /const predicateKey = `\$\{statusFilter\}\|\$\{severityFilter\}\|\$\{groupFilter\}\|\$\{debouncedSearch\}`;/);
+    assert.match(findingsPage, /const predicateKey = `\$\{statusFilter\}\|\$\{severityFilter\}\|\$\{targetFilter\}\|\$\{debouncedSearch\}`;/);
     assert.match(findingsPage, /if \(shownPredicate\.current === predicateKey\) return;/);
-    assert.match(findingsPage, /replaceRouteParams\(\{ status: null, severity: null, target_group_id: null, target_group: null, group: null \}\)/);
+    assert.match(findingsPage, /replaceRouteParams\(\{ status: null, severity: null, target_id: null, target: null \}\)/);
   });
 
   it('keeps a linked group visible in the group filter even when it is not in the loaded list', () => {
-    assert.match(findingsPage, /label: `Group \$\{groupFilter\}`/);
+    assert.match(findingsPage, /label: 'Unavailable domain'/);
   });
 });
 

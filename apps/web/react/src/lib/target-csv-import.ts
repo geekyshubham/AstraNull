@@ -84,28 +84,25 @@ export function normalizeTargetCsvImportResult(payload: unknown): TargetCsvImpor
   };
 }
 
-export function targetCsvImportPath(targetGroupId: string) {
-  return `/v1/target-groups/${encodeURIComponent(targetGroupId)}/targets:csv`;
-}
+export function targetCsvImportPath() { return '/v1/targets:csv'; }
 
 export async function importTargetCsv(
   config: PortalConfig,
   session: Session,
-  targetGroupId: string,
   file: File
 ): Promise<TargetCsvImportResult> {
   const headers = buildApiHeaders(config, session);
   delete headers['Content-Type'];
   const body = new FormData();
   body.append(TARGET_CSV_FORM_FIELD, file, file.name);
-  const response = await fetch(targetCsvImportPath(targetGroupId), { method: 'POST', headers, body });
+  const response = await fetch(targetCsvImportPath(), { method: 'POST', headers, body });
   const payload = await response.json().catch(() => null);
   if (response.status === 422 && Array.isArray((payload as { errors?: unknown } | null)?.errors)) {
     return { ...normalizeTargetCsvImportResult(payload), created: [] };
   }
   if (!response.ok) {
     const message = response.status === 404
-      ? 'CSV import is not available for this target group on this deployment.'
+      ? 'CSV import is not available on this deployment.'
       : response.status === 413
         ? 'The CSV exceeds the import limit (256 KB or 1,000 rows). Split it and try again.'
         : response.status >= 500

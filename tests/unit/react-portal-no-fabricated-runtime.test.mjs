@@ -10,7 +10,7 @@ import {
   familyCheckIds,
   familyCoverage,
   itemCheckId,
-  itemTargetGroupId,
+  itemTargetId,
 } from '../../apps/web/react/src/lib/vector-coverage.mjs';
 
 const ROOT = process.cwd();
@@ -92,7 +92,7 @@ describe('portal has no fabricated runtime fallbacks (audit FT-PROV)', () => {
 /**
  * The coverage derivation, exercised through the module the portal actually renders from.
  *
- * This suite used to re-implement `familyCoverage`, `itemCheckId` and `itemTargetGroupId`
+ * This suite used to re-implement `familyCoverage`, `itemCheckId` and `itemTargetId`
  * locally, because `node --test` cannot load the `.tsx` they lived in. The copy had already
  * drifted: it resolved ids from `check_id`/`checkId` only, while the shipped version also falls
  * back to nested `check.check_id` and `target_group.id`. Those shapes were therefore handled in
@@ -105,29 +105,29 @@ describe('vector heatmap coverage derives from real data only', () => {
   const gid = 'grp_1';
 
   it('reports no-data when no checks map to the family', () => {
-    const cov = familyCoverage({ checkIds: new Set(), groupId: gid, testPolicies: [], runs: [], evidence: [] });
+    const cov = familyCoverage({ checkIds: new Set(), targetId: gid, testPolicies: [], runs: [], evidence: [] });
     assert.equal(cov.status, 'no-data');
   });
 
   it('reports no-data when there is no declared group', () => {
-    const cov = familyCoverage({ checkIds, groupId: '', testPolicies: [], runs: [], evidence: [] });
+    const cov = familyCoverage({ checkIds, targetId: '', testPolicies: [], runs: [], evidence: [] });
     assert.equal(cov.status, 'no-data');
   });
 
   it('reports "none" when checks exist but no policy/run/evidence records do', () => {
-    const cov = familyCoverage({ checkIds, groupId: gid, testPolicies: [], runs: [], evidence: [] });
+    const cov = familyCoverage({ checkIds, targetId: gid, testPolicies: [], runs: [], evidence: [] });
     assert.equal(cov.status, 'none');
     assert.equal(cov.evidenceCount, 0);
   });
 
   it('promotes to policy, then run, then evidence as real records appear', () => {
-    const policy = { target_group_id: gid, check_id: 'chk_1' };
-    const run = { target_group_id: gid, check_id: 'chk_1' };
-    const ev = { target_group_id: gid, check_id: 'chk_1' };
+    const policy = { target_id: gid, check_id: 'chk_1' };
+    const run = { target_id: gid, check_id: 'chk_1' };
+    const ev = { target_id: gid, check_id: 'chk_1' };
 
-    assert.equal(familyCoverage({ checkIds, groupId: gid, testPolicies: [policy], runs: [], evidence: [] }).status, 'policy');
-    assert.equal(familyCoverage({ checkIds, groupId: gid, testPolicies: [policy], runs: [run], evidence: [] }).status, 'run');
-    const withEvidence = familyCoverage({ checkIds, groupId: gid, testPolicies: [policy], runs: [run], evidence: [ev] });
+    assert.equal(familyCoverage({ checkIds, targetId: gid, testPolicies: [policy], runs: [], evidence: [] }).status, 'policy');
+    assert.equal(familyCoverage({ checkIds, targetId: gid, testPolicies: [policy], runs: [run], evidence: [] }).status, 'run');
+    const withEvidence = familyCoverage({ checkIds, targetId: gid, testPolicies: [policy], runs: [run], evidence: [ev] });
     assert.equal(withEvidence.status, 'evidence');
     assert.equal(withEvidence.evidenceCount, 1);
     assert.equal(withEvidence.runCount, 1);
@@ -135,8 +135,8 @@ describe('vector heatmap coverage derives from real data only', () => {
   });
 
   it('ignores records from other target groups', () => {
-    const otherPolicy = { target_group_id: 'grp_other', check_id: 'chk_1' };
-    const cov = familyCoverage({ checkIds, groupId: gid, testPolicies: [otherPolicy], runs: [], evidence: [] });
+    const otherPolicy = { target_id: 'grp_other', check_id: 'chk_1' };
+    const cov = familyCoverage({ checkIds, targetId: gid, testPolicies: [otherPolicy], runs: [], evidence: [] });
     assert.equal(cov.status, 'none');
     assert.equal(cov.policyCount, 0);
   });
@@ -147,13 +147,13 @@ describe('vector heatmap coverage derives from real data only', () => {
     // which renders as "no coverage" rather than as a shape mismatch — so each shape that the
     // resolver accepts needs to be observably counted.
     const shapes = [
-      { target_group_id: gid, check_id: 'chk_1' },
-      { targetGroupId: gid, checkId: 'chk_1' },
-      { target_group: { id: gid }, check: { check_id: 'chk_1' } },
-      { target_group: { id: gid }, checkId: 'chk_1' },
+      { target_id: gid, check_id: 'chk_1' },
+      { targetId: gid, checkId: 'chk_1' },
+      { target: { id: gid }, check: { check_id: 'chk_1' } },
+      { target: { id: gid }, checkId: 'chk_1' },
     ];
     for (const record of shapes) {
-      const cov = familyCoverage({ checkIds, groupId: gid, testPolicies: [record], runs: [], evidence: [] });
+      const cov = familyCoverage({ checkIds, targetId: gid, testPolicies: [record], runs: [], evidence: [] });
       assert.equal(cov.policyCount, 1, `unrecognised shape: ${JSON.stringify(record)}`);
       assert.equal(cov.status, 'policy');
     }
@@ -166,12 +166,12 @@ describe('vector heatmap coverage derives from real data only', () => {
     // guard in `nestedString` is not what these array cases exercise — arrays have no `id` or
     // `check_id`, so they resolve to '' with or without it.)
     assert.equal(itemCheckId({ check: ['chk_1'] }), '');
-    assert.equal(itemTargetGroupId({ target_group: ['grp_1'] }), '');
+    assert.equal(itemTargetId({ target: ['grp_1'] }), '');
     assert.equal(itemCheckId({}), '');
-    assert.equal(itemTargetGroupId({ target_group: null }), '');
+    assert.equal(itemTargetId({ target: null }), '');
     // A record with no resolvable group id must not land in a cell.
     const cov = familyCoverage({
-      checkIds, groupId: gid, testPolicies: [{ check_id: 'chk_1' }], runs: [], evidence: [],
+      checkIds, targetId: gid, testPolicies: [{ check_id: 'chk_1' }], runs: [], evidence: [],
     });
     assert.equal(cov.policyCount, 0, 'an unresolvable record must not be counted as coverage');
   });
@@ -234,14 +234,14 @@ describe('vector family assignment', () => {
     const ids = familyCheckIds(checks, dns);
     const cov = familyCoverage({
       checkIds: ids,
-      groupId: gid,
-      testPolicies: [{ target_group_id: gid, check_id: 'chk_dns_legacy' }],
+      targetId: gid,
+      testPolicies: [{ target_id: gid, check_id: 'chk_dns_legacy' }],
       runs: [],
-      evidence: [{ target_group: { id: gid }, check: { check_id: 'chk_dns_legacy' } }],
+      evidence: [{ target: { id: gid }, check: { check_id: 'chk_dns_legacy' } }],
     });
     assert.equal(cov.status, 'evidence');
     assert.equal(cov.evidenceCount, 1);
     assert.equal(cov.policyCount, 1);
-    assert.equal(familyCoverage({ checkIds: familyCheckIds(checks, origin), groupId: gid, testPolicies: [], runs: [], evidence: [] }).status, 'no-data');
+    assert.equal(familyCoverage({ checkIds: familyCheckIds(checks, origin), targetId: gid, testPolicies: [], runs: [], evidence: [] }).status, 'no-data');
   });
 });

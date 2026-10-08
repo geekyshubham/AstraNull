@@ -14,6 +14,19 @@ const ROOT = path.resolve(__dirname, '../..');
 const ARTIFACT = path.join(ROOT, 'docs/api/waf-posture-openapi.json');
 
 describe('WAF posture OpenAPI artifact', () => {
+  it('documents exact-target detection as asynchronous and raw destinations as invalid', () => {
+    const doc = JSON.parse(readFileSync(ARTIFACT, 'utf8'));
+    const post = doc.paths['/v1/waf/edge-detection'].post;
+    const schema = post.requestBody.content['application/json'].schema;
+    assert.deepEqual(schema.required, ['target_id']);
+    assert.equal(schema.additionalProperties, false);
+    assert.equal(schema.properties.hostname, undefined);
+    assert.ok(post.responses['202']);
+    assert.deepEqual(post.security, [{ bearerAuth: ['waf:run'] }]);
+    delete doc.paths['/v1/waf/edge-detection'];
+    assert.equal(validateWafOpenApi(doc).ok, false);
+  });
+
   it('parses as JSON and passes structural contract checks', () => {
     const raw = readFileSync(ARTIFACT, 'utf8');
     const doc = JSON.parse(raw);

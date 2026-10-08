@@ -77,6 +77,7 @@ import {
 } from '../lib/domain-checks.mjs';
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
 import { TargetChangesHistory } from '../components/targets/target-history';
+import { TargetAuthorization } from '../components/targets/target-authorization';
 import { OriginRelations } from '../components/targets/origin-relations';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
 import { ProbeActivity } from '../components/targets/probe-activity';
@@ -427,7 +428,6 @@ export function TargetDetailView({
   config,
   session,
   checks,
-  targetGroups = [],
   wafEdgeEnabled = false,
   protectionValidationEnabled = false,
   onRefresh,
@@ -436,7 +436,6 @@ export function TargetDetailView({
   config: PortalConfig;
   session: Session;
   checks: DataItem[];
-  targetGroups?: DataItem[];
   /** Tenant deployment feature `waf_posture`; WAF/CDN detection routes 404 without it. */
   wafEdgeEnabled?: boolean;
   /** Tenant deployment feature `protection_validation`; entry-path and firewall change routes 404 without it. */
@@ -528,12 +527,6 @@ export function TargetDetailView({
   const targetEligible = isTargetRunEligible(eligibility, verificationState);
   const rawProvenance = resolveTargetVerificationProvenance(target, verification);
   const provenance = /agent/i.test(rawProvenance) ? `Recorded ownership evidence for ${verificationState}.` : rawProvenance;
-  const targetGroupId = getString(target, ['target_group_id'], '');
-  const targetGroupName = getString(
-    targetGroups.find((group) => getString(group, ['id'], '') === targetGroupId) ?? null,
-    ['name'],
-    getString(target, ['target_group_name'], targetGroupId),
-  );
   const canWrite = canStartRun(session.role);
   const canStartBoundedRun = canStartRun(session.role);
 
@@ -608,10 +601,10 @@ export function TargetDetailView({
   const edgeCheck = checks.find((check) => getString(check, ['check_id', 'id'], '') === EDGE_DETECTION_CHECK_ID) ?? null;
 
   const loadTargetActivity = useCallback(async () => {
-    if (!targetGroupId) return;
+    if (!entityId) return;
     const generation = loadGeneration.current;
     const [scanList, runList] = await Promise.all([
-      requestJson(config, session, validationScansPathForTarget(targetGroupId, entityId)).catch(() => null) as Promise<DataItem | null>,
+      requestJson(config, session, validationScansPathForTarget(entityId)).catch(() => null) as Promise<DataItem | null>,
       requestJson(config, session, `/v1/test-runs?target_id=${encodeURIComponent(entityId)}&limit=${TARGET_RUNS_LIMIT}`)
         .then((value) => { if (generation === loadGeneration.current) setRunsError(''); return value; })
         .catch((err) => { if (generation === loadGeneration.current) setRunsError(apiErrorMessage(err, 'Recorded check results could not load.')); return null; }) as Promise<DataItem | null>,
@@ -630,7 +623,7 @@ export function TargetDetailView({
       }
     }
     if (runList && Array.isArray(runList.items)) setTargetRuns(runList.items as DataItem[]);
-  }, [config, session, entityId, targetGroupId]);
+  }, [config, session, entityId]);
 
   useEffect(() => {
     setScan(null);
@@ -744,7 +737,7 @@ export function TargetDetailView({
   }, [config, session, selectedRow?.runId, selectedRow?.status]);
 
   const queueEdgeDetection = useCallback(async () => {
-    if (!targetGroupId) return;
+    if (!entityId) return;
     const generation = loadGeneration.current;
     setEdgeLocal('pending');
     setEdgeError('');
@@ -752,7 +745,7 @@ export function TargetDetailView({
     try {
       await requestJson(config, session, '/v1/waf/edge-detection', {
         method: 'POST',
-        body: { target_group_id: targetGroupId, target_id: entityId },
+        body: { target_id: entityId },
       });
       if (generation !== loadGeneration.current) return;
       edgeRetriesRef.current = 0;
@@ -769,9 +762,9 @@ export function TargetDetailView({
       setEdgeLocal('error');
       setEdgeError(apiErrorMessage(err, 'WAF/CDN detection could not be queued.'));
     }
-  }, [config, session, entityId, targetGroupId, loadTargetActivity, reload, selectCheck, setTab]);
+  }, [config, session, entityId, loadTargetActivity, reload, selectCheck, setTab]);
 
-  // Only after the user explicitly started detection: wait for the group's single run slot.
+  // Only after the user explicitly started detection: wait for the target’s execution slot.
   useEffect(() => {
     if (edgeLocal !== 'blocked' || scanActive) return undefined;
     if (edgeRetriesRef.current >= EDGE_BLOCKED_MAX_RETRIES) return undefined;
@@ -821,14 +814,14 @@ export function TargetDetailView({
 
   // DNS re-checks run only after the user chose Check now or issued a record in this visit.
   useEffect(() => {
-    if (!dnsWatchStartedAt || !canWrite || ownershipDone || !challenge?.id || getString(challenge as unknown as DataItem, ['state'], '') !== 'pending' || !targetGroupId) return undefined;
+    if (!dnsWatchStartedAt || !canWrite || ownershipDone || !challenge?.id || getString(challenge as unknown as DataItem, ['state'], '') !== 'pending') return undefined;
     const challengeId = challenge.id;
     let busyCheck = false;
     const timer = window.setInterval(() => {
       if (busyCheck) return;
       if (Date.now() - dnsWatchStartedAt > DNS_RECHECK_MAX_MS) { window.clearInterval(timer); setDnsWatchStartedAt(0); return; }
       busyCheck = true;
-      verifyOwnershipChallenge(config, session, targetGroupId, challengeId)
+      verifyOwnershipChallenge(config, session, entityId, challengeId)
         .then(async (result) => {
           if ((result as DataItem)?.verified === true) {
             window.clearInterval(timer);
@@ -843,7 +836,7 @@ export function TargetDetailView({
     }, DNS_RECHECK_MS);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state, targetGroupId]);
+  }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state]);
 
 
   const singleDisabledReason = !canStartBoundedRun
@@ -871,7 +864,7 @@ export function TargetDetailView({
       try {
         await requestJson(config, session, '/v1/test-runs', {
           method: 'POST',
-          body: { target_group_id: targetGroupId, target_id: entityId, check_id: effectiveSelectedCheckId },
+          body: { target_id: entityId, check_id: effectiveSelectedCheckId },
         });
         setReview(null);
         setBanner(`${displayCheckName(effectiveSelectedCheckId)} started. Its result and evidence appear on this check when recorded.`);
@@ -893,7 +886,6 @@ export function TargetDetailView({
       const created = await requestJson(config, session, '/v1/validation-scans', {
         method: 'POST',
         body: {
-          target_group_id: targetGroupId,
           target_id: entityId,
           check_ids: runAll.map((check) => getString(check, ['check_id'], '')).filter(Boolean),
           name: `All compatible checks · ${targetDisplayValue(target)}`.slice(0, 120),
@@ -933,7 +925,7 @@ export function TargetDetailView({
 
   async function saveTags(next: string[]) {
     if (!target) return;
-    await patchTargetTags(config, session, targetGroupId, entityId, next);
+    await patchTargetTags(config, session, entityId, next);
     setBanner('Tags saved.');
     await onRefresh();
     await reload();
@@ -952,7 +944,7 @@ export function TargetDetailView({
     setError('');
     setBanner('');
     try {
-      await issueOwnershipChallenge(config, session, targetGroupId, entityId);
+      await issueOwnershipChallenge(config, session, entityId);
       setBanner('DNS TXT record issued. Add it at your DNS provider, then choose Check now.');
       await reload();
     } catch (err) {
@@ -968,7 +960,7 @@ export function TargetDetailView({
     setError('');
     setBanner('');
     try {
-      const result = await verifyOwnershipChallenge(config, session, targetGroupId, challenge.id) as DataItem;
+      const result = await verifyOwnershipChallenge(config, session, entityId, challenge.id) as DataItem;
       const verified = result?.verified === true || getString(asDataItem(result.challenge), ['state']) === 'resolved';
       if (verified) {
         setDnsWatchStartedAt(0);
@@ -1093,8 +1085,6 @@ export function TargetDetailView({
                 <p className="td-muted td-context-missing">Declared purpose, owner and criticality are not reported by this server yet.</p>
               )}
               <div className="td-metaline">
-                {targetGroupId ? <a className="td-group-link" href={buildDetailHref('target-group-detail', targetGroupId)}>Group: {targetGroupName}</a> : <span>No group</span>}
-                <span className="dot" aria-hidden="true">·</span>
                 <span>Expected: {formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</span>
               </div>
               <TagEditor tags={tags} canEdit={canWrite} onChange={saveTags} />
@@ -1367,7 +1357,7 @@ export function TargetDetailView({
   function edgeNote(): ReactNode {
     if (!wafEdgeEnabled && !edgeDetection) return 'WAF/CDN detection is not enabled for this workspace.';
     if (edgePhase === 'locked') return 'WAF/CDN detection is not unlocked for this target.';
-    if (edgePhase === 'waiting') return 'Another run holds this group’s single run slot. Your detection request starts when it frees up.';
+    if (edgePhase === 'waiting') return 'Another run holds the execution slot for this target. Your detection request starts when it frees up.';
     if (edgePhase === 'error') return edgeError || 'WAF/CDN detection could not be queued.';
     if (edgePhase === 'no_result') return edgeDetectionReasonExplanation(edgeReason) || 'The last detection run finished without a trusted result, so nothing is asserted.';
     if (edgePhase === 'not_started') return 'Detection has not run on this target. It starts only when someone chooses Detect WAF and CDN.';
@@ -1579,6 +1569,7 @@ export function TargetDetailView({
               onInspect={inspectProvider}
             />
             {renderCoverage()}
+            {target ? <TargetAuthorization target={target} config={config} session={session} canWrite={canWrite} ownershipDone={ownershipDone} /> : null}
             {target ? (
               <OriginRelations
                 config={config}
@@ -1873,7 +1864,6 @@ export function TargetDetailView({
               <tr><td>Kind</td><td>{formatLabel(kind)}</td></tr>
               <tr><td>Declaration source</td><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
               <tr><td>Ownership method</td><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
-              <tr><td>Target group</td><td>{targetGroupId ? <a className="td-inline-link" href={buildDetailHref('target-group-detail', targetGroupId)}>{targetGroupName}</a> : 'None'}</td></tr>
               {detail.loa ? <tr><td>Group LOA</td><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
             </tbody>
           </table>
@@ -1899,7 +1889,7 @@ export function TargetDetailView({
               <>
                 <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
                 <p>Includes provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
-                <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the run pauses and shows when it resumes. Other runs in this group wait until it finishes, and you can stop it at any time.</p>
+                <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the run pauses and shows when it resumes. Other runs sharing the execution limit wait until it finishes, and you can stop it at any time.</p>
                 <p>The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
               </>
             ) : (

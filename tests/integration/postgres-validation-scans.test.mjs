@@ -70,7 +70,7 @@ async function seedFixtures(pool) {
 async function readRun(pool, runId) {
   return withTenantContext(pool, TENANT, async (client) => {
     const { rows } = await client.query(
-      `SELECT id, status, scan_id, scan_step_id, summary_json FROM test_runs WHERE tenant_id = $1 AND id = $2`,
+      `SELECT id, status, target_group_id, scan_id, scan_step_id, summary_json FROM test_runs WHERE tenant_id = $1 AND id = $2`,
       [TENANT, runId],
     );
     return rows[0] ?? null;
@@ -420,3 +420,33 @@ describe('postgres validation scans (service adapters over a live database)', ()
   });
 });
 
+
+it('plans and executes explicit domains across policy bindings with scoped persistence and Stop', async (t) => {
+  const availability = await resolvePostgresHarnessAvailability();
+  if (!availability.available) { t.skip(availability.reason); return; }
+  await withEphemeralPostgres(async (pool) => {
+    await seedFixtures(pool);
+    await withTenantContext(pool, TENANT, async (client) => {
+      await client.query(`INSERT INTO target_groups (id, tenant_id, environment_id, name, validation_mode, safety_policy)
+        VALUES ('policy_second', $1, $2, 'retained policy', 'external_only', '{"min_seconds_between_runs":0,"max_runs_per_hour":60}'::jsonb)`, [TENANT, ENVIRONMENT]);
+      await client.query('UPDATE targets SET target_group_id = $1 WHERE id = $2 AND tenant_id = $3', ['policy_second', TARGET_B, TENANT]);
+    });
+    const { scans, repositories, testRuns } = buildServices(pool);
+    const scan = await scans.createValidationScan(CTX, { target_group_id: GROUP, target_ids: [TARGET_A, TARGET_B], check_ids: [CHECK_ID] }, RUNTIME_CONFIG);
+    assert.equal(scan.status, 'running');
+    assert.deepEqual(scan.target_ids, [TARGET_A, TARGET_B]);
+    assert.equal(scan.steps[1].target_value, 'b.scan-int.test');
+    await withTenantContext(pool, TENANT, (client) => client.query(`UPDATE test_runs SET collection_deadline_at = now() - interval '1 second' WHERE id = $1 AND tenant_id = $2`, [scan.steps[0].test_run_id, TENANT]));
+    await testRuns.sweepExpiredCollectingRuns(RUNNER_CTX, {});
+    await scans.advanceScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG });
+    const next = await scans.getValidationScan(CTX, scan.id, { advance: false });
+    assert.equal(next.steps[1].status, 'collecting');
+    assert.equal((await readRun(pool, next.steps[1].test_run_id)).target_group_id, 'policy_second');
+    assert.equal((await scans.listValidationScans(CTX, { target_id: TARGET_B })).count, 1);
+    assert.equal((await repositories.validationScans.listScans(CTX, { targetGroupId: 'policy_second', status: ['running'] })).length, 1);
+    assert.equal((await scans.listValidationScans({ tenantId: OTHER_TENANT, role: 'admin' }, { target_id: TARGET_B })).count, 0);
+    const stop = await scans.cancelValidationScan(CTX, scan.id);
+    assert.equal(stop.status, 'cancelled');
+    assert.equal((await readRun(pool, next.steps[1].test_run_id)).status, 'cancelled');
+  }, availability.env ?? process.env);
+});

@@ -208,12 +208,13 @@ function latestVerificationByTarget(ctx, targetIds) {
   return effectiveTargetVerifications(getStore(), ctx.tenantId, targetIds);
 }
 
-function getActiveLoa(ctx, groupId) {
+function getActiveLoa(ctx, groupId, targetId = null) {
   return (getStore().loaSignatures ?? []).find(
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
       && row.state === 'signed'
+      && (!targetId || loaScopeTargetIds(row).has(targetId))
       && (!row.expires_at || new Date(row.expires_at).getTime() > Date.now()),
   ) ?? null;
 }
@@ -373,7 +374,7 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
   );
   if (!target) return { error: 'target_not_found', status: 404 };
 
-  const activeLoa = getActiveLoa(ctx, groupId);
+  const activeLoa = getActiveLoa(ctx, groupId, targetId) ?? getActiveLoa(ctx, groupId);
   if (!activeLoa) return { error: 'loa_missing', status: 409 };
 
   const latestByTarget = latestVerificationByTarget(ctx, [targetId]);

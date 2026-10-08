@@ -638,17 +638,18 @@ export function addTarget(ctx, groupId, body = {}) {
 
 export function importTargets(ctx, groupId, rows = []) {
   const store = getStore();
-  const group = store.targetGroups.find(
+  let group = groupId ? store.targetGroups.find(
     (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
-  );
-  if (!group) return null;
+  ) : null;
+  if (groupId && !group) return null;
   const existingKeys = new Set(
     store.targets
-      .filter((target) => target.tenant_id === ctx.tenantId && target.target_group_id === groupId && !isArchivedTarget(target))
+      .filter((target) => target.tenant_id === ctx.tenantId && (!groupId || target.target_group_id === groupId) && !isArchivedTarget(target))
       .map((target) => targetDedupeKey(target)),
   );
   const { accepted, errors } = validateTargetImportRows(rows, existingKeys);
   if (errors.length) return csvImportRejected(errors);
+  if (!group) { group = resolveDefaultTargetGroup(ctx); groupId = group.id; }
 
   const now = new Date().toISOString();
   const created = accepted.map(({ row, normalized, expected_behavior: expectedBehavior }) => {

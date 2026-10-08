@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 const ARTIFACT_REL = 'docs/api/waf-posture-openapi.json';
 
 const REQUIRED_PATHS = [
+  '/v1/waf/edge-detection',
+  '/v1/waf/edge-detection/{id}',
   '/v1/waf/assets',
   '/v1/waf/assets/{id}',
   '/v1/waf/assets/{id}/exception',

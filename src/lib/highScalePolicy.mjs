@@ -807,6 +807,18 @@ export function validateHighScaleIntakeFields(body) {
   };
 }
 
+/** Explicit declared-target subset for new governed requests; null retains historical scopes. */
+export function normalizeHighScaleTargetSelection(body) {
+  const raw = body?.target_ids ?? (body?.target_id ? [body.target_id] : null);
+  if (raw == null) return { target_ids: null };
+  if (!Array.isArray(raw) || !raw.length || raw.length > 500 || raw.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(id))) {
+    return { error: 'invalid_target_selection', status: 400 };
+  }
+  const ids = [...new Set(raw)];
+  if (body?.target_id && (ids.length !== 1 || ids[0] !== body.target_id)) return { error: 'target_selection_conflict', status: 400 };
+  return { target_ids: ids };
+}
+
 export function storeOptionalHighScaleFields(body) {
   const optional = {};
   if (body.environment != null && String(body.environment).trim() !== '') {
@@ -893,7 +905,7 @@ export function buildArtifactFromUpload(ctx, body, options = {}) {
   const request = options.request ?? null;
   const authorizationBinding = proof.authorization_binding ?? (request ? {
     tenant_id: ctx.tenantId,
-    target_group_id: request.target_group_id,
+    ...(request.target_ids ? { target_ids: request.target_ids } : { target_group_id: request.target_group_id }),
     scope_hash: request.scope_hash,
     requested_window: request.requested_window,
     approved_schedule_window: request.requested_window,
@@ -1056,7 +1068,7 @@ function artifactBindingErrors(req, artifact, context = {}) {
   const expectedTenantId = context.tenantId ?? req?.tenant_id ?? null;
   const expectedScopeHash = context.currentScopeHash ?? req?.scope_hash ?? null;
 
-  if (!sameStringSet(artifact?.approved_targets, [req?.target_group_id])) errors.push('approved_targets');
+  if (!sameStringSet(artifact?.approved_targets, req?.target_ids ?? [req?.target_group_id])) errors.push('approved_targets');
   if (!sameStringSet(artifact?.approved_scenario_families, req?.requested_scenario_families)) {
     errors.push('approved_scenario_families');
   }
@@ -1070,7 +1082,9 @@ function artifactBindingErrors(req, artifact, context = {}) {
     errors.push('authorization_binding');
   } else {
     if (!expectedTenantId || binding.tenant_id !== expectedTenantId) errors.push('authorization_binding.tenant_id');
-    if (binding.target_group_id !== req?.target_group_id) errors.push('authorization_binding.target_group_id');
+    if (req?.target_ids) {
+      if (!sameStringSet(binding.target_ids, req.target_ids)) errors.push('authorization_binding.target_ids');
+    } else if (binding.target_group_id !== req?.target_group_id) errors.push('authorization_binding.target_group_id');
     if (!expectedScopeHash || binding.scope_hash !== expectedScopeHash) errors.push('authorization_binding.scope_hash');
     if (!sameWindow(binding.requested_window, req?.requested_window)) {
       errors.push('authorization_binding.requested_window');
@@ -1197,6 +1211,7 @@ export function buildHighScaleScenarioReview(req) {
 
 export function mergeRiskReviewOntoRequest(mapped, riskReview) {
   const risk = riskReview ?? {};
+  if (Array.isArray(risk.target_ids)) mapped.target_ids = risk.target_ids;
   if (risk.environment != null) mapped.environment = risk.environment;
   if (risk.business_criticality != null) mapped.business_criticality = risk.business_criticality;
   if (risk.requested_scenario_families != null) mapped.requested_scenario_families = risk.requested_scenario_families;

@@ -31,6 +31,7 @@ import {
   syncChecklistFromProviderArtifactReview,
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
+  normalizeHighScaleTargetSelection,
   validateScenarioFamilyAuthorization,
   validateGovernedAuthorization,
   governedAuthorizationFailure,
@@ -162,6 +163,7 @@ async function persistRequestPack(repo, ctx, req) {
 function buildRequestPackPatch(req) {
   refreshAuthorizationPackStatus(req);
   const risk = {
+    ...(req.target_ids ? { target_ids: req.target_ids } : {}),
     environment: req.environment,
     business_criticality: req.business_criticality,
     requested_scenario_families: req.requested_scenario_families,
@@ -182,7 +184,7 @@ function buildRequestPackPatch(req) {
   };
 }
 
-async function validateTargetScope(coreCatalog, ctx, targetGroupId) {
+async function validateTargetScope(coreCatalog, ctx, targetGroupId, targetIds = null) {
   if (!targetGroupId) {
     return { error: 'missing_target_group_id', status: 400 };
   }
@@ -190,7 +192,24 @@ async function validateTargetScope(coreCatalog, ctx, targetGroupId) {
   if (!group) {
     return { error: 'target_group_not_found', status: 404 };
   }
-  const targets = group.targets ?? [];
+  let targets = (group.targets ?? []).filter((target) => !target.deleted_at);
+  if (targetIds) {
+    const selected = [];
+    const policies = new Map([[group.id ?? targetGroupId, group]]);
+    for (const id of targetIds) {
+      let target = targets.find((entry) => entry.id === id);
+      if (!target) {
+        if (typeof coreCatalog.getTarget !== 'function') return { error: 'target_selection_unavailable', status: 503 };
+        const binding = await coreCatalog.getTarget(ctx, id);
+        if (!binding || binding.tenant_id !== ctx.tenantId) return { error: 'target_not_found', status: 404 };
+        if (!policies.has(binding.target_group_id)) policies.set(binding.target_group_id, await coreCatalog.getTargetGroup(ctx, binding.target_group_id, LEAN_GROUP_LOOKUP));
+        target = policies.get(binding.target_group_id)?.targets?.find((entry) => entry.id === id && !entry.deleted_at);
+      }
+      if (!target) return { error: 'target_not_found', status: 404 };
+      selected.push({ ...target, target_group_id: target.target_group_id ?? targetGroupId });
+    }
+    targets = selected;
+  }
   if (targets.length === 0) {
     return { error: 'target_group_empty', status: 400 };
   }
@@ -269,7 +288,9 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
 
   return {
     async createHighScaleRequest(ctx, body) {
-      const scope = await validateTargetScope(coreCatalog, ctx, body.target_group_id);
+      const selection = normalizeHighScaleTargetSelection(body);
+      if (selection.error) return selection;
+      const scope = await validateTargetScope(coreCatalog, ctx, body.target_group_id, selection.target_ids);
       if (scope.error) return scope;
 
       const intake = validateHighScaleIntakeFields(body);
@@ -281,6 +302,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
       const record = {
         id,
         target_group_id: body.target_group_id,
+        ...(selection.target_ids ? { target_ids: selection.target_ids } : {}),
         reason: text,
         objective: text,
         requested_window: intake.requested_window,
@@ -304,7 +326,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         stop_criteria: intake.stop_criteria,
         abort_criteria: intake.abort_criteria,
         ...optional,
-        risk_review_json: buildIntakeRiskReviewJson(intake, body, optional),
+        risk_review_json: { ...buildIntakeRiskReviewJson(intake, body, optional), ...(selection.target_ids ? { target_ids: selection.target_ids } : {}) },
         adapter: {},
       };
       refreshAuthorizationPackStatus(record);
@@ -660,7 +682,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
             approvals: distinctSocApprovalCount(req),
           });
         } else {
-          const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id);
+          const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
           if (scope.error) {
             await appendAudit(auditRepo, ctx, 'high_scale.approval_gate_denied', 'high_scale_request', id, {
               reason: scope.error,
@@ -689,7 +711,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           return { error: 'missing_scope_hash', status: 409 };
         }
         const scheduledWindow = { window_start, window_end, scope_hash: req.scope_hash };
-        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id);
+        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
         if (scope.error) return { error: scope.error, status: scope.status };
         const currentScopeHash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
         const governed = validateGovernedAuthorization(req, { currentScopeHash, scheduledWindow });
@@ -729,7 +751,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           });
           return { error: 'outside_schedule_window', status: 409 };
         }
-        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id);
+        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id, req.target_ids ?? null);
         if (scope.error) {
           await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
             reason: scope.error,
@@ -751,18 +773,13 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           });
           return { error: 'loa_repository_unavailable', status: 503 };
         }
-        const activeLoa = await portalRevamp.getActiveLoaByGroup(ctx, req.target_group_id);
-        const loaAuthorization = validateActiveLoaAuthorization(
-          activeLoa,
-          scope.targets.map((target) => target.id),
-          nowFn().getTime(),
-        );
-        if (!loaAuthorization.ok) {
-          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
-            reason: loaAuthorization.error,
-            missing_target_ids: loaAuthorization.missing_target_ids ?? [],
-          });
-          return { error: loaAuthorization.error, status: 409 };
+        for (const target of scope.targets) {
+          const activeLoa = await portalRevamp.getActiveLoaByGroup(ctx, target.target_group_id ?? req.target_group_id, target.id);
+          const loaAuthorization = validateActiveLoaAuthorization(activeLoa, [target.id], nowFn().getTime());
+          if (!loaAuthorization.ok) {
+            await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, { reason: loaAuthorization.error, missing_target_ids: loaAuthorization.missing_target_ids ?? [] });
+            return { error: loaAuthorization.error, status: 409 };
+          }
         }
         const governed = validateGovernedAuthorization(req, {
           currentScopeHash: currentScope,
@@ -828,7 +845,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         && distinctSocApprovalCount(updated) >= 2
         && !updated.scope_hash
       ) {
-        const scope = await validateTargetScope(coreCatalog, ctx, updated.target_group_id);
+        const scope = await validateTargetScope(coreCatalog, ctx, updated.target_group_id, updated.target_ids ?? null);
         if (!scope.error) {
           const scopeHash = computeScopeHashFromTargets(updated.target_group_id, scope.targets);
           updated = await repo.updateHighScaleRequest(ctx, id, {

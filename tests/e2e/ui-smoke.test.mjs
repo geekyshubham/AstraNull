@@ -11,7 +11,6 @@ let server;
 const REQUIRED_NAV_LABELS = [
   'Dashboard',
   'Targets',
-  'Target groups',
   'Test runs',
   'Findings',
   'Reports',
@@ -21,6 +20,7 @@ const REQUIRED_NAV_LABELS = [
 ];
 
 const REMOVED_NAV_LABELS = [
+  'Target groups',
   'Evidence Vault',
   'Release Evidence',
   'WAF Posture',
@@ -86,11 +86,12 @@ describe('ui and api smoke', () => {
     assert.ok(reactAppJs.text.includes('/v1/service-accounts'), 'React settings page creates and manages service accounts');
     assert.ok(reactAppJs.text.includes('/v1/tenants/current'), 'React settings page loads and patches tenant settings');
     assert.ok(reactAppJs.text.includes('/v1/secrets'), 'React settings page manages encrypted secret vault');
-    assert.ok(reactAppJs.text.includes('/v1/target-groups'), 'React target groups page creates declared scope records');
+    assert.ok(reactAppJs.text.includes('/v1/targets:csv'), 'React targets page imports declared domains directly');
+    assert.equal(reactAppJs.text.includes('/v1/target-groups'), false, 'React customer workflows do not read grouping routes');
     assert.ok(reactAppJs.text.includes('/v1/test-policies'), 'React test policies page creates safe policy records');
     assert.ok(reactAppJs.text.includes('/internal/soc/high-scale/'), 'React SOC console calls governed SOC execution routes');
     assert.ok(reactAppJs.text.includes('/internal/admin/signup-requests/'), 'React staff console approves signup requests');
-    assert.ok(reactAppJs.text.includes('Open vector library'), 'React runs page routes operators into explicit vector, group, target, and check selection');
+    assert.ok(reactAppJs.text.includes('Open vector library'), 'React runs page routes operators into explicit vector, domain, and check selection');
     assert.ok(reactAppJs.text.includes('/v1/waf/coverage/summary'), 'React dashboard loads WAF coverage summary');
     assert.ok(reactAppJs.text.includes('/v1/high-scale-requests'), 'React portal references governed high-scale requests');
     assert.ok(reactAppJs.text.includes('Vector coverage matrix'), 'Dashboard risk trends retains vector coverage panel');

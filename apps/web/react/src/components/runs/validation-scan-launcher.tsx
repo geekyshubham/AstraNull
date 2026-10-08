@@ -23,6 +23,7 @@ import {
 import { Select, type SelectOption } from '../ui/select';
 import { Button } from '../ui/button';
 import { CheckPicker } from './check-picker';
+import { DomainPicker } from '../targets/domain-picker';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -59,17 +60,16 @@ export type ValidationScanLauncherProps = {
   config: PortalConfig;
   session: Session;
   checks: DataItem[];
-  targetGroups: DataItem[];
-  fixedTargetGroup?: DataItem | null;
+  targets?: DataItem[];
   initialTargets?: DataItem[];
   onClose: () => void;
   onScheduled: (scan: DataItem, mode: ScanLauncherMode) => void;
   onStarted?: (scan: DataItem) => void;
 };
 
-function initialForm(mode: ScanLauncherMode, scan: DataItem | null | undefined, fixedGroupId: string): ScanForm {
+function initialForm(mode: ScanLauncherMode, scan: DataItem | null | undefined): ScanForm {
   if ((mode === 'edit' || mode === 'reschedule') && scan) return scanFormFromScan(scan, mode);
-  return emptyScanForm({ targetGroupId: fixedGroupId });
+  return emptyScanForm();
 }
 
 export function ValidationScanLauncher({
@@ -79,15 +79,13 @@ export function ValidationScanLauncher({
   config,
   session,
   checks,
-  targetGroups,
-  fixedTargetGroup = null,
+  targets: declaredTargets,
   initialTargets,
   onClose,
   onScheduled,
   onStarted
 }: ValidationScanLauncherProps) {
-  const fixedGroupId = getString(fixedTargetGroup, ['id']);
-  const [form, setForm] = useState<ScanForm>(() => initialForm(mode, scan, fixedGroupId));
+  const [form, setForm] = useState<ScanForm>(() => initialForm(mode, scan));
   const [targets, setTargets] = useState<DataItem[]>(initialTargets ? activeTargets(initialTargets) : []);
   const [targetsLoading, setTargetsLoading] = useState(false);
   const [targetsError, setTargetsError] = useState('');
@@ -105,69 +103,40 @@ export function ValidationScanLauncher({
 
   useEffect(() => {
     if (!open) return;
-    setForm(initialForm(mode, scan, fixedGroupId));
+    setForm(initialForm(mode, scan));
     setFieldErrors({});
     setError('');
     setReviewing(false);
     setBusy(false);
-  }, [open, mode, scan, fixedGroupId]);
-
-  const groupId = fixedGroupId || form.targetGroupId;
-  const usesInitialTargets = Boolean(initialTargets && fixedGroupId && groupId === fixedGroupId);
+  }, [open, mode, scan]);
 
   useEffect(() => {
     if (!open) return undefined;
-    if (usesInitialTargets) {
-      setTargets(activeTargets(initialTargets ?? []));
-      setTargetsError('');
-      setTargetsLoading(false);
+    if (initialTargets || declaredTargets) {
+      setTargets(activeTargets(initialTargets ?? declaredTargets ?? [])); setTargetsError(''); setTargetsLoading(false);
       return undefined;
     }
-    setTargets([]);
-    setTargetsError('');
-    if (!groupId) return undefined;
     let cancelled = false;
-    setTargetsLoading(true);
-    requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}`)
-      .then((payload) => {
-        if (cancelled) return;
-        setTargets(activeTargets(itemArray((payload as DataItem).targets)));
-      })
-      .catch((err) => {
-        if (!cancelled) setTargetsError(apiErrorMessage(err, 'Targets for this group could not be loaded.'));
-      })
-      .finally(() => {
-        if (!cancelled) setTargetsLoading(false);
-      });
+    setTargetsLoading(true); setTargetsError('');
+    void requestJson(config, session, '/v1/targets').then((payload) => {
+      if (!cancelled) setTargets(activeTargets(itemArray((payload as DataItem).items)));
+    }).catch((err) => { if (!cancelled) setTargetsError(apiErrorMessage(err, 'Declared domains could not be loaded.')); })
+      .finally(() => { if (!cancelled) setTargetsLoading(false); });
     return () => { cancelled = true; };
-  }, [open, config, session, groupId, usesInitialTargets, initialTargets]);
+  }, [open, config, session, declaredTargets, initialTargets]);
 
-  const activeGroups = useMemo(
-    () => targetGroups.filter((group) => group.deleted_at == null && group.archived_at == null),
-    [targetGroups]
-  );
-  const selectedGroup = fixedTargetGroup ?? activeGroups.find((group) => getString(group, ['id']) === groupId) ?? null;
-  const groupOptions: SelectOption[] = [
-    { value: '', label: 'Select a target group' },
-    ...activeGroups.map((group) => ({ value: getString(group, ['id']), label: getString(group, ['name', 'id'], 'Unnamed group') }))
-  ];
-  const targetOptions: SelectOption[] = [
-    { value: '', label: targetsLoading ? 'Loading targets' : 'Select an exact target' },
-    ...targets.map((target) => ({ value: getString(target, ['id']), label: targetLabel(target) }))
-  ];
   const recurrenceOptions: SelectOption[] = [
     { value: 'none', label: 'Does not repeat' },
     ...SCAN_RECURRENCE_CADENCES.map((cadence) => ({ value: cadence, label: humanize(cadence) }))
   ];
   const eligibleChecks = useMemo(() => selectableChecks(checks).checks, [checks]);
+  const selectedTargets = useMemo(() => targets.filter((target) => form.targetIds.includes(getString(target, ['id']))), [targets, form.targetIds]);
   const summary = useMemo(() => summarizeSelection({
     checks: eligibleChecks,
     selectedIds: form.checkIds,
-    targets,
-    targetId: form.scope === 'target' ? form.targetId : null
-  }), [eligibleChecks, form.checkIds, form.scope, form.targetId, targets]);
+    targets: selectedTargets,
+  }), [eligibleChecks, form.checkIds, selectedTargets]);
   const selectedChecks = eligibleChecks.filter((check) => form.checkIds.includes(getString(check, ['check_id'])));
-  const selectedTarget = targets.find((target) => getString(target, ['id']) === form.targetId) ?? null;
   const editing = mode === 'edit';
   const title = editing ? 'Edit scheduled scan' : mode === 'reschedule' ? 'Schedule this scan again' : 'Start validation scan';
   const scheduleLocked = editing || mode === 'reschedule';
@@ -180,12 +149,13 @@ export function ValidationScanLauncher({
 
   function review(event: FormEvent) {
     event.preventDefault();
-    const nextForm = { ...form, targetGroupId: groupId };
+    const nextForm = form;
     const validation = validateScanForm(nextForm);
     if (!validation.ok) {
       setFieldErrors(validation.errors);
       return;
     }
+    if (selectedTargets.length !== form.targetIds.length) { setFieldErrors({ target_ids: 'Remove unavailable domains before reviewing this assessment.' }); return; }
     if (summary.stepCount === 0) {
       setFieldErrors({ check_ids: 'None of the selected checks apply to the targets in this scope.' });
       return;
@@ -246,48 +216,10 @@ export function ValidationScanLauncher({
       >
         <form className="product-form scan-launcher" onSubmit={review} aria-busy={busy || undefined}>
           {error ? <div className="form-banner error full" role="alert">{error}</div> : null}
-          <fieldset className="scan-launcher-scope">
-            <legend>Scope</legend>
-            {fixedTargetGroup ? (
-              <p className="scan-launcher-fixed-group full">
-                <span className="muted small">Target group</span>
-                <strong>{getString(fixedTargetGroup, ['name', 'id'])}</strong>
-                <code className="check-picker-row-id">{fixedGroupId}</code>
-              </p>
-            ) : (
-              <Select
-                label="Target group"
-                value={form.targetGroupId}
-                options={groupOptions}
-                disabled={busy || scheduleLocked}
-                onChange={(value) => update({ targetGroupId: value, targetId: '', checkIds: [] })}
-              />
-            )}
-            {fieldErrors.target_group_id ? <p className="form-error full" role="alert">{fieldErrors.target_group_id}</p> : null}
-            <div className="scan-launcher-radios full" role="radiogroup" aria-label="Scan scope" aria-describedby={ids.scopeHelp}>
-              <label className="check-row">
-                <input type="radio" name="scan-scope" value="group" checked={form.scope === 'group'} disabled={busy} onChange={() => update({ scope: 'group', targetId: '' })} />
-                <span>Whole group{targets.length > 0 ? ` (${targets.length} active target${targets.length === 1 ? '' : 's'})` : ''}</span>
-              </label>
-              <label className="check-row">
-                <input type="radio" name="scan-scope" value="target" checked={form.scope === 'target'} disabled={busy || !groupId} onChange={() => update({ scope: 'target' })} />
-                <span>One exact target</span>
-              </label>
-            </div>
-            <p id={ids.scopeHelp} className="muted small full">Whole-group scans plan one step per compatible check and target pair. Incompatible pairs are recorded, not run.</p>
-            {form.scope === 'target' ? (
-              <Select
-                label="Exact target"
-                value={form.targetId}
-                options={targetOptions}
-                disabled={busy || targetsLoading || !groupId || Boolean(targetsError)}
-                onChange={(value) => update({ targetId: value })}
-              />
-            ) : null}
-            {fieldErrors.target_id ? <p className="form-error full" role="alert">{fieldErrors.target_id}</p> : null}
-            {targetsError ? <div className="form-banner error full" role="alert">{targetsError}</div> : null}
-          </fieldset>
-
+          <DomainPicker targets={targets} selectedIds={form.targetIds} onChange={(targetIds) => update({ targetIds })} disabled={busy} loading={targetsLoading} />
+          <p id={ids.scopeHelp} className="muted small full">Choose one or more declared domains directly. Only selected domains are planned; incompatible check/target pairs are recorded and excluded.</p>
+          {fieldErrors.target_ids ? <p className="form-error full" role="alert">{fieldErrors.target_ids}</p> : null}
+          {targetsError ? <p className="form-error full" role="alert">{targetsError}</p> : null}
           <fieldset className="scan-launcher-checks">
             <legend>Checks</legend>
             <div className="full">
@@ -295,10 +227,9 @@ export function ValidationScanLauncher({
                 checks={checks}
                 selectedIds={form.checkIds}
                 onChange={(next) => update({ checkIds: next })}
-                targets={targets}
-                scope={form.scope}
-                targetId={form.targetId}
-                disabled={busy || !groupId}
+                targets={selectedTargets}
+                scope="targets"
+                disabled={busy || !form.targetIds.length}
                 maxSelected={MAX_SCAN_CHECKS}
               />
             </div>
@@ -357,7 +288,7 @@ export function ValidationScanLauncher({
 
           <div className="form-actions full">
             <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy || !groupId || form.checkIds.length === 0}>Review scan</Button>
+            <Button type="submit" disabled={busy || !form.targetIds.length || form.checkIds.length === 0}>Review scan</Button>
           </div>
         </form>
       </FormModal>
@@ -367,8 +298,7 @@ export function ValidationScanLauncher({
         title={editing ? 'Save these schedule changes?' : form.schedule === 'later' ? 'Schedule this validation scan?' : 'Start this validation scan now?'}
         description={(
           <div className="stack-tight scan-review">
-            <p><strong>Target group:</strong> {getString(selectedGroup, ['name'], groupId)} <code className="check-picker-row-id">{groupId}</code></p>
-            <p><strong>Scope:</strong> {form.scope === 'target' && selectedTarget ? `Exact target ${targetLabel(selectedTarget)} (${form.targetId})` : `Whole group, ${targets.length} active target${targets.length === 1 ? '' : 's'}`}</p>
+            <p><strong>Domains:</strong> {selectedTargets.map(targetLabel).join(', ')}</p>
             <p>
               <strong>Checks:</strong> {summary.selectedCount} selected{firstNames.length ? ` (${firstNames.join(', ')}${moreCount > 0 ? `, and ${moreCount} more` : ''})` : ''}
             </p>

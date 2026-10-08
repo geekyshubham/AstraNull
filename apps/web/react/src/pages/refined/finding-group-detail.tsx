@@ -82,8 +82,8 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
   const [reloadKey, setReloadKey] = useState(0);
   const members = useProgressiveFindings(config, session, checkId ? { check_id: checkId } : {}, reloadKey, Boolean(groupKey));
   const groups = useMemo(
-    () => groupFindings(members.items, { targets: data.targets, checks: data.checks, targetGroups: data.targetGroups }),
-    [members.items, data.targets, data.checks, data.targetGroups]
+    () => groupFindings(members.items, { targets: data.targets, checks: data.checks }),
+    [members.items, data.targets, data.checks]
   );
   const group = findGroupByKey(groups, groupKey);
   const complete = members.complete;
@@ -162,13 +162,6 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
           {!asset.resolved && asset.targetId ? <small>Target not in the loaded inventory</small> : null}
         </span>
       )
-    },
-    {
-      key: 'group',
-      label: 'Target group',
-      render: (asset) => asset.targetGroupNames.length
-        ? asset.targetGroupNames.join(', ')
-        : <span className="rf-cell-muted">Ungrouped</span>
     },
     {
       key: 'status',

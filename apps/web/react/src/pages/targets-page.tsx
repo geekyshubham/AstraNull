@@ -25,6 +25,7 @@ import { EmptyState } from '../components/ui/empty-state';
 import { Toast } from '../components/ui/toast';
 import { FormModal, useConfirmModal } from '../lib/crud-ui';
 import { canonicalCohortFilters, COHORT_FILTER_KEYS, inventoryUnits } from '../lib/domain-checks.mjs';
+import { TargetCsvImportButton } from '../components/targets/target-csv-import';
 import { TargetCohortList } from '../components/targets/target-cohort';
 import { useListReturnState, useRestoreListPosition } from '../components/evidence/use-inspector';
 
@@ -40,7 +41,7 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }
 .targets-page .targets-intake-form label { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); color: var(--fg); font-size: var(--text-sm); font-weight: 500; }
 .targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }
-.targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(4, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }
+.targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(3, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }
 .targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
 .targets-page .targets-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }
 .targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
@@ -226,7 +227,6 @@ export function TargetsPage({
   }, []);
   const [query, setQuery] = useState(savedFilters.q ?? '');
   const [verificationFilter, setVerificationFilter] = useState(savedFilters.verification ?? 'all');
-  const [groupFilter, setGroupFilter] = useState(savedFilters.group ?? 'all');
   const [kindFilter, setKindFilter] = useState(savedFilters.kind ?? 'all');
   const [tagFilter, setTagFilter] = useState(savedFilters.tag ?? 'all');
   const [showAdd, setShowAdd] = useState(false);
@@ -239,7 +239,6 @@ export function TargetsPage({
   const [error, setError] = useState('');
   const canWriteTargets = sessionHasPermission(session, 'target_group:write');
   const targets = Array.isArray(data.targets) ? data.targets : [];
-  const groups = Array.isArray(data.targetGroups) ? data.targetGroups : [];
   const addTagsResult = parseTagInput(addTags);
   const editTagsResult = parseTagInput(editTags);
   const allTags = useMemo(
@@ -253,25 +252,22 @@ export function TargetsPage({
       const state = verificationState(item).toLowerCase();
       if (verificationFilter === 'verified' && !isVerified(state)) return false;
       if (verificationFilter === 'unverified' && isVerified(state)) return false;
-      const groupId = getString(item, ['target_group_id'], '');
       const kind = getString(item, ['kind'], 'unknown').toLowerCase();
-      if (groupFilter !== 'all' && groupId !== groupFilter) return false;
       if (kindFilter !== 'all' && kind !== kindFilter) return false;
       if (tagFilter !== 'all' && !targetTags(item).includes(tagFilter)) return false;
       if (!needle) return true;
       return [
         getString(item, ['value'], ''),
-        getString(item, ['target_group_name', 'target_group_id'], ''),
         targetTags(item).join(' '),
         sourceLabel(item)
       ].some((value) => value.toLowerCase().includes(needle));
     });
-  }, [targets, query, verificationFilter, groupFilter, kindFilter, tagFilter]);
+  }, [targets, query, verificationFilter, kindFilter, tagFilter]);
 
   const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
   const unverifiedCount = targets.length - verifiedCount;
   const units = useMemo(() => inventoryUnits(targets), [targets]);
-  const filtersActive = Boolean(query.trim()) || verificationFilter !== 'all' || groupFilter !== 'all' || kindFilter !== 'all' || tagFilter !== 'all';
+  const filtersActive = Boolean(query.trim()) || verificationFilter !== 'all' || kindFilter !== 'all' || tagFilter !== 'all';
 
   function clearCohort() {
     replaceRouteParams(Object.fromEntries(COHORT_ADDRESS_KEYS.map((key) => [key, null])));
@@ -279,14 +275,13 @@ export function TargetsPage({
   }
 
   useEffect(() => {
-    save({ filters: { q: query.trim(), verification: verificationFilter, group: groupFilter, kind: kindFilter, tag: tagFilter } });
-  }, [save, query, verificationFilter, groupFilter, kindFilter, tagFilter]);
+    save({ filters: { q: query.trim(), verification: verificationFilter, kind: kindFilter, tag: tagFilter } });
+  }, [save, query, verificationFilter, kindFilter, tagFilter]);
   useRestoreListPosition(data.loaded && filtered.length > 0, initial);
 
   function clearFilters() {
     setQuery('');
     setVerificationFilter('all');
-    setGroupFilter('all');
     setKindFilter('all');
     setTagFilter('all');
   }
@@ -302,7 +297,6 @@ export function TargetsPage({
     const form = new FormData(event.currentTarget);
     const value = String(form.get('value') ?? '').trim();
     const expectedBehavior = String(form.get('expected_behavior') ?? 'block_at_edge');
-    const groupId = String(form.get('target_group_id') ?? '').trim();
     if (!value) {
       setError('Target value is required.');
       return;
@@ -322,16 +316,14 @@ export function TargetsPage({
         expected_behavior: expectedBehavior,
         tags
       };
-      if (groupId) body.target_group_id = groupId;
       const created = await requestJson(config, session, '/v1/targets', { method: 'POST', body }) as DataItem;
       const createdId = getString(created, ['id'], '');
-      const createdGroupId = getString(created, ['target_group_id'], groupId);
       // Onboarding: issue the DNS TXT ownership challenge straight away so the target page can
       // show the record, keep re-checking it, and start WAF/CDN detection once it verifies.
-      if (createdId && createdGroupId && addKind === 'fqdn') {
-        await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(createdGroupId)}/dns-ownership/issue`, {
+      if (createdId && addKind === 'fqdn') {
+        await requestJson(config, session, `/v1/targets/${encodeURIComponent(createdId)}/dns-ownership/issue`, {
           method: 'POST',
-          body: { target_id: createdId }
+          body: {}
         }).catch(() => undefined);
       }
       setMessage(`${value} added to declared scope. Verify ownership before running checks.`);
@@ -384,9 +376,8 @@ export function TargetsPage({
   async function removeTarget(item: DataItem) {
     if (!canWriteTargets) return;
     const targetId = getString(item, ['id'], '');
-    const groupId = getString(item, ['target_group_id'], '');
     const value = getString(item, ['value'], targetId);
-    if (!targetId || !groupId) return;
+    if (!targetId) return;
     if (!await confirm({
       title: 'Remove declared target',
       description: `Remove ${value} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`,
@@ -396,7 +387,7 @@ export function TargetsPage({
     setMessage('');
     setError('');
     try {
-      await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}/targets/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
+      await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
       setMessage(`${value} removed from declared scope.`);
       await onRefresh();
     } catch (err) {
@@ -470,11 +461,6 @@ export function TargetsPage({
       }
     },
     {
-      key: 'group',
-      label: 'Target group',
-      render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-group-detail', getString(item, ['target_group_id'], ''))}>{getString(item, ['target_group_name', 'target_group_id'], '—')}</AnchorButton>
-    },
-    {
       key: 'source',
       label: 'Added from',
       render: (item) => {
@@ -509,6 +495,7 @@ export function TargetsPage({
           <p>Declared hostnames, IPs and CIDRs. Each must prove ownership before any bounded check runs.</p>
         </div>
         <div className="row-actions">
+          <TargetCsvImportButton config={config} session={session} onImported={onRefresh} />
           <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Review unverified</Button>
           {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
         </div>
@@ -547,7 +534,7 @@ export function TargetsPage({
       {canWriteTargets && showAdd ? (
         <Card className="targets-intake">
           <CardHeader>
-            <div><CardTitle>Add a target</CardTitle><CardDescription>Declare one target manually. Exact-target DNS verification is required before any external probe can run. Omit the group to land in the tenant default group.</CardDescription></div>
+            <div><CardTitle>Add a target</CardTitle><CardDescription>Declare one target manually. Exact-target DNS verification is required before any external probe can run.</CardDescription></div>
             <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Close</Button>
           </CardHeader>
           <CardContent>
@@ -560,13 +547,6 @@ export function TargetsPage({
               </label>
               <label><span>Value</span><input name="value" className="mono" placeholder="api.example.com" required /></label>
               <label><span>Expected behavior</span><select name="expected_behavior" defaultValue="block_at_edge"><option value="block_at_edge">Block at edge</option><option value="absorb_at_origin">Absorb at origin</option><option value="rate_shape">Rate shape</option></select></label>
-              <label>
-                <span>Target group</span>
-                <select name="target_group_id" defaultValue="">
-                  <option value="">Default (auto)</option>
-                  {groups.map((group) => <option key={getString(group, ['id'], '')} value={getString(group, ['id'], '')}>{getString(group, ['name', 'id'], 'Unnamed group')}</option>)}
-                </select>
-              </label>
               <label className="targets-intake-tags">
                 <span>Tags</span>
                 <input
@@ -595,9 +575,8 @@ export function TargetsPage({
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">
-            <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, group, tag, or provider" /></label>
+            <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, tag, or provider" /></label>
             <label className="targets-filter"><span>Verification</span><select value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)}><option value="all">All states</option><option value="verified">Verified</option><option value="unverified">Not verified</option></select></label>
-            <label className="targets-filter"><span>Target group</span><select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}><option value="all">All groups</option>{groups.flatMap((group) => { const id = getString(group, ['id'], ''); return id ? [<option key={id} value={id}>{getString(group, ['name', 'id'], id)}</option>] : []; })}</select></label>
             <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
             <label className="targets-filter"><span>Tag</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           </div>
@@ -612,7 +591,7 @@ export function TargetsPage({
             getRowId={(item, index) => getString(item, ['id'], String(index))}
             loadError={data.loadErrors.targets}
             onRetry={() => void onRefresh()}
-            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets declared yet'} body={targets.length ? 'The declared inventory is unchanged; only the current filters hide it.' : 'Add a target here, or import approved provider inventory into a target group.'} actionLabel={targets.length ? 'Clear filters' : canWriteTargets ? 'Add target' : undefined} onAction={targets.length ? clearFilters : canWriteTargets ? () => setShowAdd(true) : undefined} />}
+            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets declared yet'} body={targets.length ? 'The declared inventory is unchanged; only the current filters hide it.' : 'Declare a domain or endpoint here.'} actionLabel={targets.length ? 'Clear filters' : canWriteTargets ? 'Add target' : undefined} onAction={targets.length ? clearFilters : canWriteTargets ? () => setShowAdd(true) : undefined} />}
           />
         </CardContent>
       </Card>

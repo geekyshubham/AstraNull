@@ -4,7 +4,6 @@ import { PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 
 /** Baseline entity IDs for detail-route hash query params (`route-params.ts`). */
 export const PORTAL_DETAIL_ENTITY_IDS = Object.freeze({
-  'target-group-detail': PORTAL_BASELINE_IDS.targetGroupId,
   'target-detail': PORTAL_BASELINE_IDS.targetId,
   'run-detail': 'run_checkout_1',
   'scan-detail': 'scan_checkout_1',
@@ -21,7 +20,6 @@ export const PORTAL_DETAIL_ENTITY_IDS = Object.freeze({
 export const NAV_ROUTE_IDS = Object.freeze([
   'dashboard',
   'targets',
-  'target-groups',
   'checks',
   'test-policies',
   'runs',
@@ -48,7 +46,6 @@ export const STAFF_NAV_ROUTE_IDS = Object.freeze([
 
 /** Deep-link detail routes from `navigation.ts` DETAIL_ROUTE_ITEMS. */
 export const DETAIL_ROUTE_IDS = Object.freeze([
-  'target-group-detail',
   'target-detail',
   'run-detail',
   'scan-detail',

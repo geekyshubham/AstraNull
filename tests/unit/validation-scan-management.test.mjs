@@ -57,7 +57,7 @@ describe('validation scan contract: input normalization', () => {
     );
     assert.equal(past.error, 'invalid_validation_scan');
     assert.equal(past.field, 'scheduled_for');
-    assert.equal(normalizeOrResponse({ check_ids: ['a'] }).field, 'target_group_id');
+    assert.equal(normalizeOrResponse({ check_ids: ['a'] }).field, 'target_ids');
   });
 
   it('requires a schedule for recurring scans and validates cadence and timezone', () => {

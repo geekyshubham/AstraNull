@@ -381,11 +381,15 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
         const conditions = ['tenant_id = $1'];
         if (options.targetGroupId) {
           params.push(options.targetGroupId);
-          conditions.push(`target_group_id = $${params.length}`);
+          conditions.push(`(target_group_id = $${params.length} OR EXISTS (
+            SELECT 1 FROM jsonb_each_text(CASE WHEN jsonb_typeof(plan_snapshot->'target_policy_bindings') = 'object'
+              THEN plan_snapshot->'target_policy_bindings' ELSE '{}'::jsonb END) AS binding
+            WHERE binding.value = $${params.length}))`);
         }
         if (options.targetId) {
           params.push(options.targetId);
-          conditions.push(`target_id = $${params.length}`);
+          conditions.push(`(target_id = $${params.length} OR EXISTS (SELECT 1 FROM validation_scan_steps AS selected
+            WHERE selected.tenant_id = $1 AND selected.scan_id = validation_scans.id AND selected.target_id = $${params.length}))`);
         }
         const statuses = asArray(options.status).filter(Boolean);
         if (statuses.length) {

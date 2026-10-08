@@ -14,7 +14,7 @@ import { SCAN_ERROR_COPY } from './validation-scan.mjs';
 const KNOWN_ERROR_COPY: Record<string, string> = {
   ...SCAN_ERROR_COPY,
   concurrent_run_blocked:
-    'A run is already in progress for this target group. Cancel or finalize it before starting another.',
+    'A run is already using this target’s execution slot. Cancel or finalize it before starting another.',
   not_found: 'That record no longer exists. Refresh and try again.',
   unauthorized: 'Your session is not authorized for this action. Sign in again or ask an admin for access.',
   forbidden: 'Your role does not permit this action.',

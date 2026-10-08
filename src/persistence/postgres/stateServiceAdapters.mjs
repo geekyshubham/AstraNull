@@ -53,7 +53,7 @@ const GAP_POSTURE_VERDICTS = new Set([
 ]);
 
 /** @type {readonly string[]} */
-export const STATE_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['listTargetGroups']);
+export const STATE_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['listTargetGroups', 'listTargets']);
 
 /** @type {readonly string[]} */
 export const STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
@@ -199,7 +199,7 @@ function evidenceFreshnessForRun(run, verdict, events, vaultItems, nowMs) {
 
 function computeReadinessSummary({
   tenantId,
-  groups,
+  targets,
   runs,
   openFindingsCount,
   verdictByRun,
@@ -211,8 +211,9 @@ function computeReadinessSummary({
 }) {
   const factors = [];
 
-  const declaredGroupIds = new Set(groups.map((g) => g.id));
-  const coveredGroupIds = new Set();
+  const declaredTargetIds = new Set(targets.map((target) => target.id));
+  const policyByTarget = new Map(targets.map((target) => [target.id, target.target_group_id]));
+  const coveredTargetIds = new Set();
   let staleBackedRuns = 0;
   let recentBackedRuns = 0;
 
@@ -224,35 +225,35 @@ function computeReadinessSummary({
     if (!freshness.backed) continue;
     if (
       freshness.recent
-      && run.target_group_id
-      && declaredGroupIds.has(run.target_group_id)
+      && run.target_id
+      && declaredTargetIds.has(run.target_id) && policyByTarget.get(run.target_id) === run.target_group_id
     ) {
-      coveredGroupIds.add(run.target_group_id);
+      coveredTargetIds.add(run.target_id);
       recentBackedRuns += 1;
     } else if (freshness.stale) {
       staleBackedRuns += 1;
     }
   }
 
-  const totalGroups = groups.length;
-  const coveredCount = coveredGroupIds.size;
-  const coverageRatio = totalGroups ? coveredCount / totalGroups : 0;
+  const totalTargets = targets.length;
+  const coveredCount = coveredTargetIds.size;
+  const coverageRatio = totalTargets ? coveredCount / totalTargets : 0;
   const coverageScore = Math.round(Math.min(WEIGHT_COVERAGE, coverageRatio * WEIGHT_COVERAGE));
 
   let coverageDetail;
-  if (!totalGroups) {
-    coverageDetail = 'No declared target groups.';
+  if (!totalTargets) {
+    coverageDetail = 'No declared domains.';
   } else if (coveredCount === 0) {
     if (staleBackedRuns > 0) {
-      coverageDetail = `0 of ${totalGroups} target group(s) covered by recent evidence-backed validations; stale evidence exists on ${staleBackedRuns} run(s).`;
+      coverageDetail = `0 of ${totalTargets} domain(s) covered by recent evidence-backed validations; stale evidence exists on ${staleBackedRuns} run(s).`;
     } else {
-      coverageDetail = `0 of ${totalGroups} target group(s) have evidence-backed validations in the last ${RECENT_EVIDENCE_WINDOW_DAYS} days.`;
+      coverageDetail = `0 of ${totalTargets} domain(s) have evidence-backed validations in the last ${RECENT_EVIDENCE_WINDOW_DAYS} days.`;
     }
   } else {
-    const missing = totalGroups - coveredCount;
-    coverageDetail = `${coveredCount} of ${totalGroups} target group(s) have recent evidence-backed validations.`;
+    const missing = totalTargets - coveredCount;
+    coverageDetail = `${coveredCount} of ${totalTargets} domain(s) have recent evidence-backed validations.`;
     if (missing > 0) {
-      coverageDetail += ` ${missing} group(s) lack recent validation evidence.`;
+      coverageDetail += ` ${missing} domain(s) lack recent validation evidence.`;
     }
   }
 
@@ -304,7 +305,7 @@ function computeReadinessSummary({
   let freshnessDetail;
   if (recentBackedRuns > 0 || coveredCount > 0) {
     freshnessScore = WEIGHT_EVIDENCE_FRESHNESS;
-    freshnessDetail = `Recent evidence-backed validation within ${RECENT_EVIDENCE_WINDOW_DAYS} days (${recentBackedRuns} run(s), ${coveredCount} target group(s)).`;
+    freshnessDetail = `Recent evidence-backed validation within ${RECENT_EVIDENCE_WINDOW_DAYS} days (${recentBackedRuns} run(s), ${coveredCount} domain(s)).`;
   } else if (staleBackedRuns > 0) {
     freshnessDetail = `Evidence exists but is stale (older than ${RECENT_EVIDENCE_WINDOW_DAYS} days); no freshness credit awarded.`;
   } else {
@@ -514,6 +515,7 @@ export function createPostgresStateServices(repositories, options = {}) {
 
       const [
         groups,
+        targets,
         runs,
         evidenceItems,
         openFindingsCount,
@@ -521,7 +523,7 @@ export function createPostgresStateServices(repositories, options = {}) {
         killSwitchRecord,
       ] = await Promise.all([
         coreCatalog.listTargetGroups(ctx),
-        validationEvidence.listTestRuns(ctx, { limit: TEST_RUN_LIST_LIMIT }),
+        coreCatalog.listTargets(ctx),        validationEvidence.listTestRuns(ctx, { limit: TEST_RUN_LIST_LIMIT }),
         validationEvidence.listEvidence(ctx, { limit: EVIDENCE_LIST_LIMIT }),
         validationEvidence.countOpenFindings(ctx),
         highScale.listHighScaleRequests(ctx),
@@ -582,7 +584,7 @@ export function createPostgresStateServices(repositories, options = {}) {
 
       const readiness = computeReadinessSummary({
         tenantId,
-        groups,
+        targets,
         runs,
         openFindingsCount,
         verdictByRun,
@@ -603,6 +605,7 @@ export function createPostgresStateServices(repositories, options = {}) {
         computed: {
           readiness,
           target_groups: groups.length,
+          targets: targets.length,
           recent_runs: sortedRuns
             .slice(0, RECENT_RUNS_LIMIT)
             .reverse()

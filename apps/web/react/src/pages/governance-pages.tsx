@@ -21,7 +21,7 @@ import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId, parseInspectorRef, replaceRouteParams } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
-import { formatAuditAction, formatDate, formatNumber, sensitiveResourceLabel } from '../lib/utils';
+import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, sensitiveResourceLabel } from '../lib/utils';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
 import { plainCodeLabel } from '../lib/plain-language.mjs';
 import { CustomerPageStyles, MetricCard, PageContextSummary, PageHeader, PanelCardHeader } from './page-components';
@@ -86,9 +86,9 @@ function isFlatMetadataObject(value: unknown): value is Record<string, string | 
   );
 }
 
-function targetGroupDisplayName(data: PortalData, groupId: string) {
-  const group = data.targetGroups.find((item) => getString(item, ['id'], '') === groupId);
-  return getString(group ?? {}, ['name', 'title'], groupId || '—');
+function requestDomainDisplay(data: PortalData, item: DataItem) {
+  const ids = Array.isArray(item.target_ids) ? item.target_ids.map(String) : item.target_id ? [String(item.target_id)] : [];
+  return ids.length ? ids.map((id) => getString(data.targets.find((target) => getString(target, ['id'], '') === id), ['value'], 'Domain not recorded')).join(', ') : 'Domain scope not recorded';
 }
 
 function auditEntrySelectionKey(item: DataItem) {
@@ -1227,7 +1227,6 @@ function summarizeOperationResult(result: DataItem) {
 const AUDIT_PAGE_SIZE = 50;
 const AUDIT_RESOURCE_ROUTES: Record<string, string> = {
   target: 'target-detail',
-  target_group: 'target-group-detail',
   finding: 'finding-detail',
   report: 'report-detail',
   test_policy: 'policy-detail',
@@ -1437,7 +1436,7 @@ export function AuditPage({
     if (sensitiveLabel) return <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>;
     return (
       <span className="cp-stack">
-        <span>{plainCodeLabel(resourceType || 'resource')}</span>
+        <span>{formatResourceTypeLabel(resourceType || 'resource')}</span>
         {resourceId && resourceId !== '—' ? <span className="mono muted small">{resourceId}</span> : null}
       </span>
     );
@@ -1538,7 +1537,7 @@ export function AuditPage({
                 <CardHeader>
                   <div>
                     <CardTitle>{formatAuditAction(getString(selectedEntry, ['action']))}</CardTitle>
-                    <CardDescription>{auditTimestamp(selectedEntry) ? formatDate(auditTimestamp(selectedEntry)) : 'Time not recorded'} · {plainCodeLabel(getString(selectedEntry, ['resource_type'], 'resource'))}</CardDescription>
+                    <CardDescription>{auditTimestamp(selectedEntry) ? formatDate(auditTimestamp(selectedEntry)) : 'Time not recorded'} · {formatResourceTypeLabel(getString(selectedEntry, ['resource_type'], 'resource'))}</CardDescription>
                   </div>
                   <Button size="sm" variant="ghost" onClick={() => setSelectedId('')}>Close</Button>
                 </CardHeader>
@@ -2019,7 +2018,7 @@ export function SocConsolePage({
         return <Badge tone={highScaleStateBadgeTone(state)}>{formatGovernanceStatusLabel(state, 'Unknown')}</Badge>;
       }
     },
-    { key: 'target', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },
+    { key: 'target', label: 'Domains', render: (item) => requestDomainDisplay(data, item) },
     {
       key: 'pack',
       label: 'Pack',

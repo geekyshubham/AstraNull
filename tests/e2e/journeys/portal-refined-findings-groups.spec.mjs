@@ -168,7 +168,7 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
       await waitForPortalRouteSettled(page);
       const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
       await expect(ruleAssets).toBeVisible();
-      await expect(ruleAssets).toContainText('edge-checkout');
+      await expect(ruleAssets).toContainText('checkout.acme.com');
       await expect(ruleAssets).not.toContainText('Group name unavailable');
 
       expect(pageErrors).toEqual([]);
@@ -242,17 +242,17 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
     await expect(row).not.toContainText(/closed/i);
   });
 
-  test('finding-detail cold deep link shows target group names (F12)', async ({ page }) => {
+  test('finding-detail cold deep link shows direct domains (F12)', async ({ page }) => {
     await prepare(page);
     await gotoHash(page, 'finding-detail?id=fnd_hist_open');
     const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
     await expect(ruleAssets).toBeVisible();
-    await expect(ruleAssets).toContainText('edge-checkout');
-    await expect(ruleAssets).toContainText(ids.targetGroupId);
+    await expect(ruleAssets).toContainText('checkout.acme.com');
+    await expect(ruleAssets).not.toContainText(ids.targetGroupId);
     await expect(ruleAssets).not.toContainText('Group name unavailable');
   });
 
-  test('finding-detail with a failed target-group load says names are unavailable (F12)', async ({ page }) => {
+  test('finding-detail does not depend on target-group loading (F12)', async ({ page }) => {
     await prepare(page);
     await page.route(/\/v1\/target-groups(\?.*)?$/, (route) => (
       route.request().method() === 'GET'
@@ -262,8 +262,8 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
     await gotoHash(page, 'finding-detail?id=fnd_hist_open');
     const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
     await expect(ruleAssets).toBeVisible();
-    await expect(ruleAssets.getByText('Group name unavailable').first()).toBeVisible();
-    await expect(ruleAssets.getByRole('status').filter({ hasText: 'Target group names are unavailable' })).toBeVisible();
+    await expect(ruleAssets).toContainText('checkout.acme.com');
+    await expect(ruleAssets.getByRole('status').filter({ hasText: 'Target group names are unavailable' })).toHaveCount(0);
     await expect(ruleAssets).not.toContainText('edge-checkout');
   });
 });

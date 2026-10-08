@@ -70,27 +70,21 @@ Implementation status: `GET /v1/waf/coverage` returns status counts in developer
 - Client cannot raise request count, timeout, or concurrency above catalog maximums.
 - Server rejects raw payload fields.
 
-## Edge detection API (hostname → WAF/CDN)
+## Edge detection API (declared target → WAF/CDN observation)
 
-One governed passive path for "is this host behind a WAF/CDN?" — built on the ported
-AstraNull WAF fingerprint + AstraNull edge classifier signature corpus (`src/lib/edgeFingerprint.mjs`, ADR-0005).
+The portal selects an exact declared target. The server resolves its retained execution policy and delegates the fixed fingerprint check to the signed worker; the control plane performs no customer-directed network requests.
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| POST | `/v1/waf/edge-detection` | `waf:run` | `{ hostname, timeout_ms? }` | `200 { detection }`. |
+| POST | `/v1/waf/edge-detection` | `waf:run` | `{ target_id }`; legacy `target_group_id` remains optional for compatibility. | `202 { detection_request }` after durable acceptance. |
+| GET | `/v1/waf/edge-detection/:id` | `waf:read` | - | `200 { detection_request }`; tenant-scoped polling. |
 
-Behavior contract:
-
-- `hostname` is a declared hostname or IP literal; URLs/credentials/paths/ports → `400 invalid_hostname`.
-- Exactly **one** bounded passive GET (HTTPS except loopback; no redirects followed, ≤8KB body read in memory only).
-- Passive signature tier only: block-page signatures are never evaluated here and no marker or
-  attack traffic is sent. The result is detection, never a validation verdict.
-- DNS metadata: bounded CNAME chain (≤4 hops) plus A/AAAA; address/CNAME classification carries
-  per-signal provenance against the AstraNull edge classifier corpus.
-- Metadata-only: header values and body text never appear in the response or the audit record;
-  audits `waf.edge_detection_ran` with booleans, vendor key, and counts.
-- Stateless — works identically in dev-json and Postgres modes; feature-gated by
-  `ASTRANULL_WAF_POSTURE_ENABLED`; portal action: "Detect edge" on target-group detail.
+- Raw hostnames, URLs, IP destinations, timeout overrides, and arbitrary probe controls are rejected. Target IDs must identify an active same-tenant declaration.
+- Version `2.0.0` is observation-only: one pinned ordinary GET, no redirects, up to three counted CNAME lookups, and the existing five-second worker deadline. No marker or efficacy check is started by detection.
+- Ownership, subscription, safe-window, rate, concurrency, kill-switch, signed-worker, and audit gates remain enforced by the shared run service. Acceptance does not imply a completed observation or a protection verdict.
+- The response supplies the accepted run reference and polling locations. The portal's Detect WAF and CDN action opens Validate for the recorded activity. Polling and opening a target are passive.
+- Evidence is metadata only. Provider identification does not establish blocking, origin lockdown, or volumetric capacity. Original signed results and custody artifacts are preserved.
+- The same target-bound path is wired in dev-json and Postgres modes, under the WAF feature gate. See [direct domain workflows](../api.md#direct-domain-workflows-2026-10-08).
 
 ## Baseline and drift APIs
 

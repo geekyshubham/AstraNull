@@ -370,14 +370,13 @@ export function IntegrationPage({
   const [pendingConnector, setPendingConnector] = useState<DataItem | null>(null);
   const [selectedCreateProviderId, setSelectedCreateProviderId] = useState('cloudflare');
   const [connectorSetupMode, setConnectorSetupMode] = useState<'connect' | 'manual'>('connect');
-  const [domainTargetGroupId, setDomainTargetGroupId] = useState('');
   const [showConnectorAdvanced, setShowConnectorAdvanced] = useState(false);
   const [showProviderFlow, setShowProviderFlow] = useState(false);
   const [guideProviderId, setGuideProviderId] = useState('');
   const [showCreateConnector, setShowCreateConnector] = useState(false);
   const [showManualSnapshot, setShowManualSnapshot] = useState(false);
   const [showAddDomain, setShowAddDomain] = useState(false);
-  const [domainResult, setDomainResult] = useState<{ hostname: string; groupName: string } | null>(null);
+  const [domainResult, setDomainResult] = useState<{ hostname: string } | null>(null);
   const [snapshots, setSnapshots] = useState<DataItem[]>([]);
   const [snapshotsConnectorId, setSnapshotsConnectorId] = useState('');
   const [connectorDraftDirty, setConnectorDraftDirty] = useState(false);
@@ -390,7 +389,6 @@ export function IntegrationPage({
   const featureFlags = data.deploymentFeatures as { connectors?: boolean; waf_posture?: boolean } | null;
   const connectorsEnabled = featureFlags?.connectors === true;
   const connectorsLoadError = data.loadErrors.connectors;
-  const targetGroupsLoadError = data.loadErrors.targetGroups;
   const canReadConnectors = canReadDataset(session, 'connectors');
   const canReadSecrets = canReadDataset(session, 'secrets');
   const canWriteConnectors = sessionHasPermission(session, 'waf:connector_write');
@@ -410,13 +408,6 @@ export function IntegrationPage({
   const effectiveConnectorId = getString(selectedConnector ?? {}, ['id'], '');
   const selectedCreateProvider = getDirectoryProvider(selectedCreateProviderId);
   const guideProvider = guideProviderId ? getDirectoryProvider(guideProviderId) : null;
-
-  const targetGroups = data.targetGroups;
-  const effectiveDomainTargetGroupId = targetGroups.some(
-    (group) => getString(group, ['id'], '') === domainTargetGroupId,
-  )
-    ? domainTargetGroupId
-    : '';
 
   function openProviderFlow(providerId = 'cloudflare') {
     if (!canAddIntegration) return;
@@ -495,7 +486,6 @@ export function IntegrationPage({
     const hostnameResult = validateDeclaredHostname(String(form.get('hostname') ?? ''));
     const expectedBehavior = String(form.get('expected_behavior') ?? '').trim();
     const tagsResult = parseTags(String(form.get('tags') ?? ''));
-    const groupId = effectiveDomainTargetGroupId;
 
     if (hostnameResult.error) {
       setError(hostnameResult.error);
@@ -515,14 +505,8 @@ export function IntegrationPage({
     setMessage('');
     setDomainResult(null);
 
-    const selectedGroup = targetGroups.find((group) => getString(group, ['id'], '') === groupId) ?? null;
-    const resolvedGroupName = groupId
-      ? getString(selectedGroup ?? {}, ['name'], groupId)
-      : 'the tenant default group';
-
     try {
-      // ADR-0008: POST /v1/targets creates a target directly. An omitted
-      // target_group_id lands in the tenant default group (created on demand).
+      // Declare the domain directly; the server applies its execution policy.
       await requestJson(config, session, '/v1/targets', {
         method: 'POST',
         body: {
@@ -530,7 +514,6 @@ export function IntegrationPage({
           value: hostnameResult.hostname,
           expected_behavior: expectedBehavior,
           ...(tagsResult.tags.length ? { tags: tagsResult.tags } : {}),
-          ...(groupId ? { target_group_id: groupId } : {}),
         },
       });
       try {
@@ -539,9 +522,9 @@ export function IntegrationPage({
         // The write is already complete; let the user refresh later.
       }
       setMessage(
-        `${hostnameResult.hostname} was added to ${resolvedGroupName}. No provider credentials or inventory discovery were used. Ownership remains unverified.`,
+        `${hostnameResult.hostname} was added to declared targets. No provider credentials or inventory discovery were used. Ownership remains unverified.`,
       );
-      setDomainResult({ hostname: hostnameResult.hostname, groupName: resolvedGroupName });
+      setDomainResult({ hostname: hostnameResult.hostname });
       setDomainDraftDirty(false);
       formElement.reset();
     } catch (err) {
@@ -1181,7 +1164,7 @@ export function IntegrationPage({
             <span className="provider-path-icon" aria-hidden="true"><Target size={18} /></span>
             <Badge tone="info">Core workflow</Badge>
             <h3>Single domain</h3>
-            <p>Declare one FQDN directly. It lands in your chosen or default target group; ownership verification remains required.</p>
+            <p>Declare a domain directly. Ownership verification remains required.</p>
             {canWriteIntegrationTargets ? (
               <Button type="button" size="sm" variant="secondary" onClick={openAddDomain}>Add single domain</Button>
             ) : <span className="muted">Domain declaration is read-only for your role.</span>}
@@ -1401,7 +1384,6 @@ export function IntegrationPage({
             <div className="domain-result-heading">
               <div>
                 <h3>{domainResult.hostname} is now declared</h3>
-                <p>Target group: {domainResult.groupName}</p>
               </div>
               <Badge tone="warn">Ownership unverified</Badge>
             </div>
@@ -1435,24 +1417,6 @@ export function IntegrationPage({
                   <option value="absorb_at_origin">Absorb at origin</option>
                   <option value="rate_shape">Rate shape</option>
                 </select>
-              </label>
-              <label className="full">
-                <span>Target group (optional)</span>
-                {targetGroupsLoadError ? (
-                  <span className="muted small">Target groups unavailable — the domain will land in the tenant default group.</span>
-                ) : (
-                  <select
-                    name="target_group_id"
-                    value={effectiveDomainTargetGroupId}
-                    onChange={(event) => setDomainTargetGroupId(event.target.value)}
-                  >
-                    <option value="">Tenant default group</option>
-                    {targetGroups.map((group) => {
-                      const id = getString(group, ['id'], '');
-                      return <option key={id} value={id}>{getString(group, ['name'], id)}</option>;
-                    })}
-                  </select>
-                )}
               </label>
               <label className="full">
                 <span>Tags (optional)</span>

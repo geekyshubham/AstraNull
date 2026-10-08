@@ -70,7 +70,7 @@ test.describe('finding-count truth from current React source', () => {
     await stopPortalPlaywrightServer();
   });
 
-  test('Dashboard, Target Groups, and Findings agree on one open finding', async ({ page }) => {
+  test('Dashboard, the exact target, and Findings agree on one open finding', async ({ page }) => {
     const consoleErrors = [];
     const pageErrors = [];
     const ownOriginServerErrors = [];
@@ -89,12 +89,8 @@ test.describe('finding-count truth from current React source', () => {
     const dashboardOpen = page.locator('.dashboard-kpi').filter({ hasText: 'Open findings' });
     await expect(dashboardOpen.locator('.dashboard-kpi-value')).toHaveText(String(expectedOpenFindings));
 
-    await gotoPortalRoute(page, 'target-groups', sourceBaseUrl);
-    const targetGroupsOpen = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
-    await expect(targetGroupsOpen.locator('.kpi-value')).toHaveText(String(expectedOpenFindings));
-    const checkoutRow = page.getByRole('row').filter({ hasText: 'edge-checkout' });
-    await expect(page.getByRole('columnheader', { name: 'Open findings' })).toBeVisible();
-    await expect(checkoutRow.locator('td[data-label="Open findings"]')).toHaveText(String(expectedOpenFindings));
+    await gotoPortalRoute(page, 'target-detail', sourceBaseUrl);
+    await expect(page.getByRole('tab', { name: /^Findings/ })).toContainText(String(expectedOpenFindings));
 
     await gotoPortalRoute(page, 'findings', sourceBaseUrl);
     const findingSummary = page.getByRole('region', { name: 'Finding summary' });

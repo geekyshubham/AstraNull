@@ -262,12 +262,14 @@ function buildFindings(targetId, tenantId, query = {}) {
   return { findings: all.slice(0, 20), next_cursor: null };
 }
 
-function buildLoa(ctx, groupId) {
+function buildLoa(ctx, groupId, targetId) {
   const loa = (getStore().loaSignatures ?? []).find(
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && row.state === 'signed',
+      && row.state === 'signed'
+      && (!row.expires_at || Date.parse(row.expires_at) > Date.now())
+      && (row.scope_snapshot?.targets ?? []).some((entry) => (typeof entry === 'object' ? entry?.target_id : entry) === targetId),
   );
   if (!loa) return null;
   return {
@@ -380,7 +382,7 @@ export function getTargetDetail(ctx, targetId, query = {}) {
     checks_applied: buildChecksApplied(ctx, target, latestByCheck),
     runs_recent: buildRunsRecent(runs, verdictForRun, Number(query.runs_limit) || 5),
     findings,
-    loa: buildLoa(ctx, target.target_group_id),
+    loa: buildLoa(ctx, target.target_group_id, target.id),
     counts: {
       runs_total: runs.length,
       findings_open: allFindings.filter((f) => (f.status ?? f.state) === 'open').length,

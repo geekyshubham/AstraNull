@@ -41,6 +41,7 @@ import {
   reportCapabilities,
 } from './contracts/complianceReports.mjs';
 import { requirePermission } from './rbac.mjs';
+import { bindDeclaredTargetInput, presentTargetSelection } from './lib/targetScopeInput.mjs';
 import { seedIfEmpty } from './seed.mjs';
 import { getStore } from './store.mjs';
 import * as highScale from './services/highScale.mjs';
@@ -596,7 +597,7 @@ function reportReadCapabilities() {
   return {
     ...reportCapabilities(),
     scope: {
-      fields: ['target_ids', 'target_group_ids', 'run_ids'],
+      fields: ['target_ids', 'run_ids'],
       max_ids: reports.MAX_REPORT_SCOPE_IDS,
       declared_members_cap: reports.MAX_DECLARED_MEMBERS,
       omitted: 'tenant',
@@ -1469,6 +1470,9 @@ export function createServer(options = {}) {
           runtimeConfig.persistenceMode === 'postgres'
             ? { ...authCtx, persistenceMode: 'postgres', auditService: serviceDeps.audit }
             : authCtx;
+        res.targetOnlyPresentation = req.headers['x-astranull-target-model'] === 'direct'
+          && !isProbeWorkerRoute(url.pathname, req.method)
+          && !/^\/v1\/(?:evidence(?:\/|$)|reports\/[^/]+\/(?:export|verify|verify-export))/.test(url.pathname);
         await handleApi(req, res, url, ctx, runtimeConfig, {
           probeBodyText,
           services: serviceDeps,
@@ -2658,6 +2662,70 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, patched);
   }
 
+  if (targetByIdMatch && method === 'DELETE') {
+    const gate = requirePermission(ctx, 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const selection = await bindDeclaredTargetInput(ctx, { target_id: targetByIdMatch[1] }, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.targetGroups.deleteTarget(ctx, selection.input.target_group_id, targetByIdMatch[1]);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, presentTargetSelection(result));
+  }
+
+  const targetAuthorizationMatch = path.match(/^\/v1\/targets\/([^/]+)\/authorization$/);
+  if (targetAuthorizationMatch && ['GET', 'POST'].includes(method)) {
+    const gate = requirePermission(ctx, method === 'GET' ? 'target_group:read' : 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (!serviceDeps.loa) return respondPostgresRouteNotWired(res);
+    const targetId = targetAuthorizationMatch[1];
+    const selection = await bindDeclaredTargetInput(ctx, { target_id: targetId }, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    if (method === 'GET') {
+      const result = await serviceDeps.loa.getActive(ctx, selection.input.target_group_id, targetId);
+      const record = result?.loa ?? result;
+      const ids = record?.scope_snapshot?.targets ?? [];
+      const coversTarget = ids.some((id) => (typeof id === 'object' ? id?.target_id : id) === targetId);
+      return json(res, 200, presentTargetSelection({ authorization: coversTarget ? record : null }));
+    }
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    if (typeof body.signer_name !== 'string' || !body.signer_name.trim() || body.signer_name.length > 160
+      || /[\r\n]/.test(body.signer_name) || typeof body.signer_email !== 'string' || body.signer_email.length > 254
+      || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.signer_email)) return json(res, 400, { error: 'invalid_signer', message: 'Provide a signer name and valid email for this exact domain.' });
+    if (body.scope_ack && (!Array.isArray(body.scope_ack) || body.scope_ack.length !== 1 || body.scope_ack[0] !== targetId)) return json(res, 400, { error: 'target_selection_conflict' });
+    const result = await serviceDeps.loa.sign(ctx, selection.input.target_group_id, { ...body, scope_ack: [targetId] });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, presentTargetSelection(result));
+  }
+
+  const targetDnsMatch = path.match(/^\/v1\/targets\/([^/]+)\/dns-ownership(?:\/(issue|verify))?$/);
+  if (targetDnsMatch) {
+    const operation = targetDnsMatch[2] ?? 'list';
+    const allowed = operation === 'list' ? 'GET' : 'POST';
+    if (method !== allowed) return json(res, 405, { error: 'method_not_allowed' });
+    const gate = requirePermission(ctx, method === 'GET' ? 'target_group:read' : 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (!serviceDeps.dnsOwnership) return respondPostgresRouteNotWired(res);
+    const targetId = targetDnsMatch[1];
+    const selection = await bindDeclaredTargetInput(ctx, { target_id: targetId }, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    const policyId = selection.input.target_group_id;
+    const listed = await serviceDeps.dnsOwnership.listChallenges(ctx, policyId);
+    if (listed.error) return json(res, listed.status ?? 400, listed);
+    const items = (listed.items ?? []).filter((item) => item.target_id === targetId);
+    if (operation === 'list') return json(res, 200, presentTargetSelection({ items, count: items.length, meta: items.length ? null : { empty_reason: 'no_dns_challenges_recorded' } }));
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    if (operation === 'issue') {
+      const result = await serviceDeps.dnsOwnership.issueDnsOwnershipChallenge(ctx, { target_group_id: policyId, target_id: targetId });
+      if (result.error) return json(res, result.status ?? 400, result);
+      return json(res, 201, presentTargetSelection(result.challenge ? result : { challenge: result, audit_entry_id: result.audit_entry_id }));
+    }
+    if (!items.some((item) => item.id === body.challenge_id)) return json(res, 404, { error: 'target_challenge_not_found' });
+    const result = await serviceDeps.dnsOwnership.verifyDnsOwnership(ctx, { target_group_id: policyId, challenge_id: body.challenge_id });
+    if (result.error && result.status === 429 && result.retry_after_seconds) res.setHeader('Retry-After', String(result.retry_after_seconds));
+    return json(res, result.error ? result.status ?? 400 : 200, presentTargetSelection(result));
+  }
+
   if (path === '/v1/target-groups' && method === 'GET') {
     const gate = requirePermission(ctx, 'target_group:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2785,7 +2853,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 201, result);
   }
   const tgCsvImportMatch = path.match(/^\/v1\/target-groups\/([^/]+)\/targets:csv$/);
-  if (tgCsvImportMatch && method === 'POST') {
+  if ((tgCsvImportMatch || path === '/v1/targets:csv') && method === 'POST') {
     const gate = requirePermission(ctx, 'target_group:write');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const importFn = serviceDeps.targetGroups?.importTargets
@@ -2808,10 +2876,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const parsed = parseTargetCsv(csvText);
     if (parsed.error) return json(res, parsed.status, parsed);
     if (parsed.errors.length) return json(res, 422, csvImportRejected(parsed.errors));
-    const result = await importFn(ctx, tgCsvImportMatch[1], parsed.rows);
+    const result = await importFn(ctx, tgCsvImportMatch?.[1] ?? null, parsed.rows);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
-    return json(res, 201, { created: result.created, errors: [] });
+    return json(res, 201, presentTargetSelection({ created: result.created, errors: [] }));
   }
   const tgtMatch = path.match(/^\/v1\/target-groups\/([^/]+)\/targets$/);
   if (tgtMatch && method === 'POST') {
@@ -3307,7 +3375,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockTestPolicyRoute(serviceDeps, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.testPolicies.createTestPolicy(ctx, body);
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.testPolicies.createTestPolicy(ctx, selection.input);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, result);
   }
@@ -3317,7 +3387,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockTestPolicyRoute(serviceDeps, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.testPolicies.patchTestPolicy(ctx, policyMatch[1], body);
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.testPolicies.patchTestPolicy(ctx, policyMatch[1], selection.input);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
@@ -3336,7 +3408,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockValidationScanRoute(serviceDeps, 'createValidationScan', res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.validationScans.createValidationScan(ctx, body, runtimeConfig);
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups, { allowMultiple: true });
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.validationScans.createValidationScan(ctx, selection.input, runtimeConfig);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, result);
   }
@@ -3370,7 +3444,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockValidationScanRoute(serviceDeps, 'patchValidationScan', res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.validationScans.patchValidationScan(ctx, scanMatch[1], body, { runtimeConfig });
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups, { allowMultiple: true });
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.validationScans.patchValidationScan(ctx, scanMatch[1], selection.input, { runtimeConfig });
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
@@ -3408,7 +3484,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'test_run:start');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await serviceDeps.testRuns.startTestRun(ctx, body, runtimeConfig);
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups);
+    if (selection.error) return json(res, selection.status, selection);
+    const result = await serviceDeps.testRuns.startTestRun(ctx, selection.input, runtimeConfig);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, result);
   }
@@ -3678,7 +3756,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresHighScaleRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const created = await Promise.resolve(hsSvc.createHighScaleRequest(ctx, body));
+    const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups, { allowMultiple: true });
+    if (selection.error) return json(res, selection.status, selection);
+    const created = await Promise.resolve(hsSvc.createHighScaleRequest(ctx, selection.input));
     if (created?.error) return json(res, created.status ?? 400, created);
     return json(res, 201, created);
   }

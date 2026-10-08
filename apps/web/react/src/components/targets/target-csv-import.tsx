@@ -25,12 +25,10 @@ const ROW_ERROR_COLUMNS: TableColumn<TargetCsvRowError>[] = [
 export function TargetCsvImportButton({
   config,
   session,
-  targetGroupId,
   onImported
 }: {
   config: PortalConfig;
   session: Session;
-  targetGroupId: string;
   onImported: () => Promise<void>;
 }) {
   const inputId = useId();
@@ -43,7 +41,7 @@ export function TargetCsvImportButton({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<TargetCsvImportResult | null>(null);
 
-  if (!targetGroupId || !sessionHasPermission(session, 'target_group:write')) return null;
+  if (!sessionHasPermission(session, 'target_group:write')) return null;
 
   function reset() {
     setFile(null);
@@ -84,7 +82,7 @@ export function TargetCsvImportButton({
     setSubmitting(true);
     setSubmitError('');
     try {
-      const imported = await importTargetCsv(config, session, targetGroupId, file);
+      const imported = await importTargetCsv(config, session, file);
       setResult(imported);
       setFile(null);
       if (imported.created.length > 0) await onImported().catch(() => undefined);
@@ -103,7 +101,7 @@ export function TargetCsvImportButton({
       <FormModal
         open={open}
         title="Import targets from CSV"
-        description="Declare several targets for this group at once. Every row is validated before anything is saved: if any row is rejected, nothing is imported and each rejected row is listed with its reason. Nothing is discovered automatically."
+        description="Declare several targets at once. Every row is validated before anything is saved: if any row is rejected, nothing is imported and each rejected row is listed with its reason. Nothing is discovered automatically."
         onClose={close}
       >
         <form className="product-form" onSubmit={(event) => void handleSubmit(event)} aria-busy={submitting || undefined}>

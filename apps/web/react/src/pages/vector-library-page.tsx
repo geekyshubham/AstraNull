@@ -184,23 +184,16 @@ export function VectorLibraryPage({
   }, [targetId, query, page]);
 
   const selectedTarget = targets.find((target) => getString(target, ['id']) === targetId) ?? null;
-  const targetGroupId = getString(selectedTarget, ['target_group_id']);
-  const targetGroupName = getString(
-    data.targetGroups.find((group) => getString(group, ['id']) === targetGroupId) ?? null,
-    ['name'],
-    getString(selectedTarget, ['target_group_name'], targetGroupId)
-  );
   const missingDeepLinkTarget = Boolean(targetId) && targetsStatus === 'loaded' && !selectedTarget;
   const targetQueryText = targetQuery.trim().toLowerCase();
   const matchingTargets = targetQueryText
-    ? targets.filter((target) => `${targetLabel(target)} ${getString(target, ['target_group_name'])} ${getString(target, ['id'])}`.toLowerCase().includes(targetQueryText))
+    ? targets.filter((target) => `${targetLabel(target)} ${getString(target, ['id'])}`.toLowerCase().includes(targetQueryText))
     : targets;
   const targetOptions: SelectOption[] = [
     { value: '', label: targetsStatus === 'loading' ? 'Loading declared targets…' : 'No target (browse the catalog)' },
     ...(selectedTarget && !matchingTargets.includes(selectedTarget) ? [selectedTarget] : []).concat(matchingTargets).slice(0, 200).map((target) => ({
       value: getString(target, ['id']),
       label: targetLabel(target),
-      description: getString(target, ['target_group_name']) ? `in ${getString(target, ['target_group_name'])}` : undefined,
     })),
   ];
 
@@ -306,7 +299,7 @@ export function VectorLibraryPage({
       setError('Your role can review vector evidence but cannot start validation runs.');
       return;
     }
-    if (!selectedVector || !selectedTarget || !targetGroupId) return;
+    if (!selectedVector || !selectedTarget) return;
     const availability = vectorTargetAvailability(selectedVector, data.checks, selectedTarget);
     const check = availability.runnableChecks.find((candidate) => getString(candidate, ['check_id']) === selectedCheckId);
     if (!check) {
@@ -323,7 +316,7 @@ export function VectorLibraryPage({
       setError('Your role can review vector evidence but cannot start validation runs.');
       return;
     }
-    if (!pendingRun || !selectedTarget || !targetGroupId) return;
+    if (!pendingRun || !selectedTarget) return;
     const checkId = getString(pendingRun.check, ['check_id']);
     setBusy('start-run');
     setError('');
@@ -331,7 +324,7 @@ export function VectorLibraryPage({
     try {
       await requestJson(config, session, '/v1/test-runs', {
         method: 'POST',
-        body: { target_group_id: targetGroupId, target_id: targetId, check_id: checkId },
+        body: { target_id: targetId, check_id: checkId },
       });
       setMessage({
         text: `Bounded check ${plainCheckName(getString(pendingRun.check, ['name', 'check_id']))} started on ${getString(selectedTarget, ['value'], targetId)}. Its result and evidence are recorded on the target.`,
@@ -511,7 +504,7 @@ export function VectorLibraryPage({
               <strong>{selectedTarget ? targetLabel(selectedTarget) : 'Browsing without a target'}</strong>
               <p className="muted">
                 {selectedTarget
-                  ? <>In {targetGroupName || 'an unrecorded group'}. Fit comes from each mapped check's supported target kinds. <a href={buildDetailHref('target-detail', targetId)}>Open target</a></>
+                  ? <>Fit comes from each mapped check's supported target kinds. <a href={buildDetailHref('target-detail', targetId)}>Open target</a></>
                   : 'Without a target the catalog shows purpose and evidence limits only.'}
               </p>
             </div>
@@ -638,7 +631,6 @@ export function VectorLibraryPage({
         description={pendingRun && selectedTarget ? (
           <div className="stack-tight">
             <p><strong>Exact target:</strong> {targetLabel(selectedTarget)} <code>{targetId}</code></p>
-            <p><strong>Target group:</strong> {targetGroupName}</p>
             <p><strong>Check:</strong> {plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} <code>{getString(pendingRun.check, ['check_id'])}</code></p>
             <p><strong>Catalog vector:</strong> {getString(pendingRun.vector, ['vector_id'])}</p>
             <p><strong>Evidence limit:</strong> {evidenceCapabilityCopy(pendingRun.vector.evidence_capability).detail}</p>

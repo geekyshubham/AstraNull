@@ -93,7 +93,7 @@ export function providerLogoId(code: string): EvidenceLayer['logo'];
 export function edgeEvidenceSignals(edge: DataItem | null | undefined): { layers: EvidenceLayer[]; facts: Array<{ id: string; label: string; value: string }> };
 export function edgeDetectionPhase(input: { eligible: boolean; edge: DataItem | null | undefined; request?: DataItem | null; localRequest?: string; scanFingerprintActive?: boolean }): EdgePhase;
 export function shouldAutoDetectEdge(input: { eligible: boolean; featureEnabled: boolean; canRun: boolean; edge: DataItem | null | undefined; request: DataItem | null | undefined; scanActive: boolean; attempted: boolean; hasPriorRuns: boolean }): boolean;
-export function validationScansPathForTarget(targetGroupId: string, targetId: string): string;
+export function validationScansPathForTarget(targetId: string): string;
 
 export type ProviderFamily = 'cdn' | 'waf' | 'cloud' | 'origin_hosting' | 'dns';
 export type ProviderFamilyRow = {

@@ -173,6 +173,9 @@ export function createPostgresCatalogServices(repositories) {
   for (const method of CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS) {
     targetGroups[method] = (...args) => coreCatalog[method](...args);
   }
+  if (typeof coreCatalog.getTarget === 'function') {
+    targetGroups.getTarget = (...args) => coreCatalog.getTarget(...args);
+  }
   if (typeof coreCatalog.importTargets === 'function') {
     targetGroups.importTargets = (...args) => coreCatalog.importTargets(...args);
   }

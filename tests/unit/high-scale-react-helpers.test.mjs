@@ -77,7 +77,7 @@ describe('high-scale react helpers', () => {
     const body = buildMetadataArtifactUploadBody({
       id: 'hs_1',
       tenant_id: 'tenant_1',
-      target_group_id: 'tg_1',
+      target_ids: ['tgt_1'],
       scope_hash: 'scope_hash_1',
       requested_window: {
         window_start: '2026-01-01T00:00:00.000Z',
@@ -106,7 +106,7 @@ describe('high-scale react helpers', () => {
     assert.equal(Object.hasOwn(body, 'max_rate'), false);
     assert.deepEqual(body.authorization_binding, {
       tenant_id: 'tenant_1',
-      target_group_id: 'tg_1',
+      target_ids: ['tgt_1'],
       scope_hash: 'scope_hash_1',
       requested_window: {
         window_start: '2026-01-01T00:00:00.000Z',

@@ -468,7 +468,6 @@ const FEATURE_GATED_DATASETS = new Set<PortalDataset>([
 
 const ALL_PORTAL_DATASETS: readonly PortalDataset[] = [
   ...CORE_PORTAL_DATASETS,
-  'targetGroups',
   'targets',
   'checks',
   'testPolicies',
@@ -556,10 +555,6 @@ function applyDatasetValue(data: PortalData, dataset: PortalDataset, value: unkn
       break;
     case 'tenant':
       data.tenant = asObject(value);
-      break;
-    case 'targetGroups':
-      data.targetGroups = asArray(value);
-      data.targetGroupsMeta = asObject((value as { meta?: unknown } | null)?.meta);
       break;
     case 'findings': {
       const envelope = parseFindingsEnvelope(value);
@@ -691,7 +686,6 @@ export async function fetchPortalData(
     state: () => opt('/v1/state', socHeaders, null),
     tenant: () => opt('/v1/tenants/current', customerHeaders, null),
     deploymentFeatures: () => opt('/v1/tenant/deployment-features', customerHeaders, null),
-    targetGroups: () => opt('/v1/target-groups', customerHeaders, { items: [] }),
     targets: () => opt('/v1/targets', customerHeaders, { items: [] }),
     checks: () => opt('/v1/checks', customerHeaders, { items: [] }),
     testPolicies: () => opt('/v1/test-policies', customerHeaders, { items: [] }),
@@ -794,8 +788,6 @@ export function fetchPortalDatasets(
 export const EMPTY_PORTAL_DATA: PortalData = {
   state: null,
   tenant: null,
-  targetGroups: [],
-  targetGroupsMeta: null,
   targets: [],
   targetsMeta: null,
   checks: [],

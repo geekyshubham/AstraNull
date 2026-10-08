@@ -327,7 +327,7 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     await dialog.getByRole('button', { name: 'Start retest' }).click();
     await expect.poll(() => fake.state.retests.length).toBe(1);
     expect(fake.state.retests[0]).toMatchObject({ check_id: 'net.tcp.reachability', target_id: TARGET });
-    expect(Object.keys(fake.state.retests[0]).sort()).toEqual(['check_id', 'target_group_id', 'target_id']);
+    expect(Object.keys(fake.state.retests[0]).sort()).toEqual(['check_id', 'target_id']);
   });
 
   test('firewall change: baseline capture uses finalized runs only, and an incompatible evaluation is reported', async ({ page }) => {

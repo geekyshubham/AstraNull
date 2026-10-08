@@ -16,7 +16,6 @@ import { NAV_ROUTE_IDS } from '../../helpers/portal-routes.mjs';
 // the budget instead of hiding under it; re-tune from the OBSERVED_V1_REQUESTS line this spec logs.
 const REQUEST_BUDGET = 45;
 const ROUTES_TO_NAVIGATE = [
-  { routeId: 'target-groups', label: 'Target groups' },
   { routeId: 'targets', label: 'Targets' },
   { routeId: 'checks', label: 'Check library' },
   { routeId: 'test-policies', label: 'Validation schedules' },

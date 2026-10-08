@@ -19,8 +19,8 @@ function getNumber(item: DataItem | null | undefined, keys: string[]): number | 
   return null;
 }
 
-export function countActiveTargetGroups(targetGroups: DataItem[]) {
-  return targetGroups.filter((group) => group.archived_at == null).length;
+export function countActiveTargets(targets: DataItem[]) {
+  return targets.filter((target) => !target.archived_at && !target.deleted_at).length;
 }
 
 export function countOpenFindings(findings: DataItem[]) {
@@ -32,7 +32,7 @@ export function countHighScaleRequests(highScale: DataItem[]) {
 }
 
 export type DashboardMetrics = {
-  targetGroups: number;
+  targets: number;
   openFindings: number;
   highScaleRequests: number;
 };
@@ -40,7 +40,7 @@ export type DashboardMetrics = {
 /** Prefer `/v1/state` fields; fall back to list APIs with the same semantics as `src/services/state.mjs`. */
 export function resolveDashboardMetrics(data: PortalData): DashboardMetrics {
   return {
-    targetGroups: data.state?.target_groups ?? countActiveTargetGroups(data.targetGroups),
+    targets: data.targets.filter((target) => !target.archived_at && !target.deleted_at).length,
     openFindings: data.state?.open_findings ?? countOpenFindings(data.findings),
     highScaleRequests: data.state?.high_scale_requests ?? countHighScaleRequests(data.highScale)
   };

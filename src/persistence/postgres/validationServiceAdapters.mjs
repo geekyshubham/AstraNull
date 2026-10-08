@@ -388,7 +388,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       || step.scan_id !== scan.id
       || step.status !== 'starting'
       || step.check_id !== check.check_id
-      || scan.target_group_id !== group.id
+      || (scan.plan_snapshot?.target_policy_bindings?.[body.target_id] ?? scan.target_group_id) !== group.id
       || step.target_id !== body.target_id) {
       return { error: 'scan_dispatch_invalid', status: 409 };
     }

@@ -34,6 +34,7 @@ function stubRepositories(overrides = {}) {
       id: 'run_1',
       tenant_id: 'ten_demo',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_reachability.safe',
       status: 'verdicted',
       created_at: RECENT_TS,
@@ -72,6 +73,7 @@ function stubRepositories(overrides = {}) {
 
   const coreCatalog = {
     listTargetGroups: async () => groups,
+    listTargets: async () => overrides.targets ?? groups.map((group) => ({ id: group.id === 'tg_1' ? 'tgt_1' : `target_${group.id}`, tenant_id: 'ten_demo', target_group_id: group.id })),
   };
   const validationEvidence = {
     listTestRuns: async (_ctx, options) => {
@@ -225,6 +227,7 @@ describe('postgres state service adapter', () => {
       id: `run_batch_${index}`,
       tenant_id: 'ten_demo',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_reachability.safe',
       status: 'verdicted',
       created_at: new Date(FIXED_NOW.getTime() - index * 1_000).toISOString(),
@@ -425,6 +428,7 @@ describe('postgres state service adapter', () => {
         id: 'run_1',
         tenant_id: 'ten_demo',
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         check_id: 'dns.authoritative_response.safe',
         status: 'verdicted',
         created_at: RECENT_TS,
@@ -465,6 +469,7 @@ describe('postgres state service adapter', () => {
         id: 'run_ops_ready',
         tenant_id: 'ten_demo',
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         check_id: 'ops.runbook_contact_validation.safe',
         status: 'verdicted',
         created_at: RECENT_TS,
@@ -534,6 +539,7 @@ describe('postgres state service adapter', () => {
       id: `run_${index + 1}`,
       tenant_id: 'ten_demo',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_reachability.safe',
       status: 'completed',
       created_at: new Date(FIXED_NOW.getTime() - index * 60_000).toISOString(),

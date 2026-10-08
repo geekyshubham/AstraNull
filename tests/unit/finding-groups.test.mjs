@@ -166,7 +166,7 @@ describe('groupFindings', () => {
     assert.equal(group.verdictLabel, 'No conclusion yet');
     assert.equal(group.title, 'Evidence-backed finding');
     assert.equal(group.assets.length, 1);
-    assert.equal(group.assets[0].label, 'Target-group scope');
+    assert.equal(group.assets[0].label, 'Target not recorded');
     assert.equal(group.assets[0].resolved, false);
   });
 });

@@ -299,7 +299,7 @@ export function buildMetadataArtifactUploadBody(
   fields: { filename: string; content_sha256: string; custody_id?: string }
 ) {
   const requestId = String(request.id ?? '').trim();
-  const targetGroupId = String(request.target_group_id ?? '').trim();
+  const targetIds = Array.isArray(request.target_ids) ? request.target_ids.map(String) : request.target_id ? [String(request.target_id)] : [];
   const requestedWindow =
     request.requested_window && typeof request.requested_window === 'object' && !Array.isArray(request.requested_window)
       ? request.requested_window as DataItem
@@ -340,7 +340,7 @@ export function buildMetadataArtifactUploadBody(
       window_start: requestedWindow.window_start ?? null,
       window_end: requestedWindow.window_end ?? null
     },
-    approved_targets: targetGroupId ? [targetGroupId] : [],
+    approved_targets: targetIds,
     approved_scenario_families: scenarioFamilies,
     approved_delivery_patterns: deliveryPatterns,
     approved_limits: approvedLimits,
@@ -357,10 +357,10 @@ export function buildMetadataArtifactUploadBody(
 
   const tenantId = String(request.tenant_id ?? '').trim();
   const scopeHash = String(request.scope_hash ?? '').trim();
-  if (tenantId && targetGroupId && scopeHash) {
+  if (tenantId && targetIds.length && scopeHash) {
     body.authorization_binding = {
       tenant_id: tenantId,
-      target_group_id: targetGroupId,
+      target_ids: targetIds,
       scope_hash: scopeHash,
       requested_window: requestedWindow,
       approved_schedule_window: requestedWindow,

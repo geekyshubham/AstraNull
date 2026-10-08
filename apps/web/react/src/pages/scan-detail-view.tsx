@@ -264,7 +264,6 @@ export function ScanDetailView({
   const scheduled = isScanScheduled(scan);
   const terminal = isScanTerminal(scan);
   const canManage = canStartRun(session.role);
-  const targetGroupId = getString(scan, ['target_group_id']);
 
   const liveText = !scan
     ? ''
@@ -329,8 +328,8 @@ export function ScanDetailView({
   if (!scanId) {
     return (
       <div className="content">
-        <PageHeader route="scan-detail" eyebrow="Validation scan" title="Validation scan" description="Open a scan from the runs page or a target group to follow its steps." />
-        <EmptyState icon={ScanSearch} title="No scan selected" body="Choose a validation scan from the runs page or a target group detail page." actionHref="#runs" actionLabel="Open test runs" />
+        <PageHeader route="scan-detail" eyebrow="Validation scan" title="Validation scan" description="Open a scan from the runs page or a target to follow its steps." />
+        <EmptyState icon={ScanSearch} title="No scan selected" body="Choose a validation scan from the runs page or a target detail page." actionHref="#runs" actionLabel="Open test runs" />
       </div>
     );
   }
@@ -354,7 +353,6 @@ export function ScanDetailView({
         actions={(
           <>
             <AnchorButton size="sm" variant="secondary" href="#runs">Test runs</AnchorButton>
-            {targetGroupId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', targetGroupId)}>Target group</AnchorButton> : null}
             <Button size="sm" variant="ghost" onClick={polling.refresh}>Refresh</Button>
             {canManage && scan && isScanCancellable(scan) ? (
               <Button size="sm" variant="danger" aria-label={`Stop scan ${scanDisplayName(scan)}`} onClick={() => setCancelOpen(true)}>Stop</Button>
@@ -386,7 +384,7 @@ export function ScanDetailView({
         </div>
       ) : null}
       {scan && active && scan.next_eligible_at ? (
-        <div className="form-banner info" role="note">Next step deferred by the target-group cooldown until {formatDate(scan.next_eligible_at)}.</div>
+        <div className="form-banner info" role="note">Next step deferred by the selected domain’s execution cooldown until {formatDate(scan.next_eligible_at)}.</div>
       ) : null}
       {scan && terminal ? (
         <div className={`form-banner ${status === 'completed' ? '' : 'neutral'}`} role="note">

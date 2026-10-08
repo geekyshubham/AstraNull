@@ -118,10 +118,11 @@ test.describe('validation scans (FT-SCAN-01)', () => {
 
   test('picker hides SOC-gated and monitor-only checks, states why, and passes axe while open', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl);
+    await gotoPortalRoute(page, 'runs', sourceBaseUrl);
     await page.getByRole('button', { name: 'Start validation scan' }).click();
     const modal = launcher(page);
     await expect(modal).toBeVisible();
+    await modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox').check();
     await expect(modal.getByRole('note').filter({ hasText: 'SOC-gated and monitor-only checks cannot be started here' })).toBeVisible();
 
     const catalog = await page.evaluate(async () => {
@@ -158,13 +159,12 @@ test.describe('validation scans (FT-SCAN-01)', () => {
       if (request.method() === 'GET' && /\/v1\/validation-scans\/[^/?]+$/.test(request.url())) scanReads.push(Date.now());
     });
 
-    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl);
+    await gotoPortalRoute(page, 'runs', sourceBaseUrl);
     await page.getByRole('button', { name: 'Start validation scan' }).click();
     const modal = launcher(page);
-    await expect(modal.getByText('edge-checkout')).toBeVisible();
+    await expect(modal.locator('.domain-picker')).toBeVisible();
 
-    await modal.getByRole('radio', { name: 'One exact target' }).check();
-    await chooseOption(modal, 'Exact target', 'checkout.acme.com');
+    await modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox').check();
 
     const sectionSelectAll = modal.getByRole('checkbox', { name: new RegExp(`Select all \\d+ applicable checks in ${DNS_SECTION}`) });
     await sectionSelectAll.check();
@@ -174,7 +174,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill('origin leak');
     const originRow = modal.locator('li.check-picker-row').filter({ hasText: PORTAL_BASELINE_IDS.checkId });
     await expect(originRow).toHaveCount(1);
-    await expect(originRow).toContainText('Applies to the selected target');
+    await expect(originRow).toContainText('Applies to 1 of 1 targets');
     await expect(originRow).toContainText(/max \d+ requests/);
     await originRow.getByRole('checkbox').check();
     const expectedChecks = sectionCount + 1;
@@ -184,8 +184,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await modal.getByRole('button', { name: 'Review scan' }).click();
     const confirm = confirmDialog(page);
     await expect(confirm).toContainText('Start this validation scan now?');
-    await expect(confirm).toContainText('edge-checkout');
-    await expect(confirm).toContainText(`Exact target checkout.acme.com · Fqdn (${PORTAL_BASELINE_IDS.targetId})`);
+    await expect(confirm).toContainText('Domains: checkout.acme.com · Fqdn');
     await expect(confirm).toContainText(`${expectedChecks} selected`);
     await expect(confirm).toContainText(`Planned steps: ${expectedChecks}`);
     await expect(confirm).toContainText('Request upper bound:');
@@ -198,7 +197,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     expect(scanPosts).toHaveLength(1);
 
     await expect(page.getByRole('heading', { level: 1, name: scanId })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(`Exact target checkout.acme.com in edge-checkout`)).toBeVisible();
+    await expect(page.getByText('Domain checkout.acme.com')).toBeVisible();
     await expect(stepRows(page)).toHaveCount(expectedChecks, { timeout: 20_000 });
     await expect(page.locator('.scan-live-region')).toContainText(/Scan running\. Refreshing every \d+ seconds?\./);
     await expect(page.getByRole('button', { name: `Stop scan ${scanId}` })).toBeVisible();
@@ -285,8 +284,8 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(page.getByRole('heading', { name: 'Validation scans' })).toBeVisible({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Start validation scan' }).click();
     const modal = launcher(page);
-    await chooseOption(modal, 'Target group', 'edge-checkout');
-    await expect(modal.getByRole('radio', { name: /Whole group/ })).toBeChecked();
+    await modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox').check();
+    await modal.locator('.domain-picker-option').filter({ hasText: /^pay\.acme\.com/ }).getByRole('checkbox').check();
     await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill('origin leak');
     const originRow = modal.locator('li.check-picker-row').filter({ hasText: PORTAL_BASELINE_IDS.checkId });
     await expect(originRow).toContainText(/Applies to \d+ of \d+ targets/);
@@ -313,7 +312,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(row).toHaveCount(1, { timeout: 15_000 });
     await expect(row).toContainText('Scheduled');
     await expect(row).toContainText('Weekly');
-    await expect(row).toContainText('Whole group edge-checkout');
+    await expect(row).toContainText('2 selected domains');
 
     await row.getByRole('button', { name: 'Edit scan Weekly origin sweep' }).click();
     const editModal = launcher(page);
@@ -327,10 +326,8 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     expect(patches[0]).toEqual({ name: 'Weekly origin sweep v2' });
     await expect(page.locator('.validation-scans-table tbody tr').filter({ hasText: 'Weekly origin sweep v2' })).toHaveCount(1, { timeout: 15_000 });
 
-    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl);
-    const groupRow = page.locator('.validation-scans-table tbody tr').filter({ hasText: 'Weekly origin sweep v2' });
-    await expect(groupRow).toHaveCount(1, { timeout: 20_000 });
-    await expect(groupRow).toContainText('Scheduled');
+
+    await expect(page.locator('.validation-scans-table tbody tr').filter({ hasText: 'Weekly origin sweep v2' })).toContainText('Scheduled');
 
     const stored = findStoredScanForTest(created.id);
     expect(stored?.status).toBe('scheduled');

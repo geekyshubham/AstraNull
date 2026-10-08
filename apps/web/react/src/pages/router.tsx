@@ -12,7 +12,6 @@ import {
   StaffSurfacePage,
   SubscriptionPage,
   SupportPage,
-  TargetGroupsPage
 } from './page-components';
 import { IntegrationPage } from './integrations-page';
 import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } from './governance-pages';
@@ -24,7 +23,6 @@ import { FindingsPage } from './refined/findings-refined';
 import { PortalUnavailablePage } from './public-pages';
 
 const DETAIL_ROUTES = new Set<RouteId>([
-  'target-group-detail',
   'target-detail',
   'run-detail',
   'finding-detail',
@@ -59,9 +57,6 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
     return <PortalUnavailablePage kind="not-found" />;
   }
   if (route === 'dashboard') return <DashboardPage data={data} config={config} session={session} onRefresh={onRefresh} />;
-  if (route === 'target-groups') {
-    return <TargetGroupsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
-  }
   if (route === 'targets') {
     return <TargetsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }

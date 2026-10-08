@@ -129,7 +129,7 @@ describe('Integrations portal annotations', () => {
     assert.match(integrations, /validateDeclaredHostname/);
     assert.match(integrations, /requestJson\(config, session, '\/v1\/targets', \{/);
     assert.match(integrations, /kind: 'fqdn'/);
-    assert.match(integrations, /target_group_id: groupId/);
+    assert.doesNotMatch(integrations, /target_group_id: groupId/);
     assert.match(integrations, /Ownership remains unverified/);
     // Environments are gone: no environment fetch, picker, or /v1/environments call.
     assert.doesNotMatch(integrations, /\/v1\/environments/);
@@ -147,7 +147,7 @@ describe('Integrations portal annotations', () => {
 
   it('renders list failures before connector empty states', () => {
     assert.match(integrations, /const connectorsLoadError = data\.loadErrors\.connectors/);
-    assert.match(integrations, /const targetGroupsLoadError = data\.loadErrors\.targetGroups/);
+    assert.doesNotMatch(integrations, /targetGroupsLoadError/);
     assert.match(integrations, /loadError=\{connectorsLoadError\}/);
     assert.match(integrations, /onRetry=\{\(\) => void onRefresh\(\)\}/);
   });

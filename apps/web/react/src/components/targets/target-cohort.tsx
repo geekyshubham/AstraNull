@@ -16,7 +16,6 @@ const PAGE_LIMIT = 50;
 
 const FILTER_LABELS: Record<string, string> = {
   q: 'Search',
-  target_group_id: 'Target group',
   verification_state: 'Ownership',
   kind: 'Kind',
   tag: 'Tag',
@@ -208,7 +207,7 @@ export function TargetCohortList({
                   return (
                     <li key={id}>
                       <span className="mono">{str(known, 'value') || id}</span>
-                      {known ? <span className="muted small"> · {str(known, 'kind')} · {str(known, 'target_group_name') || str(known, 'target_group_id')}</span> : null}
+                      {known ? <span className="muted small"> · {str(known, 'kind')}</span> : null}
                       <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', id)} aria-label={`Open declared target ${str(known, 'value') || id}`}>Open</AnchorButton>
                     </li>
                   );
@@ -254,15 +253,6 @@ export function TargetCohortList({
         if (hostUnit && members > 1) return <span className="muted small">Per declared target</span>;
         if (!Object.hasOwn(item, 'last_validation_at')) return <span className="muted small">Not available in inventory</span>;
         return item.last_validation_at ? <span className="mono small">{formatDate(item.last_validation_at)}</span> : <span className="muted small">Not checked</span>;
-      },
-    },
-    {
-      key: 'group',
-      label: 'Target group',
-      render: (item) => {
-        const members = finite(rec(item.analytics)?.member_count) ?? 1;
-        if (hostUnit && members > 1) return <span className="muted small">Per declared target</span>;
-        return str(item, 'target_group_name') || str(item, 'target_group_id') || <span className="muted small">Not recorded</span>;
       },
     },
   ];

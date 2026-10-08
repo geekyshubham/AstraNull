@@ -174,8 +174,8 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
         icon={ShieldHalf}
         title="No WAF assets in scope."
         body={plainEmptyReason(emptyReason)}
-        actionLabel="Open target groups"
-        actionHref="#target-groups"
+        actionLabel="Open targets"
+        actionHref="#targets"
       />
     );
   }

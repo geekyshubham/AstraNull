@@ -136,7 +136,7 @@ test.describe('Refined test policies and runs (G03)', () => {
         if (request.method() !== 'POST') return route.fallback();
         const body = request.postDataJSON();
         posts.push(body);
-        if (body.target_group_id === SECOND_GROUP_ID) {
+        if (body.target_id === SECOND_TARGET_ID) {
           return route.fulfill({
             status: 400,
             contentType: 'application/json',
@@ -154,21 +154,10 @@ test.describe('Refined test policies and runs (G03)', () => {
       await expect(panel).toBeVisible();
 
       await chooseCustomSelect(panel, 'Check', HOST_CHECK);
-      const pickerTrigger = panel.locator('.tg-picker-trigger');
-      await pickerTrigger.click();
-      const picker = panel.locator('.tg-picker-menu');
-      await picker.getByRole('option', { name: /edge-checkout/ }).click();
-      await picker.getByRole('option', { name: new RegExp(SECOND_GROUP_NAME) }).click();
-      await pickerTrigger.press('Escape');
-
       const submit = panel.getByRole('button', { name: 'Create schedule', exact: true });
-      // Targets are never assigned automatically: submit stays disabled until every group is bound.
       await expect(submit).toBeDisabled();
-      await expect(panel.locator('.rf-readiness')).toContainText('Select one exact active target for every selected group.');
-
-      await chooseCustomSelect(panel, 'edge-checkout exact target', 'checkout.acme.com');
-      await expect(submit).toBeDisabled();
-      await chooseCustomSelect(panel, `${SECOND_GROUP_NAME} exact target`, 'api.refined.acme.com');
+      await panel.locator('.domain-picker-option').filter({ hasText: 'checkout.acme.com' }).getByRole('checkbox').check();
+      await panel.locator('.domain-picker-option').filter({ hasText: 'api.refined.acme.com' }).getByRole('checkbox').check();
       await expect(panel.locator('.rf-readiness')).toContainText('Ready to create 2 schedules');
       await expect(submit).toBeEnabled();
 
@@ -177,20 +166,20 @@ test.describe('Refined test policies and runs (G03)', () => {
       await page.keyboard.press('Enter');
 
       await expect.poll(() => posts.length, { timeout: 15_000 }).toBe(2);
-      expect(posts.map((body) => [body.target_group_id, body.target_id])).toEqual([
-        [ids.targetGroupId, ids.targetId],
-        [SECOND_GROUP_ID, SECOND_TARGET_ID],
+      expect(posts.map((body) => body.target_id)).toEqual([
+        ids.targetId,
+        SECOND_TARGET_ID,
       ]);
 
       const banner = panel.locator('.form-banner.error[role="alert"]').filter({ hasText: 'Created 1 of 2 policies' });
       await expect(banner).toBeVisible({ timeout: 15_000 });
-      await expect(banner).toContainText(`${SECOND_GROUP_ID}/${SECOND_TARGET_ID}`);
+      await expect(banner).toContainText('api.refined.acme.com');
       await expect(banner).toContainText('only failed exact target bindings remain selected for retry');
 
-      // Only the failed group stays selected, with its exact binding intact.
-      await expect(panel.getByRole('button', { name: 'edge-checkout exact target', exact: true })).toHaveCount(0);
-      const retained = panel.getByRole('button', { name: `${SECOND_GROUP_NAME} exact target`, exact: true });
-      await expect(retained).toContainText('api.refined.acme.com');
+      // Only the failed domain stays selected; successful writes are not replayed.
+      await expect(panel.locator('.domain-picker-option').filter({ hasText: 'checkout.acme.com' }).getByRole('checkbox')).not.toBeChecked();
+      await expect(panel.locator('.domain-picker-option').filter({ hasText: 'api.refined.acme.com' }).getByRole('checkbox')).toBeChecked();
+      expect(posts.every((body) => !Object.hasOwn(body, 'target_group_id'))).toBe(true);
       await expect(panel.locator('.rf-readiness')).toContainText('Ready to create 1 schedule');
 
       // The successful write is in the schedule table.

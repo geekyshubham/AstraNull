@@ -202,7 +202,7 @@ export function staffHomePath(session) {
  */
 export function buildApiHeaders(config, session, now = Date.now()) {
   /** @type {Record<string, string>} */
-  const headers = { 'Content-Type': 'application/json', accept: 'application/json' };
+  const headers = { 'Content-Type': 'application/json', accept: 'application/json', 'x-astranull-target-model': 'direct' };
   if (config.authMode === 'dev-headers') {
     if (session.principal === 'staff') {
       headers['x-principal-type'] = 'staff';

@@ -306,7 +306,7 @@ test.describe('portal truth surfaces', () => {
     await expect(verdictMetric).not.toContainText(/placement/i);
   });
 
-  test('global and current-group run tables ignore unsupported run agent aliases', async ({ page }) => {
+  test('global and exact-target run tables ignore unsupported run agent aliases', async ({ page }) => {
     const runId = 'run_checkout_1';
     const unsupportedAgentAlias = 'unsupported-run-agent-alias';
     const unsupportedObservedAlias = 'unsupported-observed-agent-alias';
@@ -330,13 +330,9 @@ test.describe('portal truth surfaces', () => {
     await expect(globalRunsTable).not.toContainText(unsupportedAgentAlias);
     await expect(globalRunsTable).not.toContainText(unsupportedObservedAlias);
 
-    await gotoPortalRoute(page, 'target-group-detail', getPortalPlaywrightBaseUrl(), {
-      entityIds: { 'target-group-detail': PORTAL_BASELINE_IDS.targetGroupId },
-    });
-    const currentGroupRunsCard = page.locator('.card').filter({
-      has: page.getByRole('heading', { name: 'Recent runs', exact: true }),
-    });
-    const currentGroupRunsTable = currentGroupRunsCard.getByRole('table');
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
+    await page.getByRole('tab', { name: 'Changes & history', exact: true }).click();
+    const currentGroupRunsTable = page.locator('section[aria-labelledby="td-runs-title"]').getByRole('table');
     await expect(currentGroupRunsTable.getByRole('columnheader', { name: 'Agent', exact: true })).toHaveCount(0);
     await expect(currentGroupRunsTable).not.toContainText(unsupportedAgentAlias);
     await expect(currentGroupRunsTable).not.toContainText(unsupportedObservedAlias);

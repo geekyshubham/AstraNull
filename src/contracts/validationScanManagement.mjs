@@ -150,12 +150,22 @@ export function normalizeScanInput(body = {}, { now = Date.now(), partial = fals
 
   if (!partial || has('target_group_id')) {
     const targetGroupId = String(body.target_group_id ?? '').trim();
-    if (!targetGroupId) throw new ScanValidationError('target_group_id', 'target_group_id is required.');
-    normalized.target_group_id = targetGroupId;
+    if (!targetGroupId && !body.target_id && !body.target_ids) throw new ScanValidationError('target_ids', 'Select a domain or domains.');
+    normalized.target_group_id = targetGroupId || null;
   }
   if (!partial || has('target_id')) {
     const targetId = String(body.target_id ?? '').trim();
     normalized.target_id = targetId || null;
+  }
+  if (has('target_ids')) {
+    if (!Array.isArray(body.target_ids) || !body.target_ids.length || body.target_ids.length > MAX_SCAN_STEPS
+      || body.target_ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(id))) {
+      throw new ScanValidationError('target_ids', 'Select one or more declared target IDs within the scan limit.');
+    }
+    normalized.target_ids = [...new Set(body.target_ids)];
+    if (normalized.target_id && (normalized.target_ids.length !== 1 || normalized.target_ids[0] !== normalized.target_id)) {
+      throw new ScanValidationError('target_ids', 'Select an exact target or an explicit domain set.');
+    }
   }
   if (!partial || has('check_ids')) normalized.check_ids = normalizeCheckIds(body.check_ids);
   if (!partial || has('name')) normalized.name = normalizeScanName(body.name);

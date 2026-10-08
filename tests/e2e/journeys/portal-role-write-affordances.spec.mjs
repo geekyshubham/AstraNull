@@ -32,11 +32,7 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page, VIEWER_SESSION);
 
-    await gotoPortalRoute(page, 'target-groups', baseUrl);
-    await expectNoButton(page, 'Add target');
-    await expectNoButton(page, 'Create target group');
-
-    await gotoPortalRoute(page, 'targets', baseUrl);
+        await gotoPortalRoute(page, 'targets', baseUrl);
     await expectNoButton(page, 'Add target');
     await expect(page.getByRole('button', { name: /^Remove target / })).toHaveCount(0);
 
@@ -84,13 +80,6 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     expect(socRequests, 'a denied SOC console loads none of its data').toEqual([]);
     page.off('request', onSocRequest);
 
-    await gotoPortalRoute(page, 'target-group-detail', baseUrl);
-    await expect(page.locator('.route-access-notice')).toHaveCount(0);
-    await expectNoButton(page, 'Add target');
-    await expectNoButton(page, 'Import DNS zones');
-    await expect(page.getByRole('button', { name: /^Remove target / })).toHaveCount(0);
-    await expectNoButton(page, 'Run test');
-
     await gotoPortalRoute(page, 'target-detail', baseUrl);
     await expectNoButton(page, 'Detect WAF and CDN');
     await expectNoButton(page, 'Detect again');
@@ -115,8 +104,8 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page, ENGINEER_SESSION);
 
-    await gotoPortalRoute(page, 'target-groups', baseUrl);
-    await expect(page.getByRole('button', { name: 'Create target group' })).toBeVisible();
+    await gotoPortalRoute(page, 'targets', baseUrl);
+    await expect(page.getByRole('button', { name: 'Add target', exact: true })).toBeVisible();
 
     await gotoPortalRoute(page, 'integrations', baseUrl);
     await page.getByRole('button', { name: 'Add provider' }).click();

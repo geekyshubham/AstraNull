@@ -8,7 +8,7 @@
  */
 
 import { EXHAUSTED_RESOURCE_FAMILIES } from '../../../../../src/contracts/resourceExhaustionTaxonomy.mjs';
-import { itemCheckId, itemTargetGroupId } from './vector-coverage.mjs';
+import { itemCheckId, itemTargetId } from './vector-coverage.mjs';
 
 export const RESOURCE_EVIDENCE_FRESHNESS_DAYS = 30;
 export const RESOURCE_EVIDENCE_FRESHNESS_MS = RESOURCE_EVIDENCE_FRESHNESS_DAYS * 24 * 60 * 60 * 1000;
@@ -115,8 +115,8 @@ function outcomeTimestamp(run, verdict, matchingEvidence, nowMs) {
 }
 
 /** Active target groups are never display-capped; archived/deleted rows are excluded explicitly. */
-export function resourceMatrixGroups(targetGroups) {
-  return targetGroups.filter((group) => group.archived_at == null && group.deleted_at == null);
+export function resourceMatrixTargets(targets) {
+  return targets.filter((group) => group.archived_at == null && group.deleted_at == null);
 }
 
 function declaredExhaustedResources(check) {
@@ -146,17 +146,17 @@ export function resourceFamilyCheckIds(checks, family) {
 export function applicableResourceFamilyCheckIds({
   checks,
   family,
-  groupId,
+  targetId,
   targets,
   targetInventoryLoaded = true,
 }) {
   const mapped = checks.filter((check) => declaredExhaustedResources(check).has(family.id));
   if (!targetInventoryLoaded) return resourceFamilyCheckIds(checks, family);
-  if (!groupId) return new Set();
+  if (!targetId) return new Set();
 
   const targetKinds = new Set(
     targets
-      .filter((target) => itemTargetGroupId(target) === groupId)
+      .filter((target) => String(target.id ?? target.target_id ?? '') === targetId)
       .map((target) => stringValue(target.kind ?? target.target_kind).toLowerCase())
       .filter(Boolean),
   );
@@ -187,7 +187,7 @@ export function applicableResourceFamilyCheckIds({
  */
 export function resourceFamilyVerdictState({
   checkIds,
-  groupId,
+  targetId,
   runs,
   evidence,
   nowMs = Date.now(),
@@ -203,7 +203,7 @@ export function resourceFamilyVerdictState({
     inconclusiveCount: 0,
     latestEvidenceAt: null,
   };
-  if (!groupId || checkIds.size === 0) return { status: 'not_applicable', ...base };
+  if (!targetId || checkIds.size === 0) return { status: 'not_applicable', ...base };
 
   const evidenceByRun = new Map();
   for (const item of evidence) {
@@ -217,7 +217,7 @@ export function resourceFamilyVerdictState({
   const latestByCheck = new Map();
   for (const run of runs) {
     const checkId = itemCheckId(run);
-    if (itemTargetGroupId(run) !== groupId || !checkIds.has(checkId)) continue;
+    if (itemTargetId(run) !== targetId || !checkIds.has(checkId)) continue;
     if (!TERMINAL_RUN_STATUSES.has(stringValue(run.status).toLowerCase())) continue;
 
     const verdictValue = runVerdictValue(run);

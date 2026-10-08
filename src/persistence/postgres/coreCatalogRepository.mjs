@@ -126,6 +126,42 @@ async function withCatalogMutation(pool, ctx, callback) {
   });
 }
 
+async function resolveDefaultPolicy(client, ctx, body, options, auditRepository, now) {
+  let groupId;
+  let groupDeclaration = {};
+  const existing = await client.query(
+    `SELECT id, declaration_json FROM target_groups
+     WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+       AND settings_json->>'default_scope' = 'true'
+     ORDER BY created_at
+     LIMIT 1`,
+    [ctx.tenantId],
+  );
+  if (existing.rows[0]) {
+    groupId = existing.rows[0].id;
+    groupDeclaration = existing.rows[0].declaration_json ?? {};
+  } else {
+    groupId = options.defaultGroupId ?? newId('tg');
+    const expectedBehaviorDefault = body.expected_behavior ?? 'block_at_edge';
+    await client.query(
+      `INSERT INTO target_groups (
+         id, tenant_id, environment_id, name, description, expected_behavior_default,
+         timezone, safe_test_windows, safety_policy, settings_json, validation_mode,
+         ownership_status, dns_ownership, created_at
+       )
+       VALUES ($1, $2, NULL, 'Default', $3, $4, 'UTC', '[]'::jsonb, $5::jsonb,
+       '{"default_scope": true}'::jsonb, 'external_only', 'unverified', NULL, $6::timestamptz)`,
+      [groupId, ctx.tenantId, 'Default target group for directly declared targets.',
+        expectedBehaviorDefault, JSON.stringify(normalizeSafetyPolicy(undefined)), now],
+    );
+    await appendMutationAudit(auditRepository, client, ctx, {
+      action: 'target_group.created', resource_type: 'target_group', resource_id: groupId,
+      metadata: { changed_fields: ['name', 'validation_mode', 'settings_json'], default_scope: true },
+    }, now);
+  }
+  return { id: groupId, declaration: groupDeclaration };
+}
+
 function mapTargetGroupRow(row) {
   if (!row) return null;
   const windows = row.safe_test_windows;
@@ -885,16 +921,18 @@ export function createCoreCatalogRepository(pool, options = {}) {
       const now = options.now ?? new Date().toISOString();
       const newTargetId = options.newId ?? (() => newId('target'));
       return withCatalogMutation(pool, ctx, async (client) => {
-        const groupResult = await client.query(
-          `SELECT id FROM target_groups
+        if (groupId) {
+          const groupResult = await client.query(
+            `SELECT id FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
-          [groupId, ctx.tenantId],
-        );
-        if (!groupResult.rows[0]) return null;
+            [groupId, ctx.tenantId],
+          );
+          if (!groupResult.rows[0]) return null;
+        }
         const existing = await client.query(
           `SELECT kind, value, normalized_value FROM targets
-           WHERE tenant_id = $1 AND target_group_id = $2 AND deleted_at IS NULL`,
-          [ctx.tenantId, groupId],
+           WHERE tenant_id = $1 AND ($2::text IS NULL OR target_group_id = $2) AND deleted_at IS NULL`,
+          [ctx.tenantId, groupId ?? null],
         );
         const existingKeys = new Set();
         for (const row of existing.rows) {
@@ -904,6 +942,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         }
         const { accepted, errors } = validateTargetImportRows(rows, existingKeys);
         if (errors.length) return csvImportRejected(errors);
+        if (!groupId) groupId = (await resolveDefaultPolicy(client, ctx, {}, options, auditRepository, now)).id;
 
         const created = [];
         for (const { row, normalized, expected_behavior: expectedBehavior } of accepted) {
@@ -1240,36 +1279,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
           groupDeclaration = groupResult.rows[0].declaration_json ?? {};
         } else {
           if (declared.error) return declared.error;
-          const existing = await client.query(
-            `SELECT id, declaration_json FROM target_groups
-             WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
-               AND settings_json->>'default_scope' = 'true'
-             ORDER BY created_at
-             LIMIT 1`,
-            [ctx.tenantId],
-          );
-          if (existing.rows[0]) {
-            groupId = existing.rows[0].id;
-            groupDeclaration = existing.rows[0].declaration_json ?? {};
-          } else {
-            groupId = options.defaultGroupId ?? newId('tg');
-            const expectedBehaviorDefault = body.expected_behavior ?? 'block_at_edge';
-            await client.query(
-              `INSERT INTO target_groups (
-                 id, tenant_id, environment_id, name, description, expected_behavior_default,
-                 timezone, safe_test_windows, safety_policy, settings_json, validation_mode,
-                 ownership_status, dns_ownership, created_at
-               )
-               VALUES ($1, $2, NULL, 'Default', $3, $4, 'UTC', '[]'::jsonb, $5::jsonb,
-                       '{"default_scope": true}'::jsonb, 'external_only', 'unverified', NULL, $6::timestamptz)`,
-              [groupId, ctx.tenantId, 'Default target group for directly declared targets.',
-                expectedBehaviorDefault, JSON.stringify(normalizeSafetyPolicy(undefined)), now],
-            );
-            await appendMutationAudit(auditRepository, client, ctx, {
-              action: 'target_group.created', resource_type: 'target_group', resource_id: groupId,
-              metadata: { changed_fields: ['name', 'validation_mode', 'settings_json'], default_scope: true },
-            }, now);
-          }
+          const policy = await resolveDefaultPolicy(client, ctx, body, options, auditRepository, now);
+          groupId = policy.id; groupDeclaration = policy.declaration;
         }
 
         const duplicate = await client.query(

@@ -286,3 +286,49 @@ describe('validation scans (dev-json): parity guards', () => {
   });
 });
 
+
+describe('explicit domain sets preserve each target execution policy', () => {
+  beforeEach(() => {
+    freshStore();
+    const store = getStore();
+    store.targetGroups[0].safety_policy = { max_runs_per_hour: 60, min_seconds_between_runs: 0 };
+    store.targetGroups.push({ ...store.targetGroups[0], id: 'tg_second', name: 'legacy policy', safety_policy: { max_runs_per_hour: 60, min_seconds_between_runs: 0 } });
+    store.targets.push({ ...store.targets[0], id: 'tgt_second', target_group_id: 'tg_second', value: 'second.test' });
+  });
+
+  it('executes an explicit domain set sequentially across existing policy bindings', () => {
+    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', target_ids: ['tgt_1', 'tgt_second'], check_ids: [CHECKS[0]] }, RUNTIME);
+    assert.deepEqual(scan.target_ids, ['tgt_1', 'tgt_second']);
+    assert.equal(scan.summary.total, 2);
+    assert.equal(getStore().testRuns[0].target_group_id, 'tg_1');
+    getStore().targets.push({ ...getStore().targets[0], id: 'tgt_unselected', value: 'unselected.test' });
+    expireCollectionWindows();
+    const next = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+    assert.equal(next.steps[1].status, 'collecting');
+    assert.equal(getStore().testRuns[1].target_group_id, 'tg_second');
+    assert.ok(listValidationScans(CTX, { target_id: 'tgt_second' }).items.some((item) => item.id === scan.id));
+    expireCollectionWindows();
+    assert.equal(getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME }).status, 'completed');
+    assert.equal(getStore().testRuns.length, 2);
+    assert.ok(getStore().testRuns.every((run) => run.target_id !== 'tgt_unselected'));
+  });
+
+  it('keeps a later domain deferred by its existing cooldown instead of using the first domain policy', () => {
+    getStore().targetGroups[1].safety_policy.min_seconds_between_runs = 3600;
+    const priorAt = new Date(Date.now() - 60_000).toISOString();
+    getStore().testRuns.push({ id: 'prior', tenant_id: CTX.tenantId, target_group_id: 'tg_second', target_id: 'tgt_second', check_id: CHECKS[0], created_at: priorAt, status: 'verdicted' });
+    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', target_ids: ['tgt_1', 'tgt_second'], check_ids: [CHECKS[0]] }, RUNTIME);
+    expireCollectionWindows();
+    const next = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+    assert.equal(next.steps[1].status, 'deferred');
+    assert.equal(next.steps[1].eligible_at, new Date(Date.parse(priorAt) + 3_600_000).toISOString());
+    assert.equal(getStore().testRuns.length, 2);
+  });
+
+  it('rejects an absent or foreign domain before creating a scan or starting a run', () => {
+    const denied = createValidationScan(CTX, { target_group_id: 'tg_1', target_ids: ['tgt_1', 'foreign'], check_ids: [CHECKS[0]] }, RUNTIME);
+    assert.equal(denied.error, 'target_not_found');
+    assert.equal(getStore().testRuns.length, 0);
+    assert.equal(getStore().validationScans.length, 0);
+  });
+});

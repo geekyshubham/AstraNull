@@ -140,13 +140,9 @@ test.describe('schedule form controls', () => {
     await expect(panel).toBeVisible();
     await expect(panel.getByRole('heading', { name: 'New validation schedule' })).toBeFocused();
 
-    const pickerTrigger = panel.locator('.tg-picker-trigger');
-    await pickerTrigger.click();
-    await expect(panel.locator('.tg-picker-menu')).toBeVisible();
-    await pickerTrigger.press('Escape');
-    await expect(panel.locator('.tg-picker-menu')).toBeHidden();
-    await expect(panel).toBeVisible();
-    await expect(pickerTrigger).toBeFocused();
+    const domainSearch = panel.getByRole('searchbox', { name: 'Search declared domains' });
+    await domainSearch.focus(); await domainSearch.press('Escape');
+    await expect(panel).toBeVisible(); await expect(domainSearch).toBeFocused();
 
     const expectedTrigger = panel.getByRole('button', { name: 'Expected verdict', exact: true });
     await expectedTrigger.scrollIntoViewIfNeeded();
@@ -182,76 +178,31 @@ test.describe('schedule form controls', () => {
     await expect(createButton).toBeFocused();
   });
 
-  test('global schedule offers only compatible exact targets, explains empty compatibility, and clears on check change', async ({ page }) => {
+  test('direct domain selection retains incompatible selections explicitly and starts no traffic', async ({ page }) => {
     const writes = [];
-    page.on('request', (request) => {
-      if (new URL(request.url()).pathname.startsWith('/v1/') && request.method() !== 'GET') writes.push(request.method());
-    });
+    page.on('request', (request) => { if (new URL(request.url()).pathname.startsWith('/v1/') && request.method() !== 'GET') writes.push(request.method()); });
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'test-policies', sourceBaseUrl);
     await page.locator('.rf-header-actions').getByRole('button', { name: 'Create schedule' }).click();
     const panel = page.locator('section.rf-create');
-
-    await panel.getByLabel('Find a check').fill('URL-Only');
-    await expect(panel.getByText(/1 of \d+ runnable checks match/)).toBeVisible();
     await chooseCustomSelect(panel, 'Check', URL_ONLY_CHECK);
-    const pickerTrigger = panel.locator('.tg-picker-trigger');
-    await pickerTrigger.click();
-    const picker = panel.locator('.tg-picker-menu');
-    await picker.getByRole('option', { name: /edge-checkout/ }).click();
-    await picker.getByRole('option', { name: /api-ip-only/ }).click();
-    await pickerTrigger.press('Escape');
-
-    const edgeTarget = panel.getByRole('button', { name: 'edge-checkout exact target', exact: true });
-    await expect(edgeTarget).toBeEnabled({ timeout: 10_000 });
-    await expect(edgeTarget).toContainText('Select exact target');
-    await edgeTarget.click();
-    const edgeOptions = panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true });
-    await expect(edgeOptions.getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ })).toBeVisible();
-    await expect(edgeOptions.getByRole('option', { name: /^checkout\.acme\.com/ })).toHaveCount(0);
-    await edgeOptions.getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ }).click();
-
-    await expect(panel.getByText(/api-ip-only has no exact target compatible with URL-Only Schedule Probe/)).toBeVisible();
-    await expect(panel.locator('.rf-readiness')).toContainText('Select one exact active target for every selected group.');
-    await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
-
-    await panel.getByLabel('Find a check').fill('');
+    await panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox').check();
+    await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeEnabled();
     await chooseCustomSelect(panel, 'Check', HOST_CHECK);
-    await expect(edgeTarget).toContainText('Select exact target');
-    await edgeTarget.click();
-    await expect(panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /^checkout\.acme\.com/ })).toBeVisible();
-    await expect(panel.getByRole('listbox', { name: 'edge-checkout exact target', exact: true }).getByRole('option', { name: /https:\/\/checkout\.acme\.com\/health/ })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+    await expect(panel.locator('.rf-readiness')).toContainText('Select active domains compatible with this check.');
+    await expect(panel.locator('.domain-picker-option').filter({ hasText: 'https://checkout.acme.com/health' }).getByRole('checkbox')).toBeChecked();
     expect(writes).toEqual([]);
   });
 
-  test('target-group schedule filters exact targets and clears an incompatible selection', async ({ page }) => {
+  test('removed grouping links resolve to direct Targets with no group request', async ({ page }) => {
+    const requests = [];
+    page.on('request', (request) => { if (request.url().includes('/v1/target-groups')) requests.push(request.url()); });
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl, {
-      entityIds: { 'target-group-detail': PORTAL_BASELINE_IDS.targetGroupId },
-    });
-
-    const search = page.getByPlaceholder('Search rule name, family, or check ID');
-    await search.fill(URL_ONLY_CHECK);
-    await page.getByRole('radio', { name: new RegExp(`Select ${escapeRegExp(URL_ONLY_CHECK)}`) }).click();
-    const targetSelect = page.locator('form.schedule-builder select[name="target_id"]');
-    await expect(targetSelect).toBeEnabled();
-    await expect(targetSelect.locator('option')).toHaveCount(2);
-    await expect(targetSelect.locator('option').nth(1)).toContainText('https://checkout.acme.com/health · Url');
-    await targetSelect.selectOption(URL_TARGET_ID);
-
-    await search.fill(HOST_CHECK);
-    await page.getByRole('radio', { name: new RegExp(`Select ${escapeRegExp(HOST_CHECK)}`) }).click();
-    await expect(targetSelect).toHaveValue('');
-    await expect(targetSelect.locator(`option[value="${URL_TARGET_ID}"]`)).toHaveCount(0);
-    await expect(targetSelect.locator(`option[value="${PORTAL_BASELINE_IDS.targetId}"]`)).toHaveCount(1);
-
-    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl, {
-      entityIds: { 'target-group-detail': IP_GROUP_ID },
-    });
-    const ipSearch = page.getByPlaceholder('Search rule name, family, or check ID');
-    await ipSearch.fill(URL_ONLY_CHECK);
-    await page.getByRole('radio', { name: new RegExp(`Select ${escapeRegExp(URL_ONLY_CHECK)}`) }).click();
-    await expect(page.locator('form.schedule-builder select[name="target_id"]')).toBeDisabled();
-    await expect(page.getByText(/This group has no exact target compatible with URL-Only Schedule Probe/)).toBeVisible();
+    await gotoPortalRoute(page, 'target-group-detail', sourceBaseUrl);
+    await expect(page.getByRole('heading', { name: 'Targets', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/#targets$/);
+    await expect(page.getByRole('button', { name: 'Target groups', exact: true })).toHaveCount(0);
+    expect(requests).toEqual([]);
   });
 });

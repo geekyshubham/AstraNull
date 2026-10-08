@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 
 const source = readFileSync('apps/web/react/src/pages/detail-pages.tsx', 'utf8');
 const functionalSurfaces = readFileSync('apps/web/react/src/pages/functional-surfaces.tsx', 'utf8');
-const targetGroupDetail = readFileSync('apps/web/react/src/pages/target-group-detail-view.tsx', 'utf8');
+const targetDetail = readFileSync('apps/web/react/src/pages/target-detail-view.tsx', 'utf8');
 
 function sourceBetween(value, start, end) {
   const from = value.indexOf(start);
@@ -50,13 +50,9 @@ describe('portal detail truth labels', () => {
       "if (route === 'runs')",
       'const canOpenVectorLibrary =',
     );
-    const currentGroupRunColumns = sourceBetween(
-      targetGroupDetail,
-      'const runColumns:',
-      'const dnsHistoryColumns:',
-    );
 
-    for (const tableSource of [globalRunColumns, currentGroupRunColumns]) {
+
+    for (const tableSource of [globalRunColumns, targetDetail]) {
       assert.doesNotMatch(tableSource, /observed_agent_id|agentId|agent_id/);
       assert.doesNotMatch(tableSource, /label:\s*['"]Agent['"]/);
     }

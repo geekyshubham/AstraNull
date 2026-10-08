@@ -184,7 +184,6 @@ export function OriginRelations({
           method: 'POST',
           body: {
             check_id: checkIdOf(review.check),
-            target_group_id: str(target, 'target_group_id'),
             target_id: targetId,
             origin_binding_id: str(review.binding, 'id'),
           },

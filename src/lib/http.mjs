@@ -1,3 +1,4 @@
+import { presentTargetSelection } from './targetScopeInput.mjs';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -61,7 +62,7 @@ export function securityHeaders() {
 }
 
 export function json(res, status, body) {
-  const payload = JSON.stringify(body);
+  const payload = JSON.stringify(res.targetOnlyPresentation ? presentTargetSelection(body) : body);
   res.writeHead(status, {
     ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',

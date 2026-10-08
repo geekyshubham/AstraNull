@@ -1,4 +1,5 @@
 import { json, readJsonBody } from '../lib/http.mjs';
+import { bindDeclaredTargetInput } from '../lib/targetScopeInput.mjs';
 import { requirePermission } from '../rbac.mjs';
 import * as wafEdgeDetection from '../services/wafEdgeDetection.mjs';
 
@@ -58,7 +59,12 @@ export async function tryHandleWafEdgeDetectionRoutes(req, res, url, ctx, runtim
 
   // Let HttpBodyError reach the server's canonical handler so oversized requests remain 413.
   const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-  const result = await wafEdgeDetection.runEdgeDetection(ctx, body, {
+  const selection = await bindDeclaredTargetInput(ctx, body, serviceDeps.targetGroups);
+  if (selection.error) {
+    json(res, selection.status, selection);
+    return true;
+  }
+  const result = await wafEdgeDetection.runEdgeDetection(ctx, selection.input, {
     testRuns: serviceDeps.testRuns,
     runtimeConfig,
   });

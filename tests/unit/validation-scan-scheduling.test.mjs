@@ -34,6 +34,31 @@ function actions() {
 describe('validation scan scheduling (dev-json)', () => {
   beforeEach(() => freshStore());
 
+  it('keeps legacy recurring schedules bound to their original domains after intake and edits', () => {
+    const scan = scheduledScan({ target_id: null, recurrence: 'daily' });
+    const stored = getStore().validationScans.find((row) => row.id === scan.id);
+    delete stored.plan_snapshot.target_ids;
+    getStore().targets.push({ ...getStore().targets[0], id: 'tgt_later', value: 'later.test' });
+    const edited = patchValidationScan(CTX, scan.id, { name: 'Original domains only' }, { now: NOW });
+    assert.deepEqual(edited.target_ids, ['tgt_1']);
+    delete stored.plan_snapshot.target_ids;
+    const due = new Date('2026-06-01T13:00:01.000Z');
+    const [result] = dispatchDueValidationScans(CTX, { now: due, runtimeConfig: RUNTIME });
+    assert.equal(result.dispatched, true);
+    assert.deepEqual([...new Set(stored.steps.map((step) => step.target_id))], ['tgt_1']);
+    const next = getStore().validationScans.find((row) => row.id === stored.next_scan_id);
+    assert.deepEqual([...new Set(next.steps.map((step) => step.target_id))], ['tgt_1']);
+  });
+
+  it('replaces an exact legacy selection when edited to an explicit domain set', () => {
+    const scan = scheduledScan();
+    getStore().targets.push({ ...getStore().targets[0], id: 'tgt_second', value: 'second.test' });
+    const edited = patchValidationScan(CTX, scan.id, { target_ids: ['tgt_second'] }, { now: NOW });
+    assert.equal(edited.target, null);
+    assert.deepEqual(edited.target_ids, ['tgt_second']);
+    assert.ok(edited.steps.every((step) => step.target_id === 'tgt_second'));
+  });
+
   it('creates a scheduled scan without starting any run and dispatches it only when due', () => {
     const scan = scheduledScan();
     assert.equal(scan.status, 'scheduled');

@@ -8456,3 +8456,14 @@ dialog.inspector-panel::backdrop {
 .cohort-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); }
 @media (pointer: coarse) { .cohort-members summary { min-height: 44px; } }
 @media (max-width: 620px) { .cohort-panel { padding: var(--space-4); } }
+
+/* Direct declared-domain selection */
+.domain-picker { min-width: 0; margin: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.domain-picker-search { display: grid; gap: var(--space-2); }
+.domain-picker-search input { min-width: 0; min-height: 44px; width: 100%; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); background: var(--surface); }
+.domain-picker-options { display: grid; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
+.domain-picker-option { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; }
+.domain-picker-option:hover { background: var(--wash); }
+.domain-picker-option:focus-within { box-shadow: var(--focus-ring); }
+.domain-picker-option > span { display: grid; min-width: 0; gap: var(--space-1); overflow-wrap: anywhere; }
+.domain-picker-option small { color: var(--fg-2); }

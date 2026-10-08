@@ -4,45 +4,23 @@ import { describe, it } from 'node:test';
 
 const read = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 
-const picker = read('apps/web/react/src/components/policies/target-group-picker.tsx');
+const picker = read('apps/web/react/src/lib/policy-targets.ts');
 const select = read('apps/web/react/src/components/ui/select.tsx');
 const styles = read('apps/web/react/src/styles.css');
 const policies = read('apps/web/react/src/pages/page-components.tsx');
 const scheduleForm = read('apps/web/react/src/pages/refined/policies-refined.tsx');
-const targetGroup = read('apps/web/react/src/pages/target-group-detail-view.tsx');
+const targetDetail = read('apps/web/react/src/pages/target-detail-view.tsx');
 const details = read('apps/web/react/src/pages/detail-pages.tsx');
 const surfaces = read('apps/web/react/src/pages/functional-surfaces.tsx');
 
 describe('portal schedule UI hardening', () => {
-  it('mirrors backend target-kind aliases and URL inference in both schedule forms', () => {
-    assert.match(picker, /domain: 'fqdn',[\s\S]*hostname: 'fqdn'/);
-    assert.match(picker, /if \(\/\^https\?:\\\/\\\/\/i\.test\(value\)\) return 'url'/);
-    assert.match(picker, /supportedTargets\.length === 0 \|\| supportedTargets\.includes\(effectivePolicyTargetKind\(target\)\)/);
-
-    assert.match(scheduleForm, /const compatibleTargets = check \? targets\.filter\(\(target\) => isPolicyTargetCompatible\(check, target\)\) : \[\];/);
-    assert.match(scheduleForm, /\.\.\.compatibleTargets\.map\(\(target\) =>/);
-    assert.match(policies, /handlePolicyCheckChange[\s\S]*selectedTargetId: nextCheck && selectedTarget && isPolicyTargetCompatible\(nextCheck, selectedTarget\)[\s\S]*: ''/);
-    assert.match(policies, /const policyBindingsReady[\s\S]*isPolicyTargetCompatible\(selectedPolicyCheck, target\)/);
-    assert.match(scheduleForm, /No compatible targets/);
-    assert.match(scheduleForm, /has no exact target compatible with/);
-
-    assert.match(targetGroup, /compatiblePolicyTargets = selectedPolicyCheck[\s\S]*isPolicyTargetCompatible\(selectedPolicyCheck, target\)/);
-    assert.match(targetGroup, /setSelectedPolicyTargetId\(\(current\)[\s\S]*isPolicyTargetCompatible\(item, selectedTarget\) \? current : ''/);
-    assert.match(targetGroup, /\{compatiblePolicyTargets\.map\(\(target\) =>/);
-    assert.match(targetGroup, /choose another check or add a compatible target/);
-  });
 
   it('treats every group as external-only and never labels agent assistance', () => {
-    for (const source of [targetGroup, details, surfaces]) {
+    for (const source of [targetDetail, details, surfaces]) {
       assert.doesNotMatch(source, /agent_assisted|Agent-assisted verdict/);
     }
   });
 
-  it('contains TargetGroupPicker Escape inside the popup and restores trigger focus', () => {
-    assert.match(picker, /onKeyDownCapture=\{\(event\) => \{[\s\S]*!open \|\| event\.key !== 'Escape'/);
-    assert.match(picker, /event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*setOpen\(false\);[\s\S]*triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
-    assert.doesNotMatch(picker, /document\.addEventListener\('keydown'/);
-  });
 
   it('bounds custom Select menus to the nearest form-modal body and viewport', () => {
     assert.match(select, /closest<HTMLElement>\('\.form-modal-body'\)/);
@@ -54,9 +32,5 @@ describe('portal schedule UI hardening', () => {
     assert.match(select, /event\.key === 'ArrowDown'[\s\S]*focusOption\(index \+ 1\)/);
   });
 
-  it('preserves immediate WAF/CDN baselines after DNS or provider verification', () => {
-    assert.match(targetGroup, /DNS ownership verified[\s\S]*Bounded WAF\/CDN detection started through the signed-worker path/);
-    assert.match(targetGroup, /The immediate WAF\/CDN baseline could not start/);
-    assert.match(targetGroup, /Bounded WAF\/CDN detection started for \$\{baselineLabel\}/);
-  });
+
 });

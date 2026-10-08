@@ -37,8 +37,6 @@ describe('portal accessibility hardening', () => {
     assert.match(targetCss, /\.td-check-choice \{[^}]*min-width: 44px;[^}]*min-height: 44px;/);
     assert.match(targetCss, /\.td-dns-val \{[^}]*overflow-wrap: anywhere;[^}]*word-break: break-word;/);
     assert.match(target, /import '\.\/target-detail-view\.css'/);
-    const targetGroup = read('apps/web/react/src/pages/target-group-detail-view.tsx');
-    assert.match(targetGroup, /\.tg-detail-view \.check-choice \{[^}]*min-width: 44px;[^}]*min-height: 44px;/);
     assert.match(css, /\.sidebar-foot \.field\.sidebar-role \.select-display \{\s*min-height: 44px;/m);
     assert.match(css, /@media \(pointer: coarse\)[\s\S]*?\.btn-sm \{\s*min-width: 44px;\s*min-height: 44px;/m);
   });

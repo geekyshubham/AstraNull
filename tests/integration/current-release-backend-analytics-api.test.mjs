@@ -491,7 +491,7 @@ describe('declared-host analytics API', () => {
       assert.equal(listed.status, 200);
       assert.equal(caps.status, 200);
       assert.deepEqual(caps.json.capabilities, listed.json.capabilities);
-      assert.deepEqual(caps.json.capabilities.scope.fields, ['target_ids', 'target_group_ids', 'run_ids']);
+      assert.deepEqual(caps.json.capabilities.scope.fields, ['target_ids', 'run_ids']);
       assert.equal(caps.json.capabilities.scope.max_ids, MAX_REPORT_SCOPE_IDS);
       assert.equal(caps.json.capabilities.scope.declared_members_cap, MAX_DECLARED_MEMBERS);
       assert.equal(caps.json.capabilities.scope.omitted, 'tenant');

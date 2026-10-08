@@ -84,7 +84,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
 const RESOURCE_TYPE_LABELS: Record<string, string> = {
   api: 'Access control',
   test_run: 'Validation run',
-  target_group: 'Target group',
+  target_group: 'Retained execution policy',
   high_scale_request: 'SOC-governed test',
   waf_offensive_request: 'SOC-governed WAF test',
   service_account: 'Service account',
@@ -103,7 +103,7 @@ function sentenceCase(value: string) {
 export function formatAuditAction(action: string, fallback = 'Unknown action') {
   const key = action.trim();
   if (!key) return fallback;
-  return AUDIT_ACTION_LABELS[key.toLowerCase()] ?? sentenceCase(key);
+  return AUDIT_ACTION_LABELS[key.toLowerCase()] ?? sentenceCase(key.replace(/^target_group(?=[.:_]|$)/, 'target_policy'));
 }
 
 export function formatResourceTypeLabel(resourceType: string, fallback = 'Record') {

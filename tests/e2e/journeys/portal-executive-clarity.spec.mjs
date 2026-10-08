@@ -167,7 +167,7 @@ test.describe('portal executive clarity', () => {
     for (const term of ['Purpose', 'Service roles', 'Owner', 'Criticality']) {
       await expect(main.getByRole('term').filter({ hasText: new RegExp(`^${term}$`) })).toBeVisible();
     }
-    await expect(page.getByRole('link', { name: 'Group: edge-checkout' })).toHaveAttribute('href', /target-group-detail\?id=tg_checkout$/);
+    await expect(page.getByRole('link', { name: /^Group:/ })).toHaveCount(0);
     // Identity and declared context come before the workspace tabs.
     const order = await page.evaluate(() => {
       const h1 = document.querySelector('#portal-main h1');
@@ -188,7 +188,7 @@ test.describe('portal executive clarity', () => {
 
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const checks = page.getByRole('region', { name: 'Checks for this target' });
-    await expect(checks).toContainText(/\d+ bounded external checks are compatible with this target kind\./);
+    await expect(checks).toContainText(/\d+ bounded external checks can be assessed on this target, including observation checks\./);
     await expect(checks.getByRole('button', { name: /^Review all \d+$/ })).toBeVisible();
 
     // A recorded run of a declaration-only (E1) check never reads as live traffic.

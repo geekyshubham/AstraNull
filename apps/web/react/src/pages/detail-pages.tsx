@@ -64,8 +64,7 @@ import {
   reportOptionsFromCapabilities,
   useReportExport
 } from './page-components';
-import { effectivePolicyTargetKind, isPolicyTargetCompatible } from '../components/policies/target-group-picker';
-import { TargetGroupDetailView as TargetGroupDetailViewRevamp } from './target-group-detail-view';
+import { effectivePolicyTargetKind, isPolicyTargetCompatible } from '../lib/policy-targets';
 import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
@@ -411,8 +410,7 @@ function DetailKvSkeletonRows({ rows = DETAIL_SKELETON_KV_ROWS }: { rows?: numbe
 
 const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }>> = {
   'run-detail': { label: 'Test runs', href: '#runs' },
-  'target-group-detail': { label: 'Target groups', href: '#target-groups' },
-  'target-detail': { label: 'Target groups', href: '#target-groups' },
+  'target-detail': { label: 'Targets', href: '#targets' },
   'report-detail': { label: 'Reports', href: '#reports' },
   'tenant-detail': { label: 'Admin console', href: '#admin' },
   'finding-detail': { label: 'Findings', href: '#findings' },
@@ -426,7 +424,6 @@ const DETAIL_LINK_ROUTES: RouteId[] = [
   'run-detail',
   'check-detail',
   'policy-detail',
-  'target-group-detail',
   'target-detail',
   'tenant-detail',
   'report-detail',
@@ -445,7 +442,6 @@ function detailEntityTitle(route: RouteId, entity: DataItem, entityId: string, c
     return getString(entity, ['objective', 'reason', 'id'], entityId);
   }
   if (route === 'target-detail') return getString(entity, ['value', 'id'], entityId);
-  if (route === 'target-group-detail') return getString(entity, ['name'], entityId);
   if (route === 'report-detail') return getString(entity, ['title'], entityId);
   if (route === 'tenant-detail') {
     const tenant = getNestedItem(entity, ['tenant']) ?? entity;
@@ -921,11 +917,8 @@ function RunDetailView({
   ].filter((item) => item.at);
 
   const runTitle = detailEntityTitle('run-detail', entity, entityId, { checks: data.checks });
-  const groupId = getString(entity, ['target_group_id'], '');
   const runTargetId = getString(entity, ['target_id'], '');
   const runCheckId = getString(entity, ['check_id'], '');
-  const runTargetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === groupId) ?? null;
-  const groupName = groupId ? getString(runTargetGroup ?? {}, ['name'], groupId) : '—';
   const explicitRunValidationMode = getString(entity, ['validation_mode'], 'external_only');
   const verdictValue = hasEvidenceBackedVerdict(entity, data.evidence)
     ? getNestedString(entity, ['verdict', 'verdict'], runVerdictValue(entity))
@@ -991,7 +984,7 @@ function RunDetailView({
       {!loading ? (
         <>
           <div className="metric-grid four">
-            <MetricCard label="Target group" value={groupName} sub="Declared scope under test" icon={Target} tone="info" />
+            <MetricCard label="Domain" value={getString(entity, ['target_value', 'target_id'], 'Not recorded')} sub="Declared endpoint under test" icon={Target} tone="info" />
             <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={getString(entity, ['vector_family'], 'check')} icon={FileCheck2} tone="muted" />
             <MetricCard label="Verdict" value={verdictDisplay} sub="External-only confidence" icon={ShieldCheck} tone={verdictValue ? verdictBadgeTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
@@ -1031,7 +1024,6 @@ function RunDetailView({
                     <DetailKvMonoField label="Run ID" value={entityId} />
                     <div><span>Status</span><StatusBadge value={status} tone={runStatusBadgeTone(status)} fallback="pending" /></div>
                     <div><span>Check</span>{runCheckId ? <DetailEntityLink route="check-detail" id={runCheckId} label={checkDisplayName(data.checks, runCheckId)} /> : <strong>not recorded</strong>}</div>
-                    <div><span>Target group</span>{groupId ? <DetailEntityLink route="target-group-detail" id={groupId} label={groupName} /> : <strong>not recorded</strong>}</div>
                     <div><span>Target</span>{runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} /> : <strong>not recorded</strong>}</div>
                     <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label="Scheduled policy" /> : <strong>not scheduled by a recorded policy</strong>}</div>
                     <div><span>Validation mode</span><strong>{explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'not recorded'}</strong></div>
@@ -1999,7 +1991,6 @@ function HighScaleDetailView({
   const artifacts = Array.isArray(entity.artifacts) ? entity.artifacts as DataItem[] : [];
   const providerChecklist = Array.isArray(entity.provider_approval_checklist) ? entity.provider_approval_checklist as DataItem[] : [];
   const lifecycleTrail = buildLifecycleTimeline(entity);
-  const targetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === getString(entity, ['target_group_id'], ''));
   const title = detailEntityTitle('queue-detail', entity, entityId);
   const requiredArtifactTypes = authorizationArtifactTypesForRequest(entity);
   const canWriteHighScale = sessionHasPermission(session, 'high_scale:write');
@@ -2110,7 +2101,7 @@ function HighScaleDetailView({
           <div className="metric-grid four">
             <MetricCard label="State" value={formatStatusLabel(requestState)} sub="Governed request lifecycle" icon={ShieldCheck} tone={highScaleStateBadgeTone(requestState) === 'danger' ? 'danger' : highScaleStateBadgeTone(requestState) === 'warn' ? 'warn' : highScaleStateBadgeTone(requestState) === 'success' ? 'success' : 'info'} />
             <MetricCard label="Authorization" value={formatStatusLabel(packOverall, 'missing')} sub={`${artifacts.length} artifact records`} icon={FileCheck2} tone={packOverall === 'accepted' ? 'success' : 'warn'} />
-            <MetricCard label="Scope" value={getString(targetGroup ?? {}, ['name'], getString(entity, ['target_group_id'], '—'))} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone={scopeHash ? 'info' : 'muted'} />
+            <MetricCard label="Scope" value={getString(entity, ['target_id'], 'Not recorded')} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone={scopeHash ? 'info' : 'muted'} />
             <MetricCard label="Window" value={requestedWindowStart ? formatDate(requestedWindowStart) : '—'} sub={requestedWindowEnd ? `through ${formatDate(requestedWindowEnd)}` : 'requested window incomplete'} icon={Activity} tone={requestedWindowStart && requestedWindowEnd ? 'info' : 'muted'} />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="High-scale request sections"
@@ -2128,7 +2119,6 @@ function HighScaleDetailView({
                   <CardContent className="kv-list">
                     <div><span>Request</span><strong title={entityId}>{title}</strong></div>
                     <div><span>State</span><StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /></div>
-                    <div><span>Target group</span>{getString(entity, ['target_group_id'], '') ? <DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} label={getString(targetGroup ?? {}, ['name'], getString(entity, ['target_group_id']))} /> : <strong>not recorded</strong>}</div>
                     <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
                     <div><span>Objective</span><strong>{getString(entity, ['objective'], 'not recorded')}</strong></div>
                     <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'not recorded')}</strong></div>
@@ -2526,7 +2516,7 @@ function SocRequestDetailView({
       <div className="metric-grid four">
         <MetricCard label="State" value={formatStatusLabel(state, 'submitted')} sub="Governed lifecycle state" icon={ShieldCheck} tone={stateTone === 'danger' ? 'danger' : stateTone === 'warn' ? 'warn' : stateTone === 'success' ? 'success' : 'info'} />
         <MetricCard label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} sub="Authorization pack review" icon={FileCheck2} tone={packReady ? 'success' : 'warn'} />
-        <MetricCard label="Target group" value={getString(entity, ['target_group_name', 'target_group_label'], 'Declared target group')} sub="Declared scope under request" icon={Target} tone="muted" />
+        <MetricCard label="Domains" value={Array.isArray(entity.target_ids) ? entity.target_ids.length : entity.target_id ? 1 : 'Not recorded'} sub="Declared scope under request" icon={Target} tone="muted" />
         <MetricCard label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} sub={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} icon={Activity} tone={windowConfirmed ? 'info' : 'muted'} />
       </div>
       <Card>
@@ -2588,7 +2578,6 @@ function SocRequestDetailView({
             <CardContent className="kv-list">
               <div><span>Request</span><strong title={entityId}>{title}</strong></div>
               <div><span>Tenant</span><strong>{actionTenantId ?? 'not recorded'}</strong></div>
-              <div><span>Target group</span>{getString(entity, ['target_group_id'], '') ? <DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} /> : <strong>not recorded</strong>}</div>
               <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
               <div><span>Objective</span><strong>{getString(entity, ['objective'], 'not recorded')}</strong></div>
               <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'not recorded')}</strong></div>
@@ -2839,22 +2828,6 @@ function latestCheckVerdict(runs: DataItem[], evidence: DataItem[], checkId: str
   for (const run of runs) {
     if (getString(run, ['check_id'], '') !== checkId) continue;
     if (!['completed', 'verdicted'].includes(getString(run, ['status'], ''))) continue;
-    if (!hasEvidenceBackedVerdict(run, evidence)) continue;
-    const verdict = runVerdictValue(run);
-    if (!verdict) continue;
-    const at = String(run.updated_at ?? run.completed_at ?? run.started_at ?? run.created_at ?? '');
-    if (!best || at.localeCompare(best.at) >= 0) {
-      best = { verdict, runId: getString(run, ['id'], ''), at };
-    }
-  }
-  return best ? { verdict: best.verdict, runId: best.runId } : null;
-}
-
-/** Latest run outcome for a given target group id. */
-function latestGroupVerdict(runs: DataItem[], evidence: DataItem[], groupId: string): { verdict: string; runId: string } | null {
-  let best: { verdict: string; runId: string; at: string } | null = null;
-  for (const run of runs) {
-    if (getString(run, ['target_group_id'], '') !== groupId) continue;
     if (!hasEvidenceBackedVerdict(run, evidence)) continue;
     const verdict = runVerdictValue(run);
     if (!verdict) continue;
@@ -3137,8 +3110,7 @@ function CheckDetailPage({
   const callerCompatible = compatibility.status === 'loaded'
     ? compatibility.checks.some((candidate) => getString(candidate, ['check_id'], '') === entityId)
     : null;
-  const callerGroupId = callerTarget ? getString(callerTarget, ['target_group_id'], '') : '';
-  const scheduleHref = `#test-policies?check=${encodeURIComponent(entityId)}${callerTarget && callerCompatible && callerGroupId ? `&group=${encodeURIComponent(callerGroupId)}&target=${encodeURIComponent(callerTargetId)}` : ''}`;
+  const scheduleHref = `#test-policies?check=${encodeURIComponent(entityId)}${callerTarget && callerCompatible ? `&target=${encodeURIComponent(callerTargetId)}` : ''}`;
   const canSchedule = customerRunnable && sessionHasPermission(session, 'test_policy:write') && (!callerTargetId || callerCompatible === true);
 
   const policyColumns: TableColumn<DataItem>[] = [
@@ -3264,7 +3236,7 @@ function CheckDetailPage({
                   <div className="row-actions">
                   {maxEvents ? <Badge tone="muted">max {maxEvents} events</Badge> : null}
                   {maxDuration ? <Badge tone="muted">max {maxDuration}s</Badge> : null}
-                  {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent per group</Badge> : null}
+                  {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent in the execution slot</Badge> : null}
                   </div>
                 </div>
               ) : <p className="muted">Not recorded</p>}
@@ -3541,7 +3513,6 @@ function PolicyDetailPage({
   const checkHref = scheduleCheckHref(policy, checks);
   const binding = evidenceCodeBlock([
     ['policy_id', entityId],
-    ['target_group_id', target.groupId],
     ['target_id', target.targetId],
     ['check_id', check.checkId],
     ['cadence', cadence],
@@ -3557,7 +3528,7 @@ function PolicyDetailPage({
     {
       label: 'Exact target bound',
       status: target.targetId ? 'met' : 'blocked',
-      detail: target.targetId ? `${target.targetLabel}${target.groupLabel ? ` in ${target.groupLabel}` : ''}` : 'Legacy schedule without an exact target. Create a new schedule bound to one target.'
+      detail: target.targetId ? target.targetLabel : 'Legacy schedule without an exact target. Create a new schedule bound to one target.'
     },
     {
       label: 'Check available and customer-runnable',
@@ -3666,7 +3637,6 @@ function PolicyDetailPage({
           <CardContent className="kv-list">
             <div><span>Check</span>{checkHref ? <a href={checkHref}>{check.name}</a> : <strong>Not recorded</strong>}</div>
             <div><span>Exact target</span>{target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <strong>Not recorded</strong>}</div>
-            <div><span>Target group</span>{target.groupId ? <DetailEntityLink route="target-group-detail" id={target.groupId} label={target.groupLabel} /> : <strong>Not recorded</strong>}</div>
           </CardContent>
         </Card>
         <Card>
@@ -3767,19 +3737,11 @@ export function DetailRoutePage({
       ? runEventState
       : { entityId, status: 'loading', items: [], error: '' };
 
-  const targetGroupFallback = data.targetGroups.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const runFallback = data.runs.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const tenantFallback = data.internalTenants.find((item) => getString(item, ['tenant_id', 'id'], '') === entityId) ?? null;
   const findingFallback = data.findings.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const highScaleFallback = data.highScale.find((item) => getString(item, ['id'], '') === entityId) ?? null;
 
-  const targetGroupDetail = useEntityDetail(
-    route === 'target-group-detail' && Boolean(entityId),
-    config,
-    session,
-    `/v1/target-groups/${encodeURIComponent(entityId)}`,
-    targetGroupFallback
-  );
   const runDetail = useEntityDetail(
     route === 'run-detail' && Boolean(entityId),
     config,
@@ -3803,9 +3765,7 @@ export function DetailRoutePage({
   );
   // Mutations on an entity detail page must re-read the entity itself, not just the list
   // datasets onRefresh reloads; otherwise removed targets, triage changes, etc. stay on screen.
-  const activeEntityReload = route === 'target-group-detail'
-    ? targetGroupDetail.reload
-    : route === 'run-detail'
+  const activeEntityReload = route === 'run-detail'
       ? runDetail.reload
       : route === 'tenant-detail'
         ? tenantDetail.reload
@@ -3832,8 +3792,7 @@ export function DetailRoutePage({
     }
   );
   const detailState =
-    route === 'target-group-detail' ? targetGroupDetail
-      : route === 'run-detail' ? runDetail
+    route === 'run-detail' ? runDetail
         : { detail: null as DataItem | null, error: '', loading: false };
 
   const entity =
@@ -3960,11 +3919,11 @@ export function DetailRoutePage({
       return (
         <div className="content">
           <DetailPageIntro route={route} eyebrow="Declared target" />
-          <EmptyState icon={Target} title="No target selected." body="Open a target from a target group detail table." actionLabel="Open target groups" actionHref="#target-groups" />
+          <EmptyState icon={Target} title="No target selected." body="Open a declared target from Targets." actionLabel="Open targets" actionHref="#targets" />
         </div>
       );
     }
-    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} targetGroups={data.targetGroups} wafEdgeEnabled={data.deploymentFeatures?.waf_posture === true} protectionValidationEnabled={data.deploymentFeatures?.protection_validation === true} onRefresh={onRefresh} />;
+    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} wafEdgeEnabled={data.deploymentFeatures?.waf_posture === true} protectionValidationEnabled={data.deploymentFeatures?.protection_validation === true} onRefresh={onRefresh} />;
   }
 
   if (route === 'check-detail') {
@@ -4047,57 +4006,6 @@ export function DetailRoutePage({
     );
   }
 
-  if (route === 'target-group-detail') {
-    if (!entityId) {
-      return (
-        <div className="content">
-          <DetailPageIntro route={route} eyebrow="Declared business service" />
-          <EmptyState
-            icon={Target}
-            title="No target group selected."
-            body="Open a group from the list with ?id= or use the Detail link on #target-groups."
-            actionLabel="Open target groups"
-            actionHref="#target-groups"
-          />
-        </div>
-      );
-    }
-    if (!entity && detailState.loading) {
-      return (
-        <div className="content">
-          <DetailPageIntro route={route} eyebrow="Declared business service" />
-          <DetailLoadingPlaceholder label="Loading target group detail…" />
-        </div>
-      );
-    }
-    if (!entity) {
-      return (
-        <div className="content">
-          <DetailPageIntro route={route} eyebrow="Declared business service" />
-          <EmptyState
-            icon={Target}
-            title="Target group not found."
-            body={detailState.error || 'The requested group is missing, archived, or outside this tenant scope.'}
-            actionLabel="Open target groups"
-            actionHref="#target-groups"
-          />
-        </div>
-      );
-    }
-    return (
-      <TargetGroupDetailViewRevamp
-        entity={entity}
-        entityId={entityId}
-        data={data}
-        config={config}
-        session={session}
-        onRefresh={refreshWithEntity}
-        loading={detailState.loading}
-        loadError={detailState.error}
-      />
-    );
-  }
-
   if (!entityId) {
     const noSelectionByRoute: Partial<Record<RouteId, { eyebrow: string; title: string; body: string; actionLabel: string; actionHref: string; icon: typeof Target }>> = {
       'run-detail': {
@@ -4127,9 +4035,9 @@ export function DetailRoutePage({
       'target-detail': {
         eyebrow: 'Declared target',
         title: 'No target selected.',
-        body: 'Open a target from a target group detail table.',
-        actionLabel: 'Open target groups',
-        actionHref: '#target-groups',
+        body: 'Open a declared target from Targets.',
+        actionLabel: 'Open targets',
+        actionHref: '#targets',
         icon: Target
       }
     };
@@ -4360,7 +4268,6 @@ export function ReportDetailPage({
   const scopeMode = getString(scope ?? {}, ['mode'], '');
   const periodBounds = getNestedItem(scope, ['period']);
   const declaredMembers = getNestedItem(scope, ['declared_members']);
-  const groupRefs = getNestedArray(scope, ['group_refs']);
   const scopeTargetIds = Array.isArray(scope?.target_ids) ? (scope!.target_ids as unknown[]).map(String) : [];
   const runCapture = getNestedItem(summary, ['run_capture']);
   const findingsSnapshot = getNestedItem(summary, ['findings_snapshot']);
@@ -4391,8 +4298,9 @@ export function ReportDetailPage({
     ? 'Not recorded (legacy report)'
     : scopeMode === 'tenant'
       ? 'Whole workspace'
+      : scopeMode === 'target_groups'
+        ? 'Historical domain scope (exact domain IDs not captured)'
       : [
-        groupRefs.length ? `Groups: ${groupRefs.map((group) => getString(group, ['name'], getString(group, ['id'], ''))).join(', ')}` : '',
         scopeTargetIds.length ? `${formatNumber(scopeTargetIds.length)} selected target${scopeTargetIds.length === 1 ? '' : 's'}` : '',
         scopeMode === 'runs' ? 'Explicit runs' : ''
       ].filter(Boolean).join(' · ') || scopeMode.replaceAll('_', ' ');

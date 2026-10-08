@@ -294,13 +294,13 @@ test.describe('current-release customer pages', () => {
     await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
   });
 
-  test('reports: caller group is preselected exactly, reviewed, generated without export, and previewed', async ({ page }) => {
+  test('reports: caller domain is preselected exactly, reviewed, generated without export, and previewed', async ({ page }) => {
     const writes = recordWrites(page);
     await injectPortalDevHeadersSession(page);
-    await page.goto(`${sourceBaseUrl}/app#reports?group=${PORTAL_BASELINE_IDS.targetGroupId}`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#reports?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
 
-    await expect(page.getByRole('radio', { name: 'Selected target groups' })).toBeChecked();
-    await expect(page.getByRole('list', { name: 'Target groups' }).getByRole('checkbox', { name: /edge-checkout/ })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Selected domains' })).toBeChecked();
+    await expect(page.getByRole('list', { name: 'Declared domains' }).getByRole('checkbox', { name: /checkout.acme.com/ })).toBeChecked();
     await expect(page.getByRole('button', { name: 'Generate report' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Review report' })).toBeDisabled();
     await page.getByRole('radio', { name: /Technical/ }).check();
@@ -308,35 +308,35 @@ test.describe('current-release customer pages', () => {
 
     const review = page.getByRole('region', { name: 'Review before generating' });
     await expect(review.getByRole('heading', { name: 'Review before generating' })).toBeFocused();
-    await expect(review).toContainText('edge-checkout');
+    await expect(review).toContainText('checkout.acme.com');
     await expect(review).toContainText('Not included: the published formula covers the whole workspace');
     await expect(review).not.toContainText('Whole workspace');
 
     const post = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/v1/reports');
     await review.getByRole('button', { name: 'Generate report' }).click();
     const body = (await post).postDataJSON();
-    expect(body.target_group_ids).toEqual([PORTAL_BASELINE_IDS.targetGroupId]);
-    for (const key of ['target_ids', 'run_ids', 'target_id', 'target_group_id', 'scope']) expect(body).not.toHaveProperty(key);
+    expect(body.target_ids).toEqual([PORTAL_BASELINE_IDS.targetId]);
+    for (const key of ['target_group_ids', 'run_ids', 'target_id', 'target_group_id', 'scope']) expect(body).not.toHaveProperty(key);
 
     const preview = page.locator('.report-generated-preview');
     await expect(preview).toContainText('Generated:');
     await expect(preview).toContainText('Nothing is exported until you choose a format');
-    await expect(preview.locator('.kv-list > div').filter({ hasText: /^Scope/ })).toContainText('1 target group(s)');
+    await expect(preview.locator('.kv-list > div').filter({ hasText: /^Scope/ })).toContainText('1 target(s)');
     await expect(preview.locator('.kv-list > div').filter({ hasText: 'Readiness score' })).toContainText('Not included');
     await expect(preview.getByRole('button', { name: 'Export', exact: true })).toBeVisible();
     expect(writes).toEqual(['POST /v1/reports']);
   });
 
-  test('reports: an unknown caller group is shown and removable, never replaced, and whole workspace sends no scope', async ({ page }) => {
+  test('reports: an unknown caller domain is shown and removable, never replaced, and whole workspace sends no scope', async ({ page }) => {
     const writes = recordWrites(page);
     await injectPortalDevHeadersSession(page);
-    await page.goto(`${sourceBaseUrl}/app#reports?group=tg_missing_example`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#reports?target=tgt_missing_example`, { waitUntil: 'networkidle' });
 
-    await expect(page.getByRole('alert').filter({ hasText: 'Not visible in this workspace: tg_missing_example. Nothing else was selected in its place.' })).toBeVisible();
-    await expect(page.getByRole('list', { name: 'Target groups' }).getByRole('checkbox', { checked: true })).toHaveCount(0);
+    await expect(page.getByRole('alert').filter({ hasText: 'Not visible in this workspace: tgt_missing_example. Nothing else was selected in its place.' })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Declared domains' }).getByRole('checkbox', { checked: true })).toHaveCount(0);
     await page.getByRole('radio', { name: /Technical/ }).check();
     await expect(page.getByRole('button', { name: 'Review report' })).toBeDisabled();
-    await page.getByRole('button', { name: 'Remove tg_missing_example' }).click();
+    await page.getByRole('button', { name: 'Remove tgt_missing_example' }).click();
     await expect(page.getByText('Not visible in this workspace')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Review report' })).toBeDisabled();
 
@@ -358,12 +358,12 @@ test.describe('current-release customer pages', () => {
       if (route.request().method() !== 'POST') return route.continue();
       return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'scope_too_large', status: 400, field: 'declared_members', count: 140, limit: 100 }) });
     });
-    await page.goto(`${sourceBaseUrl}/app#reports?group=${PORTAL_BASELINE_IDS.targetGroupId}`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#reports?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
     await page.getByRole('radio', { name: /Technical/ }).check();
     await page.getByRole('button', { name: 'Review report' }).click();
     await page.getByRole('region', { name: 'Review before generating' }).getByRole('button', { name: 'Generate report' }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'The scope is too large: 140 declared targets, limit 100. Choose fewer groups or targets.' })).toBeVisible();
-    await expect(page.getByRole('list', { name: 'Target groups' }).getByRole('checkbox', { name: /edge-checkout/ })).toBeChecked();
+    await expect(page.getByRole('alert').filter({ hasText: 'The scope is too large: 140 declared targets, limit 100. Choose fewer domains.' })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Declared domains' }).getByRole('checkbox', { name: /checkout.acme.com/ })).toBeChecked();
     await expect(page.getByRole('radio', { name: /Technical/ })).toBeChecked();
     await expect(page.locator('.report-generated-preview')).toHaveCount(0);
     await page.unroute('**/v1/reports');
@@ -376,11 +376,11 @@ test.describe('current-release customer pages', () => {
       return route.fulfill({ response, json: payload });
     });
     await page.goto(`${sourceBaseUrl}/app#dashboard`, { waitUntil: 'networkidle' });
-    await page.goto(`${sourceBaseUrl}/app#reports?group=${PORTAL_BASELINE_IDS.targetGroupId}`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#reports?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
     await page.reload({ waitUntil: 'networkidle' });
-    await expect(page.getByRole('alert').filter({ hasText: `This server does not advertise target-group-scoped reports. ${PORTAL_BASELINE_IDS.targetGroupId} was not applied` })).toBeVisible();
-    await expect(page.getByRole('radio', { name: /Selected target groups/ })).toBeDisabled();
-    await expect(page.getByRole('list', { name: 'Target groups' })).toHaveCount(0);
+    await expect(page.getByRole('alert').filter({ hasText: 'This server does not advertise domain-scoped reports. The saved scope was not applied and no other domain was selected.' })).toBeVisible();
+    await expect(page.getByRole('radio', { name: /Selected domains/ })).toBeDisabled();
+    await expect(page.getByRole('list', { name: 'Declared domains' })).toHaveCount(0);
     await page.getByRole('radio', { name: /Technical/ }).check();
     await expect(page.getByRole('button', { name: 'Review report' })).toBeDisabled();
     await page.getByRole('radio', { name: 'Whole workspace' }).check();
@@ -417,7 +417,7 @@ test.describe('current-release customer pages', () => {
 
     await expect(page.getByRole('note').filter({ hasText: 'This is a legacy report' })).toHaveCount(0);
     const snapshot = page.getByRole('region', { name: /At generation/ });
-    await expect(snapshot.locator('.kv-list > div').filter({ hasText: /^Scope/ })).toContainText('Groups: edge-checkout');
+    await expect(snapshot.locator('.kv-list > div').filter({ hasText: /^Scope/ })).toContainText('Historical domain scope');
     await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Runs captured' })).toContainText('2 of 2');
     await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Open findings at generation' })).toContainText('1');
     await expect(snapshot).toContainText('Not included: the published readiness formula covers the whole workspace');
@@ -704,13 +704,17 @@ test.describe('current-release customer pages', () => {
     await expect(review).toBeFocused();
   });
 
-  test('target groups: name first, undeclared context explicit, add target never preselects a group', async ({ page }) => {
+  test('targets: domain first and direct intake has no grouping selector', async ({ page }) => {
+    const writes = recordWrites(page);
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-groups', sourceBaseUrl);
-    await expect(page.getByRole('link', { name: 'edge-checkout', exact: true })).toBeVisible();
-    await expect(page.getByText('Owner not declared').first()).toBeVisible();
-    await page.getByRole('button', { name: 'Add target to a group' }).click();
-    await expect(page.locator('dialog.form-modal[open]').getByRole('button', { name: 'Group', exact: true })).toContainText('Choose a group');
+    await gotoPortalRoute(page, 'targets', sourceBaseUrl);
+    await expect(page.getByRole('link', { name: 'Open target checkout.acme.com', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Add target', exact: true }).click();
+    const intake = page.locator('.targets-intake-form');
+    await expect(intake.getByLabel('Value', { exact: true })).toBeVisible();
+    await expect(intake.getByRole('button', { name: 'Group', exact: true })).toHaveCount(0);
+    await expect(page.locator('.targets-intake')).not.toContainText(/\bgroup\b/i);
+    expect(writes).toEqual([]);
   });
 
   test('artifact detail: returns to findings, recorded hash stays unverified', async ({ page }) => {
@@ -728,7 +732,7 @@ test.describe('current-release customer pages', () => {
       test.setTimeout(180_000);
       await page.addInitScript((value) => localStorage.setItem('astranull.theme', value), theme);
       const routes = [
-        ['target-groups', PORTAL_SESSION],
+        ['targets', PORTAL_SESSION],
         [`checks?target=${PORTAL_BASELINE_IDS.targetId}`, PORTAL_SESSION],
         [`check-detail?id=${PORTAL_BASELINE_IDS.checkId}&policy=${BOUND_POLICY_ID}`, PORTAL_SESSION],
         ['test-policies', PORTAL_SESSION],
@@ -764,7 +768,7 @@ test.describe('current-release customer pages', () => {
     await page.setViewportSize({ width: 640, height: 800 });
     await injectPortalDevHeadersSession(page);
     const overflowing = [];
-    for (const hash of ['target-groups', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'settings?tab=access', 'support', 'subscription', `checks?target=${PORTAL_BASELINE_IDS.targetId}`]) {
+    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'settings?tab=access', 'support', 'subscription', `checks?target=${PORTAL_BASELINE_IDS.targetId}`]) {
       await page.goto(`${sourceBaseUrl}/app#${hash}`, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       if (overflow > 1) overflowing.push(`${hash}: ${overflow}px`);
@@ -793,7 +797,7 @@ test.describe('current-release customer pages', () => {
     const page = await context.newPage();
     await injectPortalDevHeadersSession(page);
     const small = [];
-    for (const hash of ['target-groups', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'support', 'subscription', 'settings', `checks?target=${PORTAL_BASELINE_IDS.targetId}`, `integrations?focus=${RULE_ID}`]) {
+    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'support', 'subscription', 'settings', `checks?target=${PORTAL_BASELINE_IDS.targetId}`, `integrations?focus=${RULE_ID}`]) {
       await page.goto(`${sourceBaseUrl}/app#${hash}`, { waitUntil: 'networkidle' });
       const found = await page.evaluate(() => {
         const out = [];

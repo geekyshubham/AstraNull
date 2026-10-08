@@ -1275,3 +1275,19 @@ Other correlation rules from the 2026-10-06 staging run: a completed TLS handsha
 `GET /v1/test-runs/:id/activity?limit=256` uses the existing bounded passive read. Final result items add safe protocol primitives in `observations` and `port_observations` with at most 15 valid port numbers per array (`open_ports`, `filtered_ports`, `closed_ports`). These fields do not enter correlation as new evidence. All existing tenant, provenance, preview redaction, and execution bounds remain unchanged.
 
 `GET /v1/checks?scope=all` exposes the full authenticated static catalog, including `requires_additional_input`. The default remains the plain-selection catalog. Reading the complete catalog does not authorize dispatch: target compatibility, additional-input validation, subscription, ownership, SOC, and safe-run limits still apply. A full target assessment can include E2 observation checks; E2 results remain excluded from conclusive readiness coverage.
+
+### Direct domain workflows (2026-10-08)
+
+The portal selects declared targets directly. Human API requests can use `x-astranull-target-model: direct` to omit obsolete grouping identity fields from ordinary JSON projections. This is a representation choice, not an authorization grant. Original immutable evidence and custody export/verification payloads keep their original format.
+
+- `POST /v1/test-runs`, `POST /v1/waf/edge-detection`, and schedule writes accept `target_id` without a grouping field. The server resolves the same-tenant declared target and its existing execution policy before applying all existing gates.
+- `POST /v1/validation-scans` accepts `target_ids: string[]` (or an exact `target_id`) plus `check_ids`. IDs are validated in full before creation; duplicate IDs are removed; at most 500 target/check steps are planned. Cross-policy selected domains keep their own windows, cooldowns, concurrency, and rate controls. Scheduled occurrences retain the captured explicit selection. A target-filtered list includes assessments containing that target.
+- `POST /v1/high-scale-requests` accepts exact target IDs or a `target_ids` set; governed scope hashes and authoritative artifact approvals bind to that exact set. Every selected target must have current ownership/authorization, and SOC controls remain mandatory.
+- `DELETE /v1/targets/:id` retains evidence and refuses an active execution on that target.
+- `GET /v1/targets/:id/dns-ownership`, `POST .../issue`, and `POST .../verify` bind challenges to the exact target. Verification rejects a challenge belonging to another target, even if it shares the retained policy.
+- `GET /v1/targets/:id/authorization` returns only an active authorization covering that target. `POST` captures only that target and requires explicit attestation and a valid signer; a conflicting scope is rejected. Distinct domain signatures can coexist on a retained policy, while overlapping active scope returns `409 loa_active`. Historical signatures and custody digests are retained.
+- `POST /v1/targets:csv` accepts the same bounded CSV/multipart contract as existing imports. All rows are validated before writing; imports need no group selection.
+
+Legacy compatibility routes remain available to existing integrations while customer navigation and selection use targets. IDs, original custody artifacts, and existing policy histories are preserved.
+
+Readiness coverage and freshness now use exact active declared targets, with same-tenant retained policy binding checks. One target's evidence does not cover its siblings. Factor weights remain unchanged; the state representation includes a declared target count. Scores can decrease where the previous group-based denominator implied coverage for untested domains.

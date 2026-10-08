@@ -32,8 +32,8 @@ export const RESOURCE_EVIDENCE_FRESHNESS_DAYS: number;
 export const RESOURCE_EVIDENCE_FRESHNESS_MS: number;
 export const RESOURCE_FAMILIES: ResourceFamily[];
 
-export function resourceMatrixGroups(
-  targetGroups: Array<Record<string, unknown>>,
+export function resourceMatrixTargets(
+  targets: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>>;
 
 export function resourceFamilyCheckIds(
@@ -44,14 +44,14 @@ export function resourceFamilyCheckIds(
 export function applicableResourceFamilyCheckIds(input: {
   checks: Array<Record<string, unknown>>;
   family: ResourceFamily;
-  groupId: string;
+  targetId: string;
   targets: Array<Record<string, unknown>>;
   targetInventoryLoaded?: boolean;
 }): Set<string>;
 
 export function resourceFamilyVerdictState(input: {
   checkIds: Set<string>;
-  groupId: string;
+  targetId: string;
   runs: Array<Record<string, unknown>>;
   evidence: Array<Record<string, unknown>>;
   nowMs?: number;

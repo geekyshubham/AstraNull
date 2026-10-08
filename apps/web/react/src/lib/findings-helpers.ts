@@ -305,12 +305,6 @@ export function findingAssetIdentity(finding: DataItem, targets: DataItem[] = []
     || '';
   if (targetId) return { key: `target:${targetId}`, label: name || targetId };
   if (name) return { key: `label:${name}`, label: name };
-  const groupId = getString(finding, ['target_group_id'], '');
-  if (groupId) {
-    const group = targetGroups.find((entry) => getString(entry, ['id'], '') === groupId);
-    const groupName = getString(group ?? null, ['name', 'display_name'], '');
-    return { key: `group:${groupId}`, label: groupName ? `${groupName} (target-group scope)` : `Target-group scope ${groupId}` };
-  }
   return { key: `finding:${getString(finding, ['id'], '') || 'unknown'}`, label: UNRECORDED_ASSET_LABEL };
 }
 

@@ -44,6 +44,7 @@ export async function getState(ctx) {
     computed: {
       readiness: computeReadiness(tenantId),
       target_groups: activeTargetGroupsForTenant(tenantId).length,
+      targets: (store.targets ?? []).filter((target) => target.tenant_id === tenantId && !target.deleted_at && !target.archived_at).length,
       recent_runs: recentRuns,
       open_findings: store.findings.filter(
         (f) => f.tenant_id === tenantId && (f.status === 'open' || f.state === 'open'),

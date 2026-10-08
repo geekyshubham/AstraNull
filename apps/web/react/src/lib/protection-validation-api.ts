@@ -659,7 +659,7 @@ export function cancelRun(config: PortalConfig, session: Session, runId: string,
 }
 
 /** Reviewed single-check retest through the existing gated run start; no destination fields are sent. */
-export async function startReviewedRetest(config: PortalConfig, session: Session, body: { check_id: string; target_group_id: string; target_id: string }) {
+export async function startReviewedRetest(config: PortalConfig, session: Session, body: { check_id: string; target_id: string }) {
   const payload = rec(await requestJson(config, session, '/v1/test-runs', { method: 'POST', body })) ?? {};
-  return str(payload.id);
+  return str(rec(payload.run)?.id ?? payload.id);
 }

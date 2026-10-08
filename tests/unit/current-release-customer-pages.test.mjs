@@ -24,7 +24,6 @@ const reportsPage = between(pageComponents, 'export function ReportsPage(', 'fun
 const settingsPage = between(pageComponents, 'export function SettingsPage(', 'export function PolicyPage(');
 const supportPage = between(pageComponents, 'export function SupportPage(', 'const ENTITLEMENT_FEATURES');
 const subscriptionPage = between(pageComponents, 'export function SubscriptionPage(', 'export function StaffSurfacePage(');
-const targetGroupsPage = between(pageComponents, 'export function TargetGroupsPage(', 'type ReportExportFormat');
 const auditPage = between(governance, 'export function AuditPage(', 'type ReleaseRecordView');
 const notificationsPage = between(governance, 'export function NotificationsPage(', 'function summarizeOperationResult(');
 const releasePage = between(governance, 'export function ReleaseEvidencePage(', 'export function SocConsolePage(');
@@ -110,20 +109,6 @@ describe('check library and check detail (checks, check-detail)', () => {
   });
 });
 
-describe('target groups', () => {
-  it('leads with the group name and states undeclared owner and criticality', () => {
-    assert.match(targetGroupsPage, /className="tg-name-link"/);
-    assert.match(targetGroupsPage, /Owner not declared/);
-    assert.match(targetGroupsPage, /Criticality not declared/);
-  });
-
-  it('does not preselect the first group for Add target and does not treat zero findings as healthy', () => {
-    assert.match(targetGroupsPage, /const \[addTargetGroupId, setAddTargetGroupId\] = useState\(''\);/);
-    assert.doesNotMatch(targetGroupsPage, /<Badge tone="success">0<\/Badge>/);
-    assert.match(targetGroupsPage, /None checked/);
-  });
-});
-
 describe('reports and report detail (TF-12)', () => {
   it('requires an explicit review and generation never exports or verifies', () => {
     const generate = between(reportsPage, 'async function handleGenerate()', 'return (');
@@ -134,7 +119,7 @@ describe('reports and report detail (TF-12)', () => {
 
   it('sends exact scope arrays only for the chosen mode and omits them for the whole workspace', () => {
     const generate = between(reportsPage, 'async function handleGenerate()', 'return (');
-    assert.match(generate, /if \(scopeMode === 'groups'\) body\.target_group_ids = \[\.\.\.selectedGroupIds\];/);
+    assert.doesNotMatch(generate, /body\.target_group_ids/);
     assert.match(generate, /if \(scopeMode === 'targets'\) body\.target_ids = \[\.\.\.selectedTargetIds\];/);
     assert.doesNotMatch(generate, /body\.(target_id|target_group_id|group_id|scope)\b/);
     assert.match(generate, /describeReportScopeError\(result\)/);
@@ -142,10 +127,10 @@ describe('reports and report detail (TF-12)', () => {
 
   it('offers scoped modes and limits only as advertised by the report capabilities', () => {
     assert.match(reportsPage, /getNestedItem\(data\.reportCapabilities \?\? \{\}, \['scope'\]\)/);
-    assert.match(reportsPage, /scopeFields\.includes\(mode === 'groups' \? 'target_group_ids' : 'target_ids'\)/);
+    assert.match(reportsPage, /scopeFields\.includes\('target_ids'\)/);
     assert.match(reportsPage, /getOptionalNumber\(scopeCaps, \['max_ids'\]\)/);
     assert.doesNotMatch(pageComponents, /REPORT_SCOPE_LIMIT/);
-    assert.match(reportsPage, /was not applied and nothing else was selected in its place/);
+    assert.match(reportsPage, /scope was not applied and no other domain was selected/);
   });
 
   it('keeps an unresolved caller ID visible instead of falling back to another record', () => {
@@ -325,9 +310,8 @@ describe('address state uses the shared allowlisted route parameters', () => {
       assert.doesNotMatch(source, /window\.history\.replaceState\(/);
     }
     assert.match(schedules, /replaceRouteParams\(\{ status: next === 'all' \? null : next \}\)/);
-    assert.match(targetGroupsPage, /replaceRouteParams\(\{ q: query\.trim\(\) \|\| null, view: showArchived \? 'archived' : null \}\)/);
     assert.match(settingsPage, /replaceRouteParams\(\{ tab: next === 'organization' \? null : next \}\)/);
-    assert.match(checkDetail, /&group=\$\{encodeURIComponent\(callerGroupId\)\}&target=/);
+    assert.match(checkDetail, /&target=\$\{encodeURIComponent\(callerTargetId\)\}/);
   });
 
   it('resolves an incoming audit event outside the loaded page by exact read only', () => {

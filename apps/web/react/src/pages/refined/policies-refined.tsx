@@ -11,12 +11,7 @@ import {
   Plus,
   ShieldCheck
 } from 'lucide-react';
-import {
-  effectivePolicyTargetKind,
-  isPolicyTargetCompatible,
-  policySupportedTargetKinds,
-  TargetGroupPicker
-} from '../../components/policies/target-group-picker';
+import { DomainPicker } from '../../components/targets/domain-picker';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -32,14 +27,6 @@ import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/type
 import { formatNumber } from '../../lib/utils';
 import './policies-refined.css';
 
-/** Mirrors PolicyPage's per-group exact-target binding state. */
-export type RefinedPolicyTargetBinding = {
-  targets: DataItem[];
-  selectedTargetId: string;
-  loading: boolean;
-  error: string;
-};
-
 /**
  * The create-schedule form state and handlers, owned by PolicyPage. The form renders inline
  * (progressive disclosure), but every value, validation rule, and write path is the parent's.
@@ -48,13 +35,10 @@ export interface PolicyCreateFormModel {
   open: boolean;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  targetGroups: DataItem[];
-  selectedGroupIds: string[];
-  onTargetGroupsChange: (ids: string[]) => void;
-  bindings: Record<string, RefinedPolicyTargetBinding>;
-  onSelectTarget: (targetGroupId: string, targetId: string) => void;
-  onRetryTargets: (targetGroupId: string) => void;
-  bindingsReady: boolean;
+  targets: DataItem[];
+  selectedTargetIds: string[];
+  onTargetsChange: (ids: string[]) => void;
+  selectionReady: boolean;
   selectedCheck: DataItem | null;
   checkId: string;
   checkOptions: SelectOption[];
@@ -197,15 +181,11 @@ export function scheduleCheck(policy: DataItem, checks: DataItem[]) {
 
 export function scheduleTarget(policy: DataItem) {
   const target = nested(policy, 'target');
-  const group = nested(policy, 'target_group');
   const targetId = str(policy, ['target_id'], str(target, ['id']));
-  const groupId = str(policy, ['target_group_id'], str(group, ['id']));
   return {
     targetId,
     targetLabel: str(target, ['value', 'hostname'], targetId),
     targetKind: str(target, ['kind']).replace(/_/g, ' '),
-    groupId,
-    groupLabel: str(group, ['name'], groupId)
   };
 }
 
@@ -462,7 +442,6 @@ export function ScheduleEditDialog({
         <dl className="rf-binding-facts full" aria-label="Immutable binding">
           <div><dt>Check</dt><dd>{check.name}<span className="rf-mono"> {check.checkId || 'not recorded'}</span></dd></div>
           <div><dt>Exact target</dt><dd>{target.targetLabel || 'Not recorded'}{target.targetKind ? <span className="rf-mono"> {target.targetKind}</span> : null}</dd></div>
-          <div><dt>Target group</dt><dd>{target.groupLabel || 'Not recorded'}</dd></div>
         </dl>
         <p className="rf-help full"><Lock size={12} aria-hidden="true" /> The binding is immutable. To validate a different target or check, create a new schedule.</p>
         <Select label="Cadence" name="cadence" value={cadence} options={[
@@ -673,83 +652,6 @@ function FeedbackBanner({ message, error }: { message: string; error: string }) 
   );
 }
 
-function TargetBindingRow({
-  targetGroupId,
-  form,
-  busy
-}: {
-  targetGroupId: string;
-  form: PolicyCreateFormModel;
-  busy: string;
-}) {
-  const group = form.targetGroups.find((candidate) => str(candidate, ['id']) === targetGroupId);
-  const groupName = str(group, ['name'], targetGroupId);
-  const binding = form.bindings[targetGroupId];
-  const targets = binding?.targets ?? [];
-  const check = form.selectedCheck;
-  const compatibleTargets = check ? targets.filter((target) => isPolicyTargetCompatible(check, target)) : [];
-  const selectedTarget = compatibleTargets.find((target) => str(target, ['id']) === binding?.selectedTargetId);
-  const supportedKinds = policySupportedTargetKinds(check);
-  const checkName = str(check, ['name', 'check_id'], 'selected check');
-  const noCompatibleTargets = Boolean(
-    check && !binding?.loading && !binding?.error && targets.length > 0 && compatibleTargets.length === 0
-  );
-  const options: SelectOption[] = [
-    {
-      value: '',
-      label: binding?.loading
-        ? 'Loading active targets…'
-        : targets.length === 0
-          ? 'No active targets available'
-          : noCompatibleTargets
-            ? 'No compatible targets'
-            : 'Select exact target'
-    },
-    ...compatibleTargets.map((target) => {
-      const targetId = str(target, ['id']);
-      return {
-        value: targetId,
-        label: str(target, ['value'], targetId),
-        description: `${effectivePolicyTargetKind(target).replace(/_/g, ' ')} · ${targetId}`
-      };
-    })
-  ];
-
-  return (
-    <li className="rf-binding" aria-busy={binding?.loading || undefined}>
-      <Select
-        label={`${groupName} exact target`}
-        value={binding?.selectedTargetId ?? ''}
-        options={options}
-        disabled={!check || !binding || binding.loading || Boolean(binding.error) || compatibleTargets.length === 0 || busy !== ''}
-        onChange={(targetId) => form.onSelectTarget(targetGroupId, targetId)}
-      />
-      {binding?.error ? (
-        <div className="form-banner error rf-binding-error" role="alert">
-          <span>{groupName}: {binding.error}</span>
-          <Button type="button" size="sm" variant="secondary" disabled={busy !== ''} onClick={() => form.onRetryTargets(targetGroupId)}>
-            Retry targets
-          </Button>
-        </div>
-      ) : selectedTarget ? (
-        <p className="rf-binding-note">
-          <CircleCheck size={14} aria-hidden="true" />
-          <span>
-            Bound identity <strong className="rf-mono">{str(selectedTarget, ['value'], binding.selectedTargetId)}</strong>
-            {' '}<span className="rf-mono">{binding.selectedTargetId}</span>
-          </span>
-        </p>
-      ) : noCompatibleTargets ? (
-        <p className="form-banner neutral" role="status">
-          {groupName} has no exact target compatible with {checkName}. This check supports {supportedKinds.join(', ') || 'any declared target kind'}. Choose another check or target group.
-        </p>
-      ) : !binding?.loading && targets.length === 0 ? (
-        <p className="form-banner error" role="alert">{groupName} has no active target to schedule.</p>
-      ) : null}
-    </li>
-  );
-}
-
 function CreateSchedulePanel({
   form,
   busy,
@@ -773,9 +675,9 @@ function CreateSchedulePanel({
   const reviewSectionId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [checkQuery, setCheckQuery] = useState('');
-  const noGroups = form.targetGroups.length === 0;
+  const noTargets = form.targets.length === 0;
   const noChecks = safeCheckCount === 0;
-  const selectedCount = form.selectedGroupIds.length;
+  const selectedCount = form.selectedTargetIds.length;
   const viewerZone = browserTimezone();
   const timezoneValid = isValidTimezone(form.timezone);
 
@@ -789,26 +691,24 @@ function CreateSchedulePanel({
     : form.checkOptions;
   const matchCount = filteredCheckOptions.filter((option) => option.value).length;
 
-  const readiness = noGroups
-    ? 'Declare an active target group before creating a schedule.'
+  const readiness = noTargets
+    ? 'Declare a domain before creating a schedule.'
     : noChecks
       ? 'No customer-runnable checks are available to schedule.'
       : !form.checkId
         ? 'Select a check to continue.'
         : selectedCount === 0
-          ? 'Select at least one target group.'
-          : !form.bindingsReady
-            ? 'Select one exact active target for every selected group.'
+          ? 'Select a domain or domains.'
+          : !form.selectionReady
+            ? 'Select active domains compatible with this check.'
             : !timezoneValid
               ? 'Enter a valid IANA timezone, for example Europe/London.'
-              : `Ready to create ${selectedCount} ${selectedCount === 1 ? 'schedule' : 'schedules'}, one per target group.`;
-  const submitDisabled = noGroups || noChecks || !form.checkId || !form.bindingsReady || !timezoneValid || busy !== '';
+              : `Ready to create ${selectedCount} ${selectedCount === 1 ? 'schedule' : 'schedules'}, one per selected domain.`;
+  const submitDisabled = noTargets || noChecks || !form.checkId || !form.selectionReady || !timezoneValid || busy !== '';
   const checkName = str(form.selectedCheck, ['name', 'check_id']);
-  const reviewRows = form.selectedGroupIds.map((groupId) => {
-    const group = form.targetGroups.find((candidate) => str(candidate, ['id']) === groupId);
-    const binding = form.bindings[groupId];
-    const target = binding?.targets.find((candidate) => str(candidate, ['id']) === binding.selectedTargetId);
-    return { groupId, groupName: str(group, ['name'], groupId), targetLabel: str(target, ['value'], binding?.selectedTargetId ?? '') };
+  const reviewRows = form.selectedTargetIds.map((targetId) => {
+    const target = form.targets.find((candidate) => str(candidate, ['id']) === targetId);
+    return { targetId, targetLabel: str(target, ['value'], 'Unavailable domain') };
   });
 
   return (
@@ -817,7 +717,7 @@ function CreateSchedulePanel({
         <div className="rf-create-heading">
           <h2 id={headingId} ref={headingRef} tabIndex={-1}>New validation schedule</h2>
           <p>
-            Bind a customer-runnable check to one exact active target in each selected group. Groups are written one at a time, and failed bindings stay selected for retry.
+            Bind a customer-runnable check to the declared domains you select. Schedules are written one at a time, and failed domains stay selected for retry.
           </p>
         </div>
         <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={form.onClose}>Cancel</Button>
@@ -874,29 +774,11 @@ function CreateSchedulePanel({
         <div className="rf-form-section">
           <div className="rf-form-intro">
             <h3 id={scopeSectionId}><span className="rf-step" aria-hidden="true">2</span>Scope</h3>
-            <p>Choose declared target groups, then one exact target in each. Targets are never assigned automatically, and the bound identity cannot change after creation.</p>
+            <p>Select one or more declared domains directly. The bound identity cannot change after creation.</p>
           </div>
           <fieldset className="rf-form-fields" aria-labelledby={scopeSectionId}>
-            <div className="full">
-              <TargetGroupPicker
-                groups={form.targetGroups}
-                selectedIds={form.selectedGroupIds}
-                onChange={form.onTargetGroupsChange}
-                disabled={noGroups || busy !== ''}
-              />
-            </div>
-            {noGroups ? (
-              <p className="rf-help full">
-                No active target groups are declared. <a href="#targets">Declare a target</a> first.
-              </p>
-            ) : null}
-            {selectedCount > 0 ? (
-              <ul className="rf-binding-list full" aria-live="polite" aria-label="Exact target per group">
-                {form.selectedGroupIds.map((targetGroupId) => (
-                  <TargetBindingRow key={targetGroupId} targetGroupId={targetGroupId} form={form} busy={busy} />
-                ))}
-              </ul>
-            ) : null}
+            <DomainPicker targets={form.targets} selectedIds={form.selectedTargetIds} onChange={form.onTargetsChange} disabled={noTargets || busy !== ''} />
+            {noTargets ? <p className="rf-help full">No active domains are declared. <a href="#targets">Declare a target</a> first.</p> : null}
           </fieldset>
         </div>
 
@@ -956,11 +838,10 @@ function CreateSchedulePanel({
             <div className="rf-form-fields">
               <ul className="rf-review-list full" aria-label="Schedules to create">
                 {reviewRows.map((row) => (
-                  <li key={row.groupId}>
+                  <li key={row.targetId}>
                     <strong>{plainCheckName(checkName || form.checkId)}</strong>
                     <span> on </span>
                     <strong className="rf-mono">{row.targetLabel || 'target not selected'}</strong>
-                    <span className="muted"> in {row.groupName}</span>
                   </li>
                 ))}
               </ul>
@@ -1087,9 +968,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
             {target.targetId ? (
               <a className="rf-cell-title rf-target-link" href={buildDetailHref('target-detail', target.targetId)}>{target.targetLabel}</a>
             ) : <span className="rf-cell-title">No exact target</span>}
-            {target.groupId ? (
-              <span className="rf-cell-meta">in <a href={buildDetailHref('target-group-detail', target.groupId)}>{target.groupLabel}</a></span>
-            ) : null}
+
           </div>
         );
       }

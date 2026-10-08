@@ -444,7 +444,7 @@ export function createPortalRevampRepository(pool) {
              WHERE tenant_id = $1 AND target_group_id = $2 AND id = $3
                AND kind = 'fqdn' AND deleted_at IS NULL
              LIMIT 1`,
-            [ctx.tenantId, groupId, targetId],
+            [ctx.tenantId, groupId, targetId == null ? null : Array.isArray(targetId) ? targetId : [targetId]],
           );
           return rows[0]?.value ? String(rows[0].value).trim().toLowerCase() : null;
         }
@@ -493,7 +493,7 @@ export function createPortalRevampRepository(pool) {
            WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.id = $3
              AND t.deleted_at IS NULL AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
            LIMIT 1`,
-          [ctx.tenantId, groupId, targetId],
+          [ctx.tenantId, groupId, targetId == null ? null : Array.isArray(targetId) ? targetId : [targetId]],
         );
         return rows[0] ?? null;
       });
@@ -590,7 +590,7 @@ export function createPortalRevampRepository(pool) {
       });
     },
 
-    async getActiveLoaByGroup(ctx, groupId) {
+    async getActiveLoaByGroup(ctx, groupId, targetId = null) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT loa.*
@@ -600,8 +600,10 @@ export function createPortalRevampRepository(pool) {
            WHERE loa.tenant_id = $1 AND loa.target_group_id = $2 AND loa.state = 'signed'
              AND (loa.expires_at IS NULL OR loa.expires_at > now())
              AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+             AND ($3::text[] IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(loa.scope_snapshot->'targets') item
+               WHERE COALESCE(item->>'target_id', item #>> '{}') = ANY($3::text[])))
            ORDER BY loa.signed_at DESC LIMIT 1`,
-          [ctx.tenantId, groupId],
+          [ctx.tenantId, groupId, targetId == null ? null : Array.isArray(targetId) ? targetId : [targetId]],
         );
         const row = rows[0];
         if (!row) return null;
@@ -652,10 +654,12 @@ export function createPortalRevampRepository(pool) {
            WHERE loa.tenant_id = $1 AND loa.target_group_id = $2
              AND loa.state = 'signed'
              AND (loa.expires_at IS NULL OR loa.expires_at > $3::timestamptz)
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(loa.scope_snapshot->'targets') item
+               WHERE COALESCE(item->>'target_id', item #>> '{}') = $4)
            ORDER BY loa.signed_at DESC, loa.id DESC
            LIMIT 1
            FOR UPDATE OF loa`,
-          [ctx.tenantId, input.target_group_id, transitionedAt.toISOString()],
+          [ctx.tenantId, input.target_group_id, transitionedAt.toISOString(), input.target_id],
         );
         const activeLoa = loaResult.rows[0] ?? null;
         if (!activeLoa) return { error: 'loa_missing', status: 409 };
@@ -763,8 +767,10 @@ export function createPortalRevampRepository(pool) {
         const active = await client.query(
           `SELECT id FROM loa_signatures
            WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(scope_snapshot->'targets') item
+               WHERE COALESCE(item->>'target_id', item #>> '{}') = ANY($3::text[]))
            LIMIT 1 FOR UPDATE`,
-          [ctx.tenantId, record.target_group_id],
+          [ctx.tenantId, record.target_group_id, record.scope_snapshot.targets],
         );
         if (active.rows[0]) return { error: 'loa_active', status: 409 };
 
@@ -942,8 +948,11 @@ export function createPortalRevampRepository(pool) {
         const loa = await client.query(
           `SELECT * FROM loa_signatures
            WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
+             AND (expires_at IS NULL OR expires_at > now())
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(scope_snapshot->'targets') item
+               WHERE COALESCE(item->>'target_id', item #>> '{}') = $3)
            ORDER BY signed_at DESC LIMIT 1`,
-          [ctx.tenantId, target.target_group_id],
+          [ctx.tenantId, target.target_group_id, targetId],
         );
         bump();
         const findings = await client.query(findingsSql, findingsParams);

@@ -123,7 +123,7 @@ export function RunsRefined(props: RunsRefinedProps) {
   const columns = refineRunColumns(props.runColumns);
   const vectorLibraryNote = !props.canOpenVectorLibrary && props.startDisabledReason
     ? `Open the vector library once ready. ${props.startDisabledReason}`
-    : 'Customer-safe runs start in the vector library, where you select the exact target group, target, vector, and mapped bounded check.';
+    : 'Customer-safe runs start in the vector library, where you select the exact domain, vector, and mapped bounded check.';
   const launchBlocked = !props.canOpenVectorLibrary && Boolean(props.startDisabledReason);
 
   return (

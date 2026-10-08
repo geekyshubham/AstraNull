@@ -30,7 +30,7 @@ export type CheckPickerProps = {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   targets: DataItem[];
-  scope: 'group' | 'target';
+  scope: 'targets' | 'target';
   targetId?: string;
   disabled?: boolean;
   maxSelected: number;
@@ -101,7 +101,7 @@ export function CheckPicker({
     () => (scope === 'target' && targetId ? targets.filter((target) => getString(target, ['id']) === targetId) : targets),
     [targets, scope, targetId]
   );
-  const scopeReady = scope === 'group' || Boolean(targetId);
+  const scopeReady = scope === 'targets' ? targets.length > 0 : Boolean(targetId);
   const limitReached = selectedIds.length >= maxSelected;
 
   function rowState(check: DataItem): RowState {
@@ -112,7 +112,7 @@ export function CheckPicker({
       return { check, id, enabled: false, compatText: 'Choose an exact target first' };
     }
     if (scopedTargets.length === 0) {
-      return { check, id, enabled: false, compatText: 'No active targets in this group' };
+      return { check, id, enabled: false, compatText: 'No active domains are selected' };
     }
     if (coverage.supported === 0) {
       return {

@@ -201,7 +201,7 @@ describe('db schema contract', () => {
 
     for (const sql of [schemaSql, migrationSql]) {
       assert.match(sql, /fk_loa_signatures_target_group_tenant[\s\S]*?FOREIGN KEY \(tenant_id, target_group_id\)[\s\S]*?REFERENCES target_groups \(tenant_id, id\)/m);
-      assert.match(sql, /CREATE UNIQUE INDEX loa_signatures_active_tenant_group[\s\S]*?\(tenant_id, target_group_id\)[\s\S]*?WHERE state = 'signed'/m);
+      assert.match(sql, /CREATE (?:UNIQUE )?INDEX loa_signatures_active_tenant_group[\s\S]*?\(tenant_id, target_group_id\)[\s\S]*?WHERE state = 'signed'/m);
       assert.match(sql, /start_claimed_at TIMESTAMPTZ/);
       assert.match(sql, /state = 'dispatched' AND run_id IS NOT NULL/);
       assert.match(sql, /CREATE UNIQUE INDEX uniq_test_policy_dispatches_run[\s\S]*?\(tenant_id, run_id\)[\s\S]*?WHERE run_id IS NOT NULL/m);

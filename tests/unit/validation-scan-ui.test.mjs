@@ -44,17 +44,17 @@ describe('validation scan UI helpers: contract parity', () => {
 });
 
 describe('validation scan UI helpers: form and payload', () => {
-  const baseForm = ui.emptyScanForm({ targetGroupId: 'tg_1', checkIds: ['a.safe', 'b.safe', 'a.safe'] });
+  const baseForm = ui.emptyScanForm({ targetIds: ['tgt_1'], checkIds: ['a.safe', 'b.safe', 'a.safe'] });
 
   it('builds a run-now payload with deduplicated checks and no schedule', () => {
-    assert.deepEqual(ui.buildScanPayload(baseForm), { target_group_id: 'tg_1', check_ids: ['a.safe', 'b.safe'] });
+    assert.deepEqual(ui.buildScanPayload(baseForm), { target_ids: ['tgt_1'], check_ids: ['a.safe', 'b.safe'] });
     assert.equal(ui.validateScanForm(baseForm, { now: NOW }).ok, true);
   });
 
   it('adds exact target, name, schedule, and recurrence when set', () => {
-    const form = { ...baseForm, scope: 'target', targetId: 'tgt_1', name: ' Nightly ', schedule: 'later', scheduledForLocal: localPlusMinutes(5), recurrence: 'weekly', timezone: 'UTC' };
+    const form = { ...baseForm, targetIds: ['tgt_1'], name: ' Nightly ', schedule: 'later', scheduledForLocal: localPlusMinutes(5), recurrence: 'weekly', timezone: 'UTC' };
     const payload = ui.buildScanPayload(form);
-    assert.equal(payload.target_id, 'tgt_1');
+    assert.deepEqual(payload.target_ids, ['tgt_1']);
     assert.equal(payload.name, 'Nightly');
     assert.equal(new Date(payload.scheduled_for).getTime(), NOW.getTime() + 5 * 60_000);
     assert.deepEqual(payload.recurrence, { cadence: 'weekly', timezone: 'UTC' });
@@ -64,8 +64,8 @@ describe('validation scan UI helpers: form and payload', () => {
   });
 
   it('rejects missing scope, empty selection, too many checks, past schedules, and recurrence without schedule', () => {
-    assert.deepEqual(Object.keys(ui.validateScanForm(ui.emptyScanForm(), { now: NOW }).errors), ['target_group_id', 'check_ids']);
-    assert.ok(ui.validateScanForm({ ...baseForm, scope: 'target' }, { now: NOW }).errors.target_id);
+    assert.deepEqual(Object.keys(ui.validateScanForm(ui.emptyScanForm(), { now: NOW }).errors), ['target_ids', 'check_ids']);
+    assert.ok(ui.validateScanForm({ ...baseForm, targetIds: [] }, { now: NOW }).errors.target_ids);
     const tooMany = { ...baseForm, checkIds: Array.from({ length: contract.MAX_SCAN_CHECKS + 1 }, (_, index) => `c${index}`) };
     assert.match(ui.validateScanForm(tooMany, { now: NOW }).errors.check_ids, new RegExp(String(contract.MAX_SCAN_CHECKS)));
     assert.ok(ui.validateScanForm({ ...baseForm, schedule: 'later', scheduledForLocal: localPlusMinutes(0) }, { now: NOW }).errors.scheduled_for);
@@ -86,14 +86,14 @@ describe('validation scan UI helpers: form and payload', () => {
       recurrence: { cadence: 'weekly', timezone: 'UTC' },
     };
     const form = ui.scanFormFromScan(scan);
-    assert.equal(form.scope, 'group');
+    assert.deepEqual(form.targetIds, []);
     assert.equal(form.recurrence, 'weekly');
     assert.deepEqual(ui.buildScanPatch(scan, form), {});
     assert.deepEqual(ui.buildScanPatch(scan, { ...form, name: 'New' }), { name: 'New' });
     assert.deepEqual(ui.buildScanPatch(scan, { ...form, name: '' }), { name: null });
     assert.deepEqual(ui.buildScanPatch(scan, { ...form, recurrence: 'none' }), { recurrence: 'none' });
     assert.deepEqual(ui.buildScanPatch(scan, { ...form, checkIds: ['a.safe', 'b.safe'] }), { check_ids: ['a.safe', 'b.safe'] });
-    assert.deepEqual(ui.buildScanPatch(scan, { ...form, scope: 'target', targetId: 'tgt_9' }), { target_id: 'tgt_9' });
+    assert.deepEqual(ui.buildScanPatch(scan, { ...form, targetIds: ['tgt_9'] }), { target_ids: ['tgt_9'] });
   });
 
   it('humanizes backend error payloads without leaking raw codes', () => {
@@ -101,7 +101,7 @@ describe('validation scan UI helpers: form and payload', () => {
     assert.match(ui.scanErrorMessage({ error: 'soc_gated_check', check_id: 'waf.soc' }), /waf\.soc/);
     assert.match(ui.scanErrorMessage({ error: 'invalid_validation_scan', field: 'scheduled_for', message: 'scheduled_for must be at least one minute in the future.' }), /one minute/);
     assert.match(ui.scanErrorMessage({ error: 'scan_has_no_runnable_steps', excluded: [{}, {}] }), /2 incompatible/);
-    assert.match(ui.scanErrorMessage({ error: 'concurrent_scan_blocked' }), /already active/);
+    assert.match(ui.scanErrorMessage({ error: 'concurrent_scan_blocked' }), /already using/);
     assert.equal(ui.scanErrorMessage({ error: 'weird_new_code' }), 'Weird new code.');
     assert.equal(ui.scanErrorMessage(null, 'fallback'), 'fallback');
     for (const code of Object.keys(ui.SCAN_ERROR_COPY)) assert.doesNotMatch(ui.SCAN_ERROR_COPY[code], /_/);
@@ -153,8 +153,8 @@ describe('validation scan UI helpers: live view formatting', () => {
   });
 
   it('describes scope, recurrence, and reasons in prose', () => {
-    assert.equal(ui.scopeLabel({ target_group: { name: 'edge' }, target_id: 'tgt_1', target: { value: 'a.test' } }), 'Exact target a.test in edge');
-    assert.equal(ui.scopeLabel({ target_group_id: 'tg_1' }), 'Whole group tg_1');
+    assert.equal(ui.scopeLabel({ target_group: { name: 'edge' }, target_id: 'tgt_1', target: { value: 'a.test' } }), 'Domain a.test');
+    assert.equal(ui.scopeLabel({ target_group_id: 'tg_1' }), 'Domain selection not recorded');
     assert.equal(ui.recurrenceLabel(null), 'One-time');
     assert.equal(ui.recurrenceLabel({ cadence: 'weekly', timezone: 'UTC' }), 'Weekly (UTC)');
     assert.equal(ui.humanizeReason('scan_aborted:concurrent_run_blocked'), 'Scan aborted (concurrent run blocked)');
@@ -162,9 +162,10 @@ describe('validation scan UI helpers: live view formatting', () => {
   });
 });
 
-describe('validation scan UI helpers: group-scoped listing', () => {
-  it('requests scans with a server-side target_group_id filter instead of filtering a tenant-wide page', () => {
-    assert.equal(ui.validationScansPathForGroup('tg_1'), '/v1/validation-scans?target_group_id=tg_1&limit=200');
-    assert.equal(ui.validationScansPathForGroup('tg a&b', 25), '/v1/validation-scans?target_group_id=tg+a%26b&limit=25');
+describe('validation scan UI helpers: explicit domain selection', () => {
+  it('does not include private grouping identifiers in the reviewed payload', () => {
+    const payload = ui.buildScanPayload(ui.emptyScanForm({ targetIds: ['tgt_a', 'tgt_b'], checkIds: ['waf.fingerprint.safe'] }));
+    assert.deepEqual(payload.target_ids, ['tgt_a', 'tgt_b']);
+    assert.equal(Object.hasOwn(payload, 'target_group_id'), false);
   });
 });

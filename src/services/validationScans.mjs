@@ -75,7 +75,7 @@ function activeScanForGroup(tenantId, targetGroupId, excludeId = null) {
   ensureStoreShape();
   return getStore().validationScans.find(
     (scan) => scan.tenant_id === tenantId
-      && scan.target_group_id === targetGroupId
+      && (scan.target_group_id === targetGroupId || Object.values(scan.plan_snapshot?.target_policy_bindings ?? {}).includes(targetGroupId))
       && scan.id !== excludeId
       && ACTIVE_SCAN_STATUSES.includes(scan.status),
   ) ?? null;
@@ -149,11 +149,17 @@ function resolveChecks(checkIds) {
 }
 
 function buildPlan(ctx, input) {
-  const group = activeGroup(ctx, input.target_group_id);
+  const firstId = input.target_id ?? input.target_ids?.[0];
+  const selected = firstId ? getStore().targets.find((target) => target.id === firstId && target.tenant_id === ctx.tenantId && !isArchivedTarget(target)) : null;
+  const group = activeGroup(ctx, input.target_group_id ?? selected?.target_group_id);
   if (!group) return { error: 'target_group_not_found', status: 404 };
   const resolved = resolveChecks(input.check_ids);
   if (resolved.error) return resolved;
-  const targets = targetsForGroup(ctx.tenantId, group.id);
+  const targets = input.target_ids
+    ? input.target_ids.map((id) => getStore().targets.find((target) => target.id === id && target.tenant_id === ctx.tenantId && !isArchivedTarget(target)))
+    : targetsForGroup(ctx.tenantId, group.id);
+  if (targets.some((target) => !target || !activeGroup(ctx, target.target_group_id))) return { error: 'target_not_found', status: 404 };
+  if (input.target_ids && (targets[0].target_group_id ?? group.id) !== group.id) return { error: 'target_selection_conflict', status: 400 };
   if (input.target_id && !targets.some((target) => target.id === input.target_id)) {
     return { error: 'target_not_found', status: 404 };
   }
@@ -174,7 +180,7 @@ function buildPlan(ctx, input) {
     };
   }
   if (!plan.steps.length) return { error: 'scan_has_no_runnable_steps', status: 400, excluded: plan.excluded };
-  return { group, targets, checks: resolved.checks, steps: plan.steps, excluded: plan.excluded };
+  return { group, targets: input.target_id ? targets.filter((target) => target.id === input.target_id) : targets, checks: resolved.checks, steps: plan.steps, excluded: plan.excluded };
 }
 
 function materializeSteps(steps, checks, now) {
@@ -213,6 +219,8 @@ function planSnapshot(plan) {
   return {
     checks,
     group_safety_policy: normalizeSafetyPolicy(plan.group.safety_policy),
+    target_ids: plan.targets.map((target) => target.id),
+    target_policy_bindings: Object.fromEntries(plan.targets.map((target) => [target.id, target.target_group_id ?? plan.group.id])),
     excluded: plan.excluded,
   };
 }
@@ -324,12 +332,13 @@ function nextStartableStep(scan, now) {
 
 function deferStep(ctx, scan, step, result, now) {
   const code = result?.error ?? 'safe_min_interval_active';
-  const policy = normalizeSafetyPolicy(activeGroup(execCtxFor(scan), scan.target_group_id)?.safety_policy);
+  const policyId = scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? scan.target_group_id;
+  const policy = normalizeSafetyPolicy(activeGroup(execCtxFor(scan), policyId)?.safety_policy);
   const eligibleAt = deferredStepEligibleAt({
     code,
     runs: getStore().testRuns,
     tenantId: scan.tenant_id,
-    targetGroupId: scan.target_group_id,
+    targetGroupId: policyId,
     minSecondsBetweenRuns: policy.min_seconds_between_runs,
     now,
   });
@@ -393,7 +402,7 @@ function startStep(ctx, scan, step, runtimeConfig, now) {
   try {
     result = startTestRun(
       execCtxFor(scan),
-      { check_id: step.check_id, target_group_id: scan.target_group_id, target_id: step.target_id },
+      { check_id: step.check_id, target_group_id: scan.plan_snapshot?.target_policy_bindings?.[step.target_id] ?? scan.target_group_id, target_id: step.target_id },
       runtimeConfig,
       { scanDispatch: { scan_id: scan.id, step_id: step.id, lease_token: leaseToken, now: now.toISOString() } },
     );
@@ -631,15 +640,17 @@ function dispatchScheduledScan(ctx, scan, options = {}) {
   if (getTenantAccount(scan.tenant_id)?.lifecycle_state === 'suspended') return scheduleDenied(ctx, scan, 'tenant_suspended', now);
   const group = activeGroup(execCtx, scan.target_group_id);
   if (!group) return scheduleDenied(ctx, scan, 'target_group_not_found', now);
-  if ((group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, now.getTime())) {
-    return scheduleDenied(ctx, scan, 'safe_window_closed', now);
-  }
-  if (activeRunForGroup(scan.tenant_id, group.id) || activeScanForGroup(scan.tenant_id, group.id, scan.id)) {
-    return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
+  const policyIds = [...new Set([scan.target_group_id, ...Object.values(scan.plan_snapshot?.target_policy_bindings ?? {})])];
+  for (const policyId of policyIds) {
+    const policy = activeGroup(execCtx, policyId);
+    if (!policy) return scheduleDenied(ctx, scan, 'target_execution_policy_unavailable', now);
+    if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(ctx, scan, 'safe_window_closed', now);
+    if (activeRunForGroup(scan.tenant_id, policy.id) || activeScanForGroup(scan.tenant_id, policy.id, scan.id)) return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
   }
   const plan = buildPlan(execCtx, {
     target_group_id: scan.target_group_id,
     target_id: scan.target_id,
+    target_ids: scan.plan_snapshot?.target_ids ?? [...new Set(scan.steps.map((step) => step.target_id))],
     check_ids: scan.check_ids,
   });
   if (plan.error) return scheduleDenied(ctx, scan, plan.error, now, { check_id: plan.check_id ?? null });
@@ -730,6 +741,7 @@ function projectScan(ctx, scan) {
     target_group_id: scan.target_group_id,
     target_group: group ? { id: group.id, name: group.name, environment_id: group.environment_id ?? null } : null,
     target_id: scan.target_id ?? null,
+    target_ids: scan.plan_snapshot?.target_ids ?? [...new Set(scan.steps.map((step) => step.target_id))],
     target: target ? { id: target.id, kind: target.kind, value: target.value } : null,
     check_ids: [...scan.check_ids],
     scheduled_for: scan.scheduled_for ?? null,
@@ -783,7 +795,7 @@ export function createValidationScan(ctx, body = {}, runtimeConfig = undefined, 
     }
     return plan;
   }
-  if (!input.scheduled_for && (activeScanForGroup(ctx.tenantId, plan.group.id) || activeRunForGroup(ctx.tenantId, plan.group.id))) {
+  if (!input.scheduled_for && plan.targets.some((target) => activeScanForGroup(ctx.tenantId, target.target_group_id) || activeRunForGroup(ctx.tenantId, target.target_group_id))) {
     return { error: 'concurrent_scan_blocked', status: 409 };
   }
   const id = newId('scan');
@@ -844,7 +856,7 @@ export function listValidationScans(ctx, options = {}) {
   // here made dev behave differently from production and gave a read surprising side effects.
   let rows = store.validationScans.filter((scan) => scan.tenant_id === ctx.tenantId);
   if (options.target_group_id) rows = rows.filter((scan) => scan.target_group_id === options.target_group_id);
-  if (options.target_id) rows = rows.filter((scan) => scan.target_id === options.target_id);
+  if (options.target_id) rows = rows.filter((scan) => scan.target_id === options.target_id || scan.steps.some((step) => step.target_id === options.target_id));
   if (options.status) {
     const statuses = new Set(String(options.status).split(',').map((value) => value.trim()).filter(Boolean));
     rows = rows.filter((scan) => statuses.has(scan.status));
@@ -886,8 +898,9 @@ export function patchValidationScan(ctx, id, body = {}, options = {}) {
     return scanValidationResponse(err);
   }
   const merged = {
-    target_group_id: scan.target_group_id,
-    target_id: input.target_id !== undefined ? input.target_id : scan.target_id,
+    target_group_id: input.target_group_id ?? scan.target_group_id,
+    target_id: input.target_ids ? (input.target_id ?? null) : input.target_id !== undefined ? input.target_id : scan.target_id,
+    target_ids: input.target_ids ?? (input.target_id !== undefined ? (input.target_id ? [input.target_id] : undefined) : scan.plan_snapshot?.target_ids ?? [...new Set(scan.steps.map((step) => step.target_id))]),
     check_ids: input.check_ids ?? scan.check_ids,
     name: input.name !== undefined ? input.name : scan.name,
     scheduled_for: input.scheduled_for !== undefined ? input.scheduled_for : scan.scheduled_for,
@@ -899,6 +912,7 @@ export function patchValidationScan(ctx, id, body = {}, options = {}) {
   const plan = buildPlan(ctx, merged);
   if (plan.error) return plan;
   const changedFields = Object.keys(input).filter((key) => JSON.stringify(input[key]) !== JSON.stringify(scan[key]));
+  scan.target_group_id = plan.group.id;
   scan.target_id = merged.target_id ?? null;
   scan.check_ids = merged.check_ids;
   scan.name = merged.name ?? null;
