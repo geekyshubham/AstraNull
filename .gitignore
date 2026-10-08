@@ -104,6 +104,9 @@ docs/astranull-pitch-comparison.html
 scripts/export-open-design-chat.mjs
 .foreman/
 
+# Regenerable local capability reference
+docs/astranull-capabilities-and-checks.html
+
 # Local research/analysis working files — not product code, kept out of the release tree.
 # These are ad-hoc operator scripts and a source research export, not build or test inputs.
 analysis/

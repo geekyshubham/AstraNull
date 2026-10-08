@@ -545,6 +545,7 @@ describe('capability probes P0/P1', () => {
       }),
       {
         resolve4Fn: async () => ['203.0.113.55'],
+        resolve6Fn: async () => [],
         connectFn: ({ port }) => {
           probedPorts.push(port);
           return {

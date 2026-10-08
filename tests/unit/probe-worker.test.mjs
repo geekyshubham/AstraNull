@@ -388,7 +388,8 @@ describe('probe worker safety accounting', () => {
     for (const hang of ['http', 'cname', 'cname_after_hit']) {
       const job = baseJob({ check_id: 'waf.fingerprint.safe',
         target: { kind: 'fqdn', value: 'www.qantas.com' },
-        constraints: { max_requests: 4, timeout_ms: 50 } });
+        // Allow cold prefix-index initialization before testing the deliberately hung I/O.
+        constraints: { max_requests: 4, timeout_ms: 500 } });
       const result = await processJob({ secret: WORKER_SECRET }, job, {
         resolve4Fn: async () => [hang === 'cname_after_hit' ? '203.0.113.10' : '23.206.173.51'], resolve6Fn: async () => [],
         resolveCnameFn: hang === 'cname' ? () => new Promise(() => {})
