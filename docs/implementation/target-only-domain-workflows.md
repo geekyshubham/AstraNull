@@ -22,7 +22,7 @@ Requested 2026-10-08: remove target-group navigation, screens, selectors, column
 6. Verify API and persistence parity, tenant isolation, cross-policy domain sets, safety-budget continuity, ownership, recurrence, Stop, and SOC gates. Exercise all affected browser journeys with no visible group wording or group requests.
 7. Commit, deploy through CI, and verify direct domain workflows on the live tenant.
 
-## Implemented locally
+## Implemented
 
 - Direct target API selection and direct representations; no customer grouping dataset hydration.
 - Group navigation/screens/picker deleted; old bookmarks route to Targets.
@@ -33,11 +33,11 @@ Requested 2026-10-08: remove target-group navigation, screens, selectors, column
 - Exact selected-target scope for governed requests and artifact authorization.
 - Independent domain authorizations with transactional overlap protection (migration 0072); historical custody remains intact.
 - Legacy scheduled assessments freeze original domains rather than expanding after intake.
-- Local verification is complete; CI rollout and production verification follow the implementation commit.
+- Local verification, CI rollout, and authenticated production verification are complete.
 
 ## Current state
 
-The detection/catalog release (`a845930f`) has deployed successfully. Live detection records one HTTP baseline and bounded DNS work without the previous marker-scan timeout; the live catalog shows 251 definitions and 147 automatic network checks. This target-only change is a separate in-progress migration of the product model.
+The detection/catalog release (`a845930f`) has deployed successfully. Live detection records one HTTP baseline and bounded DNS work without the previous marker-scan timeout; the live catalog shows 251 definitions and 147 automatic network checks. The direct domain workflows have now deployed separately from concurrent provider-classifier changes.
 
 ## Verification
 
@@ -47,4 +47,10 @@ The detection/catalog release (`a845930f`) has deployed successfully. Live detec
 - Browser review covered the full customer journey inventory, followed by reruns of every changed or failing journey. Exact scope, report snapshots, direct intake/CSV/ownership/removal, assessment/recurrence/Stop, permissions, live activity, findings paging/lineage, firewall comparisons, and light/dark accessibility at 375–1440px passed. Legacy group-screen assertions were replaced with direct-domain assertions; stored group compatibility remains tested in backend lanes.
 - Legacy bookmarks resolve to Targets; no customer grouping catalog is hydrated. Separate concurrent provider-classifier work is excluded from this implementation commit.
 
-Production rollout remains pending until the CI-triggered deployment and authenticated production checks complete.
+Production rollout passed for `19d86003a9717d8dee2efd55f34e42a74826bdb0`: [CI 37733268074](https://github.com/geekyshubham/AstraNull/actions/runs/37733268074) and [AWS deployment 37733530875](https://github.com/geekyshubham/AstraNull/actions/runs/37733530875). The first CI pass caught dependency-symlink paths in bundle comments; a normal locked dependency install and rebuild corrected that reproducibility issue without changing application behavior.
+
+The production checkout matches this commit and the control plane, signed worker, and policy runner are healthy. Authenticated reads confirmed nine declared targets, all 251 catalog definitions, exact-target ownership and authorization, and target-filtered assessments with no obsolete grouping identifiers. The served portal bundle matches the committed artifact (SHA-256 `fddfa50443ebbad573be76820abba4f47176fa8a32be1d32b98df064dd6a3709`).
+
+An exact `target_id` detection request for `tgt_bbcda0fadb91a1b3` returned HTTP 202. Run `run_e8722b188ebd8056` reached `verdicted`, persisted a detected provider observation, and exposes 13 recorded activity items. A transient client TLS polling timeout was followed by a successful read of the same run; no extra probe was started. Metadata-only evidence is saved in `/tmp/astranull-target-only-live-proof/verification.json`.
+
+This verifies the selected detection and direct-domain workflows. It does not claim every protocol endpoint is healthy or waive setup, compatibility, rate, or SOC requirements for the full catalog.
