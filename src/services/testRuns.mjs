@@ -9,6 +9,7 @@ import {
 } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
+import { scanIncludesTarget } from '../lib/targetExecutionScope.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { redactObject } from '../lib/redact.mjs';
 import { projectRunActivity } from '../lib/probeActivity.mjs';
@@ -227,11 +228,12 @@ export function getRunEvents(ctx, id, options = {}) {
   return capped;
 }
 
-function activeRunForGroup(tenantId, targetGroupId) {
+function activeRunForGroup(tenantId, targetGroupId, targetId) {
   return getStore().testRuns.find(
     (r) =>
       r.tenant_id === tenantId &&
       r.target_group_id === targetGroupId &&
+      (r.target_id === targetId || !r.target_id) &&
       ['running', 'collecting', 'planned'].includes(r.status),
   );
 }
@@ -461,10 +463,6 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     };
   }
 
-  if (activeRunForGroup(ctx.tenantId, targetGroupId)) {
-    return { error: 'concurrent_run_blocked', status: 409 };
-  }
-
   const targetId = typeof body.target_id === 'string' ? body.target_id.trim() : '';
   if (!targetId) return { error: 'missing_target_id', status: 400 };
   const target = getStore().targets.find(
@@ -474,6 +472,12 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       && !isArchivedTarget(candidate),
   );
   if (!target) return { error: 'target_not_found', status: 404 };
+  if (activeRunForGroup(ctx.tenantId, targetGroupId, targetId)) {
+    return { error: 'concurrent_run_blocked', status: 409 };
+  }
+  if ((getStore().validationScans ?? []).some((scan) => scan.tenant_id === ctx.tenantId
+    && ['pending', 'running'].includes(scan.status) && scan.id !== options.scanDispatch?.scan_id
+    && scanIncludesTarget(scan, targetId, targetGroupId))) return { error: 'concurrent_run_blocked', status: 409 };
 
   const scanBinding = validateScanBinding(ctx, body, group, check, options);
   if (scanBinding.error) return scanBinding;
@@ -588,7 +592,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     );
   }
 
-  const priorRun = lastRunForTargetGroup(ctx.tenantId, targetGroupId);
+  const priorRun = getStore().testRuns.filter((run) => run.tenant_id === ctx.tenantId
+    && run.target_id === targetId).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
   if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
     const elapsedMs = Date.now() - new Date(priorRun.created_at).getTime();
     if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {

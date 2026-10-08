@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { scanIncludesTarget, scanTargetIds } from '../lib/targetExecutionScope.mjs';
 import { audit } from '../audit.mjs';
 import { customerSelectableChecks, getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
 import {
@@ -71,20 +72,22 @@ function scanForTenant(ctx, id) {
   return getStore().validationScans.find((scan) => scan.id === id && scan.tenant_id === ctx.tenantId) ?? null;
 }
 
-function activeScanForGroup(tenantId, targetGroupId, excludeId = null) {
+function activeScanForGroup(tenantId, targetGroupId, excludeId = null, targetId = null) {
   ensureStoreShape();
   return getStore().validationScans.find(
     (scan) => scan.tenant_id === tenantId
       && (scan.target_group_id === targetGroupId || Object.values(scan.plan_snapshot?.target_policy_bindings ?? {}).includes(targetGroupId))
       && scan.id !== excludeId
+      && (!targetId || scanIncludesTarget(scan, targetId, targetGroupId))
       && ACTIVE_SCAN_STATUSES.includes(scan.status),
   ) ?? null;
 }
 
-function activeRunForGroup(tenantId, targetGroupId) {
+function activeRunForGroup(tenantId, targetGroupId, targetId = null) {
   return getStore().testRuns.find(
     (run) => run.tenant_id === tenantId
       && run.target_group_id === targetGroupId
+      && (!targetId || run.target_id === targetId || !run.target_id)
       && ACTIVE_RUN_STATUSES.has(run.status),
   ) ?? null;
 }
@@ -508,7 +511,7 @@ export function advanceScan(ctx, id, options = {}) {
       }
       if (classification === 'abort') {
         if (result.error === 'concurrent_run_blocked') {
-          const blocking = activeRunForGroup(scan.tenant_id, scan.target_group_id);
+          const blocking = activeRunForGroup(scan.tenant_id, scan.target_group_id, step.target_id);
           const ownStepId = pendingRunStepId(scan, blocking);
           if (ownStepId) {
             const ownStep = scan.steps.find((row) => row.id === ownStepId);
@@ -645,7 +648,9 @@ function dispatchScheduledScan(ctx, scan, options = {}) {
     const policy = activeGroup(execCtx, policyId);
     if (!policy) return scheduleDenied(ctx, scan, 'target_execution_policy_unavailable', now);
     if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(ctx, scan, 'safe_window_closed', now);
-    if (activeRunForGroup(scan.tenant_id, policy.id) || activeScanForGroup(scan.tenant_id, policy.id, scan.id)) return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
+    for (const targetId of scanTargetIds(scan)) {
+      if (activeRunForGroup(scan.tenant_id, policy.id, targetId) || activeScanForGroup(scan.tenant_id, policy.id, scan.id, targetId)) return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
+    }
   }
   const plan = buildPlan(execCtx, {
     target_group_id: scan.target_group_id,
@@ -795,7 +800,7 @@ export function createValidationScan(ctx, body = {}, runtimeConfig = undefined, 
     }
     return plan;
   }
-  if (!input.scheduled_for && plan.targets.some((target) => activeScanForGroup(ctx.tenantId, target.target_group_id) || activeRunForGroup(ctx.tenantId, target.target_group_id))) {
+  if (!input.scheduled_for && plan.targets.some((target) => activeScanForGroup(ctx.tenantId, target.target_group_id, null, target.id) || activeRunForGroup(ctx.tenantId, target.target_group_id, target.id))) {
     return { error: 'concurrent_scan_blocked', status: 409 };
   }
   const id = newId('scan');

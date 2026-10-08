@@ -207,7 +207,7 @@ describe('postgres entry-path comparison lifecycle', () => {
 
       const { started } = await start(pv, ids, SIMULATION, { idempotencyKey: 'epc-pg-1' });
       assert.equal(started.status, 'running', JSON.stringify(started));
-      assert.equal(executionState({ execution: started.items }, ids.tgt_epc_origin).execution_state, 'pending');
+      assert.equal(executionState({ execution: started.items }, ids.tgt_epc_origin).execution_state, 'started');
       const finished = await finalizeOpenRuns(runtime, pv, started.id);
       assert.equal(finished.status, 'completed', JSON.stringify(finished.execution));
       assert.ok(finished.execution.every((item) => item.execution_state === 'finalized'), JSON.stringify(finished.execution));

@@ -1847,6 +1847,7 @@ describe('postgres validation service adapters', () => {
               id: 'run_prior',
               tenant_id: ctx.tenantId,
               target_group_id: 'tg_1',
+              target_id: 'tgt_1',
               check_id: 'origin.direct_bypass.safe',
               created_at: '2026-06-01T11:59:30.000Z',
             },

@@ -12,6 +12,11 @@ import {
   runMigrations,
 } from './migrations.mjs';
 import { createCoreCatalogRepository } from './coreCatalogRepository.mjs';
+import { createInitialEdgeDetectionRepository } from './initialEdgeDetectionRepository.mjs';
+import { createInitialEdgeDetectionService } from '../../services/initialEdgeDetections.mjs';
+import { INITIAL_EDGE_CHECK_ID } from '../../lib/initialEdgeDetection.mjs';
+import { ownershipParentFor, subdomainParentId } from '../../lib/subdomainEnumeration.mjs';
+import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { readDeclaredHostAnalytics } from './declaredHostAnalyticsRepository.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
@@ -67,7 +72,7 @@ import { createPostgresValidationScanRepository } from './validationScanReposito
 import { createPostgresValidationScanServices } from './validationScanServiceAdapters.mjs';
 import { createTargetHistoryRepository } from './targetHistoryRepository.mjs';
 import { createPostgresTargetHistoryServices } from './targetHistoryServiceAdapters.mjs';
-import { loadEntryPathComparisonRunnerConfig, loadRuntimeConfig, resolveProbeDispatchConfig } from '../../config.mjs';
+import { loadEntryPathComparisonRunnerConfig, loadInitialEdgeDetectionRunnerConfig, loadRuntimeConfig, resolveProbeDispatchConfig } from '../../config.mjs';
 import { createPostgresSubscriptionServices } from './subscriptionServiceAdapters.mjs';
 import { createPostgresCvePipelineServices } from './cvePipelineServiceAdapters.mjs';
 import { createCvePipelineRepository } from './cvePipelineRepository.mjs';
@@ -217,6 +222,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
   let closed = false;
   /** @type {{ close?: () => Promise<void> } | undefined} */
   let validationScansRepo;
+  let validationEvidenceRepo;
   /** @type {{ close?: () => Promise<void> } | undefined} */
   let entryPathComparisonRepo;
 
@@ -225,7 +231,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       return;
     }
     closed = true;
-    for (const lockOwner of [validationScansRepo, entryPathComparisonRepo]) {
+    for (const lockOwner of [validationScansRepo, entryPathComparisonRepo, validationEvidenceRepo]) {
       if (!lockOwner?.close) continue;
       try {
         await lockOwner.close();
@@ -274,6 +280,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       } else repositories[key] = factory(pool);
     }
     validationScansRepo = repositories.validationScans;
+    validationEvidenceRepo = repositories.validationEvidence;
 
     // Kept outside POSTGRES_RUNTIME_REPOSITORY_KEYS so that stable repository facade
     // remains backward compatible while the production service gains its private ledger.
@@ -302,6 +309,27 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         runtimeConfig: options.validationScanRuntimeConfig ?? scanRuntimeConfigFromEnv(env),
       },
     );
+    const initialEdgeRepository = createInitialEdgeDetectionRepository(pool);
+    const initialEdgeService = createInitialEdgeDetectionService({
+      ...initialEdgeRepository,
+      latestRun: async (ctx, targetId) => (await repositories.validationEvidence.listTestRuns(ctx,
+        { targetId, checkId: INITIAL_EDGE_CHECK_ID, limit: 1 }))[0],
+      activeScan: async (ctx, target) => (await repositories.validationScans.listScans(ctx,
+        { targetId: target.id, status: ['pending', 'running'], limit: 1 })).length > 0,
+      ownership: async (ctx, target) => {
+        if (ownershipProofFromStates({ targetState: target.verification_state }).verified) return true;
+        const parentId = subdomainParentId(target);
+        const parent = parentId ? await initialEdgeRepository.getTarget(ctx, parentId) : null;
+        return Boolean(ownershipParentFor(target, parent ? [parent] : [])
+          && ownershipProofFromStates({ targetState: parent?.verification_state }).verified);
+      },
+      startTestRun: validationServices.testRuns.startTestRun,
+    });
+    const initialEdgeDetections = {
+      ...initialEdgeService,
+      dispatchPending: (ctx, options = {}) => initialEdgeService.dispatchPending(ctx,
+        { ...options, runtimeConfig: loadInitialEdgeDetectionRunnerConfig(env) }),
+    };
     const secretVault = createPostgresSecretVaultServices(repositories, {
       encryptionKey: loadSecretEncryptionKey(env),
       connectorEncryptionKey: loadConnectorSecretEncryptionKey(env),
@@ -469,6 +497,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       },
       subscriptions: subscriptionServices,
       validationScans: validationScanServices,
+      initialEdgeDetections,
       productionReleaseEvidence: productionReleaseEvidenceServices,
       retention: retentionServices,
       wafPosture: {

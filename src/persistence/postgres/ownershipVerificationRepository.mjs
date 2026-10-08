@@ -365,7 +365,7 @@ export function createOwnershipVerificationRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT tv.id, tv.tenant_id, tv.target_id, tv.state, tv.source_kind,
-                  tv.source_ref, tv.transitioned_at, tv.transitioned_by, tv.audit_entry_id,
+                  tv.source_ref, tv.transitioned_at::text AS transitioned_at, tv.transitioned_by, tv.audit_entry_id,
                   t.kind AS proof_target_kind, t.value AS proof_target_value,
                   t.normalized_value AS proof_target_normalized_value,
                   connector_feature.enabled AS proof_connector_feature_enabled,

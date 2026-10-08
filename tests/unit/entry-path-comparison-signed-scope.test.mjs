@@ -210,11 +210,11 @@ describe('entry-path comparison planning is passive', () => {
 describe('entry-path comparison start uses the signed run path', () => {
   beforeEach(seed);
 
-  it('signs jobs for exactly the approved targets and waits on group concurrency', () => {
+  it('signs jobs for every approved target concurrently when each target slot is free', () => {
     const { started, comparison } = start();
     assert.equal(auditCount('entry_path_comparison.started'), 1);
     assert.equal(comparison.approved_scope.plan_digest, started.comparison.plan_digest);
-    assert.equal(itemState(comparison, 'ep_origin').state, 'pending');
+    assert.equal(itemState(comparison, 'ep_origin').state, 'started');
     for (const id of ['ep_primary', 'ep_alt', 'ep_login']) {
       const item = itemState(comparison, id);
       assert.equal(item.state, 'started');
@@ -228,7 +228,7 @@ describe('entry-path comparison start uses the signed run path', () => {
     const altJob = jobForRun(itemState(comparison, 'ep_alt').test_run_id);
     assert.equal(altJob.target.value, 'alt.example');
     assert.equal(JSON.stringify(altJob.probe_profile).includes('elsewhere.example'), false);
-    assert.equal(getStore().testRuns.length, 3);
+    assert.equal(getStore().testRuns.length, 4);
   });
 
   it('completes the comparison, carrying the origin gate scope and per-path outcomes', () => {
@@ -274,7 +274,7 @@ describe('entry-path comparison start uses the signed run path', () => {
     const listed = listEntryPathComparisons(VIEWER, { anchor_target_id: 'tgt_app', limit: 1 });
     assert.equal(listed.count, 1);
     assert.equal(getStore().testRuns.length, runs);
-    assert.equal(itemState(comparison, 'ep_origin').state, 'pending');
+    assert.equal(itemState(comparison, 'ep_origin').state, 'started');
     assert.equal(getEntryPathComparison({ tenantId: 'ten_other', userId: 'x', role: 'admin' }, comparison.id), null);
   });
 
@@ -293,7 +293,7 @@ describe('entry-path comparison start uses the signed run path', () => {
     const again = createEntryPathComparison(CTX, body('start', { reviewed_plan_digest: plan.plan_digest }), SIGNED);
     assert.equal(again.status, 200);
     assert.equal(again.replayed, true);
-    assert.equal(getStore().testRuns.length, 3);
+    assert.equal(getStore().testRuns.length, 4);
     assert.equal(auditCount('entry_path_comparison.started'), 1);
   });
 });
@@ -321,7 +321,7 @@ describe('entry-path comparison safety controls', () => {
     assert.equal(result.comparison.status, 'cancelled');
     assert.ok(getStore().testRuns.every((run) => run.status === 'cancelled'));
     assert.ok(getStore().probeJobs.every((job) => job.status === 'cancelled'));
-    assert.equal(auditCount('test_run.cancelled'), 3);
+    assert.equal(auditCount('test_run.cancelled'), 4);
     assert.equal(itemState(comparison, 'ep_origin').skip_reason, 'comparison_cancelled');
     assert.equal(cancelEntryPathComparison(CTX, comparison.id).status, 409);
     assert.equal(cancelEntryPathComparison(VIEWER, comparison.id).status, 403);
@@ -368,6 +368,7 @@ describe('entry-path comparison safety controls', () => {
   });
 
   it('rejects a tampered approved scope and cancels outstanding work', () => {
+    getStore().testRuns.push({ id: 'block_origin', tenant_id: TENANT, target_group_id: 'tg_1', target_id: 'tgt_origin', status: 'running', created_at: new Date().toISOString() });
     const { comparison } = start();
     comparison.approved_scope.items.find((row) => row.entry_path_id === 'ep_origin').target_id = 'tgt_alt';
     completeRun(itemState(comparison, 'ep_primary').test_run_id, 'blocked', markerMetadata());
@@ -376,16 +377,17 @@ describe('entry-path comparison safety controls', () => {
     assert.equal(itemState(comparison, 'ep_origin').test_run_id, null);
     assert.equal(auditCount('entry_path_comparison.scope_rejected'), 1);
     assert.ok(comparison.evaluation.items.every((row) => row.outcome === 'inconclusive'));
-    assert.equal(getStore().testRuns.filter((run) => run.target_id === 'tgt_origin').length, 0);
+    assert.equal(getStore().testRuns.filter((run) => run.target_id === 'tgt_origin' && run.id !== 'block_origin').length, 0);
   });
 
   it('skips a relation archived after approval instead of executing it', () => {
+    getStore().testRuns.push({ id: 'block_origin', tenant_id: TENANT, target_group_id: 'tg_1', target_id: 'tgt_origin', status: 'running', created_at: new Date().toISOString() });
     const { comparison } = start();
     getStore().applicationEntryPaths.find((row) => row.id === 'ep_origin').status = 'archived';
     completeRun(itemState(comparison, 'ep_primary').test_run_id, 'blocked', markerMetadata());
     assert.equal(itemState(comparison, 'ep_origin').state, 'skipped');
     assert.equal(itemState(comparison, 'ep_origin').skip_reason, 'entry_path_archived');
-    assert.equal(getStore().testRuns.filter((run) => run.target_id === 'tgt_origin').length, 0);
+    assert.equal(getStore().testRuns.filter((run) => run.target_id === 'tgt_origin' && run.id !== 'block_origin').length, 0);
   });
 
   it('treats a signed job whose target drifted after signing as inconclusive evidence', () => {

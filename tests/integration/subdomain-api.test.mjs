@@ -32,6 +32,10 @@ test('subdomain import is explicit, idempotent and never starts probes before re
   assert.equal(imported.json.created.length, 1);
   assert.deepEqual(imported.json.detection.queued, []);
   assert.equal(getStore().testRuns.length, before);
+  const initial = await request(baseUrl, 'GET', `/v1/targets/${imported.json.created[0].target_id}/initial-detection`, { headers: demoHeaders('viewer') });
+  assert.equal(initial.status, 200);
+  assert.equal(initial.json.initial_detection.status, 'queued');
+  assert.equal(getStore().testRuns.length, before, 'queue read cannot start a probe');
   const list = await request(baseUrl, 'GET', '/v1/targets/tgt_1/subdomains', { headers: demoHeaders('viewer') });
   assert.equal(list.status, 200);
   const child = list.json.items.find((row) => row.target_id === imported.json.created[0].target_id);

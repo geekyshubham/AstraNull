@@ -59,6 +59,12 @@ spec:
                     secretKeyRef:
                       name: astranull-worker-env
                       key: ASTRANULL_PROBE_WORKER_SECRET
+                - name: ASTRANULL_WAF_POSTURE_ENABLED
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-worker-env
+                      key: ASTRANULL_WAF_POSTURE_ENABLED
+                      optional: true
                 - name: ASTRANULL_DATABASE_URL
                   valueFrom:
                     secretKeyRef:

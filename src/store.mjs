@@ -27,6 +27,7 @@ function emptyStore() {
     userPasswordInvites: [],
     targetGroups: [],
     targets: [],
+    initialEdgeDetections: [],
     testPolicies: [],
     testPolicyDispatches: [],
     validationScans: [],

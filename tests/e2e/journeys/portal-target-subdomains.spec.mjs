@@ -36,7 +36,7 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     await expect(panel.getByRole('button', { name: 'Discover and add subdomains' })).toBeEnabled();
     const before = sourceCalls;
     await panel.getByRole('button', { name: 'Discover and add subdomains' }).click();
-    await expect(page.getByRole('dialog')).toContainText('No external detection starts until you review');
+    await expect(page.getByRole('dialog')).toContainText('Initial WAF/CDN detection is queued automatically');
     await page.getByRole('dialog').getByRole('button', { name: 'Discover and add', exact: true }).click();
     await expect(panel.getByRole('status')).toContainText('Added');
     await expect(panel.locator('tbody')).toContainText('api.');
@@ -53,5 +53,13 @@ for (const [theme, width] of [['dark', 1440], ['light', 375]]) {
     const axe = await new AxeBuilder({ page }).include('#td-panel-subdomains').analyze();
     expect(axe.violations).toEqual([]);
     await page.screenshot({ path: `/tmp/astranull-subdomains-${theme}-${width}.png`, fullPage: true });
+    await panel.locator('tbody a').first().click();
+    await waitForPortalRouteSettled(page);
+    await expect(page.getByRole('tab', { name: /Validate/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Findings' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Changes & history' })).toBeVisible();
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    await expect(page.locator('.td-checks')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Plan validation' })).toBeEnabled();
   });
 }

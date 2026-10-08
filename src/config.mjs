@@ -123,6 +123,11 @@ function parseTenantBooleanMap(raw, name) {
 }
 
 /** Probe dispatch plus protection-validation flags only, for background runners that lack the API's auth env. */
+export function loadInitialEdgeDetectionRunnerConfig(env = process.env) {
+  return { ...loadProbeDispatchConfig(env), featureFlags: { wafPostureEnabled: parseOptionalBoolean(
+    env.ASTRANULL_WAF_POSTURE_ENABLED, 'ASTRANULL_WAF_POSTURE_ENABLED', false) } };
+}
+
 export function loadEntryPathComparisonRunnerConfig(env = process.env) {
   const dispatch = loadProbeDispatchConfig(env);
   const protectionValidationEnabledDefault = parseOptionalBoolean(

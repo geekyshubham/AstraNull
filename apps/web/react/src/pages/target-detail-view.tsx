@@ -78,6 +78,7 @@ import {
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
 import { TargetChangesHistory } from '../components/targets/target-history';
 import { TargetSubdomains } from '../components/targets/target-subdomains';
+import { InitialEdgeStatus } from '../components/targets/initial-edge-status';
 import { TargetAuthorization } from '../components/targets/target-authorization';
 import { OriginRelations } from '../components/targets/origin-relations';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
@@ -1361,7 +1362,7 @@ export function TargetDetailView({
     if (edgePhase === 'waiting') return 'Another run holds the execution slot for this target. Your detection request starts when it frees up.';
     if (edgePhase === 'error') return edgeError || 'WAF/CDN detection could not be queued.';
     if (edgePhase === 'no_result') return edgeDetectionReasonExplanation(edgeReason) || 'The last detection run finished without a trusted result, so nothing is asserted.';
-    if (edgePhase === 'not_started') return 'Detection has not run on this target. It starts only when someone chooses Detect WAF and CDN.';
+    if (edgePhase === 'not_started') return 'Initial WAF/CDN detection is queued when this domain is added. It starts after ownership and execution requirements are met.';
     return null;
   }
 
@@ -1527,6 +1528,7 @@ export function TargetDetailView({
   return (
     <div className="content target-detail-view">
       {renderHeader()}
+      {['fqdn', 'url'].includes(kind) ? <InitialEdgeStatus key={entityId} targetId={entityId} config={config} session={session} onDispatched={reload} /> : null}
       {error ? (
         <Toast
           message={error}

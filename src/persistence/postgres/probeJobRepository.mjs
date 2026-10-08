@@ -155,6 +155,74 @@ function jobForWorkerResponse(job) {
  * applies to terminal reads and transitions so an exact completed retry can be recognized after
  * verification closure without allowing a malformed historical row to reconcile.
  */
+
+/** Revalidate the signed ownership proof at the worker boundary; no new destination is inferred. */
+function currentSignedOwnershipProofSql(jobAlias) {
+  return `(j.constraints_json ? 'ownership_binding'
+                   AND EXISTS (
+                     SELECT 1
+                     FROM target_verification_current tvc
+                     WHERE tvc.tenant_id = j.tenant_id
+                       AND tvc.target_id = COALESCE(NULLIF(j.constraints_json->'ownership_binding'->>'inherited_from_target_id', ''), j.target_id)
+                       AND (
+                         NULLIF(j.constraints_json->'ownership_binding'->>'inherited_from_target_id', '') IS NULL
+                         OR EXISTS (
+                           SELECT 1 FROM targets child
+                           JOIN targets parent ON parent.tenant_id = child.tenant_id AND parent.target_group_id = child.target_group_id
+                           JOIN target_groups policy ON policy.tenant_id = child.tenant_id AND policy.id = child.target_group_id
+                           WHERE child.tenant_id = j.tenant_id AND child.id = j.target_id
+                             AND parent.id = tvc.target_id AND child.kind = 'fqdn' AND parent.kind = 'fqdn'
+                             AND child.deleted_at IS NULL AND parent.deleted_at IS NULL
+                             AND policy.deleted_at IS NULL AND policy.archived_at IS NULL
+                             AND child.metadata_json->'tags' ? ('subdomain-of:' || parent.id)
+                             AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(parent.metadata_json->'tags') = 'array'
+                               THEN parent.metadata_json->'tags' ELSE '[]'::jsonb END) tag WHERE tag LIKE 'subdomain-of:%')
+                             AND right(lower(COALESCE(child.normalized_value, child.value)), length(lower(COALESCE(parent.normalized_value, parent.value))) + 1)
+                               = '.' || lower(COALESCE(parent.normalized_value, parent.value))
+                         )
+                       )
+                       AND tvc.state = j.constraints_json->'ownership_binding'->>'state'
+                       AND tvc.source_kind = j.constraints_json->'ownership_binding'->>'kind'
+                       AND tvc.transitioned_at = (
+                         j.constraints_json->'ownership_binding'->>'transitioned_at'
+                       )::timestamptz
+                       AND (
+                         tvc.state <> 'provider_verified'
+                         OR EXISTS (
+                           SELECT 1
+                           FROM tenant_connector_features feature
+                           JOIN waf_connectors connector
+                             ON connector.tenant_id = feature.tenant_id
+                           JOIN waf_connector_snapshots snapshot
+                             ON snapshot.tenant_id = connector.tenant_id
+                            AND snapshot.connector_id = connector.id
+                           WHERE feature.tenant_id = j.tenant_id
+                             AND feature.enabled = TRUE
+                             AND feature.revision = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'feature_revision'
+                             )::bigint
+                             AND connector.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_id'
+                             AND connector.provider = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_provider'
+                             AND connector.secret_id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_secret_id'
+                             AND connector.status NOT IN ('disabled', 'revoked')
+                             AND connector.last_success_revision = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_revision'
+                             )::bigint
+                             AND connector.last_success_at = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_generation'
+                             )::timestamptz
+                             AND snapshot.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_id'
+                             AND snapshot.provider = connector.provider
+                             AND snapshot.snapshot_kind = 'dns_zone'
+                             AND snapshot.evidence_source = 'provider_api'
+                             AND snapshot.resource_ref_hash = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_resource_ref_hash'
+                             AND snapshot.poll_revision = connector.last_success_revision
+                             AND snapshot.observed_at = connector.last_success_at
+                         )
+                       )
+                   ))`.replace(/\bj\./g, `${jobAlias}.`);
+}
+
 function reciprocalOwnershipJobBindingSql(jobAlias) {
   return `(
     (
@@ -241,6 +309,8 @@ export function createProbeJobRepository(pool) {
                    WHERE tr.tenant_id = candidate.tenant_id
                      AND tr.id = candidate.test_run_id
                      AND tr.status IN ('running', 'collecting')
+                     AND (NOT COALESCE(candidate.constraints_json->'ownership_binding' ? 'inherited_from_target_id', FALSE)
+                       OR ${currentSignedOwnershipProofSql('candidate')})
                  ))
                  OR
                  (candidate.ownership_verification_id IS NOT NULL AND EXISTS (
@@ -340,52 +410,7 @@ export function createProbeJobRepository(pool) {
                  SELECT 1 FROM test_runs tr
                  WHERE tr.tenant_id = j.tenant_id AND tr.id = j.test_run_id
                    AND tr.status IN ('running', 'collecting')
-                   AND j.constraints_json ? 'ownership_binding'
-                   AND EXISTS (
-                     SELECT 1
-                     FROM target_verification_current tvc
-                     WHERE tvc.tenant_id = j.tenant_id
-                       AND tvc.target_id = j.target_id
-                       AND tvc.state = j.constraints_json->'ownership_binding'->>'state'
-                       AND tvc.source_kind = j.constraints_json->'ownership_binding'->>'kind'
-                       AND tvc.transitioned_at = (
-                         j.constraints_json->'ownership_binding'->>'transitioned_at'
-                       )::timestamptz
-                       AND (
-                         tvc.state <> 'provider_verified'
-                         OR EXISTS (
-                           SELECT 1
-                           FROM tenant_connector_features feature
-                           JOIN waf_connectors connector
-                             ON connector.tenant_id = feature.tenant_id
-                           JOIN waf_connector_snapshots snapshot
-                             ON snapshot.tenant_id = connector.tenant_id
-                            AND snapshot.connector_id = connector.id
-                           WHERE feature.tenant_id = j.tenant_id
-                             AND feature.enabled = TRUE
-                             AND feature.revision = (
-                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'feature_revision'
-                             )::bigint
-                             AND connector.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_id'
-                             AND connector.provider = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_provider'
-                             AND connector.secret_id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_secret_id'
-                             AND connector.status NOT IN ('disabled', 'revoked')
-                             AND connector.last_success_revision = (
-                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_revision'
-                             )::bigint
-                             AND connector.last_success_at = (
-                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_generation'
-                             )::timestamptz
-                             AND snapshot.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_id'
-                             AND snapshot.provider = connector.provider
-                             AND snapshot.snapshot_kind = 'dns_zone'
-                             AND snapshot.evidence_source = 'provider_api'
-                             AND snapshot.resource_ref_hash = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_resource_ref_hash'
-                             AND snapshot.poll_revision = connector.last_success_revision
-                             AND snapshot.observed_at = connector.last_success_at
-                         )
-                       )
-                   )
+                   AND ${currentSignedOwnershipProofSql('j')}
                ))
                OR
                (j.ownership_verification_id IS NOT NULL AND EXISTS (

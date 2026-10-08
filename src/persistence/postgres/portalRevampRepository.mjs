@@ -8,6 +8,8 @@ import {
 } from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { targetTagsFromRecord } from '../../contracts/targetManagement.mjs';
+import { ownershipParentFor, subdomainParentId } from '../../lib/subdomainEnumeration.mjs';
+import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { isDemoAutoVerifyTenant } from '../../lib/demoAutoVerify.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { presentTargetDeclaration } from '../../lib/targetDeclarations.mjs';
@@ -1089,6 +1091,19 @@ export function createPortalRevampRepository(pool) {
         // history array and `latest` (the final element) keep their original semantics.
         const verificationRows = verifications.rows.slice().reverse();
         let latest = currentVerification.rows[0] ?? verificationRows[verificationRows.length - 1];
+        if (!ownershipProofFromStates({ targetState: latest?.state }).verified && subdomainParentId(target)) {
+          bump();
+          const parentResult = await client.query(`SELECT parent.*, verification.state AS verification_state
+            FROM targets parent JOIN target_groups policy ON policy.tenant_id = parent.tenant_id AND policy.id = parent.target_group_id
+            JOIN target_verification_current verification ON verification.tenant_id = parent.tenant_id AND verification.target_id = parent.id
+            WHERE parent.tenant_id = $1 AND parent.id = $2 AND parent.deleted_at IS NULL
+              AND policy.deleted_at IS NULL AND policy.archived_at IS NULL`, [ctx.tenantId, subdomainParentId(target)]);
+          const parent = ownershipParentFor(target, parentResult.rows);
+          if (parent && ownershipProofFromStates({ targetState: parent.verification_state }).verified) {
+            latest = { state: parent.verification_state, source_kind: 'inherited_parent',
+              source_ref: { inherited_from_target_id: parent.id, method: 'parent_domain' } };
+          }
+        }
         if (isDemoAutoVerifyTenant(ctx.tenantId)) {
           if (!latest || !['user_confirmed', 'dns_verified', 'provider_verified', 'verified'].includes(latest.state)) {
             latest = {

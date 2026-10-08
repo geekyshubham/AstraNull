@@ -1280,6 +1280,17 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return validationEvidence.listRunEvents(ctx, id, listOptions);
     },
     async startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, dispatchOptions = {}) {
+      if (!dispatchOptions.safeStartLockHeld && typeof validationEvidence.withSafeStartLock === 'function') {
+        try {
+          return await validationEvidence.withSafeStartLock(ctx, () => testRuns.startTestRun(ctx, body, runtimeConfig,
+            { ...dispatchOptions, safeStartLockHeld: true }));
+        } catch (error) {
+          if (error?.code === '23505' && ['uniq_active_test_run', 'uniq_active_unbound_test_run'].includes(error.constraint)) {
+            return { error: 'concurrent_run_blocked', status: 409 };
+          }
+          throw error;
+        }
+      }
       const check = getCheckById(body.check_id);
       if (!check) return { error: 'unknown_check', status: 400 };
       if (!isCustomerRunnable(check)) {
@@ -1318,6 +1329,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         : null;
       const activeRuns = await validationEvidence.listTestRuns(ctx, {
         targetGroupId,
+        targetId: typeof body.target_id === 'string' ? body.target_id.trim() : '',
+        includeUnbound: true,
         statuses: [...ACTIVE_RUN_STATUSES],
         limit: 1,
       });
@@ -1489,7 +1502,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const priorRun = lastRunForTargetGroup(recentRuns, ctx.tenantId, targetGroupId);
+      let priorRun = lastRunForTargetGroup(recentRuns.filter((run) => run.target_id === targetId), ctx.tenantId, targetGroupId);
+      if (!priorRun && groupPolicy.min_seconds_between_runs > 0) {
+        [priorRun] = await validationEvidence.listTestRuns(ctx, { targetId, targetGroupId, limit: 1 });
+      }
       if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
         const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
         if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {

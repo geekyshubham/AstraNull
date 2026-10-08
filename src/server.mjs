@@ -121,6 +121,7 @@ import { formatNotificationRuleForRead } from './lib/notifications.mjs';
 import * as cvePipeline from './services/cvePipeline.mjs';
 import * as externalDiscovery from './services/externalDiscovery.mjs';
 import * as subdomains from './services/subdomains.mjs';
+import { devInitialEdgeDetections } from './services/initialEdgeDetections.mjs';
 import { audit as appendDevAudit } from './audit.mjs';
 import * as supplyChainRisk from './services/supplyChainRisk.mjs';
 import * as notificationProviderCredentials from './services/notificationProviderCredentials.mjs';
@@ -1534,10 +1535,24 @@ export function createServer(options = {}) {
 
   if (runtimeConfig.persistenceMode !== 'postgres') {
     let stopTicker = null;
+    let initialTimer = null;
+    let initialRunning = false;
     server.on('listening', () => {
       stopTicker ??= startEntryPathComparisonTicker(runtimeConfig);
+      initialTimer = setInterval(async () => {
+        if (initialRunning) return;
+        initialRunning = true;
+        try {
+          for (const tenant of getStore().tenants) {
+            await devInitialEdgeDetections.dispatchPending({ tenantId: tenant.id }, { runtimeConfig });
+          }
+        } catch { /* Durable requests stay queued and can retry on the next tick. */ }
+        finally { initialRunning = false; }
+      }, 5000);
+      initialTimer.unref?.();
     });
     server.on('close', () => {
+      clearInterval(initialTimer);
       stopTicker?.();
       stopTicker = null;
     });
@@ -3058,6 +3073,19 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (result?.error) return json(res, result.status ?? 400, result);
     if (!result) return json(res, 404, { error: 'not_found' });
     return json(res, 200, result);
+  }
+
+  const initialDetectionMatch = path.match(/^\/v1\/targets\/([^/]+)\/initial-detection$/);
+  if (initialDetectionMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const id = decodeURIComponent(initialDetectionMatch[1]);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, id);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    if (!owned.target) return json(res, 404, { error: 'not_found' });
+    const service = runtimeConfig.persistenceMode === 'postgres' ? serviceDeps.initialEdgeDetections : devInitialEdgeDetections;
+    if (!service) return respondPostgresRouteNotWired(res);
+    return json(res, 200, { initial_detection: await service.getInitialDetection(ctx, id) });
   }
 
   const targetSubdomainsMatch = path.match(/^\/v1\/targets\/([^/]+)\/subdomains(?:\/(enumerate|detect))?$/);

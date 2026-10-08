@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { scanTargetIds } from '../../lib/targetExecutionScope.mjs';
 import { CHECK_CATALOG, customerSelectableChecks, getCheckById, isCustomerRunnable } from '../../contracts/checks.mjs';
 import {
   ACTIVE_SCAN_STATUSES,
@@ -255,18 +256,20 @@ export function createPostgresValidationScanServices(repositories, options = {})
     return coreCatalog.getTargetGroup(ctx, groupId, LEAN_GROUP_LOOKUP);
   }
 
-  async function activeRunForGroup(ctx, targetGroupId) {
+  async function activeRunForGroup(ctx, targetGroupId, targetId = null) {
     const runs = await validationEvidence.listTestRuns(ctx, {
       targetGroupId,
+      ...(targetId ? { targetId, includeUnbound: true } : {}),
       statuses: [...ACTIVE_RUN_STATUSES],
       limit: 1,
     });
     return runs[0] ?? null;
   }
 
-  async function activeScanForGroup(ctx, targetGroupId, excludeId = null) {
+  async function activeScanForGroup(ctx, targetGroupId, excludeId = null, targetId = null) {
     const scans = await repo.listScans(ctx, {
       targetGroupId,
+      ...(targetId ? { targetId } : {}),
       status: [...ACTIVE_SCAN_STATUSES],
       excludeId,
       limit: 1,
@@ -653,7 +656,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       }
       if (classification === 'abort') {
         if (result.error === 'concurrent_run_blocked') {
-          const blocking = await activeRunForGroup(execCtxFor(state.scan), state.scan.target_group_id);
+          const blocking = await activeRunForGroup(execCtxFor(state.scan), state.scan.target_group_id, step.target_id);
           const ownStepId = blocking?.scan_id === scanId ? blocking.scan_step_id : null;
           if (ownStepId) {
             const ownStep = state.steps.find((row) => row.id === ownStepId);
@@ -910,7 +913,9 @@ export function createPostgresValidationScanServices(repositories, options = {})
       const policy = await loadGroup(execCtx, policyId);
       if (!policy) return scheduleDenied(actor, state, 'target_execution_policy_unavailable', now);
       if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(actor, state, 'safe_window_closed', now);
-      if (await activeRunForGroup(execCtx, policy.id) || await activeScanForGroup(execCtx, policy.id, state.scan.id)) return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
+      for (const targetId of scanTargetIds(state.scan)) {
+        if (await activeRunForGroup(execCtx, policy.id, targetId) || await activeScanForGroup(execCtx, policy.id, state.scan.id, targetId)) return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
+      }
     }
     const plan = await buildPlan(execCtx, {
       target_group_id: state.scan.target_group_id,
@@ -1124,8 +1129,9 @@ export function createPostgresValidationScanServices(repositories, options = {})
         return plan;
       }
       if (!input.scheduled_for) {
-        for (const policyId of new Set(plan.targets.map((target) => target.target_group_id ?? plan.group.id))) {
-          if (await activeScanForGroup(ctx, policyId) || await activeRunForGroup(ctx, policyId)) return { error: 'concurrent_scan_blocked', status: 409 };
+        for (const target of plan.targets) {
+          const policyId = target.target_group_id ?? plan.group.id;
+          if (await activeScanForGroup(ctx, policyId, null, target.id) || await activeRunForGroup(ctx, policyId, target.id)) return { error: 'concurrent_scan_blocked', status: 409 };
         }
       }
       const id = newId('scan');
@@ -1295,7 +1301,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
         await state.patchStep(step, { status: 'cancelled', completed_at: now.toISOString() }, now);
         cancelledSteps.push(step.id);
       }
-      const orphan = await activeRunForGroup(ctx, scan.target_group_id);
+      const [orphan] = await validationEvidence.listTestRuns(ctx, { scanId: scan.id, statuses: [...ACTIVE_RUN_STATUSES], limit: 1 });
       if (orphan?.scan_id === scan.id && !cancelledRunIds.has(orphan.id)) {
         await cancelRun(orphan.id);
         const orphanStep = state.steps.find((step) => step.id === orphan.scan_step_id);

@@ -1487,6 +1487,25 @@ export function isPermanentResultRejection(status) {
   return Number.isInteger(status) && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
 }
 
+export async function processLeasedProbeBatch(jobs, process) {
+  const results = [];
+  const pending = jobs.map((job, index) => ({ job, key: job?.target?.id ?? job?.target_id ?? `item:${index}` }));
+  // A fixed four-job cap permits independent target work without unbounded fleet egress.
+  while (pending.length) {
+    const keys = new Set(); const batch = [];
+    for (let index = 0; index < pending.length && batch.length < 4;) {
+      const item = pending[index];
+      if (keys.has(item.key)) { index += 1; continue; }
+      keys.add(item.key); batch.push(item.job); pending.splice(index, 1);
+    }
+    const settled = await Promise.allSettled(batch.map(process));
+    const failed = settled.find((result) => result.status === 'rejected');
+    for (const result of settled) if (result.status === 'fulfilled') results.push(result.value);
+    if (failed) throw failed.reason;
+  }
+  return results;
+}
+
 export async function pollAndProcessOnce(config) {
   const listed = await signedFetch(config, 'GET', '/internal/probe/jobs');
   if (listed.status !== 200) {
@@ -1495,8 +1514,7 @@ export async function pollAndProcessOnce(config) {
     );
   }
   const jobs = listed.json?.jobs ?? [];
-  const results = [];
-  for (const job of jobs) {
+  return processLeasedProbeBatch(jobs, async (job) => {
     const cancellation = new AbortController();
     const reporter = createProbeActivityReporter(job,
       (batch) => signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/activity`, batch),
@@ -1504,13 +1522,12 @@ export async function pollAndProcessOnce(config) {
     let body;
     try { body = await processJob(config, job, { onProbeActivity: reporter.record, cancellationSignal: cancellation.signal }); }
     finally { await reporter.close(); }
-    if (cancellation.signal.aborted) { results.push({ job_id: job.id, external_result: 'stopped' }); continue; }
+    if (cancellation.signal.aborted) return { job_id: job.id, external_result: 'stopped' };
     const resultPath = `/internal/probe/jobs/${job.id}/result`;
     const posted = await signedFetch(config, 'POST', resultPath, body);
     if (isPermanentResultRejection(posted.status)) {
       console.error(`Probe result rejected (${posted.status}) for ${job.id}: ${redactSecrets(posted.text?.slice(0, 200), config.secret)}`);
-      results.push({ job_id: job.id, external_result: body.external_result, rejected: posted.status });
-      continue;
+      return { job_id: job.id, external_result: body.external_result, rejected: posted.status };
     }
     if (posted.status !== 201) {
       throw new Error(
@@ -1520,9 +1537,8 @@ export async function pollAndProcessOnce(config) {
         )}`,
       );
     }
-    results.push({ job_id: job.id, external_result: body.external_result });
-  }
-  return results;
+    return { job_id: job.id, external_result: body.external_result };
+  });
 }
 
 export async function runProbeWorker(config, deps = {}) {

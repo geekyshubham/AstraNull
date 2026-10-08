@@ -137,7 +137,7 @@ describe('postgres validation scans (service adapters over a live database)', ()
         RUNTIME_CONFIG,
         { scanDispatch: { scan_id: scan.id, step_id: scan.steps[1].step_id, lease_token: 'forged' } },
       );
-      assert.equal(forged.error, 'concurrent_run_blocked', 'concurrency gate fires before binding validation for a non-replay');
+      assert.equal(forged.error, 'scan_dispatch_invalid', 'a different target slot does not mask forged dispatch context');
       await repositories.validationScans.updateScan(CTX, scan.id, {
         lease_token: 'lease_real',
         lease_owner: 'test',
@@ -157,7 +157,7 @@ describe('postgres validation scans (service adapters over a live database)', ()
         RUNTIME_CONFIG,
         { scanDispatch: { scan_id: scan.id, step_id: scan.steps[1].step_id, lease_token: 'lease_real' } },
       );
-      assert.equal(conflicting.error, 'concurrent_run_blocked');
+      assert.equal(conflicting.error, 'policy_repository_unavailable');
       const listed = await scans.listValidationScans(CTX, {});
       assert.equal(listed.count, 1);
       const foreign = await scans.listValidationScans({ tenantId: OTHER_TENANT, userId: 'x', role: 'admin' }, {});

@@ -29,3 +29,7 @@ no matching edge fingerprint must never be labeled Exposed. Enforcement/capacity
 approved checks. Imported targets, fingerprints and audits use existing tables; no migration is
 needed for this UI/flow completion. Child declarations remain accessible in Targets as well as
 under their parent; no hidden group selection is introduced.
+
+## Superseded initial-detection behavior
+
+[ADR-0020](0020-target-concurrency-and-initial-detection.md) now authorizes automatic initial provider observations for every created domain/URL, including explicitly imported descendants. Import confirmation states this behavior. The durable request waits on current ownership and safety gates; other capability checks remain explicit in the child target workspace.

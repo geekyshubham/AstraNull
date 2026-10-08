@@ -229,7 +229,7 @@ async function insertScan(client, tenantId, record, { onConflictOccurrence = fal
 }
 
 function mapScanWriteError(error) {
-  if (error?.code === '23505' && error?.constraint === 'uniq_active_validation_scan_per_group') {
+  if (error?.code === '23505' && ['uniq_active_validation_scan_per_group', 'uniq_active_validation_scan_target'].includes(error?.constraint)) {
     return { error: 'concurrent_scan_blocked', status: 409 };
   }
   if (error?.code === '23505' && error?.constraint === 'uniq_validation_scans_occurrence') {
@@ -347,7 +347,7 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
           const insertedSteps = await insertSteps(client, ctx.tenantId, scan.id, steps);
           return { scan, steps: insertedSteps };
         } catch (error) {
-          if (error?.code === '23505' && error?.constraint === 'uniq_active_validation_scan_per_group') {
+          if (error?.code === '23505' && ['uniq_active_validation_scan_per_group', 'uniq_active_validation_scan_target'].includes(error?.constraint)) {
             return { error: 'concurrent_scan_blocked', status: 409 };
           }
           if (error?.code === '23505' && error?.constraint === 'uniq_validation_scans_occurrence') {

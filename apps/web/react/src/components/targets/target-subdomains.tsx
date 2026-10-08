@@ -83,7 +83,7 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
       });
       if (controller.signal.aborted) return;
       if (action === 'enumerate') {
-        setMessage(`Added ${rows(result.created).length} subdomains; ${Number(result.already_declared) || 0} already declared; ${rows(result.failed).length} could not be added.${result.truncated ? ' The source returned a partial list; you can import again later.' : ''} Review the hosts before starting detection.`);
+        setMessage(`Added ${rows(result.created).length} subdomains; ${Number(result.already_declared) || 0} already declared; ${rows(result.failed).length} could not be added.${result.truncated ? ' The source returned a partial list; you can import again later.' : ''} Initial WAF/CDN detection is queued automatically. Open any host to run its full target checks.`);
       } else {
         const queued = rows(result.queued);
         setMessage(`Queued ${queued.length} fingerprint observations; ${rows(result.skipped).length} skipped; ${Number(result.deferred) || 0} left for a later batch. Each host has its own result.`);
@@ -135,13 +135,13 @@ export function TargetSubdomains({ target, config, session, canWrite, canStart }
       <label className="field"><span>Filter subdomains</span><input className="input" type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hostname" /></label>
       <p>{visible.length} of {items.length} hosts shown. {unchecked.length} have not been checked.</p>
       {visible.length ? <DataTable<DataItem> columns={columns} items={visible} getRowId={(row) => text(row.target_id)} empty={null} />
-        : <EmptyState icon={Network} title={items.length ? 'No matching subdomains' : 'No subdomains recorded'} body={items.length ? 'Change the hostname filter to see more hosts.' : 'Declare a child hostname or use the configured passive source to add subdomains. Detection starts only after you review the hosts.'} />}
+        : <EmptyState icon={Network} title={items.length ? 'No matching subdomains' : 'No subdomains recorded'} body={items.length ? 'Change the hostname filter to see more hosts.' : 'Declare a child hostname or use the configured passive source to add subdomains. Initial provider detection is queued automatically; further checks are available in each host’s target workspace.'} />}
     </> : null}
     <ConfirmModal open={review !== null} busy={busy} onCancel={() => setReview(null)} onConfirm={() => void confirm()}
       title={review === 'enumerate' ? 'Discover and declare subdomains?' : 'Start subdomain provider detection?'}
       confirmLabel={review === 'enumerate' ? 'Discover and add' : 'Start bounded detection'}
       description={review === 'enumerate'
-        ? <p>The configured passive source will return a bounded list strictly under {text(target.value)}. Newly found hostnames become declared child targets. No external detection starts until you review the imported list and choose it separately.</p>
+        ? <p>The configured passive source will return a bounded list strictly under {text(target.value)}. Newly found hostnames become declared child targets. Initial WAF/CDN detection is queued automatically and runs after ownership and safety requirements are met. Each child opens the full target workspace for further checks.</p>
         : <p>Queues a bounded batch of unchecked child targets. Each fingerprint observation uses its own ownership, signed-worker, rate and safety checks. Provider detection does not test enforcement or capacity.</p>}
     />
   </section>;

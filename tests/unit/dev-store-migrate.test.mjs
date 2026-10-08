@@ -237,6 +237,7 @@ describe('dev store migration', () => {
     process.env.ASTRANULL_NO_PERSIST = '1';
     const full = CHECK_CATALOG.map((c) => ({ ...c }));
     const data = {
+      initialEdgeDetections: [],
       tenants: [{
         id: 'ten_demo',
         name: 'Demo',

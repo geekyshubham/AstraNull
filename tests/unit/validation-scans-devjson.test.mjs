@@ -167,7 +167,7 @@ describe('validation scans (dev-json): selection and sequential execution', () =
       { check_id: 'dns.authoritative_response.safe', target_group_id: 'tg_1', target_id: 'tgt_1', scan_id: scan.id, scan_step_id: stored.steps[1].id },
       RUNTIME,
     );
-    assert.equal(bodyOnly.error, 'safe_min_interval_active');
+    assert.equal(bodyOnly.error, 'concurrent_run_blocked');
     assert.equal(getStore().testRuns.some((run) => run.scan_step_id === stored.steps[1].id), false);
   });
 });

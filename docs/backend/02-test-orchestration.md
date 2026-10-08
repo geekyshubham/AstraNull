@@ -63,7 +63,7 @@ Failure states:
 | Check risk class is allowed | Yes |
 | Current time is allowed window | When `safe_test_windows` configured on target group |
 | Tenant `max_runs_per_hour` not exceeded | Yes (default 60 customer-runnable runs/hour) |
-| Target group `min_seconds_between_runs` satisfied | When configured |
+| Target `min_seconds_between_runs` satisfied using its policy setting | When configured |
 | Per-run `max_events` not exceeded | Yes on probe ingest, agent observations, no-observation marker |
 | Rate/concurrency caps exist | Yes |
 | High-scale approval not required for safe run | Yes |
@@ -82,13 +82,13 @@ A validation scan is the customer-facing on-demand run. It is a parent record ov
 | Concept | Behaviour |
 |---|---|
 | Plan | `check_ids` (1 to 500 customer-runnable safe checks, at most 500 planned steps — enough for one "run all checks" scan over the full catalog for one target) times either one exact `target_id` or every active target in the group. Pairs whose `supported_targets` exclude the target kind are recorded in `excluded` and never run. Selecting a SOC-gated, monitor-only, or unknown check fails the whole request (`403 soc_gated_check`, `400 unknown_check`). |
-| Execution | Steps run one at a time because only one run may be active per target group. Each step calls `startTestRun` with a server-side `scanDispatch` context (scan id, step id, lease token). Child runs carry `scan_id` and `scan_step_id`. |
+| Execution | Steps within a scan remain sequential. Independent targets can execute in parallel; each target permits one active run, and scans reserve their exact target sets (ADR-0020). Each step calls `startTestRun` with a server-side `scanDispatch` context (scan id, step id, lease token). Child runs carry `scan_id` and `scan_step_id`. |
 | Denial handling | `safe_min_interval_active` and the rolling hourly caps (`safe_rate_cap_exceeded`, `entitlement_limit_exceeded`) defer the step until the cooldown or hour window clears, so a long scan paces itself instead of failing. `safe_window_closed`, `kill_switch_active`, `tenant_suspended`, and a foreign `concurrent_run_blocked` deny the remaining steps and finish the scan. Per-step errors such as `prerequisites_not_met` or `ownership_not_verified` deny only that step. |
 | Statuses | Scan: `scheduled`, `pending`, `running`, `completed`, `denied`, `cancelled`. Step: `pending`, `deferred`, `starting`, `running`, `collecting`, `verdicted`, `denied`, `skipped`, `cancelled`. |
 | Progress | `GET /v1/validation-scans/:id` projects each step with the bounded request (`kind`, `method`, `path`, `protocol`, `max_requests`, `timeout_ms` from the probe profile and signed job constraints), the response (`external_result`, `status_code`), `requests_sent` from the worker safety attestation (`0` with `requests_simulated: true` in simulation mode), and the verdict record. |
 | Activity | `GET /v1/validation-scans/:id/activity` merges `validation_scan.*` audit rows, child run audit rows, and child run events into one chronological metadata-only feed with allowlisted metadata keys. |
 | Stop | `POST /v1/validation-scans/:id/cancel` marks the scan cancelled first, cancels the active child run through `cancelTestRun`, skips pending and deferred steps, and audits `validation_scan.cancelled`. A racing executor start is refused by `scan_dispatch_invalid`. |
-| Scheduling | `scheduled_for` (at least one minute ahead) with optional `recurrence` (`daily`, `weekly`, `monthly` plus IANA timezone). Due scans are dispatched after re-checking kill switch, tenant suspension, group state, safe test window, and group concurrency; a denial sets status `denied`, audits `validation_scan.schedule_denied`, and never force-runs. Recurring scans create the next occurrence idempotently (`occurrence_key`). Only `scheduled` scans can be edited. |
+| Scheduling | `scheduled_for` (at least one minute ahead) with optional `recurrence` (`daily`, `weekly`, `monthly` plus IANA timezone). Due scans are dispatched after re-checking kill switch, tenant suspension, group state, safe test window, and selected-target concurrency; a denial sets status `denied`, audits `validation_scan.schedule_denied`, and never force-runs. Recurring scans create the next occurrence idempotently (`occurrence_key`). Only `scheduled` scans can be edited. |
 | Advancement | No daemon in the API process. Run-terminal hooks (`src/services/runTerminalHooks.mjs`) advance the parent when a child verdicts or cancels; the read path advances active scans and dispatches due scans in dev-json mode; Postgres deployments run `npm run validation-scan:runner -- --tenant-id <tenant>` from a CronJob. |
 | Audit | `validation_scan.created`, `scheduled`, `updated`, `dispatched`, `schedule_denied`, `step_started`, `step_deferred`, `step_denied`, `step_skipped`, `step_completed`, `cancelled`, `series_stopped`, `completed`, `advance_failed`, `create_denied`, `cancel_denied`. |
 
@@ -169,3 +169,5 @@ Rejected inputs include raw requests/responses, packet captures, target IP inven
 ## Completion criteria
 
 Orchestration is complete when test runs are deterministic, bounded, auditable, retryable, and produce enough evidence for the correlation engine.
+
+Automatic initial WAF/CDN observations are durably queued during FQDN/URL creation, including imported subdomains, and dispatched by the existing scheduler through `startTestRun`. Queue status is passive. Missing ownership, disabled WAF feature, safe-window/cooldown/rate/stop gates leave requests queued for later retry. See [ADR-0020](../adr/0020-target-concurrency-and-initial-detection.md).

@@ -52,22 +52,6 @@ function latestVerificationRows(targetId, tenantId) {
 function latestVerificationState(targetId, tenantId) {
   const rows = latestVerificationRows(targetId, tenantId);
   const isDemo = isDemoAutoVerifyTenant(tenantId);
-  if (!rows.length) {
-    if (isDemo) {
-      return {
-        state: 'user_confirmed',
-        source_kind: 'manual_override',
-        source_ref: { method: 'demo_auto_verify', demo: true },
-        history: [],
-      };
-    }
-    return {
-      state: 'unverified',
-      source_kind: null,
-      source_ref: null,
-      history: [],
-    };
-  }
   const store = getStore();
   const target = store.targets.find((candidate) => candidate.id === targetId && ownedByTenant(candidate, tenantId));
   const latest = target
@@ -100,7 +84,8 @@ function latestVerificationState(targetId, tenantId) {
   return {
     state: latest.state,
     source_kind: latest.source_kind,
-    source_ref: latest.source_ref,
+    source_ref: latest.inherited_from_target_id
+      ? { inherited_from_target_id: latest.inherited_from_target_id, method: 'parent_domain' } : latest.source_ref,
     history: rows.map((row) => ({
       state: row.state,
       transitioned_at: toIso(row.transitioned_at),

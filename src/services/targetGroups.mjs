@@ -1,4 +1,5 @@
 import { audit } from '../audit.mjs';
+import { queueInitialEdgeDetection } from '../lib/initialEdgeDetection.mjs';
 import {
   normalizeTargetInput,
   targetDedupeKey,
@@ -604,6 +605,7 @@ export function addTarget(ctx, groupId, body = {}) {
   const declarationFields = [];
   applyStoredDeclaration(record, declared.patch, declarationFields);
   getStore().targets.push(record);
+  queueInitialEdgeDetection(getStore(), record);
   // A new target has no proof. Reset only the presentation rollup; existing per-target
   // verification rows remain intact and continue to authorize their exact targets.
   group.ownership_status = 'unverified';
@@ -664,6 +666,7 @@ export function importTargets(ctx, groupId, rows = []) {
       created_at: now,
     };
     store.targets.push(record);
+    queueInitialEdgeDetection(store, record);
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -1150,6 +1153,7 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       created_at: new Date().toISOString(),
     };
     store.targets.push(target);
+    queueInitialEdgeDetection(store, target);
     if (!store.targetVerifications) store.targetVerifications = [];
     const auditEntry = audit({
       tenant_id: ctx.tenantId,

@@ -281,6 +281,9 @@ export async function runPostgresValidationScans(options) {
           });
           continue;
         }
+        if (runtime.services?.initialEdgeDetections?.dispatchPending) {
+          await runtime.services.initialEdgeDetections.dispatchPending(ctx, { runtimeConfig: options.runtimeConfig, limit: options.limit });
+        }
         const dispatched = await service.dispatchDueValidationScans(ctx, {
           workerId: options.workerId,
           limit: options.limit,

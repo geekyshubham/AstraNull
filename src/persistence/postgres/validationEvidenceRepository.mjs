@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { prepareObservation } from '../../services/targetHistory.mjs';
 import { presentFindingLineage } from '../../services/retestLineage.mjs';
 import { createTargetHistoryRepository, writeObservation } from './targetHistoryRepository.mjs';
@@ -304,6 +306,8 @@ function findingCustomerListWhere(tenantId, query) {
  * @param {import('pg').Pool} pool
  */
 export function createValidationEvidenceRepository(pool) {
+  let safeStartPool = null;
+  const safeStartContext = new AsyncLocalStorage();
   async function queryEvidenceList(client, tenantId, options = {}) {
     const boundedLimit = normalizeEvidenceListLimit(options.limit);
     const params = [tenantId];
@@ -336,6 +340,34 @@ export function createValidationEvidenceRepository(pool) {
   }
 
   return {
+    async withSafeStartLock(ctx, callback) {
+      const held = safeStartContext.getStore();
+      if (held?.active && held.tenantId === ctx.tenantId) return callback();
+      // Admission is serialized briefly; active executions retain independent target slots.
+      if (!safeStartPool) {
+        safeStartPool = new pg.Pool({ ...pool.options, max: 1, idleTimeoutMillis: 100, allowExitOnIdle: true });
+        safeStartPool.on('error', () => { /* Active clients fail their calls; idle connections can be replaced. */ });
+      }
+      const client = await safeStartPool.connect();
+      const key = `safe_start:${ctx.tenantId}`;
+      let broken = false;
+      const scope = { active: true, tenantId: ctx.tenantId };
+      const onError = () => { broken = true; };
+      client.on('error', onError);
+      try {
+        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
+        const result = await safeStartContext.run(scope, callback);
+        if (broken) throw new Error('safe_start_lock_lost');
+        return result;
+      } finally {
+        scope.active = false;
+        if (!broken) {
+          try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]); } catch { broken = true; }
+        }
+        client.removeListener('error', onError); client.release(broken);
+      }
+    },
+    async close() { if (safeStartPool) await safeStartPool.end(); safeStartPool = null; },
     async listTestRuns(ctx, options = {}) {
       const boundedLimit = normalizeTestRunListLimit(options.limit);
       return withTenantContext(pool, ctx.tenantId, async (client) => {
@@ -349,13 +381,19 @@ export function createValidationEvidenceRepository(pool) {
           paramIndex += 1;
         }
         if (options.targetId != null && options.targetId !== '') {
-          conditions.push(`target_id = $${paramIndex}`);
+          conditions.push(options.includeUnbound === true && options.targetGroupId
+            ? `(target_id = $${paramIndex} OR target_id IS NULL)` : `target_id = $${paramIndex}`);
           params.push(options.targetId);
           paramIndex += 1;
         }
         if (options.checkId != null && options.checkId !== '') {
           conditions.push(`check_id = $${paramIndex}`);
           params.push(options.checkId);
+          paramIndex += 1;
+        }
+        if (options.scanId) {
+          conditions.push(`scan_id = $${paramIndex}`);
+          params.push(options.scanId);
           paramIndex += 1;
         }
         if (Array.isArray(options.statuses) && options.statuses.length > 0) {

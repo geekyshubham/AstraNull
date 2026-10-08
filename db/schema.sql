@@ -2057,8 +2057,6 @@ CREATE INDEX idx_validation_scans_runnable
   ON validation_scans(tenant_id, next_eligible_at, id) WHERE status = 'running';
 CREATE INDEX idx_validation_scans_tenant_group_created
   ON validation_scans(tenant_id, target_group_id, created_at DESC);
-CREATE UNIQUE INDEX uniq_active_validation_scan_per_group
-  ON validation_scans(tenant_id, target_group_id) WHERE status IN ('pending', 'running');
 CREATE UNIQUE INDEX uniq_validation_scan_steps_run
   ON validation_scan_steps(tenant_id, test_run_id) WHERE test_run_id IS NOT NULL;
 CREATE INDEX idx_validation_scan_steps_scan
@@ -2090,8 +2088,10 @@ CREATE INDEX idx_agent_jobs ON agent_jobs(tenant_id, agent_id, status, created_a
 CREATE INDEX idx_probe_jobs_status_leased ON probe_jobs(status, leased_at, created_at);
 CREATE INDEX idx_probe_jobs_tenant_run ON probe_jobs(tenant_id, test_run_id);
 CREATE UNIQUE INDEX uniq_verdict_per_test_run ON verdicts(test_run_id);
-CREATE UNIQUE INDEX uniq_active_test_run ON test_runs(tenant_id, target_group_id)
-  WHERE status IN ('planned', 'running', 'collecting');
+CREATE UNIQUE INDEX uniq_active_test_run ON test_runs(tenant_id, target_id)
+  WHERE target_id IS NOT NULL AND status IN ('planned', 'running', 'collecting');
+CREATE UNIQUE INDEX uniq_active_unbound_test_run ON test_runs(tenant_id, target_group_id)
+  WHERE target_id IS NULL AND status IN ('planned', 'running', 'collecting');
 CREATE INDEX idx_events_correlation ON events(tenant_id, test_run_id, signal_type, nonce_hash, timestamp);
 CREATE UNIQUE INDEX uniq_events_tenant_event_id ON events(tenant_id, event_id) WHERE event_id IS NOT NULL;
 CREATE INDEX idx_findings_tenant_status ON findings(tenant_id, status, severity);
@@ -4317,3 +4317,113 @@ $$;
 CREATE TRIGGER loa_signatures_target_scope_guard
   BEFORE INSERT OR UPDATE ON loa_signatures
   FOR EACH ROW EXECUTE FUNCTION guard_loa_target_scope();
+
+CREATE UNIQUE INDEX uniq_active_validation_scan_per_group ON validation_scans(tenant_id, target_group_id)
+  WHERE status IN ('pending', 'running') AND target_id IS NULL
+    AND (plan_snapshot->'target_ids' IS NULL OR plan_snapshot->'target_ids' = '[]'::jsonb);
+
+CREATE TABLE validation_scan_target_slots (
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_id TEXT NOT NULL,
+  scan_id TEXT NOT NULL,
+  PRIMARY KEY (tenant_id, target_id),
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets(tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, scan_id) REFERENCES validation_scans(tenant_id, id) ON DELETE CASCADE
+);
+ALTER TABLE validation_scan_target_slots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE validation_scan_target_slots FORCE ROW LEVEL SECURITY;
+CREATE POLICY validation_scan_target_slots_tenant_isolation ON validation_scan_target_slots
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+INSERT INTO validation_scan_target_slots(tenant_id, target_id, scan_id)
+SELECT DISTINCT step.tenant_id, step.target_id, step.scan_id FROM validation_scan_steps step
+JOIN validation_scans scan ON scan.tenant_id = step.tenant_id AND scan.id = step.scan_id
+WHERE scan.status IN ('pending', 'running');
+
+CREATE FUNCTION reserve_validation_scan_targets() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE selected TEXT; incumbent TEXT;
+BEGIN
+  DELETE FROM validation_scan_target_slots WHERE tenant_id = NEW.tenant_id AND scan_id = NEW.id;
+  IF NEW.status NOT IN ('pending', 'running') THEN RETURN NEW; END IF;
+  FOR selected IN
+    SELECT DISTINCT value FROM (
+      SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(NEW.plan_snapshot->'target_ids') = 'array'
+        THEN NEW.plan_snapshot->'target_ids' ELSE '[]'::jsonb END) AS value
+      UNION SELECT NEW.target_id WHERE NEW.target_id IS NOT NULL
+      UNION SELECT target_id FROM validation_scan_steps WHERE tenant_id = NEW.tenant_id AND scan_id = NEW.id
+    ) scope ORDER BY value
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended('target_execution:' || NEW.tenant_id || ':' || selected, 0));
+    IF EXISTS (SELECT 1 FROM test_runs WHERE tenant_id = NEW.tenant_id AND target_id = selected
+      AND status IN ('planned', 'running', 'collecting') AND scan_id IS DISTINCT FROM NEW.id) THEN
+      RAISE EXCEPTION 'Target already has an active run' USING ERRCODE = '23505', CONSTRAINT = 'uniq_active_validation_scan_target';
+    END IF;
+    INSERT INTO validation_scan_target_slots(tenant_id, target_id, scan_id) VALUES (NEW.tenant_id, selected, NEW.id)
+      ON CONFLICT (tenant_id, target_id) DO NOTHING;
+    SELECT scan_id INTO incumbent FROM validation_scan_target_slots WHERE tenant_id = NEW.tenant_id AND target_id = selected;
+    IF incumbent IS DISTINCT FROM NEW.id THEN
+      RAISE EXCEPTION 'Target already has an active scan' USING ERRCODE = '23505', CONSTRAINT = 'uniq_active_validation_scan_target';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER validation_scans_target_slots AFTER INSERT OR UPDATE OF status, target_id, plan_snapshot ON validation_scans
+  FOR EACH ROW EXECUTE FUNCTION reserve_validation_scan_targets();
+
+CREATE FUNCTION guard_run_target_slot() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.target_id IS NULL OR NEW.status NOT IN ('planned', 'running', 'collecting') THEN RETURN NEW; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('target_execution:' || NEW.tenant_id || ':' || NEW.target_id, 0));
+  IF EXISTS (SELECT 1 FROM validation_scan_target_slots WHERE tenant_id = NEW.tenant_id AND target_id = NEW.target_id
+    AND scan_id IS DISTINCT FROM NEW.scan_id) THEN
+    RAISE EXCEPTION 'Target reserved by another validation scan' USING ERRCODE = '23505', CONSTRAINT = 'uniq_active_test_run';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER test_runs_target_slot_guard BEFORE INSERT OR UPDATE OF status ON test_runs
+  FOR EACH ROW EXECUTE FUNCTION guard_run_target_slot();
+
+CREATE TABLE target_initial_edge_detections (
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'leased', 'dispatched', 'cancelled')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  blocked_reason TEXT,
+  test_run_id TEXT,
+  lease_token TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  PRIMARY KEY (tenant_id, target_id),
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets(tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs(tenant_id, id)
+);
+CREATE INDEX idx_initial_edge_detection_due ON target_initial_edge_detections(tenant_id, next_attempt_at, target_id)
+  WHERE status IN ('queued', 'leased');
+ALTER TABLE target_initial_edge_detections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE target_initial_edge_detections FORCE ROW LEVEL SECURITY;
+CREATE POLICY target_initial_edge_detections_tenant_isolation ON target_initial_edge_detections
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+CREATE FUNCTION queue_initial_target_edge_detection() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.kind IN ('fqdn', 'url') THEN
+    INSERT INTO target_initial_edge_detections(tenant_id, target_id, requested_at, next_attempt_at)
+      VALUES (NEW.tenant_id, NEW.id, COALESCE(NEW.created_at, now()), now()) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER targets_queue_initial_edge_detection AFTER INSERT ON targets
+  FOR EACH ROW EXECUTE FUNCTION queue_initial_target_edge_detection();
+
+-- Existing domains without an accepted edge observation also receive an initial request.
+INSERT INTO target_initial_edge_detections(tenant_id, target_id)
+SELECT target.tenant_id, target.id FROM targets target
+WHERE target.kind IN ('fqdn', 'url') AND target.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM target_edge_detections edge WHERE edge.tenant_id = target.tenant_id AND edge.target_id = target.id)
+ON CONFLICT DO NOTHING;
