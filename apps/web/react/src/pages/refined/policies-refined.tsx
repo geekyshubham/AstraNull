@@ -22,10 +22,11 @@ import { requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../../lib/route-params';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { plainCheckName } from '../../lib/plain-language.mjs';
+import { plainCheckName, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatNumber } from '../../lib/utils';
 import './policies-refined.css';
+import { useScrollEdges } from '../../lib/scroll-edges';
 
 /**
  * The create-schedule form state and handlers, owned by PolicyPage. The form renders inline
@@ -886,6 +887,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
   const [stateFilter, setStateFilterState] = useState<StateFilter>(readStateFilter);
   const panelId = useId();
   const tableHeadingId = useId();
+  const { setScrollNode: setStateRailNode, edges: stateRailEdges } = useScrollEdges<HTMLDivElement>();
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const policiesUnavailable = Boolean(data.loadErrors.testPolicies);
   const formOpen = canWritePolicies && createForm.open;
@@ -945,13 +947,14 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
         const href = scheduleCheckHref(item, checks);
         return (
           <div className="rf-cell">
-            {href ? (
-              <a className="rf-cell-title rf-check-link" href={href}>{check.name}</a>
-            ) : <span className="rf-cell-title">{check.name}</span>}
+            <span className="rf-cell-title">{scheduleDisplayName(item, checks)}</span>
+            <span className="rf-cell-meta">
+              Runs {href ? <a className="rf-check-link" href={href}>{check.name}</a> : check.name}
+            </span>
             {check.checkId ? <span className="rf-mono rf-cell-meta">{check.checkId}</span> : null}
             {str(item, ['expected_verdict']) ? (
               <span className="rf-cell-meta" title="Declared expectation, not observed evidence">
-                Expects {optionLabel(createForm.verdictOptions, str(item, ['expected_verdict'])).toLowerCase()}
+                Expects: {plainVerdictLabel(str(item, ['expected_verdict']))}
               </span>
             ) : null}
           </div>
@@ -967,7 +970,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           <div className="rf-cell">
             {target.targetId ? (
               <a className="rf-cell-title rf-target-link" href={buildDetailHref('target-detail', target.targetId)}>{target.targetLabel}</a>
-            ) : <span className="rf-cell-title">No exact target</span>}
+            ) : <span className="rf-cell-meta">No exact target</span>}
 
           </div>
         );
@@ -1054,7 +1057,6 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
     <div className="content refined rf-policies">
       <header className="rf-header">
         <div className="rf-header-copy">
-          <p className="rf-eyebrow">Declared scope, bounded checks</p>
           <h1>Validation schedules</h1>
           <p className="rf-header-description">
             When each check runs against its exact target, in which timezone, and why a schedule is or is not dispatching. Expected verdicts stay declarations until external probe evidence is recorded.
@@ -1121,7 +1123,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
             <p>Select a row for the schedule detail. The check name opens that exact check.</p>
           </div>
           <div className="rf-toolbar">
-            <div className="rf-segmented" role="group" aria-label="Filter schedules by dispatch state">
+            <div ref={setStateRailNode} data-scroll-edges={stateRailEdges} className="rf-segmented" role="group" aria-label="Filter schedules by dispatch state">
               {STATE_FILTERS.map((option) => (
                 <button
                   key={option.id}

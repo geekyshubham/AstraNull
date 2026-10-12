@@ -265,7 +265,7 @@ describe('dashboard-metrics', () => {
     assert.match(targets, /Distinct hostnames<\/span><strong>{formatNumber\(units\.distinctHosts\)}/);
     assert.match(
       governance,
-      /{formatNumber\(openFindingsCount\)}<\/span> open findings/,
+      /{formatNumber\(openFindingsCount\)}<\/span> open {pluralize\(openFindingsCount, 'finding'\)}/,
     );
   });
 });

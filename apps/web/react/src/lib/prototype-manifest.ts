@@ -249,7 +249,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     route: '/app#scan-detail?id=:id',
     routeId: 'scan-detail',
     audience: 'Customer',
-    group: 'validation',
+    group: 'scope',
     source: 'pages/scan-detail-view.tsx',
     status: 'React implemented',
     summary: 'Polled live view of one validation scan: step progress, bounded request and response metadata, requests sent, verdicts, activity log, and Stop.'
@@ -525,10 +525,10 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   ],
   admin: [
     { id: 'overview', label: 'Overview', summary: 'Staff metrics, pending sign-ups, approvals, and support posture.', evidence: 'Internal management records.' },
-    { id: 'signup-queue', label: 'Sign-up Queue', summary: 'Approve, reject, request info, and provision tenant.', evidence: 'Signup request record.' },
+    { id: 'signup-queue', label: 'Signup queue', summary: 'Approve, reject, request info, and provision tenant.', evidence: 'Signup request record.' },
     { id: 'tenants', label: 'Tenants', summary: 'Tenant lifecycle, status, plan, users, and support actions.', evidence: 'Tenant detail record.' },
     { id: 'approvals', label: 'Approvals', summary: 'Internal approval queue and decision ledger.', evidence: 'Approval record.' },
-    { id: 'audit', label: 'Internal Audit', summary: 'Staff actions and management-plane audit.', evidence: 'Internal audit log.' }
+    { id: 'audit', label: 'Internal audit', summary: 'Staff actions and management-plane audit.', evidence: 'Internal audit log.' }
   ],
   'internal-soc': [
     { id: 'queue', label: 'Queue', summary: 'High-scale requests requiring SOC review.', evidence: 'Request and authorization pack.' },

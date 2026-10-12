@@ -230,7 +230,7 @@ export function ProtectionValidationReportPanel({ config, session }: { config: P
           <p className="muted small">Read at {formatDate(report.generated_at)}. Results below are retained immutable comparisons; they are not a claim of current protection.</p>
           {report.source_records_complete !== true || report.conclusions_truncated ? <p className="pv-notice" data-tone="warn">Partial view: source records or conclusion listings are incomplete. Missing rows are not validated coverage.</p> : null}
           <p>{report.unknown_statement || 'Unknown and not-tested coverage remains visible. Missing evidence does not create findings or count as validated.'}</p>
-          {report.incomplete_reasons.length ? <p className="pv-break">Incomplete coverage: {report.incomplete_reasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
+          {report.incomplete_reasons.length ? <p className="pv-notice pv-break" data-tone="warn">Incomplete coverage: {report.incomplete_reasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
           {Object.keys(report.unknown_reasons).length ? <ul aria-label="Unknown coverage reasons">{Object.entries(report.unknown_reasons).map(([reason, count]) => <li key={reason}>{labelFrom({}, reason)}: {count}</li>)}</ul> : null}
           {[['Not-tested entry paths', report.not_tested_paths], ['Not-tested firewall expectations', report.untested_firewall_expectations]].map(([label, raw]) => {
             const coverage = raw as ProtectionReport['not_tested_paths'];

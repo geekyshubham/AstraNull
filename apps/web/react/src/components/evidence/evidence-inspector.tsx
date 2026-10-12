@@ -497,7 +497,6 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       open
       title={title}
       accessibleTitle={title}
-      eyebrow="Evidence inspector"
       status={statusText}
       busy={state === 'loading'}
       onClose={close}

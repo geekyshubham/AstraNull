@@ -36,7 +36,7 @@ export function evidenceCapabilityCopy(capability) {
     transport_only: {
       label: 'Transport only',
       detail: 'E2 can establish reachability or response behavior. It does not prove semantic susceptibility.',
-      tone: 'info',
+      tone: 'muted',
     },
     soc_governed: {
       label: 'SOC-governed evidence',
@@ -80,7 +80,7 @@ export function vectorTargetAvailability(vector, checks, target) {
       id: 'select_target',
       label: 'Select exact target',
       detail: 'Choose an exact declared domain or endpoint to evaluate compatible bounded checks.',
-      tone: 'info',
+      tone: 'muted',
       runnableChecks: [],
     };
   }
@@ -110,7 +110,7 @@ export function vectorTargetAvailability(vector, checks, target) {
     id: 'additional_input',
     label: 'Additional input required',
     detail: 'A bounded mapping exists but needs customer-supplied setup such as an exact URL, route, or declaration before it is exposed as runnable.',
-    tone: 'info',
+    tone: 'muted',
     runnableChecks: [],
   };
 }

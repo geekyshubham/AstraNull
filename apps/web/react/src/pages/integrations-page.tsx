@@ -11,7 +11,7 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { requestJson } from '../lib/api';
 import { canReadDataset, sessionHasPermission } from '../lib/dataset-access.mjs';
-import { NAV_GROUP_LABELS, ROUTE_BY_ID } from '../lib/navigation';
+import { ROUTE_BY_ID } from '../lib/navigation';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { formatDate, formatNumber } from '../lib/utils';
 import { ProviderLogo, type ProviderLogoId } from '../components/integrations/provider-logos';
@@ -20,15 +20,15 @@ import { NotificationChannelsPanel } from '../components/integrations/notificati
 import { INTEGRATION_TILE_STYLES } from '../components/integrations/integration-tile-styles';
 import { prefersReducedMotion } from '../lib/motion';
 import { INTEGRATIONS_PAGE_STYLES } from './integrations-page-styles';
+import { KpiCell } from './page-components';
 
 // --- Local page shell (self-contained so concurrent edits to page-components.tsx
 //     never break this page; mirrors the shared presentational primitives). ---
-function PageHeader({ route, eyebrow, actions }: { route: RouteId; eyebrow?: string; actions?: ReactNode }) {
+function PageHeader({ route, actions }: { route: RouteId; actions?: ReactNode }) {
   const item = ROUTE_BY_ID.get(route);
   return (
     <div className="page-head">
       <div>
-        <p className="eyebrow">{eyebrow ?? (item ? NAV_GROUP_LABELS[item.group] : undefined)}</p>
         <h1>{item?.label}</h1>
         <p>{item?.description}</p>
       </div>
@@ -295,7 +295,7 @@ function focusNotificationChannels() {
 
 function ProviderSetupGuidePanel({ provider }: { provider: ProviderDirectoryEntry }) {
   const guide = getProviderSetupGuide(provider.id);
-  if (!guide) return <p className="muted">No setup guide is recorded for {provider.label} yet.</p>;
+  if (!guide) return <EmptyState icon={BookOpen} title="No setup guide recorded yet." body={`A setup guide for ${provider.label} has not been recorded yet.`} />;
   return (
     <div className="provider-guide">
       <dl className="provider-guide-facts">
@@ -722,6 +722,22 @@ export function IntegrationPage({
     }
   }
 
+  const renderConnectorLastAttempt = (item: DataItem) => {
+    // Failures are only known when the API records them; otherwise the latest attempt is unknown.
+    if (!Object.prototype.hasOwnProperty.call(item, 'last_error_at')) return <span className="muted">Not recorded</span>;
+    const success = getString(item, ['last_success_at'], '');
+    const failure = getString(item, ['last_error_at'], '');
+    const failed = Boolean(failure) && (!success || Date.parse(failure) > Date.parse(success));
+    const at = failed ? failure : success;
+    if (!at) return <span className="muted">Not recorded</span>;
+    return (
+      <>
+        <span className="mono">{formatDate(at)}</span>
+        <span className="muted"> · {failed ? 'Failed' : 'Succeeded'}</span>
+      </>
+    );
+  };
+
   const connectorColumns: TableColumn<DataItem>[] = [
     {
       key: 'name',
@@ -776,25 +792,17 @@ export function IntegrationPage({
       render: (item) => {
         if (!connectorHasCredentialPoll(item)) return <span className="muted">Not applicable</span>;
         const at = getString(item, ['last_success_at'], '');
-        return at ? <span className="mono">{formatDate(at)}</span> : <span className="muted">Never</span>;
+        return (
+          <span className="connector-sync-cell">
+            {at ? <span className="mono">{formatDate(at)}</span> : <span className="muted">Never</span>}
+            <span className="connector-attempt small">
+              <span className="muted">Last attempt: </span>
+              <span className="connector-attempt-value">{renderConnectorLastAttempt(item)}</span>
+            </span>
+          </span>
+        );
       },
     },
-    { key: 'last_attempt', label: 'Last attempt', render: (item) => {
-      if (!connectorHasCredentialPoll(item)) return <span className="muted">Not applicable</span>;
-      // Failures are only known when the API records them; otherwise the latest attempt is unknown.
-      if (!Object.prototype.hasOwnProperty.call(item, 'last_error_at')) return <span className="muted">Not recorded</span>;
-      const success = getString(item, ['last_success_at'], '');
-      const failure = getString(item, ['last_error_at'], '');
-      const failed = Boolean(failure) && (!success || Date.parse(failure) > Date.parse(success));
-      const at = failed ? failure : success;
-      if (!at) return <span className="muted">Not recorded</span>;
-      return (
-        <span className="connector-attempt">
-          <span className="mono">{formatDate(at)}</span>
-          <span className="muted small">{failed ? 'Failed' : 'Succeeded'}</span>
-        </span>
-      );
-    } },
     {
       key: 'actions',
       label: 'Actions',
@@ -844,7 +852,6 @@ export function IntegrationPage({
       <style>{INTEGRATIONS_PAGE_STYLES}</style>
       <PageHeader
         route="integrations"
-        eyebrow="Optional provider and alert integrations"
         actions={canAddIntegration ? (
           <>
             {canWriteIntegrationTargets ? (
@@ -871,36 +878,28 @@ export function IntegrationPage({
       <PageContextSummary>Optional enrichment only · no default cloud access · customer-declared targets remain the core path</PageContextSummary>
 
       <div className="kpi-row" aria-label="Integration inventory summary">
-        <div className="kpi-cell">
-          <span className="kpi-cell-label">Provider paths</span>
-          <span className="kpi-cell-value">{formatNumber(PROVIDER_DIRECTORY.length)}</span>
-          <span className="kpi-cell-delta">Read-only or manual metadata</span>
-        </div>
+        <KpiCell label="Provider paths" value={formatNumber(PROVIDER_DIRECTORY.length)} delta="Read-only or manual metadata" />
         {canReadConnectors ? (
           <>
-            <div className="kpi-cell">
-              <span className="kpi-cell-label">Connectors</span>
-              <span className="kpi-cell-value">{connectorsLoadError ? '—' : formatNumber(connectorRecords.length)}</span>
-              <span className="kpi-cell-delta">{connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`}</span>
-            </div>
-            <div className="kpi-cell">
-              <span className="kpi-cell-label">Synced successfully</span>
-              <span className="kpi-cell-value">{connectorsLoadError ? '—' : formatNumber(connectorRecords.filter((connector) => connectorHasCredentialPoll(connector) && getString(connector, ['last_success_at'], '')).length)}</span>
-              <span className="kpi-cell-delta">Credential connectors with a recorded successful poll</span>
-            </div>
+            <KpiCell
+              label="Connectors"
+              value={connectorsLoadError ? '—' : formatNumber(connectorRecords.length)}
+              delta={connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`}
+            />
+            <KpiCell
+              label="Synced successfully"
+              value={connectorsLoadError ? '—' : formatNumber(connectorRecords.filter((connector) => connectorHasCredentialPoll(connector) && getString(connector, ['last_success_at'], '')).length)}
+              delta="Credential connectors with a recorded successful poll"
+            />
           </>
         ) : (
-          <div className="kpi-cell">
-            <span className="kpi-cell-label">Connectors</span>
-            <span className="kpi-cell-value">—</span>
-            <span className="kpi-cell-delta">Not available for your role</span>
-          </div>
+          <KpiCell label="Connectors" value="—" delta="Not available for your role" />
         )}
-        <div className="kpi-cell">
-          <span className="kpi-cell-label">Vault secrets</span>
-          <span className="kpi-cell-value">{!canReadSecrets || data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)}</span>
-          <span className="kpi-cell-delta">{canReadSecrets ? 'Plaintext never rendered' : 'Not available for your role'}</span>
-        </div>
+        <KpiCell
+          label="Vault secrets"
+          value={!canReadSecrets || data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)}
+          delta={canReadSecrets ? 'Plaintext never rendered' : 'Not available for your role'}
+        />
       </div>
 
       <CalloutNote icon={ShieldCheck} tone="info">
@@ -1018,17 +1017,16 @@ export function IntegrationPage({
         </>
       )}
 
-      <Card>
-        <CardHeader>
+      <section className="integration-section" aria-labelledby="provider-directory-title">
           <div className="integration-directory-heading">
             <div>
-              <CardTitle id="provider-directory-title">Provider directory</CardTitle>
-              <CardDescription className="integration-directory-note">
+              <h2 id="provider-directory-title" className="card-title">Provider directory</h2>
+              <p className="card-description integration-directory-note">
                 Choose an implemented read-only connector, a manual metadata record, or declare one domain directly. Opening a provider never grants AstraNull cloud access. Each card links a least-privilege setup guide.
-              </CardDescription>
+              </p>
             </div>
             <div className="integration-directory-meta">
-              <Badge tone="info">Optional integrations</Badge>
+              <Badge tone="muted">Optional integrations</Badge>
               <span className="integration-tally">
                 {connectedProviderCount === null
                   ? `${formatNumber(credentialProviderCount)} with credential polling`
@@ -1036,8 +1034,7 @@ export function IntegrationPage({
               </span>
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
+          <div>
           {([
             { key: 'credential', title: 'Read-only credential polling', note: 'AstraNull polls the provider with a scoped read-only credential you store in the vault.', providers: PROVIDER_DIRECTORY.filter((provider) => provider.supportsCredentialPolling) },
             { key: 'manual', title: 'Manual metadata only', note: 'No credential and no polling. You record selected metadata yourself.', providers: PROVIDER_DIRECTORY.filter((provider) => !provider.supportsCredentialPolling) },
@@ -1064,20 +1061,20 @@ export function IntegrationPage({
                     {connected ? <Badge tone="muted">{`${formatNumber(count ?? 0)} configured`}</Badge> : null}
                   </div>
                   <p className="integration-tile-desc">{provider.description}</p>
+                  <button
+                    type="button"
+                    className="integration-tile-guide"
+                    aria-label={`Setup guide for ${provider.label}`}
+                    onClick={() => setGuideProviderId(provider.id)}
+                  >
+                    <BookOpen size={14} aria-hidden="true" /> Setup guide
+                  </button>
                   <div className="integration-tile-footer">
-                    <span className="integration-chip" data-tone={credentialPath ? 'positive' : 'neutral'}>
+                    <span className="integration-chip" data-tone="neutral">
                       {credentialPath ? <KeyRound size={13} aria-hidden="true" /> : <FileCheck2 size={13} aria-hidden="true" />}
                       {credentialPath ? 'Credential polling' : 'Manual metadata'}
                     </span>
                     <div className="integration-tile-actions">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Setup guide for ${provider.label}`}
-                        onClick={() => setGuideProviderId(provider.id)}
-                      >
-                        <BookOpen size={14} aria-hidden="true" /> Setup guide
-                      </Button>
                       {canAddIntegration ? (
                         <Button
                           size="sm"
@@ -1100,8 +1097,8 @@ export function IntegrationPage({
           {!canAddIntegration ? (
             <p className="muted small provider-directory-footnote">Connecting providers is read only for your role. Setup guides stay available.</p>
           ) : null}
-        </CardContent>
-      </Card>
+          </div>
+      </section>
 
       <NotificationChannelsPanel
         config={config}
@@ -1153,7 +1150,7 @@ export function IntegrationPage({
           </article>
           <article className="provider-path">
             <span className="provider-path-icon" aria-hidden="true"><FileCheck2 size={18} /></span>
-            <Badge tone={connectorsEnabled ? 'info' : 'muted'}>{connectorsEnabled ? 'No credentials' : 'Add-on disabled'}</Badge>
+            <Badge tone="muted">{connectorsEnabled ? 'No credentials' : 'Add-on disabled'}</Badge>
             <h3>Manual metadata</h3>
             <p>Create a provider record without credentials, then submit selected normalized zone or policy metadata. AstraNull does not contact the provider.</p>
             <Button type="button" size="sm" variant="secondary" disabled={!canWriteConnectors || !connectorsEnabled} onClick={() => beginConnectorSetup('manual')}>
@@ -1162,7 +1159,7 @@ export function IntegrationPage({
           </article>
           <article className="provider-path">
             <span className="provider-path-icon" aria-hidden="true"><Target size={18} /></span>
-            <Badge tone="info">Core workflow</Badge>
+            <Badge tone="muted">Core workflow</Badge>
             <h3>Single domain</h3>
             <p>Declare a domain directly. Ownership verification remains required.</p>
             {canWriteIntegrationTargets ? (

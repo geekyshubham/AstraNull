@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react';
 import type { HTMLAttributes } from 'react';
-import { BellRing, CircleCheck, CircleDashed, ExternalLink, Info, Pencil, Plus, Power, RefreshCw, Trash2 } from 'lucide-react';
+import { CircleCheck, CircleDashed, ExternalLink, Info, Pencil, Power, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
-import { Card } from '../ui/card';
-import { EmptyState } from '../ui/empty-state';
 import { RoleRestrictedCard } from '../ui/role-restricted';
 import { DataTable, type TableColumn } from '../ui/table';
 import { ConfirmModal, FormModal } from '../../lib/crud-ui';
@@ -726,7 +724,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
   ];
 
   return (
-    <Card className="notification-channels" role="region" aria-labelledby={headingId}>
+    <section className="notification-channels" aria-labelledby={headingId}>
       <style>{INTEGRATION_TILE_STYLES}</style>
       <style>{NOTIFICATION_CHANNELS_STYLES}</style>
       <div className="nc-heading">
@@ -799,7 +797,6 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
                     title={writeDisabledReason || undefined}
                     aria-label={connected ? `Add another ${channel.label} channel` : `Connect ${channel.label}`}
                   >
-                    <Plus size={14} aria-hidden="true" />
                     {connected ? 'Add' : 'Connect'}
                   </Button>
                 </div>
@@ -816,7 +813,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
           <span className="skeleton-row" aria-hidden="true" />
           <span className="skeleton-row" aria-hidden="true" />
         </div>
-      ) : (
+      ) : loadState === 'error' || connectorRules.length > 0 ? (
         <DataTable
           columns={columns}
           items={connectorRules}
@@ -825,19 +822,9 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
           getRowProps={(rule) => ({ 'data-row-id': rule.id }) as HTMLAttributes<HTMLTableRowElement>}
           loadError={loadState === 'error' ? loadError : null}
           onRetry={() => void load()}
-          empty={
-            <EmptyState
-              icon={BellRing}
-              title="No channels connected yet"
-              body={canWrite
-                ? 'Connect Slack, Microsoft Teams, email, or a webhook to hear about high-severity findings and SOC state changes.'
-                : 'An owner or admin can connect Slack, Microsoft Teams, email, or a webhook.'}
-              actionLabel={canWrite ? 'Connect Slack' : undefined}
-              onAction={canWrite ? () => setActiveChannel('slack') : undefined}
-            />
-          }
+          empty={null}
         />
-      )}
+      ) : null}
 
       <p className="nc-footnote">{DELIVERY_MODE_NOTE}</p>
 
@@ -877,6 +864,6 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
         }}
         onConfirm={() => void confirmRemove()}
       />
-    </Card>
+    </section>
   );
 }

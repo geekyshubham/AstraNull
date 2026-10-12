@@ -35,17 +35,31 @@ export function useScrollEdges<T extends HTMLElement>() {
     // next frame instead of inside the observer callback keeps the state update
     // out of the same layout pass that delivered the notification.
     let frame = 0;
-    const observer = typeof ResizeObserver === 'function'
-      ? new ResizeObserver(() => {
-        cancelAnimationFrame(frame);
-        frame = requestAnimationFrame(onScroll);
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(onScroll);
+    };
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    // Content can grow inside a fixed-width container, so observe the children too.
+    const observeTree = () => {
+      if (!observer) return;
+      observer.disconnect();
+      observer.observe(node);
+      for (const child of Array.from(node.children)) observer.observe(child);
+    };
+    observeTree();
+    const mutations = typeof MutationObserver === 'function'
+      ? new MutationObserver(() => {
+        observeTree();
+        schedule();
       })
       : null;
-    observer?.observe(node);
+    mutations?.observe(node, { childList: true });
     return () => {
       cancelAnimationFrame(frame);
       node.removeEventListener('scroll', onScroll);
       observer?.disconnect();
+      mutations?.disconnect();
     };
   }, [measure, node]);
 

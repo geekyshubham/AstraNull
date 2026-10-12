@@ -148,13 +148,19 @@ never meant to have.
 - **Buttons:** one orange/black default primary CTA; neutral secondary; quiet ghost; outlined danger. Desktop density is 40px, compact 34px; all coarse/mobile targets are at least 44px.
 - **Cards:** 8px radius, 24px default padding, pure-black dark/white light surface, frost border; no divided raised-charcoal card chrome.
 - **Chips/badges:** inset pill, mono uppercase label, semantic tint only for state.
-- **Tabs:** inset pill rail with pill selections, horizontal overflow, complete roving-keyboard behavior.
+- **Tabs:** inset pill rail with pill selections, horizontal overflow, complete roving-keyboard behavior. When the rail overflows, the edge that still hides tabs fades out (`data-scroll-edges`, the same `useScrollEdges` hook as tables); never wrap a tab rail onto multiple rows.
 - **Inputs/selects:** 4px radius, 44px control height, recessed token surface, visible compliant focus, bounded popup placement.
-- **Tables:** scroll within their named keyboard-focusable region; mono uppercase masthead, 2px separation, zebra rhythm, orange hover wash and left edge, tabular numerics. Do not collapse data tables into unreadable mobile cards. `DataTable` wraps the scroll region in `.table-scroller`, which shades whichever horizontal edge still has content behind it and shades nothing when the table fits — a column clipped mid-word at the card edge is otherwise indistinguishable from truncated data.
+- **Tables:** scroll within their named keyboard-focusable region; mono uppercase masthead, 2px separation, zebra rhythm, orange hover wash and left edge, tabular numerics. Do not collapse data tables into unreadable mobile cards; the one sanctioned exception is the refined list tables (`.rf-stack-table`), which at ≤640px stack each record into labelled label/value rows because every row is a self-contained record. `DataTable` wraps the scroll region in `.table-scroller`, which shades whichever horizontal edge still has content behind it and shades nothing when the table fits — a column clipped mid-word at the card edge is otherwise indistinguishable from truncated data.
 - **Chips in narrow columns:** badges never break inside a word. `overflow-wrap: anywhere` made a badge's min-content one character wide, so a `HOSTNAME` chip in an auto-layout column rendered as eight stacked letters. Use `.badge-identifier` for chips that genuinely carry a long unbroken identifier.
 - **Filter rails:** micro-labels are mono uppercase, matching the table masthead they sit against; search fields and selects share the 4px input radius and 44px control height.
 - **Progress:** 7px pill track, semantic fills, transform-based value update.
-- **Empty state:** 56px inset icon visual, concise heading/body, optional real action.
+- **Empty state:** 56px inset icon visual, concise heading/body, optional real action. Inside a card the heading drops to the base size so it never outranks the card title; an empty `DataTable` is the card's content, not a second bordered box.
+- **Page header:** H1 uses the shared `--page-title-size/-weight/-tracking` tokens on classic and refined pages alike. No eyebrow or kicker labels above headings; the breadcrumb already names the section. Context that carries information (tenant, staff-only surface, SOC workspace, report framework) renders as a muted `PageTitle` context badge beside the H1. At ≤700px header actions form an even, left-aligned grid.
+- **Key/value lists:** `.kv-list` rows are direct-child grid rows — label column (9–14rem) and start-aligned value — separated by hairlines, not boxed. Nested divs inside a row carry no row chrome. One column at ≤480px.
+- **Paired cards:** cards in a two-column grid size to their own content (`align-items: start`); never stretch a short card into an empty half.
+- **Disclosures:** `<summary>` markers are CSS-drawn chevrons or lucide icons that rotate on `[open]`; never `+`/`−`/`▸` text glyphs.
+- **Entity links:** links inside facts and table cells use `.detail-entity-link` (underlined text link), not ghost buttons.
+- **Status tone:** orange is brand only; the `info` tone (`--info`) is neutral emphasis ink, never orange. Scheduled/approved/neutral labels are `muted`; running is `warn`; verified ownership (including DNS) is `success`. Zero-count severity chips are `muted`.
 
 ## Theme and accessibility contract
 

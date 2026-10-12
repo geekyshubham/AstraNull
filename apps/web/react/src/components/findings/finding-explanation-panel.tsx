@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '../ui/button';
 import { ExplanationField, VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
-import { openEvidenceInspector } from '../../lib/evidence-inspector.mjs';
 import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
+import './finding-explanation-panel.css';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -174,24 +174,26 @@ export function FindingExplanationPanel({
 
   if (!testRunId) {
     return (
-      <section className="verdict-explanation verdict-explanation--pending">
-        <h3>Linked evidence unavailable</h3>
-        <p className="muted">This finding does not identify an originating test run, so external probe evidence cannot be attributed.</p>
-        {getString(finding, ['notes'], '') ? (
-          <div className="verdict-explanation-grid">
-            <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} fullWidth />
-          </div>
-        ) : null}
-        {getString(finding, ['remediation_template'], '') ? (
-          <div className="verdict-explanation-grid">
-            <ExplanationField
-              label="Recorded remediation"
-              value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
-              fullWidth
-            />
-          </div>
-        ) : null}
-      </section>
+      <div className="finding-explanation-panel">
+        <section className="verdict-explanation verdict-explanation--pending">
+          <h3>Linked evidence unavailable</h3>
+          <p className="muted">This finding does not identify an originating test run, so external probe evidence cannot be attributed.</p>
+          {getString(finding, ['notes'], '') ? (
+            <div className="verdict-explanation-grid">
+              <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} fullWidth />
+            </div>
+          ) : null}
+          {getString(finding, ['remediation_template'], '') ? (
+            <div className="verdict-explanation-grid">
+              <ExplanationField
+                label="Recorded remediation"
+                value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
+                fullWidth
+              />
+            </div>
+          ) : null}
+        </section>
+      </div>
     );
   }
 
@@ -234,9 +236,9 @@ export function FindingExplanationPanel({
       <section className="verdict-explanation" aria-label="Finding evidence provenance">
         <h3>Evidence provenance</h3>
         <div className="verdict-explanation-grid">
-          <ExplanationField label="Finding record" value={findingId || 'Not recorded on finding'} />
-          <ExplanationField label="Originating run" value={linkedRunId} />
-          <ExplanationField label="Run check" value={runCheckId || 'Not recorded on linked run'} />
+          <ExplanationField label="Finding record" value={findingId || 'Not recorded on finding'} mono={Boolean(findingId)} />
+          <ExplanationField label="Originating run" value={linkedRunId} mono={Boolean(linkedRunId)} />
+          <ExplanationField label="Run check" value={runCheckId || 'Not recorded on linked run'} mono={Boolean(runCheckId)} />
           <ExplanationField label="Run event records" value={`${eventCount} loaded from linked run`} />
         </div>
         {contradicts ? (
@@ -244,17 +246,6 @@ export function FindingExplanationPanel({
             The originating run records a passing verdict while this finding is still open. The records disagree; review the evidence before deciding. Nothing here was replaced by a later result.
           </p>
         ) : null}
-        <div className="row-actions">
-          <Button
-            size="sm"
-            variant="ghost"
-            data-focus-key="explanation-view-evidence"
-            onClick={() => openEvidenceInspector({ entry: 'finding', finding_id: findingId, target_id: getString(finding, ['target_id'], '') || undefined, check_id: runCheckId || undefined }, { focusKey: 'explanation-view-evidence' })}
-            disabled={!findingId}
-          >
-            View original evidence
-          </Button>
-        </div>
       </section>
       <VerdictExplanationPanel
         detail={explanationDetail}

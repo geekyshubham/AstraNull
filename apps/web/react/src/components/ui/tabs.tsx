@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { scrollIntoInlineView } from '../../lib/motion';
-import { cn } from '../../lib/utils';
+import { cn, countLabel } from '../../lib/utils';
 import './primitives.css';
+import { useScrollEdges } from '../../lib/scroll-edges';
 
 export type TabOption<T extends string> = {
   id: T;
@@ -61,7 +62,7 @@ function TabButton<T extends string>({
       <span className="tab-label">{option.label}</span>
       {typeof option.count === 'number' ? (
         <span className="tab-count">
-          <span className="sr-only">{option.count} items</span>
+          <span className="sr-only">{countLabel(option.count, 'item')}</span>
           <span aria-hidden="true">{option.count}</span>
         </span>
       ) : null}
@@ -79,6 +80,11 @@ export function Tabs<T extends string>({
   getTabId
 }: TabsProps<T>) {
   const listRef = React.useRef<HTMLDivElement>(null);
+  const { setScrollNode, edges } = useScrollEdges<HTMLDivElement>();
+  const setListNode = React.useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node;
+    setScrollNode(node);
+  }, [setScrollNode]);
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.findIndex((option) => option.id === value);
   // Roving tabindex: the selected tab owns the single tab stop; if nothing valid is
@@ -133,8 +139,9 @@ export function Tabs<T extends string>({
 
   return (
     <div
-      ref={listRef}
+      ref={setListNode}
       data-ui="tabs"
+      data-scroll-edges={edges}
       className={cn('tabs', className)}
       role="tablist"
       aria-orientation="horizontal"

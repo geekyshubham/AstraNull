@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScanSearch } from 'lucide-react';
+import { History, ScanSearch } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
 import { createPayloadCommitGate } from '../lib/payload-commit-generation.mjs';
@@ -40,6 +40,7 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
 import { PageContextSummary, PageHeader } from './page-components';
+import './scan-detail-view.css';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -170,18 +171,41 @@ function StepStatusCell({ step }: { step: DataItem }) {
   );
 }
 
+const SETTLED_STEP_STATUSES = new Set(['verdicted', 'completed', 'denied', 'skipped', 'cancelled']);
+const VERDICT_EXPECTED_STATUSES = new Set(['verdicted', 'completed']);
+
+function isStepSettled(step: DataItem) {
+  return SETTLED_STEP_STATUSES.has(getString(step, ['status']).toLowerCase());
+}
+
+function StepRunLink({ step }: { step: DataItem }) {
+  const runId = getString(step, ['test_run_id']);
+  if (!runId) return null;
+  return <small><a className="detail-entity-link" href={buildDetailHref('run-detail', runId)} aria-label={`Open run ${runId}`}>Open run</a></small>;
+}
+
 function VerdictCell({ step }: { step: DataItem }) {
   const verdict = asItem(step.verdict);
-  if (!verdict) return <span className="muted">No verdict yet</span>;
+  if (!verdict) {
+    return (
+      <span className="scan-cell-stack">
+        <span className="muted">{!isStepSettled(step) ? 'No verdict yet' : VERDICT_EXPECTED_STATUSES.has(getString(step, ['status']).toLowerCase()) ? 'Not recorded' : 'No verdict, step ended'}</span>
+        <StepRunLink step={step} />
+      </span>
+    );
+  }
   const confidence = getString(verdict, ['confidence']);
   return (
     <span className="scan-cell-stack">
       <strong>{humanizeReason(getString(verdict, ['verdict'], 'unknown'))}</strong>
       {confidence ? <small className="muted">Confidence {humanizeReason(confidence).toLowerCase()}</small> : null}
       {getString(verdict, ['severity']) ? <small className="muted">Severity {getString(verdict, ['severity'])}</small> : null}
+      <StepRunLink step={step} />
     </span>
   );
 }
+
+const SCAN_SUMMARY_COUNTS = ['running', 'deferred', 'pending', 'verdicted', 'denied', 'skipped', 'cancelled'] as const;
 
 function ActivityLogPanel({ items, loading }: { items: ActivityItem[]; loading: boolean }) {
   return (
@@ -195,7 +219,9 @@ function ActivityLogPanel({ items, loading }: { items: ActivityItem[]; loading: 
       </CardHeader>
       <CardContent>
         {loading && items.length === 0 ? <PortalLoadingSkeleton rows={2} label="Loading scan activity" /> : null}
-        {!loading && items.length === 0 ? <p className="muted small">No activity has been recorded for this scan yet.</p> : null}
+        {!loading && items.length === 0 ? (
+          <EmptyState icon={History} title="No activity recorded yet." body="Dispatch, deferral, and verdict entries appear here as this scan's steps run." />
+        ) : null}
         {items.length > 0 ? (
           <ol className="activity-log" aria-label="Scan activity">
             {items.map((item) => {
@@ -291,44 +317,40 @@ export function ScanDetailView({
       label: 'Target',
       render: (step) => (
         <span className="scan-cell-stack">
-          <span>{getString(step, ['target_value', 'target_id'])}</span>
+          <span className="scan-step-target">{getString(step, ['target_value', 'target_id'])}</span>
           <small className="muted">{getString(step, ['target_kind'], 'kind not recorded')}</small>
         </span>
       )
     },
     { key: 'status', label: 'Status', render: (step) => <StepStatusCell step={step} /> },
-    { key: 'request', label: 'Probe request', render: (step) => <span className="small">{formatStepRequest(step.request)}</span> },
+    { key: 'verdict', label: 'Verdict', render: (step) => <VerdictCell step={step} /> },
+    { key: 'request', label: 'Probe request', render: (step) => <span className="small scan-step-request">{formatStepRequest(step.request)}</span> },
     {
       key: 'response',
       label: 'Response',
       render: (step) => {
         const response = asItem(step.response);
+        if (!response && isStepSettled(step)) return <span className="muted">Not recorded</span>;
+        const formatted = formatStepResponse(response);
+        const recordedError = getString(response ?? {}, ['error', 'error_class']);
+        const responseLabel = response && formatted === 'Awaiting response' && isStepSettled(step)
+          ? (recordedError ? `Recorded error: ${recordedError.replace(/_/g, ' ')}` : 'No result recorded')
+          : formatted;
         return (
           <span className="scan-cell-stack">
-            <span className="small">{formatStepResponse(response)}</span>
+            <span className="small">{responseLabel}</span>
             {response?.received_at ? <small className="muted">{formatDate(response.received_at)}</small> : null}
           </span>
         );
       }
     },
-    { key: 'sent', label: 'Requests sent', render: (step) => <span className="tabular-nums small">{formatRequestsSent(step)}</span> },
-    { key: 'verdict', label: 'Verdict', render: (step) => <VerdictCell step={step} /> },
-    {
-      key: 'run',
-      label: 'Run',
-      render: (step) => {
-        const runId = getString(step, ['test_run_id']);
-        return runId
-          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', runId)} aria-label={`Open run ${runId}`}>Run</AnchorButton>
-          : <span className="muted">—</span>;
-      }
-    }
+    { key: 'sent', label: 'Requests sent', render: (step) => <span className="tabular-nums small">{formatRequestsSent(step)}</span> }
   ];
 
   if (!scanId) {
     return (
       <div className="content">
-        <PageHeader route="scan-detail" eyebrow="Validation scan" title="Validation scan" description="Open a scan from the runs page or a target to follow its steps." />
+        <PageHeader route="scan-detail" title="Validation scan" description="Open a scan from the runs page or a target to follow its steps." />
         <EmptyState icon={ScanSearch} title="No scan selected" body="Choose a validation scan from the runs page or a target detail page." actionHref="#runs" actionLabel="Open test runs" />
       </div>
     );
@@ -337,7 +359,7 @@ export function ScanDetailView({
   if (polling.status === 'missing') {
     return (
       <div className="content">
-        <PageHeader route="scan-detail" eyebrow="Validation scan" title="Validation scan" description={scanId} />
+        <PageHeader route="scan-detail" title="Validation scan" description={scanId} />
         <EmptyState icon={ScanSearch} title="Scan not found" body="This validation scan does not exist in the current tenant or has been removed." actionHref="#runs" actionLabel="Open test runs" />
       </div>
     );
@@ -347,7 +369,6 @@ export function ScanDetailView({
     <div className="content scan-detail-view" aria-busy={polling.status === 'loading' || undefined}>
       <PageHeader
         route="scan-detail"
-        eyebrow="Validation scan"
         title={scan ? scanDisplayName(scan) : scanId}
         description={scan ? scopeLabel(scan) : 'Loading scan'}
         actions={(
@@ -366,7 +387,7 @@ export function ScanDetailView({
           <code>{scanId}</code> · created by {getString(scan, ['created_by'], 'unknown')} ({getString(scan, ['created_by_role'], 'role not recorded')}) · {formatDate(scan.created_at)}
         </PageContextSummary>
       ) : null}
-      <div className="scan-live-region" role="status" aria-live="polite">{liveText}</div>
+      <div className={terminal ? 'scan-live-region sr-only' : 'scan-live-region'} role="status" aria-live="polite">{liveText}</div>
       {polling.status === 'loading' ? <PortalLoadingSkeleton rows={3} label="Loading validation scan" /> : null}
       {polling.error ? (
         <div className="form-banner error" role="alert">
@@ -406,16 +427,12 @@ export function ScanDetailView({
             <Badge tone="muted">{recurrenceLabel(scan.recurrence)}</Badge>
           </CardHeader>
           <CardContent className="stack-tight">
-            <Progress value={scanProgressPercent(summary)} label="Scan progress" tone={status === 'completed' ? 'success' : status === 'denied' || status === 'cancelled' ? 'danger' : 'accent'} />
+            <Progress value={scanProgressPercent(summary)} label="Scan progress" tone={status === 'completed' ? 'success' : status === 'denied' || status === 'cancelled' ? 'danger' : 'warn'} />
             <p className="scan-summary-line">
-              <span className="tabular-nums">{numberOf(summary, 'completed')}</span> of <span className="tabular-nums">{numberOf(summary, 'total')}</span> steps complete
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'running')}</span> running
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'deferred')}</span> deferred
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'pending')}</span> pending
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'verdicted')}</span> verdicted
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'denied')}</span> denied
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'skipped')}</span> skipped
-              {' · '}<span className="tabular-nums">{numberOf(summary, 'cancelled')}</span> cancelled
+              <span className="nowrap"><span className="tabular-nums">{numberOf(summary, 'completed')}</span> of <span className="tabular-nums">{numberOf(summary, 'total')}</span> steps complete</span>
+              {SCAN_SUMMARY_COUNTS.map((key) => (
+                <span key={key}>{' · '}<span className="nowrap"><span className="tabular-nums">{numberOf(summary, key)}</span> {key}</span></span>
+              ))}
             </p>
             {polling.lastRefreshedAt ? <p className="muted small">Last refreshed {formatDate(polling.lastRefreshedAt)}</p> : null}
           </CardContent>

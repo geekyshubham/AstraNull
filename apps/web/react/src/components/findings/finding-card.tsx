@@ -4,6 +4,7 @@ import type { DataItem } from '../../lib/types';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
 import { plainCheckName, plainFindingTitle, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { Badge } from '../ui/badge';
+import { verdictTone } from '../../lib/status-tone';
 
 function getString(item: DataItem, keys: string[], fallback = '') {
   for (const key of keys) {
@@ -13,13 +14,6 @@ function getString(item: DataItem, keys: string[], fallback = '') {
   return fallback;
 }
 
-function verdictTone(verdict: string) {
-  const key = verdict.trim().toLowerCase();
-  if (['pass', 'passed', 'protected', 'resolved'].includes(key)) return 'success' as const;
-  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable'].includes(key)) return 'danger' as const;
-  if (['partial', 'review', 'inconclusive'].includes(key)) return 'warn' as const;
-  return 'info' as const;
-}
 
 export function FindingCard({
   finding,

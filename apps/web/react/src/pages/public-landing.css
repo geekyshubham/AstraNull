@@ -50,16 +50,6 @@
   align-items: center;
 }
 
-.public-landing .public-kicker {
-  margin: 0;
-  color: var(--landing-accent-ink);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-}
-
 .public-landing .public-hero h1 {
   max-width: 18ch;
   margin: var(--space-4) 0 0;
@@ -279,12 +269,12 @@
   list-style: none;
 }
 
-/* The rail is a positioned hairline joining the markers, not a card stripe. */
-.public-landing .public-flow::before {
+/* The rail is a per-step hairline joining each marker to the next, so it never runs past the last step. */
+.public-landing .public-flow-step:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 20px;
-  bottom: 20px;
+  top: 40px;
+  bottom: 0;
   left: 19px;
   width: 1px;
   background: var(--border-strong);
@@ -332,9 +322,7 @@
 
 /* Technical record fields: available depth, never the first explanation. */
 .public-landing .public-technical {
-  margin-top: var(--space-8);
-  border-top: 1px solid var(--landing-rule);
-  padding-top: var(--space-4);
+  margin-top: 0;
 }
 
 .public-landing .public-technical > summary {
@@ -354,16 +342,19 @@
 }
 
 .public-landing .public-technical > summary::before {
-  content: "+";
-  display: inline-grid;
-  width: 18px;
-  place-items: center;
-  color: var(--fg-2);
-  font-family: var(--font-mono);
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 var(--space-2) 0 var(--space-1);
+  border-right: 1.5px solid var(--fg-2);
+  border-bottom: 1.5px solid var(--fg-2);
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) var(--ease-out-soft);
 }
 
 .public-landing .public-technical[open] > summary::before {
-  content: "−";
+  transform: translateY(-2px) rotate(45deg);
 }
 
 .public-landing .public-technical > summary:focus-visible {
@@ -440,14 +431,6 @@
   padding-right: 0;
 }
 
-.public-landing .public-ledger-label {
-  display: block;
-  margin-bottom: var(--space-3);
-  color: var(--fg-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
 
 .public-landing .public-ledger p {
   max-width: 52ch;
@@ -484,7 +467,7 @@
 
 .public-landing .public-compare table {
   width: 100%;
-  min-width: 720px;
+  min-width: 640px;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
@@ -1298,7 +1281,8 @@
     height: 32px;
   }
 
-  .public-landing .public-flow::before {
+  .public-landing .public-flow-step:not(:last-child)::after {
+    top: 32px;
     left: 15px;
   }
 
@@ -1325,4 +1309,102 @@
   .public-app .public-requirements li svg {
     transition: none;
   }
+}
+
+/* Comparison table: row headers stay pinned while the comparison columns scroll beside them. */
+.public-landing .public-compare tbody th,
+.public-landing .public-compare thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg);
+  box-shadow: 1px 0 0 var(--border-soft);
+}
+
+.public-landing .public-compare thead th:first-child {
+  background: linear-gradient(var(--wash), var(--wash)), var(--bg);
+}
+
+.public-landing .public-compare tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+/* Signup "what happens next": beside the form on wide screens, after it once the columns stack. */
+.public-app .public-next-steps--aside {
+  margin-top: var(--space-6);
+}
+
+@media (min-width: 901px) {
+  .public-app .public-next-steps--inline { display: none; }
+}
+
+@media (max-width: 900px) {
+  .public-app .public-next-steps--aside { display: none; }
+}
+
+.public-app:has(.public-landing) .public-topnav-inner {
+  max-width: 1200px;
+}
+
+.public-landing .public-compare-frame {
+  position: relative;
+}
+
+.public-landing .public-compare-frame::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: var(--space-10);
+  border-radius: 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0;
+  background: linear-gradient(to left, var(--bg), transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
+}
+
+.public-landing .public-compare-frame[data-scroll-edges='start']::after,
+.public-landing .public-compare-frame[data-scroll-edges='middle']::after {
+  opacity: 1;
+}
+
+.public-landing .public-flow-technical {
+  grid-column: 2;
+}
+
+@media (max-width: 960px) {
+  .public-landing .public-flow-technical {
+    grid-column: 1;
+  }
+}
+
+.public-app .public-notice-text p {
+  text-wrap: pretty;
+}
+
+.public-app .public-footer nav a,
+.public-app .public-auth-task-links a,
+.public-app .auth-footer a {
+  display: inline-flex;
+  min-width: 44px;
+  justify-content: flex-start;
+}
+
+.public-app .auth-footer-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+
+.public-app .auth-footer-pair {
+  white-space: nowrap;
+}
+
+.public-app .auth-card-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }

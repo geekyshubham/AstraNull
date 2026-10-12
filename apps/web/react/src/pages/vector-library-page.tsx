@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpenCheck, ChevronLeft, ChevronRight, Search, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
+import { BookOpenCheck, ChevronDown, ChevronLeft, ChevronRight, Search, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -351,27 +351,27 @@ export function VectorLibraryPage({
         </span>
       ),
     },
-    {
+    ...(selectedTarget ? [{
       key: 'target',
-      label: selectedTarget ? `Fit for ${getString(selectedTarget, ['value'], 'target')}` : 'Fit for target',
-      render: (vector) => {
-        if (!selectedTarget) return <span className="muted small">Choose a target to see fit</span>;
+      label: `Fit for ${getString(selectedTarget, ['value'], 'target')}`,
+      render: (vector: DataItem) => {
         const availability = vectorTargetAvailability(vector, data.checks, selectedTarget);
         return <span className="vector-cell-stack"><Badge tone={availability.tone as Tone}>{availability.label}</Badge><small>{availability.detail}</small></span>;
       },
-    },
+    }] : []),
     {
       key: 'evidence',
       label: 'Evidence level',
       render: (vector) => {
         const copy = evidenceCapabilityCopy(vector.evidence_capability);
-        return <span className="vector-cell-stack"><Badge tone={copy.tone as Tone}>{copy.label}</Badge><small>{getString(vector, ['evidence_tier'])} · {copy.detail}</small></span>;
+        const tier = getString(vector, ['evidence_tier'], '');
+        return <Badge tone={copy.tone as Tone} title={copy.detail}>{tier ? `${tier} · ${copy.label}` : copy.label}</Badge>;
       },
     },
     {
       key: 'exposure',
       label: 'What it evaluates',
-      render: (vector) => <span className="vector-cell-stack"><strong>{getString(vector, ['targeted_resource_or_assumption'], 'Not recorded')}</strong><small>{getString(vector, ['intended_detection_goal'])}</small></span>,
+      render: (vector) => <span className="vector-cell-stack"><span className="vector-evaluates">{getString(vector, ['targeted_resource_or_assumption'], 'Not recorded')}</span></span>,
     },
     {
       key: 'action',
@@ -401,7 +401,6 @@ export function VectorLibraryPage({
     <div className="content vector-library-page">
       <PageHeader
         route="checks"
-        eyebrow="Checks and catalog"
         title="Check library"
         description="Choose a declared target, see which bounded checks fit it and what their evidence can and cannot prove. The vector catalog explains each exposure; only mapped checks run."
         actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void refresh()}>Refresh</Button>}
@@ -528,6 +527,7 @@ export function VectorLibraryPage({
           </div>
           <div className="vector-filter-summary">
             <Button size="sm" variant="ghost" aria-expanded={showAdvanced} aria-controls="vector-advanced-filters" onClick={() => setShowAdvanced((open) => !open)}>
+              <ChevronDown className="vector-filter-chevron" size={14} aria-hidden="true" data-open={showAdvanced || undefined} />
               {showAdvanced ? 'Hide more filters' : 'More filters'}
             </Button>
             {activeFilters.length ? (

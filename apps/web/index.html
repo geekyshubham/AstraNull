@@ -6,8 +6,7 @@
   <title>AstraNull</title>
   <meta name="description" content="AstraNull — No-access-first DDoS readiness validation. Sign up for reviewed access or log in to the readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" id="theme-color-meta" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
@@ -21,7 +20,11 @@
       try {
         // Prototype is dark-first: default to dark unless the user explicitly chose light.
         var t = localStorage.getItem('astranull.theme');
-        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        if (t === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+          var meta = document.getElementById('theme-color-meta');
+          if (meta) meta.setAttribute('content', '#f7f7f5');
+        }
       } catch (e) {}
     })();
   </script>
@@ -113,7 +116,7 @@
       display: grid;
       place-items: center;
     }
-    #boot .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; }
+    #boot .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; padding: 0; border: 0; background: none; }
     #boot .brand-mark .ring { fill: none; stroke: var(--fg); stroke-width: 1.6px; }
     #boot .brand-mark .core { fill: var(--accent); }
 
@@ -122,7 +125,7 @@
       inset: 0;
       width: 72px;
       height: 72px;
-      animation: boot-rotate var(--motion-slow) linear infinite;
+      animation: boot-rotate 800ms linear infinite;
     }
     .boot-spin-track { fill: none; stroke: var(--border); stroke-width: 2; }
     .boot-spin-arc {
@@ -135,7 +138,7 @@
     @keyframes boot-rotate { to { transform: rotate(360deg); } }
 
     .boot-word {
-      margin-top: 22px;
+      margin-top: 24px;
       font-family: var(--font-display);
       font-weight: 600;
       font-size: clamp(22px, 5vw, 30px);
@@ -143,7 +146,7 @@
       color: var(--fg);
     }
     .boot-status {
-      margin: 11px 0 0;
+      margin: 12px 0 0;
       font-family: var(--font-mono);
       font-size: 12px;
       font-weight: 500;
@@ -153,7 +156,7 @@
     }
 
     /* ── Error / timeout state (revealed by the boot controller) ── */
-    .boot-error { display: none; margin-top: 26px; width: 100%; }
+    .boot-error { display: none; margin-top: 24px; width: 100%; }
     #boot.boot-errored .boot-spin { display: none; }
     #boot.boot-errored .boot-status { display: none; }
     #boot.boot-errored .boot-error { display: block; }
@@ -162,8 +165,7 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       background: var(--surface);
-      box-shadow: var(--elev-ring);
-      padding: clamp(20px, 4vw, 26px);
+      padding: clamp(20px, 4vw, 24px);
       text-align: left;
     }
     .boot-error-title {
@@ -175,7 +177,7 @@
       color: var(--fg);
     }
     .boot-error-body {
-      margin: 0 0 18px;
+      margin: 0 0 16px;
       font-family: var(--font-body);
       font-size: 14px;
       line-height: 1.6;
@@ -188,9 +190,9 @@
       color: var(--fg);
       background: color-mix(in oklab, var(--fg), transparent 92%);
       padding: 1px 6px;
-      border-radius: 6px;
+      border-radius: 4px;
     }
-    .boot-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .boot-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 
     .boot-btn {
       appearance: none;

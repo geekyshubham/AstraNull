@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { requestJson } from '../lib/api';
 import { familyCoverageBuckets, inventoryUnits } from '../lib/domain-checks.mjs';
 import { useOpenInspector } from '../components/evidence/use-inspector';
@@ -40,7 +40,8 @@ import { canStartRun } from '../lib/run-permissions.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import { routeTabs } from '../lib/prototype-manifest';
 import type { BadgeTone, DataItem, PortalConfig, PortalData, ReadinessFactor, Session } from '../lib/types';
-import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
+import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone, tailTruncateId } from '../lib/utils';
+import { severityCountTone, severityTone } from '../lib/severity-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
 import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { PageContextSummary, PageHeader } from './page-components';
@@ -234,7 +235,7 @@ function WeightedFactors({ factors }: { factors: ReadinessFactor[] }) {
             <span className="factor-name" title={provenance}>{label}</span>
             <span className="factor-score">{score}/{scale}</span>
             <span className="factor-track" role="img" aria-label={`${label} scored ${score} of ${scale} points`}>
-              <span className="factor-fill" data-tone={scoreTone(share)} style={{ width: `${share}%` }} />
+              <span className="factor-fill" data-tone={scoreTone(share)} style={{ '--factor-share': share / 100 } as CSSProperties} />
             </span>
             {detail ? <p className="factor-detail">{detail}</p> : null}
           </div>
@@ -362,13 +363,15 @@ function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; resu
         ))}
         <li className="coverage-legend-group">
           <span className="coverage-swatch" data-segment="unmeasured" aria-hidden="true" />
-          <span>Unknown or not checked <span className="tabular-nums">{formatNumber(buckets.unmeasured)}</span>:</span>
-          {unmeasuredParts.map((part, index) => (
-            <span key={part.key}>
-              {index ? ' · ' : ' '}
-              <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} ${unitNoun}. Open the matching list.`}>{part.label} <span className="tabular-nums">{formatNumber(part.count)}</span></a>
-            </span>
-          ))}
+          <span className="coverage-legend-group-body">
+            <span className="coverage-legend-group-label">Unknown or not checked <span className="tabular-nums">{formatNumber(buckets.unmeasured)}</span>:</span>
+            {unmeasuredParts.map((part, index) => (
+              <span key={part.key} className="coverage-legend-sub">
+                {index > 0 ? <span className="coverage-legend-sep" aria-hidden="true">·</span> : null}
+                <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} ${unitNoun}. Open the matching list.`}>{part.label} <span className="tabular-nums">{formatNumber(part.count)}</span></a>
+              </span>
+            ))}
+          </span>
         </li>
       </ul>
       <span className="coverage-meta">
@@ -421,8 +424,12 @@ function DeclaredHostCoverage({ waf, cdn, unit, onUnit, onRetry }: { waf: Covera
           <p>WAF and CDN fingerprints across your current declared scope, counted by the server. Detection is not effectiveness, and unknown stays unknown. Each count opens the exact matching list.</p>
         </div>
         <div className="coverage-unit" role="group" aria-label="Count by">
-          <button type="button" aria-pressed={unit === 'normalized_hostname'} onClick={() => onUnit('normalized_hostname')}>Distinct hostnames</button>
-          <button type="button" aria-pressed={unit === 'declared_target'} onClick={() => onUnit('declared_target')}>Declared target records</button>
+          <button type="button" aria-label="Distinct hostnames" aria-pressed={unit === 'normalized_hostname'} onClick={() => onUnit('normalized_hostname')}>
+            <span className="coverage-unit-long" aria-hidden="true">Distinct hostnames</span><span className="coverage-unit-short" aria-hidden="true">Hostnames</span>
+          </button>
+          <button type="button" aria-label="Declared target records" aria-pressed={unit === 'declared_target'} onClick={() => onUnit('declared_target')}>
+            <span className="coverage-unit-long" aria-hidden="true">Declared target records</span><span className="coverage-unit-short" aria-hidden="true">Target records</span>
+          </button>
         </div>
       </div>
       <CoverageRow family="waf" result={waf} onRetry={onRetry} />
@@ -536,15 +543,16 @@ export function DashboardPage({
     || (recentRuns[0] ? String(recentRuns[0].completed_at ?? recentRuns[0].started_at ?? recentRuns[0].created_at ?? '') : '');
   const lastValidationLabel = data.loadErrors.runs ? UNAVAILABLE : lastValidationIso ? formatShortRelative(lastValidationIso) : 'Never';
 
+  const highPriorityOpen = severity.critical + severity.high;
   const executive = dashboardReadinessMessage({
     score,
-    highPriorityFindings: severity.critical + severity.high,
+    highPriorityFindings: highPriorityOpen,
     coveragePercent,
     dataUnavailable: Boolean(data.error || data.loadErrors.targets || data.loadErrors.runs || data.loadErrors.evidence || countsUnavailable)
   });
 
   const tenantId = getString(data.tenant ?? {}, ['id', 'tenant_id']) || getString((data.state ?? {}) as DataItem, ['tenant_id']);
-  const tenantEyebrow = tenantId ? `Tenant · ${tenantId.toUpperCase()}` : 'Tenant';
+  const tenantContext = tenantId ? `Tenant · ${tenantId}` : undefined;
 
   const killSwitch = data.state?.kill_switch ?? null;
   const killSwitchArmed = killSwitch?.active === true;
@@ -557,7 +565,11 @@ export function DashboardPage({
       label: 'Target',
       render: (row) => (
         <span className="posture-target">
-          <strong title={row.value}>{row.value}</strong>
+          <strong title={row.value}>
+            {row.id
+              ? <a className="detail-entity-link" href={buildDetailHref('target-detail', row.id)} onClick={(event) => event.stopPropagation()}>{row.value}</a>
+              : row.value}
+          </strong>
           <span className="posture-tags">
             {row.tags.length > 0
               ? row.tags.slice(0, 4).map((tag) => <span className="posture-tag" key={tag}>{tag}</span>)
@@ -570,7 +582,7 @@ export function DashboardPage({
     {
       key: 'verification',
       label: 'Ownership',
-      render: (row) => <VerifyChip state={row.verificationState} label={ownershipShortLabel(row.verificationState)} />
+      render: (row) => <VerifyChip state={row.verificationState} />
     },
     {
       key: 'verdict',
@@ -599,12 +611,31 @@ export function DashboardPage({
     {
       key: 'run',
       label: 'Run',
-      render: (item) => (
-        <span className="posture-target">
-          <strong>{getString(item, ['target_hostname', 'target_value'], getString(item, ['check_id'], 'Validation run'))}</strong>
-          <small className="mono">{getString(item, ['id'], UNAVAILABLE)}</small>
-        </span>
-      )
+      render: (item) => {
+        const name = getString(item, ['target_hostname', 'target_value'], getString(item, ['check_id'], 'Validation run'));
+        const inspect = runInspector(item);
+        return (
+          <span className="posture-target">
+            <strong>
+              {inspect ? (
+                <button
+                  type="button"
+                  className="link-button"
+                  data-focus-key={inspect.focusKey}
+                  aria-label={`View evidence for ${name} check ${getString(item, ['check_id'])}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    inspect.open();
+                  }}
+                >
+                  {name}
+                </button>
+              ) : name}
+            </strong>
+            <small className="mono" title={getString(item, ['id']) || undefined}>{tailTruncateId(getString(item, ['id'], UNAVAILABLE))}</small>
+          </span>
+        );
+      }
     },
     {
       key: 'verdict',
@@ -622,7 +653,7 @@ export function DashboardPage({
     }
   ];
 
-  function rowProps(route: string, id: string, label: string) {
+  function rowProps(route: string, id: string) {
     if (!id) return {};
     const href = buildDetailHref(route, id);
     const navigate = () => {
@@ -630,37 +661,24 @@ export function DashboardPage({
       window.location.hash = hashIndex >= 0 ? href.slice(hashIndex + 1) : href;
     };
     return {
-      tabIndex: 0,
       style: { cursor: 'pointer' as const },
-      'aria-label': label,
-      onClick: () => { navigate(); },
-      onKeyDown: (event: ReactKeyboardEvent) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        navigate();
-      }
+      onClick: () => { navigate(); }
     };
   }
 
-  function runInspectProps(item: DataItem) {
+  function runInspector(item: DataItem) {
     const runId = getString(item, ['id']);
     const targetId = getString(item, ['target_id']);
     const checkId = getString(item, ['check_id']);
-    if (!runId || !targetId || !checkId) return {};
-    const open = () => openInspector({ entry: 'check_result', target_id: targetId, check_id: checkId, test_run_id: runId }, `dash-run-${runId}`);
-    return {
-      tabIndex: 0,
-      role: 'button',
-      'data-focus-key': `dash-run-${runId}`,
-      style: { cursor: 'pointer' as const },
-      'aria-label': `View evidence for ${getString(item, ['target_hostname', 'target_value'], checkId)} check ${checkId}`,
-      onClick: open,
-      onKeyDown: (event: ReactKeyboardEvent) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        open();
-      }
-    };
+    if (!runId || !targetId || !checkId) return null;
+    const focusKey = `dash-run-${runId}`;
+    return { focusKey, open: () => openInspector({ entry: 'check_result', target_id: targetId, check_id: checkId, test_run_id: runId }, focusKey) };
+  }
+
+  function runRowProps(item: DataItem) {
+    const inspect = runInspector(item);
+    if (!inspect) return {};
+    return { style: { cursor: 'pointer' as const }, onClick: inspect.open };
   }
 
   // Oldest first by recorded open date; findings without a date sort last, never as "oldest".
@@ -678,7 +696,7 @@ export function DashboardPage({
     <div className="content dashboard-page">
       <PageHeader
         route="dashboard"
-        eyebrow={tenantEyebrow}
+        context={tenantContext}
         title="Readiness overview"
         description="Every verdict below traces to observed probe evidence or an explicit customer declaration. Validation runs from the outside in."
         actions={
@@ -723,7 +741,7 @@ export function DashboardPage({
           <div className="dashboard-kpis" role="group" aria-label="Readiness key metrics">
             <KpiCard
               label="Readiness"
-              value={<>{score ?? UNAVAILABLE}{score !== null ? <span className="unit">/100</span> : null}</>}
+              value={<><span className="dashboard-kpi-score">{score ?? UNAVAILABLE}</span>{score !== null ? <span className="unit">/100</span> : null}</>}
               sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">Published workspace score from evidence in the last 30 days. Not a protection guarantee.</span></>}
               onActivate={() => {
                 handleTabChange('risk-trends');
@@ -735,7 +753,7 @@ export function DashboardPage({
             <KpiCard
               label="Declared targets"
               value={targetsUnavailable ? UNAVAILABLE : formatNumber(declaredTargets)}
-              sub={<span className="dashboard-kpi-sub">{targetsUnavailable ? 'Target data unavailable' : declaredTargets === 0 ? 'No targets declared yet' : `${formatNumber(distinctHosts)} distinct hostnames · ${verifiedTargets === null ? 'ownership verified count loading' : `${formatNumber(verifiedTargets)} ownership verified (${verifiedShare}%)`}`}</span>}
+              sub={<span className="dashboard-kpi-sub">{targetsUnavailable ? 'Target data unavailable' : declaredTargets === 0 ? 'No targets declared yet' : `${formatNumber(distinctHosts)} distinct ${pluralize(distinctHosts, 'hostname')} · ${verifiedTargets === null ? 'ownership verified count loading' : `${formatNumber(verifiedTargets)} ownership verified (${verifiedShare}%)`}`}</span>}
               href="#targets"
               actionLabel="Open all declared targets"
             />
@@ -753,8 +771,8 @@ export function DashboardPage({
                 <span className="dashboard-kpi-sub">{countsUnavailable ? 'Finding counts unavailable' : 'Counting open findings'}</span>
               ) : (
                 <span className="dashboard-kpi-split">
-                  <Badge tone="danger" title="Severity 1 (Critical)">{formatNumber(severity.critical)} critical</Badge>
-                  <Badge tone="warn" title="Severity 2 (High)">{formatNumber(severity.high)} high</Badge>
+                  <Badge tone={severityCountTone('critical', severity.critical)} title="Severity 1 (Critical)">{formatNumber(severity.critical)} critical</Badge>
+                  <Badge tone={severityCountTone('high', severity.high)} title="Severity 2 (High)">{formatNumber(severity.high)} high</Badge>
                 </span>
               )}
               href="#findings?status=open"
@@ -770,7 +788,7 @@ export function DashboardPage({
               <CardHeader>
                 <div>
                   <CardTitle>Why this readiness score</CardTitle>
-                  <CardDescription>Latest evidence-backed result per check across loaded runs, and the weighted factors behind the published score. A passing check covers its own scenario only{severity.critical + severity.high > 0 ? `; ${formatNumber(severity.critical + severity.high)} high-priority findings remain open` : ''}.</CardDescription>
+                  <CardDescription>Latest evidence-backed result per check across loaded runs, and the weighted factors behind the published score. A passing check covers its own scenario only{highPriorityOpen > 0 ? `; ${formatNumber(highPriorityOpen)} high-priority ${pluralize(highPriorityOpen, 'finding')} ${highPriorityOpen === 1 ? 'remains' : 'remain'} open` : ''}.</CardDescription>
                 </div>
               </CardHeader>
               <CardContent>
@@ -808,12 +826,13 @@ export function DashboardPage({
                   </ul>
                 ) : null}
                 <DataTable
+                  className="dash-posture-table"
                   columns={postureColumns}
                   items={postureRows}
                   loadError={[data.loadErrors.targets, data.loadErrors.runs].filter(Boolean).join(' ') || null}
                   onRetry={() => void onRefresh()}
                   getRowId={(row) => row.id}
-                  getRowProps={(row) => rowProps('target-detail', row.id, `Open target ${row.value} detail`)}
+                  getRowProps={(row) => rowProps('target-detail', row.id)}
                   empty={<EmptyState icon={Target} title="No targets declared yet." body="Declare a domain, hostname, IP, or CIDR to start validating readiness." actionHref="#targets" actionLabel="Declare a target" />}
                 />
                 {!targetsUnavailable && !data.loadErrors.runs && declaredTargets > postureRows.length ? (
@@ -889,7 +908,7 @@ export function DashboardPage({
                   loadError={data.loadErrors.runs}
                   onRetry={() => void onRefresh()}
                   getRowId={(item) => getString(item, ['id'])}
-                  getRowProps={(item) => runInspectProps(item)}
+                  getRowProps={(item) => runRowProps(item)}
                   empty={<EmptyState icon={ListChecks} title="No recorded checks yet." body="Open a verified target, review a compatible check and start it." actionHref="#targets" actionLabel="Open targets" />}
                 />
               </CardContent>
@@ -978,7 +997,7 @@ export function DashboardPage({
                               <a className="aging-link" href={id ? buildDetailHref('finding-detail', id) : '#findings'}>
                                 <span className="aging-title">{plainFindingTitle(finding, data.targets, data.checks)}</span>
                                 <span className="aging-meta">
-                                  <Badge tone={severityBadgeTone(severityRaw)} title={formatSeverityLabel(severityRaw)}>{severityShortLabel(severityRaw)}</Badge>
+                                  <Badge tone={severityTone(severityRaw)} title={formatSeverityLabel(severityRaw)}>{severityShortLabel(severityRaw)}</Badge>
                                   {Number.isFinite(Date.parse(String(finding.created_at ?? ''))) ? (
                                     <>
                                       <span>{`Opened ${formatDate(finding.created_at)}`}</span>
@@ -1038,23 +1057,6 @@ export function DashboardPage({
       ) : null}
     </div>
   );
-}
-
-function severityBadgeTone(severity: string): UiBadgeTone {
-  const key = severity.trim().toLowerCase();
-  if (['s1', 'critical', 's2', 'high'].includes(key)) return 'danger';
-  if (['s3', 'medium'].includes(key)) return 'warn';
-  return 'muted';
-}
-
-/** Compact ownership label so the half-width posture table never clips its verdict column. */
-function ownershipShortLabel(state: string): string {
-  const key = state.trim().toLowerCase();
-  if (['dns_verified'].includes(key)) return 'DNS verified';
-  if (['provider_verified'].includes(key)) return 'Provider';
-  if (['user_confirmed', 'verified'].includes(key)) return 'Verified';
-  if (key.includes('pending') || key.includes('awaiting')) return 'Pending';
-  return 'Unverified';
 }
 
 /** Single status word for the compact posture table; full verdict lives in the badge title. */

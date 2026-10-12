@@ -34,7 +34,6 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary-cell { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); background: var(--surface); }
 .targets-page .targets-summary-cell span { color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-summary-cell small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
-.targets-page .target-primary-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 .targets-page .target-unknown { color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-summary-cell strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-xl); font-variant-numeric: tabular-nums; }
 .targets-page .targets-intake { border-color: color-mix(in oklab, var(--accent), transparent 70%); }
@@ -47,15 +46,16 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-filter select { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); padding: 8px 10px; }
 .targets-page .targets-result-count { margin: 0 0 var(--space-3); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }
-.targets-page .target-primary { display: flex; min-width: 220px; align-items: center; gap: var(--space-3); }
+.targets-page .target-primary { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
 .targets-page .target-primary-icon, .targets-page .provider-mark { display: inline-grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }
 .targets-page .target-primary-copy, .targets-page .source-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.targets-page a.target-primary-copy { border-radius: var(--radius-sm); color: inherit; text-decoration: none; }
-.targets-page a.target-primary-copy:hover strong { color: var(--accent); }
+.targets-page a.target-primary-copy { display: flex; align-items: flex-start; border-radius: var(--radius-sm); color: inherit; font-weight: 400; text-decoration: none; }
+.targets-page a.target-primary-copy strong { text-decoration: underline; text-decoration-color: var(--border-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.targets-page a.target-primary-copy:hover strong { text-decoration-color: currentColor; }
 .targets-page a.target-primary-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.targets-page .target-primary-copy strong { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
+.targets-page .target-primary-copy strong { max-width: 18ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
 .targets-page .target-primary-copy span, .targets-page .source-cell small { color: var(--muted); font-size: var(--text-xs); }
-.targets-page .provider-line { display: flex; min-width: 170px; align-items: center; gap: var(--space-2); }
+.targets-page .provider-line { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
 .targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }
 /* Actions stay on one line; the table scrolls horizontally inside its region instead of stacking buttons into tall rows. */
 .targets-page .target-row-actions { display: flex; flex-wrap: nowrap; gap: var(--space-2); width: max-content; }
@@ -63,8 +63,24 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-intake-tags { grid-column: 1 / -1; }
 .targets-page .field-error { color: var(--danger); font-size: var(--text-xs); }
 .targets-page .target-row-actions .btn { min-height: 34px; }
-.targets-page .targets-table-wrap .data-table { min-width: 1180px; }
-@media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }
+.targets-page .targets-table-wrap .data-table { min-width: 960px; }
+.targets-page .targets-table-wrap .data-table :is(th, td) { padding-inline: var(--space-2); }
+.targets-page .targets-table-wrap .data-table :is(th, td):first-child { padding-left: var(--space-4); }
+.targets-page .targets-table-wrap .data-table :is(th, td):last-child { padding-right: var(--space-4); }
+.targets-page .targets-table-wrap .verify-chip { white-space: normal; line-height: 1.35; }
+.targets-page .targets-table-wrap .source-cell small { white-space: normal; }
+.targets-page .targets-table-wrap .data-table thead th { white-space: normal; line-height: 1.3; }
+@media (min-width: 901px) {
+  .targets-page .table-scroller:has(> .targets-table-wrap)::after { display: none; }
+  .targets-page .targets-table-wrap .data-table :is(th, td):last-child { position: sticky; right: 0; z-index: 1; box-shadow: inset 1px 0 0 var(--border-soft); }
+  .targets-page .targets-table-wrap .data-table thead th:last-child { background: linear-gradient(var(--wash), var(--wash)), var(--surface); }
+  .targets-page .targets-table-wrap .data-table tbody td:last-child { background: var(--surface); }
+  .targets-page .targets-table-wrap .data-table tbody tr:is(:nth-child(even), .table-row-zebra) td:last-child { background: linear-gradient(var(--wash), var(--wash)), var(--surface); }
+  .targets-page .targets-table-wrap .data-table tbody tr:hover td:last-child { background: linear-gradient(color-mix(in oklab, var(--accent), transparent 94%), color-mix(in oklab, var(--accent), transparent 94%)), var(--surface); }
+}
+.targets-page .targets-table-wrap .target-date { white-space: normal; }
+.targets-page .targets-table-wrap .target-date > span { white-space: nowrap; }
+@media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }
 @media (max-width: 900px) {
   .targets-page .target-row-actions .btn { min-height: 44px; }
 }
@@ -160,6 +176,14 @@ function sourceLabel(item: DataItem) {
   const integration = getString(item, ['import_integration', 'import_source'], '');
   if (integration && integration !== '—') return integration;
   return getString(metadata, ['source_app', 'app', 'source'], getString(item, ['source'], 'manual'));
+}
+
+function TableDate({ value }: { value: unknown }) {
+  const date = value ? new Date(typeof value === 'number' ? value : String(value)) : null;
+  if (!date || Number.isNaN(date.getTime())) return <span className="mono small">{formatDate(value)}</span>;
+  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return <span className="mono small target-date" title={formatDate(value)}><span>{day}</span> <span>{time}</span></span>;
 }
 
 function targetKindLabel(item: DataItem) {
@@ -286,8 +310,8 @@ export function TargetsPage({
     setTagFilter('all');
   }
 
-  function rememberRow(id: string) {
-    save({ selectedRowId: id, focusKey: `target-${id}` });
+  function rememberRow(id: string, focusKey = `target-${id}`) {
+    save({ selectedRowId: id, focusKey });
   }
   const targetKinds = [...new Set(targets.map((item) => getString(item, ['kind'], 'unknown').toLowerCase()).filter(Boolean))].sort();
 
@@ -408,22 +432,15 @@ export function TargetsPage({
         return (
           <span className="target-primary">
             <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
-            <span className="target-primary-copy">
+            <a
+              className="target-primary-copy detail-entity-link"
+              href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
+              data-focus-key={`target-name-${id}`}
+              onClick={() => rememberRow(id, `target-name-${id}`)}
+            >
               <strong title={value}>{value}</strong>
               <span>{targetKindLabel(item)}</span>
-              <span className="target-primary-actions">
-                <AnchorButton
-                  size="sm"
-                  variant={verified ? 'secondary' : 'default'}
-                  href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
-                  data-focus-key={`target-${id}`}
-                  onClick={() => rememberRow(id)}
-                  aria-label={verified ? `Open target ${value}` : `Verify ownership of ${value}`}
-                >
-                  {verified ? 'Open' : 'Verify ownership'}
-                </AnchorButton>
-              </span>
-            </span>
+            </a>
           </span>
         );
       }
@@ -444,7 +461,7 @@ export function TargetsPage({
           return <span className="target-unknown">Not available in inventory</span>;
         }
         const value = item.last_validation_at ?? item.last_validated_at;
-        return value ? <span className="mono small">{formatDate(value)}</span> : <span className="target-unknown">Not checked</span>;
+        return value ? <TableDate value={value} /> : <span className="target-unknown">Not checked</span>;
       }
     },
     {
@@ -455,7 +472,7 @@ export function TargetsPage({
         if (tags.length === 0) return <span className="muted">—</span>;
         return (
           <span className="target-tag-chips">
-            {tags.map((tag) => <Badge key={tag} tone="info">{tag}</Badge>)}
+            {tags.map((tag) => <Badge key={tag} tone="muted">{tag}</Badge>)}
           </span>
         );
       }
@@ -465,17 +482,29 @@ export function TargetsPage({
       label: 'Added from',
       render: (item) => {
         const source = sourceLabel(item);
-        return <span className="provider-line"><ProviderIcon source={source} /><span className="source-cell"><strong>{source.replace(/_/g, ' ')}</strong><small>{getString(item, ['source'], 'manual')}</small></span></span>;
+        const rawSource = getString(item, ['source'], 'manual');
+        return <span className="provider-line"><ProviderIcon source={source} /><span className="source-cell"><strong>{source.replace(/_/g, ' ')}</strong>{rawSource !== source ? <small>{rawSource}</small> : null}{item.created_at ? <small>Added {formatDate(item.created_at)}</small> : null}</span></span>;
       }
     },
-    { key: 'added', label: 'Added', render: (item) => <span className="mono small">{formatDate(item.created_at)}</span> },
     {
       key: 'actions',
-      label: 'Manage',
+      label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
+        const value = getString(item, ['value'], id);
+        const verified = isVerified(verificationState(item));
         return (
           <span className="target-row-actions">
+            <AnchorButton
+              size="sm"
+              variant={verified ? 'secondary' : 'default'}
+              href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
+              data-focus-key={`target-${id}`}
+              onClick={() => rememberRow(id)}
+              aria-label={verified ? `Open target ${value}` : `Verify ownership of ${value}`}
+            >
+              {verified ? 'Open' : 'Verify'}
+            </AnchorButton>
             {!canWriteTargets ? <span className="target-unknown">No changes for your role</span> : null}
             {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openTagEditor(item)} aria-label={`Edit tags for ${getString(item, ['value'], id)}`}>Edit tags</Button> : null}
             {canWriteTargets ? <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove target ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button> : null}
@@ -490,7 +519,6 @@ export function TargetsPage({
       <style>{TARGETS_PAGE_STYLES}</style>
       <div className="page-head">
         <div>
-          <p className="eyebrow">Proof for customer-declared scope</p>
           <h1>Targets</h1>
           <p>Declared hostnames, IPs and CIDRs. Each must prove ownership before any bounded check runs.</p>
         </div>
@@ -568,7 +596,7 @@ export function TargetsPage({
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">
-            <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, tag, or provider" /></label>
+            <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, tag, provider" /></label>
             <label className="targets-filter"><span>Verification</span><select value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)}><option value="all">All states</option><option value="verified">Verified</option><option value="unverified">Not verified</option></select></label>
             <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
             <label className="targets-filter"><span>Tag</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>

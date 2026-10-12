@@ -23,7 +23,8 @@ import { plainVerdictDescription } from '../../lib/plain-language.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { PortalConfig, PortalData, PortalDataset, Session } from '../../lib/types';
 import { formatDate, formatSeverityLabel, pluralize } from '../../lib/utils';
-import { FindingStatusBadge, SlaBadge, severityTone, slaPresentation } from './findings-refined';
+import { FindingStatusBadge, SlaBadge, slaPresentation } from './findings-refined';
+import { severityTone } from '../../lib/severity-tone';
 import './findings-refined.css';
 import './finding-group-detail.css';
 
@@ -244,7 +245,6 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
 
       <header className="rf-header">
         <div className="rf-header-copy">
-          <p className="rf-eyebrow">Findings · finding group</p>
           <h1>{group ? group.title : 'Finding group'}</h1>
           {group ? (
             <div className="rf-alert-meta">
@@ -257,9 +257,11 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
             <p className="rf-header-description">One issue grouped across every affected target, each tied to its own external probe evidence.</p>
           )}
         </div>
-        <div className="rf-header-actions">
-          <Button size="sm" variant="secondary" loading={busy} disabled={busy} onClick={() => void refresh()}>Refresh</Button>
-        </div>
+        {groupKey ? (
+          <div className="rf-header-actions">
+            <Button size="sm" variant="secondary" loading={busy} disabled={busy} onClick={() => void refresh()}>Refresh</Button>
+          </div>
+        ) : null}
       </header>
 
       {error || loadError ? <div className="form-banner error" role="alert">{error || loadError}</div> : null}
@@ -277,7 +279,7 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
       ) : !group ? (
         <EmptyState
           icon={SearchX}
-          title="This finding group is unavailable."
+          title="This finding group is unavailable"
           body={groupKey
             ? 'No finding on the server matches this group key. The group may have closed or changed since the link was shared. No other group was substituted.'
             : 'This link has no group key. Open a finding group from the findings list.'}

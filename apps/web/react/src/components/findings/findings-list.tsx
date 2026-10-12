@@ -8,6 +8,8 @@ import { Select } from '../ui/select';
 import { DataTable, type TableColumn } from '../ui/table';
 import type { DataItem } from '../../lib/types';
 import { findingStatus } from '../../lib/finding-lifecycle.mjs';
+import { findingStatusTone as statusTone } from '../../lib/status-tone';
+import { severityTone } from '../../lib/severity-tone';
 import {
   findingAssetLabel,
   findingRuleDetailHash,
@@ -75,20 +77,6 @@ function statusMatches(finding: DataItem, filter: StatusFilter) {
   return true;
 }
 
-function statusTone(status: string) {
-  const key = status.toLowerCase();
-  if (key === 'closed' || key === 'resolved') return 'success' as const;
-  if (key === 'accepted' || key === 'accepted_risk') return 'info' as const;
-  if (key === 'open' || key === 'remediation_pending') return 'warn' as const;
-  return 'muted' as const;
-}
-
-function severityTone(severity: string) {
-  const key = severity.toLowerCase();
-  if (['critical', 'high', 's1', 's2'].includes(key)) return 'danger' as const;
-  if (['medium', 's3'].includes(key)) return 'warn' as const;
-  return 'muted' as const;
-}
 
 /** SLA for a rule: the earliest open due time, or lifecycle wording when none is open. */
 function groupSlaMeta(group: FindingRuleGroup) {

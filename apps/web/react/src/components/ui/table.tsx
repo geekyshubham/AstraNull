@@ -189,9 +189,6 @@ export function DataTable<T>({
       <>
           <div
           className={cn('table-wrap data-table-empty-wrap', className)}
-          tabIndex={0}
-          role="region"
-          aria-label={`${columns.map((column) => column.label).join(', ')} data table, empty`}
         >
           <div className="table-empty">
             {failureMessage ? <TableLoadError message={failureMessage} onRetry={onRetry} /> : empty}

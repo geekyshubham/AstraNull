@@ -87,7 +87,8 @@ export function isScanScheduled(scan) {
 export function scanStatusTone(status) {
   const key = text(status).toLowerCase();
   if (key === 'completed') return 'success';
-  if (key === 'running' || key === 'pending') return 'info';
+  if (key === 'running') return 'warn';
+  if (key === 'pending') return 'muted';
   if (key === 'scheduled') return 'muted';
   if (key === 'denied' || key === 'cancelled') return 'danger';
   return 'warn';
@@ -96,7 +97,7 @@ export function scanStatusTone(status) {
 export function stepStatusTone(status) {
   const key = text(status).toLowerCase();
   if (key === 'verdicted') return 'success';
-  if (ACTIVE_STEP_STATUSES.includes(key)) return 'info';
+  if (ACTIVE_STEP_STATUSES.includes(key)) return 'warn';
   if (key === 'pending') return 'muted';
   if (key === 'deferred') return 'warn';
   if (key === 'denied' || key === 'cancelled') return 'danger';

@@ -8,6 +8,7 @@ export const FINDING_SEVERITY_PENALTIES = Object.freeze({ critical: 20, high: 10
 const rows = (value) => Array.isArray(value) ? value : [];
 const ts = (value) => { const ms = value == null ? NaN : new Date(value).getTime(); return Number.isFinite(ms) ? ms : null; };
 const sameTenant = (row, tenantId) => row?.tenant_id === tenantId;
+const plural = (count, noun) => (count === 1 ? noun : `${noun}s`);
 function available(row, nowMs, fallback) {
   const times = [row?.created_at, row?.ingested_at].filter((value) => value != null).map(ts);
   if (!times.length) times.push(ts(fallback));
@@ -56,7 +57,7 @@ export function governancePosture({ tenantId, requests = [], killSwitch = null, 
   for (const request of scoped) {
     const approvals = distinctSocApprovalCount(request);
     const complete = authorizationPackComplete(request, nowMs);
-    if (complete && approvals >= 2) evidence.push(`Request ${request.id}: authorization pack accepted with ${approvals} SOC approver(s).`);
+    if (complete && approvals >= 2) evidence.push(`Request ${request.id}: authorization pack accepted with ${approvals} SOC approvers.`);
     if (['scheduled', 'running', 'stopped', 'closed'].includes(request.state) && rows(request.audit_trail).length) evidence.push(`Request ${request.id}: governed lifecycle recorded.`);
     if (!['closed', 'rejected'].includes(request.state)) {
       const missing = [];
@@ -152,8 +153,8 @@ export function projectReadiness(input = {}) {
     confidence: 'external_only', assessment_scope: 'current_compatible_tested_target_check_scenarios',
     factors: [
       { key: 'coverage', label: 'Tested scenario assurance', weight: 100, score: complete ? maximum : null, detail: `${passed} passing of ${coverage.applicable_count} applicable target/check scenarios; ${coverage.not_run_count} not run, ${coverage.inconclusive_count} inconclusive, ${coverage.stale_count} stale. Shared mechanisms are not independent defenses.` },
-      { key: 'verdicts', label: 'Severity-aware unresolved findings', weight: 0, score: complete ? (penalty ? -penalty : 0) : null, detail: `${unresolvedCount} unresolved finding(s); severity penalty ${severityPenalty}. Absence of findings is not proof of protection.` },
-      { key: 'evidence_freshness', label: 'Immutable evidence freshness', weight: 0, score: 0, detail: `${COVERAGE_FRESHNESS_POLICY.max_age_ms / 86400000}-day observation expiry; ${coverage.stale_count} stale pair(s). Metadata refresh never renews evidence.` },
+      { key: 'verdicts', label: 'Severity-aware unresolved findings', weight: 0, score: complete ? (penalty ? -penalty : 0) : null, detail: `${unresolvedCount} unresolved ${plural(unresolvedCount, 'finding')}; severity penalty ${severityPenalty}. Absence of findings is not proof of protection.` },
+      { key: 'evidence_freshness', label: 'Immutable evidence freshness', weight: 0, score: 0, detail: `${COVERAGE_FRESHNESS_POLICY.max_age_ms / 86400000}-day observation expiry; ${coverage.stale_count} stale ${plural(coverage.stale_count, 'pair')}. Metadata refresh never renews evidence.` },
       { key: 'soc_readiness', label: 'SOC governance (separate)', weight: 0, score: 0, detail: governance.detail },
     ],
     posture: { pass: passed, gap: coverage.gap_count, review: coverage.applicable_count - passed - coverage.gap_count, total: coverage.applicable_count },

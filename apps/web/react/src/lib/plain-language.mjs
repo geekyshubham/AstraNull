@@ -59,6 +59,12 @@ const EMPTY_REASON_COPY = Object.freeze({
   coverage_summary_not_populated: 'WAF coverage will appear after a declared WAF asset records evidence.',
 });
 
+const CODE_LABEL_ACRONYMS = new Set([
+  'oidc', 'ui', 'dr', 'kms', 'slo', 'sso', 'api', 'dns', 'waf', 'soc', 'cdn', 'csv', 'ip', 'tls',
+  'http', 'https', 'url', 'id', 'sla', 'rbac', 'cve', 'ddos', 'e2e', 'cidr', 'fqdn', 'asn', 'pci', 'dss',
+  'hipaa', 'nist', 'iso', 'gdpr', 'cis', 'soc2', 'nis2', 'mfa', 'idp', 'saml', 'jwt',
+]);
+
 export function plainCodeLabel(value, fallback = 'Not reported') {
   const text = String(value ?? '').trim();
   if (!text) return fallback;
@@ -66,10 +72,16 @@ export function plainCodeLabel(value, fallback = 'Not reported') {
     fqdn: 'Domain name',
     must_block_before_origin: 'Block before the origin server',
     should_be_protected: 'Should be protected',
+    soc_gated: 'SOC-gated',
+    third_party_security_review: 'Third-party security review',
   };
   const key = normalize(text);
   if (labels[key]) return labels[key];
-  const words = text.replaceAll('_', ' ');
+  const words = text
+    .replaceAll('_', ' ')
+    .split(' ')
+    .map((word) => (CODE_LABEL_ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word))
+    .join(' ');
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
@@ -92,7 +104,7 @@ export function plainInlineText(value) {
     const envelope = `${start}${token}${after}`.replace(/^\.+|\.+$/g, '');
     if (/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$/i.test(envelope)) return token;
     const label = plainCodeLabel(token);
-    return offset === 0 || /[.!?:]\s*$/.test(before)
+    return offset === 0 || /[.!?:]\s*$/.test(before) || /^[A-Z0-9]{2,}\b/.test(label)
       ? label
       : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
   });

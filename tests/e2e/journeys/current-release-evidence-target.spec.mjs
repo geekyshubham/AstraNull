@@ -1066,7 +1066,7 @@ test.describe('current release: target history, origin relations and retest line
       expect(store.events.filter((event) => event.test_run_id === runId)).toEqual([]);
       expect(store.evidenceVault.filter((record) => record.test_run_id === runId)).toEqual([]);
       await open(page, 'dashboard');
-      const row = page.getByRole('row', { name: `Open target ${value} detail`, exact: true });
+      const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: value, exact: true }) });
       await expect(row).toContainText(value);
       await expect(row.getByText('Not recorded', { exact: true })).toBeVisible();
       await expect(row.getByText(/^Passed/)).toHaveCount(0);

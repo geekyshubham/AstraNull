@@ -130,7 +130,6 @@ export function RunsRefined(props: RunsRefinedProps) {
     <div className="content refined rf-runs">
       <header className="rf-header">
         <div className="rf-header-copy">
-          <p className="rf-eyebrow">Validation history</p>
           <h1>Test runs</h1>
           <p className="rf-header-description">
             Bounded safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence.
@@ -240,6 +239,7 @@ export function RunsRefined(props: RunsRefinedProps) {
               className="validation-runs-table"
               columns={columns}
               items={props.filteredRuns}
+              maxHeight="70vh"
               getRowProps={props.getRunRowProps}
               empty={props.runsEmptyState}
               loadError={data.loadErrors.runs}

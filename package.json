@@ -75,6 +75,7 @@
     "test:contract": "node --test tests/contract/*.test.mjs",
     "test:portal-scale": "node --throw-deprecation --test tests/portal-scale/*.test.mjs",
     "test:a11y": "playwright test tests/a11y",
+    "ui:visual-sweep": "node scripts/portal-visual-sweep.mjs",
     "lint:portal": "node scripts/lint-portal-no-hardcoded.mjs",
     "test:lint": "npm run lint:portal",
     "web:dev": "vite --host 127.0.0.1",

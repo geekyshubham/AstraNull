@@ -254,10 +254,10 @@ describe('integrations (TF-10)', () => {
   });
 
   it('derives a connector last attempt only from recorded outcomes, never updated_at or poll requests', () => {
-    const column = between(integrations, "key: 'last_attempt'", "key: 'actions'");
+    const column = between(integrations, 'const renderConnectorLastAttempt', 'const connectorColumns');
     assert.match(column, /hasOwnProperty\.call\(item, 'last_error_at'\)\) return <span className="muted">Not recorded<\/span>/);
     assert.match(column, /Date\.parse\(failure\) > Date\.parse\(success\)/);
-    assert.match(column, /if \(!connectorHasCredentialPoll\(item\)\) return <span className="muted">Not applicable<\/span>;/);
+    assert.match(between(integrations, "key: 'last_success'", "key: 'actions'"), /if \(!connectorHasCredentialPoll\(item\)\) return <span className="muted">Not applicable<\/span>;/);
     assert.doesNotMatch(column, /updated_at|last_poll_requested_at|last_polled_at|last_poll_at/);
   });
 
@@ -301,6 +301,21 @@ describe('release evidence', () => {
     assert.match(releasePage, /Accepted but invalid/);
     for (const label of ['Inventory', 'Contract validity', 'External signoff']) assert.ok(releasePage.includes(label), label);
     assert.match(releasePage, /Why it fails/);
+  });
+});
+
+describe('SOC console without an execution tenant', () => {
+  const socPage = between(governance, 'export function SocConsolePage(');
+  const gates = between(governance, 'function buildSocGoNoGoGates(', 'function providerNameForRequest(');
+
+  it('never reports a clear kill switch or idle gates without the tenant recorded state', () => {
+    assert.match(gates, /if \(!context\.tenantSelected\) \{[\s\S]*?tone: 'muted', status: 'Tenant not selected'/);
+    assert.match(socPage, /tenantSelected: !executionTenantMissing/);
+    assert.match(socPage, /Select an execution tenant to read its kill-switch state\./);
+    assert.match(socPage, /executionTenantMissing \? \(\s*<KpiCell label="Kill switch" value="—" delta="Select a tenant" tone="muted" \/>/);
+    assert.match(socPage, /<Badge tone="muted">Tenant not selected<\/Badge>/);
+    assert.match(socPage, /getString\(data\.state\?\.kill_switch as DataItem, \['reason'\], ''\)/);
+    assert.doesNotMatch(governance, /tenant-scoped emergency stop'\)/);
   });
 });
 

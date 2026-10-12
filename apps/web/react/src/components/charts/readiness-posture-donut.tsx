@@ -44,13 +44,17 @@ export function ReadinessPostureDonut({
   const segmentSummary = paintedSegments
     .map((segment) => `${segment.label} ${countLabel(segment.count, 'check')} ${segment.pct} percent`)
     .join('. ');
-  const scoreSummary = score === null ? 'Readiness score unavailable' : `Readiness score ${score} out of 100`;
+  const passCount = segments.find((segment) => segment.key === 'pass')?.count ?? 0;
+  const showPass = total > 0;
+  const scoreSummary = showPass
+    ? `${passCount} of ${countLabel(total, 'check')} passed`
+    : score === null ? 'Readiness score unavailable' : `Readiness score ${score} out of 100`;
   const correlationSummary = correlatedCount === total
     ? `${countLabel(correlatedCount, 'check')} correlated`
     : `${correlatedCount} of ${countLabel(total, 'check')} correlated`;
   const ariaLabel = [scoreSummary, correlationSummary, segmentSummary].filter(Boolean).join('. ');
   const ringTitle = [
-    score === null ? null : `${score} / 100 readiness`,
+    showPass ? `${passCount} / ${total} checks passed` : score === null ? null : `${score} / 100 readiness`,
     `${correlatedCount} / ${total} checks correlated`,
     ...paintedSegments.map((segment) => `${segment.label} · ${segment.count} checks · ${segment.pct}%`),
   ].filter(Boolean).join(' · ');
@@ -75,10 +79,10 @@ export function ReadinessPostureDonut({
         style={{ ['--gauge-gradient' as string]: gradient }}
       >
         <div className="gauge-hole" style={{ background: 'var(--surface)' }}>
-          <span className="gauge-score-cap" aria-hidden="true">Readiness</span>
+          <span className="gauge-score-cap" aria-hidden="true">{showPass ? 'Pass' : 'Readiness'}</span>
           <div className="gauge-score" aria-hidden="true">
-            <span className="gauge-score-value">{score ?? 'n/a'}</span>
-            {score !== null ? <span className="gauge-score-scale">/100</span> : null}
+            <span className="gauge-score-value">{showPass ? passCount : score ?? 'n/a'}</span>
+            {showPass ? <span className="gauge-score-scale">/{total}</span> : score !== null ? <span className="gauge-score-scale">/100</span> : null}
           </div>
         </div>
       </div>

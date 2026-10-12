@@ -34,7 +34,7 @@ export const NOTIFICATION_CHANNELS_STYLES = `
   width: 50%;
   height: 50%;
 }
-.channel-logo[data-channel='email'] .channel-glyph { color: var(--accent); }
+.channel-logo[data-channel='email'] .channel-glyph { color: var(--fg); }
 .channel-logo[data-channel='webhook'] .channel-glyph { color: var(--fg); }
 .channel-logo .slack-red { fill: var(--brand-slack-red); }
 .channel-logo .slack-blue { fill: var(--brand-slack-blue); }

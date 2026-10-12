@@ -6,6 +6,7 @@ import {
   evidenceModePresentation,
   evidenceTierInfo,
   plainCheckName,
+  plainCodeLabel,
   plainEmptyReason,
   plainFindingTitle,
   plainInlineText,
@@ -29,6 +30,20 @@ describe('portal executive language', () => {
     assert.equal(plainVerdictLabel('bypassable'), 'A bypass path reached your server');
     assert.equal(plainVerdictLabel('protected'), 'Protection stopped the test traffic');
     assert.equal(plainVerdictLabel('inconclusive'), 'Not enough evidence');
+  });
+
+  it('keeps known acronyms uppercase in machine-code labels', () => {
+    assert.equal(plainCodeLabel('oidc_prod_auth_preflight'), 'OIDC prod auth preflight');
+    assert.equal(plainCodeLabel('ui_accessibility_matrix'), 'UI accessibility matrix');
+    assert.equal(plainCodeLabel('dr_restore'), 'DR restore');
+    assert.equal(plainCodeLabel('kms_vault_posture'), 'KMS vault posture');
+    assert.equal(plainCodeLabel('observability_slo'), 'Observability SLO');
+    assert.equal(plainCodeLabel('staging_e2e_matrix'), 'Staging E2E matrix');
+    assert.equal(plainCodeLabel('tenant_id'), 'Tenant ID');
+    assert.equal(plainCodeLabel('soc_gated'), 'SOC-gated');
+    assert.equal(plainCodeLabel('missing_evidence'), 'Missing evidence');
+    assert.equal(plainCodeLabel(''), 'Not reported');
+    assert.equal(plainInlineText('Runs are soc_gated here.'), 'Runs are SOC-gated here.');
   });
 
   it('gives ownership and protection states plain labels', () => {

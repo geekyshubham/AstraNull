@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GitCompareArrows } from 'lucide-react';
 import {
   cancelEntryPathComparison,
   cancelRun,
@@ -24,6 +25,7 @@ import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../.
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { EmptyState } from '../../ui/empty-state';
 import {
   compatibilityView,
   comparisonProgress,
@@ -276,6 +278,9 @@ export function PathComparisonPanel({
   const startBlocker = !canStart ? 'Your role cannot start checks.'
     : !ownershipDone ? 'This target’s ownership is not verified, so checks cannot start from it.'
       : active.length < 2 ? 'Declare at least two active entry paths to compare them.' : '';
+  const needsSecondPath = canStart && ownershipDone && active.length < 2 && list.state === 'ready' && !list.items.length;
+
+  if (!active.length && list.state === 'ready' && !list.items.length && !composing) return null;
 
   return (
     <section className="pv-section" aria-labelledby="pv-compare-title">
@@ -288,7 +293,7 @@ export function PathComparisonPanel({
           <Button size="sm" variant="secondary" disabled={Boolean(startBlocker)} title={startBlocker || undefined} onClick={() => openCompose()}>Plan a comparison</Button>
         ) : null}
       </header>
-      {startBlocker && !composing ? <p className="td-muted small">{startBlocker}</p> : null}
+      {startBlocker && !composing && !needsSecondPath ? <p className="td-muted small">{startBlocker}</p> : null}
       {message ? <p className="form-banner" role="status">{message}</p> : null}
       {error && !review && !stopOpen ? <p className="td-form-error" role="alert">{error}</p> : null}
 
@@ -360,7 +365,12 @@ export function PathComparisonPanel({
 
       {list.state === 'loading' ? <div className="skeleton skeleton-row" aria-label="Loading comparisons" /> : null}
       {list.state === 'failed' ? <FailureNotice failure={list.failure} subject="entry-path comparisons" onRetry={() => setReload((value) => value + 1)} /> : null}
-      {list.state === 'ready' && !list.items.length ? <p className="td-muted">No comparison has been recorded for this application yet.</p> : null}
+      {list.state === 'ready' && !list.items.length && active.length >= 2 ? (
+        <EmptyState className="pv-empty" icon={GitCompareArrows} title="No comparison recorded yet." body="Plan a comparison to test the primary route against another declared path under one scenario." />
+      ) : null}
+      {needsSecondPath ? (
+        <EmptyState className="pv-empty" icon={GitCompareArrows} title="Declare a second entry path to compare." body="A comparison needs at least two active entry paths on this application." />
+      ) : null}
       {list.state === 'ready' && list.items.length ? (
         <ul className="pv-list" aria-label="Recorded comparisons">
           {list.items.map((item) => (
@@ -371,7 +381,7 @@ export function PathComparisonPanel({
                   <span className="td-muted small mono pv-break">{item.id}{item.evaluated_at ? ` · ${formatDate(item.evaluated_at)}` : item.created_at ? ` · ${formatDate(item.created_at)}` : ''}</span>
                 </div>
                 <div className="pv-actions">
-                  <Badge tone={item.status === 'running' ? 'info' : item.status === 'cancelled' ? 'warn' : 'muted'}>{item.status === 'running' ? 'Running' : item.status === 'cancelled' ? 'Stopped' : item.status === 'completed' ? 'Completed' : 'Status not recorded'}</Badge>
+                  <Badge tone={item.status === 'running' ? 'warn' : item.status === 'cancelled' ? 'warn' : 'muted'}>{item.status === 'running' ? 'Running' : item.status === 'cancelled' ? 'Stopped' : item.status === 'completed' ? 'Completed' : 'Status not recorded'}</Badge>
                   <Button size="sm" variant={item.id === selectedId ? 'secondary' : 'ghost'} aria-pressed={item.id === selectedId} onClick={() => setSelectedId(item.id === selectedId ? '' : item.id)}>
                     {item.id === selectedId ? 'Hide results' : 'View results'}
                   </Button>

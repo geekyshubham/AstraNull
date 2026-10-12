@@ -156,7 +156,7 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
   },
   {
     id: 'policy-detail',
-    label: 'Policy detail',
+    label: 'Schedule detail',
     group: 'validation',
     description: 'Cadence, target bindings, expected verdicts, safe windows, and high-scale gating for one policy.',
     icon: ClipboardList
@@ -178,7 +178,7 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
   {
     id: 'scan-detail',
     label: 'Validation scan',
-    group: 'validation',
+    group: 'scope',
     description: 'Live step progress, bounded request and response metadata, requests sent, verdicts, and the metadata-only activity log for one validation scan.',
     icon: Activity
   },

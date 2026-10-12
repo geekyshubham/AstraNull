@@ -64,7 +64,10 @@ function claimBoundary(catalogRow, claim) {
 
 function intendedDetectionGoal(catalogRow, evidenceTier) {
   const mode = evidenceTier === 'E5' ? 'monitoring' : 'validation';
-  const target = catalogRow.targeted_resource_or_assumption || catalogRow.canonical_name;
+  const target = String(catalogRow.targeted_resource_or_assumption || catalogRow.canonical_name || '')
+    .trim()
+    .replace(/\.+$/, '')
+    .replace(/^(A|An|The) /, (article) => article.toLowerCase());
   return `Intent only: assess ${mode} evidence relevant to ${target}. This is not an observed or detected result.`;
 }
 

@@ -1,6 +1,8 @@
 .pv-section { display: grid; gap: var(--space-4); min-width: 0; }
 .pv-section + .pv-section { margin-top: var(--space-6); }
 .pv-break { min-width: 0; overflow-wrap: anywhere; }
+.pv-section > p:not([class]), .pv-section > p.pv-break:not(.pv-notice) { margin: 0; max-width: 75ch; color: var(--fg-2); font-size: var(--text-sm); line-height: 1.5; }
+.pv-section > .empty-state.pv-empty, .pv-section > [data-state='empty'] > .empty-state.pv-empty { padding: var(--space-5) var(--space-4); gap: var(--space-3); border: 1px dashed var(--border); border-radius: var(--radius-md); }
 .pv-copy { margin: 0; max-width: 72ch; color: var(--fg-2); font-size: var(--text-sm); line-height: 1.5; }
 .pv-badges { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .pv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
@@ -79,7 +81,7 @@
 .pv-ref code { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); overflow-wrap: anywhere; }
 
 .pv-progress { display: grid; gap: var(--space-2); }
-.pv-progress progress { width: 100%; height: var(--space-2); accent-color: var(--accent); }
+.pv-progress progress { width: 100%; height: var(--space-2); accent-color: var(--warn); }
 
 .pv-runs { display: grid; gap: var(--space-1); max-height: 20rem; margin: 0; padding: var(--space-1); overflow-y: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); list-style: none; }
 .pv-tabs-inline { display: flex; flex-wrap: wrap; gap: var(--space-2); }

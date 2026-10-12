@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, ExternalLink, Eye, History, ShieldAlert } from 'lucide-react';
+import { Check, Copy, ExternalLink, Eye, ShieldAlert } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
@@ -8,6 +8,8 @@ import { buildDetailHref } from '../../lib/route-params';
 import { requestJson } from '../../lib/api';
 import { findingRuleKey, parseFindingTimestamp } from '../../lib/findings-helpers';
 import { plainFindingTitle } from '../../lib/plain-language.mjs';
+import { findingStatusTone } from '../../lib/status-tone';
+import { severityTone } from '../../lib/severity-tone';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 import './finding-detection-history.css';
 
@@ -23,13 +25,6 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
   return fallback;
-}
-
-function severityTone(severity: string) {
-  const key = severity.toLowerCase();
-  if (['critical', 'high', 's1', 's2'].includes(key)) return 'danger' as const;
-  if (['medium', 's3'].includes(key)) return 'warn' as const;
-  return 'muted' as const;
 }
 
 export function FindingDetectionHistory({
@@ -142,7 +137,6 @@ export function FindingDetectionHistory({
       <CardHeader>
         <div className="finding-history-head">
           <div className="finding-history-title-wrap">
-            <History size={18} className="finding-history-icon" aria-hidden="true" />
             <div>
               <CardTitle id="finding-detection-history-title">Detection history</CardTitle>
               <CardDescription>
@@ -182,7 +176,7 @@ export function FindingDetectionHistory({
           <div className="finding-history-metric">
             <dt>Current lifecycle</dt>
             <dd>
-              <Badge tone={severityTone(getString(entity, ['severity'], 'medium'))}>
+              <Badge tone={findingStatusTone(getString(entity, ['status', 'state'], 'open'))}>
                 {formatLabel(getString(entity, ['status', 'state'], 'open'))}
               </Badge>
               <small>{formatSeverityLabel(getString(entity, ['severity'], 'medium'))}</small>
@@ -191,7 +185,7 @@ export function FindingDetectionHistory({
         </dl>
 
         <div className="finding-history-timeline-section">
-          <h4 className="finding-history-timeline-title">Detection events ({detectionCount})</h4>
+          <h3 className="finding-history-timeline-title">Detection events ({detectionCount})</h3>
           <div className="finding-history-timeline" role="list">
             {allDetections.map((detection, index) => {
               const detId = getString(detection, ['id'], '');
@@ -218,14 +212,14 @@ export function FindingDetectionHistory({
                       <div className="finding-history-entry-chips">
                         <span className="finding-history-timestamp">{formatDate(openedDate)}</span>
                         {isLatest ? (
-                          <Badge tone="warn">Latest detection</Badge>
+                          <Badge tone="default">Latest detection</Badge>
                         ) : isInitial ? (
                           <Badge tone="default">Initial detection</Badge>
                         ) : (
                           <Badge tone="default">Detection #{allDetections.length - index}</Badge>
                         )}
                         <Badge tone={severityTone(detSeverity)}>{formatSeverityLabel(detSeverity)}</Badge>
-                        {isCurrent ? <span className="finding-current-pill">Current record</span> : null}
+                        {isCurrent ? <Badge tone="muted">Current record</Badge> : null}
                       </div>
                       <div className="finding-history-entry-actions">
                         <Button

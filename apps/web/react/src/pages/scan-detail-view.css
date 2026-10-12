@@ -1,0 +1,7 @@
+body .scan-detail-view .scan-steps .data-table { min-width: 0; }
+body .scan-detail-view .scan-steps .data-table :is(th, td) { padding-inline: var(--space-3); }
+body .scan-detail-view .scan-steps .data-table thead th { white-space: normal; line-height: 1.3; }
+body .scan-detail-view .scan-step-request { display: block; min-width: 24ch; max-width: 36ch; white-space: normal; overflow-wrap: break-word; }
+body .scan-detail-view .scan-steps .check-picker-row-id { white-space: nowrap; }
+body .scan-detail-view .scan-step-target { white-space: nowrap; }
+body .scan-detail-view .scan-steps .data-table td { white-space: normal; }

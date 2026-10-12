@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Activity, Bell, CalendarClock, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, Search, ShieldCheck, Siren, Users } from 'lucide-react';
+import { Activity, Bell, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, Search, ShieldCheck, Siren, Users } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -21,12 +21,13 @@ import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId, parseInspectorRef, replaceRouteParams } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
-import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, sensitiveResourceLabel } from '../lib/utils';
+import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, pluralize, sensitiveResourceLabel } from '../lib/utils';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
 import { plainCodeLabel } from '../lib/plain-language.mjs';
-import { CustomerPageStyles, MetricCard, PageContextSummary, PageHeader, PanelCardHeader } from './page-components';
+import { CustomerPageStyles, KpiCell, PageContextSummary, PageHeader, PanelCardHeader } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
+import { highScaleStateTone } from '../lib/status-tone';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -177,14 +178,6 @@ function canReadReleaseEvidence(role: string | undefined) {
 
 type GovernanceBadgeTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 
-function highScaleStateBadgeTone(state: string): GovernanceBadgeTone {
-  const normalized = state.trim().toLowerCase();
-  if (['closed', 'completed', 'cancelled', 'canceled'].includes(normalized)) return 'success';
-  if (['running', 'executing', 'active', 'started'].includes(normalized)) return 'danger';
-  if (['scheduled', 'approved'].includes(normalized)) return 'info';
-  if (['submitted', 'under_review', 'pending', 'draft'].includes(normalized)) return 'warn';
-  return 'muted';
-}
 
 function authorizationPackBadgeTone(overall: string): GovernanceBadgeTone {
   const normalized = overall.trim().toLowerCase();
@@ -198,7 +191,7 @@ function releaseEvidenceStatusBadgeTone(status: string): GovernanceBadgeTone {
   if (['accepted', 'valid', 'passed', 'recorded'].includes(normalized)) return 'success';
   if (['failed', 'rejected', 'invalid'].includes(normalized)) return 'danger';
   if (['pending', 'review', 'unknown'].includes(normalized)) return 'warn';
-  return 'info';
+  return 'muted';
 }
 
 function productionReadyBadgeTone(value: unknown): GovernanceBadgeTone {
@@ -216,7 +209,7 @@ function productionReadyLabel(value: unknown) {
 function formatGovernanceStatusLabel(value: string, fallback = '—') {
   const trimmed = value.trim();
   if (!trimmed || trimmed === '—') return fallback;
-  return trimmed.replace(/_/g, ' ');
+  return plainCodeLabel(trimmed, fallback);
 }
 
 function authorizationPackLabel(overall: string) {
@@ -419,11 +412,15 @@ function DeliveryOperationPanel({
   titleId,
   title,
   description,
+  note,
+  noteId,
   children
 }: {
   titleId: string;
   title: string;
   description: string;
+  note?: string;
+  noteId?: string;
   children: ReactNode;
 }) {
   return (
@@ -433,6 +430,7 @@ function DeliveryOperationPanel({
         <p>{description}</p>
       </div>
       <div className="row-actions">{children}</div>
+      {note ? <p className="muted small" id={noteId}>{note}</p> : null}
     </section>
   );
 }
@@ -457,7 +455,7 @@ function KillSwitchReadOnlyCard({ active, reason }: { active: boolean; reason: s
         <KvField label="Status">
           <Badge tone={active ? 'danger' : 'success'}>{active ? 'Active' : 'Inactive'}</Badge>
         </KvField>
-        <KvField label="Reason">{reason}</KvField>
+        <KvField label="Reason">{reason || <span className="muted">Not recorded</span>}</KvField>
       </CardContent>
     </Card>
   );
@@ -543,6 +541,16 @@ function normalizeHighScaleState(item: DataItem) {
 
 type SocGoNoGoGate = { key: string; label: string; tone: GovernanceBadgeTone; status: string };
 
+const SOC_GATE_LABEL = {
+  packs: 'Authorization packs reviewed',
+  providers: 'Provider approvals',
+  kill: 'Kill switch clear',
+  execution: 'Managed execution only',
+  findings: 'Findings triaged'
+} as const;
+
+const SOC_GO_NO_GO_LABELS = Object.entries(SOC_GATE_LABEL).map(([key, label]) => ({ key, label }));
+
 function socPackGate(actionableCount: number, pendingCount: number): { tone: GovernanceBadgeTone; status: string } {
   if (actionableCount === 0) return { tone: 'muted', status: 'No open requests' };
   if (pendingCount === 0) return { tone: 'success', status: 'All accepted' };
@@ -551,8 +559,11 @@ function socPackGate(actionableCount: number, pendingCount: number): { tone: Gov
 
 function buildSocGoNoGoGates(
   requests: DataItem[],
-  context: { killSwitchActive: boolean; runningCount: number; openFindings: number }
+  context: { killSwitchActive: boolean; runningCount: number; openFindings: number; tenantSelected: boolean }
 ): SocGoNoGoGate[] {
+  if (!context.tenantSelected) {
+    return SOC_GO_NO_GO_LABELS.map(({ key, label }) => ({ key, label, tone: 'muted', status: 'Tenant not selected' }));
+  }
   const actionable = requests.filter((item) =>
     [...SOC_REVIEW_STATES, ...SOC_SCHEDULED_STATES].includes(normalizeHighScaleState(item))
   );
@@ -564,10 +575,10 @@ function buildSocGoNoGoGates(
     (item) => providerApprovalSummary(item).label === 'Accepted'
   ).length;
   return [
-    { key: 'packs', label: 'Authorization packs reviewed', ...socPackGate(actionable.length, actionable.length - packAccepted) },
+    { key: 'packs', label: SOC_GATE_LABEL.packs, ...socPackGate(actionable.length, actionable.length - packAccepted) },
     {
       key: 'providers',
-      label: 'Provider approvals',
+      label: SOC_GATE_LABEL.providers,
       tone: providerRequired.length === 0 ? 'muted' : providerAccepted === providerRequired.length ? 'success' : 'warn',
       status: providerRequired.length === 0
         ? 'Not required'
@@ -577,19 +588,19 @@ function buildSocGoNoGoGates(
     },
     {
       key: 'kill',
-      label: 'Kill switch clear',
+      label: SOC_GATE_LABEL.kill,
       tone: context.killSwitchActive ? 'danger' : 'success',
       status: context.killSwitchActive ? 'Armed' : 'Clear'
     },
     {
       key: 'execution',
-      label: 'Managed execution only',
-      tone: context.runningCount > 0 ? 'info' : 'success',
+      label: SOC_GATE_LABEL.execution,
+      tone: context.runningCount > 0 ? 'warn' : 'success',
       status: context.runningCount > 0 ? `${context.runningCount} active` : 'Idle'
     },
     {
       key: 'findings',
-      label: 'Findings triaged',
+      label: SOC_GATE_LABEL.findings,
       tone: context.openFindings > 0 ? 'warn' : 'success',
       status: context.openFindings > 0 ? `${context.openFindings} open` : 'Clear'
     }
@@ -653,7 +664,7 @@ const providerContactColumns: TableColumn<ProviderContactRow>[] = [
   {
     key: 'provider',
     label: 'Provider',
-    render: (item) => (item.provider === '—' ? <span className="muted">—</span> : <Badge tone="info">{item.provider}</Badge>)
+    render: (item) => (item.provider === '—' ? <span className="muted">—</span> : <Badge tone="muted">{item.provider}</Badge>)
   },
   { key: 'contact', label: 'Contact', render: (item) => <span className="mono">{item.contact}</span> },
   {
@@ -705,11 +716,11 @@ function buildSocCrossTenantRows(approvals: DataItem[]): SocCrossTenantRow[] {
 const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
   { key: 'tenant', label: 'Tenant', render: (item) => <span className="mono">{item.tenantId}</span> },
   { key: 'request', label: 'Request', render: (item) => <span title={item.id}>High-scale request</span> },
-  { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{formatGovernanceStatusLabel(item.kind, 'high scale')}</Badge> },
+  { key: 'kind', label: 'Kind', render: (item) => <Badge tone="muted">{formatGovernanceStatusLabel(item.kind, 'high scale')}</Badge> },
   {
     key: 'state',
     label: 'State',
-    render: (item) => <Badge tone={highScaleStateBadgeTone(item.state)}>{formatGovernanceStatusLabel(item.state, 'Unknown')}</Badge>
+    render: (item) => <Badge tone={highScaleStateTone(item.state)}>{formatGovernanceStatusLabel(item.state, 'Unknown')}</Badge>
   },
   { key: 'requested', label: 'Requested', render: (item) => formatDate(item.requestedAt) },
   {
@@ -1000,13 +1011,15 @@ export function NotificationsPage({
           </Button>
         ) : <Badge tone="muted">Read only</Badge>}
       />
-      <dl className="release-dimensions" aria-label="Delivery summary for loaded events">
-        <div><dt>Channels</dt><dd>{formatNumber(enabledRules)} of {formatNumber(rules.length)}</dd><dd className="release-dimension-hint">enabled</dd></div>
-        <div><dt>Delivered</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.delivered)}</dd><dd className="release-dimension-hint">attempts accepted by a provider or in-app</dd></div>
-        <div><dt>Failed or retrying</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.failed + counts.retry)}</dd><dd className="release-dimension-hint">{formatNumber(counts.failed)} failed · {formatNumber(counts.retry)} retry scheduled</dd></div>
-        <div><dt>Recorded, not sent</dt><dd>{eventsUnavailable ? '—' : formatNumber(counts.notSent)}</dd><dd className="release-dimension-hint">outbound delivery disabled{counts.unknown ? ` · ${formatNumber(counts.unknown)} unknown` : ''}</dd></div>
-      </dl>
-      <p className="muted small">Counts cover the {formatNumber(events.length)} most recent events loaded, not all history.</p>
+      <div className="kpi-row" role="group" aria-label="Delivery summary for loaded events">
+        <KpiCell label="Channels" value={`${formatNumber(enabledRules)} of ${formatNumber(rules.length)}`} delta="enabled" />
+        <KpiCell label="Delivered" value={eventsUnavailable ? '—' : formatNumber(counts.delivered)} delta="attempts accepted by a provider or in-app" />
+        <KpiCell label="Failed or retrying" value={eventsUnavailable ? '—' : formatNumber(counts.failed + counts.retry)} delta={`${formatNumber(counts.failed)} failed · ${formatNumber(counts.retry)} retry scheduled`} />
+        <KpiCell label="Recorded, not sent" value={eventsUnavailable ? '—' : formatNumber(counts.notSent)} delta={`outbound delivery disabled${counts.unknown ? ` · ${formatNumber(counts.unknown)} unknown` : ''}`} />
+      </div>
+      {events.length > 0 ? (
+        <p className="muted small">Counts cover the {formatNumber(events.length)} most recent {pluralize(events.length, 'event')} loaded, not all history.</p>
+      ) : null}
       <GovernanceFeedbackBanner message={message} error={error} />
 
       {canWrite && ruleFormOpen ? (
@@ -1189,13 +1202,39 @@ export function NotificationsPage({
         <Card>
           <PanelCardHeader title="Bulk recovery" description="Preview first. Live actions apply to every matching attempt and can produce duplicates if earlier sends arrived." />
           <CardContent className="stack-tight">
-            <DeliveryOperationPanel titleId="notification-retries-title" title="Due retries" description={batchPreview?.kind === 'retries' ? `Preview: ${batchPreview.summary}` : 'Process retries whose scheduled time has passed.'}>
+            <DeliveryOperationPanel
+              titleId="notification-retries-title"
+              title="Due retries"
+              description={batchPreview?.kind === 'retries' ? `Preview: ${batchPreview.summary}` : 'Process retries whose scheduled time has passed.'}
+              note={batchPreview?.kind !== 'retries' ? 'Preview due retries first.' : undefined}
+              noteId="notification-retries-reason"
+            >
               <Button size="sm" variant="secondary" loading={busy === 'batch-preview-retries'} disabled={busy !== ''} onClick={() => void previewBatch('retries')}>Preview due retries</Button>
-              <Button size="sm" variant="secondary" loading={busy === 'batch-retries'} disabled={busy !== '' || batchPreview?.kind !== 'retries'} onClick={() => void runBatch('retries')}>Process due retries</Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === 'batch-retries'}
+                disabled={busy !== '' || batchPreview?.kind !== 'retries'}
+                aria-describedby={batchPreview?.kind !== 'retries' ? 'notification-retries-reason' : undefined}
+                onClick={() => void runBatch('retries')}
+              >Process due retries</Button>
             </DeliveryOperationPanel>
-            <DeliveryOperationPanel titleId="notification-failed-title" title="Failed deliveries" description={batchPreview?.kind === 'failed' ? `Preview: ${batchPreview.summary}` : `${formatNumber(counts.failed)} failed attempt${counts.failed === 1 ? '' : 's'} on this page.`}>
+            <DeliveryOperationPanel
+              titleId="notification-failed-title"
+              title="Failed deliveries"
+              description={batchPreview?.kind === 'failed' ? `Preview: ${batchPreview.summary}` : `${formatNumber(counts.failed)} failed attempt${counts.failed === 1 ? '' : 's'} on this page.`}
+              note={counts.failed > 0 && batchPreview?.kind !== 'failed' ? 'Preview retry of failed first.' : undefined}
+              noteId="notification-failed-reason"
+            >
               <Button size="sm" variant="secondary" loading={busy === 'batch-preview-failed'} disabled={busy !== '' || counts.failed === 0} onClick={() => void previewBatch('failed')}>Preview retry of failed</Button>
-              <Button size="sm" variant="secondary" loading={busy === 'batch-failed'} disabled={busy !== '' || counts.failed === 0 || batchPreview?.kind !== 'failed'} onClick={() => void runBatch('failed')}>Retry failed deliveries</Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === 'batch-failed'}
+                disabled={busy !== '' || counts.failed === 0 || batchPreview?.kind !== 'failed'}
+                aria-describedby={counts.failed > 0 && batchPreview?.kind !== 'failed' ? 'notification-failed-reason' : undefined}
+                onClick={() => void runBatch('failed')}
+              >Retry failed deliveries</Button>
             </DeliveryOperationPanel>
           </CardContent>
         </Card>
@@ -1489,11 +1528,11 @@ export function AuditPage({
           <form className="audit-filter-toolbar" role="search" aria-label="Audit filters" onSubmit={applyFilters} noValidate>
             <div className="audit-filter-fields">
               <label className="field">
-                <span>From ({viewerZone})</span>
+                <span title={`From (${viewerZone})`}>From ({viewerZone})</span>
                 <input type="date" value={draft.since} onChange={(event) => setDraft((current) => ({ ...current, since: event.target.value }))} max={draft.until || undefined} />
               </label>
               <label className="field">
-                <span>To ({viewerZone})</span>
+                <span title={`To (${viewerZone})`}>To ({viewerZone})</span>
                 <input type="date" value={draft.until} onChange={(event) => setDraft((current) => ({ ...current, until: event.target.value }))} min={draft.since || undefined} aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'audit-date-error' : undefined} />
               </label>
               <label className="field">
@@ -1503,7 +1542,7 @@ export function AuditPage({
               </label>
               <label className="field">
                 <span>Action</span>
-                <input list="audit-action-options" value={draft.action} onChange={(event) => setDraft((current) => ({ ...current, action: event.target.value }))} placeholder="Exact action, e.g. report.generated" autoComplete="off" spellCheck={false} />
+                <input list="audit-action-options" value={draft.action} onChange={(event) => setDraft((current) => ({ ...current, action: event.target.value }))} placeholder="e.g. report.generated" autoComplete="off" spellCheck={false} />
                 <datalist id="audit-action-options">{suggestions('action').map((value) => <option key={value} value={value} />)}</datalist>
               </label>
               <label className="field">
@@ -1638,7 +1677,7 @@ export function AuditPage({
               )}
               {listState.status === 'ready' && (cursorStack.length > 1 || listState.nextCursor) ? (
                 <nav className="cp-toolbar" aria-label="Audit pages">
-                  <span className="muted small">Page {formatNumber(pageNumber)} · {formatNumber(items.length)} events on this page · {totalText}</span>
+                  <span className="muted small">Page {formatNumber(pageNumber)} · {formatNumber(items.length)} {pluralize(items.length, 'event')} on this page · {totalText}</span>
                   <Button size="sm" variant="secondary" disabled={cursorStack.length <= 1} onClick={() => setCursorStack((current) => current.slice(0, -1))}>Newer</Button>
                   <Button size="sm" variant="secondary" disabled={!listState.nextCursor} onClick={() => setCursorStack((current) => [...current, listState.nextCursor])}>Older</Button>
                 </nav>
@@ -1701,8 +1740,7 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
   const missingFiltered = coverage.missing.filter((kind) => `${kind} ${plainCodeLabel(kind)}`.toLowerCase().includes(missingQuery.trim().toLowerCase()));
 
   const missingKindColumns: TableColumn<{ kind: string }>[] = [
-    { key: 'kind', label: 'Required kind', render: (item) => <span title={item.kind}>{plainCodeLabel(item.kind)}</span> },
-    { key: 'status', label: 'Inventory', render: () => <Badge tone="warn">No accepted record</Badge> }
+    { key: 'kind', label: 'Required kind', render: (item) => <span title={item.kind}>{plainCodeLabel(item.kind)}</span> }
   ];
   const columns: TableColumn<ReleaseRecordView>[] = [
     { key: 'kind', label: 'Kind', render: (record) => <span title={record.kind}>{plainCodeLabel(record.kind)}</span> },
@@ -1764,28 +1802,28 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
         <EmptyState icon={FileText} title="Release evidence access required." body="Owners, admins, SOC, and auditors can read release evidence. Your role cannot." />
       ) : (
         <>
-          <dl className="release-dimensions" aria-label="Release evidence dimensions">
-            <div>
-              <dt>Inventory</dt>
-              <dd>{formatNumber(coverage.recorded)} of {formatNumber(coverage.expected)}</dd>
-              <dd className="release-dimension-hint">required kinds have an accepted record · {formatNumber(coverage.missing.length)} missing</dd>
-            </div>
-            <div>
-              <dt>Contract validity</dt>
-              <dd>{formatNumber(acceptedValidKinds.size)} of {formatNumber(coverage.expected)}</dd>
-              <dd className="release-dimension-hint">{acceptedInvalid.length > 0 ? `${formatNumber(acceptedInvalid.length)} accepted record${acceptedInvalid.length === 1 ? ' fails' : 's fail'} validation` : 'kinds have a contract-valid accepted record'}</dd>
-            </div>
-            <div>
-              <dt>External signoff</dt>
-              <dd>{signoff ? formatGovernanceStatusLabel(signoff) : 'Not recorded'}</dd>
-              <dd className="release-dimension-hint">Operator attestation{attestation?.checked_at || attestation?.created_at ? ` checked ${formatDate(attestation?.checked_at ?? attestation?.created_at)}` : ', time not recorded'}</dd>
-            </div>
-            <div>
-              <dt>Profile</dt>
-              <dd>{getNestedString(attestation, ['profile'], 'Not recorded')}</dd>
-              <dd className="release-dimension-hint">Production-ready flag: {productionReadyLabel(attestation?.production_ready)}</dd>
-            </div>
-          </dl>
+          <div className="kpi-row" role="group" aria-label="Release evidence dimensions">
+            <KpiCell
+              label="Inventory"
+              value={`${formatNumber(coverage.recorded)} of ${formatNumber(coverage.expected)}`}
+              delta={`required kinds have an accepted record · ${formatNumber(coverage.missing.length)} missing`}
+            />
+            <KpiCell
+              label="Contract validity"
+              value={`${formatNumber(acceptedValidKinds.size)} of ${formatNumber(coverage.expected)}`}
+              delta={acceptedInvalid.length > 0 ? `${formatNumber(acceptedInvalid.length)} accepted record${acceptedInvalid.length === 1 ? ' fails' : 's fail'} validation` : 'kinds have a contract-valid accepted record'}
+            />
+            <KpiCell
+              label="External signoff"
+              value={signoff ? formatGovernanceStatusLabel(signoff) : 'Not recorded'}
+              delta={`Operator attestation${attestation?.checked_at || attestation?.created_at ? ` checked ${formatDate(attestation?.checked_at ?? attestation?.created_at)}` : ', time not recorded'}`}
+            />
+            <KpiCell
+              label="Profile"
+              value={formatGovernanceStatusLabel(getNestedString(attestation, ['profile'], ''), 'Not recorded')}
+              delta={`Production-ready flag: ${productionReadyLabel(attestation?.production_ready)}`}
+            />
+          </div>
           {clipboardNotice ? <GovernanceInfoBanner>{clipboardNotice}</GovernanceInfoBanner> : null}
           {data.loadErrors.releaseEvidence ? (
             <div className="form-banner error" role="alert">Release evidence could not be loaded: {data.loadErrors.releaseEvidence}. Missing kinds below are unknown, not confirmed missing.</div>
@@ -1877,7 +1915,7 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
               trailing={(
                 <div className="row-actions">
                   <Button size="sm" variant="secondary" onClick={copyGapLedgerSummary}>Copy gap summary</Button>
-                  <Button size="sm" variant="ghost" onClick={() => downloadJsonFile(`release-evidence-gap-ledger-${session.tenant_id ?? 'tenant'}.json`, gapLedgerTechnicalPayload())}>Download JSON</Button>
+                  <Button size="sm" variant="secondary" onClick={() => downloadJsonFile(`release-evidence-gap-ledger-${session.tenant_id ?? 'tenant'}.json`, gapLedgerTechnicalPayload())}>Download JSON</Button>
                 </div>
               )}
             />
@@ -2015,7 +2053,7 @@ export function SocConsolePage({
       label: 'State',
       render: (item) => {
         const state = getString(item, ['state']);
-        return <Badge tone={highScaleStateBadgeTone(state)}>{formatGovernanceStatusLabel(state, 'Unknown')}</Badge>;
+        return <Badge tone={highScaleStateTone(state)}>{formatGovernanceStatusLabel(state, 'Unknown')}</Badge>;
       }
     },
     { key: 'target', label: 'Domains', render: (item) => requestDomainDisplay(data, item) },
@@ -2153,16 +2191,23 @@ export function SocConsolePage({
   }
 
   const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
-  const killSwitchReason = getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop');
-  const scheduledCount = data.highScale.filter((item) => SOC_SCHEDULED_STATES.includes(normalizeHighScaleState(item))).length;
-  const inReviewCount = data.highScale.filter((item) => SOC_REVIEW_STATES.includes(normalizeHighScaleState(item))).length;
+  const killSwitchReason = getString(data.state?.kill_switch as DataItem, ['reason'], '');
   const runningCount = data.highScale.filter((item) => SOC_RUNNING_STATES.includes(normalizeHighScaleState(item))).length;
   const openFindingsCount = Number(data.state?.open_findings ?? data.findings.filter(isFindingOpen).length) || 0;
-  const goNoGoGates = buildSocGoNoGoGates(data.highScale, { killSwitchActive, runningCount, openFindings: openFindingsCount });
   const providerContactRows = buildProviderContactRows(data.highScale);
   const executionTimeline = buildSocExecutionTimeline(data.highScale);
   const crossTenantHighScale = staffSocSurface ? buildSocCrossTenantRows(socQueue.items) : [];
   const executionTenantMissing = staffSocSurface && !effectiveSocTenant;
+  const goNoGoGates = buildSocGoNoGoGates(data.highScale, {
+    killSwitchActive,
+    runningCount,
+    openFindings: openFindingsCount,
+    tenantSelected: !executionTenantMissing
+  });
+  const kpiStates = data.highScale.map(normalizeHighScaleState);
+  const scheduledCount = kpiStates.filter((state) => SOC_SCHEDULED_STATES.includes(state)).length;
+  const inReviewCount = kpiStates.filter((state) => SOC_REVIEW_STATES.includes(state)).length;
+  const crossTenantRequestCount = new Set(crossTenantHighScale.map((row) => row.id)).size;
   const activateKillSwitchReason = executionTenantMissing
     ? 'Select an execution tenant before activating the kill switch.'
     : killSwitchActive
@@ -2195,7 +2240,6 @@ export function SocConsolePage({
       <div className="content">
         <PageHeader
           route="internal-soc"
-          eyebrow={staffSocSurface ? 'Staff SOC execution plane' : 'SOC execution plane'}
         />
         <div className="stack-tight">
           <EmptyState
@@ -2220,9 +2264,8 @@ export function SocConsolePage({
     <div className="content">
       <PageHeader
         route="internal-soc"
-        eyebrow={staffSocSurface ? 'Staff SOC execution plane' : 'Tenant SOC execution plane'}
+        context={staffSocSurface ? 'Privileged staff plane' : 'SOC role'}
         description="Governed request review, authorization custody, provider coordination, bounded execution limits, and tenant emergency stop controls."
-        actions={staffSocSurface ? <Badge tone="warn">Privileged staff plane</Badge> : <Badge tone="muted">SOC role</Badge>}
       />
       {staffSocSurface ? (
         <Card>
@@ -2247,33 +2290,49 @@ export function SocConsolePage({
           </CardContent>
         </Card>
       ) : null}
-      <div className={killSwitchActive ? 'callout warn' : 'callout info'}>
-        {killSwitchActive ? <Siren size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
-        <span>
-          {killSwitchActive
-            ? 'Kill switch is active — new safe runs are blocked, active safe runs are cancelled, and governed high-scale execution is stopped for this tenant.'
-            : 'Kill switch is clear. Safe checks remain bounded; high-scale execution still requires accepted authorization, provider approval when required, and an approved schedule.'}
-        </span>
-      </div>
-      <div className="metric-grid four">
+      {executionTenantMissing ? (
+        <div className="callout">
+          <Info size={18} aria-hidden="true" />
+          <span>Select an execution tenant to read its kill-switch state.</span>
+        </div>
+      ) : (
+        <div className={killSwitchActive ? 'callout warn' : 'callout info'}>
+          {killSwitchActive ? <Siren size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
+          <span>
+            {killSwitchActive
+              ? 'Kill switch is active — new safe runs are blocked, active safe runs are cancelled, and governed high-scale execution is stopped for this tenant.'
+              : 'Kill switch is clear. Safe checks remain bounded; high-scale execution still requires accepted authorization, provider approval when required, and an approved schedule.'}
+          </span>
+        </div>
+      )}
+      <div className="kpi-row" role="group" aria-label="SOC console summary">
         {staffSocSurface ? (
-          <MetricCard label="Active tenants" value={formatNumber(activeTenantCount)} sub="with governed requests" icon={Users} tone={activeTenantCount > 0 ? 'info' : 'muted'} />
+          <KpiCell label="Active tenants" value={formatNumber(activeTenantCount)} delta="with governed requests" />
         ) : (
-          <MetricCard label="Queue" value={formatNumber(data.highScale.length)} sub="governed requests" icon={ShieldCheck} tone={data.highScale.length > 0 ? 'info' : 'muted'} />
+          <KpiCell label="Queue" value={formatNumber(data.highScale.length)} delta="governed requests" />
         )}
-        <MetricCard label="Scheduled" value={formatNumber(scheduledCount)} sub="approved or scheduled" icon={CalendarClock} tone={scheduledCount > 0 ? 'info' : 'muted'} />
-        <MetricCard label="In review" value={formatNumber(inReviewCount)} sub="awaiting SOC decision" icon={ClipboardList} tone={inReviewCount > 0 ? 'warn' : 'muted'} />
-        <MetricCard label="Kill switch" value={killSwitchActive ? 'Armed' : 'Clear'} sub="tenant emergency stop" icon={Siren} tone={killSwitchActive ? 'danger' : 'success'} />
+        <KpiCell label="Scheduled" value={executionTenantMissing ? '—' : formatNumber(scheduledCount)} delta={executionTenantMissing ? 'Select a tenant' : 'approved or scheduled'} />
+        <KpiCell label="In review" value={executionTenantMissing ? '—' : formatNumber(inReviewCount)} delta={executionTenantMissing ? 'Select a tenant' : 'awaiting SOC decision'} tone={!executionTenantMissing && inReviewCount > 0 ? 'warn' : 'muted'} />
+        {executionTenantMissing ? (
+          <KpiCell label="Kill switch" value="—" delta="Select a tenant" tone="muted" />
+        ) : (
+          <KpiCell label="Kill switch" value={killSwitchActive ? 'Armed' : 'Clear'} delta="tenant emergency stop" tone={killSwitchActive ? 'danger' : 'success'} />
+        )}
       </div>
       <PageContextSummary>
         {staffSocSurface ? (
           <>
-            Cross-tenant <span className="tabular-nums">{formatNumber(crossTenantHighScale.length)}</span> governed requests across{' '}
-            <span className="tabular-nums">{formatNumber(activeTenantCount)}</span> tenants ·{' '}
+            Cross-tenant <span className="tabular-nums">{formatNumber(crossTenantRequestCount)}</span> governed {pluralize(crossTenantRequestCount, 'request')} across{' '}
+            <span className="tabular-nums">{formatNumber(activeTenantCount)}</span> {pluralize(activeTenantCount, 'tenant')}
+            {executionTenantMissing ? null : ' · '}
           </>
         ) : null}
-        Queue <span className="tabular-nums">{formatNumber(data.highScale.length)}</span> governed requests ·{' '}
-        <span className="tabular-nums">{formatNumber(openFindingsCount)}</span> open findings
+        {executionTenantMissing ? null : (
+          <>
+            Queue <span className="tabular-nums">{formatNumber(data.highScale.length)}</span> governed {pluralize(data.highScale.length, 'request')} ·{' '}
+            <span className="tabular-nums">{formatNumber(openFindingsCount)}</span> open {pluralize(openFindingsCount, 'finding')}
+          </>
+        )}
       </PageContextSummary>
       <GovernanceFeedbackBanner message={message} error={error} />
       <div className="dash-grid">
@@ -2285,9 +2344,11 @@ export function SocConsolePage({
           <CardContent className="stack-tight">
             <div className="kv-list">
               <KvField label="Status">
-                <Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Armed' : 'Clear'}</Badge>
+                {executionTenantMissing
+                  ? <Badge tone="muted">Tenant not selected</Badge>
+                  : <Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Armed' : 'Clear'}</Badge>}
               </KvField>
-              <KvField label="Reason">{killSwitchReason}</KvField>
+              <KvField label="Reason">{killSwitchReason && !executionTenantMissing ? killSwitchReason : <span className="muted">Not recorded</span>}</KvField>
             </div>
             <div className="row-actions">
               <Button
@@ -2311,7 +2372,9 @@ export function SocConsolePage({
             </div>
             {(activateKillSwitchReason || clearKillSwitchReason) ? (
               <p className="muted text-xs" id="kill-switch-disabled-reason">
-                {killSwitchActive ? activateKillSwitchReason : clearKillSwitchReason}
+                {executionTenantMissing
+                  ? 'Select an execution tenant before activating or clearing the kill switch.'
+                  : killSwitchActive ? activateKillSwitchReason : clearKillSwitchReason}
               </p>
             ) : null}
             <details className="disclosure">
@@ -2375,7 +2438,9 @@ export function SocConsolePage({
             empty={queueRefreshing ? (
               <TableQueueSkeleton />
             ) : (
-              <EmptyState icon={ShieldCheck} title="No high-scale requests." body="Customer requests appear here after intake and authorization-pack review." />
+              executionTenantMissing
+                ? <EmptyState icon={ShieldCheck} title="Select a tenant to load its queue." body="The high-scale queue for a tenant loads after you choose one above." />
+                : <EmptyState icon={ShieldCheck} title="No high-scale requests." body="Customer requests appear here after intake and authorization-pack review." />
             )}
           />
         </CardContent>
@@ -2388,7 +2453,9 @@ export function SocConsolePage({
           </CardHeader>
           <CardContent>
             {executionTimeline.length === 0 ? (
-              <EmptyState icon={Activity} title="No execution timeline yet." body="Lifecycle events appear after SOC approval, scheduling, or execution actions." />
+              executionTenantMissing
+                ? <EmptyState icon={Activity} title="Select a tenant to load its timeline." body="Execution events for a tenant load after you choose one above." />
+                : <EmptyState icon={Activity} title="No execution timeline yet." body="Lifecycle events appear after SOC approval, scheduling, or execution actions." />
             ) : (
               <div className="timeline-list">
                 {executionTimeline.map((event, index) => (
@@ -2414,7 +2481,9 @@ export function SocConsolePage({
               columns={providerContactColumns}
               items={providerContactRows}
               getRowId={(item) => item.id}
-              empty={<EmptyState icon={Users} title="No provider or emergency contacts." body="Contacts appear after authorization-pack intake declares provider and emergency contacts." />}
+              empty={executionTenantMissing
+                ? <EmptyState icon={Users} title="Select a tenant to load its contacts." body="Provider contacts for a tenant load after you choose one above." />
+                : <EmptyState icon={Users} title="No provider or emergency contacts." body="Contacts appear after authorization-pack intake declares provider and emergency contacts." />}
             />
           </CardContent>
         </Card>

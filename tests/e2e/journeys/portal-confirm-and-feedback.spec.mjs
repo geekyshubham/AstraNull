@@ -152,7 +152,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
       .toBeGreaterThan(readsBefore);
     const connectorTable = page.locator('table').filter({ hasText: 'Last successful sync' }).first();
     await expect(connectorTable).toBeVisible();
-    await expect(connectorTable.getByRole('columnheader', { name: 'Last attempt' })).toBeVisible();
+    await expect(connectorTable.getByRole('columnheader', { name: 'Last successful sync' })).toBeVisible();
   });
 
   test('cold deep-link into a role-gated route keeps the route when the role is already stored', async ({ page }) => {

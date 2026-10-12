@@ -33,9 +33,9 @@ type SelectProps = {
   error?: string;
 };
 
-function SelectOptionCopy({ label: optionLabel, description }: { label: string; description?: string }) {
+function SelectOptionCopy({ label: optionLabel, description, id }: { label: string; description?: string; id?: string }) {
   return (
-    <span className="select-copy">
+    <span className="select-copy" id={id}>
       <strong>{optionLabel}</strong>
       {description ? <small>{description}</small> : null}
     </span>
@@ -51,11 +51,13 @@ export function Select({ label, name, value, options, onChange, className, disab
   const menuRef = useRef<HTMLSpanElement>(null);
   const listId = useId();
   const labelId = useId();
+  const valueId = useId();
   const hintId = useId();
   const errorId = useId();
   const errorText = error?.trim() ?? '';
   const hintText = hint?.trim() ?? '';
   const describedBy = [errorText ? errorId : null, hintText ? hintId : null].filter(Boolean).join(' ') || undefined;
+  const triggerDescribedBy = [valueId, describedBy].filter(Boolean).join(' ');
   const selected = options.find((option) => option.value === value) ?? options[0];
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === selected?.value));
 
@@ -234,13 +236,13 @@ export function Select({ label, name, value, options, onChange, className, disab
           aria-controls={listId}
           aria-expanded={open}
           aria-haspopup="listbox"
-          aria-describedby={describedBy}
+          aria-describedby={triggerDescribedBy}
           aria-invalid={errorText ? true : undefined}
           disabled={disabled}
           onClick={toggleOpen}
           onKeyDown={onTriggerKeyDown}
         >
-          <SelectOptionCopy label={selected?.label ?? ''} description={selected?.description} />
+          <SelectOptionCopy id={valueId} label={selected?.label ?? ''} description={selected?.description} />
           <ChevronDown className="select-chevron" size={16} aria-hidden="true" />
         </button>
         <span

@@ -48,7 +48,7 @@
 
 .refined .rf-status-group {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
 }
@@ -84,9 +84,9 @@
 
 .refined .rf-status-chip[aria-pressed='true'] {
   border-color: var(--border-strong);
-  background: var(--surface-raised);
+  background: var(--wash-strong);
   color: var(--fg);
-  box-shadow: var(--elev-ring);
+  font-weight: 500;
 }
 
 .refined .rf-load-more {
@@ -101,19 +101,33 @@
 }
 
 .refined .rf-filter-grid {
-  display: grid;
-  grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(140px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
-  align-items: end;
+  align-items: flex-end;
   min-width: 0;
 }
 
 .refined .rf-filter-grid > * {
+  flex: 1 1 160px;
   min-width: 0;
 }
 
-.refined .rf-search {
+.refined .rf-filter-grid .field {
   margin: 0;
+}
+
+.refined .rf-filter-grid .field > span:first-child {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--meta);
+}
+
+.refined .rf-filter-grid > .rf-search {
+  flex: 2 1 260px;
 }
 
 .refined .rf-search-control {
@@ -124,6 +138,7 @@
 .refined .rf-search-control .input {
   width: 100%;
   padding-left: calc(var(--space-3) + 20px);
+  text-overflow: ellipsis;
 }
 
 .refined .rf-search-icon {
@@ -219,6 +234,10 @@
   color: var(--muted);
 }
 
+.refined .rf-findings-table .badge {
+  min-width: max-content;
+}
+
 .refined .rf-findings-table .badge svg {
   flex: none;
 }
@@ -256,19 +275,41 @@
   font-size: var(--text-sm);
 }
 
-@media (max-width: 1100px) {
-  .refined .rf-filter-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* Six stats never split 4 + 2 or 5 + 1: three even columns wherever six do not fit. */
+@media (max-width: 1100px) and (min-width: 641px), (min-width: 1121px) and (max-width: 1340px) {
+  .refined .rf-summary-strip.rf-findings-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .refined .rf-search {
-    grid-column: 1 / -1;
+  .refined .rf-summary-strip.rf-findings-summary .rf-stat:nth-child(3n + 1) {
+    border-left: 0;
+  }
+
+  .refined .rf-summary-strip.rf-findings-summary .rf-stat:nth-child(n + 4) {
+    border-top: 1px solid var(--border-soft);
+  }
+}
+
+@media (max-width: 1100px) and (min-width: 641px) {
+  .refined .rf-filter-grid > *,
+  .refined .rf-filter-grid > .rf-search {
+    flex: 1 1 calc(50% - var(--space-3) / 2);
   }
 }
 
 @media (max-width: 640px) {
-  .refined .rf-filter-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .refined .rf-status-group {
+    flex-wrap: wrap;
+    flex-basis: 100%;
+  }
+
+  .refined .rf-status-group-label {
+    flex-basis: 100%;
+  }
+
+  .refined .rf-filter-grid > *,
+  .refined .rf-filter-grid > .rf-search {
+    flex-basis: 100%;
   }
 
   .refined .rf-status-tabs {

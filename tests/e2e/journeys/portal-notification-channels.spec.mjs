@@ -47,6 +47,13 @@ function tiles(panel) {
   return panel.getByRole('list', { name: 'Available notification channels' });
 }
 
+/** @param {import('@playwright/test').Locator} panel */
+async function expectNoChannelsConnected(panel) {
+  await expect(panel.locator('.nc-loading')).toHaveCount(0);
+  await expect(tiles(panel).getByText('Not configured')).toHaveCount(4);
+  await expect(panel.locator('table')).toHaveCount(0);
+}
+
 /** @param {import('@playwright/test').Page} page */
 function connectDialog(page) {
   return page.locator('dialog.form-modal[open]').filter({ has: page.getByRole('heading', { name: 'Connect Slack' }) });
@@ -103,13 +110,13 @@ test.describe('notification channels panel', () => {
         await injectPortalDevHeadersSession(page);
         const panel = await openIntegrations(page);
 
-        await expect(panel.getByText('No channels connected yet')).toBeVisible();
+        await expectNoChannelsConnected(panel);
         await expect(tiles(panel).getByRole('button', { name: 'Connect Slack', exact: true })).toBeEnabled();
 
         await connectSlackThroughDialog(page, panel);
         await expect(panel.getByRole('status').filter({ hasText: 'Slack connected (' })).toBeVisible();
         await expect(panel.getByRole('button', { name: 'Add another Slack channel' })).toBeVisible();
-        await expect(panel.getByText('No channels connected yet')).toHaveCount(0);
+        await expect(tiles(panel).getByText('Not configured')).toHaveCount(3);
         // Only the redacted preview reaches the browser.
         await expect(panel).not.toContainText('testtoken000000');
 
@@ -132,7 +139,7 @@ test.describe('notification channels panel', () => {
         await confirm.getByRole('button', { name: 'Remove channel' }).click();
         await expect(confirm).toHaveCount(0);
         await expect(panel.getByRole('status').filter({ hasText: 'Slack channel removed. Its delivery history is kept.' })).toBeVisible();
-        await expect(panel.getByText('No channels connected yet')).toBeVisible();
+        await expectNoChannelsConnected(panel);
 
         expect(pageErrors).toEqual([]);
       });
@@ -202,7 +209,7 @@ test.describe('notification channels panel', () => {
     // Escape closes the native dialog without creating anything.
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
-    await expect(panel.getByText('No channels connected yet')).toBeVisible();
+    await expectNoChannelsConnected(panel);
   });
 
   test('a failed channel load shows an error with Retry that recovers', async ({ page }) => {
@@ -222,13 +229,13 @@ test.describe('notification channels panel', () => {
     failGets = false;
     await loadError.getByRole('button', { name: 'Retry' }).click();
     await expect(loadError).toHaveCount(0);
-    await expect(panel.getByText('No channels connected yet')).toBeVisible();
+    await expectNoChannelsConnected(panel);
   });
 
   test('auditor can read channels but every write control is disabled', async ({ page }) => {
     await injectPortalDevHeadersSession(page, PORTAL_AUDITOR_SESSION);
     const panel = await openIntegrations(page);
-    await expect(panel.getByText('No channels connected yet')).toBeVisible();
+    await expectNoChannelsConnected(panel);
     for (const label of ['Connect Slack', 'Connect Microsoft Teams', 'Connect Email', 'Connect Webhook']) {
       await expect(tiles(panel).getByRole('button', { name: label, exact: true })).toBeDisabled();
     }
@@ -262,7 +269,7 @@ test.describe('notification channels panel', () => {
       });
 
       const panel = await openIntegrations(page);
-      await expect(panel.getByText('No channels connected yet')).toBeVisible();
+      await expectNoChannelsConnected(panel);
 
       // Older request: a manual refresh that stays in flight.
       holdNextGet = true;
@@ -278,7 +285,7 @@ test.describe('notification channels panel', () => {
       releaseHeld?.();
       await page.waitForTimeout(400);
       await expect(panel.getByRole('button', { name: 'Add another Slack channel' })).toBeVisible();
-      await expect(panel.getByText('No channels connected yet')).toHaveCount(0);
+      await expect(tiles(panel).getByText('Not configured')).toHaveCount(3);
       await expect(panel.locator('.table-load-error')).toHaveCount(0);
       await expect(panel.getByRole('button', { name: 'Refresh notification channels' })).toBeEnabled();
     });

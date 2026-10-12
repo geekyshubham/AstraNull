@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronRight,
   Circle,
   CircleDashed,
   CircleDot,
@@ -35,6 +36,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Reveal } from '../components/ui/motion';
 import { Select } from '../components/ui/select';
 import { BrandMark } from '../components/layout/brand';
+import { useScrollEdges } from '../lib/scroll-edges';
 import './public-landing.css';
 
 type BadgeTone = NonNullable<BadgeProps['tone']>;
@@ -431,7 +433,8 @@ function PublicShell({
   showAccountNav?: boolean;
   showEyebrow?: boolean;
 }) {
-  const loginVariant = activeNav === 'login' || !signupEnabled ? 'default' : 'ghost';
+  const loginVariant = activeNav === 'login' ? 'ghost' : 'secondary';
+  const signupVariant = activeNav === 'signup' ? 'ghost' : 'secondary';
   return (
     <div className="public-app">
       <a className="skip-link" href="#public-main">Skip to main content</a>
@@ -455,7 +458,7 @@ function PublicShell({
               {signupEnabled ? (
                 <AnchorButton
                   href="/signup"
-                  variant={activeNav === 'login' ? 'secondary' : 'default'}
+                  variant={signupVariant}
                   size="sm"
                   aria-current={activeNav === 'signup' ? 'page' : undefined}
                 >
@@ -485,7 +488,7 @@ function AuthPageLayout({
 }) {
   return (
     <main id="public-main" className={`auth-page public-auth-split${wide ? ' auth-page--wide' : ''}`}>
-      <aside className="auth-aside">{aside}</aside>
+      <div className="auth-aside">{aside}</div>
       <section className="auth-panel">
         {children}
         {footer ? <footer className="auth-footer">{footer}</footer> : null}
@@ -644,7 +647,18 @@ function LifecycleMarker({ status }: { status: LifecycleStageStatus }) {
   if (status === 'complete') return <Check size={14} aria-hidden="true" />;
   if (status === 'current') return <CircleDot size={14} aria-hidden="true" />;
   if (status === 'untracked') return <CircleDashed size={14} aria-hidden="true" />;
-  return <Circle size={14} aria-hidden="true" />;
+  return null;
+}
+
+function SignupNextSteps({ placement }: { placement: 'aside' | 'inline' }) {
+  const headingId = `signup-next-heading-${placement}`;
+  return (
+    <section className={`public-next-steps public-next-steps--${placement}`} aria-labelledby={headingId}>
+      <h2 id={headingId}>What happens after you submit</h2>
+      <p className="public-help-line">Each step is recorded. Check progress any time with your request ID.</p>
+      <SignupLifecycle stages={SIGNUP_PREVIEW_STAGES} label="Request steps" />
+    </section>
+  );
 }
 
 function SignupLifecycle({ stages, label }: { stages: LifecycleStage[]; label: string }) {
@@ -854,10 +868,6 @@ function ValidationFlowSection() {
         <Reveal className="public-flow-intro">
           <h2 id="how-heading">How a check works.</h2>
           <p className="public-section-lead">Four steps, in this order. Each one records what the next is allowed to rely on.</p>
-          <details className="public-technical">
-            <summary>Fields in every verdict record</summary>
-            <VerdictRecordFields />
-          </details>
         </Reveal>
         <ol className="public-flow">
           {LANDING_FLOW.map((step, index) => (
@@ -870,8 +880,31 @@ function ValidationFlowSection() {
             </Reveal>
           ))}
         </ol>
+        <Reveal className="public-flow-technical">
+          <details className="public-technical">
+            <summary>Fields in every verdict record</summary>
+            <VerdictRecordFields />
+          </details>
+        </Reveal>
       </div>
     </section>
+  );
+}
+
+function CompareRegion({ children }: { children: React.ReactNode }) {
+  const { setScrollNode, edges } = useScrollEdges<HTMLDivElement>();
+  return (
+    <div className="public-compare-frame" data-scroll-edges={edges}>
+      <div
+        ref={setScrollNode}
+        className="public-compare"
+        tabIndex={0}
+        role="region"
+        aria-label="AstraNull capability comparison, scrollable"
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -884,7 +917,6 @@ function BoundariesSection() {
       <ul className="public-ledger">
         {LANDING_BOUNDARIES.map(({ label, title, body }) => (
           <li key={label}>
-            <span className="public-ledger-label">{label}</span>
             <h3>{title}</h3>
             <p>{body}</p>
           </li>
@@ -914,7 +946,6 @@ export function PublicLandingPage({ config }: PublicPageProps) {
         <section className="public-hero" aria-labelledby="public-hero-heading">
           <div className="public-hero-grid">
             <div className="public-hero-copy">
-              <p className="public-kicker">No-access-first DDoS readiness validation</p>
               <h1 id="public-hero-heading">Prove DDoS readiness without handing over your cloud keys.</h1>
               <p className="public-hero-lead">AstraNull checks customer-declared targets from outside your network, with no required cloud credentials and no automatic IP inventory discovery. Prove ownership, run bounded checks and keep the evidence behind every result.</p>
               <div className="public-actions">
@@ -945,12 +976,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
             <h2 id="compare-heading">Compare the operating model.</h2>
             <p className="public-section-lead">Where scope comes from, what access is needed, and what a result actually covers.</p>
           </div>
-          <div
-            className="public-compare table-wrap"
-            tabIndex={0}
-            role="region"
-            aria-label="AstraNull capability comparison, scrollable"
-          >
+          <CompareRegion>
             <table>
               <thead>
                 <tr>
@@ -971,7 +997,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </CompareRegion>
         </Reveal>
 
         <Reveal as="section" className="public-cta-final" aria-labelledby="cta-heading">
@@ -1149,7 +1175,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   }, [error]);
 
   const lead = isDevHeaders
-    ? 'Local developer mode. Pick an identity and role to preview the customer portal.'
+    ? 'Pick an identity and role to preview the customer portal.'
     : passwordLane
       ? 'Use your work email and AstraNull password. We never ask for your cloud credentials.'
       : config.bundledLoginEnabled
@@ -1421,7 +1447,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
         {isDevHeaders ? (
           <label htmlFor="login-tenant-id">
             <span>Workspace</span>
-            <input id="login-tenant-id" value="ten_demo" readOnly aria-readonly="true" />
+            <input id="login-tenant-id" className="mono" value="ten_demo" readOnly aria-readonly="true" />
           </label>
         ) : null}
         {showStagingRolePicker ? (
@@ -1467,7 +1493,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
             open={stagingBypass}
             onToggle={(event) => setStagingBypass((event.currentTarget as HTMLDetailsElement).open)}
           >
-            <summary>Staging role bypass</summary>
+            <summary><ChevronRight className="auth-bypass-chevron" size={14} aria-hidden="true" />Staging role bypass</summary>
             <p className="auth-field-help">
               <TriangleAlert size={14} aria-hidden="true" />
               Non-production only. This exchange mints a session from a self-selected role and
@@ -1543,7 +1569,7 @@ function RequestPasswordResetPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
+    <PublicShell showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthTaskLayout
         title="Reset your password"
         lead="Enter your work email. For privacy, the response is the same whether or not an account exists."
@@ -1980,7 +2006,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
+    <PublicShell showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthTaskLayout
         title={done ? 'Password changed' : 'Choose a new password'}
         lead={done ? undefined : 'Changing your password signs out existing password sessions and closes open recovery links.'}
@@ -2168,7 +2194,7 @@ export function SetPasswordPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
+    <PublicShell showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthTaskLayout
         title={done ? 'Password set' : 'Set your password'}
         lead={done ? undefined : 'Your invitation lets you set a password once. Your role and workspace come from the invitation, not this form.'}
@@ -2634,13 +2660,13 @@ export function SignupPage({ config }: PublicPageProps) {
               <li><ShieldCheck size={16} aria-hidden="true" />No cloud credentials, agents or IP discovery are needed.</li>
               <li><LockKeyhole size={16} aria-hidden="true" />Submitting does not create an account or grant a plan.</li>
             </ul>
+            {!submitted && signupEnabled && !hydrating ? <SignupNextSteps placement="aside" /> : null}
           </>
         )}
         footer={(
-          <p>
-            Already have access? <a href={config.loginUrl}>Log in</a>
-            {' · '}
-            <a href="/signup-status">Check request status</a>
+          <p className="auth-footer-groups">
+            <span className="auth-footer-pair">Already have access? <a href={config.loginUrl}>Log in</a></span>
+            <span className="auth-footer-pair"><a href="/signup-status">Check request status</a></span>
           </p>
         )}
       >
@@ -2653,13 +2679,7 @@ export function SignupPage({ config }: PublicPageProps) {
           </CardHeader>
           <CardContent>{content}</CardContent>
         </Card>
-        {!submitted && signupEnabled && !hydrating ? (
-          <section className="public-next-steps" aria-labelledby="signup-next-heading">
-            <h2 id="signup-next-heading">What happens after you submit</h2>
-            <p className="public-help-line">Each step is recorded. Check progress any time with your request ID.</p>
-            <SignupLifecycle stages={SIGNUP_PREVIEW_STAGES} label="Request steps" />
-          </section>
-        ) : null}
+        {!submitted && signupEnabled && !hydrating ? <SignupNextSteps placement="inline" /> : null}
         {submitted ? <LostReferenceHelp contact={contact} /> : null}
       </AuthPageLayout>
     </PublicShell>
@@ -2767,7 +2787,7 @@ export function SignupStatusPage({ config }: Partial<PublicPageProps> = {}) {
   const fieldError = lookupError && (lookupError.kind === 'empty' || lookupError.kind === 'not_found') ? lookupError.message : '';
 
   return (
-    <PublicShell showEyebrow={false} loginHref={loginUrl} signupEnabled={false}>
+    <PublicShell showEyebrow={false} loginHref={loginUrl} signupEnabled={siteConfig !== null && siteConfig.signup_enabled !== false}>
       <AuthTaskLayout
         title="Check an access request"
         lead="Enter the request ID from your confirmation. You do not need an account to check status."
@@ -2801,7 +2821,7 @@ export function SignupStatusPage({ config }: Partial<PublicPageProps> = {}) {
                   aria-invalid={fieldError ? true : undefined}
                   aria-describedby={describedBy('signup-status-request-id-help', fieldError && 'signup-status-request-id-error')}
                 />
-                <span className="auth-field-help" id="signup-status-request-id-help">Starts with sgn_. Letters are case-sensitive; spaces are ignored.</span>
+                <span className="auth-field-help" id="signup-status-request-id-help">Starts with <code>sgn_</code>. Letters are case-sensitive; spaces are ignored.</span>
                 <FieldError id="signup-status-request-id-error" message={fieldError} />
               </label>
               {lookupError && !fieldError ? (
@@ -2974,9 +2994,11 @@ function AuthCardHeader({
 }) {
   return (
     <CardHeader className="auth-card-header">
-      {badge}
       <div className="auth-card-heading">
-        <CardTitle>{title}</CardTitle>
+        <div className="auth-card-title-row">
+          <CardTitle>{title}</CardTitle>
+          {badge}
+        </div>
         <CardDescription>{description}</CardDescription>
       </div>
     </CardHeader>
@@ -3017,7 +3039,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   const cardDescription = authUnknown
     ? 'Staff sign-in configuration is unavailable right now.'
     : isDevHeaders
-      ? 'Developer validation mode: continue with staff dev headers (no password required).'
+      ? 'Continue with a staff identity and role for local validation.'
       : config.bundledLoginEnabled
         ? 'Bundled staging login mints a short-lived staff bearer session for this environment.'
         : idpRedirect
@@ -3081,20 +3103,25 @@ export function StaffLoginPage({ config }: PublicPageProps) {
             <h1 className="auth-title">Staff sign-in.</h1>
             <p className="auth-lead">
               {isDevHeaders
-                ? 'Local developer validation uses staff headers to preview internal RBAC without a password.'
+                ? 'Pick a staff identity and role to preview the internal control plane.'
                 : 'Review signup intake, tenant lifecycle, entitlement grants, approval queues, and internal audit from the staff-only control plane.'}
             </p>
-            <p className="auth-field-help" role="note">
+            <p className="auth-aside-note" role="note">
               Customer accounts do not grant access to this surface. Provisioning and approval actions are written to the internal audit log.
             </p>
           </>
         )}
         footer={<p><a href="/">Back to public site</a></p>}
       >
+        {isDevHeaders && !authUnknown ? (
+          <PublicNotice tone="warn" role="note" title="Developer mode: no password is checked.">
+            <p>Staff identity and role come from this form. Production deployments never show it.</p>
+          </PublicNotice>
+        ) : null}
         <Card className="auth-card">
           <AuthCardHeader
-            badge={<Badge tone="warn">Staff plane</Badge>}
-            title="Staff sign-in"
+            badge={<Badge tone="muted">Staff plane</Badge>}
+            title="Sign in with a staff identity"
             description={cardDescription}
           />
           <CardContent>
@@ -3118,6 +3145,9 @@ export function StaffLoginPage({ config }: PublicPageProps) {
                   <span>Staff ID</span>
                   <input
                     id="staff-login-id"
+                    className="mono"
+                    autoCapitalize="none"
+                    spellCheck={false}
                     value={staffId}
                     onChange={(event) => setStaffId(event.target.value)}
                     autoComplete="username"

@@ -2,16 +2,21 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--surface);
-  margin-top: var(--space-4);
-  margin-bottom: var(--space-4);
+  margin: 0;
 }
 
 .finding-history-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
+}
+
+.finding-history-card .card-header > .finding-history-head {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
 }
 
 .finding-history-title-wrap {
@@ -21,7 +26,7 @@
 }
 
 .finding-history-icon {
-  color: var(--accent);
+  color: var(--fg-2);
   margin-top: 3px;
   flex-shrink: 0;
 }
@@ -29,17 +34,16 @@
 .finding-history-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--space-3);
+  gap: 0 var(--space-4);
   margin: 0;
   margin-bottom: var(--space-5);
   padding: 0;
 }
 
 .finding-history-metric {
-  padding: var(--space-3);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--surface), var(--fg) 2%);
+  min-width: 0;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-soft);
 }
 
 .finding-history-metric dt {
@@ -121,9 +125,8 @@
 }
 
 .finding-history-dot.is-latest {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 80%);
+  border-color: var(--fg);
+  background: var(--fg);
 }
 
 .finding-history-line {
@@ -137,18 +140,15 @@
 .finding-history-entry-content {
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in oklab, var(--surface), var(--fg) 1.5%);
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-3) 0 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
 }
 
 .finding-history-entry.is-current .finding-history-entry-content {
-  border-color: color-mix(in oklab, var(--accent), transparent 60%);
-  background: color-mix(in oklab, var(--surface), var(--accent) 3%);
+  border-color: var(--border-strong);
 }
 
 .finding-history-entry-head {
@@ -173,16 +173,6 @@
   font-weight: 500;
 }
 
-.finding-current-pill {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  background: color-mix(in oklab, var(--accent), transparent 86%);
-  border: 1px solid color-mix(in oklab, var(--accent), transparent 65%);
-  padding: 1px 7px;
-  border-radius: var(--radius-full, 999px);
-}
 
 .finding-history-entry-actions {
   display: flex;
@@ -193,7 +183,7 @@
 .finding-history-entry-details {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: 0 var(--space-4);
   flex-wrap: wrap;
   font-size: var(--text-xs);
   color: var(--muted);
@@ -255,6 +245,15 @@
   color: var(--fg-2);
 }
 
+@media (max-width: 1100px) {
+  .finding-history-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .finding-history-entry-actions > .btn-ghost:first-child {
+    margin-inline-start: calc(-1 * (var(--space-4) + 1px));
+  }
+}
+
 @media (max-width: 720px) {
   .finding-history-metrics {
     grid-template-columns: minmax(0, 1fr);
@@ -262,5 +261,25 @@
   .finding-history-entry-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+/* The dot centres on the entry head row: hairline + content padding + half the 34px head. */
+.finding-history-dot {
+  margin-top: calc(1px + var(--space-3) + 12px);
+}
+
+.finding-history-entry-head {
+  flex-wrap: nowrap;
+}
+
+.finding-history-entry-chips {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (pointer: coarse) {
+  .finding-history-dot {
+    margin-top: calc(1px + var(--space-3) + 17px);
   }
 }

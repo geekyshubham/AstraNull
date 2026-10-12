@@ -60,9 +60,9 @@ import {
   roadmapTierMeta,
   roadmapTotalItems
 } from '../lib/waf-helpers';
-import { cn, formatDate, formatRunDuration, pluralize, scoreTone } from '../lib/utils';
+import { cn, formatDate, formatRunDuration, pluralize, scoreTone, tailTruncateId } from '../lib/utils';
 import { useTransitionKey } from '../lib/motion';
-import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
+import { runStatusTone as runStatusBadgeTone, verdictTone } from '../lib/status-tone';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 import { useDesignVariant } from '../lib/design-variant';
@@ -197,11 +197,9 @@ function formatCheckBoundLabel(check: DataItem) {
 
 function catalogVerdictBadgeTone(verdict: string): BadgeTone {
   const key = verdict.trim().toLowerCase();
-  if (['pass', 'passed', 'protected', 'ready', 'success', 'ok'].includes(key)) return 'success';
-  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable', 'penetrated', 'edge_exposed'].includes(key)) return 'danger';
-  if (['review', 'partial', 'inconclusive', 'warn', 'warning', 'medium'].includes(key)) return 'warn';
   if (key === 'request') return 'muted';
-  return verdictBadgeTone(verdict);
+  if (key === 'medium') return 'warn';
+  return verdictTone(verdict);
 }
 
 function formatRunStatusLabel(status: string) {
@@ -220,22 +218,8 @@ function formatRunStatusLabel(status: string) {
 
 type BadgeTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 
-function verdictBadgeTone(verdict: string): BadgeTone {
-  const normalized = verdict.toLowerCase();
-  if (normalized === 'pass' || normalized === 'ready') return 'success';
-  if (normalized === 'fail' || normalized === 'failed') return 'danger';
-  if (normalized === 'partial' || normalized === 'inconclusive') return 'warn';
-  if (normalized === 'pending' || normalized === '—' || !normalized) return 'muted';
-  return 'info';
-}
 
-function findingStatusBadgeTone(status: string): BadgeTone {
-  const normalized = status.toLowerCase();
-  if (normalized === 'open') return 'warn';
-  if (normalized === 'closed' || normalized === 'resolved') return 'success';
-  if (normalized === 'accepted_risk') return 'info';
-  return 'muted';
-}
+
 
 function formatFindingStatusLabel(status: string) {
   const labels: Record<string, string> = {
@@ -362,6 +346,9 @@ function ensureFunctionalSurfaceStyles() {
 .catalog-check-primary small, .catalog-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }
 .validation-catalog-table .data-table { min-width: 1040px; }
 .validation-runs-table .data-table { min-width: 1180px; }
+.validation-runs-table td code.traffic-path-label { display: block; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.validation-runs-table td code.run-id-label { max-width: none; overflow: visible; text-overflow: clip; }
+.validation-runs-page .catalog-filter-grid .field > span:first-child { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--meta); }
 @media (max-width: 900px) { .catalog-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .catalog-search-field { grid-column: 1 / -1; } }
 @media (max-width: 620px) { .catalog-filter-grid { grid-template-columns: minmax(0, 1fr); } .catalog-search-field { grid-column: auto; } }
 `;
@@ -1050,7 +1037,6 @@ export function ValidationSurfacePage({
       <div className="content validation-catalog-page">
         <PageHeader
           route="checks"
-          eyebrow="Validation catalog"
           title="Checks"
           description="Every bounded customer-runnable check and governed scenario, with execution class, evidence tier, expected behavior, and latest result."
           actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>}
@@ -1108,7 +1094,7 @@ export function ValidationSurfacePage({
           const scanId = getString(item, ['scan_id'], '');
           return (
             <span className="catalog-cell-stack">
-              <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
+              <code className="traffic-path-label run-id-label" title={getString(item, ['id'])}>{tailTruncateId(getString(item, ['id']))}</code>
               {scanId ? (
                 <a className="scan-link small" href={buildDetailHref('scan-detail', scanId)} aria-label={`Open parent scan ${scanId}`} onClick={(event) => event.stopPropagation()}>Scan</a>
               ) : null}
@@ -1175,7 +1161,7 @@ export function ValidationSurfacePage({
           const verdictRecord = getNestedItem(item, ['verdict']);
           const rawConfidence = getNumber(verdictRecord ?? {}, ['confidence_pct', 'confidence'], -1);
           const confidence = rawConfidence < 0 ? '' : rawConfidence <= 1 ? `${Math.round(rawConfidence * 100)}% confidence` : `${Math.round(rawConfidence)}% confidence`;
-          return <span className="catalog-cell-stack"><Badge tone={verdictBadgeTone(verdict)} title="Evidence-backed run verdict">{plainVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
+          return <span className="catalog-cell-stack"><Badge tone={verdictTone(verdict)} title="Evidence-backed run verdict">{plainVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
         }
       },
       {
@@ -1375,7 +1361,6 @@ export function ValidationSurfacePage({
       <div className="content validation-runs-page">
         <PageHeader
           route="runs"
-          eyebrow="Validation history"
           title="Test runs"
           description="Review safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
           actions={(
@@ -1423,6 +1408,7 @@ export function ValidationSurfacePage({
               className="validation-runs-table"
               columns={runColumns}
               items={filteredRuns}
+              maxHeight="70vh"
               getRowProps={getRunRowProps}
               empty={runsEmptyState}
               loadError={data.loadErrors.runs}
@@ -1459,7 +1445,6 @@ export function ValidationSurfacePage({
       <div className="content validation-findings-page">
         <PageHeader
           route="findings"
-          eyebrow="Triage & remediate"
           title="Findings"
           description="Every finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path."
           actions={(

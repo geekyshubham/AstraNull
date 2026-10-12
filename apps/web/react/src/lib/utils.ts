@@ -204,3 +204,8 @@ export function triggerTextDownload(filename: string, content: string, mime: str
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+/** Shared run-id prefixes make head truncation ambiguous, so long ids keep their distinguishing tail. */
+export function tailTruncateId(id: string, keep = 30) {
+  return id.length > keep + 2 ? `…${id.slice(-keep)}` : id;
+}

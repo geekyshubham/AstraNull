@@ -5,6 +5,7 @@ import { useAnimatedArc } from '../ui/motion';
 type ReadinessGaugeProps = {
   score: number;
   label?: string;
+  showBand?: boolean;
 };
 
 const GAUGE_TRACK_STROKE = 'color-mix(in oklab, var(--fg), transparent 91%)';
@@ -17,7 +18,7 @@ const GAUGE_FILL_STROKE = {
 
 const GAUGE_RADIUS = 52;
 
-export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugeProps) {
+export function ReadinessGauge({ score, label = 'Readiness', showBand = true }: ReadinessGaugeProps) {
   const normalized = clamp(score);
   // One tween drives both the arc sweep and the numeral, so they can never
   // disagree mid-flight.
@@ -40,7 +41,7 @@ export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugePro
           strokeDasharray={dash}
           strokeDashoffset={offset}
         />
-        <text className="gauge-score" x="70" y="66" textAnchor="middle" fill="var(--fg)" aria-hidden="true">
+        <text className="gauge-score" x="70" y="70" textAnchor="middle" fill="var(--fg)" aria-hidden="true">
           {Math.round(swept)}
           <tspan className="gauge-label" dx="4">/ 100</tspan>
         </text>
@@ -48,7 +49,7 @@ export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugePro
           {label}
         </text>
       </svg>
-      <Badge tone={tone}>{normalized >= 80 ? 'Ready' : normalized >= 55 ? 'Needs work' : 'At risk'}</Badge>
+      {showBand ? <Badge tone={tone}>{normalized >= 80 ? 'Ready' : normalized >= 55 ? 'Needs work' : 'At risk'}</Badge> : null}
     </div>
   );
 }

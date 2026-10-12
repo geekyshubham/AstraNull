@@ -8,6 +8,8 @@ import {
 // @ts-ignore Plain ESM keeps terminology directly testable with node:test.
 import { plainCodeLabel, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { formatDate } from '../../lib/utils';
+import { useScrollEdges } from '../../lib/scroll-edges';
+import './runs-components.css';
 
 const VERDICT_TRUTH_ROWS = [
   ...TRUTH_TABLE_ROWS,
@@ -34,10 +36,12 @@ export function ExplanationField({
   label,
   value,
   fullWidth = false,
+  mono = false,
 }: {
   label: string;
   value: string;
   fullWidth?: boolean;
+  mono?: boolean;
 }) {
   const display = value || '—';
   return (
@@ -46,7 +50,7 @@ export function ExplanationField({
       {isDenseProofValue(display) ? (
         <pre className="code verdict-explanation-value">{display}</pre>
       ) : (
-        <span className="verdict-explanation-value">{display}</span>
+        <span className={`verdict-explanation-value${mono ? ' mono' : ''}`}>{display}</span>
       )}
     </div>
   );
@@ -78,7 +82,7 @@ export function TrafficPathPanel({
 
   return (
     <section className="traffic-path" aria-label="Recorded run evidence">
-      <h3>Recorded evidence</h3>
+      <h3 className="run-proof-heading">Recorded evidence</h3>
       <div className="traffic-path-track">
         <div className="traffic-path-hop">
           <div className={`traffic-path-node traffic-path-node--${signedProbeCount > 0 ? 'ok' : 'muted'}`}>
@@ -137,35 +141,40 @@ export function VerdictExplanationPanel({
 
 export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
   const current = normalizeVerdictKey(getNestedString(detail, ['verdict', 'verdict'], '').toLowerCase());
+  const { setScrollNode, edges } = useScrollEdges<HTMLDivElement>();
 
   return (
-    <section className="truth-table-viz" tabIndex={0} role="region" aria-labelledby="truth-table-heading">
-      <h3 id="truth-table-heading">Verdict truth table</h3>
+    <section className="truth-table-panel">
+      <h3 id="truth-table-heading" className="run-proof-heading">Verdict truth table</h3>
       {!current ? <p className="muted text-sm">No final verdict is recorded; no outcome is selected.</p> : null}
-      <table className="truth-table data-table text-sm">
-        <caption className="sr-only">Evidence meaning for each supported run verdict</caption>
-        <thead>
-          <tr>
-            <th scope="col">Outcome</th>
-            <th scope="col">Evidence meaning</th>
-          </tr>
-        </thead>
-        <tbody>
-          {VERDICT_TRUTH_ROWS.map((row) => {
-            const isCurrent = current === row.key;
-            return (
-              <tr key={row.key} className={isCurrent ? 'truth-row truth-row--active' : 'truth-row'} aria-current={isCurrent ? 'true' : undefined}>
-                <td>
-                  <span className={`truth-outcome truth-outcome--${row.key}`}>{plainVerdictLabel(row.key)}</span>
-                  <code className="truth-key">{row.key}</code>
-                  {isCurrent ? <span className="muted text-xs"> · current</span> : null}
-                </td>
-                <td>{row.description}</td>
+      <div className="table-scroller" data-scroll-x={edges}>
+        <div ref={setScrollNode} className="truth-table-viz" tabIndex={0} role="region" aria-labelledby="truth-table-heading">
+          <table className="truth-table data-table text-sm">
+            <caption className="sr-only">Evidence meaning for each supported run verdict</caption>
+            <thead>
+              <tr>
+                <th scope="col">Outcome</th>
+                <th scope="col">Evidence meaning</th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {VERDICT_TRUTH_ROWS.map((row) => {
+                const isCurrent = current === row.key;
+                return (
+                  <tr key={row.key} className={isCurrent ? 'truth-row truth-row--active' : 'truth-row'} aria-current={isCurrent ? 'true' : undefined}>
+                    <td>
+                      <span className={`truth-outcome truth-outcome--${row.key}`}>{plainVerdictLabel(row.key)}</span>
+                      <code className="truth-key">{row.key}</code>
+                      {isCurrent ? <span className="muted text-xs"> · current</span> : null}
+                    </td>
+                    <td>{row.description}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   );
 }

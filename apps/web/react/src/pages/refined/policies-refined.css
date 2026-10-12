@@ -74,7 +74,7 @@
 .refined.rf-policies .rf-cell-title {
   color: var(--fg);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .refined.rf-policies .rf-cell-meta {
@@ -84,7 +84,7 @@
   gap: var(--space-1);
   color: var(--muted);
   font-size: var(--text-xs);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .refined.rf-policies .rf-cell-meta svg {
@@ -444,11 +444,6 @@
     width: 100%;
   }
 
-  .refined.rf-policies .rf-segmented button {
-    flex: 1 1 auto;
-    justify-content: center;
-  }
-
   .refined.rf-policies .rf-form-footer .form-actions {
     width: 100%;
   }
@@ -531,24 +526,34 @@
   .refined.rf-policies .rf-panel-flush td:nth-child(2) .rf-cell { min-width: 18ch; }
 }
 @media (max-width: 700px) {
-  .refined.rf-policies .rf-segmented { flex-wrap: wrap; }
   .refined.rf-policies .rf-dispatch-reason { max-width: none; }
   .refined.rf-policies .rf-schedule-actions,
   .refined.rf-policies .row-actions.rf-schedule-actions { flex-wrap: wrap; }
 }
-.refined.rf-policies .rf-check-link,
-.refined.rf-policies .rf-target-link { overflow-wrap: normal; word-break: normal; }
-.refined.rf-policies .rf-cell .rf-mono.rf-cell-meta { overflow-wrap: normal; word-break: keep-all; white-space: nowrap; }
+@media (min-width: 701px) {
+  .refined.rf-policies .rf-check-link,
+  .refined.rf-policies .rf-target-link { overflow-wrap: normal; word-break: normal; }
+  .refined.rf-policies .rf-cell .rf-mono.rf-cell-meta { overflow-wrap: normal; word-break: keep-all; white-space: nowrap; }
+}
 .refined.rf-policies .rf-cell-meta.rf-next-run,
 .refined.rf-policies .rf-cell-meta.rf-next-blocked { flex-wrap: nowrap; align-items: flex-start; }
 .refined.rf-policies .rf-next-run svg,
 .refined.rf-policies .rf-next-blocked svg { margin-top: 3px; }
 .refined.rf-policies .rf-next-run > span,
 .refined.rf-policies .rf-next-blocked > span { flex: 1 1 auto; }
-.refined.rf-policies .rf-schedule-actions,
-.refined.rf-policies .row-actions.rf-schedule-actions { flex-wrap: nowrap; }
+@media (min-width: 701px) {
+  .refined.rf-policies .rf-schedule-actions,
+  .refined.rf-policies .row-actions.rf-schedule-actions { flex-wrap: nowrap; }
+}
 
 @media (pointer: coarse) {
+  .refined.rf-policies .rf-cell-meta:has(> a) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--space-1);
+  }
+
   .refined.rf-policies td a,
   .refined.rf-policies .rf-cell-meta a { display: inline-flex; align-items: center; min-height: 44px; }
 }

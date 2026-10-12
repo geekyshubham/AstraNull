@@ -6,7 +6,7 @@ import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID } from '../../lib/navigation';
 import { canAccessRoute } from '../../lib/route-access';
 import type { NavItem, PortalData, RouteId, Session } from '../../lib/types';
 import { cn } from '../../lib/utils';
-import { Button } from '../ui/button';
+import { AnchorButton, Button } from '../ui/button';
 import { RouteTransition } from '../ui/motion';
 import { Select } from '../ui/select';
 import { Brand } from './brand';
@@ -64,14 +64,29 @@ function ShellIconButton({ label, onClick, className, variant = 'ghost', buttonR
   );
 }
 
+const NAV_PARENT_ROUTE: Partial<Record<string, RouteId>> = {
+  'target-detail': 'targets',
+  'scan-detail': 'targets',
+  'check-detail': 'checks',
+  'policy-detail': 'test-policies',
+  'finding-detail': 'findings',
+  'finding-group-detail': 'findings',
+  'evidence-detail': 'findings',
+  'report-detail': 'reports',
+  'tenant-detail': 'admin',
+  'queue-detail': 'internal-soc'
+};
+
 function NavLink({
   item,
   active,
+  current = 'page',
   onClick,
   buttonRef
 }: {
   item: NavItem;
   active: boolean;
+  current?: 'page' | 'true';
   onClick: () => void;
   buttonRef?: Ref<HTMLButtonElement>;
 }) {
@@ -83,7 +98,7 @@ function NavLink({
       className={cn('nav-item', active && 'active', active && 'is-active')}
       onClick={onClick}
       aria-label={item.label}
-      aria-current={active ? 'page' : undefined}
+      aria-current={active ? current : undefined}
       title={item.label}
     >
       <Icon size={16} aria-hidden="true" focusable="false" />
@@ -137,6 +152,8 @@ export function AppShell({
     ? { id: 'not-found', label: 'Not found', group: 'overview' as const }
     : ROUTE_BY_ID.get(route) ?? NAV_ITEMS[0];
   const tenantId = session.tenant_id ?? data.state?.tenant_id ?? 'unknown';
+  const isStaffPrincipal = session.principal === 'staff';
+  const activeNavId = NAV_PARENT_ROUTE[route] ?? route;
   const environment = (data.state as { environment?: string } | null)?.environment ?? '';
   const visibleNavItems = useMemo(() => {
     const role = session.role ?? 'admin';
@@ -286,6 +303,7 @@ export function AppShell({
     } else {
       document.documentElement.removeAttribute('data-theme');
     }
+    document.getElementById('theme-color-meta')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
     try {
       localStorage.setItem('astranull.theme', next);
     } catch {
@@ -346,8 +364,9 @@ export function AppShell({
                 <NavLink
                   key={item.id}
                   item={item}
-                  active={item.id === route}
-                  buttonRef={item.id === route ? activeNavRef : undefined}
+                  active={item.id === activeNavId}
+                  current={item.id === route ? 'page' : 'true'}
+                  buttonRef={item.id === activeNavId ? activeNavRef : undefined}
                   onClick={() => navigate(item.id)}
                 />
               ))}
@@ -355,11 +374,17 @@ export function AppShell({
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span>
-            <b>{tenantId}</b>
-            {environment ? <> · {environment}</> : null}
-          </span>
-          <span>Outside-in validation</span>
+          {isStaffPrincipal ? (
+            <span>Staff session</span>
+          ) : (
+            <>
+              <span>
+                <b>{tenantId}</b>
+                {environment ? <> · {environment}</> : null}
+              </span>
+              <span>Outside-in validation</span>
+            </>
+          )}
           {showRoleSwitcher ? (
             <Select
               label="Role (dev)"
@@ -370,9 +395,9 @@ export function AppShell({
             />
           ) : null}
           <div className="sidebar-foot-actions">
-            <a href="/" aria-label="Public site">
+            <AnchorButton href="/" variant="ghost" size="sm">
               Public site
-            </a>
+            </AnchorButton>
             <Button type="button" variant="ghost" size="sm" onClick={logout}>
               Sign out
             </Button>

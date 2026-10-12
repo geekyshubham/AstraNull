@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Layers, Plus } from 'lucide-react';
 import {
   archiveEntryPath,
   createEntryPath,
@@ -17,6 +17,7 @@ import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../.
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { EmptyState } from '../../ui/empty-state';
 import { EntryPathForm, type EntryPathReview } from './entry-path-form';
 import { PathComparisonPanel } from './path-comparison';
 import {
@@ -115,6 +116,8 @@ export function DeclaredEntryPaths({
   const referencedActive = referenced.filter((path) => path.status === 'active');
   const unsupported = paths.state === 'failed' && (paths.failure.state === 'unsupported' || paths.failure.state === 'disabled');
   const sameFailure = paths.state === 'failed' && matrix.state === 'failed' && paths.failure.state === matrix.failure.state;
+  const matrixWithoutEvidence = matrix.state === 'ready' && !matrix.value.paths.length && active.length < 2;
+  const showMatrix = !unsupported && !sameFailure && !matrixWithoutEvidence;
   const manageable = paths.state === 'ready';
 
   useEffect(() => {
@@ -184,8 +187,8 @@ export function DeclaredEntryPaths({
             {active.map((path) => <EntryPathCard key={path.id} path={path} canArchive={canWrite} onArchive={() => { setError(''); setReview({ kind: 'archive', path }); }} />)}
           </ul>
         ) : (
-          <div className="pv-notice" data-state="empty">
-            <span>No entry path is declared for this application yet. Declare the primary route first, then each alternate hostname, service or login URL, origin or fallback route you want validated.</span>
+          <div data-state="empty">
+            <EmptyState className="pv-empty" icon={Layers} title="No entry path is declared for this application yet." body="Declare the primary route first, then each alternate hostname, service or login URL, origin or fallback route you want validated." />
           </div>
         )
       ) : null}
@@ -213,7 +216,7 @@ export function DeclaredEntryPaths({
         </div>
       ) : null}
 
-      {!unsupported && !sameFailure ? (
+      {showMatrix ? (
         <section className="pv-section" aria-labelledby="pv-matrix-title">
           <header className="td-section-head">
             <div>
@@ -224,7 +227,9 @@ export function DeclaredEntryPaths({
           </header>
           {matrix.state === 'loading' ? <div className="skeleton skeleton-row" aria-label="Loading path evidence" /> : null}
           {matrix.state === 'failed' ? <FailureNotice failure={matrix.failure} subject="path evidence" onRetry={() => setReload((value) => value + 1)} /> : null}
-          {matrix.state === 'ready' && !matrix.value.paths.length ? <p className="td-muted">No path evidence yet. Declare paths, then plan a comparison to collect it.</p> : null}
+          {matrix.state === 'ready' && !matrix.value.paths.length ? (
+            <EmptyState className="pv-empty" icon={Layers} title="No path evidence yet." body="Plan a comparison to collect evidence for each declared path and layer." />
+          ) : null}
           {matrix.state === 'ready' && matrix.value.paths.length ? (
             <ProtectionMatrixTable
               matrix={matrix.value}

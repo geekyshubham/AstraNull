@@ -58,6 +58,7 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
+        minify: true,
         assetFileNames: (assetInfo) => {
           if (assetInfo.name?.endsWith('.css')) return 'react-app.css';
           return 'react-[name][extname]';

@@ -13,6 +13,7 @@ import { plainCodeLabel } from '../../lib/plain-language.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate, formatNumber } from '../../lib/utils';
+import { highScaleStateTone } from '../../lib/status-tone';
 
 // Customer-safe boundary invariants:
 // buildDetailHref('queue-detail'
@@ -107,14 +108,6 @@ function providerApprovalDisplay(item: DataItem): { label: string; detail: strin
   return { label: pending.replace(/_/g, ' '), detail: providers || 'Provider approval is not yet accepted', tone: 'warn' };
 }
 
-function stateBadgeTone(state: string): 'success' | 'warn' | 'danger' | 'info' | 'muted' {
-  const normalized = state.trim().toLowerCase();
-  if (['approved', 'scheduled'].includes(normalized)) return 'info';
-  if (['running', 'executing', 'active', 'started'].includes(normalized)) return 'danger';
-  if (['submitted', 'soc_review', 'under_review'].includes(normalized)) return 'warn';
-  if (['closed', 'completed', 'cancelled', 'canceled'].includes(normalized)) return 'success';
-  return 'muted';
-}
 
 export type RunsSocGateProps = {
   data: PortalData;
@@ -202,7 +195,7 @@ export function RunsSocGatePanel({
       label: 'State',
       render: (item) => {
         const state = getString(item, ['state']);
-        return <Badge tone={stateBadgeTone(state)} title={`Recorded request state: ${plainCodeLabel(state)}`}>{plainCodeLabel(state)}</Badge>;
+        return <Badge tone={highScaleStateTone(state)} title={`Recorded request state: ${plainCodeLabel(state)}`}>{plainCodeLabel(state)}</Badge>;
       }
     },
     {

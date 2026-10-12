@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
-import { ArrowLeft, Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
+import { Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { FindingDetectionHistory } from '../components/findings/finding-detection-history';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
@@ -38,6 +38,10 @@ import '../components/findings/findings-groups.css';
 import { ConfirmModal, useConfirmModal } from '../lib/crud-ui';
 import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
 import { getRouteParam, replaceRouteParams } from '../lib/route-params';
+import { findingStatusTone } from '../lib/status-tone';
+import { severityTone } from '../lib/severity-tone';
+import { FindingStatusBadge } from './refined/findings-refined';
+import { DetailBackLink } from '../components/layout/detail-back-link';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -48,25 +52,34 @@ const findingDetailStyles = `
 .finding-detail-page .finding-title-copy { min-width: 0; }
 .finding-detail-page .finding-title-copy .page-title,
 .finding-detail-page .finding-id { overflow-wrap: anywhere; word-break: break-word; }
-.finding-detail-page .finding-summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: 0; }
-.finding-detail-page .finding-summary-fact { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 2%); }
+.finding-detail-page .finding-summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 var(--space-4); margin: 0; }
+.finding-detail-page .finding-summary-fact { min-width: 0; padding: var(--space-3) 0; border-top: 1px solid var(--border-soft); }
 .finding-detail-page .finding-summary-fact dt { margin-bottom: var(--space-1); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
 .finding-detail-page .finding-summary-fact dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; word-break: break-word; }
 .finding-detail-page .finding-relations { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); }
+.finding-detail-page .finding-relations .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: start; }
 .finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }
-.finding-detail-page .finding-digest { display: inline-block; min-width: 0; max-width: 42ch; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+.finding-detail-page .data-table .mono.finding-digest { display: inline-block; min-width: 32ch; max-width: 42ch; overflow-wrap: anywhere; white-space: normal; }
+.finding-detail-page .entity-cell-stack { min-width: 160px; }
 .finding-detail-page .finding-artifact-row { cursor: pointer; }
 .finding-detail-page .finding-summary-fact dd small { display: block; margin-top: 2px; color: var(--fg-2); }
-.finding-detail-page .finding-lineage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }
-.finding-detail-page .finding-lineage-item { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.finding-detail-page .finding-lineage { display: grid; margin-top: var(--space-4); }
+.finding-detail-page .finding-lineage-item { display: grid; align-content: start; gap: var(--space-1); min-width: 0; padding: var(--space-3) 0; border-top: 1px solid var(--border-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .finding-detail-page .finding-lineage-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
 .finding-detail-page .rule-assets-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }
 .finding-detail-page .finding-lineage-runs { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .finding-detail-page .finding-lineage-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .finding-detail-page .finding-custody-card .code { max-width: 100%; white-space: pre; }
+@media (max-width: 1100px) {
+  .finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 720px) {
   .finding-detail-page .finding-summary-facts,
   .finding-detail-page .finding-decision-ladder { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .finding-detail-page .product-form--compact .row-actions.action-bar-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: start; align-items: stretch; }
+  .finding-detail-page .product-form--compact .row-actions.action-bar-compact .btn { width: 100%; }
 }
 `;
 
@@ -93,22 +106,6 @@ function buildFindingDecisionSteps(status: string, owner: string, remState: stri
     { id: 'remediation', label: 'Remediation linked', done: remediationTracked, meta: remediationTracked ? formatFindingLabel(remState, 'Playbook linked') : 'No playbook or progressed remediation state.' },
     { id: 'decision', label: 'Decision recorded', done: decisionRecorded, meta: decisionRecorded ? formatFindingLabel(status) : 'Accept risk or close after review.' },
   ];
-}
-
-function findingSeverityTone(value: string): StatTone {
-  const key = value.trim().toLowerCase();
-  if (['critical', 'high', 's1', 's2'].includes(key)) return 'danger';
-  if (['medium', 'moderate', 's3'].includes(key)) return 'warn';
-  if (['low', 'info', 's4'].includes(key)) return 'info';
-  return 'muted';
-}
-
-function findingStatusTone(value: string): StatTone {
-  const key = value.trim().toLowerCase();
-  if (key === 'closed') return 'success';
-  if (key === 'accepted_risk') return 'muted';
-  if (key === 'open') return 'warn';
-  return 'info';
 }
 
 function formatFindingLabel(value: string, fallback = 'Not reported') {
@@ -149,11 +146,11 @@ function remStateTone(remStateClass: string, remState: string): StatTone {
   if (cls.includes('warn')) return 'warn';
   if (cls.includes('success')) return 'success';
   if (cls.includes('muted')) return 'muted';
-  if (cls.includes('info')) return 'info';
+  if (cls.includes('info')) return 'muted';
   const state = remState.trim().toLowerCase();
   if (['resolved', 'delivered'].includes(state)) return 'success';
   if (state === 'accepted_risk') return 'muted';
-  if (state === 'in_progress') return 'info';
+  if (state === 'in_progress') return 'warn';
   if (['open', 'remediation_pending'].includes(state)) return 'warn';
   return 'default';
 }
@@ -240,6 +237,7 @@ export function FindingDetailView({
   const findingStatus = readFindingStatus(entity);
   const owner = getString(entity, ['assignee', 'rem_owner'], 'unassigned');
   const targetId = getString(entity, ['target_id'], '');
+  const targetDisplay = targetId ? (getString(data.targets?.find((t) => t.id === targetId), ['value', 'hostname'], '') || getString(entity, ['target_hostname', 'target_value'], targetId)) : '';
   const testRunId = getString(entity, ['test_run_id'], '');
   const checkId = getString(entity, ['check_id'], '');
   const vectorFamily = getString(entity, ['vector_family', 'vector'], '');
@@ -421,12 +419,11 @@ export function FindingDetailView({
     {
       key: 'target',
       label: 'Target',
-      render: (item) => <AnchorButton
-        size="sm"
-        variant="ghost"
+      render: (item) => <a
+        className="detail-entity-link"
         href={buildDetailHref('target-detail', getString(item, ['id'], ''))}
         aria-label={`Open target ${getString(item, ['value', 'id'], 'target')}`}
-      >{getString(item, ['value', 'id'], '')}</AnchorButton>
+      >{getString(item, ['value', 'id'], '')}</a>
     },
     { key: 'kind', label: 'Kind', render: (item) => plainCodeLabel(getString(item, ['kind'], ''), 'Not reported') },
     { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], 'Not reported')}</span> },
@@ -480,7 +477,7 @@ export function FindingDetailView({
       label: 'Severity',
       render: (item) => {
         const value = getString(item, ['severity'], 'unknown');
-        return <Badge tone={findingSeverityTone(value)}>{formatSeverityLabel(value)}</Badge>;
+        return <Badge tone={severityTone(value)}>{formatSeverityLabel(value)}</Badge>;
       }
     },
     {
@@ -577,18 +574,17 @@ export function FindingDetailView({
 
   return (
     <div className="content finding-detail-page" aria-busy={loading || undefined}>
+      <DetailBackLink route="finding-detail" />
       <div className="page-head">
         <div className="finding-title-copy">
-          <p className="eyebrow">Evidence-backed finding</p>
           <h1 className="page-title">{title}</h1>
           <p className="muted mono finding-id">{entityId}</p>
           <div className="detail-status-line">
-            <Badge tone={findingSeverityTone(severity)} title={`Recorded severity: ${formatSeverityLabel(severity)}`}>{formatSeverityLabel(severity)}</Badge>
-            <Badge tone={findingStatusTone(findingStatus)} title={`Recorded status: ${formatFindingLabel(findingStatus)}`}>{formatFindingLabel(findingStatus)}</Badge>
+            <Badge tone={severityTone(severity)} title={`Recorded severity: ${formatSeverityLabel(severity)}`}>{formatSeverityLabel(severity)}</Badge>
+            <FindingStatusBadge status={findingStatus} title={`Recorded status: ${formatFindingLabel(findingStatus)}`} />
           </div>
         </div>
         <div className="row-actions">
-          <AnchorButton size="sm" variant="ghost" href="#findings"><ArrowLeft size={14} aria-hidden="true" />Findings</AnchorButton>
           <Button size="sm" variant="default" data-focus-key="finding-view-evidence" onClick={inspectOriginal}><Eye size={14} aria-hidden="true" />View original evidence</Button>
         </div>
       </div>
@@ -613,9 +609,11 @@ export function FindingDetailView({
             {entity.created_at ? <div className="finding-summary-fact"><dt>Opened</dt><dd>{formatDate(entity.created_at)}</dd></div> : null}
             {entity.updated_at ? <div className="finding-summary-fact"><dt>Updated</dt><dd>{formatDate(entity.updated_at)}</dd></div> : null}
           </dl>
-          <div className="finding-relations" aria-label="Finding relationships">
-            {targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', targetId)}>Target</AnchorButton> : null}
-          </div>
+          {targetId ? (
+            <div className="finding-relations">
+              <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', targetId)}>Open target {targetDisplay}</AnchorButton>
+            </div>
+          ) : null}
           <section className="finding-lineage" aria-label="Original evidence and later results">
             <div className="finding-lineage-item">
               <span className="finding-lineage-label">Original evidence</span>
@@ -674,11 +672,6 @@ export function FindingDetailView({
         <Card>
           <CardHeader>
             <CardTitle>Verdict explanation</CardTitle>
-            <CardDescription className="detail-status-line">
-              <Badge tone={findingSeverityTone(severity)} title={`Recorded severity: ${formatSeverityLabel(severity)}`}>{formatSeverityLabel(severity)}</Badge>
-              <span className="detail-status-sep" aria-hidden="true">·</span>
-              <Badge tone={findingStatusTone(findingStatus)} title={`Recorded status: ${formatFindingLabel(findingStatus)}`}>{formatFindingLabel(findingStatus)}</Badge>
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <FindingExplanationPanel finding={entity} config={config} session={session} />
@@ -701,10 +694,11 @@ export function FindingDetailView({
                 );
               })}
             </ol>
-            <div className="kv-list">
-              <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
-              <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
-            </div>
+            {canWriteFinding ? null : (
+              <div className="kv-list">
+                <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'Unassigned')}</strong></div>
+              </div>
+            )}
             {canWriteFinding ? (
             <form className="product-form product-form--compact" onSubmit={(event) => {
               event.preventDefault();
@@ -788,7 +782,7 @@ export function FindingDetailView({
         entity={entity}
         entityId={entityId}
         targetId={targetId}
-        targetDisplay={targetId ? (getString(data.targets?.find((t) => t.id === targetId), ['value', 'hostname'], '') || getString(entity, ['target_hostname', 'target_value'], targetId)) : ''}
+        targetDisplay={targetDisplay}
         checkId={checkId}
         checks={data.checks}
         dataFindings={data.findings}
@@ -979,7 +973,7 @@ export function FindingDetailView({
               />
             </>
           ) : (
-            <EmptyState icon={FileCheck2} title="No evidence artifacts." body={plainEmptyReason(getString(evidence.meta, ['empty_reason'], 'Evidence bundle contains no artifacts for this finding.'))} />
+            <EmptyState icon={FileCheck2} title="No evidence artifacts" body={plainEmptyReason(getString(evidence.meta, ['empty_reason'], 'Evidence bundle contains no artifacts for this finding.'))} />
           )}
         </CardContent>
       </Card>

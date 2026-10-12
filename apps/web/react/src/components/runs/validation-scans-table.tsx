@@ -20,8 +20,9 @@ import {
   scopeLabel,
 } from '../../lib/validation-scan.mjs';
 import { Badge } from '../ui/badge';
-import { AnchorButton, Button } from '../ui/button';
+import { Button } from '../ui/button';
 import { DataTable, type TableColumn } from '../ui/table';
+import './runs-components.css';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -201,18 +202,20 @@ export function ValidationScansTable({
       key: 'actions',
       label: 'Actions',
       render: (scan) => {
-        const id = getString(scan, ['id']);
         const name = scanDisplayName(scan);
+        const editable = canManage && isScanEditable(scan);
+        const cancellable = canManage && isScanCancellable(scan);
+        const reschedulable = canManage && isScanTerminal(scan) && !scan.recurrence;
+        if (!editable && !cancellable && !reschedulable) return <span className="muted small">No actions</span>;
         return (
           <div className="row-end-actions">
-            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('scan-detail', id)} aria-label={`Open scan ${name}`}>Open</AnchorButton>
-            {canManage && isScanEditable(scan) ? (
+            {editable ? (
               <Button size="sm" variant="ghost" aria-label={`Edit scan ${name}`} onClick={() => onEdit(scan)}>Edit</Button>
             ) : null}
-            {canManage && isScanCancellable(scan) ? (
+            {cancellable ? (
               <Button size="sm" variant="danger" aria-label={`Cancel scan ${name}`} onClick={() => setCancelling(scan)}>Cancel</Button>
             ) : null}
-            {canManage && isScanTerminal(scan) && !scan.recurrence ? (
+            {reschedulable ? (
               <Button size="sm" variant="ghost" aria-label={`Schedule scan ${name} again`} onClick={() => onReschedule(scan)}>Schedule again</Button>
             ) : null}
           </div>

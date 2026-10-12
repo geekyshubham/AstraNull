@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
-import { Activity, Bot, ClipboardList, FileCheck2, FileText, Network, ShieldCheck, Siren, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
+import { Activity, Bot, ChevronRight, CircleDashed, ClipboardList, FileCheck2, FileText, Info, Network, ShieldCheck, Siren, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
@@ -28,7 +28,7 @@ import {
 } from './refined/policies-refined';
 import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatDate, formatDurationSeconds, formatNumber, formatSeverityLabel, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
+import { formatDate, formatDurationSeconds, formatNumber, formatSeverityLabel, pluralize, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
 import { hasEvidenceBackedVerdict } from '../lib/run-verdict';
 import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
 import { useFindingPages } from '../components/findings/use-server-findings';
@@ -51,11 +51,15 @@ import {
 } from '../lib/high-scale';
 import { routeTabs } from '../lib/prototype-manifest';
 import { ReadinessGauge } from '../components/charts/readiness-gauge';
-import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
+import { artifactReviewTone, findingStatusTone, highScaleStateTone, reportStatusTone, runStatusTone as runStatusBadgeTone, statusKey, subscriptionStatusTone, tenantLifecycleTone, verdictTone } from '../lib/status-tone';
+import { severityTone } from '../lib/severity-tone';
 import {
   CustomerPageStyles,
+  KpiCell,
   MetricCard,
   PageContextSummary,
+  PageTitle,
+  RecordedKvRow,
   REPORT_FORMAT_FALLBACK_OPTIONS,
   ReportExportMenu,
   ReportExportResult,
@@ -67,8 +71,10 @@ import {
 import { effectivePolicyTargetKind, isPolicyTargetCompatible } from '../lib/policy-targets';
 import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
+import './detail-pages.css';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { DetailBackLink, type DetailListLink } from '../components/layout/detail-back-link';
 
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
@@ -228,7 +234,7 @@ type AuthorizationArtifactDraft = {
 
 function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown }> }) {
   if (items.length === 0) {
-    return <p className="muted">No timeline milestones recorded for this entity.</p>;
+    return <EmptyState icon={Activity} title="No timeline milestones recorded." body="Milestones appear here as this record moves through its lifecycle." />;
   }
   return (
     <div className="timeline-list">
@@ -245,22 +251,11 @@ function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown }
   );
 }
 
-const DETAIL_GROUP_LABELS: Record<string, string> = {
-  scope: 'Scope',
-  validation: 'Validation',
-  posture: 'Posture',
-  governance: 'Governance',
-  staff: 'Staff'
-};
-
 type StatusBadgeTone = NonNullable<BadgeProps['tone']>;
 
 const DETAIL_SKELETON_KV_ROWS = 6;
 const DETAIL_SKELETON_TAB_COUNT = 4;
 
-function normalizeStatusKey(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, '_');
-}
 
 function formatStatusLabel(value: string, fallback = '—') {
   const trimmed = value.trim();
@@ -271,43 +266,21 @@ function formatStatusLabel(value: string, fallback = '—') {
 
 
 
-function verdictBadgeTone(verdict: string): StatusBadgeTone {
-  const key = normalizeStatusKey(verdict);
-  if (key === 'pass') return 'success';
-  if (['fail', 'failed', 'gap', 'edge_exposed', 'bypassable', 'penetrated', 'exposed', 'unprotected'].includes(key)) return 'danger';
-  if (key === 'inconclusive') return 'warn';
-  return 'info';
-}
 
-function findingSeverityBadgeTone(severity: string): StatusBadgeTone {
-  const key = normalizeStatusKey(severity);
-  if (['critical', 'high'].includes(key)) return 'danger';
-  if (['medium', 'moderate'].includes(key)) return 'warn';
-  if (['low', 'info'].includes(key)) return 'info';
-  return 'muted';
-}
 
-function findingStatusBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (key === 'closed') return 'success';
-  if (key === 'accepted_risk') return 'muted';
-  if (key === 'open') return 'warn';
-  return 'info';
-}
 
 function discoveryEntityStateBadgeTone(state: string): StatusBadgeTone {
-  const key = normalizeStatusKey(state);
+  const key = statusKey(state);
   if (['approved', 'active', 'entity', 'imported'].includes(key)) return 'success';
   if (key === 'rejected') return 'danger';
   return 'warn';
 }
 
 function signupRequestStateTone(state: string): StatusBadgeTone {
-  const key = normalizeStatusKey(state);
+  const key = statusKey(state);
   if (['approved', 'provisioned', 'active'].includes(key)) return 'success';
   if (['rejected', 'denied', 'cancelled', 'canceled'].includes(key)) return 'danger';
   if (['under_review', 'reviewing', 'in_review'].includes(key)) return 'warn';
-  if (['submitted', 'pending', 'recorded'].includes(key)) return 'info';
   return 'muted';
 }
 
@@ -316,62 +289,26 @@ function supplyChainExposureLabel(type: string) {
   return match?.label ?? formatStatusLabel(type);
 }
 
-function highScaleStateBadgeTone(state: string): StatusBadgeTone {
-  const key = normalizeStatusKey(state);
-  if (['closed', 'completed'].includes(key)) return 'success';
-  if (['running', 'scheduled', 'approved'].includes(key)) return 'info';
-  if (['stopped', 'under_review', 'submitted'].includes(key)) return 'warn';
-  if (['rejected', 'failed'].includes(key)) return 'danger';
-  return 'muted';
-}
 
-function artifactReviewBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (key === 'accepted') return 'success';
-  if (key === 'rejected') return 'danger';
-  if (key === 'pending_review' || key === 'pending') return 'warn';
-  return 'info';
-}
 
-function reportStatusBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (['ready', 'published', 'complete', 'completed'].includes(key)) return 'success';
-  if (['generating', 'pending', 'draft'].includes(key)) return 'info';
-  if (['failed', 'error'].includes(key)) return 'danger';
-  return 'muted';
-}
 
 function cveStageBadgeTone(stage: string): StatusBadgeTone {
-  const key = normalizeStatusKey(stage);
+  const key = statusKey(stage);
   if (['validated', 'mitigated', 'closed'].includes(key)) return 'success';
-  if (['triage', 'ingest'].includes(key)) return 'info';
+  if (['triage', 'ingest'].includes(key)) return 'muted';
   if (['exposed', 'active'].includes(key)) return 'danger';
   return 'warn';
 }
 
 function supplyChainStateBadgeTone(state: string): StatusBadgeTone {
-  const key = normalizeStatusKey(state);
+  const key = statusKey(state);
   if (key === 'confirmed') return 'danger';
   if (key === 'suspected') return 'warn';
   if (key === 'mitigated' || key === 'resolved') return 'success';
   return 'muted';
 }
 
-function subscriptionStatusBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (['active', 'trialing'].includes(key)) return 'success';
-  if (['past_due', 'paused'].includes(key)) return 'warn';
-  if (['canceled', 'cancelled', 'suspended'].includes(key)) return 'danger';
-  return 'info';
-}
 
-function lifecycleBadgeTone(state: string): StatusBadgeTone {
-  const key = normalizeStatusKey(state);
-  if (key === 'active') return 'success';
-  if (key === 'suspended') return 'danger';
-  if (key === 'pending') return 'warn';
-  return 'muted';
-}
 
 function StatusBadge({ value, tone, fallback = '—' }: { value: string; tone: StatusBadgeTone; fallback?: string }) {
   const label = formatStatusLabel(value, fallback);
@@ -383,13 +320,12 @@ function VerdictBadge({ value, tone }: { value: string; tone: StatusBadgeTone })
   return <Badge tone={tone} title={label}>{label}</Badge>;
 }
 
-function DetailPageIntro({ route, eyebrow }: { route: RouteId; eyebrow?: string }) {
+function DetailPageIntro({ route, context }: { route: RouteId; context?: string }) {
   const item = ROUTE_BY_ID.get(route);
   const description = item?.description?.trim();
   return (
     <>
-      <p className="eyebrow">{eyebrow ?? item?.group}</p>
-      <h1>{item?.label ?? 'Detail'}</h1>
+      <PageTitle context={context}>{item?.label ?? 'Detail'}</PageTitle>
       {description ? <p className="muted small">{description}</p> : null}
     </>
   );
@@ -408,17 +344,6 @@ function DetailKvSkeletonRows({ rows = DETAIL_SKELETON_KV_ROWS }: { rows?: numbe
   );
 }
 
-const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }>> = {
-  'run-detail': { label: 'Test runs', href: '#runs' },
-  'target-detail': { label: 'Targets', href: '#targets' },
-  'report-detail': { label: 'Reports', href: '#reports' },
-  'tenant-detail': { label: 'Admin console', href: '#admin' },
-  'finding-detail': { label: 'Findings', href: '#findings' },
-  'evidence-detail': { label: 'Findings', href: '#findings' },
-  'check-detail': { label: 'Check library', href: '#checks' },
-  'policy-detail': { label: 'Validation schedules', href: '#test-policies' },
-  'queue-detail': { label: 'SOC console', href: '#internal-soc' }
-};
 
 const DETAIL_LINK_ROUTES: RouteId[] = [
   'run-detail',
@@ -450,21 +375,6 @@ function detailEntityTitle(route: RouteId, entity: DataItem, entityId: string, c
   return getString(entity, ['name', 'hostname', 'canonical_url', 'cve_id', 'organization_name', 'id'], entityId);
 }
 
-function DetailBreadcrumb({ route, title, entityId }: { route: RouteId; title: string; entityId?: string }) {
-  const routeMeta = ROUTE_BY_ID.get(route);
-  const listLink = DETAIL_LIST_LINKS[route];
-  const listHref = listLink?.href;
-  const groupLabel = routeMeta?.group ? (DETAIL_GROUP_LABELS[routeMeta.group] ?? routeMeta.group) : 'Detail';
-  const listLabel = listLink?.label ?? routeMeta?.label ?? 'List';
-  return (
-    <p className="muted stack-tight detail-crumb">
-      {listLink && listHref ? (
-        <AnchorButton size="sm" variant="ghost" href={listHref}>← Back to {listLink.label}</AnchorButton>
-      ) : null}
-      {groupLabel} › {listLabel} › {title}
-    </p>
-  );
-}
 
 // Prefixed record IDs plus dotted catalog check IDs (e.g. origin.leak_scan.safe) stay visible as
 // secondary engineer-facing text under the plain-English title.
@@ -474,18 +384,19 @@ function DetailEntityHeading({
   route,
   entityId,
   title,
-  eyebrow
+  context,
+  backLink
 }: {
   route: RouteId;
   entityId: string;
   title: string;
-  eyebrow?: string;
+  context?: string;
+  backLink?: DetailListLink;
 }) {
   return (
     <>
-      {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-      <DetailBreadcrumb route={route} title={title} entityId={entityId} />
-      <h1>{title}</h1>
+      <DetailBackLink route={route} link={backLink} />
+      <PageTitle context={context}>{title}</PageTitle>
       {title !== entityId && VISIBLE_DETAIL_ID_RE.test(entityId) ? <p className="muted"><code>{entityId}</code></p> : null}
     </>
   );
@@ -493,21 +404,26 @@ function DetailEntityHeading({
 
 function DetailPageHeader({
   route,
-  eyebrow,
+  context,
   entityId,
   title,
-  actions
+  description,
+  actions,
+  backLink
 }: {
   route: RouteId;
-  eyebrow?: string;
+  context?: string;
   entityId: string;
   title: string;
+  description?: ReactNode;
   actions?: ReactNode;
+  backLink?: DetailListLink;
 }) {
   return (
     <div className="page-head">
       <div>
-        <DetailEntityHeading route={route} entityId={entityId} title={title} eyebrow={eyebrow} />
+        <DetailEntityHeading route={route} entityId={entityId} title={title} context={context} backLink={backLink} />
+        {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="row-actions">{actions}</div> : null}
     </div>
@@ -585,9 +501,9 @@ function DetailEntityLink({
   if (!id || id === '—') return <strong>—</strong>;
   if (!DETAIL_LINK_ROUTES.includes(route)) return <strong>{resolved}</strong>;
   return (
-    <AnchorButton size="sm" variant="ghost" href={buildDetailHref(route, id)}>
+    <a className="detail-entity-link" href={buildDetailHref(route, id)}>
       {resolved}
-    </AnchorButton>
+    </a>
   );
 }
 
@@ -614,7 +530,7 @@ function DetailKvHintField({ label, value, hint }: { label: string; value: React
 
 function DetailKvMonoField({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
   return (
-    <div className="kv-stack kv-mono-field">
+    <div className="kv-mono-field">
       <span>{label}</span>
       <code className={compact ? 'mono-hash small' : 'mono-hash'} title={value}>{value}</code>
     </div>
@@ -870,6 +786,8 @@ function RunDetailView({
   const [error, setError] = useState('');
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmFinalizeOpen, setConfirmFinalizeOpen] = useState(false);
+  const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
+  const runPolicy = runPolicyId ? (data.testPolicies ?? []).find((item) => getString(item, ['id', 'policy_id'], '') === runPolicyId) ?? null : null;
   const verdict = entity.verdict as DataItem | undefined;
   const runEvents = runEventState.status === 'loaded' ? runEventState.items : [];
   const runEventEvidenceLoading = runEventState.status === 'loading';
@@ -918,6 +836,8 @@ function RunDetailView({
 
   const runTitle = detailEntityTitle('run-detail', entity, entityId, { checks: data.checks });
   const runTargetId = getString(entity, ['target_id'], '');
+  const runTargetMatch = runTargetId ? data.targets.find((item) => getString(item, ['id'], '') === runTargetId) : undefined;
+  const runTargetValue = getString(entity, ['target_value'], '') || getString(runTargetMatch ?? {}, ['value', 'hostname'], '');
   const runCheckId = getString(entity, ['check_id'], '');
   const explicitRunValidationMode = getString(entity, ['validation_mode'], 'external_only');
   const verdictValue = hasEvidenceBackedVerdict(entity, data.evidence)
@@ -925,7 +845,6 @@ function RunDetailView({
     : '';
   const verdictDisplay = verdictValue ? plainVerdictLabel(verdictValue) : 'No result yet';
   const primaryFinding = relatedFindings[0] ?? null;
-  const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
   const runNonceHash = getNestedString(entity, ['correlation', 'nonce_hash'], '');
   const tabOptions = [
     { id: 'summary', label: 'Summary' },
@@ -947,12 +866,10 @@ function RunDetailView({
     <div className="content">
       <DetailPageHeader
         route="run-detail"
-        eyebrow="Test run evidence"
         entityId={entityId}
         title={runTitle}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#runs">Test runs</AnchorButton>
             {getString(entity, ['scan_id'], '') ? (
               <AnchorButton size="sm" variant="secondary" href={buildDetailHref('scan-detail', getString(entity, ['scan_id'], ''))}>Open parent scan</AnchorButton>
             ) : null}
@@ -970,8 +887,7 @@ function RunDetailView({
       />
       <PageContextSummary>
         <StatusBadge value={status} tone={runStatusBadgeTone(status)} fallback="pending" /> ·{' '}
-        {explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'Validation mode not recorded'} ·{' '}
-        <code>{entityId}</code>
+        {explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'Validation mode not recorded'}
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading run detail…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message} successTone="neutral" />
@@ -983,10 +899,10 @@ function RunDetailView({
       ) : null}
       {!loading ? (
         <>
-          <div className="metric-grid four">
-            <MetricCard label="Domain" value={getString(entity, ['target_value', 'target_id'], 'Not recorded')} sub="Declared endpoint under test" icon={Target} tone="info" />
-            <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={getString(entity, ['vector_family'], 'check')} icon={FileCheck2} tone="muted" />
-            <MetricCard label="Verdict" value={verdictDisplay} sub="External-only confidence" icon={ShieldCheck} tone={verdictValue ? verdictBadgeTone(verdictValue) : 'muted'} />
+          <div className="metric-grid four run-detail-metrics">
+            <MetricCard label="Target" value={runTargetValue || (runTargetId ? <code>{runTargetId}</code> : 'Not recorded')} sub="Declared endpoint under test" icon={Target} tone="muted" />
+            <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={getString(entity, ['vector_family'], 'Family not recorded')} icon={FileCheck2} tone="muted" />
+            <MetricCard label="Verdict" value={verdictDisplay} sub="External-only confidence" icon={ShieldCheck} tone={verdictValue ? verdictTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections"
@@ -1007,10 +923,12 @@ function RunDetailView({
                     ) : runEventEvidenceUnavailable ? (
                       <p className="muted">Run proof is unavailable because the event log could not be loaded.</p>
                     ) : (
-                      <TrafficPathPanel detail={entity} events={trustedEvidenceEvents} />
+                      <div className="run-proof-panels">
+                        <TrafficPathPanel detail={entity} events={trustedEvidenceEvents} />
+                      </div>
                     )}
                     <div className="kv-list">
-                      <div><span>Stored verdict</span>{verdictValue ? <VerdictBadge value={verdictValue} tone={verdictBadgeTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
+                      <div><span>Stored verdict</span>{verdictValue ? <VerdictBadge value={verdictValue} tone={verdictTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
                       <div><span>Trusted events</span><strong>{runEventEvidenceLoading || runEventEvidenceUnavailable ? '—' : trustedEvidenceEvents.length}</strong></div>
                     </div>
                   </CardContent>
@@ -1023,14 +941,14 @@ function RunDetailView({
                   <CardContent className="kv-list">
                     <DetailKvMonoField label="Run ID" value={entityId} />
                     <div><span>Status</span><StatusBadge value={status} tone={runStatusBadgeTone(status)} fallback="pending" /></div>
-                    <div><span>Check</span>{runCheckId ? <DetailEntityLink route="check-detail" id={runCheckId} label={checkDisplayName(data.checks, runCheckId)} /> : <strong>not recorded</strong>}</div>
-                    <div><span>Target</span>{runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} /> : <strong>not recorded</strong>}</div>
-                    <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label="Scheduled policy" /> : <strong>not scheduled by a recorded policy</strong>}</div>
-                    <div><span>Validation mode</span><strong>{explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'not recorded'}</strong></div>
+                    <div><span>Check</span>{runCheckId ? <DetailEntityLink route="check-detail" id={runCheckId} label={checkDisplayName(data.checks, runCheckId)} /> : <strong>Not recorded</strong>}</div>
+                    <div><span>Target</span>{runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={runTargetValue || undefined} /> : <strong>Not recorded</strong>}</div>
+                    <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label={runPolicy ? scheduleDisplayName(runPolicy, data.checks) : 'Open schedule'} /> : <strong>Not scheduled by a recorded policy</strong>}</div>
+                    <div><span>Validation mode</span><strong>{explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'Not recorded'}</strong></div>
                     <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
                     <div><span>Started</span><strong>{formatDate(entity.started_at)}</strong></div>
                     <div><span>Completed</span><strong>{formatDate(getNestedString(entity, ['verdict', 'finalized_at'], '') || entity.completed_at)}</strong></div>
-                    <div><span>Initiated by</span><strong>{getString(entity, ['initiated_by', 'created_by'], 'not recorded')}</strong></div>
+                    <div><span>Initiated by</span><strong>{getString(entity, ['initiated_by', 'created_by'], 'Not recorded')}</strong></div>
                     {runNonceHash ? <DetailKvMonoField label="Correlation nonce hash" value={runNonceHash} /> : null}
                   </CardContent>
                 </Card>
@@ -1048,10 +966,10 @@ function RunDetailView({
                   ) : runEventEvidenceUnavailable ? (
                     <p className="muted">Correlation evidence unavailable because run event evidence could not be loaded.</p>
                   ) : (
-                    <>
+                    <div className="run-proof-panels">
                       <VerdictExplanationPanel detail={entity} events={trustedEvidenceEvents} />
                       <TruthTablePanel detail={entity} />
-                    </>
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -1148,7 +1066,7 @@ function RunDetailView({
                             <span>{plainFindingTitle(finding, data.targets, data.checks)}</span>
                             <strong>
                               <DetailEntityLink route="finding-detail" id={findingId} label={formatStatusLabel(findingStatus(finding))} />
-                              {' · '}<StatusBadge value={getString(finding, ['severity'], 'unknown')} tone={findingSeverityBadgeTone(getString(finding, ['severity'], 'unknown'))} fallback="unknown" />
+                              {' · '}<StatusBadge value={getString(finding, ['severity'], 'unknown')} tone={severityTone(getString(finding, ['severity'], 'unknown'))} fallback="unknown" />
                             </strong>
                           </div>
                         );
@@ -1377,12 +1295,11 @@ function TenantDetailView({
     <div className="content">
       <DetailPageHeader
         route="tenant-detail"
-        eyebrow="Staff tenant operations"
+        context="Staff-only surface"
         entityId={entityId}
         title={tenantTitle}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#admin">Staff admin</AnchorButton>
             {lifecycleState !== 'active' ? (
               <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchLifecycle('active')}>Activate</Button>
             ) : (
@@ -1392,18 +1309,18 @@ function TenantDetailView({
         )}
       />
       <PageContextSummary>
-        <StatusBadge value={lifecycleState} tone={lifecycleBadgeTone(lifecycleState)} /> · plan {getString(subscription, ['plan_id'], '—')} ·{' '}
-        <span className="tabular-nums">{users.length}</span> users ·{' '}
-        <span className="tabular-nums">{recentAudit.length}</span> recent audit events
+        <StatusBadge value={lifecycleState} tone={tenantLifecycleTone(lifecycleState)} /> · {getString(subscription, ['plan_id'], '') ? `plan ${getString(subscription, ['plan_id'], '')}` : 'plan not recorded'} ·{' '}
+        <span className="tabular-nums">{formatNumber(users.length)}</span> {pluralize(users.length, 'user')} ·{' '}
+        <span className="tabular-nums">{formatNumber(recentAudit.length)}</span> recent audit {pluralize(recentAudit.length, 'event')}
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading tenant detail…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message} mode="combined" />
       {!loading ? (
         <>
-          <div className="metric-grid three">
-            <MetricCard label="Lifecycle" value={formatStatusLabel(lifecycleState, 'active')} sub="Staff account state" icon={ShieldCheck} tone={lifecycleState === 'active' ? 'success' : 'warn'} />
-            <MetricCard label="Plan" value={getString(subscription, ['plan_id'], '—')} sub={formatStatusLabel(getString(subscription, ['status'], 'not recorded'))} icon={FileText} tone="muted" />
-            <MetricCard label="Users" value={users.length} sub="Tenant-scoped identities" icon={Users} tone="info" />
+          <div className="kpi-row" role="group" aria-label="Tenant summary">
+            <KpiCell label="Lifecycle" value={formatStatusLabel(lifecycleState, 'active')} delta="Staff account state" tone={lifecycleState === 'active' ? 'success' : 'warn'} />
+            <KpiCell label="Plan" value={getString(subscription, ['plan_id'], '—')} valueClassName={getString(subscription, ['plan_id'], '') ? 'mono' : undefined} delta={formatStatusLabel(getString(subscription, ['status'], 'Not recorded'))} tone="muted" />
+            <KpiCell label="Users" value={formatNumber(users.length)} delta="Tenant-scoped identities" tone="muted" />
           </div>
           <Tabs
             value={tab}
@@ -1431,11 +1348,11 @@ function TenantDetailView({
                   <CardContent className="kv-list">
                     <div><span>Name</span><strong>{getString(tenant, ['name'])}</strong></div>
                     <DetailKvMonoField label="Tenant ID" value={entityId} />
-                    <div><span>Lifecycle</span><StatusBadge value={lifecycleState} tone={lifecycleBadgeTone(lifecycleState)} /></div>
-                    <div><span>Region</span><strong>{getString(account, ['region'], 'not recorded')}</strong></div>
-                    <div><span>Support owner</span><strong>{getString(account, ['support_owner'], 'unassigned')}</strong></div>
-                    <div><span>Created</span><strong>{formatDate(tenant?.created_at)}</strong></div>
-                    <div><span>Updated</span><strong>{formatDate(tenant?.updated_at ?? account?.updated_at)}</strong></div>
+                    <div><span>Lifecycle</span><StatusBadge value={lifecycleState} tone={tenantLifecycleTone(lifecycleState)} /></div>
+                    <RecordedKvRow label="Region" value={getString(account, ['region'], '')} />
+                    <RecordedKvRow label="Support owner" value={getString(account, ['support_owner'], '')} missing="Unassigned" mono />
+                    <RecordedKvRow label="Created" value={tenant?.created_at ? formatDate(tenant.created_at) : ''} />
+                    <RecordedKvRow label="Updated" value={tenant?.updated_at ?? account?.updated_at ? formatDate(tenant?.updated_at ?? account?.updated_at) : ''} />
                   </CardContent>
                 </Card>
                 <Card>
@@ -1444,19 +1361,30 @@ function TenantDetailView({
                     <CardDescription>Signup request and internal approval records explicitly scoped to this tenant.</CardDescription>
                   </CardHeader>
                   <CardContent className="stack-tight">
-                    {signupRequest ? (
-                      <div className="kv-list">
-                        <DetailKvMonoField label="Signup request" value={getString(signupRequest, ['id'], 'not returned')} />
-                        <div><span>Signup state</span><StatusBadge value={getString(signupRequest, ['state'], 'recorded')} tone={signupRequestStateTone(getString(signupRequest, ['state']))} fallback="recorded" /></div>
-                      </div>
-                    ) : (
-                      <p className="muted">No signup request is linked to this tenant. Tenants provisioned outside the signup queue may not have one.</p>
-                    )}
-                    <DataTable
-                      columns={approvalColumns}
-                      items={relatedApprovals}
-                      empty={<EmptyState icon={ShieldCheck} title="No tenant approval requests." body="No loaded internal approval record identifies this tenant." />}
-                    />
+                    <div className="kv-list">
+                      {signupRequest ? (
+                        <>
+                          <DetailKvMonoField label="Signup request" value={getString(signupRequest, ['id'], 'Not returned')} />
+                          <div><span>Signup state</span><StatusBadge value={getString(signupRequest, ['state'], 'recorded')} tone={signupRequestStateTone(getString(signupRequest, ['state']))} fallback="recorded" /></div>
+                        </>
+                      ) : (
+                        <RecordedKvRow label="Signup request" value="" missing="None linked" />
+                      )}
+                      {relatedApprovals.length === 0 ? (
+                        <RecordedKvRow
+                          label="Approval requests"
+                          value=""
+                          missing={!canReadDataset(session, 'internalApprovalRequests') ? 'Not visible to your role' : data.loadErrors.internalApprovalRequests ? 'Could not be loaded' : 'None recorded'}
+                        />
+                      ) : null}
+                    </div>
+                    {relatedApprovals.length > 0 ? (
+                      <DataTable
+                        columns={approvalColumns}
+                        items={relatedApprovals}
+                        empty={<EmptyState icon={ShieldCheck} title="No tenant approval requests." body="No loaded internal approval record identifies this tenant." />}
+                      />
+                    ) : null}
                   </CardContent>
                 </Card>
               </div>
@@ -1467,7 +1395,7 @@ function TenantDetailView({
                 </CardHeader>
                 <CardContent>
                   <form className="product-form" onSubmit={patchSupportOwner}>
-                    <label className="full"><span>Support owner</span><input name="support_owner" defaultValue={getString(account, ['support_owner'], '')} placeholder="owner@customer.example" required /></label>
+                    <label className="full"><span>Support owner</span><input name="support_owner" defaultValue={getString(account, ['support_owner'], '')} placeholder="e.g. owner@customer.example" required /></label>
                     <div className="form-actions full"><Button type="submit" loading={busy === `support-owner-${entityId}`} disabled={busy !== ''}>Save support owner</Button></div>
                   </form>
                 </CardContent>
@@ -1484,9 +1412,9 @@ function TenantDetailView({
                     <CardDescription>Recorded plan and billing fields; missing values remain unavailable.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
-                    <div><span>Plan</span><strong>{getString(subscription, ['plan_id'], 'not recorded')}</strong></div>
-                    <div><span>Status</span><StatusBadge value={getString(subscription, ['status'], 'not recorded')} tone={subscriptionStatusBadgeTone(getString(subscription, ['status'], ''))} fallback="not recorded" /></div>
-                    <div><span>MRR</span><strong>{mrrValue || 'not returned'}</strong></div>
+                    <div><span>Plan</span><strong>{getString(subscription, ['plan_id'], 'Not recorded')}</strong></div>
+                    <div><span>Status</span><StatusBadge value={getString(subscription, ['status'], 'Not recorded')} tone={subscriptionStatusTone(getString(subscription, ['status'], ''))} fallback="Not recorded" /></div>
+                    <div><span>MRR</span><strong>{mrrValue || 'Not returned'}</strong></div>
                     <div><span>Effective from</span><strong>{formatDate(subscription?.effective_from ?? subscription?.created_at)}</strong></div>
                   </CardContent>
                 </Card>
@@ -1661,7 +1589,6 @@ function EvidenceDetailView({
       <div className="content">
         <DetailPageHeader
           route="evidence-detail"
-          eyebrow="Validation · evidence artifact"
           entityId=""
           title="Evidence artifact"
         />
@@ -1679,7 +1606,7 @@ function EvidenceDetailView({
   if (!entity && loading) {
     return (
       <div className="content">
-        <DetailPageIntro route="evidence-detail" eyebrow="Validation · evidence artifact" />
+        <DetailPageIntro route="evidence-detail" />
         <DetailLoadingPlaceholder label="Loading evidence artifact…" />
       </div>
     );
@@ -1690,7 +1617,6 @@ function EvidenceDetailView({
       <div className="content">
         <DetailPageHeader
           route="evidence-detail"
-          eyebrow="Validation · evidence artifact"
           entityId={entityId}
           title="Evidence artifact"
         />
@@ -1850,25 +1776,24 @@ function EvidenceDetailView({
     <div className="content">
       <DetailPageHeader
         route="evidence-detail"
-        eyebrow="Validation · evidence artifact"
         entityId={artifactId}
         title={plainCodeLabel(kind, 'Evidence artifact')}
+        description={<>One recorded artifact. {findingId
+          ? 'It is referenced by the finding linked above.'
+          : data.findingsMeta && !data.findingsMeta.hasMore
+            ? 'No finding references this artifact explicitly.'
+            : `No finding among the ${formatNumber(data.findings.length)} newest loaded findings references this artifact; older findings were not checked.`}{runId ? ` Recorded by run ${runId}.` : ''}</>}
         actions={(
           <>
             {findingId ? (
               <AnchorButton size="sm" variant="secondary" href={buildDetailHref('finding-detail', findingId)}>Back to finding</AnchorButton>
             ) : null}
-            <Button size="sm" variant="ghost" loading={busy === 'verify'} disabled={busy !== '' || !payloadJson} onClick={() => void recomputeDigest()}>Compute local digest</Button>
+            {payloadJson ? <Button size="sm" variant="ghost" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void recomputeDigest()}>Compute local digest</Button> : null}
             <Button size="sm" variant="secondary" loading={busy === 'export'} disabled={busy !== ''} onClick={() => void exportArtifact()}>Export artifact JSON</Button>
           </>
         )}
       />
       <CustomerPageStyles />
-      <p className="muted small">One recorded artifact. {findingId
-        ? 'It is referenced by the finding linked above.'
-        : data.findingsMeta && !data.findingsMeta.hasMore
-          ? 'No finding references this artifact explicitly.'
-          : `No finding among the ${formatNumber(data.findings.length)} newest loaded findings references this artifact; older findings were not checked.`}{runId ? ` Recorded by run ${runId}.` : ''}</p>
       {loading ? <DetailLoadingPlaceholder label="Refreshing evidence artifact…" variant="compact" /> : null}
       {loadError && entity ? (
         <div className="form-banner error row-actions" role="alert">
@@ -2068,7 +1993,7 @@ function HighScaleDetailView({
   const adapterRecord = getNestedItem(entity, ['adapter']) ?? getNestedItem(entity, ['adapter_json']);
   const requestGates = [
     { label: 'Authorization pack accepted', pass: packOverall === 'accepted', detail: formatStatusLabel(packOverall, 'missing') },
-    { label: 'Requested safe window recorded', pass: Boolean(requestedWindowStart && requestedWindowEnd), detail: requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} → ${formatDate(requestedWindowEnd)}` : 'window incomplete' },
+    { label: 'Requested safe window recorded', pass: Boolean(requestedWindowStart && requestedWindowEnd), detail: requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} to ${formatDate(requestedWindowEnd)}` : 'window incomplete' },
     { label: 'Scope hash recorded', pass: Boolean(scopeHash), detail: scopeHash ? 'scope hash present' : 'not returned' },
     { label: 'SOC approval recorded', pass: socApprovals.length > 0, detail: `${socApprovals.length} approval record${socApprovals.length === 1 ? '' : 's'}` }
   ];
@@ -2077,16 +2002,16 @@ function HighScaleDetailView({
     <div className="content">
       <DetailPageHeader
         route="queue-detail"
-        eyebrow="Governed validation"
         entityId={entityId}
         title={title}
+        backLink={{ label: 'Test runs', href: '#runs' }}
         actions={packOverall === 'accepted'
           ? <AnchorButton size="sm" variant="default" href="#runs">Open high-scale requests</AnchorButton>
           : <Button size="sm" variant="default" onClick={() => setTab('authorization')}>{canWriteHighScale ? 'Complete authorization pack' : 'View authorization pack'}</Button>}
       />
       <PageContextSummary>
-        <StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /> · pack{' '}
-        <StatusBadge value={packOverall} tone={artifactReviewBadgeTone(packOverall)} fallback="missing" />
+        <StatusBadge value={requestState} tone={highScaleStateTone(requestState)} fallback="submitted" /> · pack{' '}
+        <StatusBadge value={packOverall} tone={artifactReviewTone(packOverall)} fallback="missing" />
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message}>
@@ -2099,10 +2024,10 @@ function HighScaleDetailView({
       {!loading ? (
         <>
           <div className="metric-grid four">
-            <MetricCard label="State" value={formatStatusLabel(requestState)} sub="Governed request lifecycle" icon={ShieldCheck} tone={highScaleStateBadgeTone(requestState) === 'danger' ? 'danger' : highScaleStateBadgeTone(requestState) === 'warn' ? 'warn' : highScaleStateBadgeTone(requestState) === 'success' ? 'success' : 'info'} />
+            <MetricCard label="State" value={formatStatusLabel(requestState)} sub="Governed request lifecycle" icon={ShieldCheck} tone={highScaleStateTone(requestState)} />
             <MetricCard label="Authorization" value={formatStatusLabel(packOverall, 'missing')} sub={`${artifacts.length} artifact records`} icon={FileCheck2} tone={packOverall === 'accepted' ? 'success' : 'warn'} />
-            <MetricCard label="Scope" value={getString(entity, ['target_id'], 'Not recorded')} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone={scopeHash ? 'info' : 'muted'} />
-            <MetricCard label="Window" value={requestedWindowStart ? formatDate(requestedWindowStart) : '—'} sub={requestedWindowEnd ? `through ${formatDate(requestedWindowEnd)}` : 'requested window incomplete'} icon={Activity} tone={requestedWindowStart && requestedWindowEnd ? 'info' : 'muted'} />
+            <MetricCard label="Scope" value={getString(entity, ['target_id'], 'Not recorded')} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone="muted" />
+            <MetricCard label="Window" value={requestedWindowStart ? formatDate(requestedWindowStart) : '—'} sub={requestedWindowEnd ? `through ${formatDate(requestedWindowEnd)}` : 'requested window incomplete'} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="High-scale request sections"
             getTabId={(id) => `high-scale-request-sections-tab-${id}`}
@@ -2118,14 +2043,14 @@ function HighScaleDetailView({
                   </CardHeader>
                   <CardContent className="kv-list">
                     <div><span>Request</span><strong title={entityId}>{title}</strong></div>
-                    <div><span>State</span><StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /></div>
-                    <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
-                    <div><span>Objective</span><strong>{getString(entity, ['objective'], 'not recorded')}</strong></div>
-                    <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'not recorded')}</strong></div>
+                    <div><span>State</span><StatusBadge value={requestState} tone={highScaleStateTone(requestState)} fallback="submitted" /></div>
+                    <div><span>Reason</span><strong>{getString(entity, ['reason'], 'Not recorded')}</strong></div>
+                    <div><span>Objective</span><strong>{getString(entity, ['objective'], 'Not recorded')}</strong></div>
+                    <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'Not recorded')}</strong></div>
                     <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
-                    <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} → ${formatDate(requestedWindowEnd)}` : 'not fully recorded'}</strong></div>
-                    <div><span>Timezone</span><strong>{requestedTimezone || 'not recorded'}</strong></div>
-                    <div><span>Scheduled window</span><strong>{scheduledWindowStart && scheduledWindowEnd ? `${formatDate(scheduledWindowStart)} → ${formatDate(scheduledWindowEnd)}` : 'not scheduled'}</strong></div>
+                    <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} to ${formatDate(requestedWindowEnd)}` : 'Not fully recorded'}</strong></div>
+                    <div><span>Timezone</span><strong>{requestedTimezone || 'Not recorded'}</strong></div>
+                    <div><span>Scheduled window</span><strong>{scheduledWindowStart && scheduledWindowEnd ? `${formatDate(scheduledWindowStart)} to ${formatDate(scheduledWindowEnd)}` : 'Not scheduled'}</strong></div>
                     {scopeHash ? <div><span>Scope hash</span><strong title={scopeHash}>Recorded</strong></div> : null}
                   </CardContent>
                 </Card>
@@ -2135,11 +2060,11 @@ function HighScaleDetailView({
                     <CardDescription>Recorded prerequisites. SOC still revalidates scope, window, and authorization before execution.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ul className="placement-gates" aria-label="High-scale request gates">
+                    <ul className="placement-gates gates-stacked" aria-label="High-scale request gates">
                       {requestGates.map((gate) => (
                         <li key={gate.label}>
-                          <ShieldCheck size={14} aria-hidden="true" />
-                          <span>{gate.label}<span className="muted small"> · {plainInlineText(gate.detail)}</span></span>
+                          {gate.pass ? <ShieldCheck size={14} aria-hidden="true" /> : <CircleDashed size={14} aria-hidden="true" />}
+                          <span className="gate-text"><span>{gate.label}</span><span className="muted small">{plainInlineText(gate.detail)}</span></span>
                           <Badge tone={gate.pass ? 'success' : 'muted'}>{gate.pass ? 'recorded' : 'pending'}</Badge>
                         </li>
                       ))}
@@ -2155,8 +2080,8 @@ function HighScaleDetailView({
                 <CardContent>
                   {adapterRecord ? (
                     <div className="kv-list">
-                      <div><span>Adapter state</span><strong>{getString(adapterRecord, ['state'], 'not returned')}</strong></div>
-                      <div><span>Traffic generated</span><strong>{getString(adapterRecord, ['traffic_generated'], 'not returned')}</strong></div>
+                      <div><span>Adapter state</span><strong>{getString(adapterRecord, ['state'], 'Not returned')}</strong></div>
+                      <div><span>Traffic generated</span><strong>{getString(adapterRecord, ['traffic_generated'], 'Not returned')}</strong></div>
                       <div><span>Recorded at</span><strong>{formatDate(adapterRecord.updated_at ?? adapterRecord.created_at)}</strong></div>
                     </div>
                   ) : (
@@ -2219,7 +2144,7 @@ function HighScaleDetailView({
                           <div key={getString(artifact, ['id'], type)}>
                             <span>{authorizationArtifactTitle(type)}</span>
                             <strong>
-                              <StatusBadge value={artifactStatus} tone={artifactReviewBadgeTone(artifactStatus)} fallback="pending_review" />
+                              <StatusBadge value={artifactStatus} tone={artifactReviewTone(artifactStatus)} fallback="pending_review" />
                               {digest ? <> · <code className="mono-hash">{digest}</code></> : null}
                             </strong>
                             <p className="muted small">{explainArtifactReviewStatus(type, packRequirementForType(packStatus, type), artifact)}</p>
@@ -2244,13 +2169,13 @@ function HighScaleDetailView({
             <div role="tabpanel" id="high-scale-request-sections-panel-provider" aria-labelledby="high-scale-request-sections-tab-provider" className="tab-panel"><Card>
               <CardHeader><CardTitle>Provider checklist</CardTitle><CardDescription>Provider requirements and review states recorded for this request; no live provider telemetry is inferred.</CardDescription></CardHeader>
               <CardContent>
-                {providerChecklist.length === 0 ? <p className="muted">No provider checklist items returned.</p> : (
+                {providerChecklist.length === 0 ? <EmptyState icon={ClipboardList} title="No provider checklist returned." body="No provider approval records are available for this request." /> : (
                   <div className="kv-list">
                     {providerChecklist.map((item, index) => (
                       <div key={getString(item, ['id'], String(index))}>
                         <span>{getString(item, ['label', 'provider_name', 'requirement'], 'Provider requirement')}</span>
                         <strong>
-                          <StatusBadge value={getString(item, ['status'], 'not recorded')} tone={getString(item, ['status'], '') ? artifactReviewBadgeTone(getString(item, ['status'], '')) : 'muted'} fallback="not recorded" />
+                          <StatusBadge value={getString(item, ['status'], 'Not recorded')} tone={getString(item, ['status'], '') ? artifactReviewTone(getString(item, ['status'], '')) : 'muted'} fallback="Not recorded" />
                           {getString(item, ['reference_id', 'approval_id'], '') ? <> · <code className="mono-hash">{getString(item, ['reference_id', 'approval_id'], '')}</code></> : null}
                         </strong>
                       </div>
@@ -2266,6 +2191,10 @@ function HighScaleDetailView({
   );
 }
 
+
+function socStartBlockedReason(failing: string[]) {
+  return `Start stays disabled until every Go / No-Go gate passes. Not yet passing: ${failing.join(', ')}.`;
+}
 
 function SocRequestDetailView({
   entity,
@@ -2472,7 +2401,7 @@ function SocRequestDetailView({
     const isStaffPrincipal = session.principal === 'staff';
     return (
       <div className="content">
-        <DetailPageIntro route="queue-detail" eyebrow="SOC execution workspace" />
+        <DetailPageIntro route="queue-detail" context="SOC execution workspace" />
         <EmptyState
           icon={ShieldCheck}
           title={isStaffPrincipal ? 'Staff SOC role required.' : 'SOC role required.'}
@@ -2497,7 +2426,7 @@ function SocRequestDetailView({
   const windowConfirmed = Boolean(windowStart && windowEnd);
   const scopeRecorded = Boolean(getString(entity, ['scope_hash'], '') || getNestedItem(entity, ['scope_confirmation']));
   const socApprovalsCount = Array.isArray(entity.soc_approvals) ? (entity.soc_approvals as DataItem[]).length : 0;
-  const stateTone = highScaleStateBadgeTone(state);
+  const stateTone = highScaleStateTone(state);
   const preflightGates = [
     { label: 'Authorization pack accepted', pass: packReady },
     { label: 'Safe window confirmed', pass: windowConfirmed },
@@ -2505,19 +2434,20 @@ function SocRequestDetailView({
     { label: 'SOC approval recorded', pass: socApprovalsCount > 0 }
   ];
   const preflightReady = preflightGates.every((gate) => gate.pass);
+  const startBlockedReason = preflightReady ? '' : socStartBlockedReason(preflightGates.filter((gate) => !gate.pass).map((gate) => gate.label));
 
   return (
     <div className="content">
-      <DetailPageHeader route="queue-detail" eyebrow="SOC execution workspace" entityId={entityId} title={title} />
+      <DetailPageHeader route="queue-detail" context="SOC execution workspace" entityId={entityId} title={title} />
       <PageContextSummary>
-        <StatusBadge value={state} tone={highScaleStateBadgeTone(state)} fallback="submitted" /> · tenant <code>{actionTenantId ?? 'not recorded'}</code>
+        <StatusBadge value={state} tone={highScaleStateTone(state)} fallback="submitted" /> · tenant {actionTenantId ? <code>{actionTenantId}</code> : 'not recorded'}
       </PageContextSummary>
       <DetailStatusBanners error={error} message={message} hideMessageWhenLoadError={false} />
-      <div className="metric-grid four">
-        <MetricCard label="State" value={formatStatusLabel(state, 'submitted')} sub="Governed lifecycle state" icon={ShieldCheck} tone={stateTone === 'danger' ? 'danger' : stateTone === 'warn' ? 'warn' : stateTone === 'success' ? 'success' : 'info'} />
-        <MetricCard label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} sub="Authorization pack review" icon={FileCheck2} tone={packReady ? 'success' : 'warn'} />
-        <MetricCard label="Domains" value={Array.isArray(entity.target_ids) ? entity.target_ids.length : entity.target_id ? 1 : 'Not recorded'} sub="Declared scope under request" icon={Target} tone="muted" />
-        <MetricCard label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} sub={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} icon={Activity} tone={windowConfirmed ? 'info' : 'muted'} />
+      <div className="kpi-row" role="group" aria-label="Request summary">
+        <KpiCell label="State" value={formatStatusLabel(state, 'submitted')} delta="Governed lifecycle state" tone={stateTone} />
+        <KpiCell label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} delta="Authorization pack review" tone={packReady ? 'success' : 'warn'} />
+        <KpiCell label="Domains" value={Array.isArray(entity.target_ids) ? formatNumber(entity.target_ids.length) : entity.target_id ? '1' : 'Not recorded'} delta="Declared scope under request" tone="muted" />
+        <KpiCell label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} delta={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} tone="muted" />
       </div>
       <Card>
         <CardHeader>
@@ -2528,9 +2458,9 @@ function SocRequestDetailView({
           <ul className="placement-gates" aria-label="Pre-flight execution gates">
             {preflightGates.map((gate) => (
               <li key={gate.label}>
-                <ShieldCheck size={14} aria-hidden="true" />
+                {gate.pass ? <ShieldCheck size={14} aria-hidden="true" /> : <CircleDashed size={14} aria-hidden="true" />}
                 <span>{gate.label}</span>
-                <Badge tone={gate.pass ? 'success' : 'muted'} aria-label={`${gate.label}: ${gate.pass ? 'pass' : 'pending'}`}>{gate.pass ? 'pass' : 'pending'}</Badge>
+                <Badge tone={gate.pass ? 'success' : 'warn'} aria-label={`${gate.label}: ${gate.pass ? 'pass' : 'pending'}`}>{gate.pass ? 'pass' : 'pending'}</Badge>
               </li>
             ))}
           </ul>
@@ -2543,18 +2473,21 @@ function SocRequestDetailView({
         <div role="tabpanel" id="soc-queue-detail-sections-panel-workspace" aria-labelledby="soc-queue-detail-sections-tab-workspace" className="tab-panel"><>
         <Card>
           <CardHeader><CardTitle>Queue context</CardTitle><CardDescription>Lifecycle actions for this request</CardDescription></CardHeader>
-          <CardContent className="kv-list">
-            <div><span>State</span><StatusBadge value={state} tone={highScaleStateBadgeTone(state)} /></div>
-            <div><span>Pack</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewBadgeTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
+          <CardContent className="stack-tight">
+            <div className="kv-list">
+              <div><span>State</span><StatusBadge value={state} tone={highScaleStateTone(state)} /></div>
+              <div><span>Pack</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
+            </div>
             <div className="row-actions">
               {['submitted', 'under_review'].includes(state) && packReady ? <Button size="sm" variant="secondary" loading={busy === `approve-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('approve')}>Approve</Button> : null}
               {state === 'approved' ? <Button size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('schedule', socDevScheduleWindow())}>Schedule</Button> : null}
-              {state === 'scheduled' ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== '' || !preflightReady} title={preflightReady ? undefined : 'All displayed Go / No-Go gates must pass before start'} onClick={() => void socAction('start')}>Start</Button> : null}
+              {state === 'scheduled' ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== '' || !preflightReady} title={startBlockedReason || undefined} aria-describedby={preflightReady ? undefined : 'soc-start-disabled-reason'} onClick={() => void socAction('start')}>Start</Button> : null}
               {state === 'running' ? <Button size="sm" variant="danger" loading={busy === `stop-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('stop')}>Stop</Button> : null}
               {state === 'stopped' && hasPostTestReport ? <Button size="sm" variant="secondary" loading={busy === `close-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('close')}>Close</Button> : null}
               {state === 'stopped' && !hasPostTestReport ? <Button size="sm" variant="secondary" disabled title={postTestReportError || 'Attach a post-test report before closing'}>Close</Button> : null}
               <AnchorButton size="sm" variant="ghost" href="#internal-soc">Open SOC console</AnchorButton>
             </div>
+            {state === 'scheduled' && !preflightReady ? <p className="muted text-xs" id="soc-start-disabled-reason">{startBlockedReason}</p> : null}
             {state === 'stopped' && reportBusy ? <p className="muted small">Checking for an attached post-test report…</p> : null}
             {state === 'stopped' && !reportBusy && postTestReportError ? <div className="form-banner error" role="alert">{postTestReportError} Closing remains disabled until report status can be confirmed.</div> : null}
             {state === 'stopped' && !reportBusy && hasPostTestReport ? (
@@ -2577,12 +2510,12 @@ function SocRequestDetailView({
             <CardHeader><CardTitle>Request facts</CardTitle><CardDescription>Tenant, scope, purpose, and safe-window fields returned with this queue item.</CardDescription></CardHeader>
             <CardContent className="kv-list">
               <div><span>Request</span><strong title={entityId}>{title}</strong></div>
-              <div><span>Tenant</span><strong>{actionTenantId ?? 'not recorded'}</strong></div>
-              <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
-              <div><span>Objective</span><strong>{getString(entity, ['objective'], 'not recorded')}</strong></div>
-              <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'not recorded')}</strong></div>
-              <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} → ${formatDate(requestedWindowEnd)}` : 'not fully recorded'}</strong></div>
-              <div><span>Scheduled window</span><strong>{windowConfirmed ? `${formatDate(windowStart)} → ${formatDate(windowEnd)}` : 'not scheduled'}</strong></div>
+              <RecordedKvRow label="Tenant" value={actionTenantId ?? ''} mono />
+              <RecordedKvRow label="Reason" value={getString(entity, ['reason'], '')} />
+              <RecordedKvRow label="Objective" value={getString(entity, ['objective'], '')} />
+              <RecordedKvRow label="Requested by" value={getString(entity, ['created_by', 'requested_by'], '')} mono />
+              <RecordedKvRow label="Requested window" value={requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} to ${formatDate(requestedWindowEnd)}` : ''} missing="Not fully recorded" />
+              <RecordedKvRow label="Scheduled window" value={windowConfirmed ? `${formatDate(windowStart)} to ${formatDate(windowEnd)}` : ''} missing="Not scheduled" />
               {getString(entity, ['scope_hash'], '') ? <div><span>Scope hash</span><strong title={getString(entity, ['scope_hash'], '')}>Recorded</strong></div> : null}
             </CardContent>
           </Card>
@@ -2597,7 +2530,7 @@ function SocRequestDetailView({
         <div role="tabpanel" id="soc-queue-detail-sections-panel-artifacts" aria-labelledby="soc-queue-detail-sections-tab-artifacts" className="tab-panel"><Card>
           <CardHeader><CardTitle>Authorization artifacts</CardTitle></CardHeader>
           <CardContent>
-            {artifacts.length === 0 ? <p className="muted">No artifacts uploaded.</p> : (
+            {artifacts.length === 0 ? <EmptyState icon={FileCheck2} title="No artifacts uploaded." body="No authorization artifacts are recorded for this request." /> : (
               <div className="kv-list">
                 {artifacts.map((artifact) => {
                   const artifactId = getString(artifact, ['id'], '');
@@ -2607,7 +2540,7 @@ function SocRequestDetailView({
                     <div key={artifactId || type}>
                       <span>{authorizationArtifactTitle(type)}</span>
                       <div className="row-actions">
-                        <StatusBadge value={getString(artifact, ['status'])} tone={artifactReviewBadgeTone(getString(artifact, ['status']))} />
+                        <StatusBadge value={getString(artifact, ['status'])} tone={artifactReviewTone(getString(artifact, ['status']))} />
                         <Button size="sm" variant="secondary" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'accepted')}>Accept</Button>
                         <Button size="sm" variant="ghost" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'rejected')}>Reject</Button>
                       </div>
@@ -2633,7 +2566,7 @@ function SocRequestDetailView({
                   <div key={getString(item, ['id'], String(index))}>
                     <span>{getString(item, ['provider_name', 'label', 'requirement'], 'Provider requirement')}</span>
                     <strong>
-                      <StatusBadge value={getString(item, ['status'], 'not recorded')} tone={getString(item, ['status'], '') ? artifactReviewBadgeTone(getString(item, ['status'], '')) : 'muted'} fallback="not recorded" />
+                      <StatusBadge value={getString(item, ['status'], 'Not recorded')} tone={getString(item, ['status'], '') ? artifactReviewTone(getString(item, ['status'], '')) : 'muted'} fallback="Not recorded" />
                       {getString(item, ['reference_id', 'approval_id'], '') ? <> · <code className="mono-hash">{getString(item, ['reference_id', 'approval_id'], '')}</code></> : null}
                     </strong>
                   </div>
@@ -2650,9 +2583,9 @@ function SocRequestDetailView({
             <Button size="sm" variant="secondary" loading={busy === `adapter-${entityId}`} disabled={busy !== ''} onClick={() => void loadAdapterStatus()}>Refresh adapter status</Button>
             {adapterStatus ? (
               <div className="kv-list">
-                <div><span>State</span><strong>{getNestedString(adapterStatus, ['adapter', 'state'], getString(adapterStatus, ['state'], 'not returned'))}</strong></div>
-                <div><span>Traffic generated</span>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') ? <Badge tone={getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'warn' : 'muted'}>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'Yes' : 'No'}</Badge> : <strong>not returned</strong>}</div>
-                <div><span>Provider reference</span><strong>{getNestedString(adapterStatus, ['adapter', 'provider_reference'], getString(adapterStatus, ['provider_reference'], 'not returned'))}</strong></div>
+                <div><span>State</span><strong>{getNestedString(adapterStatus, ['adapter', 'state'], getString(adapterStatus, ['state'], 'Not returned'))}</strong></div>
+                <div><span>Traffic generated</span>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') ? <Badge tone={getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'warn' : 'muted'}>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'Yes' : 'No'}</Badge> : <strong>Not returned</strong>}</div>
+                <div><span>Provider reference</span><strong>{getNestedString(adapterStatus, ['adapter', 'provider_reference'], getString(adapterStatus, ['provider_reference'], 'Not returned'))}</strong></div>
               </div>
             ) : <p className="muted">Adapter status has not been requested. No provider telemetry is inferred.</p>}
           </CardContent>
@@ -2673,7 +2606,7 @@ function SocRequestDetailView({
                   </div>
                 ))}
               </div>
-            ) : !notesLoading && !notesError ? <p className="muted">The notes endpoint returned a valid empty items array.</p> : null}
+            ) : !notesLoading && !notesError ? <EmptyState icon={ClipboardList} title="No SOC notes recorded." body="Add execution context, customer coordination, or stop rationale below." /> : null}
             <form className="product-form" aria-busy={notesLoading || undefined} onSubmit={(event) => void submitSocNote(event)}>
               <label className="full"><span>Note</span><textarea name="body" rows={4} disabled={notesLoading} placeholder="Execution context, customer coordination, or stop rationale." /></label>
               <div className="form-actions full"><Button type="submit" loading={busy === `notes-${entityId}`} disabled={busy !== '' || notesLoading}>Add note</Button></div>
@@ -2708,14 +2641,6 @@ function detailRowNavProps(route: RouteId, id: string): Omit<HTMLAttributes<HTML
 }
 
 /** Verdict/outcome badge tone shared by the check/policy detail surfaces. */
-function outcomeBadgeTone(value: string): StatusBadgeTone {
-  const key = normalizeStatusKey(value);
-  if (['pass', 'passed', 'success', 'ok', 'covered'].includes(key)) return 'success';
-  if (['fail', 'failed', 'gap', 'edge_exposed', 'bypassable', 'penetrated', 'exposed', 'unprotected'].includes(key)) return 'danger';
-  if (['review', 'manual_review', 'warn', 'warning', 'partial', 'inconclusive', 'needs_evidence'].includes(key)) return 'warn';
-  if (['soc_gated', 'request', 'pending', 'none'].includes(key)) return 'muted';
-  return 'info';
-}
 
 const CHECK_VECTOR_FAMILY_LABELS: Record<string, string> = {
   origin: 'Origin',
@@ -3002,12 +2927,13 @@ function CheckDetailPage({
     : null;
   const callerTarget = callerTargetId ? declaredTargets.find((item) => getString(item, ['id'], '') === callerTargetId) ?? null : null;
   const callerBackHref = callerPolicyId ? buildDetailHref('policy-detail', callerPolicyId) : callerTargetId ? buildDetailHref('target-detail', callerTargetId) : '#checks';
+  const hasCallerContext = Boolean(callerPolicyId || callerTargetId);
   const callerBackLabel = callerPolicyId ? 'Back to schedule' : callerTargetId ? 'Back to target' : 'Check library';
 
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="check-detail" eyebrow="Check" />
+        <DetailPageIntro route="check-detail" />
         <EmptyState
           icon={FileCheck2}
           title="No check selected."
@@ -3026,14 +2952,14 @@ function CheckDetailPage({
     if (!exactReady || exactCheck.status === 'loading') {
       return (
         <div className="content">
-          <DetailPageIntro route="check-detail" eyebrow="Check" />
+          <DetailPageIntro route="check-detail" />
           <DetailLoadingPlaceholder label="Loading check…" variant="layout" />
         </div>
       );
     }
     return (
       <div className="content">
-        <DetailPageIntro route="check-detail" eyebrow="Check" />
+        <DetailPageIntro route="check-detail" />
         {exactCheck.status === 'error' ? (
           <EmptyState
             icon={TriangleAlert}
@@ -3047,7 +2973,7 @@ function CheckDetailPage({
             icon={FileCheck2}
             title="Check not found."
             body={`No check with ID ${entityId} is in the catalog. It may have been removed or renamed; no other check is substituted.`}
-            actionLabel={callerBackLabel === 'Check library' ? 'Open check library' : callerBackLabel}
+            actionLabel={hasCallerContext ? callerBackLabel : 'Open check library'}
             actionHref={callerBackHref}
           />
         )}
@@ -3062,7 +2988,11 @@ function CheckDetailPage({
   const description = getString(check, ['description', 'summary'], '');
   const title = plainCheckName(getString(check, ['name', 'check_id', 'id'], entityId));
   const toList = catalogValueList;
-  const humanize = (value: string) => value.replace(/_/g, ' ');
+  const spaced = (value: string) => value.replace(/_/g, ' ');
+  const humanize = (value: string) => {
+    const text = spaced(value);
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
   const recordedRemediation = getString(check, ['remediation_template', 'remediation'], '');
   const recordedVerdictLogic = getString(check, ['verdict_logic'], '');
   const recordedExplanation = getString(check, ['explanation_template', 'explanation'], '');
@@ -3114,6 +3044,11 @@ function CheckDetailPage({
   const canSchedule = customerRunnable && sessionHasPermission(session, 'test_policy:write') && (!callerTargetId || callerCompatible === true);
 
   const policyColumns: TableColumn<DataItem>[] = [
+    { key: 'schedule', label: 'Schedule', render: (item) => {
+      const policyId = getString(item, ['id', 'policy_id'], '');
+      const name = scheduleDisplayName(item, data.checks);
+      return policyId ? <DetailEntityLink route="policy-detail" id={policyId} label={name} /> : <strong>{name}</strong>;
+    } },
     { key: 'target', label: 'Exact target', render: (item) => {
       const target = scheduleTarget(item);
       return target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <span className="muted">No exact target</span>;
@@ -3130,7 +3065,7 @@ function CheckDetailPage({
     { key: 'outcome', label: 'Outcome', render: (item) => {
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
       return outcome
-        ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} />
+        ? <VerdictBadge value={outcome} tone={verdictTone(outcome)} />
         : <span className="muted">{['planned', 'running', 'collecting'].includes(getString(item, ['status'], '')) ? 'In progress' : 'No evidence-backed result'}</span>;
     } },
     { key: 'evidence', label: 'Evidence', render: (item) => <RunEvidenceButton run={item} /> }
@@ -3141,12 +3076,11 @@ function CheckDetailPage({
       <CustomerPageStyles />
       <DetailPageHeader
         route="check-detail"
-        eyebrow="Check"
         entityId={entityId}
         title={title}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href={callerBackHref}>{callerBackLabel}</AnchorButton>
+            {hasCallerContext ? <AnchorButton size="sm" variant="secondary" href={callerBackHref}>{callerBackLabel}</AnchorButton> : null}
             {canSchedule ? (
               <AnchorButton size="sm" variant="default" href={scheduleHref}>
                 {callerTarget ? `Schedule on ${targetLabel(callerTargetId)}` : 'Schedule this check'}
@@ -3197,7 +3131,7 @@ function CheckDetailPage({
           <div>
             <p className="check-fact-label">What is observed</p>
             <p className="check-detail-text">
-              {evidenceRequired.length ? evidenceRequired.map(humanize).join(', ') : 'Evidence types not recorded in the catalog.'}
+              {evidenceRequired.length ? humanize(evidenceRequired.map(spaced).join(', ')) : 'Evidence types not recorded in the catalog.'}
             </p>
           </div>
           <div>
@@ -3220,7 +3154,7 @@ function CheckDetailPage({
           <CardContent className="stack-tight">
             <div>
               <p className="check-fact-label">Target kinds</p>
-              {supportedTargets.length ? <div className="row-actions">{supportedTargets.map((kind) => <Badge key={kind} tone="muted">{humanize(kind)}</Badge>)}</div> : <p className="muted">Not recorded</p>}
+              {supportedTargets.length ? <div className="chip-row">{supportedTargets.map((kind) => <Badge key={kind} tone="muted">{spaced(kind)}</Badge>)}</div> : <p className="muted">Not recorded</p>}
             </div>
             <div>
               <p className="check-fact-label">Required setup</p>
@@ -3233,10 +3167,10 @@ function CheckDetailPage({
               {maxEvents || maxDuration || maxConcurrent || probeRequests ? (
                 <div className="stack-tight">
                   {probeRequests ? <p className="check-detail-text">{checkProbeOperationBoundLabel(probeRequests)}</p> : null}
-                  <div className="row-actions">
-                  {maxEvents ? <Badge tone="muted">max {maxEvents} events</Badge> : null}
-                  {maxDuration ? <Badge tone="muted">max {maxDuration}s</Badge> : null}
-                  {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent in the execution slot</Badge> : null}
+                  <div className="chip-row">
+                    {maxEvents ? <Badge tone="muted">max {maxEvents} events</Badge> : null}
+                    {maxDuration ? <Badge tone="muted">max {maxDuration} sec</Badge> : null}
+                    {maxConcurrent ? <Badge tone="muted">{maxConcurrent} concurrent in the execution slot</Badge> : null}
                   </div>
                 </div>
               ) : <p className="muted">Not recorded</p>}
@@ -3265,7 +3199,7 @@ function CheckDetailPage({
             ) : latestResult ? (
               <>
                 <div className="row-actions">
-                  <VerdictBadge value={runVerdictValue(latestResult)} tone={outcomeBadgeTone(runVerdictValue(latestResult))} />
+                  <VerdictBadge value={runVerdictValue(latestResult)} tone={verdictTone(runVerdictValue(latestResult))} />
                   <span>on {latestTargetId ? <DetailEntityLink route="target-detail" id={latestTargetId} label={targetLabel(latestTargetId)} /> : 'an unrecorded target'}</span>
                 </div>
                 <p className="muted small">
@@ -3292,49 +3226,47 @@ function CheckDetailPage({
         </Card>
       ) : null}
 
-      <div className="stack">
-        <Card>
-          <CardHeader>
-            <CardTitle>Schedules running this check</CardTitle>
-            <CardDescription>Schedules bound to this exact check ID.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={policyColumns}
-              items={linkedPolicyState.items}
-              getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
-              getRowProps={(item) => detailRowNavProps('policy-detail', getString(item, ['id', 'policy_id'], ''))}
-              loadError={linkedPolicyState.status === 'error' ? linkedPolicyState.error : null}
-              onRetry={() => setPolicyReload((count) => count + 1)}
-              empty={linkedPolicyState.status === 'loading' || linkedPolicyState.status === 'idle'
-                ? <DetailLoadingPlaceholder label="Loading linked schedules…" variant="compact" />
-                : <EmptyState icon={ClipboardList} title="No schedules run this check." body="Nothing dispatches this check automatically." actionLabel={canSchedule ? 'Schedule this check' : undefined} actionHref={canSchedule ? scheduleHref : undefined} />}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Recorded results</CardTitle>
-            <CardDescription>Up to 25 recent runs of this check{callerTarget ? ' on this target' : ''}. Select one to see its evidence here.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={checkRunColumns}
-              items={recordedRuns.slice(0, 25)}
-              getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => checkResultInspectorRowProps(item, `View evidence for ${targetLabel(getString(item, ['target_id'], ''))} at ${formatDate(item.completed_at ?? item.updated_at ?? item.created_at)}`)}
-              loadError={checkRunState.status === 'error' ? checkRunState.error : null}
-              onRetry={() => setRunReload((count) => count + 1)}
-              empty={checkRunState.status === 'loading' || checkRunState.status === 'idle'
-                ? <DetailLoadingPlaceholder label="Loading recorded results…" variant="compact" />
-                : <EmptyState icon={Activity} title="No recorded runs." body={callerTarget ? 'This check has not run on this target.' : 'This check has not run in this workspace.'} />}
-            />
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Schedules running this check</CardTitle>
+          <CardDescription>Schedules bound to this exact check ID.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={policyColumns}
+            items={linkedPolicyState.items}
+            getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
+            getRowProps={(item) => detailRowNavProps('policy-detail', getString(item, ['id', 'policy_id'], ''))}
+            loadError={linkedPolicyState.status === 'error' ? linkedPolicyState.error : null}
+            onRetry={() => setPolicyReload((count) => count + 1)}
+            empty={linkedPolicyState.status === 'loading' || linkedPolicyState.status === 'idle'
+              ? <DetailLoadingPlaceholder label="Loading linked schedules…" variant="compact" />
+              : <EmptyState icon={ClipboardList} title="No schedules run this check." body="Nothing dispatches this check automatically." actionLabel={canSchedule ? 'Schedule this check' : undefined} actionHref={canSchedule ? scheduleHref : undefined} />}
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Recorded results</CardTitle>
+          <CardDescription>Up to 25 recent runs of this check{callerTarget ? ' on this target' : ''}. Select one to see its evidence here.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={checkRunColumns}
+            items={recordedRuns.slice(0, 25)}
+            getRowId={(item) => getString(item, ['id'], '')}
+            getRowProps={(item) => checkResultInspectorRowProps(item, `View evidence for ${targetLabel(getString(item, ['target_id'], ''))} at ${formatDate(item.completed_at ?? item.updated_at ?? item.created_at)}`)}
+            loadError={checkRunState.status === 'error' ? checkRunState.error : null}
+            onRetry={() => setRunReload((count) => count + 1)}
+            empty={checkRunState.status === 'loading' || checkRunState.status === 'idle'
+              ? <DetailLoadingPlaceholder label="Loading recorded results…" variant="compact" />
+              : <EmptyState icon={Activity} title="No recorded runs." body={callerTarget ? 'This check has not run on this target.' : 'This check has not run in this workspace.'} />}
+          />
+        </CardContent>
+      </Card>
 
       <details className="detail-technical">
-        <summary>Technical details</summary>
+        <summary><ChevronRight className="detail-technical-chevron" size={16} aria-hidden="true" />Technical details</summary>
         <div className="stack">
           <div className="kv-list">
             <div><span>Check ID</span><strong className="mono">{entityId}</strong></div>
@@ -3459,7 +3391,7 @@ function PolicyDetailPage({
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="policy-detail" eyebrow="Validation schedule" />
+        <DetailPageIntro route="policy-detail" />
         <EmptyState
           icon={ClipboardList}
           title="No schedule selected."
@@ -3476,7 +3408,7 @@ function PolicyDetailPage({
   if (!policy) {
     return (
       <div className="content">
-        <DetailPageIntro route="policy-detail" eyebrow="Validation schedule" />
+        <DetailPageIntro route="policy-detail" />
         {data.loadErrors.testPolicies ? (
           <EmptyState
             icon={TriangleAlert}
@@ -3566,16 +3498,21 @@ function PolicyDetailPage({
       detail: windows.length === 0 ? 'No window: runs can start any time on the cadence.' : `Runs start only within ${formatSafeWindowList(policy)}.`
     }
   ];
+  const declaredTargetLabels = new Map(data.targets.map((item) => [getString(item, ['id'], ''), getString(item, ['value', 'hostname'], '')]));
   const runColumns: TableColumn<DataItem>[] = [
     { key: 'recorded', label: 'Dispatched', render: (run) => <span className="mono">{formatDate(run.started_at ?? run.created_at)}</span> },
     { key: 'target', label: 'Target', render: (run) => {
       const runTargetId = getString(run, ['target_id'], '');
-      return runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={runTargetId === target.targetId ? target.targetLabel : runTargetId} /> : <span className="muted">Not recorded</span>;
+      if (!runTargetId) return <span className="muted">Not recorded</span>;
+      const label = declaredTargetLabels.get(runTargetId) || (runTargetId === target.targetId && target.targetLabel !== runTargetId ? target.targetLabel : '');
+      return label
+        ? <DetailEntityLink route="target-detail" id={runTargetId} label={label} />
+        : <a className="detail-entity-link" href={buildDetailHref('target-detail', runTargetId)}><code>{runTargetId}</code></a>;
     } },
     { key: 'status', label: 'Status', render: (run) => <StatusBadge value={getString(run, ['status'], '')} tone={runStatusBadgeTone(getString(run, ['status'], ''))} fallback="Not recorded" /> },
     { key: 'outcome', label: 'Outcome', render: (run) => {
       const outcome = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
-      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No evidence-backed result</span>;
+      return outcome ? <VerdictBadge value={outcome} tone={verdictTone(outcome)} /> : <span className="muted">No evidence-backed result</span>;
     } },
     { key: 'evidence', label: 'Evidence', render: (run) => <RunEvidenceButton run={run} /> }
   ];
@@ -3585,12 +3522,10 @@ function PolicyDetailPage({
       <CustomerPageStyles />
       <DetailPageHeader
         route="policy-detail"
-        eyebrow="Validation schedule"
         entityId={entityId}
         title={title}
         actions={(
           <>
-            <AnchorButton size="sm" variant="ghost" href="#test-policies">All schedules</AnchorButton>
             <ScheduleActions
               policy={policy}
               checks={checks}
@@ -3619,9 +3554,9 @@ function PolicyDetailPage({
         <CardContent className="stack-tight">
           <div className="row-actions">
             <ScheduleStateBadge dispatch={dispatch} />
-            <span>{dispatch.reason}</span>
+            <span className="small muted">{dispatch.reason}</span>
           </div>
-          <div className="kv-list">
+          <div className="kv-list schedule-dispatch-facts">
             <div><span>Next run</span><strong>{next ? <>{next.primary} <span className="muted">{next.zone}</span></> : 'No next run recorded'}</strong></div>
             {next?.viewer ? <div><span>In your timezone</span><strong>{next.viewer}</strong></div> : null}
             <div><span>Last dispatched</span><strong>{lastDispatchedAt ? formatDate(lastDispatchedAt) : 'Never dispatched'}</strong></div>
@@ -3635,8 +3570,8 @@ function PolicyDetailPage({
             <CardDescription>Immutable after creation. A different target or check needs a new schedule.</CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
-            <div><span>Check</span>{checkHref ? <a href={checkHref}>{check.name}</a> : <strong>Not recorded</strong>}</div>
-            <div><span>Exact target</span>{target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <strong>Not recorded</strong>}</div>
+            <div><span>Check</span>{checkHref ? <a className="detail-entity-link" href={checkHref}>{check.name}</a> : <strong>Not recorded</strong>}</div>
+            <div><span>Exact target</span>{target.targetId ? <DetailEntityLink route="target-detail" id={target.targetId} label={target.targetLabel} /> : <strong className="muted">No exact target</strong>}</div>
           </CardContent>
         </Card>
         <Card>
@@ -3660,11 +3595,11 @@ function PolicyDetailPage({
           <CardDescription>What must hold for the scheduler to dispatch. Ownership, rate, and concurrency are still checked server-side at dispatch.</CardDescription>
         </CardHeader>
         <CardContent>
-          <ul className="placement-gates" aria-label="Schedule dispatch gates">
+          <ul className="placement-gates gates-stacked" aria-label="Schedule dispatch gates">
             {gates.map((gate) => (
               <li key={gate.label}>
-                {gate.status === 'blocked' ? <TriangleAlert size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
-                <span>{gate.label}<span className="muted small"> · {plainInlineText(gate.detail)}</span></span>
+                {gate.status === 'blocked' ? <TriangleAlert size={14} aria-hidden="true" /> : gate.status === 'met' ? <ShieldCheck size={14} aria-hidden="true" /> : <Info size={14} aria-hidden="true" />}
+                <span className="gate-text"><span>{gate.label}</span><span className="muted small">{plainInlineText(gate.detail)}</span></span>
                 <Badge tone={gate.status === 'met' ? 'success' : gate.status === 'blocked' ? 'warn' : 'muted'}>
                   {gate.status === 'met' ? 'Met' : gate.status === 'blocked' ? 'Blocks dispatch' : 'Info'}
                 </Badge>
@@ -3695,7 +3630,7 @@ function PolicyDetailPage({
         </CardContent>
       </Card>
       <details className="detail-technical">
-        <summary>Technical record</summary>
+        <summary><ChevronRight className="detail-technical-chevron" size={16} aria-hidden="true" />Technical record</summary>
         {binding ? <DetailCodeBlock label="Schedule binding record">{binding}</DetailCodeBlock> : null}
         {safetySnapshot ? <DetailCodeBlock label="Safety snapshot captured at creation">{JSON.stringify(safetySnapshot, null, 2)}</DetailCodeBlock> : null}
       </details>
@@ -3847,7 +3782,7 @@ export function DetailRoutePage({
     if (!entityId) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Staff tenant operations" />
+          <DetailPageIntro route={route} context="Staff-only surface" />
           <EmptyState icon={Target} title="No tenant selected." body="Open a tenant from the staff directory with ?id= or use the Detail link on #admin." actionLabel="Open staff admin" actionHref="#admin" />
         </div>
       );
@@ -3855,7 +3790,7 @@ export function DetailRoutePage({
     if (session.principal !== 'staff') {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Staff tenant operations" />
+          <DetailPageIntro route={route} context="Staff-only surface" />
           <EmptyState icon={UserCog} title="Staff session required." body="Tenant detail is available after staff sign-in." actionLabel="Open staff login" actionHref="/internal/admin/login" />
         </div>
       );
@@ -3878,7 +3813,7 @@ export function DetailRoutePage({
     if (!entityId) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <DetailPageIntro route={route} />
           <EmptyState icon={TriangleAlert} title="No finding selected." body="Open a finding from the list with ?id= or use the View link on #findings." actionLabel="Open findings" actionHref="#findings" />
         </div>
       );
@@ -3887,7 +3822,7 @@ export function DetailRoutePage({
     if (!findingEntity && findingDetailState.loading) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <DetailPageIntro route={route} />
           <DetailLoadingPlaceholder label="Loading finding detail…" />
         </div>
       );
@@ -3895,7 +3830,7 @@ export function DetailRoutePage({
     if (!findingEntity) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <DetailPageIntro route={route} />
           <EmptyState icon={TriangleAlert} title="Finding not found." body={findingDetailState.error || 'The requested finding is missing or outside this tenant scope.'} actionLabel="Open findings" actionHref="#findings" />
         </div>
       );
@@ -3918,7 +3853,7 @@ export function DetailRoutePage({
     if (!entityId) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow="Declared target" />
+          <DetailPageIntro route={route} />
           <EmptyState icon={Target} title="No target selected." body="Open a declared target from Targets." actionLabel="Open targets" actionHref="#targets" />
         </div>
       );
@@ -3943,7 +3878,7 @@ export function DetailRoutePage({
     if (!entityId) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
+          <DetailPageIntro route={route} context={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
           <EmptyState
             icon={ShieldCheck}
             title="No high-scale request selected."
@@ -3960,7 +3895,7 @@ export function DetailRoutePage({
     if (!queueEntity && highScaleDetail.loading) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
+          <DetailPageIntro route={route} context={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
           <DetailLoadingPlaceholder label="Loading high-scale request…" />
         </div>
       );
@@ -3968,7 +3903,7 @@ export function DetailRoutePage({
     if (!queueEntity) {
       return (
         <div className="content">
-          <DetailPageIntro route={route} eyebrow={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
+          <DetailPageIntro route={route} context={staffSocWorkspace ? 'SOC execution workspace' : 'High-scale authorization pack'} />
           <EmptyState
             icon={ShieldCheck}
             title="High-scale request not found."
@@ -4007,9 +3942,8 @@ export function DetailRoutePage({
   }
 
   if (!entityId) {
-    const noSelectionByRoute: Partial<Record<RouteId, { eyebrow: string; title: string; body: string; actionLabel: string; actionHref: string; icon: typeof Target }>> = {
+    const noSelectionByRoute: Partial<Record<RouteId, { title: string; body: string; actionLabel: string; actionHref: string; icon: typeof Target }>> = {
       'run-detail': {
-        eyebrow: 'Test run evidence',
         title: 'No test run selected.',
         body: 'Open a run from the list with ?id= or use the Detail link on #runs.',
         actionLabel: 'Open test runs',
@@ -4017,7 +3951,6 @@ export function DetailRoutePage({
         icon: Activity
       },
       'finding-detail': {
-        eyebrow: 'Evidence-backed finding',
         title: 'No finding selected.',
         body: 'Open a finding from the list with ?id= or use the View link on #findings.',
         actionLabel: 'Open findings',
@@ -4025,7 +3958,6 @@ export function DetailRoutePage({
         icon: TriangleAlert
       },
       'queue-detail': {
-        eyebrow: 'SOC execution workspace',
         title: 'No SOC request selected.',
         body: 'Open a queue item from Test runs or the SOC console with ?id=.',
         actionLabel: 'Open SOC console',
@@ -4033,7 +3965,6 @@ export function DetailRoutePage({
         icon: ShieldCheck
       },
       'target-detail': {
-        eyebrow: 'Declared target',
         title: 'No target selected.',
         body: 'Open a declared target from Targets.',
         actionLabel: 'Open targets',
@@ -4044,7 +3975,7 @@ export function DetailRoutePage({
     const noSelection = noSelectionByRoute[route];
     return (
       <div className="content">
-        <DetailPageIntro route={route} eyebrow={noSelection?.eyebrow ?? 'Detail surface'} />
+        <DetailPageIntro route={route} />
         <EmptyState
           icon={noSelection?.icon ?? Target}
           title={noSelection?.title ?? 'No entity selected.'}
@@ -4059,7 +3990,7 @@ export function DetailRoutePage({
   if (!entity && detailState.loading) {
     return (
       <div className="content">
-        <DetailPageIntro route={route} eyebrow="Entity detail" />
+        <DetailPageIntro route={route} />
         <DetailLoadingPlaceholder label="Loading entity detail…" />
       </div>
     );
@@ -4072,7 +4003,7 @@ export function DetailRoutePage({
     const listLink = listHrefByRoute[route];
     return (
       <div className="content">
-        <DetailPageIntro route={route} eyebrow="Entity detail" />
+        <DetailPageIntro route={route} />
         <EmptyState
           icon={Target}
           title="Entity not found."
@@ -4102,7 +4033,7 @@ export function DetailRoutePage({
 
   return (
     <div className="content">
-      <DetailPageIntro route={route} eyebrow="Detail surface" />
+      <DetailPageIntro route={route} />
       <EmptyState
         icon={Target}
         title="Unsupported detail route."
@@ -4164,7 +4095,7 @@ function ReportLiveOpenFindings({ data, config, session, runIds, checkedAt }: { 
               {rows.map((finding) => (
                 <li key={getString(finding, ['id'])}>
                   <DetailEntityLink route="finding-detail" id={getString(finding, ['id'])} label={plainFindingTitle(finding, data.targets, data.checks)} />
-                  <span className="muted small"> · {formatSeverityLabel(getString(finding, ['severity'], ''))} · run {getString(finding, ['test_run_id'])}</span>
+                  <span className="muted small"> · {formatSeverityLabel(getString(finding, ['severity'], ''))} · <code className="mono">{getString(finding, ['test_run_id'])}</code></span>
                 </li>
               ))}
             </ul>
@@ -4210,7 +4141,7 @@ export function ReportDetailPage({
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report" />
+        <DetailPageIntro route="report-detail" />
         <EmptyState
           icon={FileText}
           title="No report selected."
@@ -4225,7 +4156,7 @@ export function ReportDetailPage({
   if (!report && reportDetail.loading) {
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report" />
+        <DetailPageIntro route="report-detail" />
         <DetailLoadingPlaceholder label="Loading report…" variant="layout" />
       </div>
     );
@@ -4235,7 +4166,7 @@ export function ReportDetailPage({
     const denied = /forbidden|permission|403/i.test(reportDetail.error);
     return (
       <div className="content">
-        <DetailPageIntro route="report-detail" eyebrow="Report" />
+        <DetailPageIntro route="report-detail" />
         <EmptyState
           icon={denied ? TriangleAlert : FileText}
           title={denied ? 'Report access required.' : reportDetail.error && !/not.?found|404/i.test(reportDetail.error) ? 'Report could not be loaded.' : 'Report not found.'}
@@ -4362,19 +4293,18 @@ export function ReportDetailPage({
       <CustomerPageStyles />
       <DetailPageHeader
         route="report-detail"
-        eyebrow={`${reportKindIsFramework(kind) ? `${reportKindLabel(kind)} mapping` : `${reportKindLabel(kind)} report`}`}
+        context={reportKindIsFramework(kind) ? `${reportKindLabel(kind)} mapping` : `${reportKindLabel(kind)} report`}
         entityId={entityId}
         title={reportTitle}
         actions={(
           <>
-            <AnchorButton size="sm" variant="ghost" href="#reports">All reports</AnchorButton>
             <Button size="sm" variant="secondary" onClick={() => openEvidenceInspector({ entry: 'report', report_id: entityId })}>View snapshot evidence</Button>
             <ReportExportMenu reportId={entityId} title={reportTitle} formats={formatOptions} exporter={exporter} />
           </>
         )}
       />
       <PageContextSummary>
-        Snapshot {asOf ? `frozen ${formatDate(asOf)}` : `created ${formatDate(report.created_at)} (snapshot time not recorded)`} · {scopeText}
+        {asOf ? `Snapshot frozen ${formatDate(asOf)}` : `Report created ${formatDate(report.created_at)} · snapshot time not recorded`} · Scope: {scopeText}
       </PageContextSummary>
       {!frozen ? (
         <div className="form-banner neutral" role="note">This is a legacy report: its inputs were not frozen at generation. Only the stored run references and summary values are shown; nothing is filled in from current data.</div>
@@ -4404,11 +4334,13 @@ export function ReportDetailPage({
               <CardTitle>Readiness at {asOf ? formatDate(asOf) : 'generation'}</CardTitle>
               <CardDescription>Values recorded in the report. They do not change when current results change.</CardDescription>
             </CardHeader>
-            <CardContent className="kv-list report-summary-layout">
-              {hasReadinessScore ? <ReadinessGauge score={readinessScore} /> : <p className="cp-note">{readinessNote}</p>}
-              <div><span>{reportKindIsFramework(kind) ? 'Framework mapping' : 'Audience'}</span><strong>{compliance ? getString(compliance, ['template_title'], reportKindLabel(kind)) : reportKindLabel(kind)}</strong></div>
-              {frameworks.length ? <div><span>Frameworks</span><strong>{frameworks.map((framework) => plainCodeLabel(framework)).join(', ')}</strong></div> : null}
-              <div><span>Status</span><StatusBadge value={getString(report, ['status'], '')} tone={reportStatusBadgeTone(getString(report, ['status'], ''))} fallback="Not recorded" /></div>
+            <CardContent className="report-summary-layout">
+              {hasReadinessScore ? <ReadinessGauge score={readinessScore} showBand={false} /> : <p className="cp-note">{readinessNote}</p>}
+              <div className="kv-list">
+                <div><span>{reportKindIsFramework(kind) ? 'Framework mapping' : 'Audience'}</span><strong>{compliance ? getString(compliance, ['template_title'], reportKindLabel(kind)) : reportKindLabel(kind)}</strong></div>
+                {frameworks.length ? <div><span>Frameworks</span><strong>{frameworks.map((framework) => plainCodeLabel(framework)).join(', ')}</strong></div> : null}
+                <div><span>Status</span><StatusBadge value={getString(report, ['status'], '')} tone={reportStatusTone(getString(report, ['status'], ''))} fallback="Not recorded" /></div>
+              </div>
             </CardContent>
           </Card>
         </div>

@@ -31,8 +31,15 @@
 }
 
 .dash-gauge-block .legend-row {
-  grid-template-columns: 9px minmax(4.5rem, auto) minmax(0, 1fr) auto auto;
+  grid-template-columns: 9px minmax(4.5rem, auto) minmax(0, 1fr) 4ch minmax(8ch, auto);
   width: 100%;
+}
+
+.dash-gauge-block .legend-row .lg-pct,
+.dash-gauge-block .legend-row b {
+  min-width: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .gauge-side-note {

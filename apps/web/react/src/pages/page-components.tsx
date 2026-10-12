@@ -3,6 +3,7 @@ import {
   Activity,
   Bot,
   CheckCircle2,
+  ChevronRight,
   CircleHelp,
   CircleMinus,
   ClipboardList,
@@ -48,9 +49,9 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { Toast } from '../components/ui/toast';
 import { AnimatedNumber } from '../components/ui/motion';
-import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
+import { reportStatusTone, runStatusTone as runStatusBadgeTone, subscriptionStatusTone, tenantLifecycleTone, type StatusTone } from '../lib/status-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainCheckName, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { dashboardReadinessMessage, plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { canReadDataset, sessionHasPermission, staffSessionHasPermission } from '../lib/dataset-access.mjs';
@@ -58,7 +59,7 @@ import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import { buildDetailHref, replaceRouteParams } from '../lib/route-params';
-import { DEFENSIVE_RULES, NAV_GROUP_LABELS, ROUTE_BY_ID } from '../lib/navigation';
+import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
 import { isValidTimezone, PoliciesRefined, type PoliciesRefinedProps } from './refined/policies-refined';
 import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
@@ -190,32 +191,35 @@ function formatRunStatusLabel(status: string) {
 
 
 
-function findingSeverityBadgeTone(severity: string): UiBadgeTone {
-  const normalized = severity.toLowerCase();
-  if (normalized === 'critical' || normalized === 'high' || normalized === 's1' || normalized === 's2') return 'danger';
-  if (normalized === 'medium' || normalized === 's3') return 'warn';
-  if (normalized === 'low' || normalized === 's4') return 'info';
-  return 'muted';
+
+
+
+
+function presentValue(value: string) {
+  const text = value.trim();
+  return !text || text.toLowerCase() === 'unrecorded' ? '' : text;
 }
 
-function highScaleStateBadgeTone(state: string): UiBadgeTone {
-  if (['submitted', 'under_review'].includes(state)) return 'warn';
-  if (['approved', 'scheduled', 'completed', 'executed'].includes(state)) return 'success';
-  if (['rejected', 'cancelled', 'stopped'].includes(state)) return 'danger';
-  return 'info';
+function presentStatus(value: string) {
+  const text = presentValue(value);
+  return text ? plainCodeLabel(text) : '';
 }
 
-function lifecycleBadgeTone(state: string): UiBadgeTone {
-  if (state === 'active') return 'success';
-  if (state === 'suspended') return 'danger';
-  return 'warn';
+function recordedText(value: string) {
+  return presentValue(value) || 'Not recorded';
 }
 
-function subscriptionStatusBadgeTone(status: string): UiBadgeTone {
-  if (status === 'active') return 'success';
-  if (status === 'past_due' || status === 'suspended') return 'warn';
-  if (status === 'cancelled') return 'muted';
-  return 'info';
+function recordedStatusLabel(value: string) {
+  return presentStatus(value) || 'Not recorded';
+}
+
+export function RecordedKvRow({ label, value, missing = 'Not recorded', mono }: { label: string; value: string; missing?: string; mono?: boolean }) {
+  return (
+    <div>
+      <span>{label}</span>
+      {!value ? <span className="muted">{missing}</span> : mono ? <code className="mono-hash" title={value}>{value}</code> : <strong>{value}</strong>}
+    </div>
+  );
 }
 
 function configuredSupportUri(siteConfig: Record<string, unknown>) {
@@ -298,7 +302,12 @@ const CUSTOMER_PAGE_STYLES = `
 .tg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
 .tg-toolbar > .muted { margin-left: auto; }
 details.detail-technical { min-width: 0; padding: var(--space-4) 0 0; border-top: 1px solid var(--border-soft); }
-details.detail-technical > summary { min-height: 44px; display: flex; align-items: center; color: var(--fg); font-weight: 600; cursor: pointer; }
+details.detail-technical > summary { min-height: 44px; display: flex; align-items: center; gap: var(--space-2); color: var(--fg); font-size: var(--text-sm); font-weight: 600; cursor: pointer; list-style: none; }
+details.detail-technical > summary::-webkit-details-marker { display: none; }
+details.detail-technical .detail-technical-chevron { flex: 0 0 auto; color: var(--fg-2); transition: transform var(--motion-fast) var(--ease-standard); }
+details.detail-technical[open] > summary > .detail-technical-chevron { transform: rotate(90deg); }
+details.detail-technical > summary:not(:has(> .detail-technical-chevron))::before { content: ''; flex: 0 0 auto; width: 7px; height: 7px; margin: 0 var(--space-1); border-right: 1.5px solid var(--fg-2); border-bottom: 1.5px solid var(--fg-2); transform: rotate(-45deg); transition: transform var(--motion-fast) var(--ease-standard); }
+details.detail-technical[open] > summary:not(:has(> .detail-technical-chevron))::before { transform: rotate(45deg); }
 details.detail-technical > summary:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; border-radius: var(--radius-sm); }
 details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .check-explainer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4) var(--space-6); }
@@ -343,7 +352,19 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .report-export-options small { color: var(--fg-2); font-size: var(--text-xs); }
 .report-kind-group { min-width: 0; margin: 0; padding: 0; border: 0; }
 .report-kind-group legend { margin-bottom: var(--space-2); padding: 0; color: var(--fg); font-weight: 600; }
-.report-kind-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); }
+.report-kind-group .cp-note { margin: 0 0 var(--space-3); }
+.report-kind-group .report-period-select { margin: 0; }
+.report-kind-group .report-framework-options { grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); }
+@media (pointer: fine) { .reports-page .report-scope-modes .check-row { min-height: 0; padding-block: 0; } }
+@media (pointer: coarse) { .reports-page .report-scope-modes { margin-top: calc(-1 * var(--space-2)); } }
+.reports-page .report-review-actions { align-items: center; }
+@media (max-width: 700px) {
+  .reports-page .report-review-actions { align-items: stretch; }
+  .page-head .row-actions > .report-export-menu, .page-head .row-actions > .report-export-menu > .btn { width: 100%; }
+}
+.settings-page .settings-related-links { margin: 0; text-align: left; }
+.report-kind-group .report-period-select > span:first-child { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.report-kind-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: var(--space-2); }
 .report-kind-option {
   display: flex;
   min-height: 44px;
@@ -358,7 +379,8 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .report-kind-option:hover { border-color: var(--border-strong); }
 .report-kind-option:has(input:checked) { border-color: var(--accent); }
 .report-kind-option:has(input:focus-visible) { box-shadow: var(--focus-ring); }
-.report-kind-option input { margin-top: 3px; accent-color: var(--accent); }
+.report-kind-option input { width: 20px; min-width: 20px; height: 20px; flex: 0 0 20px; margin: 0; accent-color: var(--accent); }
+@media (pointer: coarse) { .report-kind-option input { width: 24px; min-width: 24px; height: 24px; flex-basis: 24px; } }
 .report-kind-option span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .report-kind-option small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
 .report-review { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
@@ -374,13 +396,6 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .support-event-row:first-child { border-top: 0; }
 .support-event-row .check-row { min-width: 0; flex: 1 1 280px; }
 .support-summary-preview { max-height: 280px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.release-dimensions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.release-dimensions > div { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); padding: var(--space-4) var(--space-5); }
-.release-dimensions > div + div { border-left: 1px solid var(--border-soft); }
-.release-dimensions > div:first-child { padding-left: 0; }
-.release-dimensions dt { color: var(--meta); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: var(--tracking-caps); text-transform: uppercase; }
-.release-dimensions dd { margin: 0; color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; overflow-wrap: anywhere; }
-.release-dimensions dd.release-dimension-hint { margin: 0; color: var(--fg-2); font-family: var(--font-body); font-size: var(--text-xs); font-weight: 400; line-height: 1.45; }
 .release-evidence-page .audit-search-pill, .audit-page .audit-search-pill { flex: 0 1 auto; width: min(100%, 520px); }
 .release-ledger { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .release-filter button { min-height: 36px; }
@@ -388,28 +403,19 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
   .release-ledger.has-selection { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
   .release-record-detail { position: sticky; top: calc(64px + var(--space-4)); }
 }
-@media (max-width: 900px) {
-  .release-dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .release-dimensions > div:nth-child(3) { padding-left: 0; border-left: 0; }
-  .release-dimensions > div:nth-child(n + 3) { border-top: 1px solid var(--border-soft); }
-}
-@media (max-width: 480px) {
-  .release-dimensions { grid-template-columns: minmax(0, 1fr); }
-  .release-dimensions > div, .release-dimensions > div + div { padding-left: 0; border-left: 0; }
-  .release-dimensions > div + div { border-top: 1px solid var(--border-soft); }
-}
+.product-form input.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .settings-retention-review { margin: 0; padding-left: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); }
-.settings-session > summary { padding: 0 var(--space-6); }
 .report-scope-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-1) var(--space-4); max-height: 320px; margin: 0; padding: var(--space-2); overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-md); list-style: none; }
 .report-scope-options li { min-width: 0; overflow-wrap: anywhere; }
 .report-generated-preview .card-header .row-actions { flex-wrap: wrap; }
 .report-section-title { margin: var(--space-2) 0 0; font-size: var(--text-lg); }
 .report-section-title .muted { font-family: var(--font-body); font-size: var(--text-sm); font-weight: 400; }
-.audit-page .audit-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); width: 100%; }
-.audit-page .audit-filter-fields .field { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); }
-.audit-page .audit-filter-fields input[type="date"] { min-height: 44px; padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); font: inherit; font-size: var(--text-sm); color-scheme: dark; }
+.audit-page .audit-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: start; column-gap: var(--space-3); width: 100%; }
+.audit-page .audit-filter-fields .field { display: flex; min-width: 0; flex-direction: column; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.audit-page .audit-filter-fields .field > span { min-height: 1.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audit-page .audit-filter-fields input[type="date"] { color-scheme: dark; }
 :root[data-theme="light"] .audit-page .audit-filter-fields input[type="date"] { color-scheme: light; }
-.audit-page .audit-filter-fields input[type="date"]:focus-visible { outline: none; border-color: var(--focus-color); box-shadow: var(--focus-ring); }
+.audit-page .audit-filter-fields .field > input:focus-visible { outline: none; border-color: var(--focus-color); box-shadow: var(--focus-ring); }
 .audit-page .audit-filter-toolbar > .cp-toolbar { width: 100%; }
 .audit-event-detail:focus { outline: none; }
 body .settings-page .tab-panel[hidden] { display: none; }
@@ -428,7 +434,7 @@ body .settings-page .tab-panel[hidden] { display: none; }
   .report-export-options { right: auto; left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .report-export-options button, .report-kind-option { transition: none; }
+  .report-export-options button, .report-kind-option, details.detail-technical .detail-technical-chevron, details.detail-technical > summary::before { transition: none; }
 }
 @media (max-width: 900px) {
   .check-explainer { grid-template-columns: minmax(0, 1fr); }
@@ -439,16 +445,30 @@ export function CustomerPageStyles() {
   return <style>{CUSTOMER_PAGE_STYLES}</style>;
 }
 
+export function PageContextBadge({ children }: { children: ReactNode }) {
+  return <Badge tone="muted" className="page-context-badge">{children}</Badge>;
+}
+
+export function PageTitle({ context, className, children }: { context?: ReactNode; className?: string; children: ReactNode }) {
+  if (!context) return <h1 className={className}>{children}</h1>;
+  return (
+    <div className="page-title-row">
+      <h1 className={className}>{children}</h1>
+      <PageContextBadge>{context}</PageContextBadge>
+    </div>
+  );
+}
+
 export function PageHeader({
   route,
-  eyebrow,
+  context,
   title,
   description,
   variant = 'default',
   actions
 }: {
   route: RouteId;
-  eyebrow?: string;
+  context?: ReactNode;
   title?: ReactNode;
   description?: ReactNode;
   variant?: 'default' | 'detail';
@@ -458,17 +478,14 @@ export function PageHeader({
   if (variant === 'detail') {
     return (
       <div className="page-head page-head-detail">
-        {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
+        {context ? <PageContextBadge>{context}</PageContextBadge> : null}
       </div>
     );
   }
   return (
     <div className="page-head">
       <div>
-        {/* The raw group id ("governance") leaked into the eyebrow whenever a page
-            passed no explicit one; the shared label is what the breadcrumb shows. */}
-        <p className="eyebrow">{eyebrow ?? (item ? NAV_GROUP_LABELS[item.group] : undefined)}</p>
-        <h1>{title ?? item?.label}</h1>
+        <PageTitle context={context}>{title ?? item?.label}</PageTitle>
         <p>{description ?? item?.description}</p>
       </div>
       {actions ? <div className="row-actions">{actions}</div> : null}
@@ -485,7 +502,7 @@ export function MetricCard({
   showStatusBadge
 }: {
   label: string;
-  value: string | number;
+  value: ReactNode;
   sub: string;
   icon: typeof Activity;
   tone?: 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
@@ -531,16 +548,21 @@ function KpiValue({ value }: { value: ReactNode }) {
   return <AnimatedNumber value={parsed} />;
 }
 
-function KpiCell({
+export function KpiCell({
   label,
   value,
   delta,
-  deltaVariant
+  deltaVariant,
+  tone,
+  valueClassName
 }: {
   label: string;
   value: ReactNode;
   delta: ReactNode;
   deltaVariant?: 'up' | 'down';
+  /** Status tone; warn and danger add the same attention/critical chip MetricCard carried. */
+  tone?: StatusTone;
+  valueClassName?: string;
 }) {
   const deltaClassName = deltaVariant ? `kpi-delta ${deltaVariant}` : 'kpi-delta';
   // Carry the up/down trend through a colored Lucide glyph (graphical, needs only 3:1) and keep the
@@ -549,9 +571,16 @@ function KpiCell({
   // size; the glyph preserves the direction signal without small colored text on white.
   const DeltaIcon = deltaVariant === 'up' ? TrendingUp : deltaVariant === 'down' ? TrendingDown : null;
   return (
-    <div className="kpi-cell">
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value"><KpiValue value={value} /></div>
+    <div className="kpi-cell" data-tone={tone}>
+      {tone === 'warn' || tone === 'danger' ? (
+        <div className="kpi-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)' }}>
+          <span>{label}</span>
+          <Badge tone={tone}>{tone === 'warn' ? 'attention' : 'critical'}</Badge>
+        </div>
+      ) : (
+        <div className="kpi-label">{label}</div>
+      )}
+      <div className={valueClassName ? `kpi-value ${valueClassName}` : 'kpi-value'}><KpiValue value={value} /></div>
       {DeltaIcon ? (
         <div className={deltaClassName} style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}>
           <DeltaIcon size={12} aria-hidden />
@@ -1237,11 +1266,11 @@ export function ReportsPage({
         const legacyScope = scope.mode === 'target_groups';
         const targets = Array.isArray(scope.target_ids) ? scope.target_ids.length : 0;
         const runs = getNestedItem(item, ['summary', 'run_capture']);
-        return [legacyScope ? 'Historical domain scope' : '', targets ? `${formatNumber(targets)} target${targets === 1 ? '' : 's'}` : '', mode === 'runs' ? `${getString(runs ?? {}, ['included'], '?')} runs` : ''].filter(Boolean).join(' · ') || mode.replaceAll('_', ' ');
+        return [legacyScope ? 'Historical domain scope' : '', targets ? `${formatNumber(targets)} target${targets === 1 ? '' : 's'}` : '', mode === 'runs' ? `${getString(runs ?? {}, ['included'], '?')} ${pluralize(Number(getString(runs ?? {}, ['included'], '0')), 'run')}` : ''].filter(Boolean).join(' · ') || mode.replaceAll('_', ' ');
       }
     },
     { key: 'generated', label: 'Generated', render: (item) => <span className="mono">{formatDate(getNestedItem(item, ['summary'])?.as_of ?? item.created_at ?? item.generated_at)}</span> },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone="muted">{getString(item, ['status'], 'Not recorded').replaceAll('_', ' ')}</Badge> }
+    { key: 'status', label: 'Status', render: (item) => <Badge tone={reportStatusTone(getString(item, ['status'], ''))}>{getString(item, ['status'], 'Not recorded').replaceAll('_', ' ')}</Badge> }
   ];
 
   async function handleGenerate() {
@@ -1281,7 +1310,6 @@ export function ReportsPage({
       <PageHeader
         route="reports"
         title="Reports"
-        eyebrow="Snapshots on the record"
         description="Generate a dated snapshot of findings, recorded runs, and declarations for a chosen audience and scope, review it, then export it. A report never changes after generation."
       />
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
@@ -1307,7 +1335,7 @@ export function ReportsPage({
               <fieldset className="report-kind-group" disabled={busy !== ''}>
                 <legend>Or a framework mapping</legend>
                 <p className="cp-note">Maps recorded evidence to framework controls. It is not a certification or a statement of compliance.</p>
-                <div className="report-kind-options">
+                <div className="report-kind-options report-framework-options">
                   {frameworkOptions.map((option) => (
                     <label key={option.value} className="report-kind-option">
                       <input type="radio" name="report_kind" value={option.value} checked={selectedReportKind === option.value} onChange={() => { setReportKind(option.value); setReviewing(false); }} />
@@ -1317,12 +1345,15 @@ export function ReportsPage({
                 </div>
               </fieldset>
             ) : null}
-            <div className="product-form">
-              <Select label="2. Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={(value) => { setReportPeriod(value); setReviewing(false); }} hint="Runs and findings are captured inside this window, ending at generation." />
-            </div>
+            <fieldset className="report-kind-group" disabled={busy !== ''}>
+              <legend>2. Period</legend>
+              <div className="product-form">
+                <Select className="report-period-select" label="Report period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={(value) => { setReportPeriod(value); setReviewing(false); }} hint="Runs and findings are captured inside this window, ending at generation." />
+              </div>
+            </fieldset>
             <fieldset className="report-kind-group" disabled={busy !== ''}>
               <legend>3. Scope</legend>
-              <div className="cp-toolbar" role="radiogroup" aria-label="Report scope">
+              <div className="cp-toolbar report-scope-modes" role="radiogroup" aria-label="Report scope">
                 <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'tenant'} onChange={() => setMode('tenant')} /><span>Whole workspace</span></label>
                 <label className="check-row"><input type="radio" name="report_scope" checked={scopeMode === 'targets'} disabled={!modeSupported('targets')} onChange={() => setMode('targets')} /><span>Selected domains{modeSupported('targets') ? '' : ' (not offered by this server)'}</span></label>
               </div>
@@ -1379,13 +1410,13 @@ export function ReportsPage({
                     </>
                   ) : null}
                   <p className="muted small">
-                    Up to {scopeLimit !== null ? formatNumber(scopeLimit) : 'the server limit of'} domains per report
+                    Up to {scopeLimit !== null ? formatNumber(scopeLimit) : 'the server limit of'} {scopeLimit === 1 ? 'domain' : 'domains'} per report
                     . The server rejects a larger scope rather than trimming it.
                   </p>
                 </div>
               ) : scopeMode === 'tenant' ? <p className="cp-note">Covers every declared target. No scope is sent with the request.</p> : null}
             </fieldset>
-            <div className="row-actions">
+            <div className="row-actions report-review-actions">
               <Button variant="secondary" disabled={!selectedReportKind || !scopeReady || busy !== ''} onClick={() => setReviewing(true)}>Review report</Button>
               {!selectedReportKind ? <span className="muted small">Choose an audience or framework first.</span> : !scopeModeSupported ? <span className="muted small">This scope is not offered; choose Whole workspace.</span> : !scopeReady ? <span className="muted small">Select at least one domain that is visible in this workspace.</span> : null}
             </div>
@@ -1790,7 +1821,6 @@ export function SettingsPage({
       <PageHeader
         route="settings"
         title="Settings"
-        eyebrow="Workspace configuration"
         description="Organization name, automation credentials, stored integration secrets, and data retention. Each change is saved and audited on its own."
       />
       <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections"
@@ -1839,53 +1869,51 @@ export function SettingsPage({
 
       {(
         <div role="tabpanel" id="settings-sections-panel-organization" aria-labelledby="settings-sections-tab-organization" className="tab-panel" hidden={tab !== 'organization'}><>
-        <div className="split">
-          <Card>
-            <CardHeader>
-              <CardTitle>Organization profile</CardTitle>
-              <CardDescription>Organization display name and residency metadata. Privacy defaults stay metadata-only.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {tenant ? (
-                <form className="product-form" onSubmit={handleSaveOrganization}>
-                  <label className="full">
-                    <span>Organization name</span>
-                    <input name="name" defaultValue={getString(tenant, ['name'])} required readOnly={!canWriteTenant} />
-                  </label>
-                  <label>
-                    <span>Tenant ID</span>
-                    <input value={getString(tenant, ['id'])} readOnly />
-                  </label>
-                  <label>
-                    <span>Data region</span>
-                    <input value={getString(tenant, ['data_region'], 'unrecorded')} readOnly />
-                  </label>
-                  <div className="form-actions full">
-                    {canWriteTenant
-                      ? <Button type="submit" loading={busy === 'save-organization'}>Save organization</Button>
-                      : <span className="muted">Organization settings are read-only for your role.</span>}
-                  </div>
-                </form>
-              ) : (
-                <EmptyState
-                  icon={ShieldCheck}
-                  variant="skeleton"
-                  title="Organization profile loading…"
-                  body="Tenant settings are not available yet for this session. Refresh the page or retry in a moment."
-                  actionLabel="Refresh page"
-                  onAction={() => window.location.reload()}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Organization profile</CardTitle>
+            <CardDescription>Organization display name and residency metadata. Privacy defaults stay metadata-only.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {tenant ? (
+              <form className="product-form" onSubmit={handleSaveOrganization}>
+                <label className="full">
+                  <span>Organization name</span>
+                  <input name="name" defaultValue={getString(tenant, ['name'])} required readOnly={!canWriteTenant} />
+                </label>
+                <label>
+                  <span>Tenant ID</span>
+                  <input className="mono" value={getString(tenant, ['id'])} readOnly />
+                </label>
+                <label>
+                  <span>Data region</span>
+                  <input value={recordedText(getString(tenant, ['data_region'], ''))} readOnly />
+                </label>
+                <div className="form-actions full">
+                  {canWriteTenant
+                    ? <Button type="submit" loading={busy === 'save-organization'}>Save organization</Button>
+                    : <span className="muted">Organization settings are read-only for your role.</span>}
+                </div>
+              </form>
+            ) : (
+              <EmptyState
+                icon={ShieldCheck}
+                variant="skeleton"
+                title="Organization profile loading…"
+                body="Tenant settings are not available yet for this session. Refresh the page or retry in a moment."
+                actionLabel="Refresh page"
+                onAction={() => window.location.reload()}
+              />
+            )}
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>Users and sign-in</CardTitle>
             <CardDescription>Inviting users, changing roles, and SSO mapping are not self-service in this portal. Ask your deployment administrator.</CardDescription>
           </CardHeader>
           <details className="detail-technical settings-session">
-          <summary>Your session details</summary>
+          <summary><ChevronRight className="detail-technical-chevron" size={16} aria-hidden="true" />Your session details</summary>
           <CardContent className="kv-list">
             <div><span>User ID</span><strong>{session.user_id ?? '—'}</strong></div>
             <div><span>Role</span><strong>{session.role ?? '—'}</strong></div>
@@ -1906,9 +1934,12 @@ export function SettingsPage({
               description="Immutable security-relevant history lives on the Audit page — Settings does not duplicate that log."
               trailing={<AnchorButton href="#audit" variant="secondary" size="sm">Open audit log</AnchorButton>}
             />
-            <CardContent className="row-actions">
-              {canReadNotifications ? <AnchorButton href="#notifications" variant="ghost" size="sm">Notification rules</AnchorButton> : null}
-              <AnchorButton href="#integrations" variant="ghost" size="sm">Integrations</AnchorButton>
+            <CardContent>
+              <p className="settings-related-links muted">
+                Related:{' '}
+                {canReadNotifications ? <><a className="detail-entity-link" href="#notifications">Notification rules</a>{' · '}</> : null}
+                <a className="detail-entity-link" href="#integrations">Integrations</a>
+              </p>
             </CardContent>
           </Card>
         ) : null}
@@ -1967,7 +1998,7 @@ export function SettingsPage({
             <PanelCardHeader
               title="Service accounts"
               description="Automation credentials are scoped, auditable, rotatable, and redacted after creation."
-              trailing={<Badge tone="muted">{data.serviceAccounts.length} records</Badge>}
+              trailing={<Badge tone="muted">{countLabel(data.serviceAccounts.length, 'record')}</Badge>}
             />
             <CardContent>
               <DataTable
@@ -2074,7 +2105,7 @@ export function SettingsPage({
             <PanelCardHeader
               title="Secret vault inventory"
               description="Stored secret metadata only — no plaintext, ciphertext, or auth tags."
-              trailing={<Badge tone="muted">{data.secrets.length} records</Badge>}
+              trailing={<Badge tone="muted">{countLabel(data.secrets.length, 'record')}</Badge>}
             />
             <CardContent>
               <DataTable
@@ -2158,7 +2189,7 @@ export function SettingsPage({
               {retentionChanges.map((change) => (
                 <li key={change.label}>
                   <strong>{change.label}:</strong>{' '}
-                  {change.before === null ? `not recorded → ${change.after} days` : change.before === change.after ? `${change.after} days (unchanged)` : `${change.before} → ${change.after} days${change.after < change.before ? ' (shorter)' : ''}`}
+                  {change.before === null ? `Not recorded → ${countLabel(change.after, 'day')}` : change.before === change.after ? `${countLabel(change.after, 'day')} (unchanged)` : `${change.before} → ${countLabel(change.after, 'day')}${change.after < change.before ? ' (shorter)' : ''}`}
                 </li>
               ))}
               <li><strong>Legal hold:</strong> {pendingRetention?.evidence_retention.legal_hold ? 'on, deletions are blocked while it stays on' : 'off'}</li>
@@ -2463,7 +2494,6 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
       <PageHeader
         route="support"
         title="Support"
-        eyebrow="Escalation and references"
         description="Prepare a reference-only summary for your support contact and open the exact events behind it. AstraNull does not send anything from this page."
         actions={supportUri ? <AnchorButton href={supportUri} variant="default" size="sm">Contact support</AnchorButton> : undefined}
       />
@@ -2485,10 +2515,10 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
               </div>
             )}
             <div className="kv-list">
-              <div><span>Support owner</span><strong>{supportOwner || 'Not assigned'}</strong></div>
-              <div><span>Account state</span><strong>{getString(account ?? support ?? {}, ['lifecycle_state'], 'Not recorded').replaceAll('_', ' ')}</strong></div>
-              <div><span>Region</span><strong>{getString(account ?? support ?? {}, ['region'], 'Not recorded')}</strong></div>
-              <div><span>Response coverage</span><strong>{getString(support ?? {}, ['coverage', 'support_hours'], 'Not recorded')}</strong></div>
+              <RecordedKvRow label="Support owner" value={supportOwner} missing="Not assigned" mono />
+              <RecordedKvRow label="Account state" value={presentStatus(getString(account ?? support ?? {}, ['lifecycle_state'], ''))} />
+              <RecordedKvRow label="Region" value={presentValue(getString(account ?? support ?? {}, ['region'], ''))} />
+              <RecordedKvRow label="Response coverage" value={getString(support ?? {}, ['coverage', 'support_hours'], '')} />
             </div>
           </CardContent>
         </Card>
@@ -2613,9 +2643,6 @@ const SUBSCRIPTION_PAGE_STYLES = `
   min-width: 0;
   flex-direction: column;
   gap: var(--space-1);
-}
-.subscription-page .subscription-plan-title .eyebrow {
-  margin: 0;
 }
 .subscription-page .subscription-plan-facts {
   display: grid;
@@ -2906,7 +2933,7 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
     return (
       <div className="content subscription-page">
         <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader route="subscription" title="Plan & usage" eyebrow="Account" />
+        <PageHeader route="subscription" title="Plan & usage" />
         <Card>
           <CardContent>
             <div className="subscription-state-error" role="alert">
@@ -2929,7 +2956,7 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
     return (
       <div className="content subscription-page">
         <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader route="subscription" title="Plan & usage" eyebrow="Account" />
+        <PageHeader route="subscription" title="Plan & usage" />
         <EmptyState
           icon={Activity}
           variant="skeleton"
@@ -2947,7 +2974,6 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
         <PageHeader
           route="subscription"
           title="Plan & usage"
-          eyebrow="Account"
           actions={<Button type="button" variant="secondary" size="sm" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>}
         />
         <EmptyState
@@ -2967,7 +2993,6 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
       <PageHeader
         route="subscription"
         title="Plan & usage"
-        eyebrow="Account"
         description="Your recorded plan, measured usage against its limits, and which features your plan makes available. This page has no billing or payment actions."
       />
       <div className="subscription-toolbar" role="status" aria-live="polite">
@@ -2988,11 +3013,10 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
         <CardHeader>
           <div className="subscription-plan-heading">
             <div className="subscription-plan-title">
-              <p className="eyebrow">Current plan</p>
               <CardTitle>{planLabel}</CardTitle>
-              <CardDescription>Contract posture and account ownership, without duplicating usage or entitlement panels.</CardDescription>
+              <CardDescription>Your current plan: contract posture and account ownership, without duplicating usage or entitlement panels.</CardDescription>
             </div>
-            <Badge tone={subscriptionStatusBadgeTone(subscriptionStatus)}>{subscriptionStatus.replaceAll('_', ' ')}</Badge>
+            <Badge tone={subscriptionStatusTone(subscriptionStatus)}>{recordedStatusLabel(subscriptionStatus)}</Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -3007,11 +3031,11 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
             </div>
             <div className="subscription-plan-fact">
               <dt>Data region</dt>
-              <dd>{getString(account ?? support ?? {}, ['region'], 'unrecorded')}</dd>
+              <dd>{recordedText(getString(account ?? support ?? {}, ['region'], ''))}</dd>
             </div>
             <div className="subscription-plan-fact">
               <dt>Lifecycle</dt>
-              <dd><Badge tone={lifecycleBadgeTone(getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'))}>{getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded')}</Badge></dd>
+              <dd><Badge tone={tenantLifecycleTone(getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'))}>{recordedStatusLabel(getString(account ?? support ?? {}, ['lifecycle_state'], ''))}</Badge></dd>
             </div>
             <div className="subscription-plan-fact">
               <dt>Support owner</dt>
@@ -3019,7 +3043,7 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
             </div>
             <div className="subscription-plan-fact">
               <dt>Contract ref</dt>
-              <dd>{getString(account ?? {}, ['contract_reference'], 'unrecorded')}</dd>
+              <dd>{recordedText(getString(account ?? {}, ['contract_reference'], ''))}</dd>
             </div>
           </dl>
         </CardContent>
@@ -3316,7 +3340,7 @@ export function StaffSurfacePage({
     <div className="content">
       <PageHeader
         route={route}
-        eyebrow={route === 'internal-soc' ? 'Staff SOC surface' : 'Staff-only surface'}
+        context={route === 'internal-soc' ? 'Staff SOC surface' : 'Staff-only surface'}
       />
       {(message || error) && (
         <Toast
@@ -3342,7 +3366,7 @@ export function StaffSurfacePage({
         </Card>
       ) : (
         <>
-          <CalloutNote icon={ShieldCheck} tone="warn">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
+          <CalloutNote icon={ShieldCheck} tone="info">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
           <Tabs value={activeAdminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections"
             getTabId={(id) => `staff-administration-sections-tab-${id}`}
             getPanelId={(id) => `staff-administration-sections-panel-${id}`} />
@@ -3356,7 +3380,7 @@ export function StaffSurfacePage({
               </div>
               {canReadInternalAudit ? (
               <Card density="compact">
-                <PanelCardHeader title="Recent internal activity" description="Latest audit-backed staff actions across managed tenants." trailing={<Badge tone="muted">{data.loadErrors.internalAudit ? 'Unavailable' : `${data.internalAudit.length} records`}</Badge>} />
+                <PanelCardHeader title="Recent internal activity" description="Latest audit-backed staff actions across managed tenants." trailing={<Badge tone="muted">{data.loadErrors.internalAudit ? 'Unavailable' : countLabel(data.internalAudit.length, 'record')}</Badge>} />
                 <CardContent>
                   <DataTable columns={auditColumns} items={data.internalAudit.slice(0, 6)} loadError={data.loadErrors.internalAudit} onRetry={() => void onRefresh()} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions appear here after they are recorded.' })} />
                 </CardContent>

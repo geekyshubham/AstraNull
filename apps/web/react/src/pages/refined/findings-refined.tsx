@@ -41,6 +41,8 @@ import { computeFindingKpis, findingAssetLabel, summarizeFindingStatuses } from 
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate, formatNumber, formatSeverityLabel, pluralize } from '../../lib/utils';
 import './findings-refined.css';
+import { findingStatusTone } from '../../lib/status-tone';
+import { severityTone } from '../../lib/severity-tone';
 
 /**
  * Everything the Refined findings view needs. Refresh, busy, and feedback state stay owned
@@ -118,27 +120,13 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
-export function severityTone(severity: string) {
-  const key = severity.toLowerCase();
-  if (['critical', 'high', 's1', 's2'].includes(key)) return 'danger' as const;
-  if (['medium', 'moderate', 's3'].includes(key)) return 'warn' as const;
-  return 'muted' as const;
-}
-
-export function statusTone(status: string) {
-  const bucket = findingStatusBucket({ status });
-  if (bucket === 'closed') return 'success' as const;
-  if (bucket === 'accepted') return 'info' as const;
-  if (bucket === 'open' || status === 'remediation_pending') return 'warn' as const;
-  return 'muted' as const;
-}
 
 /** Status badge: text plus icon, never color alone. */
-export function FindingStatusBadge({ status }: { status: string }) {
+export function FindingStatusBadge({ status, title }: { status: string; title?: string }) {
   const bucket = findingStatusBucket({ status });
   const Icon = bucket === 'closed' ? CircleCheck : bucket === 'accepted' ? ShieldMinus : CircleDot;
   return (
-    <Badge tone={statusTone(status)}>
+    <Badge tone={findingStatusTone(status)} title={title}>
       <Icon size={12} />
       {status.replace(/_/g, ' ')}
     </Badge>
@@ -600,7 +588,6 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     <div className="content refined rf-findings">
       <header className="rf-header">
         <div className="rf-header-copy">
-          <p className="rf-eyebrow">Triage &amp; remediate</p>
           <h1>Findings</h1>
           <p className="rf-header-description">
             Evidence-backed gaps on your declared targets. Select a finding to see the evidence that opened it beside the queue.
@@ -620,7 +607,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
         <div className="rf-stat">
           <span className="rf-stat-label">In progress</span>
           <span className="rf-stat-value">{statValue(total('in_progress'))}</span>
-          <span className="rf-stat-hint">Server count</span>
+          <span className="rf-stat-hint">Active work on record</span>
         </div>
         <div className="rf-stat">
           <span className="rf-stat-label">Accepted risk</span>
@@ -675,8 +662,8 @@ export function FindingsRefined(props: FindingsRefinedProps) {
               <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, 'all')}</span>
             </button>
             {FINDING_STATUS_GROUPS.map((group) => (
-              <span key={group.id} className="rf-status-group">
-                <span className="rf-status-group-label" aria-hidden="true">{group.label}</span>
+              <span key={group.id} className="rf-status-group" role="group" aria-labelledby={`rf-status-group-${group.id}`}>
+                <span className="rf-status-group-label" id={`rf-status-group-${group.id}`}>{group.label}</span>
                 {group.statuses.map((status) => (
                   <button key={status} type="button" className="rf-status-chip" aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)}>
                     {FINDING_STATUS_LABELS[status]}
@@ -699,7 +686,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
                   maxLength={200}
                   aria-label="Search findings by title, finding ID, check ID, target ID, group ID, or owner"
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Title, finding, check, target, group or owner"
+                  placeholder="Title, ID, target or owner"
                 />
               </span>
             </label>

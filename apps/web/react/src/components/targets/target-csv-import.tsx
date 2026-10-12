@@ -97,7 +97,7 @@ export function TargetCsvImportButton({
 
   return (
     <>
-      <Button size="sm" variant="secondary" onClick={() => setOpen(true)}><FileUp size={14} aria-hidden="true" /> Import CSV</Button>
+      <Button variant="secondary" onClick={() => setOpen(true)}><FileUp size={16} aria-hidden="true" /> Import CSV</Button>
       <FormModal
         open={open}
         title="Import targets from CSV"

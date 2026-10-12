@@ -6,8 +6,7 @@
   <title>AstraNull</title>
   <meta name="description" content="AstraNull — no-access-first DDoS readiness validation. React + TypeScript + Vite readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" id="theme-color-meta" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
@@ -21,7 +20,11 @@
       try {
         // Prototype is dark-first: default to dark unless the user explicitly chose light.
         var t = localStorage.getItem('astranull.theme');
-        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        if (t === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+          var meta = document.getElementById('theme-color-meta');
+          if (meta) meta.setAttribute('content', '#f7f7f5');
+        }
       } catch (e) {}
     })();
   </script>
@@ -81,10 +84,10 @@
     #boot.boot-hidden { opacity: 0; pointer-events: none; }
     .boot-inner { display: flex; flex-direction: column; align-items: center; text-align: center; }
     .boot-loader { position: relative; width: 72px; height: 72px; display: grid; place-items: center; }
-    .boot-loader .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; }
+    .boot-loader .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; padding: 0; border: 0; background: none; }
     .boot-loader .brand-mark .ring { fill: none; stroke: var(--boot-fg); stroke-width: 1.6px; }
     .boot-loader .brand-mark .core { fill: var(--boot-accent); }
-    .boot-spin { position: absolute; inset: 0; width: 72px; height: 72px; animation: boot-rotate var(--boot-motion-slow) linear infinite; }
+    .boot-spin { position: absolute; inset: 0; width: 72px; height: 72px; animation: boot-rotate 800ms linear infinite; }
     .boot-spin-track { fill: none; stroke: var(--boot-border); stroke-width: 2; }
     .boot-spin-arc {
       fill: none;
@@ -95,7 +98,7 @@
     }
     @keyframes boot-rotate { to { transform: rotate(360deg); } }
     .boot-word {
-      margin-top: 22px;
+      margin-top: 24px;
       font-family: var(--boot-font-display);
       font-weight: 600;
       font-size: clamp(22px, 5vw, 30px);
@@ -103,7 +106,7 @@
       color: var(--boot-fg);
     }
     .boot-status {
-      margin: 11px 0 0;
+      margin: 12px 0 0;
       font-family: var(--boot-font-mono);
       font-size: 12px;
       font-weight: 500;
@@ -112,6 +115,7 @@
       color: var(--boot-muted);
     }
     @media (prefers-reduced-motion: reduce) {
+      #boot { transition: none; }
       .boot-spin { animation: none; }
       .boot-spin-arc { display: none; }
       .boot-spin-track { stroke: var(--boot-accent); opacity: .55; }

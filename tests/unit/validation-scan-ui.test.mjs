@@ -28,7 +28,7 @@ describe('validation scan UI helpers: contract parity', () => {
     for (const status of contract.STEP_STATUSES) assert.ok(tones.has(ui.stepStatusTone(status)), status);
     assert.equal(ui.scanStatusTone('completed'), 'success');
     assert.equal(ui.scanStatusTone('cancelled'), 'danger');
-    assert.equal(ui.stepStatusTone('collecting'), 'info');
+    assert.equal(ui.stepStatusTone('collecting'), 'warn');
     assert.equal(ui.stepStatusTone('deferred'), 'warn');
   });
 

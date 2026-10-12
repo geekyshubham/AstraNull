@@ -1,0 +1,16 @@
+.run-detail-metrics .metric-card strong {
+  overflow-wrap: break-word;
+  text-overflow: clip;
+}
+
+.schedule-dispatch-card .schedule-dispatch-facts {
+  margin-top: var(--space-3);
+}
+
+.placement-gates.gates-stacked .gate-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

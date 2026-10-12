@@ -488,9 +488,9 @@ export function CheckQueue({
             <div className="td-run-progress-head">
               {scanActive ? <Spinner size={15} /> : <CircleCheck size={15} aria-hidden="true" />}
               <span className="td-live-text" role="status" aria-live="polite">{liveText}</span>
-              {scanActive ? <Badge tone="info">Live probe session</Badge> : null}
+              {scanActive ? <Badge tone="warn">Live probe session</Badge> : null}
             </div>
-            <Progress value={progress.percent} label="Checks complete" tone={scanActive ? 'accent' : (counts.failed ?? 0) > 0 ? 'danger' : 'success'} />
+            <Progress value={progress.percent} label="Checks complete" tone={scanActive ? 'warn' : (counts.failed ?? 0) > 0 ? 'danger' : 'success'} />
           </div>
           <LiveProbeTerminal
             entries={scanLogEntries}
@@ -545,7 +545,7 @@ export function CheckQueue({
               <span className="td-cat-tally">
                 {group.counts.failed ? <Badge tone="danger">{`${group.counts.failed} gap${group.counts.failed === 1 ? '' : 's'}`}</Badge> : null}
                 {group.counts.passed ? <Badge tone="success">{`${group.counts.passed} passed`}</Badge> : null}
-                {group.counts.running ? <Badge tone="info">Running</Badge> : null}
+                {group.counts.running ? <Badge tone="warn">Running</Badge> : null}
               </span>
               <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
             </summary>

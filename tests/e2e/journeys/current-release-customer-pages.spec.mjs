@@ -601,13 +601,13 @@ test.describe('current-release customer pages', () => {
     });
     const connectorTable = () => page.locator('table').filter({ hasText: 'Last successful sync' }).first();
     const connectorRow = () => connectorTable().locator('tbody tr').filter({ hasText: 'Cloudflare checkout' });
-    const attemptCell = () => connectorRow().locator('td[data-label="Last attempt"]');
+    const attemptCell = () => connectorRow().locator('td[data-label="Last successful sync"] .connector-attempt-value');
 
     await gotoPortalRoute(page, 'integrations', sourceBaseUrl);
     await expect(connectorRow()).toHaveCount(1);
     await expect(attemptCell()).toHaveText('Not recorded');
     const manualRows = connectorTable().locator('tbody tr').filter({ has: page.locator('td[data-label="Last successful sync"]', { hasText: 'Not applicable' }) });
-    for (const row of await manualRows.all()) await expect(row.locator('td[data-label="Last attempt"]')).toHaveText('Not applicable');
+    for (const row of await manualRows.all()) await expect(row.locator('td[data-label="Last successful sync"]')).toHaveText('Not applicable');
 
     shape = 'older-error';
     await page.reload({ waitUntil: 'networkidle' });
@@ -619,7 +619,7 @@ test.describe('current-release customer pages', () => {
     await page.reload({ waitUntil: 'networkidle' });
     await expect(attemptCell()).toContainText('Failed');
     await expect(attemptCell()).toContainText('Jul 3');
-    await expect(connectorRow().locator('td[data-label="Last successful sync"]')).toContainText('Jul 1');
+    await expect(connectorRow().locator('td[data-label="Last successful sync"] .connector-sync-cell > .mono')).toContainText('Jul 1');
     expect(writes).toEqual([]);
   });
 

@@ -113,6 +113,43 @@ export const INTEGRATION_TILE_STYLES = `
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
+  margin-left: auto;
+}
+.integration-tile-actions:empty {
+  display: none;
+}
+.integration-tile-guide {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color var(--motion-fast) var(--motion-ease);
+}
+.integration-tile-guide:hover {
+  text-decoration-color: currentColor;
+}
+.integration-tile-guide:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+@media (pointer: coarse) {
+  .integration-tile-guide {
+    min-height: 44px;
+  }
 }
 .integration-chip {
   display: inline-flex;
@@ -120,8 +157,11 @@ export const INTEGRATION_TILE_STYLES = `
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
   white-space: nowrap;
 }
 .integration-chip[data-tone='positive'] {
@@ -138,8 +178,12 @@ export const INTEGRATION_TILE_STYLES = `
   color: var(--fg-2);
 }
 .integration-tile .btn {
-  min-height: 44px;
   transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+@media (pointer: coarse) {
+  .integration-tile .btn {
+    min-height: 44px;
+  }
 }
 .integration-tile .btn:active:not(:disabled) {
   transform: scale(var(--press-scale));
@@ -153,20 +197,9 @@ export const INTEGRATION_TILE_STYLES = `
   font-size: var(--text-xs);
   white-space: nowrap;
 }
-@media (max-width: 640px) {
-  .integration-tile-footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .integration-tile-actions {
-    width: 100%;
-  }
-  .integration-tile-actions .btn {
-    flex: 1 1 0;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .integration-tile,
+  .integration-tile-guide,
   .integration-tile .btn {
     transition: none;
   }

@@ -10,6 +10,8 @@
  * No per-provider tint is applied and no raw hex appears here.
  */
 export const INTEGRATIONS_PAGE_STYLES = `
+.integration-page .integration-section { display: flex; min-width: 0; flex-direction: column; gap: var(--space-4); }
+.integration-page .integration-section .card-title { margin: 0; }
 .integration-page .integration-directory-group { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); }
 .integration-page .integration-directory-group + .integration-directory-group { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }
 .integration-page .integration-directory-group-title { margin: 0; color: var(--fg); font-size: var(--text-sm); font-weight: 600; line-height: 1.5; }
@@ -153,27 +155,6 @@ export const INTEGRATIONS_PAGE_STYLES = `
   max-width: 72ch;
   margin: 0;
 }
-.integration-page .kpi-cell {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.integration-page .kpi-cell-label {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-caps);
-}
-.integration-page .kpi-cell-value {
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: var(--text-xl);
-}
-.integration-page .kpi-cell-delta {
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-}
 .integration-page .provider-flow-context {
   align-items: flex-end;
   margin-bottom: var(--space-4);
@@ -273,9 +254,18 @@ export const INTEGRATIONS_PAGE_STYLES = `
     align-items: flex-start;
   }
 }
-.integration-page .connector-attempt {
+.integration-page .connector-sync-cell {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: var(--space-1);
+}
+.integration-page .connector-attempt {
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+.integration-page td .row-actions--compact {
+  flex-wrap: wrap;
+  max-width: 18rem;
 }
 `;

@@ -42,7 +42,8 @@ import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isTargetRun
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
-import { formatDate, formatSeverityLabel } from '../lib/utils';
+import { countLabel, formatDate, formatSeverityLabel, pluralize } from '../lib/utils';
+import { severityTone } from '../lib/severity-tone';
 import { AnchorButton, Button } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
 import { emptyStateFromApi } from '../lib/empty-from-api';
@@ -171,14 +172,7 @@ function runOutcomeTone(value: string): StatTone {
   const key = value.trim().toLowerCase();
   if (['pass', 'passed', 'protected', 'complete', 'completed', 'succeeded'].includes(key)) return 'success';
   if (['gap', 'fail', 'failed', 'bypassable', 'penetrated', 'unprotected', 'error', 'cancelled'].includes(key)) return 'danger';
-  if (['pending', 'planned', 'queued', 'running', 'collecting'].includes(key)) return 'info';
-  return 'muted';
-}
-
-function severityTone(value: string): StatTone {
-  const rank = SEVERITY_RANK[value.trim().toLowerCase()] ?? 0;
-  if (rank >= 4) return 'danger';
-  if (rank === 3) return 'warn';
+  if (['running', 'collecting'].includes(key)) return 'warn';
   return 'muted';
 }
 
@@ -1066,7 +1060,7 @@ export function TargetDetailView({
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
                   {targetEligible ? 'Validation unlocked' : 'Validation locked'}
                 </Badge>
-                <span className="td-kind-tag">{formatLabel(kind)}</span>
+                <Badge tone="muted">{formatLabel(kind)}</Badge>
               </div>
             ) : null}
           </div>
@@ -1178,9 +1172,9 @@ export function TargetDetailView({
       return (
         <section className="td-next" data-kind="ownership" aria-labelledby="td-next-title">
           <div className="td-next-head">
-            <span className="td-label">Next step</span>
             <h2 id="td-next-title">Prove ownership to unlock validation</h2>
             <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
+            <Badge tone="muted">Next step</Badge>
           </div>
           {renderOwnershipPanel()}
         </section>
@@ -1191,9 +1185,9 @@ export function TargetDetailView({
       return (
         <section className="td-next" data-kind="finding" aria-labelledby="td-next-title">
           <div className="td-next-head">
-            <span className="td-label">Highest-priority open finding</span>
             <h2 id="td-next-title">{plainFindingTitle(topFinding, [target], checks)}</h2>
             <Badge tone={severityTone(getString(topFinding, ['severity'], ''))}>{formatSeverityLabel(getString(topFinding, ['severity'], 'unknown'))}</Badge>
+            <Badge tone="muted">Highest-priority open finding</Badge>
           </div>
           <p className="td-copy">
             Opened {formatDate(topFinding.created_at ?? topFinding.opened_at)}
@@ -1212,8 +1206,8 @@ export function TargetDetailView({
       return (
         <section className="td-next" data-kind="plan" aria-labelledby="td-next-title">
           <div className="td-next-head">
-            <span className="td-label">Next step</span>
             <h2 id="td-next-title">No recorded check results yet</h2>
+            <Badge tone="muted">Next step</Badge>
           </div>
           <p className="td-copy">Ownership is verified. Choose a compatible check, review its bounds, then start it. Nothing runs until you do.</p>
           <div className="td-actions">
@@ -1225,11 +1219,11 @@ export function TargetDetailView({
     return (
       <section className="td-next" data-kind="results" aria-labelledby="td-next-title">
         <div className="td-next-head">
-          <span className="td-label">Latest recorded results</span>
           <h2 id="td-next-title">No open findings on this target</h2>
+          <Badge tone="muted">Latest recorded results</Badge>
         </div>
         <p className="td-copy">
-          Passed checks show behavior in their recorded scenario only. {rowCounts.not_run ?? 0} compatible check{(rowCounts.not_run ?? 0) === 1 ? '' : 's'} have no result yet.
+          Passed checks show behavior in their recorded scenario only. {countLabel(rowCounts.not_run ?? 0, 'compatible check')} {pluralize(rowCounts.not_run ?? 0, 'has', 'have')} no result yet.
         </p>
         <div className="td-actions">
           <Button size="sm" variant="secondary" onClick={() => setTab('validate')}>Review checks</Button>
@@ -1863,12 +1857,12 @@ export function TargetDetailView({
         <div className="table-wrap" tabIndex={0} role="region" aria-label="Target facts, scrollable">
           <table className="data-table">
             <tbody>
-              <tr><td>Target ID</td><td><span className="mono">{entityId}</span></td></tr>
-              <tr><td>Declared value</td><td><span className="mono">{targetDisplayValue(target)}</span></td></tr>
-              <tr><td>Kind</td><td>{formatLabel(kind)}</td></tr>
-              <tr><td>Declaration source</td><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
-              <tr><td>Ownership method</td><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
-              {detail.loa ? <tr><td>Group LOA</td><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
+              <tr><th scope="row">Target ID</th><td><span className="mono">{entityId}</span></td></tr>
+              <tr><th scope="row">Declared value</th><td><span className="mono">{targetDisplayValue(target)}</span></td></tr>
+              <tr><th scope="row">Kind</th><td>{formatLabel(kind)}</td></tr>
+              <tr><th scope="row">Declaration source</th><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
+              <tr><th scope="row">Ownership method</th><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
+              {detail.loa ? <tr><th scope="row">Group LOA</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
             </tbody>
           </table>
         </div>

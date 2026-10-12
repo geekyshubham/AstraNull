@@ -54,7 +54,7 @@ describe('portal accessibility hardening', () => {
     assert.match(proof, /className="truth-table-viz" tabIndex=\{0\} role="region" aria-labelledby="truth-table-heading"/);
     assert.match(heatmap, /className="heatmap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="Vector coverage summary matrix, scrollable"/m);
     assert.doesNotMatch(heatmap, /HEATMAP_CELL_STYLE|style=\{HEATMAP_CELL_STYLE/);
-    assert.match(landing, /className="public-compare table-wrap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="AstraNull capability comparison, scrollable"/m);
+    assert.match(landing, /className="public-compare"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="AstraNull capability comparison, scrollable"/m);
     // The landing comparison table lives in its own stylesheet and scrolls at every width.
     const landingCss = read('apps/web/react/src/pages/public-landing.css');
     assert.match(landing, /import '\.\/public-landing\.css';/);
@@ -109,8 +109,8 @@ describe('portal accessibility hardening', () => {
     const targetCss = read('apps/web/react/src/pages/target-detail-view.css');
     // Ensure no hardcoded black background in the terminal
     assert.doesNotMatch(targetCss, /background:\s*#090d16/);
-    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-terminal/);
-    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-live-console-wrapper/);
-    assert.match(targetCss, /:root\[data-theme="light"\] \.target-detail-view \.td-term-tag\[data-tone="info"\]/);
+    // Every terminal color is a theme token, so light theme needs no hand-tuned inks.
+    assert.doesNotMatch(targetCss, /#[0-9a-fA-F]{3,8}\b|rgba?\(/);
+    assert.match(targetCss, /\.td-term-tag\[data-tone="danger"\][^{]*\{ color: var\(--danger\); \}/);
   });
 });

@@ -17,7 +17,6 @@ describe('Targets portal contract', () => {
       'Tags',
 
       'Added from',
-      'Added',
     ]) {
       assert.match(source, new RegExp(`label: '${label}'`));
     }
@@ -66,13 +65,13 @@ describe('Targets portal contract', () => {
     assert.match(source, /<form id="target-declare-form"/);
   });
 
-  it('collapses the targets toolbar to one column at <=620px without a desktop rule overriding it (TARGETS-01)', () => {
+  it('collapses the targets toolbar to one column at <=620px; the search-plus-three-filters desktop grid applies only at >=1121px (TARGETS-01)', () => {
     const styles = readFileSync(new URL('../../apps/web/react/src/styles.css', import.meta.url), 'utf8');
     // The placeholder-clipping desktop rule must be scoped above the mobile breakpoint so it no
     // longer out-specifies the single-column @media(max-width:620px) rule.
     assert.match(
       styles,
-      /@media \(min-width: 621px\) \{\s*body \.targets-page \.targets-toolbar \{\s*grid-template-columns: minmax\(280px, 1\.7fr\) repeat\(4, minmax\(150px, 1fr\)\);/,
+      /@media \(min-width: 1121px\) \{\s*body \.targets-page \.targets-toolbar \{\s*grid-template-columns: minmax\(280px, 1\.7fr\) repeat\(3, minmax\(150px, 1fr\)\);/,
     );
     // No unconditional body-scoped toolbar grid rule may remain (that was the 928px-overflow cause).
     assert.doesNotMatch(
