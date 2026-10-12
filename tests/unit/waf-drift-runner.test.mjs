@@ -38,6 +38,8 @@ function tempDir() {
 function wafEnabledEnv() {
   return {
     ...process.env,
+    ASTRANULL_DATABASE_URL: '',
+    ASTRANULL_ADMIN_DATABASE_URL: '',
     ASTRANULL_NO_PERSIST: '1',
     ASTRANULL_WAF_POSTURE_ENABLED: '1',
   };

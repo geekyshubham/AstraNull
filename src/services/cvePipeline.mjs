@@ -5,6 +5,7 @@ import {
   assertCvePlaybookCoordinatedRetestAllowed,
   assertCvePostMitigationRetestAllowed,
   assertCveSafeValidationAllowed,
+  assertCveValidationRequestSafety,
   assertValidStageTransition,
   buildCveMitigationPlaybook,
   buildCvePostMitigationRetestRequest,
@@ -117,6 +118,7 @@ function formatPipelineItem(record) {
     poc_indicator: record.poc_indicator ?? false,
     vendor_advisories: record.vendor_advisories ?? [],
     stage: record.stage,
+    resolution: record.resolution ?? record.triage_summary_json?.resolution ?? { kind: record.stage === 'resolved' ? 'legacy_unverified' : 'open', mitigation_verified: false },
     triage_result: record.triage_result ?? null,
     created_at: record.created_at,
     updated_at: record.updated_at,
@@ -138,6 +140,8 @@ function formatAssetMatch(record) {
     validation_status: record.validation_status ?? 'pending',
     last_waf_validation_run_id: record.last_waf_validation_run_id ?? null,
     validation_evidence_json: record.validation_evidence_json ?? null,
+    assurance_status: record.validation_evidence_json?.assurance_status ?? 'not_validated',
+    component_applicability: record.component_applicability ?? record.validation_evidence_json?.component_applicability ?? null,
     created_at: record.created_at,
     updated_at: record.updated_at,
   };
@@ -460,6 +464,7 @@ export function createCvePipelineItem(ctx, body = {}) {
         cve_id: record.cve_id,
         severity: record.severity,
         stage: record.stage,
+    resolution: record.resolution ?? record.triage_summary_json?.resolution ?? { kind: record.stage === 'resolved' ? 'legacy_unverified' : 'open', mitigation_verified: false },
       },
     });
     persistStore();
@@ -674,6 +679,7 @@ export function executeSafeCveValidation(ctx, pipelineItemId, body = {}) {
   }
 
   try {
+      assertCveValidationRequestSafety(body);
     const now = new Date().toISOString();
     const validation_runs = [];
     const updated_matches = [];
@@ -684,6 +690,7 @@ export function executeSafeCveValidation(ctx, pipelineItemId, body = {}) {
       const checkId = resolveSafeCveValidationCheck(item, formattedMatch);
       if (!checkId) {
         matchRecord.validation_status = 'skipped';
+        matchRecord.validation_evidence_json = { ...(matchRecord.validation_evidence_json ?? {}), assurance_status: 'not_validated', closure_ready: false, reason: 'cve_specific_scenario_unavailable' };
         matchRecord.updated_at = now;
         skipped_matches.push(formatAssetMatch(matchRecord));
         continue;
@@ -805,6 +812,7 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
   }
 
   try {
+      assertCveValidationRequestSafety(body);
     const now = new Date().toISOString();
     const validation_runs = [];
     const updated_matches = [];
@@ -822,6 +830,7 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
       const matchRecommendations = recommendationsByMatchId.get(matchRecord.id) ?? [];
       const recommendation = selectLatestDeployedRecommendation(matchRecommendations);
       if (!recommendation) {
+        matchOutcomes.push({ match_id: matchRecord.id, status: 'retest_pending', closure_ready: false, reason: 'mitigation_not_deployed' });
         continue;
       }
 
@@ -836,14 +845,14 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
         && isRetestEvidenceBinding(existingEvidence);
 
       if (hasPendingRetest) {
-        const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun);
+        const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun, { item, match: formattedMatch, recommendation, binding: existingEvidence });
         matchOutcomes.push({ match_id: matchRecord.id, ...outcome });
         updated_matches.push(formatAssetMatch(matchRecord));
         continue;
       }
 
       if (existingRun?.status === 'finalized' && isRetestEvidenceBinding(existingEvidence)) {
-        const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun);
+        const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun, { item, match: formattedMatch, recommendation, binding: existingEvidence });
         matchRecord.validation_status = outcome.status;
         matchRecord.updated_at = now;
         if (matchRecord.validation_evidence_json) {
@@ -851,6 +860,9 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
             ...matchRecord.validation_evidence_json,
             validation_status: outcome.status,
             retest_verdict: outcome.verdict,
+          assurance_status: outcome.assurance_status,
+          closure_ready: outcome.closure_ready,
+          reason: outcome.reason,
             finalized_at: existingRun.finalized_at ?? now,
           };
         }
@@ -862,11 +874,14 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
       const checkId = resolveSafeCveValidationCheck(item, formattedMatch);
       if (!checkId) {
         matchRecord.validation_status = 'skipped';
+        matchRecord.validation_evidence_json = { ...(matchRecord.validation_evidence_json ?? {}), assurance_status: 'not_validated', closure_ready: false, reason: 'cve_specific_scenario_unavailable' };
         matchRecord.updated_at = now;
         matchOutcomes.push({
           match_id: matchRecord.id,
           status: 'skipped',
-          closure_ready: true,
+          closure_ready: false,
+          assurance_status: 'not_validated',
+          reason: 'cve_specific_scenario_unavailable',
           verdict: 'skipped',
         });
         updated_matches.push(formatAssetMatch(matchRecord));
@@ -963,6 +978,7 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
       nextStage = assertValidStageTransition(currentStage, 'retest');
     }
     item.stage = nextStage;
+    item.resolution = { kind: closure.ready ? 'evidence_verified' : 'open', mitigation_verified: closure.ready, recorded_at: now };
     item.updated_at = now;
 
     audit({
@@ -978,6 +994,8 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
         closure_ready: closure.ready,
         closure_verdict: closure.verdict,
         stage: nextStage,
+        disposition: closure.ready ? 'evidence_verified' : 'open',
+        mitigation_verified: closure.ready,
       },
     });
 
@@ -1008,6 +1026,7 @@ export function patchCveItemStage(ctx, id, stage) {
     const now = new Date().toISOString();
     const previousStage = item.stage;
     item.stage = nextStage;
+    item.resolution = { kind: nextStage === 'resolved' ? 'administrative_disposition' : 'open', mitigation_verified: false, recorded_at: now };
     item.updated_at = now;
 
     audit({
@@ -1021,6 +1040,8 @@ export function patchCveItemStage(ctx, id, stage) {
         cve_id: item.cve_id,
         previous_stage: previousStage,
         stage: nextStage,
+        disposition: 'administrative',
+        mitigation_verified: false,
       },
     });
     persistStore();

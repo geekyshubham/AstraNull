@@ -7,7 +7,12 @@ import {
   classifyFirewallComparisonItem,
   REQUIRED_LIMITATIONS,
   verifyBaselineDigest,
+  normalizeEntryPathDeclaration, normalizePathValidationExpectation, normalizeComparisonEvaluation,
 } from '../../src/contracts/protectionValidation.mjs';
+import { getCheckById } from '../../src/contracts/checks.mjs';
+import { deriveRunEvidenceStamp, approvedScenarioVersion } from '../../src/lib/checkDefinitionVersion.mjs';
+import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
+import { projectProtectionMatrixRows } from '../../src/lib/protectionValidationReport.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { closePgPool, createPgPool } from '../../src/persistence/postgres/pool.mjs';
 import { createProtectionValidationRepository } from '../../src/persistence/postgres/protectionValidationRepository.mjs';
@@ -394,5 +399,71 @@ describe('postgres protection validation persistence', () => {
         await closePgPool(appPool);
       }
     });
+  });
+});
+
+
+describe('actual PostgreSQL report scope and performed classification', () => {
+  it('resolves only recorded scope and withdraws current credit for material group/policy or actual outcome changes without custody mutation', { timeout: 120_000 }, async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) { t.skip(availability.reason); return; }
+    await withEphemeralPostgres(async (pool) => {
+      await seed(pool);
+      await pool.query('UPDATE target_groups SET created_at = $1 WHERE id = $2', [DECLARED, GROUP]);
+      await pool.query(`INSERT INTO test_policies (id, tenant_id, target_group_id, target_id, check_id, created_at)
+        VALUES ('policy_report_live', $1, $2, 'tgt_pg_app', 'waf.http_method_policy_marker.safe', $3)`, [TENANT, GROUP, DECLARED]);
+      const target = (await pool.query('SELECT * FROM targets WHERE id = $1', ['tgt_pg_app'])).rows[0];
+      const group = (await pool.query('SELECT * FROM target_groups WHERE id = $1', [GROUP])).rows[0];
+      const policy = (await pool.query(`SELECT * FROM test_policies WHERE id = 'policy_report_live'`)).rows[0];
+      policy.schedule_revision = Number(policy.schedule_revision);
+      const check = getCheckById('waf.http_method_policy_marker.safe');
+      const scenario = check.check_id;
+      const stamp = deriveRunEvidenceStamp(check, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(check) });
+      const observed = '2026-10-05T12:00:00.000Z';
+      await pool.query(`INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, policy_id, check_id,
+        status, producer_kind, check_version, scenario_version, safety_constraints, correlation_json, created_at, completed_at)
+        VALUES ('run_report_live', $1, $2, $3, $4, $5, 'verdicted', 'signed_probe', $6, $7, $8::jsonb, '{"nonce_hash":"nonce_report_live"}', $9, $9)`,
+        [TENANT, GROUP, target.id, policy.id, check.check_id, stamp.check_version, stamp.scenario_version,
+          JSON.stringify({ assurance_scope: deriveAssuranceScope({ target, targetGroup: group, policy }) }), observed]);
+      const metadata = { source_perspective: 'public-worker-eu', complete: true, classifier_version: 'marker-comparison-v4',
+        comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy',
+        permitted_baseline: { status_code: 200 }, marker_results: [{ blocked: true, allowed: false }], enforcement: 'enforced' };
+      await pool.query(`INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json)
+        VALUES ('event_report_live', $1, 'run_report_live', 'probe_result', 'signed_probe', 'nonce_report_live', $2, $2, $3::jsonb)`, [TENANT, observed, JSON.stringify(metadata)]);
+      const relation = { ...normalizeEntryPathDeclaration({ owner: 'Report Team', purpose: 'Actual report regression', entry_target_id: target.id, relation_kind: 'primary_route',
+        expected_behavior: 'must_be_protected_by_layers', required_layers: ['waf'] }, { tenantId: TENANT, anchorTargetId: target.id }), id: 'path_report_live' };
+      const expectation = { ...normalizePathValidationExpectation({ scenario, layer_outcomes: { waf: 'enforce' } },
+        { tenantId: TENANT, anchorTargetId: target.id }), id: 'expectation_report_live' };
+      const evaluation = { ...normalizeComparisonEvaluation({ kind: 'path_validation', tenant_id: TENANT, evaluated_at: observed,
+        items: [{ entry_path_id: relation.id, scenario, outcome: 'consistent_enforcement', reasons: [], limitations: [...REQUIRED_LIMITATIONS.path_validation], evidence_refs: [{
+          test_run_id: 'run_report_live', target_id: target.id, check_id: check.check_id, check_version: stamp.check_version,
+          scenario_version: stamp.scenario_version, evidence_ids: ['event_report_live'], observed_at: observed,
+          run_status: 'verdicted', source_perspective: 'public-worker-eu',
+        }] }] }), id: 'evaluation_report_live' };
+      const repository = createProtectionValidationRepository(pool);
+      const input = () => repository.loadComparisonEvidence(CTX, { runIds: ['run_report_live'], asOf: NOW });
+      const project = (evidenceInputs) => projectProtectionMatrixRows({ tenantId: TENANT, targets: [target],
+        entryPaths: [relation], pathExpectations: [expectation], pathEvaluations: [evaluation], checkCatalog: [check], evidenceInputs, now: NOW }).rows[0];
+      const first = await input();
+      assert.deepEqual(first.groups.map((row) => row.id), [GROUP]);
+      assert.deepEqual(first.policies.map((row) => row.id), [policy.id]);
+      assert.equal(project(first).current_assurance.status, 'tested_path_scenario_only', JSON.stringify(project(first).current_assurance));
+      const custody = JSON.stringify([first.runs, first.events, evaluation]);
+      await pool.query(`UPDATE events SET nonce_hash = 'another_run_nonce' WHERE id = 'event_report_live'`);
+      assert.ok(project(await input()).current_assurance.reasons.includes('referenced_signed_evidence_unverified'));
+      await pool.query(`UPDATE events SET nonce_hash = 'nonce_report_live' WHERE id = 'event_report_live'`);
+      await pool.query(`UPDATE target_groups SET safety_policy = '{"max_rps":9}' WHERE id = $1`, [GROUP]);
+      assert.ok(project(await input()).current_assurance.reasons.includes('target_group_definition_changed'));
+      await pool.query('UPDATE target_groups SET safety_policy = $1::jsonb WHERE id = $2', [JSON.stringify(group.safety_policy), GROUP]);
+      await pool.query(`UPDATE test_policies SET state = 'paused' WHERE id = $1`, [policy.id]);
+      assert.ok(project(await input()).current_assurance.reasons.includes('policy_definition_changed'));
+      await pool.query('UPDATE test_policies SET state = $1 WHERE id = $2', [policy.state, policy.id]);
+      assert.equal(project(await input()).current_assurance.status, 'tested_path_scenario_only');
+      assert.equal(JSON.stringify([(await input()).runs, (await input()).events, evaluation]), custody);
+      await pool.query(`UPDATE events SET metadata_json = $1::jsonb WHERE id = 'event_report_live'`,
+        [JSON.stringify({ ...metadata, marker_results: [{ blocked: false, allowed: true }], enforcement: 'not_enforced' })]);
+      assert.ok(project(await input()).current_assurance.reasons.includes('actual_outcome_mismatch'));
+      assert.equal(evaluation.items[0].outcome, 'consistent_enforcement');
+    }, availability.env ?? process.env);
   });
 });

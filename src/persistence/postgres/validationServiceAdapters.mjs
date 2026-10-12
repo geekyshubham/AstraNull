@@ -7,6 +7,7 @@ import {
   isCustomerRunnable,
 } from '../../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
+import { validateReviewedOperationSelection } from '../../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { probeDispatchReady } from '../../config.mjs';
 import { approvedScenarioVersion, deriveRunEvidenceStamp, verdictExpectedBehaviorForRun } from '../../lib/checkDefinitionVersion.mjs';
@@ -27,10 +28,8 @@ import {
   scrubRunForCustomer,
 } from '../../lib/outsideInEvidence.mjs';
 import {
-  countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
-  lastRunForTargetGroup,
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
@@ -1263,7 +1262,15 @@ export function createPostgresValidationServices(repositories, options = {}) {
     async getRunActivity(ctx, id, options = {}) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;
-      return projectRunActivity(run, await validationEvidence.listRunEvents(ctx, id, { limit: 1000 }), options.limit);
+      const inputComplete = typeof validationEvidence.listRunActivityEvents === 'function';
+      const events = inputComplete
+        ? await validationEvidence.listRunActivityEvents(ctx, [id])
+        : await validationEvidence.listRunEvents(ctx, id, { limit: 1000 });
+      const job = typeof probeJobs.getProbeJobByTestRun === 'function' ? await probeJobs.getProbeJobByTestRun(ctx, id) : null;
+      const activity = projectRunActivity(run, events, { ...options, job });
+      if (activity.error) return activity;
+      return { ...activity, input_complete: inputComplete,
+        capture: { ...activity.capture, ...(inputComplete ? {} : { status: 'incomplete' }) } };
     },
 
     async getRunEvents(ctx, id, options = {}) {
@@ -1280,6 +1287,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return validationEvidence.listRunEvents(ctx, id, listOptions);
     },
     async startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, dispatchOptions = {}) {
+      const selection = validateReviewedOperationSelection(body);
+      if (!selection.ok) return { error: selection.error, status: selection.status };
+      if (!selection.legacy) {
+        return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
       if (!dispatchOptions.safeStartLockHeld && typeof validationEvidence.withSafeStartLock === 'function') {
         try {
           return await validationEvidence.withSafeStartLock(ctx, () => testRuns.startTestRun(ctx, body, runtimeConfig,
@@ -1303,6 +1315,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
 
       const targetGroupId = body.target_group_id;
+      if (typeof validationEvidence.lockAdmissionDefinitions === 'function') {
+        await validationEvidence.lockAdmissionDefinitions(ctx, { targetGroupId, targetId: body.target_id });
+      }
       const group = await coreCatalog.getTargetGroup(ctx, targetGroupId, LEAN_GROUP_LOOKUP);
       if (!group) return { error: 'target_group_not_found', status: 404 };
 
@@ -1486,9 +1501,19 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const recentRuns = await validationEvidence.listTestRuns(ctx, { limit: 500 });
       const groupPolicy = effectiveSafetyConstraints(check, group);
-      if (countCustomerRunnableRunsLastHour(recentRuns, ctx.tenantId, nowMs) >= groupPolicy.max_runs_per_hour) {
+      const usage = typeof validationEvidence.readSafeAdmissionUsage === 'function'
+        ? await validationEvidence.readSafeAdmissionUsage(ctx, { now: now.toISOString(), targetId, targetGroupId,
+          customerCheckIds: CHECK_CATALOG.filter(isCustomerRunnable).map((item) => item.check_id) })
+        : null;
+      if (usage?.input_complete !== true || !Number.isSafeInteger(usage.runs_last_hour) || usage.runs_last_hour < 0
+        || !Object.hasOwn(usage, 'prior_run')) {
+        return denySafeStart(ctx, 'test_run.admission_unavailable', targetGroupId,
+          { check_id: check.check_id, reason: 'complete_safety_accounting_unavailable' },
+          'safe_admission_usage_unavailable', 503);
+      }
+      const runsLastHour = usage.runs_last_hour;
+      if (runsLastHour >= groupPolicy.max_runs_per_hour) {
         return denySafeStart(
           ctx,
           'test_run.safe_rate_denied',
@@ -1502,10 +1527,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      let priorRun = lastRunForTargetGroup(recentRuns.filter((run) => run.target_id === targetId), ctx.tenantId, targetGroupId);
-      if (!priorRun && groupPolicy.min_seconds_between_runs > 0) {
-        [priorRun] = await validationEvidence.listTestRuns(ctx, { targetId, targetGroupId, limit: 1 });
-      }
+      const priorRun = usage.prior_run;
       if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
         const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
         if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {
@@ -1627,7 +1649,20 @@ export function createPostgresValidationServices(repositories, options = {}) {
           opsReadiness ? resolveOpsReadinessScenario(check) : null,
         ),
       });
-      const safetyConstraints = effectiveSafetyConstraints(check, group);
+      await validationEvidence.lockAdmissionCommit?.(ctx);
+      if (await killSwitch.isKillSwitchActiveForTenant(ctx)) {
+        return denySafeStart(ctx, 'test_run.kill_switch_denied', targetGroupId,
+          { check_id: check.check_id, phase: 'admission_commit' }, 'kill_switch_active', 423);
+      }
+      if (!isWithinSafeTestWindow(group, nowFn().getTime())) {
+        return denySafeStart(ctx, 'test_run.safe_window_denied', targetGroupId,
+          { check_id: check.check_id, phase: 'admission_commit' }, 'safe_window_closed', 429);
+      }
+      const openWindowEnds = (group.safe_test_windows ?? []).filter((window) =>
+        new Date(window.start_at).getTime() <= nowMs && new Date(window.end_at).getTime() >= nowMs)
+        .map((window) => new Date(window.end_at).getTime());
+      const safetyConstraints = { ...effectiveSafetyConstraints(check, group),
+        ...(openWindowEnds.length ? { safe_window_not_after: new Date(Math.max(...openWindowEnds)).toISOString() } : {}) };
       const runId = newId('run');
       const runRecord = {
         id: runId,

@@ -8,7 +8,7 @@
 
 export const EVIDENCE_INSPECTOR_EVENT = 'astranull:evidence-inspector';
 
-export const INSPECTOR_ENTRIES = Object.freeze(['finding', 'group_member', 'check_result', 'provider', 'artifact', 'report', 'audit']);
+export const INSPECTOR_ENTRIES = Object.freeze(['finding', 'group_member', 'check_result', 'validation_scan', 'provider', 'artifact', 'report', 'audit']);
 export const PROVIDER_FAMILIES = Object.freeze(['waf', 'cdn', 'cloud', 'dns', 'origin_hosting']);
 
 /** Matches the server's exact-ID rule for GET /v1/evidence-context. */
@@ -20,6 +20,9 @@ const FIELD_PARAMS = Object.freeze({
   target_id: 'ev_target',
   check_id: 'ev_check',
   test_run_id: 'ev_run',
+  scan_id: 'ev_scan',
+  display_mode: 'ev_display',
+  pinned_run_id: 'ev_pin',
   family: 'ev_family',
   evidence_id: 'ev_evidence',
   report_id: 'ev_report',
@@ -32,6 +35,7 @@ const REQUIRED_FIELDS = Object.freeze({
   finding: ['finding_id'],
   group_member: ['finding_id'],
   check_result: ['target_id', 'check_id', 'test_run_id'],
+  validation_scan: ['target_id', 'scan_id'],
   provider: ['target_id', 'family'],
   artifact: ['evidence_id'],
   report: ['report_id'],
@@ -43,6 +47,7 @@ const ALLOWED_FIELDS = Object.freeze({
   finding: ['finding_id', 'target_id', 'check_id'],
   group_member: ['finding_id', 'target_id', 'check_id'],
   check_result: ['target_id', 'check_id', 'test_run_id'],
+  validation_scan: ['target_id', 'scan_id', 'display_mode', 'pinned_run_id'],
   provider: ['target_id', 'family'],
   artifact: ['evidence_id', 'finding_id', 'test_run_id'],
   report: ['report_id'],
@@ -138,7 +143,13 @@ export function sanitizeRouteParams(input) {
   for (const [key, value] of params.entries()) {
     if (kept.has(key)) continue;
     if (INSPECTOR_PARAMS.has(key)) {
-      if (key === ENTRY_PARAM ? INSPECTOR_ENTRIES.includes(value) : key === 'ev_family' ? PROVIDER_FAMILIES.includes(value) : isSafeInspectorId(value)) kept.set(key, value);
+      if (key === 'ev_display') {
+        // Invalid explicit display state must not disappear and silently become Follow.
+        kept.set(key, ['follow', 'pinned'].includes(value) ? value : 'pinned');
+      } else if (key === 'ev_pin') {
+        if (params.get('ev_display') === 'pinned' && isSafeInspectorId(value) && !looksLikeCredential(value)) kept.set(key, value);
+        if (!params.has('ev_display')) kept.set('ev_display', 'pinned');
+      } else if (key === ENTRY_PARAM ? INSPECTOR_ENTRIES.includes(value) : key === 'ev_family' ? PROVIDER_FAMILIES.includes(value) : isSafeInspectorId(value)) kept.set(key, value);
       continue;
     }
     const rule = ROUTE_PARAM_RULES[key];
@@ -173,6 +184,7 @@ export function normalizeInspectorRef(input) {
   if (!INSPECTOR_ENTRIES.includes(entry)) return null;
   const out = { entry };
   for (const field of ALLOWED_FIELDS[entry]) {
+    if (field === 'display_mode' || field === 'pinned_run_id') continue;
     const value = text(ref[field]);
     if (!value) continue;
     if (field === 'family') {
@@ -185,6 +197,12 @@ export function normalizeInspectorRef(input) {
   for (const field of REQUIRED_FIELDS[entry]) {
     if (!out[field]) return null;
   }
+  if (entry === 'validation_scan' && (ref.display_mode !== undefined || ref.pinned_run_id !== undefined)) {
+    out.display_mode = ref.display_mode === 'follow' ? 'follow' : 'pinned';
+    const pin = text(ref.pinned_run_id);
+    // Keep a malformed/missing pin explicitly pinned-but-unavailable, never a latest fallback.
+    if (ref.display_mode === 'pinned' && isSafeInspectorId(pin) && !looksLikeCredential(pin)) out.pinned_run_id = pin;
+  }
   return out;
 }
 
@@ -193,6 +211,38 @@ export function inspectorRefKey(input) {
   const ref = normalizeInspectorRef(input);
   if (!ref) return '';
   return [ref.entry, ...ALLOWED_FIELDS[ref.entry].map((field) => ref[field] ?? '')].join('|');
+}
+
+/** Execution identity excludes display-only selection, so pinning cannot reset an open Stop. */
+export function inspectorWorkspaceKey(input) {
+  const ref = normalizeInspectorRef(input);
+  if (!ref) return '';
+  const { display_mode: _mode, pinned_run_id: _pin, ...execution } = ref;
+  return inspectorRefKey(execution);
+}
+
+/**
+ * Resolve only from the current scoped reader's authorized exact assessment record. This is a
+ * display relationship check, not authorization: every subsequent read is still server-owned.
+ * An unavailable pin always returns an empty runId, preventing even its child fetch.
+ */
+export function resolveScanChild(input, source, error = null) {
+  const ref = normalizeInspectorRef(input);
+  const scan = record(source);
+  const empty = (state) => ({ state, runId: '', checkId: '', targetId: '', steps: [] });
+  if (!ref || ref.entry !== 'validation_scan' || [401, 403, 404].includes(Number(error?.status))) return empty('unavailable');
+  if (!scan) return empty(error ? 'unavailable' : 'loading');
+  if (scan.id !== ref.scan_id || !(scan.target_id === ref.target_id || list(scan.target_ids).includes(ref.target_id))) return empty('unavailable');
+  const steps = list(scan.steps).map(record).filter((step) => step
+    && isSafeInspectorId(step.test_run_id) && !looksLikeCredential(step.test_run_id)
+    && isSafeInspectorId(step.check_id)
+    && (step.target_id === ref.target_id || (!step.target_id && scan.target_id === ref.target_id && list(scan.target_ids).length <= 1)));
+  const pinned = ref.display_mode === 'pinned';
+  const selected = pinned
+    ? steps.find((step) => step.test_run_id === ref.pinned_run_id)
+    : steps.find((step) => ['starting', 'running', 'collecting'].includes(text(step.status))) ?? steps.at(-1);
+  if (!selected) return { ...empty(pinned ? 'unavailable' : 'empty'), steps };
+  return { state: 'ready', runId: selected.test_run_id, checkId: selected.check_id, targetId: ref.target_id, steps };
 }
 
 function splitHref(href) {
@@ -220,7 +270,7 @@ export function parseInspectorRef(hashOrHref) {
   const ref = { entry };
   for (const [field, param] of Object.entries(FIELD_PARAMS)) {
     const value = params.get(param);
-    if (value) ref[field] = value;
+    if (value !== null) ref[field] = value;
   }
   return normalizeInspectorRef(ref);
 }
@@ -330,7 +380,8 @@ export function closeEvidenceInspector() {
 /** Exact read-only query for GET /v1/evidence-context. Never includes anything but ids. */
 export function evidenceContextPath(input) {
   const ref = normalizeInspectorRef(input);
-  if (!ref) return '';
+  // Assessments use their existing passive exact-ID/activity routes, not a new evidence route.
+  if (!ref || ref.entry === 'validation_scan') return '';
   const params = new URLSearchParams({ entry: ref.entry });
   for (const field of ALLOWED_FIELDS[ref.entry]) {
     if (ref[field]) params.set(field, ref[field]);
@@ -425,9 +476,17 @@ function observation(value, relationship) {
 export function normalizeEvidenceContext(payload, input) {
   const ref = normalizeInspectorRef(input);
   const body = record(payload);
-  if (!body) {
-    return { state: 'unavailable', ref, missingEvidenceIds: [], proof: null, provider: { confidence: null, conflict: false, corpus: '', source: '' }, answer: null, primary: null, originating: null, later: null, alternatives: [], request: summaryBlock(null), response: summaryBlock(null), evaluation: summaryBlock(null), subject: {}, limitations: [], unavailableReason: 'fetch_failed' };
-  }
+  const empty = (state, unavailableReason = '') => ({ state, ref, missingEvidenceIds: [], proof: null, provider: { confidence: null, conflict: false, corpus: '', source: '' }, answer: null, primary: null, originating: null, later: null, alternatives: [], request: summaryBlock(null), response: summaryBlock(null), evaluation: summaryBlock(null), subject: {}, limitations: [], unavailableReason });
+  if (!body) return empty('unavailable', 'fetch_failed');
+  // Failure envelopes must discard protected data even when sent with HTTP 200 or stale fields.
+  const declaredState = text(body.state);
+  if (['denied', 'auth', 'not_found', 'expired', 'unbound'].includes(declaredState)) return empty(declaredState);
+  if (body.unavailable_reason === 'permission_denied') return empty('denied', 'permission_denied');
+  if (body.unavailable_reason === 'expired') return empty('expired', 'expired');
+  const declaredSubject = record(body.subject);
+  if ((ref?.target_id && declaredSubject?.target_id && ref.target_id !== declaredSubject.target_id)
+    || (ref?.check_id && declaredSubject?.check_id && ref.check_id !== declaredSubject.check_id)
+    || (ref?.entry === 'check_result' && ref.test_run_id && record(body.primary)?.test_run_id && ref.test_run_id !== body.primary.test_run_id)) return empty('not_found');
   const answer = record(body.answer);
   const reason = text(body.unavailable_reason);
   const unavailableReason = UNAVAILABLE_REASONS.has(reason) ? reason : '';

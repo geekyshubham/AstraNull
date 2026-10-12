@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { getCheckById } from '../../src/contracts/checks.mjs';
-import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
+import { deriveRunEvidenceStamp, approvedScenarioVersion } from '../../src/lib/checkDefinitionVersion.mjs';
 import { buildSignedProbeJobRecord } from '../../src/lib/probeJobs.mjs';
 import { validateProbeResultBody } from '../../src/lib/probeResultValidation.mjs';
 import { correlateExternalOnlyVerdict } from '../../src/services/correlation.mjs';
@@ -12,8 +12,8 @@ import { executeProbeForJob } from '../../workers/probe-worker.mjs';
 
 test('transport-only observations cannot depress readiness coverage or inflate it with a passing legacy verdict', () => {
   const transport = { check_id: 'transport', version: '1', vector_family: 'l7', supported_targets: ['fqdn'], probe_profile: { kind: 'http_head' } };
-  const semantic = { check_id: 'semantic', version: '1', vector_family: 'waf', supported_targets: ['fqdn'], probe_profile: { kind: 'waf_evasion_marker_probe' } };
-  const run = { status: 'verdicted', completed_at: '2026-10-04T10:00:00Z', check_version: '1', producer_kind: 'signed_probe', probe_external_result: 'not_run' };
+  const semantic = { ...structuredClone(getCheckById('waf.http_method_policy_marker.safe')), check_id: 'semantic', version: '1' };
+  const run = { ...deriveRunEvidenceStamp(semantic, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(semantic) }), status: 'verdicted', completed_at: '2026-10-04T10:00:00Z', check_version: '1', producer_kind: 'signed_probe', probe_external_result: 'not_run', probe_metadata: { classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy' } };
   const { coverage } = deriveProtectionProfile({
     now: '2026-10-04T11:00:00Z', target: { id: 'tgt', kind: 'fqdn' }, catalog: [transport, semantic],
     observations: [
@@ -26,7 +26,7 @@ test('transport-only observations cannot depress readiness coverage or inflate i
   assert.equal(coverage.conclusive_count, 0);
   assert.equal(coverage.inconclusive_count, 1);
   assert.equal(coverage.pairs.find(p => p.check_id === 'transport').exclusion_reason, 'observation_only');
-  assert.equal(coverage.inconclusive_reasons[0].reason, 'baseline_comparison_unavailable');
+  assert.equal(coverage.inconclusive_reasons[0].reason, 'probe_incomplete');
   assert.equal(coverage.inconclusive_reasons.reduce((n, r) => n + r.count, 0), coverage.inconclusive_count);
 });
 
@@ -82,7 +82,7 @@ async function executeDnssec(options) {
 test('signed DNSSEC uses a real DNSKEY wire query within attested probe and resolver caps', async () => {
   for (const key of [true, false]) {
     const { job, result } = await executeDnssec({ key });
-    assert.equal(result.external_result, key ? 'blocked' : 'connected', JSON.stringify(result));
+    assert.equal(result.external_result, 'connected', JSON.stringify(result));
     assert.equal(result.metadata.dnskey_count, key ? 1 : 0);
     assert.equal(result.metadata.ds_count, null);
     assert.equal(result.metadata.dnssec_chain_validated, false);
@@ -92,8 +92,11 @@ test('signed DNSSEC uses a real DNSKEY wire query within attested probe and reso
     const validation = validateProbeResultBody({ external_result: result.external_result, metadata: result.metadata, safety_attestation: { requests_sent: result.requests_sent, duration_ms: result.duration_ms, probe_requests_sent: 1, destination_resolver_attempts: 3, total_operations: 4 } }, job.constraints, { probeKind: 'dnssec_posture', probeProfile: job.probe_profile, target: job.target });
     assert.equal(validation.ok, true, JSON.stringify(validation));
     const verdict = correlateExternalOnlyVerdict({ probeKind: 'dnssec_posture', externalResult: result.external_result, probeMetadata: result.metadata, probeIoObserved: true });
-    assert.equal(verdict.verdict, key ? 'protected' : 'exposed');
-    assert.match(verdict.explanation, /key presence only|contained no DNSKEY/);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(result.metadata.observation_only, true);
+    assert.equal(result.metadata.readiness_conclusion, false);
+    assert.equal(result.metadata.dnskey_present, key);
+    assert.match(verdict.explanation, /transport or liveness metadata only|did not establish/);
     assert.doesNotMatch(verdict.explanation, /blocked at the edge/);
   }
 });

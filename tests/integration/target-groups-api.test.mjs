@@ -82,7 +82,8 @@ describe('target groups API CRUD', () => {
     const state = await request(baseUrl, 'GET', '/v1/state', { headers: engineer });
     assert.equal(state.status, 200);
     assert.equal(state.json.target_groups, 1);
-    assert.match(state.json.readiness.factors[0].detail, /1 domain\(s\)/);
+    assert.equal(state.json.readiness.coverage.target_count, 1);
+    assert.match(state.json.readiness.factors[0].detail, /applicable target\/check scenarios/);
     assert.equal(state.json.readiness.factors.some((factor) => factor.key === 'agent_placement'), false);
 
     const run = await request(baseUrl, 'POST', '/v1/test-runs', {

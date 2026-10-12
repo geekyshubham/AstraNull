@@ -2,6 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { createPostgresFirewallEvidenceReader } from '../../src/persistence/postgres/firewallEvidenceReader.mjs';
 
 import {
   PROTECTION_VALIDATION_AUDIT_ACTIONS,
@@ -111,13 +112,14 @@ function makeRepository(expectations) {
   return repo;
 }
 
-function setup({ expectations = [makeExpectation('fwx_1')], clock = '2026-10-02T00:00:00.000Z' } = {}) {
+function setup({ expectations = [makeExpectation('fwx_1')], clock = '2026-10-02T00:00:00.000Z',
+  evidenceFactory = createDevStoreFirewallEvidenceReader } = {}) {
   const store = makeStore();
   const repository = makeRepository(expectations);
   let now = clock;
   const service = createFirewallChangeAcceptanceService({
     repository,
-    evidence: createDevStoreFirewallEvidenceReader(() => store),
+    evidence: evidenceFactory(() => store),
     resolveSourcePerspective: createApprovedSourceResolver({ [SOURCE]: ['worker_eu_1', 'worker_eu_2'], 'public-worker-us': ['worker_us_1'] }),
     now: () => now,
   });
@@ -182,6 +184,40 @@ describe('firewall change acceptance service', () => {
     const malformed = await service.captureFirewallBaseline(OWNER, { change_id: 'CHG-1001', expectation_ids: [], test_run_ids: ['run_pre'], source_ip: '192.0.2.1' });
     assert.equal(malformed.status, 400);
     assert.equal((await service.listFirewallBaselines(VIEWER, { limit: 500 })).limit, 100);
+  });
+
+  for (const side of ['pre', 'post']) it(`reads all exact PostgreSQL ${side} events, including a contradiction beyond 256`, async () => {
+    const evidenceFactory = (getState) => createPostgresFirewallEvidenceReader({ async connect() {
+      return { release() {}, async query(sql, args = []) {
+        const state = getState();
+        const owned = (rows) => rows.filter((row) => row.tenant_id === args[0]);
+        if (/FROM test_runs/.test(sql)) return { rows: owned(state.testRuns).filter((row) => row.id === args[1]) };
+        if (/FROM targets/.test(sql)) return { rows: owned(state.targets).filter((row) => row.id === args[1]) };
+        if (/FROM verdicts/.test(sql)) return { rows: owned(state.verdicts).filter((row) => row.test_run_id === args[1]) };
+        if (/FROM events/.test(sql)) {
+          const rows = owned(state.events).filter((row) => row.test_run_id === args[1])
+            .map(({ metadata, ...row }) => ({ ...row, metadata_json: metadata }));
+          return { rows: /LIMIT 256/.test(sql) ? rows.slice(0, 256) : rows };
+        }
+        return { rows: [] };
+      } };
+    } });
+    const { store, service, setNow } = setup({ evidenceFactory });
+    addRun(store, { id: 'run_pre' });
+    addRun(store, { id: 'run_post', day: '2026-10-03' });
+    const first = store.events.find((event) => event.test_run_id === `run_${side}`);
+    for (let index = 1; index <= 256; index++) store.events.push({ ...structuredClone(first), id: `overflow_${side}_${index}`,
+      timestamp: new Date(Date.parse(first.timestamp) + index).toISOString(),
+      metadata: index === 256 ? { ...first.metadata, tls_protocol: null, external_result: 'timeout', error_class: 'ETIMEDOUT' }
+        : { ...first.metadata, profile_kind: 'unsupported_observation' } });
+    const baseline = await service.captureFirewallBaseline(OWNER, baselineBody());
+    assert.equal(baseline.error, undefined, JSON.stringify(baseline));
+    if (side === 'pre') assert.equal(baseline.entries[0].observations.length, 2);
+    setNow('2026-10-04T00:00:00.000Z');
+    const result = await service.evaluateFirewallComparison(OWNER, { baseline_id: baseline.id, post_test_run_ids: ['run_post'] });
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.items[0].status, 'inconclusive');
+    assert.equal(result.summary.accepted, false);
   });
 
   it('evaluates post-change evidence, records an audited immutable evaluation, and replays', async () => {

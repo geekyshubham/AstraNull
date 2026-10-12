@@ -1,679 +1,257 @@
+import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import {
-  computeReadiness,
-  RECENT_EVIDENCE_WINDOW_DAYS,
-  WEIGHT_EVIDENCE_FRESHNESS,
-  WEIGHT_SOC_GOVERNANCE,
-  WEIGHT_VERDICTS,
-} from '../../src/services/readiness.mjs';
-import { REQUIRED_ARTIFACT_TYPES } from '../../src/services/highScale.mjs';
-import {
-  catalogCheckSupportsReadiness,
-  evidenceTierForProbeKind,
-} from '../../src/lib/readinessVerdicts.mjs';
-import { artifactProofBody } from '../helpers/highScalePayload.mjs';
+import { computeReadiness, evidenceBackedVerdictForRun, RECENT_EVIDENCE_WINDOW_DAYS } from '../../src/services/readiness.mjs';
+import { coverageFrom, summarizePairs } from '../../src/lib/protectionCoverage.mjs';
+import { projectReadiness } from '../../src/lib/readinessProjection.mjs';
+import { CHECK_CATALOG, getCheckById } from '../../src/contracts/checks.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
+import { assuranceWorld, addAssuredObservation, ASSURANCE_NOW } from '../helpers/assurance-fixtures.mjs';
 import { buildPortalBaselineStore, PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 import { buildPortalDemoStore, PORTAL_DEMO_IDS } from '../fixtures/portal-demo/seed.mjs';
-import {
-  applyPortalBaselineReadinessBoost,
-  applyPortalBaselineReadinessPenalty,
-} from '../fixtures/portal-baseline/readiness.mjs';
-import { freshStore } from '../helpers/reset.mjs';
-
-function daysAgo(n) {
-  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+import { applyPortalBaselineReadinessBoost, applyPortalBaselineReadinessPenalty } from '../fixtures/portal-baseline/readiness.mjs';
+const factor = (result, key) => result.factors.find((entry) => entry.key === key);
+function dev(world) {
+  resetStoreForTests({ targets: world.targets, targetGroups: world.groups, testPolicies: world.policies, testRuns: world.runs, verdicts: world.verdicts, events: world.events, evidenceVault: world.evidenceItems, findings: world.findings, highScaleRequests: world.highScaleRequests, auditLog: [], socKillSwitch: world.killSwitch, stateRollups: world.legacy_snapshot ? { [world.tenantId]: { readiness: world.legacy_snapshot } } : {} });
+  return computeReadiness(world.tenantId, { now: world.asOf, catalog: world.catalog });
 }
 
-function daysAhead(n) {
-  return new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function addTrustedVerdictEvidence(store, runId, id, timestamp) {
-  store.events.push({
-    id,
-    tenant_id: 'ten_demo',
-    test_run_id: runId,
-    signal_type: 'probe_result',
-    producer_kind: 'signed_probe',
-    timestamp,
+describe('versioned conservative readiness', () => {
+  it('publishes an explainable seven-day assessment, not capacity or all-path protection', () => {
+    const world = assuranceWorld(); addAssuredObservation(world);
+    const result = projectReadiness(world);
+    assert.equal(result.score, 100); assert.equal(result.assessment_version, 'readiness-assessment.v2');
+    assert.equal(RECENT_EVIDENCE_WINDOW_DAYS, 7); assert.equal(result.confidence, 'external_only');
+    assert.equal(result.coverage.passed_count, 1); assert.equal(result.current_assurance.status, 'tested_scenarios_only');
+    assert.ok(result.factors.every((entry) => entry.label && entry.detail));
   });
-  return id;
-}
-
-function factor(result, key) {
-  return result.factors.find((f) => f.key === key);
-}
-
-describe('readiness scoring', () => {
-  it('is explainable with factors', () => {
-    freshStore();
-    const r = computeReadiness('ten_demo');
-    assert.ok(r.score >= 0 && r.score <= 100);
-    assert.ok(r.factors.length >= 4);
-    for (const f of r.factors) {
-      assert.ok(f.label);
-      assert.ok(f.detail);
+  it('rejects contradictory/missing performed positives and wrong/missing nonce or ingestion identically in dev without custody edits', () => {
+    for (const outcome of ['protected', 'edge_protected', 'pass', 'passed', 'success', 'ok']) {
+      for (const mutate of [
+        (w) => { w.events[0].metadata.enforcement = 'not_enforced'; },
+        (w) => { delete w.events[0].metadata.enforcement; },
+        (w) => { w.events[0].nonce_hash = 'another_run_nonce'; },
+        (w) => { delete w.runs[0].correlation; },
+        (w) => { delete w.events[0].ingested_at; },
+      ]) {
+        const world = assuranceWorld(); addAssuredObservation(world, { outcome });
+        mutate(world);
+        const custody = JSON.stringify([world.runs, world.events, world.verdicts]);
+        const result = projectReadiness(world);
+        assert.equal(result.score, 0, outcome); assert.equal(result.coverage.passed_count, 0, outcome);
+        assert.deepEqual(dev(world), result, outcome);
+        assert.equal(JSON.stringify([world.runs, world.events, world.verdicts]), custody);
+      }
     }
   });
-
-  it('selects the baseline readiness run by stable ID/check after unrelated runs are prepended', () => {
-    function storeWithUnrelatedFirst() {
-      const store = buildPortalBaselineStore();
-      store.testRuns.unshift({
-        id: 'run_unrelated_prepend',
-        tenant_id: PORTAL_BASELINE_IDS.tenantId,
-        target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
-        target_id: PORTAL_BASELINE_IDS.targetId,
-        check_id: 'dns.authoritative_response.safe',
-        status: 'completed',
-        created_at: new Date().toISOString(),
-      });
-      return store;
+  it('only credits allowed_as_expected when actual nonce canary identity matches the explicit allow expectation', () => {
+    const world = assuranceWorld(); world.targets[0].expected_behavior = 'must_reach_canary';
+    const { event } = addAssuredObservation(world, { outcome: 'allowed_as_expected' });
+    event.metadata.application_identity = { confirmed: true, method: 'nonce_canary' };
+    assert.equal(projectReadiness(world).score, 100);
+    event.metadata.application_identity.method = 'header_similarity';
+    assert.equal(projectReadiness(world).score, 0);
+  });
+  it('does not collapse the same check across multiple targets', () => {
+    const world = assuranceWorld({ targetCount: 2 }); addAssuredObservation(world);
+    const result = projectReadiness(world);
+    assert.equal(result.score, 50); assert.equal(result.coverage.applicable_count, 2); assert.equal(result.coverage.not_run_count, 1);
+    assert.deepEqual(result.posture, { pass: 1, gap: 0, review: 1, total: 2 });
+  });
+  it('bounds a narrow sample by the complete target/check denominator', () => {
+    const world = assuranceWorld({ targetCount: 3, checkCount: 4 }); addAssuredObservation(world);
+    assert.equal(projectReadiness(world).score, 8);
+    const broad = projectReadiness({ ...world, catalog: CHECK_CATALOG });
+    assert.ok(broad.coverage.applicable_count > 12); assert.ok(broad.score < 8);
+  });
+  it('distinguishes severity and retains accepted-risk findings as unresolved', () => {
+    const world = assuranceWorld(); addAssuredObservation(world);
+    for (const [severity, expected] of [['low', 99], ['medium', 95], ['high', 90], ['critical', 80]]) {
+      world.findings = [{ id: 'f', tenant_id: world.tenantId, target_id: world.targets[0].id, severity, status: 'accepted_risk' }];
+      assert.equal(projectReadiness(world).score, expected);
     }
-
-    const boostedStore = storeWithUnrelatedFirst();
-    applyPortalBaselineReadinessBoost(boostedStore);
-    const boostedEvent = boostedStore.events.find((event) => event.id === 'evt_portal_baseline_boost');
-    assert.equal(boostedEvent.test_run_id, PORTAL_BASELINE_IDS.readinessRunId);
-    assert.equal(boostedEvent.check_id, PORTAL_BASELINE_IDS.checkId);
-    assert.equal(
-      boostedStore.testRuns.find((run) => run.id === boostedEvent.test_run_id)?.check_id,
-      boostedEvent.check_id,
-    );
-    assert.equal(
-      boostedStore.verdicts.find((verdict) => verdict.id === 'vrd_portal_baseline_boost')?.test_run_id,
-      PORTAL_BASELINE_IDS.readinessRunId,
-    );
-    resetStoreForTests(boostedStore);
+    world.findings[0].status = 'closed'; assert.equal(projectReadiness(world).score, 100);
+  });
+  it('gives gaps and inconclusive results no positive credit without treating unknown as exposed', () => {
+    for (const outcome of ['exposed', 'inconclusive', 'skipped', 'unknown']) {
+      const world = assuranceWorld(); addAssuredObservation(world, { outcome }); const result = projectReadiness(world);
+      assert.equal(result.score, 0); assert.equal(result.posture.gap, outcome === 'exposed' ? 1 : 0);
+      assert.equal(result.posture.pass, 0);
+    }
+  });
+  it('never grants protection credit for kill-switch governance alone (audited)', () => {
+    const world = assuranceWorld(); world.killSwitch = { tenant_id: world.tenantId, updated_at: world.asOf, active: false };
+    const result = dev(world); assert.equal(result.score, 0); assert.equal(result.governance.status, 'recorded'); assert.equal(result.governance.protection_credit, 0);
+  });
+  it('does not renew stale evidence through mutable metadata or new vault timestamps (audited)', () => {
+    const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world, { observedAt: '2026-09-01T12:00:00.000Z' });
+    run.updated_at = world.asOf; verdict.created_at = world.asOf;
+    world.evidenceItems.push({ id: 'ev_fresh', tenant_id: world.tenantId, test_run_id: run.id, related_event_id: event.id, created_at: world.asOf }); verdict.evidence_ids = ['ev_fresh'];
+    const result = dev(world); assert.equal(result.score, 0); assert.equal(result.coverage.stale_count, 1); assert.equal(result.current_assurance.retest_required_count, 1);
+  });
+  it('uses the oldest required result rather than a newly completed leg', () => {
+    const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world);
+    const old = { ...structuredClone(event), id: 'old_leg', timestamp: '2026-09-01T12:00:00.000Z' }; world.events.push(old); verdict.evidence_ids.push(old.id);
+    run.completed_at = world.asOf; assert.equal(projectReadiness(world).coverage.stale_count, 1);
+  });
+  for (const field of ['timestamp', 'created_at', 'ingested_at']) it(`rejects future ${field} even when other event times are current`, () => {
+    const world = assuranceWorld(); const { event } = addAssuredObservation(world); event[field] = '2026-10-09T00:00:00.000Z';
+    assert.equal(projectReadiness(world).score, 0);
+  });
+  it('requires every referenced evidence ID to resolve to signed same-run same-tenant result', () => {
+    for (const mutation of ['missing', 'foreign', 'other_run', 'activity', 'legacy', 'unlinked_vault']) {
+      const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world);
+      if (mutation === 'missing') verdict.evidence_ids.push('missing');
+      if (mutation === 'foreign') event.tenant_id = 'other';
+      if (mutation === 'other_run') event.test_run_id = 'another';
+      if (mutation === 'activity') event.signal_type = 'probe_activity';
+      if (mutation === 'legacy') event.producer_kind = 'legacy_untrusted';
+      if (mutation === 'unlinked_vault') { world.evidenceItems.push({ id: 'vault', test_run_id: run.id, tenant_id: world.tenantId, created_at: world.asOf }); verdict.evidence_ids = ['vault']; }
+      assert.equal(projectReadiness(world).score, 0, mutation);
+    }
+  });
+  it('accepts an actual linked same-run vault record without changing observation age', () => {
+    const world = assuranceWorld(); const { run, event, verdict } = addAssuredObservation(world);
+    world.evidenceItems.push({ id: 'vault', related_event_id: event.id, test_run_id: run.id, tenant_id: world.tenantId, created_at: world.asOf }); verdict.evidence_ids = ['vault'];
+    assert.equal(dev(world).score, 100); assert.equal(evidenceBackedVerdictForRun(getStore(), run.id).id, verdict.id);
+  });
+  for (const field of ['check_version', 'scenario_version']) it(`invalidates incompatible ${field} while retaining immutable run/verdict`, () => {
+    const world = assuranceWorld(); const { run } = addAssuredObservation(world); run[field] = 'old'; const before = structuredClone(world.runs);
+    const result = projectReadiness(world); assert.equal(result.score, 0); assert.equal(result.coverage.partial_count, 1); assert.deepEqual(world.runs, before);
+  });
+  it('invalidates changed definition digest even if explicit catalog version was not bumped', () => {
+    const world = assuranceWorld(); addAssuredObservation(world); world.catalog[0].probe_profile.timeout_ms -= 1;
+    assert.ok(projectReadiness(world).current_assurance.reasons.includes('check_definition_changed'));
+  });
+  it('invalidates exact URL path and expected behavior changes but not target names or tags', () => {
+    const world = assuranceWorld(); addAssuredObservation(world);
+    world.targets[0].name = 'Presentation change'; world.targets[0].tags = ['critical']; assert.equal(projectReadiness(world).score, 100);
+    world.targets[0].value += '/new'; const result = projectReadiness(world);
+    assert.equal(result.score, 0); assert.ok(result.current_assurance.reasons.includes('target_definition_changed'));
+  });
+  it('invalidates material policy revisions and current group safety changes', () => {
+    const world = assuranceWorld(); const policy = { id: 'pol', tenant_id: world.tenantId, target_id: world.targets[0].id, target_group_id: 'tg_1', check_id: world.catalog[0].check_id, expected_verdict: 'pass', schedule_revision: 1, enabled: true, state: 'active', safety_policy_snapshot: {} }; world.policies.push(policy); addAssuredObservation(world, { policy });
+    assert.equal(projectReadiness(world).score, 100); policy.schedule_revision = 2;
+    assert.ok(projectReadiness(world).current_assurance.reasons.includes('policy_definition_changed'));
+    policy.schedule_revision = 1; world.groups[0].safety_policy = { max_events: 1 }; assert.ok(projectReadiness(world).current_assurance.reasons.includes('target_group_definition_changed'));
+  });
+  it('selects latest attempt immutably; pending attempt never borrows older passing evidence', () => {
+    const world = assuranceWorld(); addAssuredObservation(world); world.runs.push({ ...world.runs[0], id: 'pending', started_at: world.asOf, created_at: world.asOf, completed_at: null, status: 'collecting' }); world.runs.reverse();
+    assert.equal(projectReadiness(world).score, 0); assert.equal(projectReadiness(world).coverage.unknown_count, 1);
+  });
+  it('quarantines incomplete, observation-only, unhealthy and missing planned marker evidence', () => {
+    const mutations = [{ observation_only: true }, { readiness_conclusion: false }, { comparison_complete: false }, { completed_marker_legs: 1 }, { planned_marker_legs: 0 }, { permitted_baseline_health: 'unhealthy' }, { classifier_version: 'old' }];
+    for (const mutation of mutations) { const world = assuranceWorld(); const { event } = addAssuredObservation(world); Object.assign(event.metadata, mutation); assert.equal(projectReadiness(world).score, 0, JSON.stringify(mutation)); }
+    const world = assuranceWorld(); const { event } = addAssuredObservation(world); event.metadata = {}; assert.equal(projectReadiness(world).score, 0);
+  });
+  it('excludes catalog E1/E2 and reports setup-required independently', () => {
+    const world = assuranceWorld(); world.targets[0].kind = 'fqdn'; world.targets[0].value = 'app.example.test'; world.catalog.push(getCheckById('dns.authoritative_response.safe'), getCheckById('ops.runbook_contact_validation.safe'), getCheckById('origin.host_sni_bypass.safe'), { ...structuredClone(world.catalog[0]), check_id: 'waf.fixture_setup.safe', required_customer_setup: ['declared_fixture_probe_path'] });
+    const result = projectReadiness(world); assert.equal(result.coverage.applicable_count, 1); assert.ok(result.coverage.observation_only_count >= 1); assert.ok(result.coverage.setup_required_count >= 1); assert.equal(result.score, 0);
+  });
+  it('requires complete inputs rather than inventing estate completeness from a bounded feed', () => {
+    const world = assuranceWorld(); addAssuredObservation(world); world.input_complete = false; const result = projectReadiness(world);
+    assert.equal(result.score, null); assert.equal(result.score_status, 'incomplete_inputs');
+  });
+  it('preserves labelled nonauthoritative legacy score and normalizes no-credit factors to positive zero', () => {
+    const world = assuranceWorld(); world.legacy_snapshot = { score: 97, updated_at: '2025-01-01T00:00:00.000Z' };
+    const result = dev(world); assert.equal(result.score, 0); assert.equal(result.legacy_snapshot.snapshot.score, 97); assert.equal(result.legacy_snapshot.authoritative, false);
+    assert.equal(Object.is(factor(result, 'verdicts').score, -0), false); assert.equal(getStore().stateRollups[world.tenantId].readiness.score, 97);
+  });
+  it('keeps trust/tenant scoping and excludes deleted or undeclared target cohorts', () => {
+    const world = assuranceWorld({ targetCount: 2 }); addAssuredObservation(world);
+    world.targets[0].deleted_at = world.asOf; world.targets[1].target_group_id = 'missing';
+    assert.equal(projectReadiness(world).score, 0); assert.equal(projectReadiness(world).coverage.target_count, 0);
+    assert.equal(projectReadiness({ ...world, tenantId: 'other' }).score, 0);
+  });
+  it('shared pure/dev projection is exactly identical with complete inputs', () => {
+    const world = assuranceWorld({ targetCount: 2 }); addAssuredObservation(world); world.findings.push({ id: 'f', tenant_id: world.tenantId, severity: 'high', status: 'open' });
+    assert.deepEqual(dev(world), projectReadiness(world));
+  });
+  it('withdraws current credit after explicit port/protocol changes and scope-version mismatch without rewriting custody', () => {
+    for (const change of [{ port: 8443 }, { protocol: 'http' }]) {
+      const world = assuranceWorld(); Object.assign(world.targets[0], { port: 443, protocol: 'https' });
+      addAssuredObservation(world); const custody = structuredClone({ runs: world.runs, verdicts: world.verdicts, events: world.events });
+      assert.equal(projectReadiness(world).score, 100);
+      Object.assign(world.targets[0], change);
+      assert.equal(projectReadiness(world).score, 0);
+      assert.equal(projectReadiness(world).current_assurance.status, 'retest_required');
+      assert.deepEqual({ runs: world.runs, verdicts: world.verdicts, events: world.events }, custody);
+    }
+    const legacy = assuranceWorld(); addAssuredObservation(legacy);
+    legacy.runs[0].safety_constraints.assurance_scope.version = 'assurance-scope.v1';
+    assert.equal(projectReadiness(legacy).score, 0);
+    const unstamped = assuranceWorld(); addAssuredObservation(unstamped);
+    delete unstamped.runs[0].safety_constraints.assurance_scope;
+    const custody = JSON.stringify([unstamped.runs, unstamped.verdicts, unstamped.events]);
+    assert.equal(projectReadiness(unstamped).score, 0);
+    assert.equal(projectReadiness(unstamped).current_assurance.status, 'retest_required');
+    assert.equal(JSON.stringify([unstamped.runs, unstamped.verdicts, unstamped.events]), custody);
+  });
+  it('credits only exact signed complete reviewed marker edge denial, not raw edge verdicts', () => {
+    const world = assuranceWorld(); const proof = addAssuredObservation(world, { outcome: 'edge_protected' });
+    assert.equal(projectReadiness(world).score, 100);
+    for (const mutate of [
+      w => { w.events[0].producer_kind = 'legacy_untrusted'; },
+      w => { w.events[0].metadata.comparison_complete = false; },
+      w => { w.events[0].metadata.permitted_baseline_health = 'unhealthy'; },
+      w => { w.catalog[0].observation_only = true; },
+      w => { w.catalog[0].requires_complete_comparison = false; w.catalog[0].probe_profile.kind = 'http_head'; },
+    ]) { const copy = structuredClone(world); mutate(copy); assert.equal(projectReadiness(copy).score, 0); }
+    assert.equal(proof.verdict.verdict, 'edge_protected');
+  });
+  it('complete grouped finding accounting equals raw records without losing tenant, scope, time or severity', () => {
+    const world = assuranceWorld(); addAssuredObservation(world);
+    world.findings = [
+      ...Array.from({ length: 4 }, (_, index) => ({ id: `finding_${index}`, tenant_id: world.tenantId, target_id: world.targets[0].id, status: 'open', severity: 'medium', created_at: world.asOf })),
+      { id: 'accepted', tenant_id: world.tenantId, target_id: world.targets[0].id, status: 'accepted_risk', severity: 'high', created_at: world.asOf },
+      { id: 'foreign', tenant_id: 'other', status: 'open', severity: 'critical', created_at: world.asOf },
+      { id: 'removed', tenant_id: world.tenantId, target_id: 'removed_target', status: 'open', severity: 'critical', created_at: world.asOf },
+      { id: 'future', tenant_id: world.tenantId, status: 'open', severity: 'critical', created_at: '2026-10-10T00:00:00.000Z' },
+    ];
+    const findingCounts = [{ ...world.findings[0], count: 4 }, ...world.findings.slice(4, 7).map((row) => ({ ...row, count: 1 }))];
+    const grouped = { ...world, findings: [], findingCounts, finding_counts_complete: true };
+    assert.deepEqual(projectReadiness(grouped), projectReadiness(world));
+    assert.equal(projectReadiness(grouped).findings.unresolved_count, 5);
+    assert.deepEqual(projectReadiness({ ...grouped, findings: world.findings }), projectReadiness(grouped), 'grouped counts replace raw records, never double-count them');
+    assert.equal(projectReadiness({ ...grouped, findingCounts: [...findingCounts, { ...findingCounts[0], created_at: '2026-10-10T00:00:00.000Z' }] }).score, null);
+    assert.equal(projectReadiness({ ...grouped, finding_counts_complete: false }).score, null);
+    grouped.findingCounts[0].count = -1;
+    assert.equal(projectReadiness(grouped).score_status, 'incomplete_inputs');
+  });
+  it('weighted blank target projection exactly matches fully expanded per-target applicability', () => {
+    const world = assuranceWorld({ targetCount: 100 });
+    for (let index = 0; index < world.targets.length; index++) {
+      if (index % 3 === 1) Object.assign(world.targets[index], { kind: 'fqdn', value: `host${index}.example.test` });
+      if (index % 3 === 2) Object.assign(world.targets[index], { kind: 'ip', value: '203.0.113.10' });
+    }
+    addAssuredObservation(world);
+    const allPairs = world.targets.flatMap((target) => coverageFrom({ target, targetGroup: world.groups[0],
+      observations: target.id === world.targets[0].id ? [{ run: { ...world.runs[0], readiness_result_metadata: [world.events[0].metadata] }, verdict: world.verdicts[0], observed_at: world.events[0].timestamp, evidence_verified: true }] : [],
+      catalog: CHECK_CATALOG, nowMs: Date.parse(world.asOf) }).coverage.pairs);
+    const expanded = summarizePairs(allPairs);
+    const grouped = projectReadiness({ ...world, catalog: CHECK_CATALOG });
+    for (const [key, value] of Object.entries(expanded)) assert.deepEqual(grouped.coverage[key], value, key);
+    assert.equal(grouped.coverage.target_count, world.targets.length);
+    assert.equal(grouped.coverage.observation_only_count, allPairs.filter((pair) => pair.exclusion_reason === 'observation_only').length);
+  });
+  it('keeps legacy baseline custody untouched while a broad new fixture cohort supplies current proof', () => {
+    const store = buildPortalBaselineStore();
+    const original = structuredClone(store.testRuns.find((row) => row.id === PORTAL_BASELINE_IDS.readinessRunId));
+    store.testRuns.unshift({ id: 'unrelated', check_id: 'dns.authoritative_response.safe', created_at: ASSURANCE_NOW });
+    const { run } = applyPortalBaselineReadinessBoost(store);
+    assert.deepEqual(store.testRuns.find((row) => row.id === original.id), original);
+    assert.notEqual(run.id, original.id);
+    assert.ok(store.events.filter((row) => String(row.test_run_id).startsWith('run_portal_assurance_')).length > 20);
+    resetStoreForTests(store);
     const boosted = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
-
-    const penalizedStore = storeWithUnrelatedFirst();
-    applyPortalBaselineReadinessPenalty(penalizedStore);
-    resetStoreForTests(penalizedStore);
-    const penalized = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
-
-    for (const result of [boosted, penalized]) {
-      assert.ok(Number.isInteger(result.score));
-      assert.ok(result.score >= 0 && result.score <= 100);
-      assert.ok(result.factors.length >= 4);
-      assert.ok(result.factors.every((entry) => entry.key && entry.label && entry.detail));
-    }
-    assert.ok(boosted.score > penalized.score, `${boosted.score} must exceed ${penalized.score}`);
+    assert.ok(boosted.score > 0);
+    assert.ok(boosted.coverage.observed_target_count >= 2);
+    assert.ok(boosted.score < 100, 'untested targets and scenarios remain in the complete denominator');
+    applyPortalBaselineReadinessPenalty(store);
+    assert.equal(store.findings.find((row) => row.id === 'fnd_portal_baseline_penalty').tenant_id, PORTAL_BASELINE_IDS.tenantId);
+    assert.ok(computeReadiness(PORTAL_BASELINE_IDS.tenantId).score < boosted.score);
+    const demo = buildPortalDemoStore(); resetStoreForTests(demo);
+    assert.equal(computeReadiness(PORTAL_DEMO_IDS.tenantId, { now: ASSURANCE_NOW }).score, 0);
+    assert.equal(computeReadiness(PORTAL_BASELINE_IDS.tenantId, { now: ASSURANCE_NOW }).score, 0);
   });
-
-  it('keeps portal-demo freshness and penalty scoring on the remapped tenant', () => {
-    const boostedStore = buildPortalDemoStore();
-    resetStoreForTests(boostedStore);
-
-    const boosted = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(boosted.score, 65, 'one of five declared domains has recent evidence');
-    assert.equal(factor(boosted, 'soc_readiness').score, WEIGHT_SOC_GOVERNANCE);
-    assert.match(factor(boosted, 'soc_readiness').detail, /hsr_demo_approved: authorization pack accepted/);
-    assert.equal(factor(boosted, 'coverage').score, 9);
-    assert.equal(factor(boosted, 'verdicts').score, WEIGHT_VERDICTS);
-    assert.equal(factor(boosted, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-    assert.match(factor(boosted, 'evidence_freshness').detail, /1 run\(s\), 1 domain\(s\)/);
-
-    const unmappedTenant = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
-    assert.equal(unmappedTenant.score, 0);
-    assert.equal(factor(unmappedTenant, 'evidence_freshness').score, 0);
-
-    const penalizedStore = buildPortalDemoStore();
-    applyPortalBaselineReadinessPenalty(penalizedStore);
-    const run = penalizedStore.testRuns.find((entry) => (
-      entry.id === PORTAL_DEMO_IDS.runId && entry.check_id === PORTAL_BASELINE_IDS.checkId
-    ));
-    const penalty = penalizedStore.findings.find(
-      (entry) => entry.id === 'fnd_portal_baseline_penalty',
-    );
-    assert.ok(run);
-    assert.ok(penalty);
-    assert.equal(penalty.tenant_id, PORTAL_DEMO_IDS.tenantId);
-    assert.equal(penalty.test_run_id, run.id);
-    assert.equal(penalty.target_group_id, run.target_group_id);
-    assert.equal(penalty.target_id, run.target_id);
-    assert.equal(penalty.check_id, run.check_id);
-    assert.equal(
-      penalizedStore.findings.some((entry) => (
-        entry.id === penalty.id && entry.tenant_id === PORTAL_BASELINE_IDS.tenantId
-      )),
-      false,
-    );
-
-    resetStoreForTests(penalizedStore);
-    const penalized = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(penalized.score, 37);
-    assert.equal(factor(penalized, 'verdicts').score, 0);
-    assert.equal(factor(penalized, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-  });
-
-  it('recomputes authoritative zero instead of returning stale unversioned score 97', () => {
-    freshStore();
-    const store = getStore();
-    store.stateRollups.ten_demo = {
-      readiness: { score: 97, factors: [], updated_at: '2025-01-01T00:00:00.000Z' },
-    };
-
-    const readiness = computeReadiness('ten_demo');
-
-    assert.equal(store.stateRollups.ten_demo.readiness.score, 97);
-    assert.equal(readiness.score, 0);
-    assert.notStrictEqual(readiness, store.stateRollups.ten_demo.readiness);
-  });
-
-  it('empty tenant state stays explainable and does not award SOC points by absence', () => {
-    freshStore();
-    const r = computeReadiness('ten_demo');
-    const soc = factor(r, 'soc_readiness');
-    assert.equal(soc.score, 0);
-    assert.match(soc.detail, /No high-scale governance evidence recorded yet/);
-    const freshness = factor(r, 'evidence_freshness');
-    assert.equal(freshness.score, 0);
-    assert.match(freshness.detail, /No evidence-backed validations yet/);
-    const verdictsFactor = factor(r, 'verdicts');
-    assert.equal(verdictsFactor.score, 0);
-    assert.match(verdictsFactor.detail, /absence of findings is not proof/i);
-  });
-
-  it('classifies readiness semantics from the authoritative catalog check', () => {
-    for (const checkId of [
-      'dns.authoritative_response.safe',
-      'l3.forbidden_tcp_port.safe',
-      'l3.forbidden_udp_port.safe',
-      'pattern.carpet_bombing.readiness',
-      'l7.http_method_restriction.safe',
-      'protocol.http3_control_stream.readiness',
-    ]) {
-      assert.equal(catalogCheckSupportsReadiness(checkId), false, checkId);
-    }
-    assert.equal(catalogCheckSupportsReadiness('origin.direct_reachability.safe'), true);
-    assert.equal(catalogCheckSupportsReadiness('ops.runbook_contact_validation.safe'), true);
-    assert.equal(catalogCheckSupportsReadiness('unknown.check'), false);
-    assert.equal(evidenceTierForProbeKind('http_method_matrix'), 'E2');
-    assert.equal(evidenceTierForProbeKind('http3_control_probe'), 'E2');
-  });
-
-  it('stale completed run does not earn evidence freshness', () => {
-    freshStore();
-    const store = getStore();
-    store.testRuns.push({
-      id: 'run_stale',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 5),
-      created_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 10),
-    });
-    const staleEvidenceAt = daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 5);
-    const staleEvidenceId = addTrustedVerdictEvidence(
-      store,
-      'run_stale',
-      'evt_stale',
-      staleEvidenceAt,
-    );
-    store.verdicts.push({
-      id: 'v_stale',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_stale',
-      verdict: 'protected',
-      created_at: staleEvidenceAt,
-      evidence_ids: [staleEvidenceId],
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'evidence_freshness').score, 0);
-    assert.match(factor(r, 'evidence_freshness').detail, /stale/i);
-    assert.equal(factor(r, 'coverage').score, 0);
-  });
-
-  it('recent run without verdict/event/evidence does not earn freshness', () => {
-    freshStore();
-    getStore().testRuns.push({
-      id: 'run_bare',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'evidence_freshness').score, 0);
-    assert.match(factor(r, 'evidence_freshness').detail, /No evidence-backed validations yet/);
-    assert.equal(factor(r, 'coverage').score, 0);
-  });
-
-  it('ignores an evidence-bound protected verdict for an authoritative observation-only check', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_transport_only',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'dns.authoritative_response.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_transport_only',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_transport_only',
-      signal_type: 'probe_result',
-      producer_kind: 'signed_probe',
-      timestamp: now,
-      metadata: { profile_kind: 'host_sni_bypass', external_result: 'blocked' },
-    });
-    store.verdicts.push({
-      id: 'verdict_transport_only',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_transport_only',
-      verdict: 'protected',
-      evidence_ids: ['evt_transport_only'],
-      created_at: now,
-    });
-
-    const readiness = computeReadiness('ten_demo');
-    assert.equal(factor(readiness, 'coverage').score, 0);
-    assert.equal(factor(readiness, 'verdicts').score, 0);
-    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
-  });
-
-  it('does not award readiness for vault evidence linked to a legacy reserved event', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_legacy_link',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'completed',
-      completed_at: now,
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_legacy_link',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_legacy_link',
-      signal_type: 'probe_result',
-      producer_kind: 'legacy_untrusted',
-      timestamp: now,
-    });
-    store.evidenceVault.push({
-      id: 'evidence_legacy_link',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_legacy_link',
-      related_event_id: 'evt_legacy_link',
-      created_at: now,
-    });
-
-    const readiness = computeReadiness('ten_demo');
-    assert.equal(factor(readiness, 'coverage').score, 0);
-    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
-    assert.match(factor(readiness, 'evidence_freshness').detail, /No evidence-backed validations yet/);
-  });
-
-  it('quarantines a historical verdict that references only a legacy producer event', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_legacy_verdict',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_legacy_verdict',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_legacy_verdict',
-      signal_type: 'probe_result',
-      producer_kind: 'legacy_untrusted',
-      timestamp: now,
-    });
-    store.verdicts.push({
-      id: 'verdict_legacy_only',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_legacy_verdict',
-      verdict: 'protected',
-      evidence_ids: ['evt_legacy_verdict'],
-      created_at: now,
-    });
-
-    const readiness = computeReadiness('ten_demo');
-    assert.equal(factor(readiness, 'coverage').score, 0);
-    assert.equal(factor(readiness, 'verdicts').score, 0);
-    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
-  });
-
-  it('recent run with verdict/evidence earns freshness and coverage', () => {
-    freshStore();
-    const store = getStore();
-    store.testRuns.push({
-      id: 'run_recent',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-    });
-    store.verdicts.push({
-      id: 'v_recent',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_recent',
-      verdict: 'protected',
-      created_at: new Date().toISOString(),
-      evidence_ids: ['evt_1'],
-    });
-    store.events.push({
-      id: 'evt_1',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_recent',
-      signal_type: 'probe_result',
-      timestamp: new Date().toISOString(),
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-    assert.equal(factor(r, 'coverage').score, 44);
-    assert.match(factor(r, 'coverage').detail, /1 of 1 domain/);
-  });
-
-  it('preserves readiness credit for an evidence-bound ops readiness verdict', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_ops_ready',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'ops.runbook_contact_validation.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    store.events.push({
-      id: 'evt_ops_ready',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_ops_ready',
-      signal_type: 'probe_result',
-      producer_kind: 'signed_probe',
-      timestamp: now,
-      metadata: { external_result: 'connected', ops_validation_ok: true },
-    });
-    store.verdicts.push({
-      id: 'verdict_ops_ready',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_ops_ready',
-      verdict: 'protected',
-      evidence_ids: ['evt_ops_ready'],
-      created_at: now,
-    });
-
-    const readiness = computeReadiness('ten_demo');
-    assert.equal(factor(readiness, 'coverage').score, 44);
-    assert.equal(factor(readiness, 'verdicts').score, WEIGHT_VERDICTS);
-    assert.equal(factor(readiness, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
-  });
-
-  it('high-scale request with accepted required artifacts and two distinct approvals earns SOC points', () => {
-    freshStore();
-    const store = getStore();
-    const artifacts = REQUIRED_ARTIFACT_TYPES.map((type, i) => {
-      const proof = artifactProofBody(type);
-      return {
-        id: `art_${i}`,
-        type,
-        status: 'accepted',
-        approval_reference: proof.approval_reference,
-        approver: proof.approver,
-        valid_window: proof.valid_window,
-        approved_scenario_families: proof.approved_scenario_families,
-        max_rate: proof.max_rate,
-        max_duration_minutes: proof.max_duration_minutes,
-        emergency_contacts: proof.emergency_contacts,
-        abort_criteria: proof.abort_criteria,
-      };
-    });
-    store.highScaleRequests.push({
-      id: 'hs_ok',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      state: 'approved',
-      artifacts,
-      soc_approvals: [
-        { user_id: 'usr_a', at: new Date().toISOString() },
-        { user_id: 'usr_b', at: new Date().toISOString() },
-      ],
-      audit_trail: [{ action: 'approve', at: new Date().toISOString() }],
-    });
-
-    const r = computeReadiness('ten_demo');
-    const soc = factor(r, 'soc_readiness');
-    assert.equal(soc.score, WEIGHT_SOC_GOVERNANCE);
-    assert.match(soc.detail, /authorization pack accepted/i);
-  });
-
-  it('pending high-scale request without complete artifacts/approvals does not earn SOC points and explains missing gates', () => {
-    freshStore();
-    getStore().highScaleRequests.push({
-      id: 'hs_pending',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      state: 'submitted',
-      artifacts: [{ id: 'art_0', type: REQUIRED_ARTIFACT_TYPES[0], status: 'accepted' }],
-      soc_approvals: [{ user_id: 'usr_a', at: new Date().toISOString() }],
-      audit_trail: [],
-    });
-
-    const r = computeReadiness('ten_demo');
-    const soc = factor(r, 'soc_readiness');
-    assert.equal(soc.score, 0);
-    assert.match(soc.detail, /gates remain/i);
-    assert.match(soc.detail, /SOC approvals 1\/2/);
-    assert.match(soc.detail, /missing accepted artifacts/i);
-    assert.ok(REQUIRED_ARTIFACT_TYPES.includes('business_approval'));
-    assert.ok(REQUIRED_ARTIFACT_TYPES.includes('legal_approval'));
-  });
-
-  it('future-dated run, verdict, and event do not earn freshness or coverage', () => {
-    freshStore();
-    const store = getStore();
-    const future = daysAhead(3);
-    store.testRuns.push({
-      id: 'run_future',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: future,
-      created_at: future,
-    });
-    store.verdicts.push({
-      id: 'v_future',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_future',
-      verdict: 'protected',
-      created_at: future,
-      evidence_ids: ['evt_future'],
-    });
-    store.events.push({
-      id: 'evt_future',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_future',
-      signal_type: 'probe_result',
-      timestamp: future,
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'evidence_freshness').score, 0);
-    assert.equal(factor(r, 'coverage').score, 0);
-  });
-
-  it('recent evidence-backed run for undeclared target group does not earn coverage', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_undeclared_tg',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_not_declared',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    store.verdicts.push({
-      id: 'v_undeclared',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_undeclared_tg',
-      verdict: 'protected',
-      created_at: now,
-      evidence_ids: ['evt_ud'],
-    });
-    store.events.push({
-      id: 'evt_ud',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_undeclared_tg',
-      signal_type: 'probe_result',
-      timestamp: now,
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'coverage').score, 0);
-    assert.match(factor(r, 'coverage').detail, /0 of 1 domain/);
-  });
-
-  it('recent verdict with no open findings earns full verdict factor', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_v_ok',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    const evidenceId = addTrustedVerdictEvidence(store, 'run_v_ok', 'evt_v_ok', now);
-    store.verdicts.push({
-      id: 'v_ok',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_v_ok',
-      verdict: 'protected',
-      created_at: now,
-      evidence_ids: [evidenceId],
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'verdicts').score, WEIGHT_VERDICTS);
-    assert.match(factor(r, 'verdicts').detail, /0 open finding/);
-    assert.match(factor(r, 'verdicts').detail, /1 recent/);
-  });
-
-  it('open findings reduce verdict factor when recent verdicts exist', () => {
-    freshStore();
-    const store = getStore();
-    const now = new Date().toISOString();
-    store.testRuns.push({
-      id: 'run_x',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: now,
-      created_at: now,
-    });
-    const evidenceId = addTrustedVerdictEvidence(store, 'run_x', 'evt_penalty', now);
-    store.verdicts.push({
-      id: 'v_penalty',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_x',
-      verdict: 'exposed',
-      created_at: now,
-      evidence_ids: [evidenceId],
-    });
-    store.findings.push({
-      id: 'f_1',
-      tenant_id: 'ten_demo',
-      status: 'open',
-      severity: 'high',
-    });
-    store.findings.push({
-      id: 'f_2',
-      tenant_id: 'ten_demo',
-      status: 'open',
-      severity: 'medium',
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'verdicts').score, WEIGHT_VERDICTS - 20);
-    assert.match(factor(r, 'verdicts').detail, /2 open finding/);
-    assert.match(factor(r, 'verdicts').detail, /1 recent/);
-  });
-  it('stale-only verdicts do not earn full verdict factor credit', () => {
-    freshStore();
-    const store = getStore();
-    const oldEvidenceAt = daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 2);
-    store.testRuns.push({
-      id: 'run_old',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_1',
-      target_id: 'tgt_1',
-      check_id: 'origin.direct_reachability.safe',
-      status: 'verdicted',
-      completed_at: oldEvidenceAt,
-      created_at: oldEvidenceAt,
-    });
-    const evidenceId = addTrustedVerdictEvidence(store, 'run_old', 'evt_old', oldEvidenceAt);
-    store.verdicts.push({
-      id: 'v_old',
-      tenant_id: 'ten_demo',
-      test_run_id: 'run_old',
-      verdict: 'protected',
-      created_at: oldEvidenceAt,
-      evidence_ids: [evidenceId],
-    });
-
-    const r = computeReadiness('ten_demo');
-    assert.equal(factor(r, 'verdicts').score, 0);
-    assert.match(factor(r, 'verdicts').detail, /0 recent/);
-    assert.match(factor(r, 'verdicts').detail, /stale/i);
-    assert.match(factor(r, 'verdicts').detail, /does not support full posture credit/i);
-  });
-});
-it('coverage credits one declared domain without claiming evidence for its untested sibling', () => {
-  freshStore();
-  const store = getStore();
-  store.targets.push({ ...store.targets[0], id: 'tgt_sibling', value: 'untested.test' });
-  const at = new Date().toISOString();
-  store.testRuns.push({ id: 'domain_evidence', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'origin.direct_reachability.safe', status: 'verdicted', completed_at: at, created_at: at });
-  const evidenceId = addTrustedVerdictEvidence(store, 'domain_evidence', 'domain_event', at);
-  store.verdicts.push({ id: 'domain_verdict', tenant_id: 'ten_demo', test_run_id: 'domain_evidence', verdict: 'protected', evidence_ids: [evidenceId], created_at: at });
-  const readiness = computeReadiness('ten_demo');
-  assert.equal(factor(readiness, 'coverage').score, 22);
-  assert.match(factor(readiness, 'coverage').detail, /1 of 2 domain/);
 });

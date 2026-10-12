@@ -11,11 +11,14 @@ import {
 import { classifyDirectOriginObservation } from '../../src/lib/externalObservationOutcomes.mjs';
 
 const HEALTHY_BASELINE = { status_code: 200, server_header: 'edge' };
+const ORIGIN_SCOPE = { host: 'shop.example.test', path: '/', method: 'HEAD', port: 443,
+  scenario_version: 'origin-comparison-v4', source_perspective: 'external_fixture', worker_id: 'worker_fixture' };
+const ORIGIN_AT = '2026-10-04T12:00:00.000Z';
 const responseWith = (status, headers = {}) => ({ status, headers: { get: (name) => headers[String(name).toLowerCase()] ?? null } });
 const deniedOriginObservation = () => classifyDirectOriginObservation({
   response: responseWith(403, { 'x-origin-lockdown': 'cdn-only' }),
-  baseline: HEALTHY_BASELINE,
-  scope: { host: 'shop.example.test', path: '/' },
+  baseline: { ...HEALTHY_BASELINE, scope: ORIGIN_SCOPE, observed_at: ORIGIN_AT, canary_echo: 'nonce_1', application_identity: { confirmed: true, method: 'nonce_canary' } },
+  expectedNonce: 'nonce_1', scope: ORIGIN_SCOPE, observedAt: ORIGIN_AT,
   declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
 });
 

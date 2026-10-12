@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { prepareObservation } from '../../services/targetHistory.mjs';
 import { presentFindingLineage } from '../../services/retestLineage.mjs';
@@ -306,7 +305,6 @@ function findingCustomerListWhere(tenantId, query) {
  * @param {import('pg').Pool} pool
  */
 export function createValidationEvidenceRepository(pool) {
-  let safeStartPool = null;
   const safeStartContext = new AsyncLocalStorage();
   async function queryEvidenceList(client, tenantId, options = {}) {
     const boundedLimit = normalizeEvidenceListLimit(options.limit);
@@ -343,31 +341,87 @@ export function createValidationEvidenceRepository(pool) {
     async withSafeStartLock(ctx, callback) {
       const held = safeStartContext.getStore();
       if (held?.active && held.tenantId === ctx.tenantId) return callback();
-      // Admission is serialized briefly; active executions retain independent target slots.
-      if (!safeStartPool) {
-        safeStartPool = new pg.Pool({ ...pool.options, max: 1, idleTimeoutMillis: 100, allowExitOnIdle: true });
-        safeStartPool.on('error', () => { /* Active clients fail their calls; idle connections can be replaced. */ });
-      }
-      const client = await safeStartPool.connect();
-      const key = `safe_start:${ctx.tenantId}`;
-      let broken = false;
-      const scope = { active: true, tenantId: ctx.tenantId };
-      const onError = () => { broken = true; };
-      client.on('error', onError);
-      try {
-        await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [key]);
-        const result = await safeStartContext.run(scope, callback);
-        if (broken) throw new Error('safe_start_lock_lost');
-        return result;
-      } finally {
-        scope.active = false;
-        if (!broken) {
-          try { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [key]); } catch { broken = true; }
-        }
-        client.removeListener('error', onError); client.release(broken);
-      }
+      // Audit precedes admission/mutation locks, matching finalization. All repository calls
+      // retain this transaction; a lost connection rolls back admission and its reservation.
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`safe_start:${ctx.tenantId}`]);
+        const scope = { active: true, tenantId: ctx.tenantId };
+        try { return await safeStartContext.run(scope, callback); }
+        finally { scope.active = false; }
+      });
     },
-    async close() { if (safeStartPool) await safeStartPool.end(); safeStartPool = null; },
+    async close() {},
+
+    async lockAdmissionDefinitions(ctx, { targetGroupId, targetId }) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT id FROM target_groups WHERE tenant_id = $1 AND id = $2 FOR SHARE',
+          [ctx.tenantId, targetGroupId]);
+        await client.query('SELECT id FROM targets WHERE tenant_id = $1 AND id = $2 FOR SHARE',
+          [ctx.tenantId, targetId]);
+      });
+    },
+
+    async lockAdmissionCommit(ctx) {
+      return withTenantContext(pool, ctx.tenantId, (client) => client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))', [`kill_switch_state:${ctx.tenantId}`]));
+    },
+
+    async readSafeAdmissionUsage(ctx, { now, targetId, targetGroupId, customerCheckIds }) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const count = await client.query(`SELECT count(*) AS count FROM test_runs
+          WHERE tenant_id = $1 AND created_at >= $2::timestamptz - interval '1 hour'
+            AND created_at <= $2::timestamptz AND check_id = ANY($3::text[])`,
+        [ctx.tenantId, now, customerCheckIds]);
+        const prior = await client.query(`SELECT ${TEST_RUN_COLUMNS} FROM test_runs
+          WHERE tenant_id = $1 AND target_id = $2 AND target_group_id = $3
+          ORDER BY created_at DESC, id DESC LIMIT 1`, [ctx.tenantId, targetId, targetGroupId]);
+        return { runs_last_hour: Number(count.rows[0]?.count ?? 0), prior_run: mapTestRunRow(prior.rows[0]), input_complete: true };
+      });
+    },
+
+    async readReadinessInputs(ctx, { asOf = new Date().toISOString() } = {}) {
+      const at = new Date(asOf);
+      if (!Number.isFinite(at.getTime())) throw new TypeError('Invalid readiness cutoff.');
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        // One statement snapshot across all inputs; presentation feed limits never affect assurance.
+        const { rows } = await client.query(`SELECT
+          (SELECT COALESCE(jsonb_agg(g), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, expected_behavior_default, safety_policy, declaration_json, created_at
+             FROM target_groups WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+               AND created_at <= $2::timestamptz) g) AS groups,
+          (SELECT COALESCE(jsonb_agg(t), '[]'::jsonb) FROM
+            (SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.expected_behavior,
+                    t.protocol, t.port, t.declaration_json, t.created_at
+             FROM targets t JOIN target_groups g ON g.tenant_id = t.tenant_id AND g.id = t.target_group_id
+             WHERE t.tenant_id = $1 AND t.deleted_at IS NULL AND g.deleted_at IS NULL AND g.archived_at IS NULL
+               AND t.created_at <= $2::timestamptz AND g.created_at <= $2::timestamptz) t) AS targets,
+          (SELECT COALESCE(jsonb_agg(r ORDER BY r.created_at, r.id), '[]'::jsonb) FROM
+            (SELECT ${TEST_RUN_COLUMNS} FROM test_runs WHERE tenant_id = $1 AND created_at <= $2::timestamptz) r) AS runs,
+          (SELECT COALESCE(jsonb_agg(v), '[]'::jsonb) FROM
+            (SELECT ${VERDICT_COLUMNS} FROM verdicts WHERE tenant_id = $1 AND created_at <= $2::timestamptz) v) AS verdicts,
+          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+            (SELECT ${EVENT_COLUMNS} FROM events WHERE tenant_id = $1 AND timestamp <= $2::timestamptz
+              AND ingested_at <= $2::timestamptz AND signal_type <> 'probe_activity') e) AS events,
+          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+            (SELECT ${EVIDENCE_COLUMNS} FROM evidence_vault WHERE tenant_id = $1 AND created_at <= $2::timestamptz) e) AS evidence,
+          (SELECT COALESCE(jsonb_agg(f), '[]'::jsonb) FROM
+            (SELECT tenant_id, target_id, status, severity, COUNT(*)::int AS count, MAX(created_at) AS created_at
+             FROM findings WHERE tenant_id = $1 AND created_at <= $2::timestamptz
+               AND status IN ('open', 'in_progress', 'accepted_risk')
+             GROUP BY tenant_id, target_id, status, severity) f) AS findings,
+          (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, target_group_id, target_id, check_id, expected_verdict, safe_windows,
+              enabled, state, schedule_revision, safety_policy_snapshot, created_at, updated_at
+             FROM test_policies WHERE tenant_id = $1 AND created_at <= $2::timestamptz) p) AS policies`,
+        [ctx.tenantId, at.toISOString()]);
+        const input = rows[0] ?? {};
+        return { groups: input.groups ?? [], targets: input.targets ?? [], scope_complete: true,
+          runs: (input.runs ?? []).map(mapTestRunRow), verdicts: (input.verdicts ?? []).map(mapVerdictRow),
+          events: (input.events ?? []).map(mapEventRow), evidenceItems: (input.evidence ?? []).map(mapEvidenceRow),
+          findings: [], findingCounts: input.findings ?? [], finding_counts_complete: true, policies: input.policies ?? [], input_complete: true };
+      });
+    },
     async listTestRuns(ctx, options = {}) {
       const boundedLimit = normalizeTestRunListLimit(options.limit);
       return withTenantContext(pool, ctx.tenantId, async (client) => {
@@ -887,14 +941,24 @@ export function createValidationEvidenceRepository(pool) {
     },
 
 
+    /** Read retained activity without presentation caps; run IDs and tenant remain bounded. */
+    async listRunActivityEvents(ctx, runIds, options = {}) {
+      const ids = normalizeRunIdBatch(runIds, 'listRunActivityEvents.runIds');
+      if (!ids.length) return [];
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(`SELECT ${EVENT_COLUMNS} FROM events
+          WHERE tenant_id = $1 AND test_run_id = ANY($2::text[])
+            AND ($3::boolean OR (signal_type = 'probe_activity' AND producer_kind = 'signed_probe')
+              OR (signal_type = 'probe_result' AND producer_kind IN ('signed_probe', 'internal_simulation')))
+          ORDER BY ingested_at, id`, [ctx.tenantId, ids, options.includeAllSignals === true]);
+        return rows.map(mapEventRow);
+      });
+    },
+
     /**
-     * Load the state-readiness verdict/event slice without per-run repository calls.
-     *
-     * Both parameterized statements use one tenant transaction client. Verdict selection is
-     * deterministic even for restored pre-uniqueness data: the newest `(created_at, id)` wins
-     * for each requested run, while results retain requested-run order. Event rows preserve the
-     * existing oldest-first per-run order and the existing 1,000-row per-run ceiling. The caller
-     * remains responsible for trusted-producer filtering.
+     * Load the presentation verdict/event slice on one tenant client. Latest verdicts are
+     * deterministic by (created_at, id); event rows retain the existing per-run ceiling.
+     * Safety accounting, readiness and full activity use their uncapped internal readers.
      */
     async loadRunEvidenceBatch(ctx, selection = {}, options = {}) {
       const runIds = normalizeRunIdBatch(selection.runIds, 'loadRunEvidenceBatch.runIds');

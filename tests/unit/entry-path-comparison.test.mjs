@@ -136,6 +136,10 @@ function markerAttempt(item, { baseline = 200, blocked = 2, allowed = 0, externa
     external_result: external,
     probe_metadata: {
       profile_kind: 'waf_class_marker_probe',
+      classifier_version: 'marker-comparison-v4',
+      comparison_complete: true,
+      planned_marker_legs: results.length,
+      completed_marker_legs: results.length,
       permitted_baseline: { status_code: baseline },
       marker_results: results,
       ...extra,
@@ -157,6 +161,14 @@ function itemFor(p, id) {
 
 function outcomes(result) {
   return Object.fromEntries(result.evaluation.items.map((row) => [row.entry_path_id, row.outcome]));
+}
+
+function comparableOriginBaseline() {
+  const scope = { host: 'app.example', path: '/', port: 443, method: 'GET', scenario_version: 'marker-comparison-v4',
+    source_perspective: DEFAULT_SOURCE_PERSPECTIVE, worker_id: 'worker-eu-1' };
+  return { scope, expectedNonce: 'fixture-nonce', observedAt: T1,
+    baseline: { status_code: 200, scope, observed_at: '2026-10-06T10:04:59.000Z', canary_echo: 'fixture-nonce',
+      application_identity: { confirmed: true, method: 'nonce_canary' } } };
 }
 
 function okResponse(status, headers = {}) {
@@ -346,7 +358,7 @@ describe('per-attempt observations', () => {
     assert.ok(allowedBaseline.reasons.includes('evasion_blocked_baseline_missing'));
     const weaker = deriveAttemptObservation({
       external_result: 'connected',
-      probe_metadata: { profile_kind: 'waf_evasion_marker_probe', baseline_blocked: true, permitted_baseline_status: 200, variant_results: [{ label: 'baseline', blocked: true }, { label: 'double_url', blocked: false }] },
+      probe_metadata: { profile_kind: 'waf_evasion_marker_probe', classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, baseline_blocked: true, permitted_baseline_status: 200, variant_results: [{ label: 'baseline', blocked: true }, { label: 'double_url', blocked: false }] },
     });
     assert.equal(weaker.enforcement, 'partial');
     assert.equal(weaker.baseline_health, 'healthy');
@@ -501,7 +513,7 @@ describe('direct-origin denials need a control-specific signature', () => {
     assert.equal(outcomes(undeclared).ep_origin, 'reachability_exposure');
     const locked = evaluate(classifyDirectOriginObservation({
       response: okResponse(403, { 'x-origin-lockdown': 'cdn-only' }),
-      baseline: { status_code: 200 },
+      ...comparableOriginBaseline(),
       declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
     }));
     assert.equal(outcomes(locked).ep_origin, 'consistent_enforcement');
@@ -509,7 +521,8 @@ describe('direct-origin denials need a control-specific signature', () => {
       response: okResponse(403),
       bodyText: 'Access Denied. Reference #18.2f3e4d5c.1700000000.1a2b3c',
     }));
-    assert.equal(outcomes(vendor).ep_origin, 'consistent_enforcement');
+    assert.equal(outcomes(vendor).ep_origin, 'inconclusive');
+    assert.equal(vendor.attempts.find((row) => row.entry_path_id === 'ep_origin').observation, 'explicit_denial_observed');
     for (const status of [421, 407]) {
       const gap = evaluate(classifyDirectOriginObservation({ response: okResponse(status), baseline: { status_code: 200 } }));
       assert.equal(outcomes(gap).ep_origin, 'inconclusive', String(status));
@@ -643,7 +656,7 @@ describe('evaluation', () => {
     const p = plan();
     const denial = classifyDirectOriginObservation({
       response: okResponse(403, { 'x-origin-lockdown': 'cdn-only' }),
-      baseline: { status_code: 200 },
+      ...comparableOriginBaseline(),
       declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
     });
     const { result } = fullEvaluation({ ep_origin: originAttempt(itemFor(p, 'ep_origin'), denial) });

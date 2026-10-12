@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Pause, Play, Search, Square } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { requestJson } from '../../lib/api';
+import { sessionIdentity } from '../../lib/api';
+import { activityIsLive, captureWarnings, stopStateLabel, type RecordedActivityState } from '../../lib/recorded-activity.mjs';
+import { useRecordedActivity } from '../evidence/use-recorded-activity';
 import { apiErrorMessage } from '../../lib/error-messages';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 import './probe-activity.css';
@@ -11,7 +13,7 @@ const LABELS: Record<string, string> = {
   job_started: 'Worker started', attempt_started: 'Attempt started', request_started: 'Request started',
   response_received: 'Response received', attempt_failed: 'Request failed', request_not_sent: 'Not sent',
   probe_completed: 'Probe finished', result_received: 'Result recorded',
-  run_started: 'Run started', run_stopped: 'Run stopped',
+  run_started: 'Run started', run_stopped: 'Cancellation recorded',
   run_created: 'Run created',
   phase_completed: 'Phase finished',
   response_payload: 'Payload captured', response_body_completed: 'Response body read',
@@ -39,64 +41,68 @@ function describe(item: DataItem) {
   return `${LABELS[text(item.stage)] || text(item.stage).replaceAll('_', ' ')}.${identity} The fields below are the recorded facts for this event.`;
 }
 
-export function ProbeActivity({ config, session, runId, checkName, running, canStop, onStop, onFollowActive, notSent }: {
-  config: PortalConfig; session: Session; runId: string; checkName: string; running: boolean;
-  canStop: boolean; onStop: () => void; onFollowActive?: () => void;
-  notSent?: { reason: string; at: string } | null;
-}) {
-  const [snapshot, setSnapshot] = useState<DataItem | null>(null);
-  const [error, setError] = useState('');
+type ActivityProps = {
+  runId: string; checkName: string; running: boolean; canStop: boolean; onStop: () => void;
+  onFollowActive?: () => void; notSent?: { reason: string; at: string } | null;
+  maxRequests?: number | null; titleId?: string;
+};
+
+export function ProbeActivity({ config, session, ...props }: ActivityProps & { config: PortalConfig; session: Session }) {
   const [paused, setPaused] = useState(false);
+  const scope = sessionIdentity(session);
+  useEffect(() => { setPaused(false); }, [scope, props.runId]);
+  const activity = useRecordedActivity({ config, session, id: props.runId, paused });
+  return <ProbeActivityView {...props} activity={activity} paused={paused} onPause={() => setPaused((value) => !value)} titleId={props.titleId || 'probe-activity-title'} />;
+}
+
+/** Table and Inspector present the same retained, authenticated activity stream. */
+export function ProbeActivityView({ runId, checkName, running: fallbackRunning, canStop, onStop, onFollowActive, notSent, maxRequests, titleId, activity, paused, onPause }: ActivityProps & {
+  activity: RecordedActivityState & { refresh: () => void }; paused: boolean; onPause: () => void;
+}) {
+  const generatedId = useId();
+  const headingId = titleId || `activity-${generatedId}`;
+  const { snapshot, error, lastUpdated, updating } = activity;
+  const accessDenied = [401, 403, 404].includes(Number((error as { status?: number } | null)?.status));
+  const running = !accessDenied && (snapshot ? activityIsLive(snapshot) : fallbackRunning);
+  const warnings = captureWarnings(snapshot);
+  const stopLabel = stopStateLabel(snapshot?.stop);
+  const stopPending = stopLabel !== '';
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [expanded, setExpanded] = useState<string | null>(null);
-  useEffect(() => { setSnapshot(null); setError(''); setExpanded(null); setPaused(false); }, [runId]);
-  useEffect(() => {
-    if (!runId || paused) return undefined;
-    const controller = new AbortController();
-    let timer: number | undefined;
-    let failures = 0;
-    const poll = async () => {
-      let active = running;
-      try {
-        const data = await requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/activity?limit=256`, { signal: controller.signal }) as DataItem;
-        if (controller.signal.aborted) return;
-        setSnapshot(data); setError(''); failures = 0;
-        active = ['running', 'collecting', 'planned'].includes(text(data.status));
-      } catch (reason) {
-        if (controller.signal.aborted) return;
-        failures += 1;
-        setError(apiErrorMessage(reason, 'Activity could not refresh. Previous recorded events remain visible.'));
-      }
-      if (active && !controller.signal.aborted) timer = window.setTimeout(() => { void poll(); }, Math.min(15_000, 2500 * (failures + 1)));
-    };
-    void poll();
-    return () => { controller.abort(); if (timer !== undefined) window.clearTimeout(timer); };
-  }, [config, session, runId, running, paused]);
+  useEffect(() => { setExpanded(null); }, [runId]);
   const items = useMemo(() => (Array.isArray(snapshot?.items) ? snapshot.items as DataItem[] : notSent ? [{ id: 'scan-decision', stage: 'request_not_sent', source: 'scan_state', reason: notSent.reason, at: notSent.at } as DataItem] : [])
     .filter((item) => filter === 'all' || severity(item) === filter)
     .filter((item) => !search.trim() || [item.operation, item.method, item.url, item.stage, item.status_code, item.error_class, item.reason, item.vector_family, item.marker_class, item.phase, item.request_content_type, item.response_content_type].join(' ').toLowerCase().includes(search.trim().toLowerCase()))
     .slice().reverse(), [snapshot, filter, search, notSent]);
   return (
-    <section className="probe-activity" aria-labelledby="probe-activity-title">
+    <section className="probe-activity" aria-labelledby={headingId}>
       <header className="probe-activity-head">
-        <div><h2 id="probe-activity-title">Execution activity</h2><p>{checkName || 'Choose a recorded check to inspect its activity.'}</p></div>
+        <div><h2 id={headingId}>Execution activity</h2><p>{checkName || 'Choose a recorded check to inspect its activity.'}</p>{runId ? <code className="probe-activity-run">{runId}</code> : null}</div>
         <div className="probe-activity-actions">
           {onFollowActive ? <Button size="sm" variant="ghost" onClick={onFollowActive}>Follow active check</Button> : null}
-          {canStop && running ? <Button size="sm" variant="danger" onClick={onStop}><Square size={13} aria-hidden="true" />Stop check</Button> : null}
+          {canStop && running && !stopPending ? <Button size="sm" variant="danger" onClick={onStop}><Square size={13} aria-hidden="true" />Stop check</Button> : null}
         </div>
       </header>
       <div className="probe-activity-tools">
         <label className="probe-activity-search"><Search size={15} aria-hidden="true" /><span className="sr-only">Search execution activity</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search requests and responses" /></label>
         <label><span className="sr-only">Activity severity</span><select aria-label="Activity severity" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All events</option><option value="info">Info</option><option value="warning">Not sent</option><option value="error">Errors</option></select></label>
-        <Button size="sm" variant="ghost" disabled={!runId} onClick={() => setPaused((value) => !value)}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{paused ? 'Resume updates' : 'Pause updates'}</Button>
+        <Button size="sm" variant="ghost" disabled={!runId} onClick={onPause}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{paused ? 'Resume updates' : 'Pause updates'}</Button>
       </div>
       <div className="probe-activity-status" role="status" aria-live="polite">
-        <span>{snapshot ? `${items.length} shown · ${Array.isArray(snapshot.items) ? snapshot.items.length : 0} recorded events` : notSent ? 'Recorded execution decision · no request dispatched' : runId ? 'Waiting for recorded worker activity' : 'No check selected'}</span>
-        <span>{paused ? 'Updates paused; execution continues' : running ? 'Live updates · every 2.5s' : text(snapshot?.status).replaceAll('_', ' ') || 'No execution recorded'}</span>
-        {snapshot?.requests_sent != null ? <span>{String(snapshot.requests_sent)} attested operations</span> : null}
+        <span>{snapshot ? `${items.length} shown · ${Array.isArray(snapshot.items) ? snapshot.items.length : 0} recorded events retained` : notSent ? 'Recorded execution decision · no request dispatched' : runId ? 'Waiting for recorded worker activity' : 'No check selected'}</span>
+        <span>{paused ? 'Updates paused; execution continues' : error ? 'Disconnected · recorded view may be stale' : running ? 'Live updates · every 2.5s' : text(snapshot?.status).replaceAll('_', ' ') || 'No execution recorded'}</span>
+        {snapshot?.requests_sent != null ? <span>{String(snapshot.requests_sent)} attested operations</span> : <span>Operation count not recorded</span>}
+        {maxRequests != null ? <span>Planned probe maximum: {maxRequests} · not operations sent</span> : null}
+        <span>{lastUpdated ? <>Last successful update <time dateTime={lastUpdated} title={lastUpdated}>{time(lastUpdated)}</time>{updating && !paused ? ' · refreshing' : ''}</> : 'No successful update yet'}</span>
       </div>
-      {error ? <p className="probe-activity-error" role="alert">{error}</p> : null}
+      {stopLabel ? <p className="probe-activity-note" role="status">{stopLabel}. Database cancellation is not proof that the worker stopped.</p> : ['cancelled', 'canceled'].includes(text(snapshot?.status)) ? <p className="probe-activity-note">Cancellation recorded; worker acknowledgment was not recorded. An in-flight bounded request may have finished.</p> : null}
+      {error ? <p className="probe-activity-error" role="alert">{apiErrorMessage(error, 'Activity could not refresh. Previous recorded events remain visible.')} <Button size="sm" variant="ghost" disabled={paused} onClick={activity.refresh}>Reconnect</Button></p> : null}
+      {runId && warnings.length ? <ul className="probe-activity-warnings" aria-label="Capture limitations">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+      {snapshot ? <details className="probe-activity-authority"><summary>Recorded source and authorization bounds</summary><dl>
+        {['worker_id', 'job_id', 'leased_at'].map((key) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{text((snapshot.source_context as DataItem | null)?.[key]) || 'Not recorded'}</dd></div>)}
+        {['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'timeout_ms', 'not_after', 'authority_version'].map((key) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{(snapshot.authorized_bounds as DataItem | null)?.[key] != null ? String((snapshot.authorized_bounds as DataItem)[key]) : 'Not recorded'}</dd></div>)}
+      </dl><p>These are signed authorization limits, not observed requests or duration. Worker identity is not a verified geographic or network perspective. Port, SNI and address family are shown only when an event recorded them.</p></details> : null}
       <div className="probe-activity-scroll" role="region" aria-label="Recorded request and response activity" tabIndex={0}>
         <table className="probe-activity-table" role="table">
           <caption className="sr-only">Worker-recorded activity for {checkName || 'the selected check'}, including methods, vectors, response formats and redacted payload previews. Credentials and declared private query values are withheld.</caption>
@@ -121,7 +127,7 @@ export function ProbeActivity({ config, session, runId, checkName, running, canS
           </tbody>
         </table>
       </div>
-      <p className="probe-activity-note">{snapshot?.truncated ? `Showing the latest ${String(snapshot.count)} events. ` : ''}Expand an event for the method, vector, format, status and captured payload. Previews retain up to 2 KiB; credentials and declared private query values are redacted. Non-HTTP checks show their recorded protocol fields.</p>
+      <p className="probe-activity-note">Expand an event for the recorded method, endpoint, protocol, vector, status and bounded payload. Previews retain up to 2 KiB and may be partial; credentials and declared private query values are redacted. Missing port, SNI, address family or source perspective remain not recorded. Informational activity never substitutes for verdict evidence or internal-origin visibility.</p>
     </section>
   );
 }

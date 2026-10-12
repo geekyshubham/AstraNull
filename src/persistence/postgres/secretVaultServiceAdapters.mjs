@@ -128,7 +128,17 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
 
     async rotateEncryptedSecret(ctx, id, body, key) {
       const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
-      if (!record) return null;
+      if (!record) {
+        await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'secret.rotate_not_found',
+          resource_type: 'encrypted_secret',
+          resource_id: id,
+        });
+        return null;
+      }
       const encryptionKey = keyForPurpose(record.purpose, key);
       if (!encryptionKey) return encryptionNotConfigured(record.purpose);
 

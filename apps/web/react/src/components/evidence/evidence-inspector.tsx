@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, CircleAlert, CircleDashed, Lock, RefreshCw, SearchX } from 'lucide-react';
-import { requestJson, sessionIdentity } from '../../lib/api';
+import { requestJson } from '../../lib/api';
 import {
   EVIDENCE_INSPECTOR_EVENT,
   classifyInspectorError,
@@ -12,6 +12,7 @@ import {
   inspectorLoadKey,
   inspectorOriginFocusKey,
   inspectorRefKey,
+  inspectorWorkspaceKey,
   limitationLabel,
   normalizeEvidenceContext,
   parseInspectorRef,
@@ -31,6 +32,8 @@ import { Badge } from '../ui/badge';
 import { AnchorButton, Button } from '../ui/button';
 import { InspectorPanel } from '../ui/inspector-panel';
 import { sequencePosition, useInspectorSequence } from './inspector-sequence';
+import { ExecutionInspector } from './execution-inspector';
+import { useInspectorScopeKey } from './use-inspector';
 import './evidence-inspector.css';
 
 type Tone = 'success' | 'warn' | 'danger' | 'info' | 'muted' | 'default';
@@ -39,6 +42,7 @@ const ENTRY_TITLE: Record<EvidenceInspectorRef['entry'], string> = {
   finding: 'Finding evidence',
   group_member: 'Affected target evidence',
   check_result: 'Check result',
+  validation_scan: 'Assessment execution',
   provider: 'How this was identified',
   artifact: 'Evidence artifact',
   report: 'Report snapshot',
@@ -60,7 +64,7 @@ const FIELD_LABEL: Record<string, string> = {
   engine: 'Engine',
   max_requests: 'Request upper bound',
   timeout_ms: 'Timeout (ms)',
-  requests_sent: 'Requests sent',
+  requests_sent: 'Recorded logical operations',
   requests_simulated: 'Requests simulated',
   request_count: 'Request count',
   provenance: 'Provenance',
@@ -285,8 +289,9 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
   const generation = useRef(createInspectorGeneration());
   const sequence = useInspectorSequence();
   const focusKeyRef = useRef('');
-  const scopeKey = sessionIdentity(session);
+  const scopeKey = useInspectorScopeKey(config, session);
   const refKey = inspectorRefKey(ref);
+  const workspaceKey = inspectorLoadKey(scopeKey, inspectorWorkspaceKey(ref));
   const loadKey = inspectorLoadKey(scopeKey, refKey);
 
   const syncFromLocation = useCallback(() => {
@@ -323,8 +328,13 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
     }
     const token = generation.current.begin(scopeKey, refKey);
     const controller = new AbortController();
-    setLoad({ key: loadKey, model: null, state: 'loading', permission: '', fallback: false });
+    setLoad((previous) => previous.key === loadKey && previous.model ? previous : { key: loadKey, model: null, state: 'loading', permission: '', fallback: false });
     const current = () => generation.current.isCurrent(token);
+    if (ref.entry === 'validation_scan') {
+      // The existing exact assessment reader supplies its own passive state and child workspace.
+      setLoad({ key: loadKey, model: null, state: 'ready', permission: '', fallback: false });
+      return () => controller.abort();
+    }
 
     if (ref.entry === 'audit' && !canAccessRoute(session.role, 'audit', { principal: session.principal, staffRole: session.staff_role })) {
       setLoad({ key: loadKey, model: null, state: 'denied', permission: 'audit:read', fallback: false });
@@ -343,7 +353,8 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
         // Only a server without the context route falls back to an exact record read. Every other
         // failure keeps its own state: no permission, relationship or availability bypass.
         if (classified.state !== 'route_missing') {
-          setLoad({ key: loadKey, model: null, state: classified.state, permission: classified.permission, fallback: false });
+          const classifiedState = classified.state;
+          setLoad((previous) => ({ key: loadKey, model: classifiedState === 'unavailable' && previous.key === loadKey ? previous.model : null, state: classifiedState, permission: classified.permission, fallback: false }));
           return;
         }
         const recordPath = fallbackRecordPath(ref!);
@@ -413,6 +424,13 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
     return { model, state, targetId, checkId, targetLabel, checkLabel, subject: lifecycle ? { ...subject, lifecycle } : subject };
   }, [ref, loadKey, load, data.targets, data.checks, data.findings]);
 
+  const refreshExecutionEvidence = useCallback((state?: 'denied' | 'auth' | 'not_found') => {
+    if (state) {
+      generation.current.cancel();
+      setLoad({ key: loadKey, model: null, state, permission: '', fallback: false });
+    } else setReload((value) => value + 1);
+  }, [loadKey]);
+
   if (!ref || !view) return null;
 
   const { model, state, targetId, checkId, targetLabel, checkLabel, subject } = view;
@@ -440,6 +458,8 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       {ref.entry === 'audit' && subject.resource_type ? <div><dt>Resource</dt><dd className="mono">{subject.resource_type}{subject.resource_id ? ` ${subject.resource_id}` : ''}</dd></div> : null}
       {ref.entry === 'audit' && subject.timestamp ? <div><dt>Recorded</dt><dd>{formatDate(subject.timestamp)}</dd></div> : null}
       {model?.primary?.observedAt ? <div><dt>Observed</dt><dd>{formatDate(model.primary.observedAt)}</dd></div> : null}
+      {ref.test_run_id ? <div><dt>Exact run</dt><dd className="mono">{ref.test_run_id}</dd></div> : null}
+      {ref.scan_id ? <div><dt>Exact assessment</dt><dd className="mono">{ref.scan_id}</dd></div> : null}
       <div><dt>Scope</dt><dd>External probes only</dd></div>
     </dl>
   );
@@ -482,7 +502,7 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       busy={state === 'loading'}
       onClose={close}
       restoreFocus={restoreFocus}
-      focusToken={refKey}
+      focusToken={workspaceKey}
       meta={(
         <>
           {position ? (
@@ -529,6 +549,10 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       ) : null}
 
       <StateNotice state={state} permission={load.key === loadKey ? load.permission : ''} entry={ref.entry} onRetry={() => setReload((value) => value + 1)} />
+
+      {(ref.entry === 'check_result' || ref.entry === 'validation_scan') && !['denied', 'auth', 'not_found', 'unbound', 'expired'].includes(state) ? (
+        <ExecutionInspector key={workspaceKey} config={config} session={session} reference={ref} checks={data.checks} onEvidenceUpdate={refreshExecutionEvidence} />
+      ) : null}
 
       {load.key === loadKey && load.fallback && model && state !== 'no_refs' ? (
         <p className="ei-partial" role="note">

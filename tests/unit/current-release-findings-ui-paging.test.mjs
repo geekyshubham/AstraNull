@@ -171,7 +171,9 @@ describe('origin relations: approved checks from target-scoped reads', () => {
   it('reads compatible pairs and exact catalog definitions, not the global list', () => {
     assert.match(originRelations, /\/compatible-checks`/);
     assert.match(originRelations, /`\/v1\/checks\/\$\{encodeURIComponent\(id\)\}`/);
-    assert.match(originRelations, /'setup_required'/);
+    assert.match(originRelations, /str\(pair, 'target_id'\) === targetId && str\(pair, 'mechanism'\) === 'host_sni_bypass'/);
+    assert.match(originRelations, /str\(check, 'check_id'\) === id && originRelationCheckEligible\(check, target, pair\)/);
+    assert.doesNotMatch(originRelations, /str\(pair, '(?:exclusion_reason|pair_reason)'\) === 'setup_required'/);
     assert.match(originRelations, /'host_sni_bypass'/);
     assert.doesNotMatch(originRelations, /checks\.filter\(/);
     assert.doesNotMatch(targetDetail, /<OriginRelations[\s\S]{0,400}checks=\{checks\}/);

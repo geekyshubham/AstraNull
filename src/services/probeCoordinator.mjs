@@ -5,6 +5,7 @@ import {
   buildSignedProbeJobRecord,
   signProbeJob,
   verifyProbeJobSignature,
+  probeAuthority,
 } from '../lib/probeJobs.mjs';
 import {
   sanitizeWorkerProbeMetadata,
@@ -17,8 +18,11 @@ import { recordEvidence } from './evidence.mjs';
 import { recordSignedProbeHistory } from './targetEdgeDetectionStore.mjs';
 import { normalizeProbeActivityBatch, probeActivityEvent } from '../lib/probeActivity.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
+import { targetOwnershipProof } from './ownershipVerification.mjs';
+import { executionReservation, probeExecutionReceipt, probeExecutionEvidenceReceipt, normalizeStopAcknowledgment, mergeProbeCapture } from '../lib/probeExecution.mjs';
+import { createProbeSourceResolver, probeSourceResolverFromEnv } from '../lib/probeSourcePerspective.mjs';
 
-const PROBE_WORKER_SIG_VERSION = 'pw1';
+const PROBE_WORKER_SIG_VERSION = 'pw2';
 
 const MAX_TIMESTAMP_SKEW_SEC = 300;
 
@@ -32,8 +36,8 @@ function safeEqualUtf8(a, b) {
 
 export { signProbeJob, verifyProbeJobSignature };
 
-export function workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId) {
-  const base = `${PROBE_WORKER_SIG_VERSION}\n${method}\n${path}\n${timestamp}\n${bodyText ?? ''}`;
+export function workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId) {
+  const base = `${PROBE_WORKER_SIG_VERSION}\n${method}\n${path}\n${timestamp}\n${bodyText ?? ''}\n${String(workerId ?? '')}`;
   if (tenantId != null && tenantId !== '') {
     return `${base}\n${String(tenantId)}`;
   }
@@ -41,12 +45,12 @@ export function workerRequestSigningPayload(method, path, timestamp, bodyText, t
 }
 
 export function signProbeWorkerRequest(
-  { method, path, timestamp, bodyText = '', tenantId },
+  { method, path, timestamp, bodyText = '', tenantId, workerId },
   secret,
 ) {
   return createHmac('sha256', secret)
     .update(
-      workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId),
+      workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId),
       'utf8',
     )
     .digest('base64url');
@@ -59,7 +63,7 @@ export function probeWorkerAuthHeaders(
 ) {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = signProbeWorkerRequest(
-    { method, path, timestamp, bodyText, tenantId },
+    { method, path, timestamp, bodyText, tenantId, workerId },
     secret,
   );
   const headers = {
@@ -161,6 +165,7 @@ export function authenticateProbeWorker(headers, method, path, bodyText, runtime
       timestamp: String(timestamp),
       bodyText: bodyText ?? '',
       tenantId: tenantId != null && tenantId !== '' ? String(tenantId) : undefined,
+      workerId: String(workerId),
     },
     secret,
   );
@@ -214,6 +219,55 @@ export function listPendingProbeJobsForWorker(workerCtx, runtimeConfig) {
   return jobs.map((j) => jobForWorkerResponse(j));
 }
 
+export function reserveProbeExecution(ctx, jobId, body) {
+  const store = getStore();
+  const job = store.probeJobs.find((entry) => entry.id === jobId && entry.tenant_id === ctx.tenantId);
+  if (!job || job.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+  if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
+    return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+  }
+  if (!body || Object.keys(body).some((key) => key !== 'leased_at')) return { error: 'invalid_probe_execution', status: 400 };
+  const run = store.testRuns.find((entry) => entry.id === job.test_run_id && entry.tenant_id === ctx.tenantId);
+  if (isKillSwitchActiveForTenant(ctx.tenantId) || !['running', 'collecting'].includes(run?.status)) {
+    return { error: 'job_not_open', status: 409 };
+  }
+  const target = store.targets.find((entry) => entry.id === job.target_id && entry.tenant_id === ctx.tenantId && !entry.deleted_at);
+  const group = store.targetGroups.find((entry) => entry.id === run.target_group_id && entry.tenant_id === ctx.tenantId
+    && !entry.deleted_at && !entry.archived_at);
+  if (!target || !group || target.target_group_id !== group.id || run.check_id !== job.check_id
+    || run.target_id !== job.target_id || target.kind !== job.target?.kind || target.value !== job.target?.value
+    || (target.port ?? null) !== (job.target?.port ?? null) || (target.protocol ?? null) !== (job.target?.protocol ?? null)
+    || !targetOwnershipProof(ctx, group, target.id).verified) {
+    return { error: 'probe_execution_not_authorized', status: 409 };
+  }
+  const parsed = executionReservation(job, ctx.workerId, body.leased_at, newId('reservation'));
+  if (parsed.error) return parsed;
+  job.worker_metadata ??= {};
+  job.worker_metadata.execution_reservation = parsed.reservation;
+  audit({ tenant_id: ctx.tenantId, actor_user_id: ctx.workerId, actor_role: 'probe_worker',
+    action: 'probe_job.execution_reserved', resource_type: 'probe_job', resource_id: job.id,
+    metadata: { test_run_id: job.test_run_id, reservation_id: parsed.reservation.id,
+      max_total_operations: parsed.reservation.max_total_operations, not_after: parsed.reservation.not_after } });
+  persistStore();
+  return { authorized: true, reservation_id: parsed.reservation.id, not_after: parsed.reservation.not_after };
+}
+
+export function acknowledgeProbeStop(ctx, jobId, body) {
+  const job = getStore().probeJobs.find((entry) => entry.id === jobId && entry.tenant_id === ctx.tenantId);
+  if (!job || job.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+  const parsed = normalizeStopAcknowledgment(body, job, ctx.workerId);
+  if (parsed.error) return parsed;
+  job.worker_metadata ??= {};
+  const replay = Boolean(job.worker_metadata.stop_acknowledgment);
+  job.worker_metadata.stop_acknowledgment ??= parsed.acknowledgment;
+  if (parsed.capture) job.worker_metadata.capture = mergeProbeCapture(job.worker_metadata.capture, parsed.capture);
+  if (!replay) audit({ tenant_id: ctx.tenantId, actor_user_id: ctx.workerId, actor_role: 'probe_worker',
+    action: 'probe_job.stop_acknowledged', resource_type: 'probe_job', resource_id: job.id,
+    metadata: { test_run_id: job.test_run_id, reason: parsed.acknowledgment.reason } });
+  persistStore();
+  return { acknowledged: true, acknowledged_at: job.worker_metadata.stop_acknowledgment.acknowledged_at };
+}
+
 export function ingestProbeActivity(ctx, jobId, body) {
   const store = getStore();
   const job = store.probeJobs.find((entry) => entry.id === jobId && entry.tenant_id === ctx.tenantId);
@@ -234,7 +288,11 @@ export function ingestProbeActivity(ctx, jobId, body) {
     if (store.events.some((entry) => entry.tenant_id === ctx.tenantId && entry.event_id === record.event_id)) continue;
     store.events.push({ ...record, ingested_at: new Date().toISOString() }); accepted += 1;
   }
-  if (accepted) persistStore();
+  if (parsed.capture) {
+    job.worker_metadata ??= {};
+    job.worker_metadata.capture = mergeProbeCapture(job.worker_metadata.capture, parsed.capture);
+  }
+  if (accepted || parsed.capture) persistStore();
   return { accepted, continue: true };
 }
 
@@ -244,6 +302,10 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
   if (!job) return { error: 'job_not_found', status: 404 };
   if (workerCtx?.tenantId && job.tenant_id !== workerCtx.tenantId) {
     return { error: 'job_not_found', status: 404 };
+  }
+
+  if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
+    return { error: 'reviewed_operation_execution_unavailable', status: 409 };
   }
 
   const runForJob = store.testRuns.find(
@@ -294,6 +356,8 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     };
   }
   const { externalResult, safetyAttestation, workerMetadata } = validated;
+  const receipt = probeExecutionReceipt(job, workerCtx.workerId, safetyAttestation, externalResult);
+  if (receipt.error) return receipt;
 
   const run = runForJob;
   if (!run) return { error: 'run_not_found', status: 404 };
@@ -318,8 +382,12 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     {
       ...workerMetadata,
       external_result: externalResult,
+      probe_job_id: job.id,
       profile_kind: job.probe_profile?.kind ?? null,
       probe_worker_id: workerCtx.workerId,
+      source_perspective: (runtimeConfig.approvedProbeSources === undefined ? probeSourceResolverFromEnv()
+        : createProbeSourceResolver({ registry: runtimeConfig.approvedProbeSources }))(workerCtx.workerId),
+      execution_receipt: probeExecutionEvidenceReceipt(job, workerCtx.workerId, safetyAttestation, externalResult),
       safety_attestation: safetyAttestation,
     },
     job.check_id,
@@ -335,6 +403,7 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     signal_type: 'probe_result',
     producer_kind: 'signed_probe',
     timestamp: new Date().toISOString(),
+    ingested_at: new Date().toISOString(),
     nonce_hash: job.nonce_hash,
     metadata: probeMetadata,
   };

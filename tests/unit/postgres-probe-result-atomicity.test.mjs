@@ -7,6 +7,7 @@ import { createKillSwitchRepository } from '../../src/persistence/postgres/killS
 import { createPostgresProbeJobServices } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
 import { createValidationEvidenceRepository } from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
+import { executionReservation } from '../../src/lib/probeExecution.mjs';
 
 const TENANT_ID = 'ten_demo';
 const RUN_ID = 'run_1';
@@ -16,7 +17,7 @@ const NOW = '2026-06-01T12:00:00.000Z';
 const CTX = { tenantId: TENANT_ID, workerId: WORKER_ID, role: 'probe_worker' };
 
 function probeJobRow(status = 'leased') {
-  return {
+  const row = {
     id: JOB_ID,
     tenant_id: TENANT_ID,
     test_run_id: RUN_ID,
@@ -27,7 +28,9 @@ function probeJobRow(status = 'leased') {
     nonce_hash: 'nonce_hash_1',
     nonce_for_worker: 'nonce_1',
     probe_profile: { kind: 'http_head' },
-    constraints_json: { max_requests: 1, timeout_ms: 5000 },
+    constraints_json: { max_requests: 1, max_probe_requests: 1, min_destination_resolver_attempts: 0,
+      max_destination_resolver_attempts: 0, max_total_operations: 1, timeout_ms: 5000,
+      authority_version: 'probe-authority-v2', issued_at: NOW, not_after: '2026-06-01T12:02:00.000Z', execution_attempts: 1 },
     target_descriptor_json: {},
     worker_metadata_json: {},
     job_signature: 'signature',
@@ -37,6 +40,11 @@ function probeJobRow(status = 'leased') {
     ownership_verification_id: null,
     created_at: NOW,
   };
+  const grant = executionReservation({ ...row, status: 'leased', constraints: row.constraints_json },
+    WORKER_ID, NOW, 'reservation_atomicity', new Date(NOW));
+  assert.equal(grant.error, undefined);
+  row.worker_metadata_json = { execution_reservation: grant.reservation };
+  return row;
 }
 
 function runRow(status = 'running') {
@@ -175,7 +183,8 @@ describe('postgres probe-result transaction atomicity', () => {
     await assert.rejects(
       () => service.ingestProbeResult(CTX, JOB_ID, {
         external_result: 'connected',
-        safety_attestation: { requests_sent: 1, duration_ms: 10 },
+        safety_attestation: { requests_sent: 1, probe_requests_sent: 1,
+          destination_resolver_attempts: 0, total_operations: 1, duration_ms: 10 },
       }),
       /injected audit insert failure/,
     );

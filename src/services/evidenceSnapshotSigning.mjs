@@ -15,15 +15,15 @@ function safeSignedAuditMetadata(signed) {
   };
 }
 
-async function appendSigningAudit(ctx, signed) {
+async function appendSigningAudit(ctx, signed, failure = false) {
   const entry = {
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
     actor_role: ctx.role,
-    action: 'evidence.snapshot_signed',
+    action: failure ? 'evidence.snapshot_sign_failed' : 'evidence.snapshot_signed',
     resource_type: 'custody_manifest',
     resource_id: signed.artifact_id ?? null,
-    metadata: safeSignedAuditMetadata(signed),
+    metadata: failure ? signed : safeSignedAuditMetadata(signed),
   };
   if (ctx.persistenceMode === 'postgres' && typeof ctx.auditService?.appendAuditEvent === 'function') {
     await ctx.auditService.appendAuditEvent(entry);
@@ -54,6 +54,11 @@ export async function signEvidenceSnapshotCustody(ctx, body = {}, options = {}) 
     signingAdapter,
   });
   if (result.error) {
+    await appendSigningAudit(ctx, {
+      outcome: 'rejected',
+      status: Number.isInteger(result.status) ? result.status : 500,
+      verification_failed: ['signature_verification_failed', 'signing_receipt_key_mismatch', 'signing_receipt_invalid'].includes(result.error),
+    }, true);
     return result;
   }
   await appendSigningAudit(ctx, result.signed);

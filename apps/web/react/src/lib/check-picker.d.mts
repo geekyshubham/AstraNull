@@ -4,7 +4,7 @@ export const OTHER_SECTION_ID: string;
 export const OTHER_SECTION_LABEL: string;
 export const MONITOR_ONLY_TIER: string;
 
-export type CheckExclusionReason = 'soc_gated' | 'monitor_only' | 'not_customer_runnable' | 'unknown_check';
+export type CheckExclusionReason = 'soc_gated' | 'monitor_only' | 'not_customer_runnable' | 'unknown_check' | 'unsupported_delivery';
 
 export type CheckSection = { id: string; label: string; checks: DataItem[] };
 
@@ -20,7 +20,7 @@ export type SelectionSummary = {
 export function checkExclusionReason(check: DataItem | null | undefined): CheckExclusionReason | null;
 export function selectableChecks(checks: DataItem[]): {
   checks: DataItem[];
-  excluded: { soc_gated: number; monitor_only: number; not_customer_runnable: number; total: number };
+  excluded: { soc_gated: number; monitor_only: number; not_customer_runnable: number; unsupported_delivery: number; total: number };
 };
 export function groupChecksBySection(checks: DataItem[]): CheckSection[];
 export function checkSupportsTarget(check: DataItem | null | undefined, target: DataItem | null | undefined): boolean;

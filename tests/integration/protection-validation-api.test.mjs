@@ -249,7 +249,12 @@ describe('protection validation over the dev HTTP surface', () => {
     assert.equal(report.json.passive, true);
     assert.equal(report.json.executes_checks, false);
     assert.equal(report.json.units.firewall_expectations.denominator, 1);
-    assert.equal(report.json.units.firewall_expectations.gaps.required_service_newly_unavailable, 1);
+    assert.equal(report.json.units.firewall_expectations.gaps.required_service_newly_unavailable, 0);
+    const retained = report.json.conclusions.find((row) => row.subject.expectation_id === expectation.json.id);
+    assert.equal(retained.result, 'regression');
+    assert.equal(retained.current_assurance.status, 'not_established');
+    assert.ok(retained.current_assurance.reasons.includes('recorded_target_scope_missing'),
+      'reference-only fixtures have no recorded authority scope or accepted execution receipts');
     assert.equal(report.json.detection.counts_as_enforcement, false);
     const csv = await fetch(`${baseUrl}/v1/reports/protection-validation?format=csv`, { headers: viewer() });
     assert.equal(csv.status, 200);

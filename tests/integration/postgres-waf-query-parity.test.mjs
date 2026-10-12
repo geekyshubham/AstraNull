@@ -10,6 +10,7 @@ import { resetStoreForTests } from '../../src/store.mjs';
 import { resolvePostgresHarnessAvailability, withEphemeralPostgres } from '../helpers/pg-harness.mjs';
 
 const TENANT = 'ten_waf_query_parity';
+const NOW = new Date('2026-10-08T12:00:00.000Z');
 const CTX = { tenantId: TENANT, userId: 'waf-query-parity-test', role: 'viewer' };
 const CASES = [
   [{}, 90],
@@ -35,7 +36,7 @@ describe('postgres WAF coverage query parity', () => {
         coreCatalog: createCoreCatalogRepository(pool),
         audit: createAuditRepository(pool),
         validationEvidence: createValidationEvidenceRepository(pool),
-      }, { connectorEncryptionKey: null });
+      }, { connectorEncryptionKey: null, now: () => NOW });
 
       resetStoreForTests({
         tenants: [{ id: TENANT, name: TENANT }],
@@ -52,7 +53,7 @@ describe('postgres WAF coverage query parity', () => {
 
       for (const [query, expected] of CASES) {
         const postgresPayload = await postgres.getWafCoverage(CTX, query);
-        const devPayload = getDevWafCoverage(CTX, query);
+        const devPayload = getDevWafCoverage(CTX, { ...query, now: NOW });
         assert.equal(postgresPayload.window_days, expected, `Postgres ${JSON.stringify(query)}`);
         assert.equal(devPayload.window_days, expected, `dev-json ${JSON.stringify(query)}`);
         assert.deepEqual(devPayload, postgresPayload);

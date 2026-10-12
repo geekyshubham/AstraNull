@@ -10,6 +10,7 @@ import {
   verifyBaselineDigest,
 } from '../../src/contracts/protectionValidation.mjs';
 import {
+  createDevProtectionValidationBackend,
   archiveEntryPath,
   archiveExpectation,
   authorizeEntryPathForExecution,
@@ -31,6 +32,7 @@ import {
   resolveRunEvidence,
 } from '../../src/services/protectionValidation.mjs';
 import { getStore } from '../../src/store.mjs';
+import { createProtectionValidationRepository } from '../../src/persistence/postgres/protectionValidationRepository.mjs';
 
 const TENANT = 'ten_pv_unit';
 const OTHER = 'ten_pv_other';
@@ -563,5 +565,96 @@ describe('protection validation path expectations and baselines (dev store)', ()
     });
     assert.equal(foreignAnchor.error, 'unknown_target');
     assert.equal((await listEvaluations(VIEWER, { kind: 'path_validation', anchor_target_id: 'tgt_app' })).count, 1);
+  });
+});
+
+
+describe('complete exact-run report evidence readers', () => {
+  beforeEach(seed);
+
+  it('dev reader includes all requested actual results and linked vault records, never foreign, late or unrelated rows', async () => {
+    const state = getStore();
+    const at = '2026-10-05T00:00:00.000Z';
+    const after = '2026-10-07T00:00:00.000Z';
+    const group = { id: 'report_group', tenant_id: TENANT, created_at: at, safety_policy: { max_rps: 5 } };
+    const policy = { id: 'report_policy', tenant_id: TENANT, created_at: at, schedule_revision: 1 };
+    state.targetGroups.push(group, { ...group, id: 'report_group_unrelated' }, { ...group, id: 'report_group_foreign', tenant_id: OTHER });
+    state.testPolicies ??= [];
+    state.testPolicies.push(policy, { ...policy, id: 'report_policy_unrelated' });
+    const run = { id: 'report_exact', tenant_id: TENANT, created_at: at,
+      safety_constraints: { assurance_scope: { target_group: { id: group.id }, policy: { id: policy.id } } } };
+    state.testRuns.push(run, { ...run, id: 'report_other' }, { ...run, id: 'report_future', created_at: after });
+    state.probeJobs ??= [];
+    const job = { id: 'report_job', tenant_id: TENANT, test_run_id: run.id, created_at: at,
+      worker_metadata: { execution_reservation: { id: 'reservation_report' } } };
+    state.probeJobs.push(job, { ...job, id: 'report_job_foreign', tenant_id: OTHER },
+      { ...job, id: 'report_job_late', created_at: after }, { ...job, id: 'report_job_other', test_run_id: 'report_other' });
+    const result = { tenant_id: TENANT, test_run_id: run.id, timestamp: at, ingested_at: at, signal_type: 'probe_result', metadata: { complete: true } };
+    for (let index = 0; index < 301; index++) state.events.push({ ...result, id: `report_event_${index}` });
+    state.events.push({ ...result, id: 'report_late', ingested_at: after }, { ...result, id: 'report_foreign', tenant_id: OTHER },
+      { ...result, id: 'report_unrelated', test_run_id: 'report_other' }, { ...result, id: 'report_missing_ingestion', ingested_at: null },
+      { ...result, id: 'report_health', signal_type: 'health' });
+    state.evidenceVault ??= [];
+    state.evidenceVault.push({ id: 'report_vault', tenant_id: TENANT, test_run_id: run.id, related_event_id: 'report_event_0', created_at: at },
+      { id: 'report_vault_late', tenant_id: TENANT, test_run_id: run.id, related_event_id: 'report_event_0', created_at: after });
+    try {
+      const backend = createDevProtectionValidationBackend();
+      const input = await backend.loadComparisonEvidence(OWNER, { runIds: [run.id, run.id, 'report_future'], asOf: NOW });
+      assert.equal(input.input_complete, true);
+      assert.deepEqual(input.groups, [group]);
+      assert.deepEqual(input.policies, [policy]);
+      input.groups[0].safety_policy.max_rps = 10;
+      assert.equal(group.safety_policy.max_rps, 5);
+      assert.deepEqual(input.runs.map((row) => row.id), [run.id]);
+      assert.deepEqual(input.jobs.map((row) => row.id), [job.id]);
+      input.jobs[0].worker_metadata.execution_reservation.id = 'changed';
+      assert.equal(job.worker_metadata.execution_reservation.id, 'reservation_report');
+      assert.equal(input.events.length, 301);
+      assert.deepEqual(input.evidenceItems.map((row) => row.id), ['report_vault']);
+      input.events[0].metadata.complete = false;
+      assert.equal(state.events.find((row) => row.id === 'report_event_0').metadata.complete, true);
+      assert.deepEqual(await backend.loadComparisonEvidence(OWNER, { runIds: [], asOf: NOW }), { groups: [], policies: [], runs: [], jobs: [], events: [], evidenceItems: [], input_complete: true });
+      await assert.rejects(backend.loadComparisonEvidence(OWNER, { runIds: [run.id], asOf: 'invalid' }), /Invalid comparison evidence cutoff/);
+    } finally {
+      state.probeJobs = state.probeJobs.filter((row) => !row.id.startsWith('report_job'));
+      state.evidenceVault = state.evidenceVault.filter((row) => !row.id.startsWith('report_vault'));
+      state.targetGroups = state.targetGroups.filter((row) => !row.id.startsWith('report_group'));
+      state.testPolicies = state.testPolicies.filter((row) => !row.id.startsWith('report_policy'));
+    }
+  });
+
+  it('PG reader uses one complete exact-run tenant/cutoff SELECT inside one transaction without display caps', async () => {
+    const queries = [];
+    let released = false;
+    const result = { runs: [{ id: 'report_exact' }], events: Array.from({ length: 301 }, (_, id) => ({ id })), evidence_items: [{ id: 'vault' }], groups: [{ id: 'report_group' }], policies: [{ id: 'report_policy' }] };
+    const client = { query: async (sql, params) => { queries.push({ sql, params }); return { rows: sql.includes('jsonb_agg(r)') ? [result] : [] }; }, release: () => { released = true; } };
+    const repository = createProtectionValidationRepository({ connect: async () => client });
+    const input = await repository.loadComparisonEvidence(OWNER, { runIds: ['report_exact', 'report_exact'], asOf: NOW });
+    assert.equal(input.input_complete, true);
+    assert.equal(input.events.length, 301);
+    assert.deepEqual(input.evidenceItems, result.evidence_items);
+    assert.deepEqual(input.groups, result.groups);
+    assert.deepEqual(input.policies, result.policies);
+    assert.equal(released, true);
+    assert.equal(queries[0].sql, 'BEGIN');
+    assert.equal(queries.at(-1).sql, 'COMMIT');
+    const selects = queries.filter(({ sql }) => sql.includes('jsonb_agg(r)'));
+    assert.equal(selects.length, 1);
+    assert.deepEqual(selects[0].params, [TENANT, ['report_exact'], NOW.toISOString()]);
+    const sql = selects[0].sql;
+    assert.equal((sql.match(/tenant_id = \$1/g) ?? []).length, 8);
+    assert.equal((sql.match(/ANY\(\$2::text\[\]\)/g) ?? []).length, 6);
+    assert.match(sql, /FROM probe_jobs WHERE tenant_id = \$1 AND test_run_id = ANY\(\$2::text\[\]\)/);
+    assert.match(sql, /constraints_json, target_descriptor_json, worker_metadata_json/);
+    assert.match(sql, /timestamp <= \$3::timestamptz AND ingested_at <= \$3::timestamptz/);
+    assert.match(sql, /FROM target_groups WHERE tenant_id = \$1 AND deleted_at IS NULL AND archived_at IS NULL/);
+    assert.match(sql, /'target_group'->>'id'/);
+    assert.match(sql, /'policy'->>'id'/);
+    assert.match(sql, /SELECT p\.\* FROM test_policies p/);
+    assert.doesNotMatch(sql, /\bLIMIT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b/i);
+    const count = queries.length;
+    assert.deepEqual(await repository.loadComparisonEvidence(OWNER, { runIds: [], asOf: NOW }), { groups: [], policies: [], runs: [], jobs: [], events: [], evidenceItems: [], input_complete: true });
+    await assert.rejects(repository.loadComparisonEvidence(OWNER, { asOf: 'invalid' }), /Invalid comparison evidence cutoff/);
+    assert.equal(queries.length, count);
   });
 });

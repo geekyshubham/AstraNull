@@ -1,6 +1,8 @@
 import { isCurrentProviderDnsOwnershipProof } from './connectorProviders/domainInventory.mjs';
 import { isDemoAutoVerifyTenant } from './demoAutoVerify.mjs';
-import { ownershipProofFromStates, VERIFICATION_RANK } from './ownershipPolicy.mjs';
+import { ownershipProofFromStates } from './ownershipPolicy.mjs';
+import { compareOwnershipInstants, ownershipTransitionInstant } from './ownershipTransitions.mjs';
+import { isDeepStrictEqual } from 'node:util';
 import { ownershipParentFor } from './subdomainEnumeration.mjs';
 
 function latestRows(store, tenantId, targetIds = null) {
@@ -8,17 +10,25 @@ function latestRows(store, tenantId, targetIds = null) {
   const latest = new Map();
   for (const row of store.targetVerifications ?? []) {
     if (row.tenant_id !== tenantId || (wanted && !wanted.has(row.target_id))) continue;
+    const instant = ownershipTransitionInstant(row.transitioned_at);
     const previous = latest.get(row.target_id);
-    const rowAt = String(row.transitioned_at ?? '');
-    const previousAt = String(previous?.transitioned_at ?? '');
-    if (!previous
-      || rowAt > previousAt
-      || (rowAt === previousAt
-        && (VERIFICATION_RANK[row.state] ?? 0) > (VERIFICATION_RANK[previous.state] ?? 0))) {
-      latest.set(row.target_id, row);
+    if (!instant) {
+      latest.set(row.target_id, { row, malformed: true, ambiguous: true });
+      continue;
+    }
+    if (previous?.malformed) continue;
+    const order = previous ? compareOwnershipInstants(instant, previous.instant) : 1;
+    if (order > 0) {
+      latest.set(row.target_id, { row, instant, ambiguous: false });
+    } else if (order === 0
+      && (row.state !== previous.row.state || row.source_kind !== previous.row.source_kind
+        || !isDeepStrictEqual(row.source_ref ?? {}, previous.row.source_ref ?? {}))) {
+      previous.ambiguous = true;
     }
   }
-  return latest;
+  return new Map([...latest].map(([targetId, value]) => [targetId, value.ambiguous
+    ? { ...value.row, state: 'pending', effective_state: 'pending', source_kind: 'ownership_ambiguous', source_ref: {} }
+    : value.row]));
 }
 
 export function effectiveTargetVerification(store, verification, target) {
@@ -52,7 +62,8 @@ export function effectiveTargetVerifications(store, tenantId, targetIds = null) 
     rows.set(targetId, effectiveTargetVerification(store, verification, targets.get(targetId)));
   }
   for (const [targetId, target] of targets) {
-    if (ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) continue;
+    if (rows.get(targetId)?.source_kind === 'ownership_ambiguous'
+      || ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) continue;
     const parent = ownershipParentFor(target, tenantTargets);
     if (!parent) continue;
     const parentRow = effectiveTargetVerification(store, latestRows(store, tenantId, [parent.id]).get(parent.id), parent);
@@ -67,7 +78,8 @@ export function effectiveTargetVerifications(store, tenantId, targetIds = null) 
   }
   if (isDemoAutoVerifyTenant(tenantId)) {
     for (const [targetId, target] of targets) {
-      if (!ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) {
+      if (rows.get(targetId)?.source_kind !== 'ownership_ambiguous'
+        && !ownershipProofFromStates({ targetState: rows.get(targetId)?.state }).verified) {
         rows.set(targetId, {
           id: `tv_demo_${targetId}`,
           tenant_id: tenantId,

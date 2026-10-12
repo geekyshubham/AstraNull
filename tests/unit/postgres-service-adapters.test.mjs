@@ -55,6 +55,7 @@ import {
   createPostgresTestPolicyServices,
 } from '../../src/persistence/postgres/serviceAdapters.mjs';
 import { classifyDirectOriginObservation } from '../../src/lib/externalObservationOutcomes.mjs';
+import { executionReservation } from '../../src/lib/probeExecution.mjs';
 import {
   buildRetestResultsFromDelegatedRuns,
   upsertDelegationJobByReservation,
@@ -361,6 +362,33 @@ describe('postgres auth service adapters', () => {
     assert.equal(auditEvents.at(-1)?.action, 'service_account.rotated');
   });
 
+  for (const operation of ['rotateServiceAccount', 'revokeServiceAccount']) {
+    it(`${operation} audits a tenant-scoped missing record without revealing another tenant`, async () => {
+      const ctx = { tenantId: 'ten_other', userId: 'usr_denied', role: 'admin' };
+      const { repositories, auditEvents } = createRecordingAuthRepositories({
+        getServiceAccountById: async (scope, id) => {
+          assert.equal(scope, ctx);
+          assert.equal(id, 'sacc_unavailable');
+          return null;
+        },
+        revokeServiceAccount: async (scope, id) => {
+          assert.equal(scope, ctx);
+          assert.equal(id, 'sacc_unavailable');
+          return null;
+        },
+        rotateServiceAccountSecret: async () => assert.fail('Missing scoped record must not rotate'),
+      });
+      const { serviceAccounts } = createPostgresAuthServices(repositories);
+      assert.equal(await serviceAccounts[operation](ctx, 'sacc_unavailable'), null);
+      assert.equal(auditEvents.length, 1);
+      assert.deepEqual(auditEvents[0], {
+        tenant_id: ctx.tenantId, actor_user_id: ctx.userId, actor_role: ctx.role,
+        action: 'service_account.mutation_not_found', resource_type: 'service_account',
+        resource_id: 'sacc_unavailable',
+      });
+    });
+  }
+
   it('addressed service bearer auth records last-used and returns service ctx', async () => {
     const accountId = 'sacc_auth';
     const tenantId = 'ten_demo';
@@ -506,6 +534,12 @@ function createRecordingValidationRepositories(overrides = {}) {
     };
   }
 
+  validationEvidence.readSafeAdmissionUsage = async (...args) => {
+    validationCalls.push({ method: 'readSafeAdmissionUsage', args });
+    return overrides.readSafeAdmissionUsage?.(...args)
+      ?? { input_complete: true, runs_last_hour: 0, prior_run: null };
+  };
+
   const audit = {
     appendAuditEvent: async (entry, options = {}) => {
       if (overrides.appendAuditEvent) {
@@ -627,6 +661,24 @@ function customerRunnableRunsLastHour(tenantId, count, nowIso = FIXED_NOW.toISOS
 }
 
 describe('postgres validation service adapters', () => {
+  it('never claims complete capture from a capped compatibility activity reader', async () => {
+    const ctx = { tenantId: 'ten_demo', role: 'viewer' };
+    for (const complete of [false, true]) {
+      const { repositories } = createRecordingValidationRepositories({
+        getTestRun: async () => ({ id: 'run_capture', tenant_id: ctx.tenantId, status: 'verdicted' }),
+        listRunEvents: async () => [],
+      });
+      repositories.probeJobs.getProbeJobByTestRun = async () => ({ id: 'job_capture', leased_at: FIXED_NOW.toISOString(),
+        worker_metadata: { capture: { version: 'probe-capture.v1', recorded_count: 0, last_sequence: 0,
+          dropped_count: 0, delivery_failures: 0, finalized_at: FIXED_NOW.toISOString() } } });
+      if (complete) repositories.validationEvidence.listRunActivityEvents = async () => [];
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+      const activity = await testRuns.getRunActivity(ctx, 'run_capture');
+      assert.equal(activity.input_complete, complete);
+      assert.equal(activity.capture.status, complete ? 'complete' : 'incomplete');
+    }
+  });
+
   it('exposes stable validation repository and service method lists', () => {
     assert.deepEqual(VALIDATION_AUDIT_REPOSITORY_METHODS, [
       'appendAuditEvent',
@@ -647,6 +699,30 @@ describe('postgres validation service adapters', () => {
     assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 11);
     assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('getRunActivity'));
     assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('registerRunTerminalHook'));
+  });
+
+  it('denies safe starts when complete admission accounting is absent or invalid', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const body = { check_id: 'origin.direct_bypass.safe', target_group_id: 'tg_1', target_id: 'tgt_1' };
+    for (const usage of [null, undefined, { runs_last_hour: 0, prior_run: null },
+      { input_complete: false, runs_last_hour: 0, prior_run: null },
+      { input_complete: true, runs_last_hour: -1, prior_run: null },
+      { input_complete: true, runs_last_hour: 0.5, prior_run: null },
+      { input_complete: true, runs_last_hour: 0 }]) {
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup(),
+      });
+      recorded.repositories.validationEvidence.readSafeAdmissionUsage = async () => usage;
+      if (usage === undefined) delete recorded.repositories.validationEvidence.readSafeAdmissionUsage;
+      const services = createPostgresValidationServices(recorded.repositories, { now: () => FIXED_NOW });
+      const denied = await services.testRuns.startTestRun(ctx, body);
+      assert.deepEqual(denied, { error: 'safe_admission_usage_unavailable', status: 503 });
+      assertNoRunProbeOrAgentSideEffects(recorded.validationCalls);
+      assert.ok(recorded.auditEvents.some(({ entry }) => entry.action === 'test_run.admission_unavailable'
+        && entry.metadata.reason === 'complete_safety_accounting_unavailable'));
+      assert.equal(recorded.validationCalls.some(({ method, args }) => method === 'listTestRuns'
+        && !args[1]?.statuses), false, 'presentation feeds must never substitute for safety accounting');
+    }
   });
 
   it('fails early when validationEvidence or audit is missing', () => {
@@ -840,16 +916,16 @@ describe('postgres validation service adapters', () => {
     const summary = await testRuns.sweepExpiredCollectingRuns(ctx);
 
     assert.equal(summary.finalized, 1);
-    assert.deepEqual(summary.finalized_runs, [{ run_id: run.id, verdict: 'edge_exposed' }]);
+    assert.deepEqual(summary.finalized_runs, [{ run_id: run.id, verdict: 'inconclusive' }], 'durable liveness evidence is recovered without inventing a protection or exposure verdict');
     assert.equal(verdictAttempts, 2);
     assert.equal(appendedEvents, 0);
     assert.equal(
-      auditEvents.filter((event) => event.entry.action === 'verdict.published').length,
+      auditEvents.filter((event) => ['verdict.published', 'verdict.finalized_no_observation'].includes(event.entry.action)).length,
       1,
     );
     assert.equal(
       auditEvents.some((event) => event.entry.action === 'verdict.finalized_no_observation'),
-      false,
+      true,
     );
 
     const sweepCalls = validationCalls.slice(sweepCallStart);
@@ -889,8 +965,8 @@ describe('postgres validation service adapters', () => {
       );
     }
     const publicationAudits = auditEvents.filter(({ entry }) =>
-      ['verdict.published', 'finding.created', 'finding.updated'].includes(entry.action));
-    assert.ok(publicationAudits.length > 0);
+      ['verdict.published', 'verdict.finalized_no_observation', 'finding.created', 'finding.updated'].includes(entry.action));
+    assert.equal(publicationAudits.length, 1);
     assert.ok(publicationAudits.every(({ options }) =>
       options.client === transactionClient && options.auditLockHeld === true));
   });
@@ -1023,7 +1099,8 @@ describe('postgres validation service adapters', () => {
     runEvents = [probeEvent];
     repositories.validationEvidence.listRunEvents = async () => [...runEvents];
     const forced = await testRuns.finalizeTestRun(ctx, 'run_1', { force: true });
-    assert.equal(forced.verdict.verdict, 'edge_protected');
+    // A declared denial signature without comparable healthy permitted-path proof is not protection.
+    assert.equal(forced.verdict.verdict, 'inconclusive');
     assert.ok(
       auditEvents.some((a) => a.entry.action === 'verdict.finalized_no_observation'),
     );
@@ -1821,13 +1898,7 @@ describe('postgres validation service adapters', () => {
     const rateCap = createRecordingValidationRepositories({
       getTargetGroup: async () =>
         baseStartTargetGroup({ safety_policy: { max_runs_per_hour: 2 } }),
-      listTestRuns: async (c, opts) => {
-        if (opts?.statuses) return [];
-        if (opts?.limit === 500) {
-          return customerRunnableRunsLastHour(ctx.tenantId, 2);
-        }
-        return [];
-      },
+      readSafeAdmissionUsage: async () => ({ input_complete: true, runs_last_hour: 2, prior_run: null }),
       listAgents: async () => [baseOnlineAgent()],
     });
     const rateDenied = await createPostgresValidationServices(rateCap.repositories, {
@@ -1839,22 +1910,9 @@ describe('postgres validation service adapters', () => {
     const minInterval = createRecordingValidationRepositories({
       getTargetGroup: async () =>
         baseStartTargetGroup({ safety_policy: { min_seconds_between_runs: 300 } }),
-      listTestRuns: async (c, opts) => {
-        if (opts?.statuses) return [];
-        if (opts?.limit === 500) {
-          return [
-            {
-              id: 'run_prior',
-              tenant_id: ctx.tenantId,
-              target_group_id: 'tg_1',
-              target_id: 'tgt_1',
-              check_id: 'origin.direct_bypass.safe',
-              created_at: '2026-06-01T11:59:30.000Z',
-            },
-          ];
-        }
-        return [];
-      },
+      readSafeAdmissionUsage: async () => ({ input_complete: true, runs_last_hour: 1,
+        prior_run: { id: 'run_prior', tenant_id: ctx.tenantId, target_group_id: 'tg_1', target_id: 'tgt_1',
+          check_id: 'origin.direct_bypass.safe', created_at: '2026-06-01T11:59:30.000Z' } }),
       listAgents: async () => [baseOnlineAgent()],
     });
     const intervalDenied = await createPostgresValidationServices(minInterval.repositories, {
@@ -2474,6 +2532,29 @@ describe('postgres secret vault service adapters', () => {
     assert.ok(repoCalls.some((c) => c.method === 'createEncryptedSecret'));
   });
 
+  it('audits missing scoped vault rotation without persisting plaintext or attempting a write', async () => {
+    const ctx = { tenantId: 'ten_other', userId: 'usr_denied', role: 'admin' };
+    const { repositories, auditEvents } = createRecordingSecretVaultRepositories({
+      getEncryptedSecretById: async (scope, id) => {
+        assert.equal(scope, ctx);
+        assert.equal(id, 'secret_unavailable');
+        return null;
+      },
+      updateEncryptedSecret: async () => assert.fail('Missing scoped secret must not rotate'),
+    });
+    const vault = createPostgresSecretVaultServices(repositories);
+    assert.equal(await vault.rotateEncryptedSecret(ctx, 'secret_unavailable', {
+      plaintext: 'synthetic-denied-rotation',
+    }, randomBytes(32)), null);
+    assert.equal(auditEvents.length, 1);
+    assert.deepEqual(auditEvents[0], {
+      tenant_id: ctx.tenantId, actor_user_id: ctx.userId, actor_role: ctx.role,
+      action: 'secret.rotate_not_found', resource_type: 'encrypted_secret',
+      resource_id: 'secret_unavailable',
+    });
+    assert.equal(JSON.stringify(auditEvents).includes('synthetic-denied-rotation'), false);
+  });
+
   it('isolates connector credential envelopes from the global vault key', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
     const globalKey = randomBytes(32);
@@ -2695,8 +2776,8 @@ describe('postgres report service adapters', () => {
       },
       listFindings: async () => findings,
       createReport: async (_c, record) => {
-        assert.equal(typeof record.summary.readiness_score, 'number');
-        assert.ok(record.summary.readiness_score >= 0);
+        // The compatibility feed is bounded and cannot establish an authoritative estate score.
+        assert.equal(record.summary.readiness_score, null);
         assert.ok(Array.isArray(record.summary.readiness_factors));
         assert.ok(record.summary.readiness_factors.some((f) => f.key === 'coverage'));
         return persisted;
@@ -3160,6 +3241,8 @@ describe('postgres probe job service adapters', () => {
       'listPendingProbeJobsForWorker',
       'ingestProbeResult',
       'ingestProbeActivity',
+      'reserveProbeExecution',
+      'acknowledgeProbeStop',
     ]);
   });
 
@@ -3198,19 +3281,20 @@ describe('postgres probe job service adapters', () => {
         return [{ id: 'pjob_1', status: 'leased' }];
       },
       async getJobById(workerCtx, id) {
-        return {
-          id,
-          tenant_id: 'ten_demo',
-          test_run_id: 'run_1',
-          target_id: 'tgt_1',
-          check_id: 'origin.direct_bypass.safe',
-          vector_family: 'origin',
-          status: 'leased',
-          leased_by: 'pw_1',
-          nonce_hash: 'nh_1',
+        const job = {
+          id, tenant_id: 'ten_demo', test_run_id: 'run_1', target_id: 'tgt_1',
+          check_id: 'origin.direct_bypass.safe', vector_family: 'origin', status: 'leased',
+          leased_by: 'pw_1', leased_at: FIXED_NOW.toISOString(), nonce_hash: 'nh_1',
           probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
-          constraints: { max_requests: 1, timeout_ms: 5000 },
+          constraints: { max_requests: 1, max_probe_requests: 1, min_destination_resolver_attempts: 0,
+            max_destination_resolver_attempts: 0, max_total_operations: 1, timeout_ms: 5000,
+            authority_version: 'probe-authority-v2', issued_at: FIXED_NOW.toISOString(),
+            not_after: new Date(FIXED_NOW.getTime() + 120_000).toISOString(), execution_attempts: 1 },
         };
+        const grant = executionReservation(job, ctx.workerId, job.leased_at, 'reservation_service', FIXED_NOW);
+        assert.equal(grant.error, undefined);
+        job.worker_metadata = { execution_reservation: grant.reservation };
+        return job;
       },
       async claimPendingJobForWorker() {
         return null;
@@ -3286,7 +3370,8 @@ describe('postgres probe job service adapters', () => {
 
     const ingested = await svc.ingestProbeResult(ctx, 'pjob_1', {
       external_result: 'connected',
-      safety_attestation: { requests_sent: 1, duration_ms: 10 },
+      safety_attestation: { requests_sent: 1, probe_requests_sent: 1, destination_resolver_attempts: 0,
+        total_operations: 1, duration_ms: 10 },
       metadata: { probe_kind: 'http_head', status_code: 204 },
     });
     assert.equal(ingested.run_id, 'run_1');
@@ -4122,7 +4207,7 @@ describe('postgres WAF posture service adapters', () => {
       repoCalls.push({ method: 'listWafCoverageDailyRollups', args });
       return [
         {
-          rollup_date: '2026-07-02',
+          rollup_date: '2026-05-31',
           total_assets: 2,
           protected: 1,
           underprotected: 0,
@@ -4133,13 +4218,14 @@ describe('postgres WAF posture service adapters', () => {
         },
       ];
     };
-    const svc = createPostgresWafPostureServices(repositories);
+    const svc = createPostgresWafPostureServices(repositories, { now: () => FIXED_NOW });
 
     const coverage = await svc.getWafCoverage(ctx, { windowDays: 30 });
 
-    assert.equal(coverage.protected, 1);
+    assert.equal(coverage.protected, 0);
+    assert.equal(coverage.unknown, 1);
     assert.deepEqual(coverage.trend, [{
-      date: '2026-07-02',
+      date: '2026-05-31',
       coverage_ratio: 0.5,
       protected: 1,
       edge_protected: 0,
@@ -4148,6 +4234,8 @@ describe('postgres WAF posture service adapters', () => {
       unknown: 0,
       excluded: 0,
       total_assets: 2,
+      semantics_version: 'legacy_persisted_rollup',
+      assurance_claim: 'historical_rollup_not_current_assurance',
     }]);
     const rollupCall = repoCalls.find((call) => call.method === 'listWafCoverageDailyRollups');
     assert.ok(rollupCall);

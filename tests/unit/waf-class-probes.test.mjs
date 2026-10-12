@@ -48,10 +48,10 @@ test('every marker is inert: embeds the benign sentinel and no working-payload s
   }
 });
 
-test('URL-bearing markers only target the RFC-6761 .invalid sink, never live/metadata hosts', () => {
+test('opaque lookup markers contain no URL, callback, entity or interpreter syntax', () => {
   for (const key of ['ssrf', 'xxe', 'open_redirect', 'ldap', 'cors_marker']) {
     const marker = WAF_CLASS_MARKERS[key];
-    assert.ok(marker.includes('.invalid'), `${key} marker must use .invalid: ${marker}`);
+    assert.doesNotMatch(marker, /:\/\/|<!ENTITY|\$\{|\{\{/i, key);
     assert.ok(!marker.includes('169.254'), `${key} marker must not reference link-local metadata`);
   }
 });
@@ -227,5 +227,31 @@ test('marker classes cover the E3 families and the enum lists every family', () 
   for (const cls of WAF_E3_MARKER_CLASSES) {
     assert.ok(WAF_MARKER_CLASSES.includes(cls), `enum missing ${cls}`);
     assert.ok(typeof WAF_CLASS_MARKERS[cls] === 'string', `no marker for ${cls}`);
+  }
+});
+
+
+test('one blocked marker plus an untested or inconclusive leg cannot earn full protection', async () => {
+  for (const max_requests of [2, 3]) {
+    let requests = 0;
+    const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'ssrf', max_requests,
+      fetchFn: async () => (++requests === 1 ? okResponse(200) : okResponse(403, { 'cf-mitigated': 'challenge' })),
+    });
+    assert.equal(result.posture, 'inconclusive');
+    assert.equal(result.comparison_complete, false);
+    assert.equal(result.completed_marker_legs < result.planned_marker_legs, true);
+  }
+});
+
+
+test('an allowed partial marker sample or unhealthy baseline never earns exposure or readiness', async () => {
+  for (const baselineStatus of [200, 503]) {
+    let count = 0;
+    const result = await runWafClassMarkerProbe({ url: 'https://fixture.example.test/', marker_class: 'ssrf', max_requests: 2,
+      fetchFn: async () => okResponse(++count === 1 ? baselineStatus : 200) });
+    assert.equal(result.posture, 'inconclusive');
+    assert.equal(result.comparison_complete, false);
+    assert.equal(result.readiness_conclusion, false);
+    assert.equal(result.marker_results[0].allowed, baselineStatus === 200);
   }
 });

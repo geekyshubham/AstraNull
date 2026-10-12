@@ -694,8 +694,8 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
                OR (metadata_json->>'test_run_id' IS NOT NULL AND metadata_json->>'test_run_id' = ANY($3::text[]))
              )
            ORDER BY sequence DESC
-           LIMIT $4`,
-          [ctx.tenantId, scanId, runIds, limit],
+           ${options.complete === true ? '' : 'LIMIT $4'}`,
+          options.complete === true ? [ctx.tenantId, scanId, runIds] : [ctx.tenantId, scanId, runIds, limit],
         );
         return rows.reverse().map(mapAuditRow);
       });

@@ -1108,11 +1108,13 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   const [role, setRole] = useState('admin');
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string; tenant?: string; totp?: string }>({});
   const [loading, setLoading] = useState(false);
   const [stagingBypass, setStagingBypass] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
+  const tenantRef = useRef<HTMLInputElement>(null);
+  const totpRef = useRef<HTMLInputElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
 
   const isDevHeaders = config.authMode === 'dev-headers';
@@ -1234,15 +1236,19 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   }
 
   function validate() {
-    const next: { email?: string; password?: string } = {};
+    const next: { email?: string; password?: string; tenant?: string; totp?: string } = {};
     const email = userId.trim();
     if (!email) next.email = usePasswordLane ? 'Enter your work email.' : 'Enter a user ID or work email.';
     else if (usePasswordLane && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a full work email, like name@company.com.';
     if (usePasswordLane && !password) next.password = 'Enter your password.';
+    if (usePasswordLane && tenantRequired && !tenantId.trim()) next.tenant = 'Enter the workspace ID you want to open.';
+    if (usePasswordLane && mfaRequired && !/^\d{6}$/.test(totp.trim())) next.totp = 'Enter the 6-digit code from your authenticator app.';
     setFieldErrors(next);
     if (next.email) emailRef.current?.focus();
     else if (next.password) passwordRef.current?.focus();
-    return !next.email && !next.password;
+    else if (next.tenant) tenantRef.current?.focus();
+    else if (next.totp) totpRef.current?.focus();
+    return !next.email && !next.password && !next.tenant && !next.totp;
   }
 
   async function submit(event: FormEvent) {
@@ -1363,19 +1369,23 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                 <span>Workspace ID</span>
                 <input
                   id="login-tenant-scope"
+                  ref={tenantRef}
                   value={tenantId}
                   onChange={(event) => {
                     setTenantId(event.target.value);
+                    if (fieldErrors.tenant) setFieldErrors((current) => ({ ...current, tenant: undefined }));
                     clearMfaChallenge();
                   }}
                   className="mono"
                   autoComplete="off"
                   required
-                  aria-describedby="login-tenant-scope-help"
+                  aria-invalid={fieldErrors.tenant ? true : undefined}
+                  aria-describedby={describedBy(fieldErrors.tenant && 'login-tenant-scope-error', 'login-tenant-scope-help')}
                 />
                 <span className="auth-field-help" id="login-tenant-scope-help">
                   This email belongs to more than one workspace. Enter the workspace ID you want to open.
                 </span>
+                <FieldError id="login-tenant-scope-error" message={fieldErrors.tenant} />
               </label>
             ) : null}
             {mfaRequired ? (
@@ -1383,8 +1393,12 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                 <span>Authenticator code</span>
                 <input
                   id="login-totp"
+                  ref={totpRef}
                   value={totp}
-                  onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  onChange={(event) => {
+                    setTotp(event.target.value.replace(/\D/g, '').slice(0, 6));
+                    if (fieldErrors.totp) setFieldErrors((current) => ({ ...current, totp: undefined }));
+                  }}
                   className="mono"
                   inputMode="numeric"
                   autoComplete="one-time-code"
@@ -1393,11 +1407,13 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                   maxLength={6}
                   required
                   autoFocus
-                  aria-describedby="login-totp-help"
+                  aria-invalid={fieldErrors.totp ? true : undefined}
+                  aria-describedby={describedBy(fieldErrors.totp && 'login-totp-error', 'login-totp-help')}
                 />
                 <span className="auth-field-help" id="login-totp-help">
                   Enter the current 6-digit code from your authenticator app.
                 </span>
+                <FieldError id="login-totp-error" message={fieldErrors.totp} />
               </label>
             ) : null}
           </>
@@ -2976,6 +2992,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   const [loading, setLoading] = useState(false);
 
   const isDevHeaders = config.authMode === 'dev-headers';
+  const authUnknown = config.authMode === 'unknown';
   const isOidc = isOidcJwtMode(config);
   const showStagingStaffRolePicker = isDevHeaders || config.bundledLoginEnabled;
   const idpRedirect = useMemo(() => resolveOidcLoginRedirect(config, 'staff'), [config]);
@@ -2997,17 +3014,19 @@ export function StaffLoginPage({ config }: PublicPageProps) {
     if (loginDisabled) setError('Staff SSO is required for this deployment.');
   }, [loginDisabled]);
 
-  const cardDescription = isDevHeaders
-    ? 'Developer validation mode: continue with staff dev headers (no password required).'
-    : config.bundledLoginEnabled
-      ? 'Bundled staging login mints a short-lived staff bearer session for this environment.'
-      : idpRedirect
-        ? 'Redirecting to your organization staff sign-in provider.'
-        : 'Staff sign-in is managed by your organization identity provider.';
+  const cardDescription = authUnknown
+    ? 'Staff sign-in configuration is unavailable right now.'
+    : isDevHeaders
+      ? 'Developer validation mode: continue with staff dev headers (no password required).'
+      : config.bundledLoginEnabled
+        ? 'Bundled staging login mints a short-lived staff bearer session for this environment.'
+        : idpRedirect
+          ? 'Redirecting to your organization staff sign-in provider.'
+          : 'Staff sign-in is managed by your organization identity provider.';
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (loginDisabled) return;
+    if (loginDisabled || authUnknown) return;
     setError('');
     setLoading(true);
 
@@ -3079,7 +3098,16 @@ export function StaffLoginPage({ config }: PublicPageProps) {
             description={cardDescription}
           />
           <CardContent>
-            {idpRedirect ? (
+            {authUnknown ? (
+              <PublicNotice
+                tone="warn"
+                role="alert"
+                title="We could not confirm how this deployment signs staff in."
+                actions={<Button type="button" variant="secondary" onClick={() => window.location.reload()}>Try again</Button>}
+              >
+                <p>The sign-in service did not return its configuration. Nothing was submitted. Try again in a moment.</p>
+              </PublicNotice>
+            ) : idpRedirect ? (
               <AuthRedirectPanel
                 lead="Redirecting to your staff identity provider…"
                 help="You will be sent to your organization&apos;s staff sign-in page. If nothing happens, contact your administrator."

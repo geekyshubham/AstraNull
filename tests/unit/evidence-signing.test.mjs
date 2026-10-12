@@ -484,21 +484,16 @@ describe('evidence signing algorithm policy by deployment profile', () => {
     assert.equal(result.status, 400);
   });
 
-  it('permits hmac-sha256 under the hosted-staging profile even when NODE_ENV=production', () => {
-    // astranull.site runs NODE_ENV=production with the hosted-staging profile.
-    // Gating on NODE_ENV would break that deployment.
-    const result = signHmac(hmacEnv({
-      ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
-      NODE_ENV: 'production',
-    }));
-    assert.equal(result.error, undefined);
-    assert.equal(result.signed.algorithm, 'hmac-sha256');
+  it('refuses hmac-sha256 under hosted-staging when NODE_ENV=production', () => {
+    const result = signHmac(hmacEnv({ ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging', NODE_ENV: 'production' }));
+    assert.equal(result.error, 'hmac_signing_forbidden_in_production');
+    assert.equal(result.signed, undefined);
   });
 
-  it('does not refuse hmac-sha256 on NODE_ENV alone with no profile set', () => {
+  it('refuses hmac-sha256 on NODE_ENV=production with no profile set', () => {
     const result = signHmac(hmacEnv({ NODE_ENV: 'production' }));
-    assert.equal(result.error, undefined);
-    assert.equal(result.signed.algorithm, 'hmac-sha256');
+    assert.equal(result.error, 'hmac_signing_forbidden_in_production');
+    assert.equal(result.signed, undefined);
   });
 
   it('still permits ed25519 under the production profile', () => {

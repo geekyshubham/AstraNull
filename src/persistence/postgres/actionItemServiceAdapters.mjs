@@ -361,10 +361,10 @@ export function createPostgresActionItemServices(pool, options = {}) {
             id: newId('rem'),
             finding_id: findingId,
             action_slug: 'waf_action_delivery',
-            owner_group: 'edge-sre',
+            owner_group: record.owner || 'unassigned',
             state: 'open',
-            description: 'Auto-attached remediation for WAF action-item delivery.',
-            steps: ['Deliver remediation ticket', 'Verify control', 'Re-run validation'],
+            description: `Action item ${record.action_item_id} delivered for finding ${findingId}. Delivery is not proof of a control change or verified mitigation. ${record.evidence?.summary ?? ''}`,
+            steps: [`Review linked evidence for finding ${findingId}`, 'Record an authorized change owner, legitimate-traffic impact and rollback plan', `Retest the compatible affected scope using ${record.retest_url ?? 'the approved validation workflow'}; administrative resolution cannot verify mitigation`],
             audit_entry_id: newId('aud'),
           });
         }

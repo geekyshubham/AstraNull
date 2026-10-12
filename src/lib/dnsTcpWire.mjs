@@ -113,7 +113,7 @@ export function parseDnsResponseHeader(chunk, options = {}) {
         dns_message: buffer,
         incomplete: false,
         tcp_framed: true,
-        axfr_refused: true,
+        axfr_refused: false,
         reason: 'malformed_response',
       };
     }
@@ -233,9 +233,9 @@ function validateSoaRdata(message, startOffset, endOffset) {
   if (mname.nextOffset > endOffset) throw new RangeError('Malformed SOA RDATA.');
   const rname = parseDnsName(message, mname.nextOffset);
   if (rname.nextOffset + 20 !== endOffset) throw new RangeError('Malformed SOA RDATA.');
-  for (let offset = rname.nextOffset; offset < endOffset; offset += 4) {
-    message.readUInt32BE(offset);
-  }
+  const integers = [];
+  for (let offset = rname.nextOffset; offset < endOffset; offset += 4) integers.push(message.readUInt32BE(offset));
+  return JSON.stringify([mname.name, rname.name, ...integers]);
 }
 
 /**
@@ -313,10 +313,12 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
   let completeAnswerCount = 0;
   let soaAnswerCount = 0;
   let matchingAnswerCount = 0;
+  const answerIdentities = [];
   for (let index = 0; index < answerCount; index += 1) {
     let type;
     let rdataStart;
     let rdataEnd;
+    let soaIdentity = null;
     try {
       const owner = parseDnsName(message, offset);
       offset = owner.nextOffset;
@@ -334,9 +336,17 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
         }
         matchingAnswerCount += 1;
       }
+      if ([2, 5, 12].includes(type)) {
+        const name = parseDnsName(message, rdataStart);
+        if (name.nextOffset !== rdataEnd) throw new RangeError('Malformed DNS name RDATA.');
+      }
+      if ((type === 1 && rdlength !== 4) || (type === 28 && rdlength !== 16)
+        || (type === 0x21 && (rdlength < 47 || rdlength !== 47 + message[rdataStart] * 18))) {
+        throw new RangeError('Malformed typed DNS RDATA.');
+      }
       if (type === DNS_QTYPE_CODES.SOA) {
         try {
-          validateSoaRdata(message, rdataStart, rdataEnd);
+          soaIdentity = validateSoaRdata(message, rdataStart, rdataEnd);
         } catch {
           return {
             ...base,
@@ -350,6 +360,7 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
         }
         soaAnswerCount += 1;
       }
+      answerIdentities.push({ name: owner.name, type, qclass: message.readUInt16BE(offset + 2), soaIdentity });
       completeAnswerCount += 1;
       offset = rdataEnd;
     } catch {
@@ -365,12 +376,37 @@ export function parseDnsResponseStructure(dnsMessage, options = {}) {
     }
   }
 
+  // Authority/additional sections and trailing bytes are part of message identity too.
+  const extraCount = message.readUInt16BE(8) + message.readUInt16BE(10);
+  if (extraCount > MAX_DNS_SECTION_RECORDS) return { ...base, structure_valid: false, reason: 'section_count_exceeded' };
+  try {
+    for (let index = 0; index < extraCount; index += 1) {
+      offset = parseDnsName(message, offset).nextOffset;
+      if (offset + 10 > message.length) throw new RangeError('Malformed DNS record.');
+      const end = offset + 10 + message.readUInt16BE(offset + 8);
+      if (end > message.length) throw new RangeError('Malformed DNS RDATA.');
+      if (message.readUInt16BE(offset) === DNS_QTYPE_CODES.SOA) validateSoaRdata(message, offset + 10, end);
+      offset = end;
+    }
+    if (offset !== message.length) throw new RangeError('Trailing DNS bytes.');
+  } catch {
+    return { ...base, complete_answer_count: completeAnswerCount, soa_answer_count: soaAnswerCount,
+      structure_valid: false, reason: 'malformed_remaining_sections' };
+  }
+  const first = answerIdentities[0];
+  const last = answerIdentities.at(-1);
+  const zone = String(expectedQuestion?.name ?? '').toLowerCase().replace(/\.+$/, '');
+  const axfrBoundaryMatch = expectedQuestion?.qtype === DNS_QTYPE_CODES.AXFR
+    && answerIdentities.length >= 2 && first.type === DNS_QTYPE_CODES.SOA && last.type === DNS_QTYPE_CODES.SOA
+    && first.qclass === DNS_QCLASS_IN && last.qclass === DNS_QCLASS_IN
+    && first.name === zone && last.name === zone && first.soaIdentity === last.soaIdentity;
   return {
     ...base,
     complete_answer_count: completeAnswerCount,
     soa_answer_count: soaAnswerCount,
     has_complete_answer: completeAnswerCount > 0,
     has_complete_soa: soaAnswerCount > 0,
+    axfr_boundary_soa_match: Boolean(axfrBoundaryMatch),
     structure_valid: true,
     matching_answer_count: matchingAnswerCount,
     reason: null,
@@ -401,7 +437,7 @@ export function accumulateDnsTcpResponse(responseBuffer, chunk, options = { tran
         dns_message: Buffer.alloc(0),
         incomplete: false,
         tcp_framed: true,
-        axfr_refused: true,
+        axfr_refused: false,
         reason: 'response_too_large',
       },
       complete: true,

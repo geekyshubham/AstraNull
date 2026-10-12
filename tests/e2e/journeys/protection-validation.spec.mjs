@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import AxeBuilder from '@axe-core/playwright';
-import { getPortalPlaywrightBaseUrl, startPortalPlaywrightServer, stopPortalPlaywrightServer } from '../../helpers/portal-playwright-server.mjs';
+import { getPortalPlaywrightBaseUrl, startPortalPlaywrightServer, stopPortalPlaywrightServer, seedPortalPlaywrightStore } from '../../helpers/portal-playwright-server.mjs';
 import { gotoPortalRoute, injectPortalDevHeadersSession, PORTAL_SESSION, waitForPortalRouteSettled } from '../../helpers/portal-playwright-session.mjs';
 
 // PV-07: protection-validation routes are an in-browser fake with the documented shapes; everything else is the real dev-json backend.
@@ -93,6 +94,7 @@ const PV_PATH = /^\/v1\/(targets\/[^/]+\/(entry-paths|protection-validation)|ent
 async function installFake(page, options = {}) {
   const calls = [];
   const state = { comparison: null, cancels: [], retests: [], evaluateConflict: options.evaluateConflict ?? false };
+  const firewallComparison = options.retestTarget ? { ...COMPARISON, items: COMPARISON.items.map((item) => ({ ...item, evidence_refs: item.evidence_refs.map((ref) => ({ ...ref, target_id: options.retestTarget })) })) } : COMPARISON;
   await page.route('**/v1/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -117,7 +119,7 @@ async function installFake(page, options = {}) {
     }
     if (method === 'POST' && pathname === '/v1/test-runs') {
       state.retests.push(body);
-      return route.fulfill({ status: 201, json: { id: 'run_retest_1', status: 'running' } });
+      return route.fulfill({ status: 201, json: options.retestResponse ?? { run: { id: 'run_retest_1', ...body, status: 'running' }, jobs_dispatched: 0 } });
     }
     if (!PV_PATH.test(pathname)) return route.continue();
 
@@ -127,7 +129,7 @@ async function installFake(page, options = {}) {
 
     if (pathname === `/v1/targets/${TARGET}/entry-paths` || pathname === `/v1/targets/${UNVERIFIED}/entry-paths`) {
       if (method === 'POST') return route.fulfill({ status: 201, json: { ...ENTRY_PATHS[1], id: 'ep_new', entry_target_id: body.entry_target_id, relation_kind: body.relation_kind } });
-      const items = pathname.includes(UNVERIFIED) ? [] : ENTRY_PATHS;
+      const items = pathname.includes(UNVERIFIED) ? [] : ENTRY_PATHS.map((item) => options.driftedPathsAfterStart && state.comparison && item.id === 'ep_alt' ? { ...item, entry_target_id: 'tgt_current_metadata_drift' } : item);
       return route.fulfill({ json: { items, count: items.length, next_cursor: null } });
     }
     if (pathname.endsWith('/protection-validation')) return route.fulfill({ json: pathname.includes(UNVERIFIED) ? { ...MATRIX, target_id: UNVERIFIED, paths: [] } : MATRIX });
@@ -138,6 +140,8 @@ async function installFake(page, options = {}) {
           { entry_path_id: 'ep_alt', test_run_id: 'run_cmp_alt', outcome: 'not_tested', evidence_refs: [], reasons: [], compatibility_reasons: [], limitations: PATH_LIMITS },
           { entry_path_id: 'ep_login', test_run_id: null, outcome: 'skipped', evidence_refs: [], reasons: ['ownership_not_verified'], compatibility_reasons: [], limitations: PATH_LIMITS }],
         compatibility: null, summary: { total: 3, evaluated: 1, by_status: {}, gaps: {}, accepted: false }, evaluated_at: null, created_at: iso(0) };
+      if (options.noChildIds) state.comparison.items = state.comparison.items.map((item) => ({ ...item, test_run_id: null }));
+      if (options.noComparisonId) state.comparison.id = '';
       return route.fulfill({ status: 202, json: state.comparison });
     }
     if (pathname === '/v1/entry-path-comparisons') return route.fulfill({ json: { items: state.comparison ? [state.comparison] : [], count: state.comparison ? 1 : 0, next_cursor: null } });
@@ -153,14 +157,14 @@ async function installFake(page, options = {}) {
     if (pathname === '/v1/firewall-baselines' && method === 'GET') return route.fulfill({ json: { items: BASELINES, count: BASELINES.length, next_cursor: null } });
     if (pathname === '/v1/firewall-baselines' && method === 'POST') return route.fulfill({ status: 201, json: { ...BASELINES[0], id: 'fwb_new' } });
     if (pathname === '/v1/firewall-comparisons' && method === 'GET') {
-      const items = url.searchParams.get('baseline_id') === 'fwb_1' ? [COMPARISON] : [];
+      const items = url.searchParams.get('baseline_id') === 'fwb_1' ? [firewallComparison] : [];
       return route.fulfill({ json: { items, count: items.length, next_cursor: null } });
     }
     if (pathname === '/v1/firewall-comparisons' && method === 'POST') {
       if (state.evaluateConflict) return route.fulfill({ status: 409, json: { error: 'baseline_not_comparable', message: 'not comparable' } });
       return route.fulfill({ status: 201, json: COMPARISON });
     }
-    if (pathname === '/v1/firewall-comparisons/fwc_1') return route.fulfill({ json: COMPARISON });
+    if (pathname === '/v1/firewall-comparisons/fwc_1') return route.fulfill({ json: firewallComparison });
     return route.fulfill({ status: 404, json: { error: 'not_found' } });
   });
   return { calls, state, writes: () => calls.filter((call) => call.method === 'POST') };
@@ -179,8 +183,19 @@ async function expectNoBlockingAxe(page, selector) {
 }
 
 test.describe('protection validation in the target workspace (PV-07)', () => {
-  test.beforeEach(async () => { await startPortalPlaywrightServer(); });
-  test.afterEach(async () => { await stopPortalPlaywrightServer(); });
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180000);
+    await startPortalPlaywrightServer({ liveSource: true, env: { ASTRANULL_PROBE_MODE: 'simulation' } });
+    const warm = await browser.newPage();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, getPortalPlaywrightBaseUrl());
+    } finally {
+      await warm.close();
+    }
+  });
+  test.beforeEach(() => { test.setTimeout(90000); seedPortalPlaywrightStore(); });
+  test.afterAll(async () => { await stopPortalPlaywrightServer(); });
 
   test('declared paths and per-layer evidence load passively, with scoped labels, partial and stale states', async ({ page }) => {
     const fake = await installFake(page);
@@ -215,6 +230,96 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     expect(fake.writes()).toEqual([]);
   });
 
+  test('matrix finding exclusions preserve unknown paths and configuration stays explanation-only and permission-gated', async ({ page }) => {
+    const fake = await installFake(page);
+    let redacted = false;
+    const matrix = structuredClone(MATRIX);
+    matrix.configuration_access = 'granted';
+    matrix.paths[2].scenarios = [{ scenario: 'waf.http_method_policy_marker.safe', outcome: 'inconclusive', ignored_for_findings: true, compatibility_reasons: ['source_mismatch'], reasons: [], evidence_refs: [] }];
+    matrix.paths[2].layers[0].configuration = { evidence_role: 'explanation_only', status: 'configuration_evidence_available', record_count: null, coverage: 'monitor_only', provider_labels: ['PRIVATE_CONFIGURATION_LABEL'], markers: ['stale_snapshot', 'incomplete_inventory', 'ambiguous_ordering'] };
+    await page.route(`**/v1/targets/${TARGET}/protection-validation`, (route) => route.fulfill({ json: { ...matrix, configuration_access: redacted ? 'redacted' : 'granted' } }));
+    await openTarget(page);
+    const section = page.locator('.td-entry-paths');
+    await expect(section.locator('.pv-matrix tbody tr')).toHaveCount(3);
+    await expect(section.locator('.pv-matrix')).toContainText('Inconclusive');
+    await section.getByRole('button', { name: /^WAF on cdn.acme.com: Inconclusive/ }).click();
+    const detail = section.locator('.pv-detail').first();
+    await expect(detail).toContainText('Excluded from findings');
+    await expect(detail).toContainText(/source/i);
+    await expect(detail).toContainText('This path stays visible in unknown or not-tested coverage');
+    const context = detail.getByRole('region', { name: 'Optional configuration context' });
+    await expect(context).toContainText('explanation only');
+    await expect(context).toContainText('Monitor only');
+    await expect(context).toContainText('Snapshot recordsNot reported');
+    await expect(context).toContainText('Stale snapshot');
+    await expect(context).toContainText('Ambiguous ordering');
+    await expect(context).toContainText('PRIVATE_CONFIGURATION_LABEL');
+    await expect(section.locator('.pv-matrix')).toContainText('Inconclusive');
+    redacted = true;
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(section.locator('.pv-detail')).toContainText('Your role cannot read connector configuration.');
+    await expect(section).not.toContainText('PRIVATE_CONFIGURATION_LABEL');
+    expect(fake.writes()).toEqual([]);
+  });
+
+  test('passive protection report exposes ignored conclusions and not-tested coverage without certifying retained results', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    const writes = [];
+    const reads = [];
+    page.on('request', (request) => { if (request.method() !== 'GET') writes.push(request.url()); });
+    const report = {
+      report_kind: 'protection_validation', tenant_id: PORTAL_SESSION.tenant_id, generated_at: iso(0),
+      passive: true, executes_checks: false, sends_notifications: false, scope: { source_records_complete: false },
+      conclusions_total: 5, conclusions_truncated: true,
+      unknowns: { statement: 'Unknown and not-tested evidence does not create findings or count as validated.', by_reason: { evidence_not_finalized: 2 } },
+      incomplete_scope: { reasons: ['source_records_truncated', 'entry_paths_not_tested'], not_tested_paths: { ids: ['ep_untested'], total: 4, truncated: true }, untested_firewall_expectations: { ids: ['fwx_untested'], total: 1, truncated: false } },
+      conclusions: [
+        { id: 'pvc_missing', subject: { entry_path_id: 'ep_missing' }, comparison_kind: 'path_validation', scenario: 'waf.http_method_policy_marker.safe', result: 'inconclusive', ignored_for_findings: true, reasons: [], compatibility_reasons: ['source_mismatch'], evidence_refs: [], readiness_eligible: false, readiness_exclusion_reason: 'no_evidence', current_assurance: { status: 'not_established', reasons: ['no_evidence'] } },
+        { id: 'pvc_retained', subject: { entry_path_id: 'ep_retained' }, comparison_kind: 'path_validation', scenario: 'waf.http_method_policy_marker.safe', result: 'consistent_enforcement', ignored_for_findings: false, reasons: [], compatibility_reasons: [], evidence_refs: [ref('run_primary', TARGET)], readiness_eligible: false, readiness_exclusion_reason: 'current_scope_changed', current_assurance: { status: 'not_established', reasons: ['current_scope_changed'] } },
+      ],
+    };
+    await page.route('**/v1/reports/protection-validation', (route) => { reads.push(route.request().method()); return route.fulfill({ json: report }); });
+    await gotoPortalRoute(page, 'reports', getPortalPlaywrightBaseUrl());
+    const panel = page.getByRole('region', { name: 'Current protection validation report' });
+    await expect(panel).toContainText('Partial view');
+    await expect(panel.locator('tbody tr')).toHaveCount(2);
+    await expect(panel.locator('[data-conclusion-id="pvc_missing"]')).toContainText('Excluded from findings');
+    await expect(panel.locator('[data-conclusion-id="pvc_missing"]')).toContainText(/source/i);
+    await expect(panel.locator('[data-conclusion-id="pvc_retained"]')).toContainText('Not established');
+    await expect(panel).toContainText('ep_untested');
+    await expect(panel).toContainText('partial identifiers; 4 total');
+    await expect(panel).toContainText('fwx_untested');
+    await expect(panel).toContainText('Showing 2 of 5 conclusions');
+    for (const [width, theme] of [[375, 'dark'], [1440, 'light']]) {
+      await page.setViewportSize({ width, height: 950 });
+      await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+      const result = await new AxeBuilder({ page }).include('.protection-validation-report').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+      expect(result.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? '')).map((item) => item.id)).toEqual([]);
+    }
+    await panel.getByRole('button', { name: 'Refresh current coverage' }).click();
+    await expect(panel.locator('tbody tr')).toHaveCount(2);
+    expect(reads.length).toBeGreaterThan(1);
+    expect(reads.every((method) => method === 'GET')).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
+  test('passive report revocation clears previously read conclusions and exposes the permission state', async ({ page }) => {
+    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role: 'viewer', user_id: 'usr_viewer' });
+    let denied = false;
+    await page.route('**/v1/reports/protection-validation', (route) => route.fulfill(denied
+      ? { status: 403, json: { error: 'forbidden' } }
+      : { json: { tenant_id: PORTAL_SESSION.tenant_id, generated_at: iso(0), scope: { source_records_complete: true }, conclusions: [{ id: 'pvc_private', subject: { entry_path_id: 'ep_previous' }, result: 'not_tested', ignored_for_findings: true }] } }));
+    await gotoPortalRoute(page, 'reports', getPortalPlaywrightBaseUrl());
+    const panel = page.getByRole('region', { name: 'Current protection validation report' });
+    await expect(panel).toContainText('ep_previous');
+    denied = true;
+    await panel.getByRole('button', { name: 'Refresh current coverage' }).click();
+    await expect(panel).toContainText('Your role cannot read');
+    await expect(panel).not.toContainText('ep_previous');
+    await expect(page.getByRole('button', { name: 'Generate report', exact: true })).toHaveCount(0);
+  });
+
   test('declares an entry path from paged existing targets after an explicit review', async ({ page }) => {
     const fake = await installFake(page);
     await openTarget(page);
@@ -245,7 +350,13 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     expect(write.body).toEqual({ entry_target_id: 'tgt_checkout_3', relation_kind: 'alternate_hostname', owner: 'Partner team', purpose: 'Legacy hostname kept for partner integrations', expected_behavior: 'must_be_protected_by_layers', required_layers: ['waf'], origin_binding_id: null });
   });
 
-  test('discards a late pagination response after the target search changes', async ({ page }) => {
+  test('discards a late pagination response after the target search changes without an unhandled rejection', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__pickerUnhandledRejections = [];
+      window.addEventListener('unhandledrejection', (event) => {
+        window.__pickerUnhandledRejections.push(String(event.reason?.message ?? event.reason));
+      });
+    });
     await installFake(page);
     let releasePage;
     const held = new Promise((resolve) => { releasePage = resolve; });
@@ -271,10 +382,38 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     releasePage();
     await expect(form.getByRole('radio', { name: /obsolete.example.test/ })).toHaveCount(0);
     await expect(form.getByRole('radio')).toHaveCount(1);
+    expect(await page.evaluate(() => window.__pickerUnhandledRejections)).toEqual([]);
+  });
+
+  test('keeps pagination errors visible and retries without losing the selected target', async ({ page }) => {
+    const fake = await installFake(page);
+    let fail = true;
+    await page.route('**/v1/targets?**', (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('unit') !== 'target' || !url.searchParams.get('cursor')) return route.fallback();
+      if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: 'fixture_unavailable' } }); }
+      return route.fallback();
+    });
+    await openTarget(page);
+    await page.locator('.td-entry-paths').getByRole('button', { name: 'Declare entry path' }).first().click();
+    const form = page.locator('.td-entry-paths form.pv-form');
+    await form.getByLabel('Relation').selectOption('alternate_hostname');
+    await expect(form.getByRole('radio')).toHaveCount(2);
+    const selected = await form.getByRole('radio').first().getAttribute('value');
+    await form.getByRole('radio').first().check();
+    await form.getByRole('button', { name: 'Load more targets' }).click();
+    await expect(form.getByRole('alert')).toHaveText('More targets could not load. Retry.');
+    await expect(form.getByRole('radio')).toHaveCount(2);
+    await expect(form.locator(`input[type=radio][value="${selected}"]`)).toBeChecked();
+    await form.getByRole('button', { name: 'Load more targets' }).click();
+    await expect(form.getByRole('radio')).toHaveCount(3);
+    await expect(form.getByRole('alert')).toHaveCount(0);
+    await expect(form.locator(`input[type=radio][value="${selected}"]`)).toBeChecked();
+    expect(fake.writes()).toEqual([]);
   });
 
   test('plans passively, starts only the reviewed plan, shows progress, and Stop cancels running checks', async ({ page }) => {
-    const fake = await installFake(page);
+    const fake = await installFake(page, { driftedPathsAfterStart: true });
     await openTarget(page);
     const section = page.locator('.td-entry-paths');
     await section.getByRole('button', { name: 'Plan a comparison' }).click();
@@ -289,6 +428,19 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     await dialog.getByRole('button', { name: 'Start reviewed checks' }).click();
     await expect.poll(() => fake.writes().map((call) => call.body.mode)).toEqual(['plan', 'start']);
     expect(fake.writes()[1].body.reviewed_plan_digest).toBe('b'.repeat(64));
+    await expect(page.locator('.inspector-panel')).toBeVisible();
+    await expect.poll(() => Object.fromEntries(new URLSearchParams(new URL(page.url()).hash.split('?')[1]))).toMatchObject({ inspect: 'check_result', ev_run: 'run_cmp_primary', ev_check: 'waf.marker_rule.safe', ev_target: TARGET });
+    await page.keyboard.press('Escape');
+    const executions = page.getByRole('region', { name: 'Accepted comparison executions' });
+    await expect(executions.getByRole('button')).toHaveCount(2);
+    await executions.getByRole('button', { name: 'Inspect execution run_cmp_alt', exact: true }).click();
+    await expect(page.locator('.inspector-panel')).toBeVisible();
+    await expect.poll(() => Object.fromEntries(new URLSearchParams(new URL(page.url()).hash.split('?')[1]))).toMatchObject({ inspect: 'check_result', ev_run: 'run_cmp_alt', ev_check: 'waf.marker_rule.safe', ev_target: 'tgt_checkout_3' });
+    await page.keyboard.press('Escape');
+    await expect(executions).not.toContainText('tgt_current_metadata_drift');
+    await executions.getByRole('button', { name: 'Inspect execution run_cmp_primary', exact: true }).click();
+    await expect.poll(() => Object.fromEntries(new URLSearchParams(new URL(page.url()).hash.split('?')[1]))).toMatchObject({ inspect: 'check_result', ev_run: 'run_cmp_primary', ev_check: 'waf.marker_rule.safe', ev_target: TARGET });
+    await page.keyboard.press('Escape');
     const result = section.locator('.pv-detail').filter({ hasText: 'Results for' });
     await expect(result).toContainText('1 of 2 started checks finished; 1 skipped');
     await expect(result).toContainText('Skipped; not executed');
@@ -328,7 +480,78 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     await expect.poll(() => fake.state.retests.length).toBe(1);
     expect(fake.state.retests[0]).toMatchObject({ check_id: 'net.tcp.reachability', target_id: TARGET });
     expect(Object.keys(fake.state.retests[0]).sort()).toEqual(['check_id', 'target_id']);
+    await expect(page.locator('.inspector-panel')).toBeVisible();
+    await expect.poll(() => Object.fromEntries(new URLSearchParams(new URL(page.url()).hash.split('?')[1]))).toMatchObject({ inspect: 'check_result', ev_run: 'run_retest_1', ev_check: fake.state.retests[0].check_id, ev_target: fake.state.retests[0].target_id });
+    await expect(page.locator('.inspector-panel')).toContainText('run_retest_1');
   });
+
+  test('firewall references outside the reviewed target cannot become a retest', async ({ page }) => {
+    const fake = await installFake(page, { retestTarget: 'tgt_checkout_3' });
+    await openTarget(page, { tab: 'Changes & history' });
+    const section = page.locator('.td-firewall-change');
+    await section.locator('.pv-card').filter({ hasText: 'fwb_1' }).getByRole('button', { name: 'Select baseline' }).click();
+    await section.getByRole('group', { name: 'Recorded comparisons' }).getByRole('button').first().click();
+    const result = section.locator('.pv-detail').filter({ hasText: 'Comparison recorded' });
+    await result.locator('[data-status="regression"]').getByRole('button', { name: 'Inspect' }).click();
+    await expect(result).toContainText('tgt_checkout_3');
+    await expect(result.getByRole('button', { name: 'Review exact retest' })).toHaveCount(0);
+    expect(fake.state.retests).toEqual([]);
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+  });
+
+  test('accepted firewall retest with a mismatched target never opens another execution', async ({ page }) => {
+    const fake = await installFake(page, { retestResponse: { run: { id: 'run_wrong_target', target_id: 'tgt_unreviewed', check_id: 'net.tcp.reachability' } } });
+    await openTarget(page, { tab: 'Changes & history' });
+    const section = page.locator('.td-firewall-change');
+    await section.locator('.pv-card').filter({ hasText: 'fwb_1' }).getByRole('button', { name: 'Select baseline' }).click();
+    await section.getByRole('group', { name: 'Recorded comparisons' }).getByRole('button').first().click();
+    const result = section.locator('.pv-detail').filter({ hasText: 'Comparison recorded' });
+    await result.locator('[data-status="regression"]').getByRole('button', { name: 'Inspect' }).click();
+    await result.getByRole('button', { name: 'Review exact retest' }).click();
+    await page.getByRole('dialog', { name: 'Start this retest?' }).getByRole('button', { name: 'Start retest' }).click();
+    await expect.poll(() => fake.state.retests.length).toBe(1);
+    await expect(section.getByRole('alert')).toContainText('did not match the reviewed target/check');
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+    expect(new URL(page.url()).hash).not.toContain('ev_run=');
+  });
+
+  test('accepted firewall retest without an execution ID does not substitute a recorded run', async ({ page }) => {
+    const fake = await installFake(page, { retestResponse: { run: { status: 'planned' }, jobs_dispatched: 0 } });
+    await openTarget(page, { tab: 'Changes & history' });
+    const section = page.locator('.td-firewall-change');
+    await section.locator('.pv-card').filter({ hasText: 'fwb_1' }).getByRole('button', { name: 'Select baseline' }).click();
+    await section.getByRole('group', { name: 'Recorded comparisons' }).getByRole('button').first().click();
+    const result = section.locator('.pv-detail').filter({ hasText: 'Comparison recorded' });
+    await result.locator('[data-status="regression"]').getByRole('button', { name: 'Inspect' }).click();
+    await result.getByRole('button', { name: 'Review exact retest' }).click();
+    await page.getByRole('dialog', { name: 'Start this retest?' }).getByRole('button', { name: 'Start retest' }).click();
+    await expect.poll(() => fake.state.retests.length).toBe(1);
+    await expect(section.getByRole('alert')).toContainText('accepted without a recorded run ID');
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+    expect(new URL(page.url()).hash).not.toContain('ev_run=');
+  });
+
+  for (const noComparisonId of [false, true]) {
+    test(`accepted comparison ${noComparisonId ? 'without comparison ID' : 'without child IDs'} never substitutes historical executions`, async ({ page }) => {
+      const fake = await installFake(page, { noChildIds: true, noComparisonId });
+      await openTarget(page);
+      const section = page.locator('.td-entry-paths');
+      await section.getByRole('button', { name: 'Plan a comparison' }).click();
+      const form = section.locator('form.pv-form');
+      await form.getByRole('checkbox', { name: new RegExp(LONG_HOST.slice(0, 20)) }).check();
+      await form.getByLabel('Scenario').fill('waf.sqli.marker');
+      await form.getByRole('button', { name: 'Review plan' }).click();
+      await page.getByRole('dialog', { name: 'Start these reviewed checks?' }).getByRole('button', { name: 'Start reviewed checks' }).click();
+      await expect.poll(() => fake.writes().map((call) => call.body.mode)).toEqual(['plan', 'start']);
+      if (noComparisonId) await expect(section.getByRole('alert')).toContainText('accepted without a recorded comparison ID');
+      else {
+        await expect(page.locator('#portal-main')).toContainText('no child execution ID was returned yet');
+        await expect(section.locator('.pv-card').filter({ hasText: 'epc_1' })).toContainText('epc_1');
+      }
+      await expect(page.locator('.inspector-panel')).toHaveCount(0);
+      expect(new URL(page.url()).hash).not.toContain('ev_run=');
+    });
+  }
 
   test('firewall change: baseline capture uses finalized runs only, and an incompatible evaluation is reported', async ({ page }) => {
     const fake = await installFake(page, { evaluateConflict: true });

@@ -337,6 +337,9 @@ describe('capability probes P0/P1', () => {
     );
     assert.equal(outcome.metadata.bypass_signal, true);
     assert.equal(outcome.metadata.direct_ip, '198.51.100.7');
+    assert.equal(outcome.metadata.observation_complete, true);
+    assert.equal(outcome.metadata.comparison_complete, false);
+    assert.equal(outcome.metadata.target_port, 8080);
   });
 
   it('host/SNI bypass reports missing direct IP before live probing', async () => {
@@ -560,6 +563,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(probedPorts.length, 15);
     assert.equal(probedPorts.at(-1), 8443);
     assert.equal(outcome.requests_sent, 15);
+    assert.equal(outcome.metadata.observation_complete, true);
   });
 
   it('port scan bounded reports risky admin ports', async () => {
@@ -609,7 +613,9 @@ describe('capability probes P0/P1', () => {
       },
     );
     assert.equal(outcome.metadata.throttled, true);
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('rate limit sequence returns error instead of an exposure verdict on transport failure', async () => {
@@ -620,7 +626,7 @@ describe('capability probes P0/P1', () => {
       probe_profile: {
         kind: 'rate_limit_sequence',
         max_requests: 5,
-        http_method: 'POST',
+        http_method: 'GET',
         nonce_hash_only: true,
       },
     }), {
@@ -660,7 +666,7 @@ describe('capability probes P0/P1', () => {
         kind: 'rate_limit_sequence',
         max_requests: 1,
         probe_path: '/account/signup-probe',
-        http_method: 'POST',
+        http_method: 'HEAD',
         nonce_hash_only: true,
       },
     }), { fetchFn });
@@ -668,7 +674,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(search.metadata.probe_path, '/catalog/search');
     assert.equal(search.metadata.http_method, 'GET');
     assert.equal(signup.metadata.probe_path, '/account/signup-probe');
-    assert.equal(signup.metadata.http_method, 'POST');
+    assert.equal(signup.metadata.http_method, 'HEAD');
     assert.notEqual(search.metadata.probe_path, signup.metadata.probe_path);
     assert.deepEqual(urls, [
       'https://app.example.test/catalog/search',
@@ -749,9 +755,10 @@ describe('capability probes P0/P1', () => {
     }), {
       fetchFn: async () => { attempts += 1; return httpResponse(405); },
     });
-    assert.deepEqual(complete.metadata.methods_blocked, ['HEAD', 'OPTIONS']);
+    assert.deepEqual(complete.metadata.methods_blocked, []);
     assert.deepEqual(complete.metadata.methods_allowed, []);
-    assert.equal(complete.external_result, 'error');
+    assert.equal(complete.external_result, 'connected');
+    assert.equal(complete.metadata.readiness_conclusion, false);
     assert.equal(attempts, 2);
 
     attempts = 0;
@@ -782,7 +789,9 @@ describe('capability probes P0/P1', () => {
     assert.deepEqual(headerLengths, [0, 8_192]);
     assert.equal(outcome.metadata.oversize_status, 431);
     assert.equal(outcome.metadata.oversize_bytes, 8_192);
-    assert.equal(outcome.metadata.boundary_enforced, true);
+    assert.equal(outcome.metadata.boundary_enforced, null);
+    assert.equal(outcome.metadata.boundary_rejection_status_observed, true);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('header-size boundary returns error instead of exposed when a request fails', async () => {
@@ -823,7 +832,8 @@ describe('capability probes P0/P1', () => {
     assert.equal(destroyCount, 1);
     assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.metadata.connection_closed_by_server, true);
-    assert.equal(outcome.metadata.timeout_enforced, true);
+    assert.equal(outcome.metadata.timeout_enforced, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('slow-header probe closes its single connection when partial write throws', async () => {
@@ -869,7 +879,7 @@ describe('capability probes P0/P1', () => {
 
     assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'ECONNREFUSED');
-    assert.equal(outcome.metadata.timeout_enforced, false);
+    assert.equal(outcome.metadata.timeout_enforced, null);
   });
 
   it('HTTP/2 frame behavior sends exactly one RST_STREAM', async () => {
@@ -877,9 +887,11 @@ describe('capability probes P0/P1', () => {
     const session = new EventEmitter();
     session.alpnProtocol = 'h2';
     session.ping = (_payload, callback) => queueMicrotask(() => callback(null, 2));
-    session.request = () => {
+    session.request = (headers, options) => {
+      assert.equal(headers[':method'], 'HEAD');
+      assert.equal(options.endStream, false);
       const stream = new EventEmitter();
-      stream.close = () => { resetCount += 1; };
+      stream.close = (_code, callback) => { resetCount += 1; queueMicrotask(callback); };
       return stream;
     };
     session.close = () => {};
@@ -912,6 +924,51 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.continuation_bound_advertised, true);
   });
 
+  for (const terminal of ['abort', 'deadline']) {
+    it(`HTTP/2 pending reset ${terminal} cannot issue a late CANCEL or claim delivery`, async () => {
+      const controller = new AbortController();
+      const session = new EventEmitter();
+      const stream = new EventEmitter();
+      let resetCount = 0;
+      let destroyCount = 0;
+      session.alpnProtocol = 'h2';
+      session.request = () => stream;
+      session.ping = (_payload, callback) => queueMicrotask(() => {
+        callback(null, 2);
+        if (terminal === 'abort') queueMicrotask(() => controller.abort());
+      });
+      stream.pending = true;
+      stream.close = () => { resetCount += 1; };
+      session.close = () => {};
+      session.destroy = () => { destroyCount += 1; };
+      const outcome = await probeHttp2FrameBehavior(job({
+        constraints: { max_requests: 4, timeout_ms: 30 },
+        target: { kind: 'url', value: 'https://203.0.113.21/h2' },
+        probe_profile: { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 30 },
+      }), {
+        signedJobVerified: true,
+        jobDeadlineSignal: controller.signal,
+        http2ConnectFn: () => {
+          queueMicrotask(() => {
+            session.emit('connect');
+            session.emit('remoteSettings', { maxConcurrentStreams: 7 });
+          });
+          return session;
+        },
+      });
+      assert.equal(outcome.external_result, 'error');
+      assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
+      assert.equal(outcome.metadata.reset_accepted, null);
+      assert.equal(outcome.requests_sent, 3);
+      assert.equal(resetCount, 0);
+      assert.equal(destroyCount, 1);
+      assert.equal(stream.listenerCount('ready'), 0);
+      stream.emit('ready');
+      stream.emit('error', new Error('late owned stream error'));
+      assert.equal(resetCount, 0);
+    });
+  }
+
   it('HTTP/2 SETTINGS-only HPACK assertion grades negotiated bounds without extra frames', async () => {
     const session = new EventEmitter();
     session.alpnProtocol = 'h2';
@@ -941,7 +998,8 @@ describe('capability probes P0/P1', () => {
     const outcome = await outcomePromise;
 
     assert.equal(outcome.requests_sent, 1);
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.metadata.settings_assertion, 'hpack_limits');
     assert.equal(outcome.metadata.header_table_size, 4096);
     assert.equal(outcome.metadata.max_header_list_size, 16_384);
@@ -1016,18 +1074,14 @@ describe('capability probes P0/P1', () => {
       },
     });
 
-    assert.equal(calls.length, 5);
-    assert.ok(calls.length <= 6);
-    assert.equal(outcome.requests_sent, calls.length);
-    for (const { url, init } of calls) {
-      const wire = `${url} ${Object.values(init.headers ?? {}).join(' ')} ${init.body ?? ''}`;
-      assert.ok(wire.includes(BENIGN_CLASS_MARKERS.sqli) || decodeURIComponent(wire).includes(BENIGN_CLASS_MARKERS.sqli));
-      assert.equal(wire.includes(BENIGN_CLASS_MARKERS.xss), false);
-      assert.equal(wire.includes(BENIGN_CLASS_MARKERS.path_traversal), false);
-    }
-    assert.equal(outcome.metadata.variants.length, 4);
-    assert.equal(outcome.metadata.inspection_limit_bypass_suspected, true);
-    assert.equal(outcome.metadata.fail_open_signal, true);
+    assert.equal(calls.length, 0);
+    assert.equal(outcome.requests_sent, 0);
+    assert.deepEqual(outcome.metadata.variants, []);
+    assert.equal(outcome.metadata.inspection_limit_bypass_suspected, null);
+    assert.equal(outcome.metadata.fail_open_signal, null);
+    assert.equal(outcome.metadata.delivery_supported, false);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
+    assert.equal(outcome.metadata.not_run_reason, 'approved_business_safe_body_endpoint_required');
   });
 
   it('WAF inspection-limit probe never treats an unsigned 403 baseline as blocked', async () => {
@@ -1037,7 +1091,8 @@ describe('capability probes P0/P1', () => {
       target: { kind: 'url', value: 'https://waf.example.test/' },
       probe_profile: { kind: 'waf_inspection_limit_probe', max_requests: 6 },
     }), { fetchFn: async () => httpResponse(403) });
-    assert.equal(outcome.metadata.baseline_blocked, false);
+    assert.equal(outcome.metadata.baseline_blocked, null);
+    assert.equal(outcome.requests_sent, 0);
     assert.equal(outcome.metadata.comparison_complete, false);
     assert.equal(outcome.external_result, 'not_run');
   });
@@ -1048,20 +1103,23 @@ describe('capability probes P0/P1', () => {
       { fetchFn: async () => httpResponse(status, headers) },
     );
     const challenged = await run(403, { 'cf-mitigated': 'challenge' });
-    assert.equal(challenged.external_result, 'blocked');
+    assert.equal(challenged.external_result, 'not_run');
+    assert.equal(challenged.metadata.control_action_observed, true);
+    assert.equal(challenged.metadata.readiness_conclusion, false);
     assert.equal(challenged.metadata.denial_signature.id, 'cloudflare_challenge');
     assert.equal(challenged.metadata.waf_product_hint, 'cloudflare');
     for (const [status, reason] of [[401, 'authentication_gate_precedes_inspection'], [403, 'baseline_not_available'], [421, 'misdirected_request'], [407, 'probe_path_error'], [503, 'error_not_attributable']]) {
       const outcome = await run(status);
       assert.equal(outcome.external_result, 'not_run', String(status));
-      assert.equal(outcome.metadata.waf_enforced, false);
+      assert.equal(outcome.metadata.waf_enforced, null);
       assert.equal(outcome.metadata.inconclusive_reason, reason);
     }
     const allowed = await run(200);
-    assert.equal(allowed.external_result, 'connected');
-    assert.equal(allowed.metadata.monitor_only_leak, true);
+    assert.equal(allowed.external_result, 'not_run');
+    assert.equal(allowed.metadata.monitor_only_leak, null);
     const declared = await run(403, { 'x-block-reason': 'marker' }, { declared_block_signature: { status_code: 403, header: { name: 'x-block-reason', value: 'marker' } } });
-    assert.equal(declared.external_result, 'blocked');
+    assert.equal(declared.external_result, 'not_run');
+    assert.equal(declared.metadata.control_action_observed, true);
     assert.equal(declared.metadata.denial_signature.kind, 'declared');
   });
 
@@ -1088,9 +1146,10 @@ describe('capability probes P0/P1', () => {
         throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
       },
     });
-    assert.equal(attempts, 1);
-    assert.equal(failedBaseline.external_result, 'error');
-    assert.equal(failedBaseline.metadata.error_class, 'ECONNREFUSED');
+    assert.equal(attempts, 0);
+    assert.equal(failedBaseline.requests_sent, 0);
+    assert.equal(failedBaseline.external_result, 'not_run');
+    assert.equal(failedBaseline.metadata.delivery_supported, false);
     assert.equal(failedBaseline.metadata.comparison_complete, false);
   });
 
@@ -1129,8 +1188,9 @@ describe('capability probes P0/P1', () => {
         fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
       },
     );
-    assert.equal(outcome.metadata.monitor_only_leak, true);
-    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.monitor_only_leak, null);
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('dnssec posture reports missing DNSSEC', async () => {
@@ -1139,7 +1199,9 @@ describe('capability probes P0/P1', () => {
     }), {
       dnssecWireQueryFn: async () => ({ external_result: 'connected', metadata: { matching_answer_count: 0 }, requests_sent: 1 }),
     });
-    assert.equal(outcome.metadata.dnssec_missing, true);
+    assert.equal(outcome.metadata.dnssec_missing, null);
+    assert.equal(outcome.metadata.dnskey_present, false);
+    assert.equal(outcome.metadata.dnssec_chain_validated, false);
     assert.equal(outcome.external_result, 'connected');
   });
 
@@ -1188,7 +1250,8 @@ describe('capability probes P0/P1', () => {
       resolve4Fn: async () => { throw Object.assign(new Error('no data'), { code: 'ENODATA' }); },
     });
     assert.equal(authoritative.external_result, 'connected');
-    assert.equal(authoritative.metadata.secondary_results[0].reachable, false);
+    assert.equal(authoritative.metadata.secondary_results[0].reachable, null);
+    assert.equal(authoritative.metadata.secondary_results[0].hostname_resolved, false);
 
     const transient = await probeDnsFailoverPosture(job({
       target: { kind: 'fqdn', value: 'shop.example.test' },
@@ -1263,8 +1326,7 @@ describe('capability probes P0/P1', () => {
   });
 
   it('probeAxfrLeak accumulates split TCP response chunks before parsing', async () => {
-    const refusedDns = Buffer.alloc(12);
-    refusedDns.writeUInt16BE(0x4242, 0);
+    const refusedDns = buildAxfrDnsMessage('example.test', { transactionId: 0x4242 });
     refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
     const chunk1 = refusedFramed.subarray(0, 4);
@@ -1313,8 +1375,7 @@ describe('capability probes P0/P1', () => {
     const victim = 'victim.example';
     const touched = [];
     let written = null;
-    const refusedDns = Buffer.alloc(12);
-    refusedDns.writeUInt16BE(0x4242, 0);
+    const refusedDns = buildAxfrDnsMessage('verified.example', { transactionId: 0x4242 });
     refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
 
@@ -1392,15 +1453,14 @@ describe('capability probes P0/P1', () => {
     }), {
       resolveNsFn: async () => [],
     });
-    assert.equal(outcome.metadata.axfr_refused, true);
+    assert.equal(outcome.metadata.axfr_refused, false);
     assert.equal(outcome.metadata.reason, 'no_nameservers');
     assert.equal(outcome.requests_sent, 1);
   });
 
   it('axfr leak probe sends TCP-framed query and treats REFUSED rcode as blocked', async () => {
     let written = null;
-    const refusedDns = Buffer.alloc(12);
-    refusedDns.writeUInt16BE(0x4242, 0);
+    const refusedDns = buildAxfrDnsMessage('example.test', { transactionId: 0x4242 });
     refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
 
@@ -1502,7 +1562,8 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.resolver_host, 'resolver.example.test');
     assert.equal(outcome.metadata.resolver_address, '93.184.216.34');
-    assert.equal(outcome.metadata.open_recursion_detected, true);
+    assert.equal(outcome.metadata.open_recursion_detected, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(resolverCalls, 1);
     assert.deepEqual(calls, [{ resolver: '93.184.216.34', name: 'resolver.example.test' }]);
   });
@@ -1567,7 +1628,7 @@ describe('capability probes P0/P1', () => {
   it('parseDnsResponseHeader terminates a zero-length TCP frame in a single parse', () => {
     const parsed = parseDnsResponseHeader(Buffer.from([0x00, 0x00]), { transport: 'tcp' });
     assert.equal(parsed.incomplete, false);
-    assert.equal(parsed.axfr_refused, true);
+    assert.equal(parsed.axfr_refused, false);
     assert.equal(parsed.reason, 'malformed_response');
 
     const accumulated = accumulateDnsTcpResponse(
@@ -1576,7 +1637,7 @@ describe('capability probes P0/P1', () => {
       { transport: 'tcp' },
     );
     assert.equal(accumulated.complete, true);
-    assert.equal(accumulated.parsed.axfr_refused, true);
+    assert.equal(accumulated.parsed.axfr_refused, false);
   });
 
   it('accumulateDnsTcpResponse stops at the hard response ceiling', () => {
@@ -1606,8 +1667,8 @@ describe('capability probes P0/P1', () => {
         destroy() {},
       }),
     });
-    assert.equal(outcome.external_result, 'blocked');
-    assert.equal(outcome.metadata.axfr_refused, true);
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.axfr_refused, false);
     assert.equal(outcome.metadata.reason, 'malformed_response');
   });
 
@@ -1621,6 +1682,8 @@ describe('capability probes P0/P1', () => {
         once(event, handler) {
           if (event === 'secureConnect') handler();
         },
+        removeListener() {},
+        destroy() {},
         getProtocol: () => 'TLSv1.1',
         getCipher: () => ({ name: 'RC4-SHA' }),
         authorized: false,
@@ -1648,7 +1711,8 @@ describe('capability probes P0/P1', () => {
         },
       }),
     });
-    assert.equal(outcome.metadata.cache_key_weakness, true);
+    assert.equal(outcome.metadata.cache_key_weakness, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.metadata.observations[1].x_cache, 'HIT');
   });
 
@@ -1691,7 +1755,8 @@ describe('capability probes P0/P1', () => {
     assert.deepEqual(calls, [{ resolver: '8.8.8.8', name: '8.8.8.8' }]);
     assert.equal(outcome.metadata.resolver_host, '8.8.8.8');
     assert.equal(outcome.metadata.recursion_test_name, '8.8.8.8');
-    assert.equal(outcome.metadata.open_recursion_detected, true);
+    assert.equal(outcome.metadata.open_recursion_detected, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(JSON.stringify(calls).includes('victim.example'), false);
     assert.equal(JSON.stringify(calls).includes('9.9.9.9'), false);
@@ -1736,10 +1801,12 @@ describe('capability probes P0/P1', () => {
     assert.equal(JSON.stringify(resolved).includes('victim.example'), false);
     assert.deepEqual(outcome.metadata.secondary_results, [{
       nameserver: 'shop.example.test',
-      reachable: false,
+      hostname_resolved: false,
+      reachable: null,
       addresses: [],
     }]);
-    assert.equal(outcome.metadata.weak_failover, true);
+    assert.equal(outcome.metadata.weak_failover, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.external_result, 'connected');
   });
 
@@ -1753,7 +1820,7 @@ describe('capability probes P0/P1', () => {
         headers: { get: () => null },
       }),
     });
-    assert.equal(outcome.metadata.exposure_count, 1);
+    assert.equal(outcome.metadata.exposure_count, null);
     assert.equal(outcome.external_result, 'connected');
   });
 
@@ -1769,7 +1836,7 @@ describe('capability probes P0/P1', () => {
     });
 
     assert.equal(outcome.external_result, 'error');
-    assert.equal(outcome.metadata.exposure_count, 0);
+    assert.equal(outcome.metadata.exposure_count, null);
     assert.equal(outcome.metadata.path_errors.length, 2);
     assert.equal(outcome.metadata.error_class, 'ECONNREFUSED');
   });
@@ -1784,7 +1851,9 @@ describe('capability probes P0/P1', () => {
         headers: { get: (n) => (n === 'access-control-allow-origin' ? '*' : null) },
       }),
     });
-    assert.equal(outcome.metadata.weak_cors, true);
+    assert.equal(outcome.metadata.weak_cors, null);
+    assert.equal(outcome.metadata.access_control_allow_origin, '*');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('semantic HTTP checks classify connection failures as errors, not protection', async () => {
@@ -1823,7 +1892,8 @@ describe('capability probes P0/P1', () => {
     }), {
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.metadata.bot_challenge_missing, true);
+    assert.equal(outcome.metadata.bot_challenge_missing, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('graphql posture flags exposed endpoint without limits', async () => {
@@ -1833,7 +1903,8 @@ describe('capability probes P0/P1', () => {
     }), {
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.metadata.graphql_exposed, true);
+    assert.equal(outcome.metadata.graphql_exposed, null);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.external_result, 'connected');
   });
 
@@ -1845,7 +1916,8 @@ describe('capability probes P0/P1', () => {
       fetchFn: async () => ({ status: 403, headers: { get: () => 'challenge' } }),
     });
     assert.equal(outcome.metadata.probe_kind, 'bot_challenge_probe');
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
   });
 
   it('executeCapabilityProbe blocks unsigned live probes without injectable deps', async () => {
@@ -1936,5 +2008,88 @@ describe('origin edge transport failure safety', () => {
     assert.deepEqual(outcome.metadata.leak_signals, []);
     assert.equal(outcome.metadata.leak_count, 0);
     assert.equal(outcome.metadata.leak_signals.includes('dns_only_no_edge_http'), false);
+  });
+});
+
+
+describe('HEAD and slow-header transport cancellation golden regressions', () => {
+  it('handles synchronous HEAD callbacks without sending after completion or leaking timers', async () => {
+    const request = new EventEmitter();
+    let ended = 0; let destroyed = 0;
+    request.end = () => { ended += 1; };
+    request.destroy = () => { destroyed += 1; };
+    const outcome = await probeHostSniBypass(job({ probe_profile: { kind: 'host_sni_bypass', protected_host: 'edge.example.test', direct_ip: '198.51.100.7' } }), {
+      httpsRequestFn: (_options, callback) => { callback({ statusCode: 200, headers: {}, resume() {} }); return request; },
+    });
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(ended, 0);
+    assert.equal(destroyed, 1);
+    assert.equal(request.listenerCount('timeout'), 0);
+    assert.doesNotThrow(() => request.emit('error', new Error('late transport failure')));
+    request.emit('close');
+    assert.equal(request.listenerCount('error'), 0);
+  });
+
+  it('aborting HEAD closes the underlying request and never establishes control assurance', async () => {
+    const controller = new AbortController();
+    const request = new EventEmitter();
+    let destroyed = 0;
+    request.end = () => setImmediate(() => controller.abort());
+    request.destroy = () => { destroyed += 1; };
+    const result = await probeHostSniBypass(job({ probe_profile: { kind: 'host_sni_bypass', protected_host: 'edge.example.test', direct_ip: '198.51.100.7' } }), {
+      jobDeadlineSignal: controller.signal, httpsRequestFn: () => request,
+    });
+    assert.equal(result.requests_sent, 1);
+    assert.equal(destroyed, 1);
+    assert.equal(result.metadata.readiness_conclusion, false);
+    assert.doesNotThrow(() => request.emit('error', new Error('error after destroy')));
+  });
+
+  it('does not connect when cancellation arrives during slow-header destination validation', async () => {
+    const controller = new AbortController();
+    let connected = 0;
+    const result = await probeSlowHeaderTimeout(job({ target: { kind: 'url', value: 'http://slow.fixture.test/' }, probe_profile: { kind: 'slow_header_probe' } }), {
+      jobDeadlineSignal: controller.signal,
+      resolve4Fn: async () => { controller.abort(); return ['198.51.100.7']; }, resolve6Fn: async () => [],
+      connectFn: () => { connected += 1; throw new Error('connect after abort'); },
+    });
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(connected, 0);
+    assert.equal(result.requests_sent, 0);
+    assert.equal(result.external_result, 'error');
+    assert.equal(result.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(result.metadata.readiness_conclusion, false);
+  });
+
+  it('does not connect when slow-header destination validation exhausts the original timeout', async () => {
+    let connected = 0;
+    const result = await probeSlowHeaderTimeout(job({
+      constraints: { timeout_ms: 25, max_requests: 15 },
+      target: { kind: 'url', value: 'http://slow.fixture.test/' },
+      probe_profile: { kind: 'slow_header_probe' },
+    }), {
+      resolve4Fn: () => new Promise(() => {}),
+      resolve6Fn: async () => [],
+      connectFn: () => { connected += 1; throw new Error('connect after deadline'); },
+    });
+    assert.equal(connected, 0);
+    assert.equal(result.requests_sent, 0);
+    assert.equal(result.external_result, 'error');
+    assert.equal(result.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(result.metadata.readiness_conclusion, false);
+  });
+
+  it('preserves operation-budget rejection during slow-header destination validation', async () => {
+    let connected = 0;
+    const error = Object.assign(new Error('signed operation budget exhausted'), { code: 'signed_operation_budget_exceeded' });
+    await assert.rejects(probeSlowHeaderTimeout(job({
+      target: { kind: 'url', value: 'http://slow.fixture.test/' },
+      probe_profile: { kind: 'slow_header_probe' },
+    }), {
+      resolve4Fn: async () => { throw error; },
+      resolve6Fn: async () => [],
+      connectFn: () => { connected += 1; throw new Error('connect after budget failure'); },
+    }), (received) => received === error);
+    assert.equal(connected, 0);
   });
 });

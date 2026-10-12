@@ -513,3 +513,20 @@ export function authorizationView(path) {
   if (value.currently_authorized === false) return { authorized: false, label: 'Ownership not current; checks on this path are skipped', tone: 'warn' };
   return { authorized: null, label: 'Ownership not reported', tone: 'muted' };
 }
+
+/** The report's explicit flag is authoritative; matrix rows may use the same finalized-evidence predicate when no flag is supplied. */
+export function findingExclusionView(item, inferFromEvidence = false) {
+  const value = record(item) ?? {};
+  const outcome = text(value.outcome || value.result || value.status);
+  const refs = Array.isArray(value.evidence_refs) ? value.evidence_refs : [];
+  const finalized = refs.length > 0 && refs.every((ref) => ref?.finalized === true && Array.isArray(ref.evidence_ids) && ref.evidence_ids.length > 0 && Number.isFinite(Date.parse(ref.observed_at ?? '')));
+  const unresolved = ['inconclusive', 'not_tested', 'skipped', 'stale', 'not_comparable'].includes(outcome);
+  const excluded = typeof value.ignored_for_findings === 'boolean' ? value.ignored_for_findings : inferFromEvidence && (unresolved || !finalized);
+  if (!excluded) return { excluded: false, reason: '' };
+  const reasons = [...new Set([...(Array.isArray(value.reasons) ? value.reasons : []), ...(Array.isArray(value.compatibility_reasons) ? value.compatibility_reasons : [])].filter((reason) => typeof reason === 'string' && reason.trim()))];
+  const explanation = reasons.length ? compatibilityReasonLabels(reasons).map((reason) => reason.label).join(' · ')
+    : !finalized ? 'No finalized evidence is linked.'
+    : unresolved ? `The recorded result is ${humanize(outcome).toLowerCase()}.`
+    : 'The report excludes this result; no exclusion reason was recorded.';
+  return { excluded: true, reason: explanation };
+}

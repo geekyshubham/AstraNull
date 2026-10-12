@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { createServer as createViteServer } from 'vite';
+import { createPortalSourceServer as createViteServer } from '../helpers/portal-playwright-server.mjs';
+import { assertPortalInitialLoad } from '../helpers/portal-browser-failures.mjs';
 import { PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 import {
   getPortalPlaywrightBaseUrl,
@@ -67,12 +68,12 @@ test.describe('current release inspector accessibility (EI-10)', () => {
     await vite.listen();
     webBase = `http://127.0.0.1:${vite.httpServer.address().port}`;
     const warm = await browser.newPage();
-    await injectPortalDevHeadersSession(warm);
-    await warm.goto(`${webBase}/app#dashboard`, { waitUntil: 'networkidle', timeout: 180_000 }).catch(() => undefined);
-    await warm.waitForTimeout(6000);
-    await warm.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
-    await warm.locator('#portal-main').waitFor({ timeout: 120_000 }).catch(() => undefined);
-    await warm.close();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, webBase);
+    } finally {
+      await warm.close();
+    }
   });
 
   test.afterAll(async () => {

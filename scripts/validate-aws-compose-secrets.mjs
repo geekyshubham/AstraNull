@@ -120,7 +120,36 @@ function exactOwnerRestoreCredential(value, label, databaseName, ownerPassword) 
   return credential;
 }
 
+export function validateAwsComposeSigningIsolation(model) {
+  const services = model?.services ?? {};
+  const signerKeys = /^(?:ASTRANULL_KMS_SIGNING_|ASTRANULL_EVIDENCE_SIGNING_)/;
+  const mounts = (service) => (service?.volumes ?? []).map((volume) => {
+    if (typeof volume !== 'string') return volume;
+    const [source, target, mode] = volume.split(':');
+    return { source, target, read_only: mode?.split(',').includes('ro') === true };
+  });
+  const control = services['control-plane'];
+  const signerMounts = mounts(control).filter((volume) => volume?.target === '/run/astranull-signing'
+    || volume?.target?.startsWith('/run/astranull-signing/'));
+  if (signerMounts.some((volume) => volume.read_only !== true)) {
+    throw new Error('aws-compose-secrets: signing mounts must be read-only.');
+  }
+  const sources = new Set(signerMounts.map((volume) => volume.source));
+  for (const [name, service] of Object.entries(services)) {
+    if (name === 'control-plane') continue;
+    if (Object.keys(service.environment ?? {}).some((key) => signerKeys.test(key))) {
+      throw new Error(`aws-compose-secrets: ${name} must not receive evidence signer configuration or credentials.`);
+    }
+    if (mounts(service).some((volume) => sources.has(volume?.source)
+      || volume?.target === '/run/astranull-signing' || volume?.target?.startsWith('/run/astranull-signing/'))) {
+      throw new Error(`aws-compose-secrets: ${name} must not receive signing mounts.`);
+    }
+  }
+  return true;
+}
+
 export function validateAwsComposeSecretModel(model) {
+  validateAwsComposeSigningIsolation(model);
   const services = model?.services ?? {};
   const environment = (name) => services[name]?.environment ?? {};
   for (const required of [

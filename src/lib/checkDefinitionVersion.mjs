@@ -99,6 +99,8 @@ export function deriveCheckDefinitionVersion(definition, body = undefined) {
 /** Catalog scenario, else the caller-supplied approved ops scenario. Body flags are not read. */
 export function approvedScenarioVersion(check, opsScenario = null) {
   const profile = check?.probe_profile ?? {};
+  if (typeof profile.scenario_version === 'string' && profile.scenario_version.trim()) return profile.scenario_version.trim();
+  if (typeof check?.scenario_version === 'string' && check.scenario_version.trim()) return check.scenario_version.trim();
   if (typeof profile.scenario === 'string' && profile.scenario.trim()) return profile.scenario.trim();
   if (typeof profile.scenario_family === 'string' && profile.scenario_family.trim()) return profile.scenario_family.trim();
   return typeof opsScenario === 'string' && opsScenario.trim() ? opsScenario.trim() : null;

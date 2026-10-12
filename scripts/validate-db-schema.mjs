@@ -58,6 +58,9 @@ function assertAbsent(label, sql, pattern) {
 
 const REQUIRED_TABLES = [
   'schema_migrations',
+  'reviewed_operations',
+  'reviewed_execution_grant_issuances',
+  'cve_applicability_reviews',
   'tenants',
   'environments',
   'users',
@@ -133,6 +136,18 @@ const REQUIRED_TABLES = [
 ];
 
 const REQUIRED_COLUMNS = [
+  [/CREATE TABLE cve_applicability_reviews[\s\S]*?plan_json JSONB NOT NULL/m, 'cve_applicability_reviews.plan_json'],
+  [/CREATE TABLE cve_applicability_reviews[\s\S]*?approved_role TEXT NOT NULL CHECK \(approved_role IN \('owner', 'admin'\)\)/m, 'CVE review human roles'],
+  [/CONSTRAINT cve_review_plan_check CHECK[\s\S]*?plan_json->>'version' = 'cve-component-declaration.v1'[\s\S]*?plan_json->'grants_execution' = 'false'::jsonb[\s\S]*?plan_json->'execution_available' = 'false'::jsonb[\s\S]*?\) IS TRUE\)/m, 'CVE declaration plan cannot grant execution'],
+  [/CREATE FUNCTION valid_cve_review_support\(value JSONB\) RETURNS BOOLEAN/m, 'CVE review bounded typed support metadata'],
+  [/CREATE TRIGGER cve_applicability_reviews_history_guard BEFORE UPDATE OR DELETE ON cve_applicability_reviews/m, 'CVE review immutable history trigger'],
+  [/ADD CONSTRAINT cve_pipeline_items_review_lineage_key\s+UNIQUE \(tenant_id, id, cve_id\)/m, 'CVE item exact review lineage key'],
+  [/ADD CONSTRAINT cve_asset_matches_review_lineage_key\s+UNIQUE \(tenant_id, id, cve_pipeline_item_id, waf_asset_id\)/m, 'CVE match exact review lineage key'],
+  [/ADD CONSTRAINT fk_cve_review_item_lineage\s+FOREIGN KEY \(tenant_id, cve_pipeline_item_id, cve_id\) REFERENCES cve_pipeline_items\s*\(tenant_id, id, cve_id\)/m, 'CVE review exact item lineage FK'],
+  [/ADD CONSTRAINT fk_cve_review_match_lineage\s+FOREIGN KEY \(tenant_id, cve_asset_match_id, cve_pipeline_item_id, waf_asset_id\)\s+REFERENCES cve_asset_matches\s*\(tenant_id, id, cve_pipeline_item_id, waf_asset_id\)/m, 'CVE review exact match lineage FK'],
+  [/CREATE TABLE reviewed_operations[\s\S]*?plan_json JSONB NOT NULL/m, 'reviewed_operations.plan_json'],
+  [/CREATE TABLE reviewed_operations[\s\S]*?approved_role TEXT NOT NULL CHECK \(approved_role IN \('owner', 'admin'\)\)/m, 'reviewed_operations human review roles'],
+  [/CREATE TRIGGER reviewed_operations_history_guard BEFORE UPDATE OR DELETE ON reviewed_operations/m, 'reviewed_operations immutable history trigger'],
   [/CREATE TABLE probe_jobs[\s\S]*?job_signature/m, 'probe_jobs.job_signature'],
   [/CREATE TABLE agent_jobs[\s\S]*?type TEXT NOT NULL DEFAULT 'observe_window'/m, 'agent_jobs.type'],
   [/CREATE TABLE agent_jobs[\s\S]*?nonce_for_agent/m, 'agent_jobs.nonce_for_agent'],
@@ -394,6 +409,10 @@ const TENANT_RLS_TABLES = [
 ];
 
 const REQUIRED_MIGRATION_FILES = [
+  '0078_reviewed_execution_grant_issuances.sql',
+  '0077_ownership_transition_order.sql',
+  '0076_cve_applicability_reviews.sql',
+  '0075_reviewed_inert_operations.sql',
   '0043_password_resets_and_mfa.sql',
   '0044_target_management_rules_and_schedules.sql',
   '0045_ownership_and_policy_dispatch_hardening.sql',
@@ -499,6 +518,12 @@ const EDGE_PROVENANCE_UPGRADE_SQL_REQUIREMENTS = [
 ];
 
 const REQUIRED_RLS = [
+  /ALTER TABLE cve_applicability_reviews ENABLE ROW LEVEL SECURITY/,
+  /ALTER TABLE cve_applicability_reviews FORCE ROW LEVEL SECURITY/,
+  /CREATE POLICY cve_applicability_reviews_tenant_isolation ON cve_applicability_reviews[\s\S]*?USING \(tenant_id = current_setting\('app\.tenant_id', true\)\)[\s\S]*?WITH CHECK \(tenant_id = current_setting\('app\.tenant_id', true\)\)/m,
+  /ALTER TABLE reviewed_operations ENABLE ROW LEVEL SECURITY/,
+  /ALTER TABLE reviewed_operations FORCE ROW LEVEL SECURITY/,
+  /CREATE POLICY reviewed_operations_tenant_isolation ON reviewed_operations[\s\S]*?USING \(tenant_id = current_setting\('app\.tenant_id', true\)\)[\s\S]*?WITH CHECK \(tenant_id = current_setting\('app\.tenant_id', true\)\)/m,
   /ALTER TABLE tenants ENABLE ROW LEVEL SECURITY/,
   /ALTER TABLE tenants FORCE ROW LEVEL SECURITY/,
   /CREATE POLICY tenant_isolation_tenants ON tenants[\s\S]*?USING \(id = current_setting\('app\.tenant_id', true\)\)/m,
@@ -692,6 +717,13 @@ export const TENANT_CONSISTENT_FK_CONSTRAINTS = [
   'fk_entry_path_comparison_items_origin_binding_tenant',
   'fk_entry_path_comparison_items_run_tenant',
   'fk_entry_path_comparison_items_probe_job_tenant',
+  'fk_reviewed_operations_target_tenant',
+  'fk_reviewed_grant_job_run_tenant',
+  'fk_reviewed_grant_run_tenant',
+  'fk_reviewed_grant_review_plan_tenant',
+  'fk_cve_review_item_lineage',
+  'fk_cve_review_match_lineage',
+  'fk_cve_review_asset_tenant',
 ];
 
 const TENANT_FK_COMPOSITE_SHAPE =
@@ -715,6 +747,47 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
   const migration0052 = migrationSqlByName.get('0052_target_edge_detections.sql') ?? '';
   const migration0053 = migrationSqlByName.get('0053_target_edge_detection_provenance.sql') ?? '';
   const schema = stripSqlComments(loaded.schemaSql ?? schemaSql);
+  const grantIssuance = migrationSqlByName.get('0078_reviewed_execution_grant_issuances.sql') ?? combinedMigration;
+  const grantSchema = schema.match(/CREATE FUNCTION reviewed_grant_utc_millis[\s\S]*$/)?.[0] ?? '';
+  for (const [pattern, requirement] of [
+    [/CREATE FUNCTION reviewed_grant_utc_millis\(value JSONB\) RETURNS BOOLEAN/, 'canonical clock validator'],
+    [/CREATE FUNCTION valid_reviewed_grant_json\(e JSONB, r JSONB, p JSONB\) RETURNS BOOLEAN/, 'typed nested validator'],
+    [/\(b->>'max_probe_requests'\)::numeric BETWEEN 1 AND 4/, 'bounded integer probe budget'],
+    [/\(a->>'original_not_after'\)::timestamptz <= \(a->>'issued_at'\)::timestamptz \+ interval '120 seconds'/, 'unchanged bounded original authority'],
+    [/UNIQUE \(tenant_id, probe_job_id\)/, 'one job claim'],
+    [/UNIQUE \(tenant_id, test_run_id\)/, 'one run claim'],
+    [/UNIQUE \(tenant_id, reservation_id\)/, 'one reservation claim'],
+    [/FOREIGN KEY \(tenant_id, probe_job_id, test_run_id\)\s+REFERENCES probe_jobs\(tenant_id, id, test_run_id\)/, 'exact job run tenant FK'],
+    [/FOREIGN KEY \(tenant_id, review_id, target_id, plan_digest\)\s+REFERENCES reviewed_operations\(tenant_id, id, target_id, plan_digest\)/, 'exact review plan tenant FK'],
+    [/CONSTRAINT reviewed_grant_outcome_check CHECK[\s\S]*?\) IS TRUE\)/, 'state dependent outcomes'],
+    [/CONSTRAINT reviewed_grant_integrity_check CHECK[\s\S]*?valid_reviewed_grant_json\(envelope_json, reservation_json, provenance_json\)[\s\S]*?\) IS TRUE\)/, 'bounded typed claim integrity'],
+    [/finished_at < \(envelope_json->'authority'->>'not_after'\)::timestamptz/, 'issued completion before expiry'],
+    [/provenance_json->'assurance_scope'->>'version' = 'assurance-scope.v3'/, 'current scope version'],
+    [/provenance_json->'dns_proof'->'source_ref'->'dns_target_binding'->>'version' = 'dns-ownership-target.v2'/, 'current DNS version'],
+    [/ALTER TABLE reviewed_execution_grant_issuances ENABLE ROW LEVEL SECURITY/, 'enabled RLS'],
+    [/ALTER TABLE reviewed_execution_grant_issuances FORCE ROW LEVEL SECURITY/, 'forced RLS'],
+    [/CREATE POLICY reviewed_execution_grant_issuances_tenant_isolation[\s\S]*?USING \(tenant_id = current_setting\('app\.tenant_id', true\)\)[\s\S]*?WITH CHECK \(tenant_id = current_setting\('app\.tenant_id', true\)\)/, 'read and write tenant policy'],
+    [/CREATE TRIGGER reviewed_execution_grant_issuances_history_guard BEFORE INSERT OR UPDATE OR DELETE/, 'immutable lifecycle trigger'],
+    [/OLD.state <> 'signing_unknown' OR NEW.state NOT IN \('issued', 'closed_unknown'\)/, 'terminal lifecycle'],
+  ]) {
+    errors.push(assertPattern(`schema:grant_issuance:${requirement}`, grantSchema, pattern));
+    errors.push(assertPattern(`migration:0078:grant_issuance:${requirement}`, grantIssuance, pattern));
+  }
+  const ownershipOrder = migrationSqlByName.get('0077_ownership_transition_order.sql') ?? combinedMigration;
+  const ownershipSchema = schema.match(/CREATE OR REPLACE FUNCTION advance_target_verification_clock\(\)[\s\S]*$/)?.[0] ?? '';
+  for (const [pattern, requirement] of [
+    [/CREATE TRIGGER target_verification_advance_clock\s+BEFORE INSERT ON target_verifications/, 'append clock trigger'],
+    [/pg_advisory_xact_lock\(hashtext\(NEW\.tenant_id\)\)/, 'audit-first serialization'],
+    [/date_trunc\('milliseconds', previous_at\) \+ interval '1 millisecond'/, 'millisecond advancement'],
+    [/bool_or\(NOT isfinite\(transitioned_at\)\s+OR abs\(extract\(epoch FROM transitioned_at\) \* 1000\) > 8640000000000000\)/, 'representable finite history'],
+    [/Ownership transition clock cannot advance/, 'successor overflow rejection'],
+    [/count\(DISTINCT jsonb_build_array\(state, source_kind, source_ref\)\) > 1/, 'authority-equivalent ties'],
+    [/WHEN latest\.ambiguous OR NOT isfinite\(latest\.transitioned_at\) THEN 'pending'/, 'ambiguous history denies proof'],
+    [/WITH \(security_invoker = true\) AS\s+WITH ranked/, 'tenant-invoker current projection'],
+  ]) {
+    errors.push(assertPattern(`schema:ownership_order:${requirement}`, ownershipSchema, pattern));
+    errors.push(assertPattern(`migration:0077:ownership_order:${requirement}`, ownershipOrder, pattern));
+  }
 
   for (const [pattern, requirement] of RECIPROCAL_OWNERSHIP_SQL_REQUIREMENTS) {
     errors.push(assertPattern(`schema:reciprocal_ownership:${requirement}`, schema, pattern));

@@ -271,6 +271,35 @@ describe('validation scan contract: activity cursor and deferral', () => {
     assert.equal(contract.decodeActivityCursor('not-a-cursor'), null);
   });
 
+  it('drains more than 500 audits and 200 events without skips or duplicates and rejects foreign cursors', () => {
+    const scan = { id: 'scan_pages' };
+    const audits = Array.from({ length: 603 }, (_, i) => ({ id: `audit_pages_${i}`, sequence: i + 1,
+      action: 'validation_scan.created', resource_type: 'validation_scan', resource_id: scan.id,
+      timestamp: new Date(NOW.getTime() + i * 10).toISOString() }));
+    const events = Array.from({ length: 413 }, (_, i) => ({ id: `event_pages_${i}`, test_run_id: 'run_pages',
+      producer_kind: 'signed_probe', signal_type: 'probe_result', ingest_index: i,
+      timestamp: new Date(NOW.getTime() - i * 5).toISOString() }));
+    const items = contract.buildActivityItems({ scan, auditEntries: audits, runEvents: events });
+    const ids = [];
+    let after = null;
+    let page;
+    do {
+      page = contract.paginateActivity(items, { after, limit: 37 });
+      assert.equal(page.error, undefined);
+      ids.push(...page.items.map((item) => item.id));
+      after = page.cursor;
+    } while (page.pagination.has_more);
+    assert.equal(ids.length, 1016);
+    assert.equal(new Set(ids).size, 1016);
+    assert.deepEqual(new Set(ids), new Set(items.map((item) => item.id)));
+    assert.equal(contract.paginateActivity(items, { after }).items.length, 0);
+    assert.equal(contract.paginateActivity(items, { after: 'invalid' }).status, 400);
+    const foreign = contract.encodeActivityCursor({ auditSequence: 9999 });
+    assert.equal(contract.paginateActivity(items, { after: foreign }).status, 400);
+    const foreignEvent = contract.encodeActivityCursor({ eventKey: [0, 'event_from_other_scope'] });
+    assert.equal(contract.paginateActivity(items, { after: foreignEvent }).status, 400);
+  });
+
   it('computes hourly-cap and min-interval eligibility from persisted runs', () => {
     const now = new Date('2026-06-01T12:00:00.000Z');
     const runs = [

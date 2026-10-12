@@ -39,6 +39,9 @@ function assessSafeCheck(checkId, profile) {
   }
 
   const reasons = [];
+  if (check.mechanism_supported === false || check.probe_profile?.delivery_supported === false) {
+    reasons.push('unsupported_delivery');
+  }
   if (targetKindCompatibilityError(check, syntheticTarget(profile.target_kind))) {
     reasons.push('target_kind_not_supported');
   }
@@ -53,6 +56,9 @@ function rowDisposition(vector, assessments) {
   if (vector.execution_disposition === 'soc_gated_only') return 'soc_gated';
   if (vector.execution_disposition !== 'safe_validation_available') return 'not_runnable';
   if (assessments.some((assessment) => assessment.runnable)) return 'safe_runnable';
+  if (assessments.length > 0 && assessments.every((assessment) => (
+    assessment.reasons.includes('unsupported_delivery')
+  ))) return 'not_runnable';
   if (assessments.some((assessment) => (
     assessment.reasons.includes('additional_customer_input_required')
   ))) {
@@ -67,7 +73,7 @@ export function buildVectorTargetMatrix(profile = DEFAULT_VECTOR_TARGET_PROFILE)
     validation_mode: String(profile.validation_mode ?? 'external_only').trim().toLowerCase(),
   };
   const rows = VECTOR_LIBRARY.map((vector) => {
-    const assessments = vector.execution_disposition === 'safe_validation_available'
+    const assessments = ['safe_validation_available', 'not_currently_runnable'].includes(vector.execution_disposition)
       ? vector.safe_check_ids.map((checkId) => assessSafeCheck(checkId, normalizedProfile))
       : [];
     const runnableSafeCheckIds = sortStrings(

@@ -26,11 +26,12 @@ import {
   unsignedStatusOutcome,
 } from './externalObservationOutcomes.mjs';
 import { computeScopeHashFromTargets } from './scopeHash.mjs';
+import { DEFAULT_SOURCE_PERSPECTIVE } from './probeSourcePerspective.mjs';
 
 export const ENTRY_PATH_COMPARISON_STATUSES = Object.freeze(['running', 'completed', 'cancelled']);
 export const ENTRY_PATH_ITEM_EXECUTION_STATES = Object.freeze(['pending', 'deferred', 'started', 'finalized', 'skipped']);
 export const ORIGIN_PROBE_KIND = 'host_sni_bypass';
-export const DEFAULT_SOURCE_PERSPECTIVE = 'astranull-signed-public-worker';
+export { DEFAULT_SOURCE_PERSPECTIVE };
 
 /** Probe kinds that never send a body or a state-changing method to a declared login or API URL. */
 export const ENTRY_PATH_SAFE_PROBE_KINDS = Object.freeze([
@@ -128,7 +129,8 @@ export function entryTargetScopeHash(target) {
 
 export function checkMatchesScenario(check, scenario) {
   if (!check || typeof scenario !== 'string') return false;
-  return check.check_id === scenario || approvedScenarioVersion(check) === scenario;
+  return check.check_id === scenario || approvedScenarioVersion(check) === scenario
+    || check.probe_profile?.scenario_family === scenario;
 }
 
 function rankCandidates(candidates, scenario, preferredEntryScenario) {
@@ -148,12 +150,13 @@ function entryPathVariantMatches(entryCheck, scenario, scenarioChecks) {
   const version = approvedScenarioVersion(entryCheck);
   if (!version) return false;
   if (version === scenario) return true;
-  return scenarioChecks.some((check) => approvedScenarioVersion(check) === version && (
+  return scenarioChecks.some((check) => (
     GENERIC_MARKER_SCENARIO_KINDS.has(check.probe_profile?.kind)
-    || (check.probe_profile?.kind === entryCheck.probe_profile?.kind
-      && check.probe_profile?.marker_class != null
-      && check.probe_profile.marker_class === entryCheck.probe_profile?.marker_class)
-  ));
+      && check.probe_profile?.scenario_family === entryCheck.probe_profile?.scenario_family
+  ) || (approvedScenarioVersion(check) === version
+    && check.probe_profile?.kind === entryCheck.probe_profile?.kind
+    && check.probe_profile?.marker_class != null
+    && check.probe_profile.marker_class === entryCheck.probe_profile?.marker_class));
 }
 
 /** Origin relations use approved host/SNI checks; others need a scenario check for the exact target kind. */
@@ -443,12 +446,14 @@ export function evidenceReferenceForAttempt(attempt) {
   }
 }
 
-function markerEnforcement(entries) {
+function markerEnforcement(entries, metadata) {
+  if (!Array.isArray(entries) || !entries.length || metadata?.comparison_complete !== true
+    || metadata?.planned_marker_legs !== metadata?.completed_marker_legs) return 'unknown';
   const graded = (entries ?? []).filter((row) => row && !row.inconclusive && !row.block_suspected && !row.error_class && !row.transport_error);
   const blocked = graded.filter((row) => row.blocked === true).length;
   const allowed = graded.filter((row) => row.allowed === true || (row.blocked === false && row.allowed == null)).length;
   if (blocked + allowed === 0) return 'unknown';
-  if (allowed === 0) return 'enforced';
+  if (allowed === 0) return graded.length === entries.length ? 'enforced' : 'unknown';
   if (blocked === 0) return 'not_enforced';
   return 'partial';
 }
@@ -531,7 +536,7 @@ export function deriveAttemptObservation(attempt) {
       denial_signature: observed.denial_signature ?? null,
     };
     const unconfirmedDenial = outcome === 'explicit_denial_observed'
-      && !(observed.origin_lockdown_confirmed === true && observed.baseline === 'healthy');
+      && !(observed.origin_lockdown_confirmed === true && observed.baseline === 'healthy' && observed.baseline_comparable === true);
     const derived = finish(outcome, 'unknown', observed.baseline ?? 'not_available', unconfirmedDenial ? ['origin_lockdown_not_confirmed'] : [], fields);
     return unconfirmedDenial ? { ...derived, unconfirmed_origin_denial: true } : derived;
   }
@@ -575,15 +580,20 @@ export function deriveAttemptObservation(attempt) {
   let observation = 'response_observed';
 
   let enforcement = 'unknown';
+  const complete = metadata.comparison_complete === true && metadata.planned_marker_legs > 0
+    && metadata.planned_marker_legs === metadata.completed_marker_legs;
+  if (!complete) reasons.push('planned_comparison_incomplete');
+  if (metadata.observation_only === true || metadata.readiness_conclusion === false) reasons.push('observation_only_no_assurance');
   if (kind === 'waf_evasion_marker_probe') {
     if (metadata.baseline_blocked !== true) {
       reasons.push('evasion_blocked_baseline_missing');
     } else {
       if (Array.isArray(metadata.variant_results)) {
-        const transformed = metadata.variant_results.filter((row) => row?.label !== 'baseline' && row?.label !== 'permitted_baseline' && !row?.transport_error && !row?.inconclusive);
-        enforcement = transformed.length === 0 ? 'unknown' : transformed.every((row) => row.blocked) ? 'enforced' : 'partial';
+        const transformed = metadata.variant_results.filter((row) => row?.label !== 'baseline' && row?.label !== 'permitted_baseline');
+        enforcement = !complete || transformed.length !== 1 || transformed.some((row) => row.transport_error || row.inconclusive)
+          ? 'unknown' : transformed.every((row) => row.blocked === true) ? 'enforced' : 'partial';
       } else {
-        enforcement = external === 'blocked' ? 'enforced' : external === 'connected' ? 'partial' : 'unknown';
+        enforcement = 'unknown';
       }
     }
   } else if (kind === 'waf_inspection_limit_probe') {
@@ -591,18 +601,18 @@ export function deriveAttemptObservation(attempt) {
     else if (metadata.inspection_limit_bypass_suspected === true) enforcement = 'partial';
     else if (metadata.comparison_complete === true) enforcement = 'enforced';
   } else if (kind === 'waf_enforcement_probe') {
-    enforcement = external === 'blocked' ? 'enforced' : external === 'connected' ? 'not_enforced' : 'unknown';
+    enforcement = 'unknown';
     if (enforcement === 'unknown' && typeof metadata.inconclusive_reason === 'string') legReason ??= metadata.inconclusive_reason;
   } else if (kind === 'outside_in_waf_scan') {
-    enforcement = markerEnforcement(metadata.marker_probes);
+    enforcement = markerEnforcement(metadata.marker_probes, metadata);
     if (enforcement === 'unknown') legReason ??= markerLegReason(metadata.marker_probes);
   } else if (Array.isArray(metadata.marker_results)) {
-    enforcement = markerEnforcement(metadata.marker_results);
+    enforcement = markerEnforcement(metadata.marker_results, metadata);
     if (enforcement === 'unknown') legReason ??= markerLegReason(metadata.marker_results);
   } else {
     enforcement = RECORDED_ENFORCEMENT.has(metadata.enforcement) ? metadata.enforcement : 'unknown';
   }
-  if (health === 'unhealthy' && enforcement !== 'unknown') {
+  if ((health !== 'healthy' || !complete || metadata.observation_only === true || metadata.readiness_conclusion === false) && enforcement !== 'unknown') {
     reasons.push('permitted_baseline_not_healthy');
     enforcement = 'unknown';
   }
@@ -721,10 +731,7 @@ export function evaluateEntryPathComparison({
     if (!matched.ok) {
       return itemResult(item, scenario, { outcome: 'inconclusive', reasons: matched.reasons }, { evidence_refs: refs });
     }
-    const signedUnreachableDenial = derived.unconfirmed_origin_denial
-      && item.expected_behavior === 'must_not_be_reachable'
-      && Boolean(derived.denial_signature);
-    if (derived.observation == null || (derived.unconfirmed_origin_denial && !signedUnreachableDenial)) {
+    if (derived.observation == null || derived.unconfirmed_origin_denial) {
       return itemResult(item, scenario, { outcome: 'inconclusive', reasons: derived.reasons }, { evidence_refs: refs });
     }
     if (derived.leg_reason && derived.observation !== 'explicit_denial_observed') {
@@ -750,6 +757,10 @@ export function evaluateEntryPathComparison({
         ...compatOptions,
         ...(sameCheck ? {} : { matchBy: 'scenario_version' }),
       });
+      // A shared classifier version does not make Host/SNI reachability the primary marker scenario.
+      if (item.relation_kind === 'origin' && !sameCheck && compatibility.comparable) {
+        compatibility = { ...compatibility, comparable: false, reasons: ['check_mismatch'] };
+      }
       if (REACHABILITY_ROUTE_KINDS.has(item.relation_kind) && !compatibility.comparable) {
         strippedScenarioReasons = compatibility.reasons.filter((reason) => SCENARIO_ONLY_REASONS.has(reason));
         const remaining = compatibility.reasons.filter((reason) => !SCENARIO_ONLY_REASONS.has(reason));

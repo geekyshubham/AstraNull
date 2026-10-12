@@ -72,6 +72,91 @@ describe('inspector refs (EI-05, ID-only state)', () => {
   });
 });
 
+describe('assessment pin restoration and exact authorized membership', () => {
+  const assessment = { entry: 'validation_scan', target_id: 'tgt_a', scan_id: 'scan_a' };
+  const pinned = { ...assessment, display_mode: 'pinned', pinned_run_id: 'run_a1' };
+  const scan = { id: 'scan_a', target_id: 'tgt_a', status: 'running', steps: [
+    { test_run_id: 'run_a1', check_id: 'check_a', target_id: 'tgt_a', status: 'verdicted' },
+    { test_run_id: 'run_a2', check_id: 'check_a', target_id: 'tgt_a', status: 'running' },
+  ] };
+
+  it('reload retains assessment A / A1 / pinned despite active A2 and newer assessment B', async () => {
+    const { resolveScanChild, inspectorWorkspaceKey } = await import('../../apps/web/react/src/lib/evidence-inspector.mjs');
+    const href = buildEvidenceInspectorHref(pinned, '#target-detail?id=tgt_a&tab=validate&token=secret');
+    assert.deepEqual(parseInspectorRef(href), pinned);
+    assert.match(href, /ev_display=pinned&ev_pin=run_a1/);
+    assert.equal(resolveScanChild(parseInspectorRef(href), scan).runId, 'run_a1');
+    assert.equal(resolveScanChild(assessment, scan).runId, 'run_a2', 'explicit Follow uses only A');
+    assert.equal(resolveScanChild(pinned, { ...scan, id: 'scan_b' }).state, 'unavailable');
+    assert.notEqual(inspectorRefKey(assessment), inspectorRefKey(pinned));
+    assert.equal(inspectorWorkspaceKey(assessment), inspectorWorkspaceKey(pinned), 'pin changes cannot remount Stop confirmation');
+    assert.notEqual(inspectorWorkspaceKey(assessment), inspectorWorkspaceKey({ ...assessment, scan_id: 'scan_b' }));
+    assert.equal(stripInspectorParams(href), '#target-detail?id=tgt_a&tab=validate');
+    assert.equal(evidenceContextPath(pinned), '', 'display state is never an evidence API query');
+    assert.equal(evidenceContextPath({ entry: 'check_result', target_id: 'tgt_a', check_id: 'check_a', test_run_id: 'run_a1', display_mode: 'pinned', pinned_run_id: 'run_a2' }), '/v1/evidence-context?entry=check_result&target_id=tgt_a&check_id=check_a&test_run_id=run_a1');
+  });
+
+  it('old target/scan references remain Follow, while malformed pins stay explicitly unavailable', async () => {
+    const { resolveScanChild, sanitizeRouteParams } = await import('../../apps/web/react/src/lib/evidence-inspector.mjs');
+    assert.deepEqual(parseInspectorRef(buildEvidenceInspectorHref(assessment, '#targets')), assessment);
+    assert.equal(resolveScanChild(assessment, scan).runId, 'run_a2');
+    for (const suffix of ['ev_display=pinned', 'ev_display=pinned&ev_pin=bad%20id', `ev_display=pinned&ev_pin=${'x'.repeat(129)}`, 'ev_display=unknown&ev_pin=run_a1', 'ev_display=pinned&ev_pin=sk_live_secret', 'ev_pin=run_a1']) {
+      const ref = parseInspectorRef(`#targets?inspect=validation_scan&ev_target=tgt_a&ev_scan=scan_a&${suffix}`);
+      assert.ok(ref, 'retain the assessment and an explicit unavailable selection');
+      assert.equal(resolveScanChild(ref, scan).state, 'unavailable', suffix);
+      assert.equal(resolveScanChild(ref, scan).runId, '', 'no fallback child fetch');
+      assert.equal(resolveScanChild(parseInspectorRef(buildEvidenceInspectorHref(ref, '#targets')), scan).state, 'unavailable', 'sanitized rewrites must not turn an invalid pin into Follow');
+    }
+    assert.equal(sanitizeRouteParams('ev_display=pinned&ev_pin=bad%20id').get('ev_display'), 'pinned');
+    assert.equal(sanitizeRouteParams('ev_display=pinned&ev_pin=bad%20id').has('ev_pin'), false);
+  });
+
+  it('never fetches missing, unrelated, other-target or forbidden pinned children', async () => {
+    const { resolveScanChild } = await import('../../apps/web/react/src/lib/evidence-inspector.mjs');
+    assert.equal(resolveScanChild(pinned, null).state, 'loading');
+    for (const record of [
+      { ...scan, id: 'scan_b' }, { ...scan, target_id: 'tgt_b' },
+      { ...scan, steps: scan.steps.filter((step) => step.test_run_id !== 'run_a1') },
+      { ...scan, steps: [{ ...scan.steps[0], target_id: 'tgt_b' }, scan.steps[1]] },
+      { ...scan, steps: [{ ...scan.steps[0], check_id: '' }, scan.steps[1]] },
+      { ...scan, target_id: undefined, target_ids: ['tgt_a', 'tgt_b'], steps: [{ ...scan.steps[0], target_id: undefined }] },
+    ]) {
+      const selected = resolveScanChild(pinned, record);
+      assert.equal(selected.state, 'unavailable'); assert.equal(selected.runId, '');
+    }
+    for (const status of [401, 403, 404]) {
+      const selected = resolveScanChild(pinned, scan, { status });
+      assert.equal(selected.state, 'unavailable'); assert.equal(selected.runId, '');
+    }
+    assert.equal(resolveScanChild(pinned, scan).targetId, 'tgt_a');
+  });
+
+  it('scope and credential epochs isolate assessment loads before selection or child evidence reads', async () => {
+    const { createActivityReaderKey } = await import('../../apps/web/react/src/lib/recorded-activity.mjs');
+    const { inspectorLoadKey, inspectorWorkspaceKey } = await import('../../apps/web/react/src/lib/evidence-inspector.mjs');
+    const keyFor = createActivityReaderKey();
+    const original = { identity: 'tenant-a/user-a/owner', authMode: 'jwt', session: { mode: 'jwt', access_token: 'private-old', expires_at: 10 }, id: 'inspector' };
+    const oldKey = inspectorLoadKey(keyFor(original), inspectorWorkspaceKey(pinned));
+    const guard = createInspectorGeneration();
+    const pending = guard.begin(oldKey, inspectorRefKey(pinned));
+    for (const next of [{ ...original, identity: 'tenant-b/user-a/owner' }, { ...original, identity: 'tenant-a/user-b/owner' }, { ...original, identity: 'tenant-a/user-a/viewer' }, { ...original, session: { ...original.session, access_token: 'private-new' } }, { ...original, session: { ...original.session, expires_at: 20 } }]) {
+      const currentKey = inspectorLoadKey(keyFor(next), inspectorWorkspaceKey(pinned));
+      assert.notEqual(currentKey, oldKey); assert.doesNotMatch(currentKey, /private-old|private-new/);
+      guard.begin(currentKey, inspectorRefKey(pinned)); assert.equal(guard.isCurrent(pending), false);
+    }
+    const host = read('apps/web/react/src/components/evidence/evidence-inspector.tsx');
+    const hooks = read('apps/web/react/src/components/evidence/use-inspector.ts');
+    const execution = read('apps/web/react/src/components/evidence/execution-inspector.tsx');
+    assert.match(host, /useInspectorScopeKey\(config, session\)/);
+    assert.match(host, /ExecutionInspector key=\{workspaceKey\}/);
+    assert.match(hooks, /createActivityReaderKey/);
+    assert.match(execution, /resolveScanChild\(reference, scan, scanActivity.error\)/);
+    assert.match(execution, /useScanDisplaySelection\(reference\)/);
+    assert.match(execution, /confirm.scopeKey !== scopeKey/);
+    assert.match(execution, /useInspectorScopeKey\(config, session\)/);
+  });
+});
+
 describe('evidence-context query and failure states (EI-06, EI-08)', () => {
   it('builds a GET query with ids only', () => {
     const path = evidenceContextPath({ entry: 'provider', target_id: 'tgt_1', family: 'cdn' });
@@ -661,7 +746,10 @@ describe('history, origin relations and retest lineage (current-release history)
     assert.match(finding, /data-focus-key=\{`artifact-\$\{artifactId\}`\}/);
     assert.match(finding, /not proof of a fix/);
     const target = read('apps/web/react/src/pages/target-detail-view.tsx');
-    assert.match(target, /\/v1\/validation-scans\/\$\{encodeURIComponent\(scanId\)\}\?advance=false/);
+    assert.match(target, /useRecordedActivity\(\{ config, session, kind: 'scan', id: scanId \}\)/);
+    const reader = read('apps/web/react/src/lib/recorded-activity.mjs');
+    assert.match(reader, /\/v1\/validation-scans\/\$\{encodeURIComponent\(id\)\}\?advance=false/);
+    assert.doesNotMatch(reader, /method:\s*'(POST|PATCH|PUT|DELETE)'/);
     const origin = read('apps/web/react/src/components/targets/origin-relations.tsx');
     assert.match(origin, /origin_binding_id: str\(review\.binding, 'id'\)/);
     assert.doesNotMatch(origin, /direct_ip|discovered_endpoint|destination:/);

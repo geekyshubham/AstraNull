@@ -85,21 +85,16 @@ async function lockActiveTargetBoundToChallenge(client, tenantId, record) {
 
 async function lockCurrentTargetVerification(client, tenantId, targetId) {
   const { rows } = await client.query(
-    `SELECT id, tenant_id, target_id, state, source_kind, source_ref, transitioned_at,
-            transitioned_by, audit_entry_id
-     FROM target_verifications
-     WHERE tenant_id = $1 AND target_id = $2
-     ORDER BY transitioned_at DESC,
-              CASE state
-                WHEN 'user_confirmed' THEN 4
-                WHEN 'dns_verified' THEN 2
-                WHEN 'provider_verified' THEN 2
-                WHEN 'pending' THEN 1
-                ELSE 0
-              END DESC,
-              id DESC
+    `SELECT tv.id, tv.tenant_id, tv.target_id, current.state, current.source_kind,
+            current.source_ref, tv.transitioned_at, tv.transitioned_by, tv.audit_entry_id
+     FROM target_verifications tv
+     JOIN target_verification_current current
+       ON current.tenant_id = tv.tenant_id AND current.target_id = tv.target_id
+         AND current.transitioned_at = tv.transitioned_at
+     WHERE tv.tenant_id = $1 AND tv.target_id = $2
+     ORDER BY tv.id DESC
      LIMIT 1
-     FOR UPDATE`,
+     FOR UPDATE OF tv`,
     [tenantId, targetId],
   );
   return mapTargetVerificationRow(rows[0] ?? null);
@@ -110,18 +105,8 @@ async function recomputeTargetGroupOwnershipSummary(client, tenantId, targetGrou
     `SELECT t.id AS target_id,
             (
               SELECT tv.state
-              FROM target_verifications tv
+              FROM target_verification_current tv
               WHERE tv.tenant_id = t.tenant_id AND tv.target_id = t.id
-              ORDER BY tv.transitioned_at DESC,
-                       CASE tv.state
-                         WHEN 'user_confirmed' THEN 4
-                         WHEN 'dns_verified' THEN 2
-                WHEN 'provider_verified' THEN 2
-                         WHEN 'pending' THEN 1
-                         ELSE 0
-                       END DESC,
-                       tv.id DESC
-              LIMIT 1
             ) AS state
      FROM targets t
      WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.deleted_at IS NULL
@@ -213,6 +198,7 @@ export function createOwnershipVerificationRepository(pool) {
         throw new Error('Postgres ownership confirmation requires audit.appendAuditEvent().');
       }
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
         const selected = await client.query(
           `SELECT ${VERIFICATION_COLUMNS}
            FROM ownership_verifications
@@ -238,6 +224,9 @@ export function createOwnershipVerificationRepository(pool) {
         if (!target) return { error: 'ownership_target_not_active', status: 409 };
 
         const current = await lockCurrentTargetVerification(client, ctx.tenantId, target.id);
+        if (current?.source_kind === 'ownership_ambiguous') {
+          return { error: 'ownership_transition_invalid', status: 409 };
+        }
         let targetVerification = current;
         if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.user_confirmed) {
           const targetAudit = await auditRepo.appendAuditEvent({
@@ -364,8 +353,8 @@ export function createOwnershipVerificationRepository(pool) {
     async getCurrentTargetVerification(ctx, targetGroupId, targetId) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
-          `SELECT tv.id, tv.tenant_id, tv.target_id, tv.state, tv.source_kind,
-                  tv.source_ref, tv.transitioned_at::text AS transitioned_at, tv.transitioned_by, tv.audit_entry_id,
+          `SELECT tv.id, tv.tenant_id, tv.target_id, current.state, current.source_kind,
+                  current.source_ref, tv.transitioned_at::text AS transitioned_at, tv.transitioned_by, tv.audit_entry_id,
                   t.kind AS proof_target_kind, t.value AS proof_target_value,
                   t.normalized_value AS proof_target_normalized_value,
                   connector_feature.enabled AS proof_connector_feature_enabled,
@@ -388,19 +377,14 @@ export function createOwnershipVerificationRepository(pool) {
            FROM target_groups tg
            JOIN targets t
              ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
+           JOIN target_verification_current current
+             ON current.tenant_id = t.tenant_id AND current.target_id = t.id
            JOIN LATERAL (
              SELECT candidate.*
              FROM target_verifications candidate
              WHERE candidate.tenant_id = t.tenant_id AND candidate.target_id = t.id
-             ORDER BY candidate.transitioned_at DESC,
-                      CASE candidate.state
-                        WHEN 'user_confirmed' THEN 4
-                        WHEN 'dns_verified' THEN 2
-                        WHEN 'provider_verified' THEN 2
-                        WHEN 'pending' THEN 1
-                        ELSE 0
-                      END DESC,
-                      candidate.id DESC
+               AND candidate.transitioned_at = current.transitioned_at
+             ORDER BY candidate.id DESC
              LIMIT 1
            ) tv ON true
            LEFT JOIN tenant_connector_features connector_feature
@@ -429,7 +413,7 @@ export function createOwnershipVerificationRepository(pool) {
         );
         const row = rows[0] ?? null;
         const current = mapTargetVerificationRow(row);
-        if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+        if (isDemoAutoVerifyTenant(ctx.tenantId) && current?.source_kind !== 'ownership_ambiguous') {
           if (!current || !['user_confirmed', 'dns_verified', 'provider_verified', 'verified'].includes(current.state)) {
             return {
               id: `tv_demo_${targetId}`,

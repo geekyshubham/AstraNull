@@ -28,11 +28,11 @@ export function createPostgresFirewallEvidenceReader(pool) {
       return run(tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT id, tenant_id, test_run_id, target_id, check_id, signal_type, producer_kind,
-                  ${EXACT_TIME('"timestamp"')} AS "timestamp", metadata_json
+                  ${EXACT_TIME('"timestamp"')} AS "timestamp",
+                  ${EXACT_TIME('ingested_at')} AS ingested_at, nonce_hash, metadata_json
            FROM events
            WHERE tenant_id = $1 AND test_run_id = $2 AND signal_type = 'probe_result'
-           ORDER BY "timestamp", id
-           LIMIT 256`,
+           ORDER BY "timestamp", id`,
           [tenantId, runId],
         );
         return rows.map(({ metadata_json: metadata, ...row }) => ({ ...row, metadata: asObject(metadata) }));

@@ -187,6 +187,10 @@ Routes are under `/v1/waf/cve-pipeline` (WAF add-on namespace). See [Live Exposu
 | POST | `/v1/waf/cve-pipeline/:id/recommend` | `waf:write` | `{ vendor }` | `201 { recommendation }`. |
 | PATCH | `/v1/waf/cve-pipeline/:id/stage` | `waf:write` | `{ stage }` | `200 { item }`. |
 
+Validation and retest reject caller-owned approval/actor/time fields (including normalized nested aliases) with `400 unsafe_cve_pipeline_item`; `soc_approved` is not permission. Existing accepted evidence is evaluated conservatively and unsupported CVE-specific execution does not create a generic fingerprint fallback or establish mitigation closure.
+
+The separate passive `/v1/waf/cve-applicability-reviews` family provides human preview, exact-digest approval, current/history read and terminal revocation; see the [full request/response and authorization contract](../api.md#customer-cve-applicability-declaration-reviews). It persists customer component/version declarations, not observed exposure, execution approval, or readiness credit. PostgreSQL requires migration 0076 and complete service injection; no dev fallback. Service accounts are denied throughout the human review family.
+
 ### Multi-vendor CVE playbook APIs (developer validation — WAF-020)
 
 When asset matches span multiple vendors, grouped playbooks coordinate mitigation and retest. See [Multi-Vendor CVE Mitigation Playbook](../detection/17-multi-vendor-cve-mitigation-playbook.md).

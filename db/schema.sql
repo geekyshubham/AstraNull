@@ -4427,3 +4427,510 @@ SELECT target.tenant_id, target.id FROM targets target
 WHERE target.kind IN ('fqdn', 'url') AND target.deleted_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM target_edge_detections edge WHERE edge.tenant_id = target.tenant_id AND edge.target_id = target.id)
 ON CONFLICT DO NOTHING;
+
+-- Durable authenticated preflight review. This record alone never grants traffic.
+CREATE TABLE reviewed_operations (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_id TEXT NOT NULL,
+  plan_json JSONB NOT NULL,
+  plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'),
+  approved_by TEXT NOT NULL CHECK (char_length(approved_by) BETWEEN 1 AND 128),
+  approved_role TEXT NOT NULL CHECK (approved_role IN ('owner', 'admin')),
+  approved_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, plan_digest),
+  CONSTRAINT reviewed_operations_plan_check CHECK ((
+    jsonb_typeof(plan_json) = 'object' AND octet_length(plan_json::text) <= 8192
+    AND plan_json ?& ARRAY['version', 'tenant_id', 'target_id', 'template', 'semantics', 'side_effects', 'expires_at',
+      'endpoint', 'method', 'target_definition_digest', 'check_id', 'check_version', 'check_definition_digest',
+      'scenario_version', 'request_schema', 'maximum_body_bytes', 'maximum_probe_operations']
+    AND plan_json->>'version' = 'reviewed-inert-operation.v1'
+    AND plan_json->>'tenant_id' = tenant_id AND plan_json->>'target_id' = target_id
+    AND plan_json->>'template' IN ('marker-query-v1', 'inert-json-v1')
+    AND plan_json->>'semantics' = 'inert_diagnostic' AND plan_json->>'side_effects' = 'none'
+    AND jsonb_typeof(plan_json->'endpoint') = 'string' AND plan_json->>'endpoint' ~ '^https?://'
+    AND jsonb_typeof(plan_json->'target_definition_digest') = 'string' AND plan_json->>'target_definition_digest' ~ '^[a-f0-9]{64}$'
+    AND jsonb_typeof(plan_json->'check_definition_digest') = 'string' AND plan_json->>'check_definition_digest' ~ '^[a-f0-9]{64}$'
+    AND jsonb_typeof(plan_json->'check_id') = 'string' AND plan_json->>'check_id' ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+    AND jsonb_typeof(plan_json->'check_version') = 'string' AND char_length(plan_json->>'check_version') BETWEEN 1 AND 128
+    AND jsonb_typeof(plan_json->'scenario_version') IN ('string', 'null')
+    AND plan_json->'maximum_probe_operations' = '4'::jsonb
+    AND ((plan_json->>'template' = 'marker-query-v1' AND plan_json->>'method' = 'GET'
+      AND plan_json->>'request_schema' = 'fixed-asn-probe-query.v1' AND plan_json->'maximum_body_bytes' = '0'::jsonb)
+      OR (plan_json->>'template' = 'inert-json-v1' AND plan_json->>'method' = 'POST'
+      AND plan_json->>'request_schema' = 'fixed-asn-marker-json.v1' AND plan_json->'maximum_body_bytes' = '1024'::jsonb))
+    AND jsonb_typeof(plan_json->'expires_at') = 'string'
+    AND plan_json->>'expires_at' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
+    AND (plan_json->>'expires_at')::timestamptz > approved_at
+    AND (plan_json->>'expires_at')::timestamptz <= approved_at + INTERVAL '24 hours'
+  ) IS TRUE),
+  CONSTRAINT reviewed_operations_revocation_check CHECK (
+    (revoked_at IS NULL AND revoked_by IS NULL) OR
+    (revoked_at IS NOT NULL AND revoked_at >= approved_at AND char_length(revoked_by) BETWEEN 1 AND 128 AND revoked_by IS NOT NULL)
+  )
+);
+ALTER TABLE reviewed_operations ADD CONSTRAINT fk_reviewed_operations_target_tenant
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets(tenant_id, id);
+CREATE INDEX idx_reviewed_operations_target ON reviewed_operations(tenant_id, target_id, approved_at DESC, id DESC);
+ALTER TABLE reviewed_operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviewed_operations FORCE ROW LEVEL SECURITY;
+CREATE POLICY reviewed_operations_tenant_isolation ON reviewed_operations
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+CREATE FUNCTION guard_reviewed_operation_history() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'reviewed operation history cannot be deleted'; END IF;
+  IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL OR
+    (to_jsonb(NEW) - ARRAY['revoked_at', 'revoked_by']) IS DISTINCT FROM
+    (to_jsonb(OLD) - ARRAY['revoked_at', 'revoked_by']) THEN
+    RAISE EXCEPTION 'reviewed operation scope is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER reviewed_operations_history_guard BEFORE UPDATE OR DELETE ON reviewed_operations
+  FOR EACH ROW EXECUTE FUNCTION guard_reviewed_operation_history();
+
+-- Migration 0076: durable passive CVE component-applicability declaration reviews.
+-- Passive authenticated declarations only. Existing matches remain unreviewed; no backfill or execution grant.
+ALTER TABLE cve_pipeline_items ADD CONSTRAINT cve_pipeline_items_review_lineage_key
+  UNIQUE (tenant_id, id, cve_id);
+ALTER TABLE cve_asset_matches ADD CONSTRAINT cve_asset_matches_review_lineage_key
+  UNIQUE (tenant_id, id, cve_pipeline_item_id, waf_asset_id);
+
+CREATE FUNCTION valid_cve_review_support(value JSONB) RETURNS BOOLEAN
+  LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE entry JSONB;
+BEGIN
+  IF jsonb_typeof(value) IS DISTINCT FROM 'array' THEN RETURN FALSE; END IF;
+  IF jsonb_array_length(value) > 8 THEN RETURN FALSE; END IF;
+  FOR entry IN SELECT jsonb_array_elements(value) LOOP
+    IF NOT ((jsonb_typeof(entry) = 'object'
+      AND entry ?& ARRAY['kind', 'reference_id', 'sha256']
+      AND entry - ARRAY['kind', 'reference_id', 'sha256'] = '{}'::jsonb
+      AND jsonb_typeof(entry->'kind') = 'string'
+      AND entry->>'kind' IN ('sbom', 'cmdb', 'vendor_advisory', 'change_record')
+      AND jsonb_typeof(entry->'reference_id') = 'string'
+      AND entry->>'reference_id' ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+      AND jsonb_typeof(entry->'sha256') = 'string'
+      AND entry->>'sha256' ~ '^[a-f0-9]{64}$') IS TRUE) THEN RETURN FALSE; END IF;
+  END LOOP;
+  RETURN TRUE;
+END;
+$$;
+
+CREATE TABLE cve_applicability_reviews (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  cve_pipeline_item_id TEXT NOT NULL,
+  cve_id TEXT NOT NULL CHECK (cve_id ~ '^CVE-[0-9]{4}-[0-9]{4,19}$'),
+  cve_asset_match_id TEXT NOT NULL,
+  waf_asset_id TEXT NOT NULL,
+  plan_json JSONB NOT NULL,
+  plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'),
+  approved_by TEXT NOT NULL CHECK (approved_by ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+  approved_role TEXT NOT NULL CHECK (approved_role IN ('owner', 'admin')),
+  approved_at TIMESTAMPTZ NOT NULL CHECK (isfinite(approved_at)),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, plan_digest),
+  CONSTRAINT cve_review_plan_check CHECK ((
+    jsonb_typeof(plan_json) = 'object' AND octet_length(plan_json::text) <= 8192
+    AND plan_json ?& ARRAY['version', 'tenant_id', 'cve_pipeline_item_id', 'cve_id', 'cve_asset_match_id', 'waf_asset_id',
+      'component', 'component_version', 'declared_applicability', 'source', 'supporting_metadata',
+      'asset_definition_digest', 'item_definition_digest', 'match_definition_digest', 'evidence_classification',
+      'external_applicability_verified', 'exposure_claim_allowed', 'observed_enforcement', 'grants_execution', 'execution_available']
+    AND plan_json - ARRAY['version', 'tenant_id', 'cve_pipeline_item_id', 'cve_id', 'cve_asset_match_id', 'waf_asset_id',
+      'component', 'component_version', 'declared_applicability', 'source', 'supporting_metadata',
+      'asset_definition_digest', 'item_definition_digest', 'match_definition_digest', 'evidence_classification',
+      'external_applicability_verified', 'exposure_claim_allowed', 'observed_enforcement', 'grants_execution', 'execution_available'] = '{}'::jsonb
+    AND plan_json->>'version' = 'cve-component-declaration.v1'
+    AND jsonb_typeof(plan_json->'version') = 'string'
+    AND plan_json->'tenant_id' = to_jsonb(tenant_id)
+    AND plan_json->'cve_pipeline_item_id' = to_jsonb(cve_pipeline_item_id)
+    AND plan_json->'cve_id' = to_jsonb(cve_id)
+    AND plan_json->'cve_asset_match_id' = to_jsonb(cve_asset_match_id)
+    AND plan_json->'waf_asset_id' = to_jsonb(waf_asset_id)
+    AND jsonb_typeof(plan_json->'component') = 'string'
+    AND plan_json->>'component' ~ '^[A-Za-z0-9@][A-Za-z0-9@._+/-]{0,127}$'
+    AND jsonb_typeof(plan_json->'component_version') = 'string'
+    AND plan_json->>'component_version' ~ '^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$'
+    AND jsonb_typeof(plan_json->'declared_applicability') = 'string'
+    AND plan_json->>'declared_applicability' IN ('applicable', 'not_applicable', 'unknown')
+    AND jsonb_typeof(plan_json->'source') = 'string'
+    AND plan_json->>'source' IN ('manual', 'sbom', 'cmdb', 'vendor_advisory')
+    AND valid_cve_review_support(plan_json->'supporting_metadata')
+    AND jsonb_typeof(plan_json->'asset_definition_digest') = 'string'
+    AND plan_json->>'asset_definition_digest' ~ '^[a-f0-9]{64}$'
+    AND jsonb_typeof(plan_json->'item_definition_digest') = 'string'
+    AND plan_json->>'item_definition_digest' ~ '^[a-f0-9]{64}$'
+    AND jsonb_typeof(plan_json->'match_definition_digest') = 'string'
+    AND plan_json->>'match_definition_digest' ~ '^[a-f0-9]{64}$'
+    AND plan_json->'evidence_classification' = '"customer_declaration"'::jsonb
+    AND plan_json->'external_applicability_verified' = 'false'::jsonb
+    AND plan_json->'exposure_claim_allowed' = 'false'::jsonb
+    AND plan_json->'observed_enforcement' = 'false'::jsonb
+    AND plan_json->'grants_execution' = 'false'::jsonb
+    AND plan_json->'execution_available' = 'false'::jsonb
+  ) IS TRUE),
+  CONSTRAINT cve_review_revocation_check CHECK (
+    (revoked_at IS NULL AND revoked_by IS NULL) OR
+    (revoked_at IS NOT NULL AND isfinite(revoked_at) AND revoked_at >= approved_at AND revoked_by IS NOT NULL
+      AND revoked_by ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$')
+  )
+);
+ALTER TABLE cve_applicability_reviews ADD CONSTRAINT fk_cve_review_item_lineage
+  FOREIGN KEY (tenant_id, cve_pipeline_item_id, cve_id) REFERENCES cve_pipeline_items(tenant_id, id, cve_id);
+ALTER TABLE cve_applicability_reviews ADD CONSTRAINT fk_cve_review_match_lineage
+  FOREIGN KEY (tenant_id, cve_asset_match_id, cve_pipeline_item_id, waf_asset_id)
+    REFERENCES cve_asset_matches(tenant_id, id, cve_pipeline_item_id, waf_asset_id);
+ALTER TABLE cve_applicability_reviews ADD CONSTRAINT fk_cve_review_asset_tenant
+  FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets(tenant_id, id);
+CREATE INDEX idx_cve_review_match_history ON cve_applicability_reviews(tenant_id, cve_asset_match_id, approved_at DESC, id DESC);
+ALTER TABLE cve_applicability_reviews ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cve_applicability_reviews FORCE ROW LEVEL SECURITY;
+CREATE POLICY cve_applicability_reviews_tenant_isolation ON cve_applicability_reviews
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+CREATE FUNCTION guard_cve_applicability_review_history() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'CVE review history cannot be deleted'; END IF;
+  IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL OR
+    (to_jsonb(NEW) - ARRAY['revoked_at', 'revoked_by']) IS DISTINCT FROM
+    (to_jsonb(OLD) - ARRAY['revoked_at', 'revoked_by']) THEN
+    RAISE EXCEPTION 'CVE review scope is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER cve_applicability_reviews_history_guard BEFORE UPDATE OR DELETE ON cve_applicability_reviews
+  FOR EACH ROW EXECUTE FUNCTION guard_cve_applicability_review_history();
+
+-- Preserve existing history; new transitions serialize and remain distinct in millisecond bindings.
+CREATE OR REPLACE FUNCTION advance_target_verification_clock()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  previous_at timestamptz;
+  invalid_history boolean;
+BEGIN
+  IF NEW.tenant_id IS DISTINCT FROM current_setting('app.tenant_id', true)
+     OR NEW.transitioned_at IS NULL OR NOT isfinite(NEW.transitioned_at)
+     OR abs(extract(epoch FROM NEW.transitioned_at) * 1000) > 8640000000000000 THEN
+    RAISE EXCEPTION 'Invalid ownership transition scope or clock' USING ERRCODE = '23514';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext(NEW.tenant_id));
+  PERFORM 1 FROM targets
+    WHERE tenant_id = NEW.tenant_id AND id = NEW.target_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Ownership transition target is unavailable' USING ERRCODE = '23503';
+  END IF;
+  SELECT max(transitioned_at), bool_or(NOT isfinite(transitioned_at)
+      OR abs(extract(epoch FROM transitioned_at) * 1000) > 8640000000000000)
+    INTO previous_at, invalid_history FROM target_verifications
+    WHERE tenant_id = NEW.tenant_id AND target_id = NEW.target_id;
+  IF invalid_history THEN
+    RAISE EXCEPTION 'Existing ownership transition clock is invalid' USING ERRCODE = '23514';
+  END IF;
+  NEW.transitioned_at := date_trunc('milliseconds', NEW.transitioned_at);
+  IF previous_at IS NOT NULL THEN
+    NEW.transitioned_at := greatest(NEW.transitioned_at,
+      date_trunc('milliseconds', previous_at) + interval '1 millisecond');
+  END IF;
+  IF abs(extract(epoch FROM NEW.transitioned_at) * 1000) > 8640000000000000 THEN
+    RAISE EXCEPTION 'Ownership transition clock cannot advance' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER target_verification_advance_clock
+BEFORE INSERT ON target_verifications
+FOR EACH ROW EXECUTE FUNCTION advance_target_verification_clock();
+
+-- Neither strength nor row identity establishes chronology for equal-time legacy history.
+CREATE OR REPLACE VIEW target_verification_current
+WITH (security_invoker = true) AS
+  WITH ranked AS (
+    SELECT target_id, tenant_id, state, source_kind, source_ref, transitioned_at,
+           dense_rank() OVER (PARTITION BY tenant_id, target_id ORDER BY transitioned_at DESC) AS position,
+           bool_or(NOT isfinite(transitioned_at)
+      OR abs(extract(epoch FROM transitioned_at) * 1000) > 8640000000000000) OVER (PARTITION BY tenant_id, target_id) AS invalid_history
+    FROM target_verifications
+    WHERE tenant_id = current_setting('app.tenant_id', true)
+  ), latest AS (
+    SELECT target_id, tenant_id, transitioned_at,
+           min(state) AS state, min(source_kind) AS source_kind,
+           (jsonb_agg(source_ref)->0) AS source_ref,
+           count(DISTINCT jsonb_build_array(state, source_kind, source_ref)) > 1
+             OR bool_or(invalid_history) AS ambiguous
+    FROM ranked WHERE position = 1
+    GROUP BY target_id, tenant_id, transitioned_at
+  )
+  SELECT latest.target_id, latest.tenant_id,
+         CASE
+           WHEN latest.ambiguous OR NOT isfinite(latest.transitioned_at) THEN 'pending'
+           WHEN latest.state = 'provider_verified'
+            AND (
+              latest.source_kind <> 'provider_account'
+              OR feature.enabled IS NOT TRUE
+              OR NOT target_provider_verification_is_current(
+                latest.tenant_id, latest.target_id, latest.source_ref
+              )
+            ) THEN 'pending'
+           ELSE latest.state
+         END AS state,
+         CASE WHEN latest.ambiguous THEN 'ownership_ambiguous' ELSE latest.source_kind END AS source_kind,
+         CASE WHEN latest.ambiguous THEN '{}'::jsonb ELSE latest.source_ref END AS source_ref,
+         latest.transitioned_at
+  FROM latest
+  LEFT JOIN tenant_connector_features feature ON feature.tenant_id = latest.tenant_id;
+
+-- Internal at-most-once prerequisite only; does not enable reviewed reservation or execution.
+ALTER TABLE probe_jobs ADD CONSTRAINT probe_jobs_grant_job_run_key UNIQUE (tenant_id, id, test_run_id);
+ALTER TABLE reviewed_operations ADD CONSTRAINT reviewed_operations_grant_plan_key UNIQUE (tenant_id, id, target_id, plan_digest);
+
+CREATE FUNCTION reviewed_grant_utc_millis(value JSONB) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  RETURN (jsonb_typeof(value) = 'string' AND value #>> '{}' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
+    AND isfinite((value #>> '{}')::timestamptz)
+    AND to_char((value #>> '{}')::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = value #>> '{}') IS TRUE;
+EXCEPTION WHEN OTHERS THEN RETURN FALSE;
+END;
+$$;
+
+CREATE FUNCTION valid_reviewed_grant_json(e JSONB, r JSONB, p JSONB) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE a JSONB := e->'authority'; b JSONB := e->'budgets'; j JSONB; c JSONB; binding JSONB; k TEXT; dns JSONB;
+BEGIN
+  IF octet_length(e::text) > 262144 OR octet_length(r::text) > 16384 OR octet_length(p::text) > 262144 THEN RETURN FALSE; END IF;
+  FOR k IN SELECT unnest(ARRAY['version', 'purpose', 'content_canonicalization', 'algorithm', 'key_reference',
+    'public_key_fingerprint_sha256', 'tenant_id', 'original_job_payload', 'original_job_signature_sha256']) LOOP
+    IF jsonb_typeof(e->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  j := (e->>'original_job_payload')::jsonb; c := j->'constraints'; binding := c->'reviewed_operation_binding';
+  FOR k IN SELECT unnest(ARRAY['id', 'tenant_id', 'test_run_id', 'check_id', 'nonce_hash']) LOOP
+    IF jsonb_typeof(j->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  IF NOT ((jsonb_typeof(j->'target') = 'object' AND jsonb_typeof(j->'target'->'id') = 'string'
+    AND jsonb_typeof(j->'probe_profile') = 'object' AND jsonb_typeof(c) = 'object'
+    AND jsonb_typeof(e->'job') = 'object' AND jsonb_typeof(e->'worker') = 'object'
+    AND jsonb_typeof(e->'worker'->'id') = 'string'
+    AND jsonb_typeof(a) = 'object' AND a ?& ARRAY['issued_at', 'original_not_after', 'not_after', 'grant_issued_at']
+    AND a - ARRAY['issued_at', 'original_not_after', 'not_after', 'grant_issued_at'] = '{}'::jsonb
+    AND jsonb_typeof(b) = 'object' AND b ?& ARRAY['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'execution_attempts', 'timeout_ms']
+    AND b - ARRAY['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'execution_attempts', 'timeout_ms'] = '{}'::jsonb
+    AND jsonb_typeof(r) = 'object' AND r ?& ARRAY['version', 'id', 'worker_id', 'leased_at', 'reserved_at', 'not_after',
+      'max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'state', 'reviewed_operation']
+    AND r - ARRAY['version', 'id', 'worker_id', 'leased_at', 'reserved_at', 'not_after',
+      'max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'state', 'reviewed_operation'] = '{}'::jsonb
+    AND jsonb_typeof(r->'reviewed_operation') = 'object'
+    AND r->'reviewed_operation' ?& ARRAY['binding_version', 'review_id', 'plan_version', 'plan_digest']
+    AND (r->'reviewed_operation') - ARRAY['binding_version', 'review_id', 'plan_version', 'plan_digest'] = '{}'::jsonb
+    AND jsonb_typeof(binding->'authority') = 'object'
+    AND binding->'authority' ?& ARRAY['issued_at', 'original_not_after', 'not_after']
+    AND (binding->'authority') - ARRAY['issued_at', 'original_not_after', 'not_after'] = '{}'::jsonb
+  ) IS TRUE) THEN RETURN FALSE; END IF;
+  FOR k IN SELECT unnest(ARRAY['version', 'id', 'worker_id', 'state']) LOOP
+    IF jsonb_typeof(r->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['binding_version', 'review_id', 'plan_version', 'plan_digest']) LOOP
+    IF jsonb_typeof(r->'reviewed_operation'->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['version', 'review_id', 'plan_digest']) LOOP
+    IF jsonb_typeof(binding->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  IF NOT ((binding->>'version' = 'reviewed-operation-binding.v1'
+    AND jsonb_typeof(binding->'plan'->'version') = 'string'
+    AND binding->'plan'->>'version' = 'reviewed-inert-operation.v1'
+    AND r->'reviewed_operation' = jsonb_build_object('binding_version', binding->>'version',
+      'review_id', binding->>'review_id', 'plan_version', binding->'plan'->>'version', 'plan_digest', binding->>'plan_digest')) IS TRUE)
+    THEN RETURN FALSE; END IF;
+  FOR k IN SELECT unnest(ARRAY['issued_at', 'original_not_after', 'not_after', 'grant_issued_at']) LOOP
+    IF NOT reviewed_grant_utc_millis(a->k) THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['leased_at', 'reserved_at', 'not_after']) LOOP
+    IF NOT reviewed_grant_utc_millis(r->k) THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations', 'execution_attempts', 'timeout_ms']) LOOP
+    IF jsonb_typeof(b->k) IS DISTINCT FROM 'number' OR b->>k !~ '^(0|[1-9][0-9]*)$'
+      OR b->k IS DISTINCT FROM c->k THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['max_probe_requests', 'max_destination_resolver_attempts', 'max_total_operations']) LOOP
+    IF jsonb_typeof(r->k) IS DISTINCT FROM 'number' OR r->k IS DISTINCT FROM b->k THEN RETURN FALSE; END IF;
+  END LOOP;
+  dns := p->'dns_proof'->'source_ref'->'dns_target_binding';
+  FOR k IN SELECT unnest(ARRAY['version', 'tenant_id', 'target_group_id', 'target_id', 'definition_digest']) LOOP
+    IF jsonb_typeof(dns->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  FOR k IN SELECT unnest(ARRAY['id', 'tenant_id', 'target_id', 'state', 'source_kind', 'transitioned_at']) LOOP
+    IF jsonb_typeof(p->'dns_proof'->k) IS DISTINCT FROM 'string' THEN RETURN FALSE; END IF;
+  END LOOP;
+  RETURN ((b->>'max_probe_requests')::numeric BETWEEN 1 AND 4 AND (b->>'max_destination_resolver_attempts')::numeric IN (0, 2)
+    AND (b->>'max_total_operations')::numeric = (b->>'max_probe_requests')::numeric + (b->>'max_destination_resolver_attempts')::numeric
+    AND b->'execution_attempts' = '1'::jsonb AND (b->>'timeout_ms')::numeric BETWEEN 1 AND 5000
+    AND c->'max_requests' = b->'max_total_operations' AND c->'min_destination_resolver_attempts' = b->'max_destination_resolver_attempts'
+    AND c->>'authority_version' = 'probe-authority-v2'
+    AND a->'issued_at' = c->'issued_at' AND a->'not_after' = c->'not_after'
+    AND a - 'grant_issued_at' = binding->'authority'
+    AND reviewed_grant_utc_millis(binding->'plan'->'expires_at')
+    AND (a->>'original_not_after')::timestamptz > (a->>'issued_at')::timestamptz
+    AND (a->>'original_not_after')::timestamptz <= (a->>'issued_at')::timestamptz + interval '120 seconds'
+    AND (a->>'not_after')::timestamptz = LEAST((a->>'original_not_after')::timestamptz, (binding->'plan'->>'expires_at')::timestamptz)
+    AND (r->>'reserved_at')::timestamptz >= (r->>'leased_at')::timestamptz
+    AND (r->>'reserved_at')::timestamptz <= (a->>'grant_issued_at')::timestamptz
+    AND (r->>'reserved_at')::timestamptz < (a->>'not_after')::timestamptz
+    AND jsonb_typeof(p->'assurance_scope') = 'object' AND jsonb_typeof(p->'assurance_scope'->'version') = 'string'
+    AND jsonb_typeof(p->'assurance_scope'->'target') = 'object'
+    AND jsonb_typeof(p->'assurance_scope'->'target'->'id') = 'string'
+    AND jsonb_typeof(p->'assurance_scope'->'target'->'definition_digest') = 'string'
+    AND p->'assurance_scope'->'target'->>'definition_digest' ~ '^[a-f0-9]{64}$'
+    AND dns - ARRAY['version', 'tenant_id', 'target_group_id', 'target_id', 'definition_digest'] = '{}'::jsonb
+    AND dns->>'tenant_id' = e->>'tenant_id' AND dns->>'target_id' = e->'job'->>'target_id'
+    AND dns->>'definition_digest' = p->'assurance_scope'->'target'->>'definition_digest'
+    AND jsonb_typeof(p->'ownership_history_sha256') = 'string') IS TRUE;
+EXCEPTION WHEN OTHERS THEN RETURN FALSE;
+END;
+$$;
+
+CREATE TABLE reviewed_execution_grant_issuances (
+  id TEXT PRIMARY KEY CHECK (id ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  probe_job_id TEXT NOT NULL,
+  test_run_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  check_id TEXT NOT NULL,
+  reservation_id TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  plan_digest TEXT NOT NULL CHECK (plan_digest ~ '^[a-f0-9]{64}$'),
+  worker_id TEXT NOT NULL CHECK (worker_id ~ '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'),
+  leased_at TIMESTAMPTZ NOT NULL CHECK (isfinite(leased_at)),
+  original_job_payload TEXT NOT NULL CHECK (octet_length(original_job_payload) BETWEEN 1 AND 131072),
+  original_job_payload_sha256 TEXT NOT NULL,
+  original_job_signature TEXT NOT NULL CHECK (original_job_signature ~ '^[a-f0-9]{64}$'),
+  original_job_signature_sha256 TEXT NOT NULL,
+  reservation_json JSONB NOT NULL,
+  provenance_json JSONB NOT NULL,
+  envelope_json JSONB NOT NULL,
+  envelope_canonical TEXT NOT NULL CHECK (octet_length(envelope_canonical) BETWEEN 1 AND 262144),
+  envelope_sha256 TEXT NOT NULL,
+  completion_token_hash TEXT NOT NULL CHECK (completion_token_hash ~ '^[a-f0-9]{64}$'),
+  claimed_at TIMESTAMPTZ NOT NULL CHECK (isfinite(claimed_at)),
+  state TEXT NOT NULL DEFAULT 'signing_unknown' CHECK (state IN ('signing_unknown', 'issued', 'closed_unknown')),
+  finished_at TIMESTAMPTZ,
+  failure_code TEXT,
+  grant_signature TEXT,
+  UNIQUE (tenant_id, probe_job_id),
+  UNIQUE (tenant_id, test_run_id),
+  UNIQUE (tenant_id, reservation_id),
+  CONSTRAINT reviewed_grant_outcome_check CHECK ((
+    (state = 'signing_unknown' AND finished_at IS NULL AND failure_code IS NULL AND grant_signature IS NULL)
+    OR (state = 'issued' AND isfinite(finished_at) AND finished_at >= claimed_at
+      AND finished_at = date_trunc('milliseconds', finished_at)
+      AND finished_at < (envelope_json->'authority'->>'not_after')::timestamptz AND failure_code IS NULL
+      AND grant_signature ~ '^[A-Za-z0-9+/]{86}==$')
+    OR (state = 'closed_unknown' AND isfinite(finished_at) AND finished_at >= claimed_at AND grant_signature IS NULL
+      AND failure_code ~ '^[a-z0-9_]{1,128}$')
+  ) IS TRUE),
+  CONSTRAINT reviewed_grant_integrity_check CHECK ((
+    valid_reviewed_grant_json(envelope_json, reservation_json, provenance_json)
+    AND envelope_canonical::jsonb = envelope_json
+    AND envelope_sha256 = encode(sha256(convert_to(envelope_canonical, 'UTF8')), 'hex')
+    AND original_job_payload_sha256 = encode(sha256(convert_to(original_job_payload, 'UTF8')), 'hex')
+    AND original_job_signature_sha256 = encode(sha256(convert_to(original_job_signature, 'UTF8')), 'hex')
+    AND jsonb_typeof(envelope_json) = 'object'
+    AND envelope_json ?& ARRAY['version', 'purpose', 'content_canonicalization', 'algorithm', 'key_reference',
+      'public_key_fingerprint_sha256', 'tenant_id', 'job', 'original_job_payload', 'original_job_signature_sha256',
+      'worker', 'reservation', 'budgets', 'authority']
+    AND envelope_json - ARRAY['version', 'purpose', 'content_canonicalization', 'algorithm', 'key_reference',
+      'public_key_fingerprint_sha256', 'tenant_id', 'job', 'original_job_payload', 'original_job_signature_sha256',
+      'worker', 'reservation', 'budgets', 'authority'] = '{}'::jsonb
+    AND envelope_json->>'version' = 'reviewed-execution-grant-envelope.v1'
+    AND envelope_json->>'purpose' = 'astranull.reviewed-operation.execution-grant'
+    AND envelope_json->>'algorithm' = 'ed25519'
+    AND envelope_json->>'content_canonicalization' = 'json-key-sorted-v1'
+    AND envelope_json->>'key_reference' ~ '^key://[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$'
+    AND envelope_json->>'public_key_fingerprint_sha256' ~ '^[a-f0-9]{64}$'
+    AND envelope_json->>'tenant_id' = tenant_id
+    AND envelope_json->'job' = jsonb_build_object('id', probe_job_id, 'test_run_id', test_run_id, 'check_id', check_id,
+      'target_id', target_id, 'nonce_hash', original_job_payload::jsonb->>'nonce_hash')
+    AND envelope_json->>'original_job_payload' = original_job_payload
+    AND envelope_json->>'original_job_signature_sha256' = original_job_signature_sha256
+    AND envelope_json->'worker' = jsonb_build_object('id', worker_id, 'leased_at',
+      to_char(leased_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+    AND leased_at = date_trunc('milliseconds', leased_at) AND claimed_at = date_trunc('milliseconds', claimed_at)
+    AND envelope_json->'authority'->>'grant_issued_at' = to_char(claimed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    AND claimed_at >= leased_at
+    AND (envelope_json->'authority'->>'issued_at')::timestamptz <= leased_at
+    AND (envelope_json->'authority'->>'not_after')::timestamptz > claimed_at
+    AND (envelope_json->'authority'->>'not_after')::timestamptz <= (envelope_json->'authority'->>'original_not_after')::timestamptz
+    AND jsonb_typeof(original_job_payload::jsonb) = 'object'
+    AND original_job_payload::jsonb ?& ARRAY['check_id', 'constraints', 'id', 'nonce_hash', 'probe_profile', 'target', 'tenant_id', 'test_run_id']
+    AND original_job_payload::jsonb - ARRAY['check_id', 'constraints', 'id', 'nonce_hash', 'probe_profile', 'target', 'tenant_id', 'test_run_id'] = '{}'::jsonb
+    AND original_job_payload::jsonb->>'id' = probe_job_id AND original_job_payload::jsonb->>'tenant_id' = tenant_id
+    AND original_job_payload::jsonb->>'test_run_id' = test_run_id AND original_job_payload::jsonb->>'check_id' = check_id
+    AND original_job_payload::jsonb->'target'->>'id' = target_id
+    AND original_job_payload::jsonb->>'nonce_hash' ~ '^[a-f0-9]{64}$'
+    AND original_job_payload::jsonb->'constraints'->'reviewed_operation_binding'->>'review_id' = review_id
+    AND original_job_payload::jsonb->'constraints'->'reviewed_operation_binding'->>'plan_digest' = plan_digest
+    AND envelope_json->'authority'->>'issued_at' = original_job_payload::jsonb->'constraints'->>'issued_at'
+    AND envelope_json->'authority'->>'not_after' = original_job_payload::jsonb->'constraints'->>'not_after'
+    AND jsonb_typeof(reservation_json) = 'object' AND octet_length(reservation_json::text) <= 16384
+    AND reservation_json->>'version' = 'execution-reservation.v1' AND reservation_json->>'id' = reservation_id
+    AND reservation_json->>'state' = 'reserved_unknown' AND reservation_json->>'worker_id' = worker_id
+    AND reservation_json->>'leased_at' = envelope_json->'worker'->>'leased_at'
+    AND reservation_json->>'not_after' = envelope_json->'authority'->>'not_after'
+    AND reservation_json->'reviewed_operation'->>'review_id' = review_id
+    AND reservation_json->'reviewed_operation'->>'plan_digest' = plan_digest
+    AND envelope_json->'reservation' = reservation_json
+    AND envelope_json->'budgets'->'execution_attempts' = '1'::jsonb
+    AND envelope_json->'budgets'->'max_probe_requests' = reservation_json->'max_probe_requests'
+    AND envelope_json->'budgets'->'max_destination_resolver_attempts' = reservation_json->'max_destination_resolver_attempts'
+    AND envelope_json->'budgets'->'max_total_operations' = reservation_json->'max_total_operations'
+    AND jsonb_typeof(provenance_json) = 'object' AND octet_length(provenance_json::text) <= 262144
+    AND provenance_json ?& ARRAY['assurance_scope', 'dns_proof', 'ownership_history_sha256']
+    AND provenance_json - ARRAY['assurance_scope', 'dns_proof', 'ownership_history_sha256'] = '{}'::jsonb
+    AND provenance_json->'assurance_scope'->>'version' = 'assurance-scope.v3'
+    AND provenance_json->'assurance_scope'->'target'->>'id' = target_id
+    AND provenance_json->'dns_proof'->>'tenant_id' = tenant_id
+    AND provenance_json->'dns_proof'->>'target_id' = target_id
+    AND provenance_json->'dns_proof'->>'state' = 'dns_verified'
+    AND provenance_json->'dns_proof'->>'source_kind' = 'dns_txt'
+    AND provenance_json->'dns_proof'->'source_ref'->'dns_target_binding'->>'version' = 'dns-ownership-target.v2'
+    AND provenance_json->>'ownership_history_sha256' ~ '^[a-f0-9]{64}$'
+  ) IS TRUE)
+);
+ALTER TABLE reviewed_execution_grant_issuances ADD CONSTRAINT fk_reviewed_grant_job_run_tenant
+  FOREIGN KEY (tenant_id, probe_job_id, test_run_id) REFERENCES probe_jobs(tenant_id, id, test_run_id);
+ALTER TABLE reviewed_execution_grant_issuances ADD CONSTRAINT fk_reviewed_grant_run_tenant
+  FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs(tenant_id, id);
+ALTER TABLE reviewed_execution_grant_issuances ADD CONSTRAINT fk_reviewed_grant_review_plan_tenant
+  FOREIGN KEY (tenant_id, review_id, target_id, plan_digest) REFERENCES reviewed_operations(tenant_id, id, target_id, plan_digest);
+ALTER TABLE reviewed_execution_grant_issuances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviewed_execution_grant_issuances FORCE ROW LEVEL SECURITY;
+CREATE POLICY reviewed_execution_grant_issuances_tenant_isolation ON reviewed_execution_grant_issuances
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+CREATE FUNCTION guard_reviewed_execution_grant_history() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state <> 'signing_unknown' THEN RAISE EXCEPTION 'reviewed grant must start consumed unknown'; END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'reviewed grant history cannot be deleted'; END IF;
+  IF OLD.state <> 'signing_unknown' OR NEW.state NOT IN ('issued', 'closed_unknown') OR
+    (to_jsonb(NEW) - ARRAY['state', 'finished_at', 'failure_code', 'grant_signature']) IS DISTINCT FROM
+    (to_jsonb(OLD) - ARRAY['state', 'finished_at', 'failure_code', 'grant_signature']) THEN
+    RAISE EXCEPTION 'reviewed grant claim and terminal history are immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER reviewed_execution_grant_issuances_history_guard BEFORE INSERT OR UPDATE OR DELETE ON reviewed_execution_grant_issuances
+  FOR EACH ROW EXECUTE FUNCTION guard_reviewed_execution_grant_history();

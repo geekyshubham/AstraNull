@@ -10,6 +10,7 @@ import {
   MAX_WAF_EVASION_MARKER_REQUESTS,
   buildEvasionMarkerProfile,
 } from '../../lib/vectorProbes/evasionProbes.mjs';
+import { SUPPORTED_EVASION_TRANSFORMS } from '../../lib/probeEvidenceTiers.mjs';
 
 const SAFE_STOP_CONDITIONS = Object.freeze([
   'max_events_reached',
@@ -114,20 +115,29 @@ function evasionCheckId(transform) {
 }
 
 function buildEvasionCheck({ transform, marker_class, technique }) {
-  const profile = { ...buildEvasionMarkerProfile({ transform, marker_class }) };
+  const supported = SUPPORTED_EVASION_TRANSFORMS.includes(transform);
+  const profile = { ...buildEvasionMarkerProfile({ transform, marker_class }), delivery_supported: supported,
+    scenario_version: supported ? 'marker-comparison-v4' : 'probe-observation-v3',
+    ...(supported ? { requires_complete_comparison: true } : { observation_only: true, readiness_conclusion: false }) };
   return {
+    mechanism_supported: supported,
+    coverage_unit: 'check_definition_not_independent_mechanism',
     check_id: evasionCheckId(transform),
     version: '1.0.0',
     name: `WAF Evasion — ${humanize(transform)} (Safe)`,
     vector_family: 'waf',
     safety_class: 'safe',
-    description: `Bounded probe: wraps the inert ${marker_class} marker in a ${technique} transform and checks whether the WAF still blocks it.`,
+    description: supported
+      ? `Bounded inert-marker comparison for ${technique}; only complete permitted/reference/transformed legs can establish marker rule action.`
+      : `${technique} delivery is unsupported by the safe transport. No request or protection conclusion is produced.`,
     supported_targets: ['url', 'fqdn'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_marker_probe'],
     evidence_required: ['probe_result'],
     stop_conditions: [...SAFE_STOP_CONDITIONS],
     safety_constraints: { max_events: MAX_WAF_EVASION_MARKER_REQUESTS, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
-    verdict_logic: `Baseline inert marker should be blocked; if the ${technique} variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.`,
+    verdict_logic: supported
+      ? `Healthy permitted baseline and every planned ${technique} leg must be conclusive. A specifically denied reference plus allowed transformed marker indicates a scoped marker comparison gap, not exploit or capacity proof.`
+      : 'Unsupported delivery; not-run/inconclusive, no readiness credit.',
     default_expected_behavior: 'must_block_before_origin',
     prerequisites: [],
     remediation_template: `Enable normalization/canonicalization for ${technique} on the edge WAF so inspection occurs after decoding.`,
@@ -181,13 +191,13 @@ export const PROPOSED_CHECKS = Object.freeze([
     name: 'WAF Inspection-Limit / Fail-Open (Safe)',
     vector_family: 'waf',
     safety_class: 'safe',
-    description: 'Wires the existing wave-3 waf_inspection_limit_probe to a check: places the inert marker past body/field/parser inspection limits and checks whether it is still blocked.',
+    description: 'Body/field/parser inspection-limit delivery is unsupported without an approved business-safe endpoint. No POST or substitute GET is executed.',
     supported_targets: ['url', 'fqdn'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_marker_probe'],
     evidence_required: ['probe_result'],
     stop_conditions: [...SAFE_STOP_CONDITIONS],
     safety_constraints: { max_events: 6, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
-    verdict_logic: 'If the marker placed past an inspection limit passes while an in-limit marker is blocked, an inspection-limit / fail-open gap is suspected.',
+    verdict_logic: 'Not-run/inconclusive; the unsupported mechanism cannot establish inspection-limit enforcement or exposure.',
     default_expected_behavior: 'must_block_before_origin',
     prerequisites: [],
     remediation_template: 'Raise or enforce WAF body/field/parser inspection limits and fail-closed on inspection budget exhaustion.',
@@ -200,7 +210,11 @@ export const PROPOSED_CHECKS = Object.freeze([
       scenario_family: 'marker',
       marker_type: 'query',
       expected_action: 'block',
-      http_method: 'POST',
+      http_method: 'HEAD',
+      delivery_supported: false,
+      observation_only: true,
+      readiness_conclusion: false,
+      scenario_version: 'probe-observation-v3',
       nonce_hash_only: true,
       collect: ['status_code', 'waf_product_hint', 'evasion_bypass_suspected'],
     },
@@ -213,12 +227,16 @@ export const PROPOSED_REGISTRY_MAPPING = Object.freeze([
   ...EVASION_E3_TECHNIQUES.map(({ eva, transform }) => ({
     registry_id: eva,
     add_check_ids: [evasionCheckId(transform)],
-    target_tier: 'E3',
+    target_tier: SUPPORTED_EVASION_TRANSFORMS.includes(transform) ? 'E3' : 'E2',
+    mechanism_supported: SUPPORTED_EVASION_TRANSFORMS.includes(transform),
+    coverage_unit: 'shared_executor_profile_variant',
   })),
   ...INSPECTION_LIMIT_EVAS.map((eva) => ({
     registry_id: eva,
     add_check_ids: [INSPECTION_LIMIT_CHECK_ID],
-    target_tier: 'E3',
+    target_tier: 'E2',
+    mechanism_supported: false,
+    coverage_unit: 'unsupported_delivery',
   })),
   ...E4_GOVERNED.map(({ eva, family }) => ({
     registry_id: eva,
@@ -248,8 +266,9 @@ export const PROPOSED_TIER_RECLASSIFICATION = Object.freeze([
 
 export const EVASION_COVERAGE_SUMMARY = Object.freeze({
   total: EVASION_E3_TECHNIQUES.length + INSPECTION_LIMIT_EVAS.length + E4_GOVERNED.length + E1_POSTURE.length,
-  e3_new_probe: EVASION_E3_TECHNIQUES.length,
-  e3_inspection_limit: INSPECTION_LIMIT_EVAS.length,
+  e3_new_probe: EVASION_E3_TECHNIQUES.filter(({ transform }) => SUPPORTED_EVASION_TRANSFORMS.includes(transform)).length,
+  e3_inspection_limit: 0,
+  e2_unsupported_delivery: EVASION_E3_TECHNIQUES.filter(({ transform }) => !SUPPORTED_EVASION_TRANSFORMS.includes(transform)).length + INSPECTION_LIMIT_EVAS.length,
   e4_governed: E4_GOVERNED.length,
   e1_posture: E1_POSTURE.length,
 });

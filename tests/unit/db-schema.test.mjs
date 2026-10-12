@@ -506,6 +506,36 @@ describe('db schema contract comment handling', () => {
       .map((n) => ({ name: n, sql: readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8') })),
   });
 
+  it('requires the additive CVE declaration review migration and exact schema parity', () => {
+    const { schemaSql, migrationSqls } = readReal();
+    const migration = migrationSqls.find(({ name }) => name === '0076_cve_applicability_reviews.sql');
+    assert.ok(migration);
+    assert.equal(schemaSql.includes(migration.sql.trim()), true, 'fresh schema must contain the identical review DDL');
+    const result = validateDbSchema({ schemaSql,
+      migrationSqls: migrationSqls.filter(({ name }) => name !== migration.name) });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => error.includes('missing required file 0076_cve_applicability_reviews.sql')));
+  });
+
+  for (const [name, pattern, replacement] of [
+    ['forced tenant isolation', /ALTER TABLE cve_applicability_reviews FORCE ROW LEVEL SECURITY;/, ''],
+    ['human review roles', /approved_role TEXT NOT NULL CHECK \(approved_role IN \('owner', 'admin'\)\)(?=[\s\S]*?CONSTRAINT cve_review_plan_check)/, 'approved_role TEXT NOT NULL'],
+    ['no-execution constraint', /plan_json->'grants_execution' = 'false'::jsonb/, "plan_json->'grants_execution' = 'true'::jsonb"],
+    ['exact item lineage', /FOREIGN KEY \(tenant_id, cve_pipeline_item_id, cve_id\) REFERENCES cve_pipeline_items\(tenant_id, id, cve_id\)/, 'FOREIGN KEY (tenant_id, cve_pipeline_item_id) REFERENCES cve_pipeline_items(tenant_id, id)'],
+    ['exact match lineage', /FOREIGN KEY \(tenant_id, cve_asset_match_id, cve_pipeline_item_id, waf_asset_id\)/, 'FOREIGN KEY (tenant_id, cve_asset_match_id)'],
+    ['bounded typed support', /CREATE FUNCTION valid_cve_review_support\(value JSONB\)/, 'CREATE FUNCTION renamed_review_support(value JSONB)'],
+    ['immutable history', /CREATE TRIGGER cve_applicability_reviews_history_guard BEFORE UPDATE OR DELETE ON cve_applicability_reviews/, '-- CREATE TRIGGER cve_applicability_reviews_history_guard BEFORE UPDATE OR DELETE ON cve_applicability_reviews\nCREATE TRIGGER unrelated_guard BEFORE UPDATE ON cve_applicability_reviews'],
+  ]) it(`rejects weakened CVE review ${name}`, () => {
+    const { schemaSql, migrationSqls } = readReal();
+    // Limit mutations to the new declaration section, never a similar legacy constraint.
+    const marker = '-- Passive authenticated declarations only.';
+    const start = schemaSql.indexOf(marker);
+    assert.ok(start >= 0);
+    const section = schemaSql.slice(start), weakened = section.replace(pattern, replacement);
+    assert.notEqual(weakened, section, 'mutation must change actual review DDL');
+    assert.equal(validateDbSchema({ schemaSql: schemaSql.slice(0, start) + weakened, migrationSqls }).ok, false);
+  });
+
   it('strips line comments without disturbing DDL on the same line', () => {
     assert.equal(stripSqlComments('CREATE TABLE x (); -- trailing note').trim(), 'CREATE TABLE x ();');
     assert.equal(stripSqlComments('-- uniq_example\nCREATE INDEX real_one ON x(y);').trim(), 'CREATE INDEX real_one ON x(y);');

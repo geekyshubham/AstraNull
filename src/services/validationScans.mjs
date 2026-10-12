@@ -1033,12 +1033,15 @@ export function getValidationScanActivity(ctx, id, options = {}) {
     after: options.after ?? null,
     limit: options.limit,
   });
+  if (page.error) return page;
   return {
     scan_id: scan.id,
     status: scan.status,
     items: page.items,
     count: page.items.length,
     cursor: page.cursor,
+    pagination: page.pagination,
+    capture: { status: 'unknown', input_complete: true, perspective: 'recorded_metadata_only' },
   };
 }
 

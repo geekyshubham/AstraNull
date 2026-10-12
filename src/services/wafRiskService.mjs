@@ -1,4 +1,5 @@
-export const WAF_RISK_METHOD = 'waf_risk_v1';
+import { assessPostureAssurance, verifiedOriginBypass } from '../lib/wafPostureAssurance.mjs';
+export const WAF_RISK_METHOD = 'waf_risk_v2';
 
 export const DEPLOYMENT_TIERS = Object.freeze(['tier_1', 'tier_2', 'tier_3', 'tier_4']);
 
@@ -46,6 +47,7 @@ const OWASP_EXPOSURE_BY_KIND = Object.freeze({
 const PROTECTION_STATE_WEIGHTS = Object.freeze({
   unprotected: 28,
   underprotected: 18,
+  edge_protected: 8,
   unknown: 12,
   protected: 2,
   excluded: 0,
@@ -150,40 +152,29 @@ function vulnerabilityContribution(matches = []) {
   return contribution;
 }
 
-function originBypassContribution(snapshot = {}, summary = {}) {
-  const reasonCodes = new Set(snapshot.reason_codes ?? []);
-  if (summary.origin_bypass_confirmed === true || reasonCodes.has('origin_bypass_confirmed')) {
+function originBypassContribution(snapshot = {}, summary = {}, asOf = new Date()) {
+  if (verifiedOriginBypass(snapshot, summary, { asOf })) {
     return 25;
   }
   return 0;
 }
 
-function deriveConfidence({ snapshot = {}, asset = {}, factors = [] }) {
-  const sourceMix = snapshot.source_mix_json ?? snapshot.source_mix ?? {};
-  let confidence = Number(snapshot.confidence ?? 0);
-  if (!confidence) {
-    const signals = [
-      sourceMix.external,
-      sourceMix.connector,
-      sourceMix.validation,
-      sourceMix.cve,
-    ].filter(Boolean).length;
-    confidence = 0.45 + signals * 0.12;
-  }
-  if (factors.some((f) => f.factor === 'confidence_review')) {
-    confidence = Math.min(confidence, 0.69);
-  }
-  return Math.max(0, Math.min(1, Math.round(confidence * 100) / 100));
+function deriveConfidence({ snapshot = {} }) {
+  const confidence = snapshot.confidence;
+  if (confidence == null || confidence === '' || !Number.isFinite(Number(confidence))) return null;
+  return Math.max(0, Math.min(1, Math.round(Number(confidence) * 100) / 100));
 }
 
 export function deriveRecommendedAction({ factors = [], snapshot = {}, priorityBand = 'tier_3' } = {}) {
   const reasonCodes = new Set(snapshot.reason_codes ?? []);
   const factorNames = new Set(factors.map((f) => f.factor));
-  if (factorNames.has('origin_bypass') || reasonCodes.has('origin_bypass_confirmed')) {
+  if (factorNames.has('origin_bypass')) {
     return 'close_origin_bypass';
   }
   if (reasonCodes.has('policy_exception_active')) return 'approve_exception';
   if (snapshot.status === 'excluded') return 'approve_exception';
+  if (snapshot.status === 'unknown') return 'review_evidence_and_retest';
+  if (snapshot.status === 'edge_protected') return 'review_declared_origin_scope';
   if (snapshot.status === 'unprotected') return 'deploy_waf_blocking';
   if (
     reasonCodes.has('marker_rule_not_blocking')
@@ -214,13 +205,12 @@ export function assignPriorityBand({
     const normalized = normalizeString(tag).replace(/\s+/g, '_').replace(/-/g, '_');
     return REGULATORY_TAGS.has(normalized);
   });
-  const originBypass = factors.some((f) => f.factor === 'origin_bypass')
-    || (snapshot.reason_codes ?? []).includes('origin_bypass_confirmed');
+  const originBypass = factors.some((f) => f.factor === 'origin_bypass');
   const validationFailed = factors.some(
     (f) => f.factor === 'validation_result' && Number(f.contribution) >= 12,
   );
 
-  if (status === 'excluded' || (status === 'unknown' && !CRITICAL_BUSINESS_VALUES.has(criticality))) {
+  if (status === 'excluded') {
     return 'tier_4';
   }
   if (
@@ -246,11 +236,18 @@ export function assignPriorityBand({
  */
 export function computeAssetRiskAssessment(input = {}) {
   const asset = input.asset ?? {};
-  const snapshot = input.snapshot ?? { status: asset.status ?? 'unknown' };
-  const summary = input.validationSummary ?? {};
+  const historicalSnapshot = input.snapshot ?? null;
   const targetGroup = input.targetGroup ?? null;
   const cveMatches = Array.isArray(input.cveMatches) ? input.cveMatches : [];
   const computedAt = input.computedAt ?? new Date().toISOString();
+  const assurance = assessPostureAssurance({ asset, snapshot: historicalSnapshot, asOf: computedAt });
+  const snapshot = { ...(historicalSnapshot ?? {}), status: assurance.status };
+  const rawSummary = input.validationSummary ?? {};
+  const summaryObserved = Date.parse(rawSummary.observed_at ?? '');
+  const summaryCurrent = rawSummary.complete === true && rawSummary.producer_kind === 'signed_probe' && Array.isArray(rawSummary.evidence_ids) && rawSummary.evidence_ids.length && Number.isFinite(summaryObserved) && summaryObserved <= Date.parse(computedAt) && Date.parse(computedAt) - summaryObserved <= 7 * 86400000;
+  const events = input.evidence ?? rawSummary.result_events ?? [];
+  const summaryVerified = summaryCurrent && rawSummary.evidence_ids.every((id) => events.some((event) => event.id === id && event.tenant_id === asset.tenant_id && event.signal_type === 'probe_result' && event.producer_kind === 'signed_probe' && event.test_run_id === rawSummary.test_run_id && event.metadata?.waf_asset_id === asset.id && event.metadata?.complete === true && event.metadata?.validation_passed === rawSummary.validation_passed && event.metadata?.validation_failed === rawSummary.validation_failed && Date.parse(event.timestamp) === summaryObserved && [event.created_at, event.ingested_at].filter((time) => time != null).every((time) => Date.parse(time) <= Date.parse(computedAt))));
+  const summary = summaryVerified ? rawSummary : {};
 
   const factors = [];
   const status = snapshot.status ?? 'unknown';
@@ -270,7 +267,7 @@ export function computeAssetRiskAssessment(input = {}) {
     validationWeight,
   );
 
-  const bypassWeight = originBypassContribution(snapshot, summary);
+  const bypassWeight = originBypassContribution(snapshot, summary, computedAt);
   pushFactor(factors, 'origin_bypass', bypassWeight ? 'confirmed' : 'none', bypassWeight);
 
   const businessWeight = businessCriticalityContribution(asset.business_criticality);
@@ -304,7 +301,7 @@ export function computeAssetRiskAssessment(input = {}) {
   }
 
   const confidence = deriveConfidence({ snapshot, asset, factors });
-  if (confidence < 0.7) {
+  if (confidence == null || confidence < 0.7) {
     pushFactor(factors, 'confidence_review', 'low_confidence', 0);
   }
 
@@ -322,6 +319,10 @@ export function computeAssetRiskAssessment(input = {}) {
     recommended_action: recommendedAction,
     computed_at: computedAt,
     method: WAF_RISK_METHOD,
+    score_role: 'review_prioritization_not_protection_assurance',
+    current_assurance: assurance,
+    edge_only: assurance.edge_only,
+    origin_lockdown: 'not_established',
   };
 }
 

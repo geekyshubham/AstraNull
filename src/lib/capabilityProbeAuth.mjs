@@ -17,6 +17,9 @@ export function hasInjectableIoDeps(deps = {}) {
 
 /** Fail closed unless the caller is a signed worker, a signed job, or an injectable test consumer. */
 export function isLiveCapabilityProbeAuthorized(job, deps = {}) {
+  // Reviewed jobs have a distinct dual-crypto + durable claim entry. An ordinary
+  // injectable transport or cached signedJobVerified flag cannot dispatch one.
+  if (Object.hasOwn(job?.constraints ?? {}, 'reviewed_operation_binding')) return false;
   if (deps.signedJobVerified === true) return true;
   if (hasInjectableIoDeps(deps)) return true;
   if (deps.probeWorkerSecret && verifyProbeJobSignature(job, deps.probeWorkerSecret)) return true;

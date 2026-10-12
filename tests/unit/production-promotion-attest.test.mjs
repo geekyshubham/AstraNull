@@ -1,138 +1,153 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { parseArgs, runProductionPromotionAttest } from '../../scripts/production-promotion-attest.mjs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+import { parseArgs, runProductionPromotionAttest, validatePromotionCandidateInputs } from '../../scripts/production-promotion-attest.mjs';
 
-describe('production promotion attest', () => {
-  it('parseArgs reads profile and base-url flags', () => {
-    const opts = parseArgs(['--profile', 'hosted', '--base-url', 'https://staging.example.test']);
-    assert.equal(opts.profile, 'hosted');
-    assert.equal(opts.baseUrl, 'https://staging.example.test');
-    assert.equal(opts.help, false);
+const dirs = [];
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+const binding = { candidate_sha: 'a'.repeat(40), image_digest: `sha256:${'b'.repeat(64)}`, schema_digest: 'c'.repeat(64) };
+function fixture() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'astranull-promotion-contract-'));
+  dirs.push(dir);
+  const bundle = { release_id: 'rel_candidate_test', environment: 'staging', candidate_binding: { ...binding },
+    records: [{ release_id: 'rel_candidate_test', kind: 'test-only-record', status: 'accepted', evidence: { environment: 'staging' } }] };
+  const manifest = { release_id: bundle.release_id, candidate_binding: { ...binding } };
+  const opts = { releaseId: bundle.release_id, profile: 'safe-validation-ga', candidateSha: binding.candidate_sha,
+    imageDigest: binding.image_digest, schemaDigest: binding.schema_digest,
+    evidence: path.join(dir, 'records.json'), manifest: path.join(dir, 'manifest.json') };
+  function save() {
+    for (const [key, value] of [['evidence', bundle], ['manifest', manifest]]) {
+      const bytes = JSON.stringify(value);
+      writeFileSync(opts[key], bytes);
+      opts[`${key}Digest`] = createHash('sha256').update(bytes).digest('hex');
+    }
+  }
+  save();
+  return { opts, bundle, manifest, save };
+}
+const completeReport = (opts) => ({ release_id: opts.releaseId, profile: opts.profile,
+  production_ready: true, customer_production_ready: true, external_verification: { complete: true } });
+
+describe('read-only production promotion prerequisite verification', () => {
+  it('parses explicit candidate flags and rejects unknown/missing arguments', () => {
+    const opts = parseArgs(['--release-id', 'rel_current', '--profile', 'safe-validation-ga', '--candidate-sha', binding.candidate_sha,
+      '--base-url', 'https://unused.example.test']);
+    assert.equal(opts.releaseId, 'rel_current');
+    assert.equal(opts.profile, 'safe-validation-ga');
+    assert.equal(opts.baseUrl, 'https://unused.example.test');
+    assert.equal(parseArgs(['-h']).help, true);
+    assert.throws(() => parseArgs(['--release-id']), /Missing value/);
+    assert.throws(() => parseArgs(['--unknown']), /Unknown argument/);
+    assert.throws(() => parseArgs(['--release-id', 'a', '--release-id', 'b']), /Duplicate argument/);
+    assert.throws(() => parseArgs(['--profile', 'full', '--profile', 'safe-validation-ga']), /Duplicate argument/);
   });
 
-  it('requires base URL before running attest orchestration', async () => {
-    await assert.rejects(
-      () => runProductionPromotionAttest({ baseUrl: '' }),
-      /ASTRANULL_HOSTED_STAGING_BASE_URL or --base-url is required/,
-    );
+  it('requires pinned existing inputs before performing any orchestration', async () => {
+    let calls = 0;
+    await assert.rejects(() => runProductionPromotionAttest({}, { shell: () => calls++ }), /path and exact SHA-256/);
+    assert.equal(calls, 0);
   });
 
-  it('parseArgs sets help when -h is passed', () => {
-    const opts = parseArgs(['-h']);
-    assert.equal(opts.help, true);
+  it('never chooses a historical or environment-provided release', () => {
+    const { opts, bundle, manifest } = fixture();
+    assert.throws(() => validatePromotionCandidateInputs({ ...opts, releaseId: undefined }, bundle, manifest), /explicit valid --release-id/);
+    assert.throws(() => validatePromotionCandidateInputs({ ...opts, profile: 'hosted' }, bundle, manifest), /Unsupported promotion profile/);
   });
 
-  it('runs unit tests before setting hosted staging env', async () => {
-    const commands = [];
-    const envSnapshots = [];
-    const originalHosted = process.env.ASTRANULL_HOSTED_STAGING_BASE_URL;
-    delete process.env.ASTRANULL_HOSTED_STAGING_BASE_URL;
+  for (const input of ['bundle', 'manifest']) {
+    it(`rejects mismatched release and candidate in ${input}`, async () => {
+      const world = fixture();
+      world[input].release_id = 'rel_old';
+      world.save();
+      await assert.rejects(() => runProductionPromotionAttest(world.opts), /release identity mismatch/);
+      world[input].release_id = world.opts.releaseId;
+      world[input].candidate_binding.image_digest = `sha256:${'d'.repeat(64)}`;
+      world.save();
+      await assert.rejects(() => runProductionPromotionAttest(world.opts), /candidate binding mismatch/);
+    });
+  }
 
-    const shell = (command) => {
-      commands.push(command);
-      envSnapshots.push(process.env.ASTRANULL_HOSTED_STAGING_BASE_URL);
-      if (command.startsWith('node scripts/run-live-oidc-staging-login.mjs')) {
-        throw new Error('stop-after-hosted-env-set');
-      }
-    };
-
-    await assert.rejects(
-      () => runProductionPromotionAttest({ baseUrl: 'https://staging.example.test' }, { shell }),
-      /stop-after-hosted-env-set/,
-    );
-
-    const npmTestIndex = commands.indexOf('npm test');
-    const oidcIndex = commands.findIndex((command) => command.startsWith('node scripts/run-live-oidc-staging-login.mjs'));
-    assert.ok(npmTestIndex >= 0);
-    assert.ok(oidcIndex > npmTestIndex);
-    assert.equal(envSnapshots[npmTestIndex], undefined);
-    assert.equal(envSnapshots[oidcIndex], 'https://staging.example.test');
-
-    if (originalHosted === undefined) delete process.env.ASTRANULL_HOSTED_STAGING_BASE_URL;
-    else process.env.ASTRANULL_HOSTED_STAGING_BASE_URL = originalHosted;
+  it('rejects oversized and non-regular inputs before parsing or aggregation', async () => {
+    const { opts } = fixture();
+    let calls = 0;
+    const deps = { aggregate: () => calls++ };
+    truncateSync(opts.evidence, 16 * 1024 * 1024 + 1);
+    await assert.rejects(() => runProductionPromotionAttest(opts, deps), /exceeds the 16 MiB input limit/);
+    await assert.rejects(() => runProductionPromotionAttest({ ...opts, evidence: path.dirname(opts.evidence) }, deps), /must be a regular file/);
+    assert.equal(calls, 0);
   });
 
-  it('reruns gap audit after gate closeouts', async () => {
-    const commands = [];
-    const shell = (command) => {
-      commands.push(command);
-      if (command.startsWith('node scripts/production-readiness-gap-audit.mjs')) {
-        throw new Error('gap-audit-rerun-ok');
-      }
-    };
-
-    await assert.rejects(
-      () => runProductionPromotionAttest({ baseUrl: 'https://staging.example.test' }, { shell }),
-      /gap-audit-rerun-ok/,
-    );
-
-    const closeoutIndex = commands.indexOf('node scripts/apply-release-gate-closeouts.mjs');
-    const gapAuditIndex = commands.indexOf(
-      'node scripts/production-readiness-gap-audit.mjs --evidence output/release-evidence/records.json',
-    );
-    assert.ok(closeoutIndex >= 0);
-    assert.ok(gapAuditIndex > closeoutIndex);
+  it('rejects changed exact bytes before evaluating metadata', async () => {
+    const { opts } = fixture();
+    writeFileSync(opts.evidence, '{}');
+    let calls = 0;
+    await assert.rejects(() => runProductionPromotionAttest(opts, { aggregate: () => calls++ }), /digest mismatch/);
+    assert.equal(calls, 0);
   });
 
-  it('runs external verification check after gap audit without failing promotion', async () => {
-    const commands = [];
-    const shell = (command) => {
-      commands.push(command);
-    };
+  for (const mutation of [
+    (w) => { w.bundle.rehearsal_only = true; },
+    (w) => { w.manifest.rehearsal_only = true; },
+    (w) => { w.bundle.records[0].release_id = 'rel_old'; },
+    (w) => { w.bundle.records[0].status = 'rejected'; },
+    (w) => { w.bundle.records[0].evidence.rehearsal_only = true; },
+    (w) => { w.bundle.records[0].evidence.environment = 'local-staging'; },
+    (w) => { w.bundle.environment = 'dev'; },
+    (w) => { w.bundle.records = []; },
+  ]) {
+    it('rejects rehearsal, mixed, missing, or non-operational records', async () => {
+      const world = fixture();
+      mutation(world);
+      world.save();
+      await assert.rejects(() => runProductionPromotionAttest(world.opts));
+    });
+  }
 
-    const report = await runProductionPromotionAttest(
-      { baseUrl: 'https://staging.example.test' },
-      {
-        shell,
-        readGapAuditReport: () => ({
-          production_ready: true,
-          customer_production_ready: false,
-          production_readiness_scorecard: { overall_percent: 95 },
-        }),
-      },
-    );
+  for (const mutation of [
+    (r) => { r.production_ready = false; },
+    (r) => { r.customer_production_ready = false; },
+    (r) => { r.external_verification.complete = false; },
+    (r) => { delete r.external_verification; },
+    (r) => { r.release_id = 'rel_old'; },
+    (r) => { r.profile = 'full'; },
+  ]) {
+    it('propagates incomplete or wrongly scoped readiness rather than warning and succeeding', async () => {
+      const { opts } = fixture();
+      const report = completeReport(opts);
+      mutation(report);
+      await assert.rejects(() => runProductionPromotionAttest(opts, { aggregate: () => report }));
+    });
+  }
 
-    assert.equal(report.production_ready, true);
-    const gapAuditIndex = commands.indexOf(
-      'node scripts/production-readiness-gap-audit.mjs --evidence output/release-evidence/records.json',
-    );
-    const attachIndex = commands.indexOf('node scripts/attach-external-verification-markers.mjs --force');
-    const externalVerifyIndex = commands.indexOf(
-      'node scripts/verify-external-production-readiness.mjs --validate-only',
-    );
-    assert.ok(gapAuditIndex >= 0);
-    assert.ok(attachIndex > gapAuditIndex);
-    assert.ok(externalVerifyIndex > attachIndex);
+  it('propagates verification failures', async () => {
+    const { opts } = fixture();
+    await assert.rejects(() => runProductionPromotionAttest(opts, { aggregate() { throw new Error('verification failed'); } }), /verification failed/);
   });
 
-  it('scopes the accessibility password to only the live accessibility subprocess', async () => {
-    const calls = [];
-    const secret = 'test-only-credential';
-    process.env.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD = secret;
+  it('is passive even when an injected test prerequisite report is complete', async () => {
+    const { opts } = fixture();
+    const before = { evidence: readFileSync(opts.evidence), manifest: readFileSync(opts.manifest) };
+    const oldEnv = { ...process.env };
+    let shellCalls = 0;
+    const result = await runProductionPromotionAttest(opts, {
+      aggregate: () => completeReport(opts), shell: () => shellCalls++,
+    });
+    assert.equal(shellCalls, 0);
+    assert.deepEqual({ ...process.env }, oldEnv);
+    assert.deepEqual(readFileSync(opts.evidence), before.evidence);
+    assert.deepEqual(readFileSync(opts.manifest), before.manifest);
+    assert.deepEqual(result.candidate_binding, binding);
+    assert.equal(result.passive, true);
+    assert.equal(result.executes_drills, false);
+    assert.equal(result.grants_deployment, false);
+    assert.match(result.caveats[0], /does not authenticate a human approver/);
+  });
 
-    await runProductionPromotionAttest(
-      { baseUrl: 'https://staging.example.test' },
-      {
-        shell(command, inherit, envOverrides = {}) {
-          calls.push({ command, inherit, envOverrides });
-        },
-        readGapAuditReport: () => ({
-          production_ready: true,
-          customer_production_ready: true,
-        }),
-      },
-    );
-
-    assert.equal(process.env.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD, undefined);
-    const recipients = calls.filter(
-      ({ envOverrides }) => envOverrides.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD === secret,
-    );
-    assert.equal(recipients.length, 1);
-    assert.match(recipients[0].command, /run-live-ui-accessibility-matrix\.mjs/);
-    assert.equal(
-      calls.some(({ command }) => command.includes(secret)),
-      false,
-      'secret must never be placed in a command string',
-    );
+  it('real readiness aggregation refuses the metadata-only test fixture', async () => {
+    const { opts } = fixture();
+    await assert.rejects(() => runProductionPromotionAttest(opts), /Promotion blocked/);
   });
 });

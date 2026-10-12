@@ -3,7 +3,6 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureExternalVerificationManifest } from './attach-external-verification-markers.mjs';
 import { aggregateExternalProductionVerification } from '../src/contracts/externalProductionVerification.mjs';
 import { validateProductionReleaseEvidence } from '../src/contracts/productionReleaseEvidence.mjs';
 import {
@@ -685,6 +684,7 @@ export function aggregateProductionReadinessGapAudit(input = {}, options = {}) {
   const externalVerificationManifest = loadExternalVerificationManifest(options);
   const external_verification = aggregateExternalProductionVerification(records, {
     manifest: externalVerificationManifest,
+    releaseId,
   });
   const customer_production_ready = production_ready && external_verification.complete === true;
 
@@ -871,6 +871,7 @@ export async function main(argv = process.argv.slice(2)) {
       throw new Error(`Malformed evidence JSON: ${err.message}`);
     }
     const normalized = parseEvidenceInput(parsed);
+    if (opts.releaseId !== null && normalized.releaseId !== opts.releaseId) throw new Error('Evidence bundle release identity mismatch');
     input = {
       releaseId: opts.releaseId ?? normalized.releaseId,
       records: normalized.records,
@@ -888,13 +889,6 @@ export async function main(argv = process.argv.slice(2)) {
     );
   } catch {
     // optional attest artifact
-  }
-  if (opts.evidence && existsSync(opts.evidence)) {
-    ensureExternalVerificationManifest({
-      out: opts.externalVerification ?? DEFAULT_EXTERNAL_VERIFICATION_MANIFEST,
-      evidence: opts.evidence,
-      releaseId: input.releaseId ?? opts.releaseId ?? null,
-    });
   }
   const report = aggregateProductionReadinessGapAudit(input, {
     profile: opts.profile,

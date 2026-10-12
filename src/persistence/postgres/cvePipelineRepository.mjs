@@ -275,6 +275,7 @@ export function createCvePipelineRepository(pool) {
         const triageSummary = {
           ...currentSummary,
           ...(extras.triage_result !== undefined ? { triage_result: extras.triage_result } : {}),
+          ...(extras.resolution !== undefined ? { resolution: extras.resolution } : {}),
           ...(extras.affected_products !== undefined ? { affected_products: extras.affected_products } : {}),
           ...(extras.vendor_advisories !== undefined ? { vendor_advisories: extras.vendor_advisories } : {}),
           ...(extras.validation_bindings !== undefined

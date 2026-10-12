@@ -71,7 +71,7 @@ export function createPostgresProtectionValidationBackend(repository, audit) {
   };
 }
 
-const OPTIONAL_REPOSITORY_METHODS = Object.freeze(['loadEdgeDetections', 'loadConfigurationSnapshots', 'listReportSources']);
+const OPTIONAL_REPOSITORY_METHODS = Object.freeze(['loadEdgeDetections', 'loadConfigurationSnapshots', 'listReportSources', 'loadComparisonEvidence']);
 
 export function createPostgresProtectionValidationServices({ repository, audit = null, approvedSourcePerspectives = null } = {}) {
   return createProtectionValidationService({

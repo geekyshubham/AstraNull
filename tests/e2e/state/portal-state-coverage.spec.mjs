@@ -1,13 +1,13 @@
 import { expect, test } from '@playwright/test';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_EMPTY_IDS } from '../../fixtures/portal-empty/seed.mjs';
-import { PORTAL_EDGE_IDS } from '../../fixtures/portal-edge/seed.mjs';
+import { buildPortalEdgeStore, PORTAL_EDGE_IDS } from '../../fixtures/portal-edge/seed.mjs';
 import {
   fetchPortalReadinessScore,
   getPortalPlaywrightBaseUrl,
   portalOwnerHeaders,
   restartPortalPlaywrightWithEmptyStore,
-  restartPortalPlaywrightWithEdgeStore,
+  restartPortalPlaywrightServer,
   startPortalPlaywrightServer,
   stopPortalPlaywrightServer,
 } from '../../helpers/portal-playwright-server.mjs';
@@ -41,7 +41,7 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     await expect(page.getByText(String(apiScore), { exact: true }).first()).toBeVisible();
   });
 
-  test('FT-STATE-empty target-groups shows meta.empty_reason from API', async ({ page }) => {
+  test('FT-STATE-empty direct targets show the empty declared inventory without group navigation', async ({ page }) => {
     await restartPortalPlaywrightWithEmptyStore();
     const baseUrl = getPortalPlaywrightBaseUrl();
 
@@ -49,7 +49,7 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
       ...portalOwnerHeaders(),
       'x-tenant-id': PORTAL_EMPTY_IDS.tenantId,
     };
-    const groupsRes = await fetch(`${baseUrl}/v1/target-groups`, { headers: emptyHeaders });
+    const groupsRes = await fetch(`${baseUrl}/v1/targets`, { headers: emptyHeaders });
     expect(groupsRes.ok).toBeTruthy();
     const groupsJson = await groupsRes.json();
     expect(groupsJson.count).toBe(0);
@@ -57,12 +57,13 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     expect(emptyReason.length).toBeGreaterThan(0);
 
     await injectPortalDevHeadersSession(page, EMPTY_SESSION);
-    await gotoPortalRoute(page, 'target-groups', baseUrl);
+    await gotoPortalRoute(page, 'targets', baseUrl);
 
-    const emptyTitle = emptyReason.replace(/[.!?]+$/, '');
+    const emptyTitle = 'No targets declared yet';
     const emptyState = page.getByRole('region', { name: emptyTitle });
     await expect(emptyState.getByRole('heading', { name: emptyTitle })).toBeVisible();
-    await expect(emptyState.locator(':scope > p')).toHaveCount(0);
+    await expect(emptyState).toContainText('Declare a domain or endpoint here.');
+    await expect(page.getByRole('link', { name: 'Target groups', exact: true })).toHaveCount(0);
   });
 
   test('FT-STATE-loading target-detail shows busy skeleton before hydrator resolves', async ({ page }) => {
@@ -131,22 +132,26 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     await expect(page.locator('[data-target-load-error="true"]')).toHaveCount(0);
   });
 
-  test('FT-STATE-edge long group name, null-field finding, and RTL owner render', async ({ page }) => {
-    await restartPortalPlaywrightWithEdgeStore();
+  test('FT-STATE-edge long direct target, null-field finding, and RTL declared owner render', async ({ page }) => {
+    const longValue = `https://no-runs.edge.example/${'a'.repeat(256)}`;
+    await restartPortalPlaywrightServer({ mutate: (store) => {
+      Object.assign(store, buildPortalEdgeStore());
+      const target = store.targets.find((item) => item.id === PORTAL_EDGE_IDS.noRunsTargetId);
+      target.kind = 'url';
+      target.value = longValue;
+      target.declaration_json = { owner_label: PORTAL_EDGE_IDS.rtlOwner };
+    } });
     const baseUrl = getPortalPlaywrightBaseUrl();
 
     const edgeHeaders = {
       ...portalOwnerHeaders(),
       'x-tenant-id': PORTAL_EDGE_IDS.tenantId,
     };
-    const groupRes = await fetch(
-      `${baseUrl}/v1/target-groups/${PORTAL_EDGE_IDS.longNameGroupId}`,
-      { headers: edgeHeaders },
-    );
-    expect(groupRes.ok).toBeTruthy();
-    const longGroup = await groupRes.json();
-    expect(longGroup.name.length).toBe(256);
-    expect(longGroup.owner).toBe(PORTAL_EDGE_IDS.rtlOwner);
+    const targetRes = await fetch(`${baseUrl}/v1/targets/${PORTAL_EDGE_IDS.noRunsTargetId}`, { headers: edgeHeaders });
+    expect(targetRes.ok).toBeTruthy();
+    const targetJson = await targetRes.json();
+    expect(targetJson.target.value).toBe(longValue);
+    expect(targetJson.target.declaration.owner.label).toBe(PORTAL_EDGE_IDS.rtlOwner);
 
     await injectPortalDevHeadersSession(page, {
       mode: 'dev-headers',
@@ -155,14 +160,16 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
       user_id: 'usr_owner',
       role: 'owner',
     });
-    await gotoPortalRoute(page, 'target-group-detail', baseUrl, {
-      entityIds: { 'target-group-detail': PORTAL_EDGE_IDS.longNameGroupId },
+    await gotoPortalRoute(page, 'target-detail', baseUrl, {
+      entityIds: { 'target-detail': PORTAL_EDGE_IDS.noRunsTargetId },
     });
 
     const title = page.locator('h1.page-title');
     await expect(title).toBeVisible();
     const titleText = await title.textContent();
-    expect((titleText ?? '').length).toBeGreaterThanOrEqual(256);
+    expect(titleText).toBe(longValue);
+    await expect(page.locator('#portal-main')).toContainText(PORTAL_EDGE_IDS.rtlOwner);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2)).toBe(true);
 
     const findingRes = await fetch(
       `${baseUrl}/v1/findings/${PORTAL_EDGE_IDS.nullFieldFindingId}`,

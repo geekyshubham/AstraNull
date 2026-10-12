@@ -9,6 +9,17 @@ import { createPostgresPortalRevampServices } from '../../src/persistence/postgr
 
 const CTX = { tenantId: 'ten_demo', userId: 'usr_owner', role: 'owner' };
 const NOW = new Date('2026-06-01T12:00:00.000Z');
+const GENERATION = 'a'.repeat(64);
+
+function lookupBinding(challenge, target) {
+  return {
+    version: 'dns-ownership-check.v1',
+    challenge: [challenge.tenant_id, challenge.id, challenge.target_group_id, challenge.target_id,
+      challenge.record_name, challenge.record_value, challenge.issued_at, challenge.expires_at],
+    target: [target.tenant_id, target.id, target.target_group_id, target.kind, target.value],
+    ownership_generation: GENERATION,
+  };
+}
 
 function portalRepository(overrides = {}) {
   const defaults = Object.fromEntries(
@@ -238,6 +249,8 @@ describe('postgres portal ownership hardening', () => {
     const services = portalServices({
       findDnsChallenge: async () => challenge,
       getActiveTarget: async () => ({ id: challenge.target_id }),
+      getDnsOwnershipCheckSnapshot: async () => ({ challenge, checked_at: beforeLookup.toISOString(),
+        lookup_binding: lookupBinding(challenge, { id: challenge.target_id }) }),
       updateDnsChallenge: rejectLegacyWrite,
       insertTargetVerification: rejectLegacyWrite,
       finalizeDnsOwnershipCheck: async (_ctx, input) => {
@@ -262,6 +275,7 @@ describe('postgres portal ownership hardening', () => {
 
     assert.equal(finalization.finalized_at, afterLookup.toISOString());
     assert.equal(finalization.matched, true);
+    assert.deepEqual(finalization.lookup_binding, lookupBinding(challenge, { id: challenge.target_id }));
     assert.deepEqual(result, {
       error: 'challenge_expired', status: 409,
       challenge: { ...challenge, state: 'expired', resolved_at: null },
@@ -320,6 +334,7 @@ describe('postgres portal audited transaction boundary', () => {
       if (sql.includes('FROM target_edge_detections')) return 'edge-detection';
       if (sql.includes('FROM target_observations')) return 'target-observations';
       if (sql.includes('FROM origin_bindings')) return 'origin-bindings';
+      if (sql.includes('FROM target_groups') && sql.includes('tenant_id = $1 AND id = $2')) return 'current-group';
       return sql;
     }
 
@@ -386,6 +401,7 @@ describe('postgres portal audited transaction boundary', () => {
       'edge-detection',
       'target-observations',
       'origin-bindings',
+      'current-group',
       'COMMIT',
     ];
     assert.deepEqual(
@@ -482,7 +498,7 @@ describe('postgres portal audited transaction boundary', () => {
     let resolved = false;
     const pool = recordingPool((text, params) => {
       const sql = String(text);
-      if (sql.includes('SELECT * FROM dns_challenges') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM dns_challenges') && sql.includes('FOR UPDATE')) {
         return { rows: [challenge] };
       }
       if (sql.includes('FROM target_groups tg') && sql.includes('JOIN targets t')) {
@@ -501,6 +517,7 @@ describe('postgres portal audited transaction boundary', () => {
           audit_entry_id: params[5],
         }] };
       }
+      if (sql.includes('AS finalized_at')) return { rows: [{ finalized_at: params[0] }] };
       if (sql.includes("SET state = 'resolved'")) resolved = true;
       if (sql.includes('INSERT INTO target_verifications')) insertedVerification = true;
       return { rows: [] };
@@ -551,17 +568,18 @@ describe('postgres portal audited transaction boundary', () => {
       expires_at: '2026-06-01T12:01:00.000Z', resolved_at: null,
       last_checked_at: null, last_check_result: null, audit_entry_id: 'audit_issued',
     };
+    const target = { id: challenge.target_id, tenant_id: CTX.tenantId,
+      target_group_id: challenge.target_group_id, kind: 'fqdn', value: 'rollback.example.test', deleted_at: null };
     const pool = recordingPool((text, params) => {
       const sql = String(text);
-      if (sql.includes('SELECT * FROM dns_challenges') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM dns_challenges') && sql.includes('FOR UPDATE')) {
         return { rows: [challenge] };
       }
       if (sql.includes('FROM target_groups tg') && sql.includes('JOIN targets t')) {
-        return { rows: [{
-          id: challenge.target_id, tenant_id: CTX.tenantId,
-          target_group_id: challenge.target_group_id, deleted_at: null,
-        }] };
+        return { rows: [target] };
       }
+      if (sql.includes('AS generation')) return { rows: [{ generation: GENERATION }] };
+      if (sql.includes('AS finalized_at')) return { rows: [{ finalized_at: params[0] }] };
       if (sql.includes("SET state = 'resolved'")) {
         return { rows: [{
           ...challenge,
@@ -591,6 +609,7 @@ describe('postgres portal audited transaction boundary', () => {
         matched: true,
         last_check_result: { resolver: 'system', records: ['TOKEN'], matched: true },
         verification_id: 'tv_atomic_rollback',
+        lookup_binding: lookupBinding(challenge, target),
         transitioned_by: CTX.userId,
       }, audit),
       /verification insert failed/,
@@ -668,7 +687,7 @@ describe('postgres portal audited transaction boundary', () => {
       if (sql.includes('SELECT loa.*') && sql.includes('FROM loa_signatures loa')) {
         return { rows: [activeLoa] };
       }
-      if (sql.includes('SELECT * FROM target_verifications') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM target_verifications tv') && sql.includes('JOIN target_verification_current current') && sql.includes('FOR UPDATE')) {
         return { rows: [{ id: 'tv_dns', target_id: target.id, state: 'dns_verified' }] };
       }
       if (sql.includes('INSERT INTO target_verifications')) {
@@ -713,7 +732,7 @@ describe('postgres portal audited transaction boundary', () => {
       : event.text.includes('pg_advisory_xact_lock') ? 'lock'
         : event.text.includes('FROM target_groups tg') ? 'target'
           : event.text.includes('SELECT loa.*') ? 'loa'
-            : event.text.includes('SELECT * FROM target_verifications') ? 'prerequisite'
+            : event.text.includes('JOIN target_verification_current current') ? 'prerequisite'
               : event.text.includes('INSERT INTO target_verifications') ? 'insert' : event.text);
     assert.ok(labels.indexOf('lock') < labels.indexOf('target'));
     assert.ok(labels.indexOf('target') < labels.indexOf('loa'));
@@ -821,5 +840,24 @@ describe('postgres portal audited transaction boundary', () => {
     assert.equal(mutated, false);
     assert.ok(pool.events.some((event) => event.type === 'query' && event.text === 'ROLLBACK'));
     assert.equal(pool.events.some((event) => event.type === 'query' && event.text === 'COMMIT'), false);
+  });
+});
+
+
+describe('tenant-filtered remediation custody insert', () => {
+  it('cannot attach to a missing or foreign finding and derives tenant authority from context, not the record', async () => {
+    const queries = [];
+    let released = false;
+    const client = { query: async (sql, params) => { queries.push({ sql, params }); return { rows: [] }; }, release: () => { released = true; } };
+    const repository = createPortalRevampRepository({ connect: async () => client });
+    const result = await repository.insertFindingRemediation(CTX, { id: 'remediation', tenant_id: 'foreign', finding_id: 'foreign_finding',
+      action_slug: 'review', owner_group: 'unassigned', description: 'Review actual evidence', steps: [], audit_entry_id: 'audit' });
+    assert.equal(result, undefined);
+    const insert = queries.find(({ sql }) => sql.includes('INSERT INTO finding_remediations'));
+    assert.match(insert.sql, /FROM findings WHERE tenant_id = \$2 AND id = \$3 RETURNING/);
+    assert.equal(insert.params[1], CTX.tenantId);
+    assert.equal(insert.params[2], 'foreign_finding');
+    assert.equal(queries.at(-1).sql, 'COMMIT');
+    assert.equal(released, true);
   });
 });

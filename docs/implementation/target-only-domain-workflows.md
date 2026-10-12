@@ -1,5 +1,10 @@
 # Direct target and domain workflows
 
+## Audit remediation follow-up (2026-10-09)
+
+The current audit implementation preserves ADR-0019 direct target/domain-set selection. Play keeps the exact returned run/scan ID and immediately opens its live Inspector; it never guesses from the newest result list. Dedicated reviewed Origin and Firewall starts retain their exact run/check/target without broadening existing relation/retest authorization. Firewall references outside the allowed current destination stay non-runnable. Comparison child targets may differ from the workspace anchor and are never coerced to it. Path comparisons bind returned child run IDs only to eligible items in the submitted reviewed plan, open an accepted child and provide explicit Inspector controls for each other returned child. Missing accepted IDs show an explicit gap and never substitute history. Passive baseline capture/evaluation still does not start execution. Complete atomic safety accounting remains bound to current declared target and retained internal policy records, including independent target cooldowns. Internal historical group relationships are not restored as customer selectors. Persistent declaration/organization errors retain drafts for correction/retry. See [audit remediation ledger](verified-capability-audit-remediation.md) and [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md). Earlier deployment evidence below does not verify this uncommitted follow-up.
+
+
 Requested 2026-10-08: remove target-group navigation, screens, selectors, columns, links, and workflow requirements. Customers select a declared domain/endpoint or an explicit set of declared domains/endpoints directly.
 
 ## Acceptance criteria

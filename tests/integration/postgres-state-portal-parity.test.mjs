@@ -24,7 +24,7 @@ const RUN_SPECS = [
   ['run_state_6', 'origin.host_sni_bypass.safe', 'edge_protected'],
   ['run_state_7', 'origin.direct_reachability.safe', null],
 ].map(([id, check_id, verdict], index) => ({
-  id,
+  id, correlation: { nonce_hash: `nonce_${id}` },
   tenant_id: TENANT,
   target_group_id: GROUP_ID,
   target_id: TARGET_ID,
@@ -39,31 +39,31 @@ async function seed(pool) {
   await pool.query('INSERT INTO tenants (id, name) VALUES ($1, $1)', [TENANT]);
   await pool.query("INSERT INTO environments (id, tenant_id, name) VALUES ('env_state_portal', $1, 'prod')", [TENANT]);
   await pool.query(
-    `INSERT INTO target_groups (id, tenant_id, environment_id, name, validation_mode)
-     VALUES ($1, $2, 'env_state_portal', 'Portal state', 'external_only')`,
+    `INSERT INTO target_groups (id, tenant_id, environment_id, name, validation_mode, created_at)
+     VALUES ($1, $2, 'env_state_portal', 'Portal state', 'external_only', '2026-01-01')`,
     [GROUP_ID, TENANT],
   );
   await pool.query(
-    `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, normalized_value)
-     VALUES ($1, $2, $3, 'fqdn', 'state.example.test', 'state.example.test')`,
+    `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, normalized_value, created_at)
+     VALUES ($1, $2, $3, 'fqdn', 'state.example.test', 'state.example.test', '2026-01-01')`,
     [TARGET_ID, TENANT, GROUP_ID],
   );
 
   for (const run of RUN_SPECS) {
     await pool.query(
       `INSERT INTO test_runs (
-         id, tenant_id, target_group_id, target_id, check_id, status, created_at, completed_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [run.id, TENANT, GROUP_ID, TARGET_ID, run.check_id, run.status, run.created_at, run.completed_at],
+         id, tenant_id, target_group_id, target_id, check_id, status, created_at, completed_at, correlation_json
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+      [run.id, TENANT, GROUP_ID, TARGET_ID, run.check_id, run.status, run.created_at, run.completed_at, JSON.stringify(run.correlation)],
     );
     if (!run.verdict) continue;
     const eventId = `evt_${run.id}`;
     await pool.query(
       `INSERT INTO events (
          id, tenant_id, test_run_id, target_id, check_id, source,
-         signal_type, producer_kind, timestamp, metadata_json
-       ) VALUES ($1, $2, $3, $4, $5, 'probe_worker', 'probe_result', 'signed_probe', $6, '{}'::jsonb)`,
-      [eventId, TENANT, run.id, TARGET_ID, run.check_id, run.completed_at],
+         signal_type, producer_kind, timestamp, ingested_at, metadata_json, nonce_hash
+       ) VALUES ($1, $2, $3, $4, $5, 'probe_worker', 'probe_result', 'signed_probe', $6, $6, '{}'::jsonb, $7)`,
+      [eventId, TENANT, run.id, TARGET_ID, run.check_id, run.completed_at, run.correlation.nonce_hash],
     );
     await pool.query(
       `INSERT INTO verdicts (
@@ -94,7 +94,7 @@ function devStore() {
     source: 'probe_worker',
     signal_type: 'probe_result',
     producer_kind: 'signed_probe',
-    timestamp: run.completed_at,
+    timestamp: run.completed_at, ingested_at: run.completed_at, nonce_hash: run.correlation.nonce_hash,
     metadata: {},
   }));
   return {
@@ -117,7 +117,7 @@ function devStore() {
 }
 
 function assertPortalStateShape(payload) {
-  assert.deepEqual(payload.readiness.posture, { pass: 1, review: 1, gap: 1, total: 3 });
+  assert.deepEqual(payload.readiness.posture, { pass: 0, review: payload.readiness.coverage.applicable_count, gap: 0, total: payload.readiness.coverage.applicable_count }, 'legacy E2 verdicts never earn current protection or exposure credit');
   assert.deepEqual(
     payload.recent_runs.map((run) => run.id),
     ['run_state_3', 'run_state_4', 'run_state_5', 'run_state_6', 'run_state_7'],

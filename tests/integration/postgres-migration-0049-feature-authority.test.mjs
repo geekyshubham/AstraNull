@@ -150,19 +150,26 @@ async function seed(pool) {
      )`,
     [TENANT_A, GENERATION_7],
   );
-  await pool.query(
+  await withTenantContext(pool, TENANT_A, (client) => client.query(
     `INSERT INTO target_verifications (
        id, tenant_id, target_id, state, source_kind, source_ref,
        transitioned_at, transitioned_by, audit_entry_id
      ) VALUES
        ('tv_0049_a', $1, 'tgt_0049_a', 'provider_verified', 'provider_account',
         '{"connector_id":"conn_0049_a","provider":"cloudflare","resource_ref_hash":"zone_hash_0049"}'::jsonb,
-        $2::timestamptz, 'seed', 'audit_0049_a'),
-       ('tv_0049_b', 'ten_0049_b', 'tgt_0049_b', 'dns_verified', 'dns_txt',
+        $2::timestamptz, 'seed', 'audit_0049_a')`,
+    [TENANT_A, TRANSITIONED_AT],
+  ));
+  await withTenantContext(pool, TENANT_B, (client) => client.query(
+    `INSERT INTO target_verifications (
+       id, tenant_id, target_id, state, source_kind, source_ref,
+       transitioned_at, transitioned_by, audit_entry_id
+     ) VALUES
+       ('tv_0049_b', $1, 'tgt_0049_b', 'dns_verified', 'dns_txt',
         '{"record":"_astranull.other.example.com"}'::jsonb,
         $2::timestamptz, 'seed', 'audit_0049_b')`,
-    [TENANT_A, TRANSITIONED_AT],
-  );
+    [TENANT_B, TRANSITIONED_AT],
+  ));
 }
 
 describe('postgres migration 0049 feature authority', () => {

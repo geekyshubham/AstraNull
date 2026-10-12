@@ -1,4 +1,4 @@
-export type EvidenceInspectorEntry = 'finding' | 'group_member' | 'check_result' | 'provider' | 'artifact' | 'report' | 'audit';
+export type EvidenceInspectorEntry = 'finding' | 'group_member' | 'check_result' | 'validation_scan' | 'provider' | 'artifact' | 'report' | 'audit';
 export type EvidenceProviderFamily = 'waf' | 'cdn' | 'cloud' | 'dns' | 'origin_hosting';
 
 export type EvidenceInspectorRef = {
@@ -7,6 +7,10 @@ export type EvidenceInspectorRef = {
   target_id?: string;
   check_id?: string;
   test_run_id?: string;
+  scan_id?: string;
+  /** Assessment display only; omitted legacy references follow their own active child. */
+  display_mode?: 'follow' | 'pinned';
+  pinned_run_id?: string;
   family?: EvidenceProviderFamily;
   evidence_id?: string;
   report_id?: string;
@@ -59,6 +63,14 @@ export declare const PROVIDER_FAMILIES: readonly EvidenceProviderFamily[];
 export declare function isSafeInspectorId(value: unknown): boolean;
 export declare function normalizeInspectorRef(input: unknown): EvidenceInspectorRef | null;
 export declare function inspectorRefKey(input: unknown): string;
+export declare function inspectorWorkspaceKey(input: unknown): string;
+export declare function resolveScanChild(input: unknown, scan: unknown, error?: unknown): {
+  state: 'loading' | 'unavailable' | 'empty' | 'ready';
+  runId: string;
+  checkId: string;
+  targetId: string;
+  steps: Array<Record<string, unknown>>;
+};
 export declare function parseInspectorRef(hashOrHref: string): EvidenceInspectorRef | null;
 export declare function stripInspectorParams(hashOrHref: string): string;
 export declare function buildEvidenceInspectorHref(ref: EvidenceInspectorRef, baseHref?: string): string;

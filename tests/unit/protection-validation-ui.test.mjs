@@ -100,7 +100,7 @@ describe('protection-validation UI vocabulary parity with the PV-02 contract', (
 describe('protection-validation API client pins the documented routes', () => {
   const source = readFileSync(API_FILE, 'utf8');
   const documented = new Set(PROTECTION_VALIDATION_ROUTES.map((route) => route.path));
-  const existing = new Set(['/v1/targets', '/v1/test-runs', '/v1/test-runs/:id', '/v1/test-runs/:id/cancel']);
+  const existing = new Set(['/v1/targets', '/v1/test-runs', '/v1/test-runs/:id', '/v1/test-runs/:id/cancel', '/v1/reports/protection-validation']);
 
   it('only calls documented protection-validation routes or existing target/run routes', () => {
     const paths = [...source.matchAll(/[`'](\/v1\/[^`'\n]*)[`']/g)]
@@ -270,5 +270,42 @@ describe('plan expectation conflicts keep the server object shape', () => {
     assert.deepEqual(parseExpectationConflicts(['legacy_string', null, { entry_path_id: 'ep', conflicts: [] }]), []);
     const api = readFileSync(API_FILE, 'utf8');
     assert.match(api, /expectation_conflicts: parseExpectationConflicts\(payload\.expectation_conflicts\)/);
+  });
+});
+
+
+describe('finding exclusions remain separate from coverage and immutable results', () => {
+  const finalizedRef = { finalized: true, evidence_ids: ['ev_1'], observed_at: '2026-10-01T00:00:00.000Z' };
+  it('honors explicit report flags and exposes recorded compatibility reasons', () => {
+    const view = presenter.findingExclusionView({ ignored_for_findings: true, result: 'inconclusive', compatibility_reasons: ['source_mismatch'], evidence_refs: [finalizedRef] });
+    assert.equal(view.excluded, true);
+    assert.match(view.reason, /source/i);
+    assert.deepEqual(presenter.findingExclusionView({ ignored_for_findings: false, result: 'consistent_enforcement', evidence_refs: [] }), { excluded: false, reason: '' });
+    assert.deepEqual(presenter.findingExclusionView({ result: 'not_tested' }), { excluded: false, reason: '' });
+  });
+  it('matrix fallback uses the same finalized-evidence exclusion predicate as the backend', async () => {
+    const { isUnavailableEvidenceItem } = await import('../../src/lib/protectionValidationFindings.mjs');
+    const cases = [
+      { outcome: 'consistent_enforcement', evidence_refs: [finalizedRef] },
+      { outcome: 'consistent_enforcement', evidence_refs: [] },
+      { outcome: 'consistent_enforcement', evidence_refs: [{ ...finalizedRef, observed_at: '' }] },
+      { outcome: 'reachability_exposure', evidence_refs: [{ ...finalizedRef, finalized: false }] },
+      ...['inconclusive', 'not_tested', 'skipped'].map((outcome) => ({ outcome, evidence_refs: [finalizedRef] })),
+    ];
+    for (const item of cases) assert.equal(presenter.findingExclusionView(item, true).excluded, isUnavailableEvidenceItem('path_validation', item));
+    assert.match(presenter.findingExclusionView(cases[1], true).reason, /No finalized evidence/);
+  });
+  it('retains report flags, assurance, capped unknown lists and permission-gated configuration in the typed client', () => {
+    const source = readFileSync(API_FILE, 'utf8');
+    assert.match(source, /ignored_for_findings: bool\(item\.ignored_for_findings\)/);
+    assert.match(source, /current_assurance: assurance\(item\.current_assurance\)/);
+    assert.match(source, /not_tested_paths: coverageIds\(incomplete\.not_tested_paths\)/);
+    assert.match(source, /access !== 'granted' \|\| item\?\.evidence_role !== 'explanation_only'/);
+    const matrix = readFileSync(path.join(UI_DIR, 'protection-matrix.tsx'), 'utf8');
+    assert.match(matrix, /report\.conclusions\.map/);
+    assert.match(matrix, /stored\.key === key/);
+    assert.match(matrix, /controller\.abort\(\)/);
+    assert.match(matrix, /report\.source_records_complete !== true/);
+    assert.match(matrix, /Missing configuration remains unknown/);
   });
 });

@@ -10,7 +10,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { createServer as createViteServer } from 'vite';
+import { createPortalSourceServer as createViteServer } from '../../helpers/portal-playwright-server.mjs';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import AxeBuilder from '@axe-core/playwright';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost as applyReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
@@ -92,14 +93,13 @@ test.describe('current release: evidence inspector and target workspace', () => 
     });
     await vite.listen();
     webBase = `http://127.0.0.1:${vite.httpServer.address().port}`;
-    // Vite optimizes dependencies on the first page load and reloads once; absorb that here.
     const warm = await browser.newPage();
-    await injectPortalDevHeadersSession(warm);
-    await warm.goto(`${webBase}/app#dashboard`, { waitUntil: 'networkidle', timeout: 180_000 }).catch(() => undefined);
-    await warm.waitForTimeout(6000);
-    await warm.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
-    await warm.locator('#portal-main').waitFor({ timeout: 120_000 }).catch(() => undefined);
-    await warm.close();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, webBase);
+    } finally {
+      await warm.close();
+    }
   });
 
   test.afterAll(async () => {
@@ -441,12 +441,12 @@ async function startUi(browser, mutate) {
   await vite.listen();
   webBase = `http://127.0.0.1:${vite.httpServer.address().port}`;
   const warm = await browser.newPage();
-  await injectPortalDevHeadersSession(warm);
-  await warm.goto(`${webBase}/app#dashboard`, { waitUntil: 'networkidle', timeout: 180_000 }).catch(() => undefined);
-  await warm.waitForTimeout(6000);
-  await warm.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
-  await warm.locator('#portal-main').waitFor({ timeout: 120_000 }).catch(() => undefined);
-  await warm.close();
+  try {
+    await injectPortalDevHeadersSession(warm);
+    await assertPortalInitialLoad(warm, webBase);
+  } finally {
+    await warm.close();
+  }
 }
 
 /** Records the query string of each GET /v1/targets read. */
@@ -640,8 +640,6 @@ function seedHistory(store) {
   const run = store.testRuns.find((entry) => entry.id === 'run_checkout_1');
   store.testRuns.push({ ...structuredClone(run), id: 'run_checkout_retest', started_at: '2026-09-01T00:00:00.000Z', created_at: '2026-09-01T00:00:00.000Z', completed_at: '2026-09-01T00:05:00.000Z' });
   store.testRuns.push({ ...structuredClone(run), id: 'run_checkout_later', started_at: '2026-09-05T00:00:00.000Z', created_at: '2026-09-05T00:00:00.000Z', completed_at: '2026-09-05T00:05:00.000Z' });
-  // A newer finished run on another target with a bare verdict string and no recorded verdict.
-  store.testRuns.push({ id: 'run_unbacked_newer', tenant_id: ids.tenantId, target_group_id: ids.targetGroupId, target_id: 'tgt_checkout_2', check_id: ids.checkId, verdict: 'pass', status: 'completed', started_at: '2026-09-20T00:00:00.000Z', created_at: '2026-09-20T00:00:00.000Z' });
   const finding = store.findings.find((entry) => entry.id !== 'fnd_member_pay') ?? store.findings[0];
   store.findings.push({ ...structuredClone(finding), id: 'fnd_closed_history', status: 'closed', closed_at: '2026-09-12T08:00:00.000Z', title: 'Closed origin exposure' });
 }
@@ -667,11 +665,11 @@ function seedObservations() {
 }
 
 /** Captures run starts and answers without dispatching anything. */
-async function captureRunStarts(page, starts) {
+async function captureRunStarts(page, starts, response = null) {
   await page.route('**/v1/test-runs', (route) => {
     if (route.request().method() !== 'POST') return route.continue();
     starts.push(route.request().postDataJSON());
-    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'run_captured_not_dispatched', status: 'pending' }) });
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(response ?? { run: { id: 'run_captured_not_dispatched', ...route.request().postDataJSON(), status: 'pending' }, jobs_dispatched: 0 }) });
   });
 }
 
@@ -864,7 +862,7 @@ test.describe('current release: target history, origin relations and retest line
     const reads = [];
     page.on('request', (request) => {
       const url = new URL(request.url());
-      if (request.method() === 'GET' && (url.pathname.endsWith('/compatible-checks') || url.pathname.startsWith('/v1/checks/'))) reads.push(url.pathname);
+      if (request.method() === 'GET' && (url.pathname.endsWith('/compatible-checks') || url.pathname.startsWith('/v1/checks/') || url.pathname.startsWith('/v1/test-runs/'))) reads.push(url.pathname);
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
     const section = page.locator('section.td-origin-relations');
@@ -888,6 +886,47 @@ test.describe('current release: target history, origin relations and retest line
     await dialog.getByRole('button', { name: 'Start origin check' }).click();
     await expect.poll(() => starts.length).toBe(1);
     expect(starts[0]).toEqual({ check_id: 'origin.direct_bypass.safe', target_id: ORIGIN_IP, origin_binding_id: binding.id });
+    await expect(inspector(page)).toBeVisible();
+    await expect.poll(() => Object.fromEntries(new URLSearchParams(new URL(page.url()).hash.split('?')[1]))).toMatchObject({ inspect: 'check_result', ev_run: 'run_captured_not_dispatched', ev_check: starts[0].check_id, ev_target: starts[0].target_id });
+    await expect.poll(() => reads.some((read) => read === '/v1/test-runs/run_captured_not_dispatched/activity')).toBe(true);
+    await expect(inspector(page)).toContainText('run_captured_not_dispatched');
+    archiveOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, binding.id);
+  });
+
+  test('an accepted origin start without an execution ID shows a truthful error and never opens a historical Inspector', async ({ page }) => {
+    test.setTimeout(120_000);
+    const binding = createOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, { protected_target_id: ids.targetId, origin_target_id: ORIGIN_IP });
+    const starts = [];
+    await captureRunStarts(page, starts, { run: { status: 'planned' }, jobs_dispatched: 0 });
+    await open(page, `target-detail?id=${ORIGIN_IP}`);
+    const section = page.locator('section.td-origin-relations');
+    const item = section.locator('.td-origin-item').filter({ hasText: 'checkout.acme.com' });
+    await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
+    await item.getByRole('button', { name: 'Review origin check' }).click();
+    await page.getByRole('dialog', { name: 'Start the origin check under this relation?' }).getByRole('button', { name: 'Start origin check' }).click();
+    await expect.poll(() => starts.length).toBe(1);
+    await expect(section.getByRole('alert')).toContainText('accepted without a recorded run ID');
+    await expect(section.getByRole('alert')).toContainText('No historical run was substituted');
+    await expect(inspector(page)).toHaveCount(0);
+    expect(new URL(page.url()).hash).not.toContain('ev_run=');
+    archiveOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, binding.id);
+  });
+
+  test('an accepted origin start with a mismatched check never opens another execution', async ({ page }) => {
+    test.setTimeout(120_000);
+    const binding = createOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, { protected_target_id: ids.targetId, origin_target_id: ORIGIN_IP });
+    const starts = [];
+    await captureRunStarts(page, starts, { run: { id: 'run_wrong_check', target_id: ORIGIN_IP, check_id: 'other.check.safe', status: 'planned' } });
+    await open(page, `target-detail?id=${ORIGIN_IP}`);
+    const section = page.locator('section.td-origin-relations');
+    const item = section.locator('.td-origin-item').filter({ hasText: 'checkout.acme.com' });
+    await item.getByRole('combobox', { name: 'Approved origin check' }).selectOption('origin.direct_bypass.safe');
+    await item.getByRole('button', { name: 'Review origin check' }).click();
+    await page.getByRole('dialog', { name: 'Start the origin check under this relation?' }).getByRole('button', { name: 'Start origin check' }).click();
+    await expect.poll(() => starts.length).toBe(1);
+    await expect(section.getByRole('alert')).toContainText('did not match the reviewed target/check');
+    await expect(inspector(page)).toHaveCount(0);
+    expect(new URL(page.url()).hash).not.toContain('ev_run=');
     archiveOriginBinding({ tenantId: ids.tenantId, userId: 'usr_owner', role: 'owner' }, binding.id);
   });
 
@@ -900,7 +939,7 @@ test.describe('current release: target history, origin relations and retest line
       if (mode === 'error') return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'internal_error', message: 'Catalog read failed.' }) });
       const response = await route.fetch();
       const body = await response.json();
-      const keep = (pair) => pair.exclusion_reason !== 'setup_required';
+      const keep = (pair) => !ORIGIN_CHECKS.includes(pair.check_id);
       return route.fulfill({ response, json: { ...body, checks: body.checks.filter(keep), coverage: { ...body.coverage, pairs: body.coverage.pairs.filter(keep) } } });
     });
     await open(page, `target-detail?id=${ORIGIN_IP}`);
@@ -1011,9 +1050,30 @@ test.describe('current release: target history, origin relations and retest line
   test('a finished run without a recorded verdict never reads as passed on the dashboard', async ({ page }) => {
     test.setTimeout(120_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await open(page, 'dashboard');
-    const row = page.getByRole('row').filter({ hasText: 'pay.acme.com' });
-    await expect(row.getByText('Not recorded', { exact: true })).toBeVisible();
-    await expect(row.getByText(/^Passed/)).toHaveCount(0);
+    const store = getStore();
+    // The assurance cohort has genuine current results on pay.acme.com. Use an independent
+    // declared target so those results cannot mask this run or legitimately supply an earlier pass.
+    const targetId = 'tgt_dashboard_unbacked';
+    const runId = 'run_dashboard_unbacked';
+    const value = 'bare-verdict.example.test';
+    const base = store.targets.find((target) => target.id === 'tgt_checkout_2');
+    const at = new Date().toISOString();
+    store.targets.push({ ...structuredClone(base), id: targetId, value, normalized_value: value });
+    store.testRuns.push({ id: runId, tenant_id: ids.tenantId, target_group_id: ids.targetGroupId, target_id: targetId, check_id: ids.checkId, verdict: 'pass', status: 'completed', started_at: at, created_at: at, completed_at: at });
+    try {
+      expect(store.testRuns.filter((run) => run.target_id === targetId).map((run) => run.id)).toEqual([runId]);
+      expect(store.verdicts.filter((verdict) => verdict.test_run_id === runId)).toEqual([]);
+      expect(store.events.filter((event) => event.test_run_id === runId)).toEqual([]);
+      expect(store.evidenceVault.filter((record) => record.test_run_id === runId)).toEqual([]);
+      await open(page, 'dashboard');
+      const row = page.getByRole('row', { name: `Open target ${value} detail`, exact: true });
+      await expect(row).toContainText(value);
+      await expect(row.getByText('Not recorded', { exact: true })).toBeVisible();
+      await expect(row.getByText(/^Passed/)).toHaveCount(0);
+      await expect(row).not.toContainText('Earlier run');
+    } finally {
+      store.testRuns = store.testRuns.filter((run) => run.id !== runId);
+      store.targets = store.targets.filter((target) => target.id !== targetId);
+    }
   });
 });

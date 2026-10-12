@@ -209,7 +209,7 @@ describe('outside-in WAF scanner', () => {
       'path_traversal_marker',
       'sqli_marker',
       'xss_marker',
-      'content_type_confusion',
+      'sqli_case_marker',
     ]);
     assert.deepEqual(
       ['sqli_marker', 'xss_marker', 'path_traversal_marker'].filter(
@@ -219,10 +219,11 @@ describe('outside-in WAF scanner', () => {
     );
     assert.equal(plan.some((entry) => entry.phase === 'no_user_agent'), false);
     assert.equal(plan.some((entry) => entry.phase === 'sqli_encoded_marker'), false);
-    assert.equal(plan.some((entry) => entry.phase === 'sqli_case_marker'), false);
+    assert.equal(plan.some((entry) => entry.phase === 'sqli_case_marker'), true);
 
     const fullPlan = buildOutsideInScanPlan(13, { hasDirectIp: true });
-    assert.equal(fullPlan.length, 13);
+    assert.equal(fullPlan.length, 11);
+    assert.equal(fullPlan.some((entry) => ['content_type_confusion', 'multipart_confusion'].includes(entry.phase)), false);
     for (const phase of ['xss_marker', 'xss_encoded_marker', 'no_user_agent', 'origin_bypass']) {
       assert.ok(fullPlan.some((entry) => entry.phase === phase), phase);
     }
@@ -368,8 +369,11 @@ describe('outside-in WAF scanner', () => {
         if (!isBaseline) {
           return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
         }
-        return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
+        return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1', 'x-astranull-canary-echo': init?.headers?.['x-astranull-nonce'] });
       },
+      canaryNonce: 'fixture-canary',
+      originScope: { host: 'shop.example.test', path: '/', port: 443, method: 'GET', scenario_version: 'marker-comparison-v4',
+        source_perspective: 'astranull-signed-public-worker', worker_id: 'local-fixture' },
       declaredOriginLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
       originBypassFn: async () => ({ res: mockResponse(403, { server: 'origin-nginx', 'x-origin-lockdown': 'cdn-only' }), error: null }),
     });
@@ -435,7 +439,7 @@ describe('outside-in WAF scanner', () => {
     }
   });
 
-  it('reports protected class evidence while optional phase coverage is incomplete', async () => {
+  it('retains individual blocked-class facts but refuses a scan pass with incomplete coverage', async () => {
     const baseUrl = 'https://shop.example.test/';
     const outcome = await runOutsideInWafScan({
       url: baseUrl,
@@ -451,7 +455,9 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.coverage_complete, false);
     assert.ok(outcome.phases_dropped.includes('no_user_agent'));
-    assert.equal(outcome.posture_label, 'Edge protected · origin lockdown unverified');
+    assert.equal(outcome.posture_label, 'Unknown');
+    assert.equal(outcome.comparison_complete, false);
+    assert.equal(outcome.readiness_conclusion, false);
     assert.deepEqual(outcome.class_posture, {
       sqli: 'protected',
       xss: 'protected',
@@ -501,7 +507,7 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.validation_failed, true);
   });
 
-  it('runs content-type and multipart confusion POST probes within scan plan', async () => {
+  it('refuses unapproved content-type and multipart POST mechanisms without substitution', async () => {
     const methods = [];
     const contentTypes = [];
     const outcome = await runOutsideInWafScan({
@@ -519,17 +525,13 @@ describe('outside-in WAF scanner', () => {
           : mockResponse(403, { server: 'cloudflare', 'cf-ray': 'blocked', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
-    assert.ok(methods.includes('POST'));
-    const contentTypeProbe = outcome.marker_probes.find((probe) => probe.family === 'content_type_confusion');
-    assert.ok(contentTypeProbe);
-    assert.equal(contentTypeProbe.blocked, true);
-    const multipartProbe = outcome.marker_probes.find((probe) => probe.family === 'multipart_confusion');
-    assert.ok(multipartProbe);
-    assert.equal(multipartProbe.blocked, true);
-    assert.ok(contentTypes.some((value) => String(value).includes('multipart/form-data')));
+    assert.equal(methods.includes('POST'), false);
+    assert.deepEqual(outcome.unsupported_phases, ['content_type_confusion', 'multipart_confusion']);
+    assert.equal(outcome.marker_probes.some((probe) => outcome.unsupported_phases.includes(probe.family)), false);
+    assert.equal(contentTypes.some((value) => String(value).includes('multipart/form-data')), false);
   });
 
-  it('flags content-type confusion gap when POST marker is allowed through', async () => {
+  it('does not fabricate a content-type exposure when the POST mechanism was never delivered', async () => {
     const outcome = await runOutsideInWafScan({
       url: 'https://api.example.test/',
       budget: 10,
@@ -543,8 +545,8 @@ describe('outside-in WAF scanner', () => {
           : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
       },
     });
-    assert.equal(outcome.evasion_bypass_suspected, true);
-    assert.ok(outcome.marker_probes.find((probe) => probe.family === 'content_type_confusion')?.allowed);
+    assert.equal(outcome.evasion_bypass_suspected, false);
+    assert.equal(outcome.marker_probes.some((probe) => probe.family === 'content_type_confusion'), false);
   });
 
   it('reports a detected WAF that passes every marker as present but not effective', async () => {
@@ -644,7 +646,7 @@ describe('outside-in WAF scanner', () => {
       hostname: 'edge.example.test',
       fetchFn: async (url, init) => {
         if (url === 'https://edge.example.test/' && init?.headers?.['User-Agent']) {
-          return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
+          return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1', 'x-astranull-canary-echo': init?.headers?.['x-astranull-nonce'] });
         }
         return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'blocked' });
       },
@@ -762,7 +764,7 @@ describe('outside-in WAF scanner', () => {
         if (!isBaseline) {
           return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
         }
-        return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
+        return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1', 'x-astranull-canary-echo': init?.headers?.['x-astranull-nonce'] });
       },
     });
 
@@ -790,7 +792,8 @@ describe('outside-in WAF scanner', () => {
     });
 
     assert.equal(outcome.metadata.origin_lockdown_confirmed, false);
-    assert.equal(outcome.metadata.posture_label, 'Edge protected · origin lockdown unverified');
+    assert.equal(outcome.metadata.posture_label, 'Unknown');
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.metadata.coverage_complete, false);
     assert.ok(outcome.metadata.phases_dropped.includes('no_user_agent'));
   });

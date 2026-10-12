@@ -6,6 +6,14 @@ import {
   WAF_VULNERABILITY_REGISTRY,
 } from './resourceExhaustionTaxonomy.mjs';
 import { evidenceTierForCheck } from '../lib/probeEvidenceTiers.mjs';
+import { PROPOSED_REGISTRY_MAPPING as EVASION_DELIVERY_MAPPINGS } from './manifests/evasion.manifest.mjs';
+
+// Aggregate taxonomy groups are not mechanism-equivalent alternatives. Delivery-specific
+// mappings keep an unsupported lexical/parser/framing vector from borrowing E3 from
+// an unrelated supported marker in the same resource family. SOC grouping is unchanged.
+const EVASION_DELIVERY_BY_VECTOR_ID = new Map(EVASION_DELIVERY_MAPPINGS
+  .filter((mapping) => typeof mapping.mechanism_supported === 'boolean')
+  .map((mapping) => [mapping.registry_id, mapping]));
 import {
   VECTOR_CATALOG,
   VECTOR_CATALOG_TOTAL,
@@ -132,7 +140,8 @@ export function buildVectorLibrary() {
     const claim = claims.get(catalogRow.vector_id);
     if (!claim) throw new Error(`Vector catalog ID ${catalogRow.vector_id} has no registry disposition.`);
 
-    const checkIds = sortStrings(claim.entry.check_ids ?? []);
+    const deliveryMapping = EVASION_DELIVERY_BY_VECTOR_ID.get(catalogRow.vector_id);
+    const checkIds = sortStrings(deliveryMapping?.add_check_ids ?? claim.entry.check_ids ?? []);
     const checks = checkIds.map((checkId) => {
       const check = checksById.get(checkId);
       if (!check) throw new Error(`${catalogRow.vector_id} references unknown check ${checkId}.`);
@@ -151,7 +160,7 @@ export function buildVectorLibrary() {
 
     const evidenceTier = claim.source === 'OUT_OF_SCOPE_VECTORS'
       ? 'E5'
-      : String(claim.entry.evidence_tier ?? 'E0');
+      : String(deliveryMapping?.target_tier ?? claim.entry.evidence_tier ?? 'E0');
     const evidenceCapability = EVIDENCE_CAPABILITY_BY_TIER[evidenceTier];
     if (!evidenceCapability) {
       throw new Error(`${catalogRow.vector_id} has unsupported evidence tier ${evidenceTier}.`);
@@ -176,7 +185,9 @@ export function buildVectorLibrary() {
       registry_name: claim.entry.name ?? null,
       registry_domain: claim.entry.domain ?? null,
       exhausted_resource: claim.entry.exhausted_resource ?? null,
-      coverage_status: claim.entry.coverage_status ?? null,
+      coverage_status: deliveryMapping
+        ? (evidenceTier === 'E3' ? 'implemented' : 'partial')
+        : claim.entry.coverage_status ?? null,
       out_of_scope_reason: claim.source === 'OUT_OF_SCOPE_VECTORS'
         ? claim.entry.reason
         : null,
@@ -192,7 +203,8 @@ export function buildVectorLibrary() {
       execution_disposition: executionDisposition(
         claim,
         evidenceTier,
-        safeCheckIds,
+        safeChecks.filter((check) => check.mechanism_supported !== false
+          && check.probe_profile?.delivery_supported !== false).map((check) => check.check_id),
         socCheckIds,
       ),
       intended_detection_goal: intendedDetectionGoal(catalogRow, evidenceTier),

@@ -18,11 +18,13 @@ export function checkExclusionReason(check) {
   if (text(check.risk_class).toLowerCase() === 'soc_gated') return 'soc_gated';
   if (check.safety_constraints?.customer_runnable === false) return 'not_customer_runnable';
   if (text(check.evidence_tier).toUpperCase() === MONITOR_ONLY_TIER) return 'monitor_only';
+  if (check.mechanism_supported === false || check.probe_profile?.delivery_supported === false
+    || check.probe_profile?.execution_supported === false) return 'unsupported_delivery';
   return null;
 }
 
 export function selectableChecks(checks) {
-  const excluded = { soc_gated: 0, monitor_only: 0, not_customer_runnable: 0, total: 0 };
+  const excluded = { soc_gated: 0, monitor_only: 0, not_customer_runnable: 0, unsupported_delivery: 0, total: 0 };
   const selectable = [];
   for (const check of Array.isArray(checks) ? checks : []) {
     const reason = checkExclusionReason(check);

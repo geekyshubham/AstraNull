@@ -248,7 +248,7 @@ export function createProtectionValidationRepository(pool) {
   const repo = {
     async loadTargetContext(ctx, ids) {
       return run(ctx, async (client) => {
-        const targetSql = `SELECT id, tenant_id, target_group_id, kind, value, port, deleted_at, declaration_json, normalized_value,
+        const targetSql = `SELECT id, tenant_id, target_group_id, kind, value, protocol, port, expected_behavior, deleted_at, declaration_json, normalized_value,
                   metadata_json, ${exact('created_at')} AS created_at
            FROM targets WHERE tenant_id = $1 AND id = ANY($2::text[])`;
         const targets = await client.query(targetSql, [ctx.tenantId, ids]);
@@ -259,7 +259,8 @@ export function createProtectionValidationRepository(pool) {
           .filter((id) => id && !requested.has(id)))];
         const parents = parentIds.length ? (await client.query(targetSql, [ctx.tenantId, parentIds])).rows : [];
         const verifications = await client.query(
-          `SELECT id, tenant_id, target_id, state, source_kind, source_ref, transitioned_at, transitioned_by
+          `SELECT id, tenant_id, target_id, state, source_kind, source_ref,
+                  ${exact('transitioned_at')} AS transitioned_at, transitioned_by
            FROM target_verifications WHERE tenant_id = $1 AND target_id = ANY($2::text[])`,
           [ctx.tenantId, [...ids, ...parents.map((row) => row.id)]],
         );
@@ -545,6 +546,50 @@ export function createProtectionValidationRepository(pool) {
             filter.limit, ...(filter.cursor ? [filter.cursor.created_at, filter.cursor.id] : [])],
         );
         return rows.map(mapExpectation);
+      });
+    },
+
+    /** Complete exact-run evidence snapshot for passive report qualification; no display caps. */
+    async loadComparisonEvidence(ctx, { runIds = [], asOf = new Date() } = {}) {
+      const cutoff = new Date(asOf);
+      if (!Number.isFinite(cutoff.getTime())) throw new TypeError('Invalid comparison evidence cutoff.');
+      const ids = [...new Set(runIds)];
+      if (!ids.length) return { groups: [], policies: [], runs: [], jobs: [], events: [], evidenceItems: [], input_complete: true };
+      return run(ctx, async (client) => {
+        const { rows } = await client.query(`SELECT
+          (SELECT COALESCE(jsonb_agg(r), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, target_id, target_group_id, policy_id, check_id, status,
+                    check_version, scenario_version, producer_kind, provenance_json, safety_constraints, correlation_json, probe_external_result,
+                    created_at, started_at, completed_at
+             FROM test_runs WHERE tenant_id = $1 AND id = ANY($2::text[]) AND created_at <= $3::timestamptz) r) AS runs,
+          (SELECT COALESCE(jsonb_agg(j), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, test_run_id, target_id, check_id, status, nonce_hash, job_signature,
+                    probe_profile, constraints_json, target_descriptor_json, worker_metadata_json,
+                    created_at, leased_at, leased_by, completed_at
+             FROM probe_jobs WHERE tenant_id = $1 AND test_run_id = ANY($2::text[])
+               AND created_at <= $3::timestamptz) j) AS jobs,
+          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, test_run_id, target_id, check_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json
+             FROM events WHERE tenant_id = $1 AND test_run_id = ANY($2::text[])
+               AND timestamp <= $3::timestamptz AND ingested_at <= $3::timestamptz
+               AND signal_type = 'probe_result') e) AS events,
+          (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, test_run_id, related_event_id, created_at
+             FROM evidence_vault WHERE tenant_id = $1 AND test_run_id = ANY($2::text[])
+               AND created_at <= $3::timestamptz) e) AS evidence_items,
+          (SELECT COALESCE(jsonb_agg(g), '[]'::jsonb) FROM
+            (SELECT id, tenant_id, expected_behavior_default, safety_policy, declaration_json, created_at
+             FROM target_groups WHERE tenant_id = $1 AND deleted_at IS NULL AND archived_at IS NULL
+               AND created_at <= $3::timestamptz AND id IN
+                 (SELECT COALESCE(safety_constraints->'assurance_scope', provenance_json->'assurance_scope')->'target_group'->>'id'
+                  FROM test_runs WHERE tenant_id = $1 AND id = ANY($2::text[]) AND created_at <= $3::timestamptz)) g) AS groups,
+          (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb) FROM
+            (SELECT p.* FROM test_policies p WHERE tenant_id = $1 AND created_at <= $3::timestamptz AND id IN
+                 (SELECT COALESCE(safety_constraints->'assurance_scope', provenance_json->'assurance_scope')->'policy'->>'id'
+                  FROM test_runs WHERE tenant_id = $1 AND id = ANY($2::text[]) AND created_at <= $3::timestamptz)) p) AS policies`,
+        [ctx.tenantId, ids, cutoff.toISOString()]);
+        const input = rows[0] ?? {};
+        return { groups: input.groups ?? [], policies: input.policies ?? [], runs: input.runs ?? [], jobs: input.jobs ?? [], events: input.events ?? [], evidenceItems: input.evidence_items ?? [], input_complete: true };
       });
     },
 
@@ -835,7 +880,9 @@ export function createProtectionValidationRepository(pool) {
         ].filter(Boolean))];
         const targets = ids.length
           ? (await client.query(
-            `SELECT id, tenant_id, target_group_id, kind, value, ${nullableExact('deleted_at')} AS deleted_at
+            `SELECT id, tenant_id, target_group_id, kind, value, protocol, port, expected_behavior,
+                    declaration_json, normalized_value, metadata_json, ${exact('created_at')} AS created_at,
+                    ${nullableExact('deleted_at')} AS deleted_at
              FROM targets WHERE tenant_id = $1 AND id = ANY($2::text[])`,
             [ctx.tenantId, ids],
           )).rows

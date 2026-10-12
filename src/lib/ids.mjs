@@ -17,6 +17,8 @@ const PREFIX = {
   signup: 'sgn',
   internalAudit: 'iaud',
   approval: 'appr',
+  reviewedOperation: 'rop',
+  cveApplicabilityReview: 'car',
   passwordInvite: 'pwi',
   dns: 'dns',
   tv: 'tv',

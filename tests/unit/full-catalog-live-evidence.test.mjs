@@ -108,6 +108,13 @@ function buildArtifact({ matrix = MATRIX, liveResults = makeLiveResults() } = {}
 }
 
 describe('full-catalog live evidence generator', () => {
+  it('rejects old assessment semantics instead of rewriting historical artifacts', () => {
+    const legacy = buildArtifact();
+    legacy.schema_version = 2;
+    legacy.generator.schema = 'astranull.full-catalog-live-evidence.v1';
+    assert.throws(() => validateFullCatalogLiveEvidence(legacy), /schema_version/);
+  });
+
   it('produces deterministic non-self-referential custody', () => {
     const first = buildArtifact();
     const second = buildArtifact();
@@ -145,36 +152,37 @@ describe('full-catalog live evidence generator', () => {
     const artifact = buildArtifact();
     const nonExecutedRows = artifact.rows.filter((row) => row.target_disposition !== 'safe_runnable');
 
-    assert.equal(nonExecutedRows.length, 317);
+    assert.equal(nonExecutedRows.length, 364);
     assert.ok(nonExecutedRows.every((row) => row.check_result_refs.length === 0));
     assert.ok(artifact.rows
       .filter((row) => row.target_disposition === 'safe_runnable')
       .every((row) => row.check_result_refs.length > 0));
   });
 
-  it('preserves the required 721/404/10/258/49/194 totals', () => {
+  it('preserves the required 721/357/10/269/49/36/161 totals', () => {
     const artifact = buildArtifact();
 
     assert.equal(artifact.rows.length, 721);
-    assert.equal(artifact.check_results.length, 194);
-    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 194);
+    assert.equal(artifact.check_results.length, 161);
+    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 161);
     assert.deepEqual(MATRIX.summary.dispositions, {
-      safe_runnable: 404,
+      safe_runnable: 357,
       additional_input_required: 10,
       target_incompatible: 0,
-      soc_gated: 258,
+      soc_gated: 269,
       monitor_only: 49,
-      not_runnable: 0,
+      not_runnable: 36,
     });
     assert.deepEqual(artifact.summary.evaluation_status, {
       additional_input_required: 10,
-      evaluated_bounded: 404,
+      evaluated_bounded: 357,
       monitor_only_not_executed: 49,
-      soc_gated_not_executed: 258,
+      soc_gated_not_executed: 269,
+      not_runnable: 36,
     });
-    assert.equal(artifact.summary.planned_unique_safe_checks, 194);
-    assert.equal(artifact.summary.completed_unique_safe_checks, 194);
-    assert.equal(artifact.summary.check_status.verdicted, 194);
-    assert.equal(artifact.summary.check_confidence.external_only, 194);
+    assert.equal(artifact.summary.planned_unique_safe_checks, 161);
+    assert.equal(artifact.summary.completed_unique_safe_checks, 161);
+    assert.equal(artifact.summary.check_status.verdicted, 161);
+    assert.equal(artifact.summary.check_confidence.external_only, 161);
   });
 });

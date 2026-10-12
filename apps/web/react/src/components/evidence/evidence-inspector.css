@@ -215,3 +215,8 @@
 }
 
 .ei-kv-inline { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-top: var(--space-3); }
+.ei-execution { min-width: 0; display: grid; gap: var(--space-3); }
+.ei-execution .probe-activity { margin: 0; }
+.ei-child-select { display: grid; gap: var(--space-2); font-size: var(--text-sm); min-width: 0; }
+.ei-child-select select { width: 100%; min-width: 0; background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-2); }
+.ei-child-select select:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }

@@ -184,10 +184,10 @@ describe('classifyFirewallSample', () => {
     assert.equal(classifyFirewallSample(expectation({ protocol: 'udp', port: 443 }), sample()).reason, 'protocol_mismatch');
   });
 
-  it('only semantic checks yield a valid service response', () => {
+  it('records valid sampled service responses as observation-only, never readiness protection', () => {
     const verdict = classifyFirewallSample(tcpAllow, tls());
     assert.equal(verdict.observation_class, 'service_response_observed');
-    assert.equal(verdict.evidence_tier, 'E3');
+    assert.equal(verdict.evidence_tier, 'E2');
     const udp = expectation({ protocol: 'udp', port: 53, destination_target_id: 'tgt_dns' });
     assert.equal(classifyFirewallSample(udp, sample({ kind: 'udp_probe', target: 'tgt_dns' })).observation_class, 'reachable_transport_only');
     assert.equal(classifyFirewallSample(udp, sample({ kind: 'udp_probe', target: 'tgt_dns', result: 'timeout' })).observation_class, 'udp_silence');

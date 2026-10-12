@@ -1,3 +1,6 @@
+// These request mechanisms have no approved safe execution adapter.
+export const UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES = Object.freeze(['ipp_get_printer_attributes']);
+
 export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
   'metadata_marker',
   'not_run',
@@ -15,37 +18,38 @@ export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
   'http_method_matrix',
   'http3_control_probe',
   'waf_fingerprint_observation',
-]);
-
-const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
-
-export const SEMANTIC_SAFE_PROBE_KINDS = Object.freeze([
-  'ops_readiness',
-  'origin_leak_scan',
-  'host_sni_bypass',
-  'port_scan_bounded',
   'rate_limit_sequence',
   'waf_enforcement_probe',
   'dnssec_posture',
   'dns_open_recursion',
   'dns_failover_posture',
-  'dns_axfr_leak',
   'tls_audit',
   'cache_abuse_probe',
   'api_surface_scan',
   'cors_posture_probe',
   'bot_challenge_probe',
   'graphql_posture_probe',
-  'outside_in_waf_scan',
   'grpc_reflection_probe',
   'reflection_service_probe',
   'header_size_probe',
   'slow_header_probe',
   'http2_frame_probe',
   'waf_inspection_limit_probe',
+  'l7_resource_posture_probe',
+  // Standalone Host/SNI has a one-request contract and no approved permitted-baseline producer.
+  'host_sni_bypass',
+  'origin_leak_scan',
+  'port_scan_bounded',
+]);
+
+const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
+
+export const SEMANTIC_SAFE_PROBE_KINDS = Object.freeze([
+  'ops_readiness',
+  'dns_axfr_leak',
+  'outside_in_waf_scan',
   'waf_class_marker_probe',
   'waf_evasion_marker_probe',
-  'l7_resource_posture_probe',
 ]);
 
 const SEMANTIC_SAFE_PROBE_KIND_SET = new Set(SEMANTIC_SAFE_PROBE_KINDS);
@@ -55,7 +59,7 @@ export const EVIDENCE_TIERS = Object.freeze(['E0', 'E1', 'E2', 'E3', 'E4', 'E5']
 export const EVIDENCE_TIER_LABELS = Object.freeze({
   E0: 'Unmapped',
   E1: 'Declared only',
-  E2: 'Transport only',
+  E2: 'External observation',
   E3: 'Semantic safe',
   E4: 'SOC governed',
   E5: 'Monitor only',
@@ -71,6 +75,7 @@ export function evidenceTierForProbeKind(kind) {
 
 export function evidenceTierForCheck(check) {
   if (!check?.probe_profile) return 'E4';
+  if (check.observation_only === true || check.probe_profile.observation_only === true || check.readiness_conclusion === false || check.probe_profile.readiness_conclusion === false) return check.probe_profile.kind === 'metadata_marker' ? 'E1' : 'E2';
   return evidenceTierForProbeKind(check.probe_profile.kind);
 }
 
@@ -382,10 +387,19 @@ const TAXONOMY_PROBE_KIND_BY_CHECK_ID = new Map(
 // SOC-governed requirement must not be downgraded by supplemental declaration/transport checks.
 const EVIDENCE_TIER_PRIORITY = Object.freeze({ E0: 0, E1: 1, E2: 2, E4: 3, E3: 4 });
 
+export const SUPPORTED_EVASION_TRANSFORMS = Object.freeze([
+  'double_url', 'mixed_url', 'unicode_normalization', 'homoglyph', 'overlong_utf8',
+  'html_entity', 'js_escape', 'css_escape', 'base64_wrap', 'numeric_repr',
+  'whitespace',
+  'case_fold', 'control_char', 'parser_hpp', 'parameter_location', 'benign_padding',
+]);
+const SEMANTIC_EVASION_CHECK_SUFFIXES = new Set(SUPPORTED_EVASION_TRANSFORMS);
+
 export function evidenceTierForTaxonomyCheckId(checkId) {
   const kind = TAXONOMY_PROBE_KIND_BY_CHECK_ID.get(checkId);
   if (kind === 'soc_gated') return 'E4';
   if (!kind) return 'E0';
+  if (kind === 'waf_evasion_marker_probe' && !SEMANTIC_EVASION_CHECK_SUFFIXES.has(checkId.replace(/^waf\.evasion_/, '').replace(/\.safe$/, ''))) return 'E2';
   return evidenceTierForProbeKind(kind);
 }
 

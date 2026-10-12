@@ -1,10 +1,9 @@
 /**
  * L7 resource-exhaustion POSTURE probes (Wave 4, ticket W4-L7).
  *
- * These probes read *acceptance posture* only. They DECLARE an oversize/compressed
- * request via headers and send a single tiny inert benign marker — they never send a
- * decompression bomb, hash-collision payload, or flood. A protected origin rejects the
- * declared shape before doing work (413/414/415/431/400); an exposed origin accepts it.
+ * One bounded GET observes an actual ~1KB URI. It cannot establish a 64KB limit.
+ * Compressed-body/parser scenarios are unsupported without a business-safe approved
+ * endpoint; a declaration header or malformed encoding is never mitigation evidence.
  *
  * Hard-bounded by L7_RESOURCE_POSTURE_MAX_REQUESTS. No count, rate, concurrency, or
  * repeat parameter is exported. Response bodies are never retained.
@@ -13,7 +12,6 @@
 import { isLiveCapabilityProbeAuthorized } from '../capabilityProbeAuth.mjs';
 import { normalizeProbeHttpPath } from '../../contracts/checks.mjs';
 import { pinnedFetch } from '../pinnedHttpRequest.mjs';
-import { BENIGN_CLASS_MARKERS } from '../outsideInWafScanner.mjs';
 import { resolveProbeRequestBudget } from '../probeRequestBudget.mjs';
 
 export const L7_RESOURCE_POSTURE_PROBE_KIND = 'l7_resource_posture_probe';
@@ -29,21 +27,18 @@ export const L7_POSTURE_MARKER_CLASSES = Object.freeze([
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 5000;
 
-// Inert benign marker body. ~30 bytes; compresses ~1:1. Not a bomb.
-export const INERT_POSTURE_MARKER_BODY = `${BENIGN_CLASS_MARKERS.xss}astranull-inert-posture`;
+// Exported compatibility token only; body delivery remains unsupported.
+export const INERT_POSTURE_MARKER_BODY = 'astranull-inert-posture';
 
 // Bounded benign URI marker used for the oversize-URI posture read. One small request.
 const URI_MARKER_TOKEN = 'astranull-inert';
 const URI_MARKER_LENGTH = 1024;
 
 // DECLARED sizes are integers placed in a header string only — never materialised as bytes.
-const DECLARED_DECOMPRESSED_BYTES = 52428800;
-const DECLARED_URI_LENGTH = 65536;
+// No imaginary declared size is used as evidence.
 
 // Absolute cap on the actual bytes any single request in this module may send.
 export const MAX_ACTUAL_REQUEST_BYTES = 4096;
-
-const ENFORCED_STATUSES = new Set([400, 413, 414, 415, 431]);
 
 export function boundedPostureTimeoutMs(value) {
   const candidate = Number(value);
@@ -66,8 +61,13 @@ export function buildL7ResourcePostureProfile({
     timeout_ms: boundedPostureTimeoutMs(timeout_ms),
     marker_class,
   };
+  if (!Number.isSafeInteger(max_requests) || max_requests < 1 || !Number.isSafeInteger(timeout_ms) || timeout_ms < 1) throw new Error('probe budget and timeout must be positive integers');
   const path = normalizeProbeHttpPath(probe_path);
+  if (probe_path != null && !path) throw new Error('invalid bounded probe path');
   if (path) profile.probe_path = path;
+  profile.observation_only = true;
+  profile.readiness_conclusion = false;
+  profile.delivery_supported = marker_class === 'declared_oversize_uri';
   return profile;
 }
 
@@ -80,7 +80,9 @@ function resolveEndpoint(job) {
   } catch {
     return null;
   }
+  if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.hash) return null;
   const configuredPath = normalizeProbeHttpPath(job?.probe_profile?.probe_path);
+  if (job?.probe_profile?.probe_path != null && !configuredPath) return null;
   if (configuredPath) {
     base.pathname = configuredPath;
     base.search = '';
@@ -89,39 +91,14 @@ function resolveEndpoint(job) {
   return { url: base, path: base.pathname };
 }
 
-// Each spec declares an oversize/compressed shape via headers only. `body` and `query`
-// are always inert and bounded; `declared_*` values live exclusively inside header strings.
+// Only an actual bounded URI is delivered. No declared compressed shape or POST.
 function requestSpecsForMarkerClass(markerClass) {
-  if (markerClass === 'declared_content_encoding') {
-    return [
-      {
-        method: 'POST',
-        headers: {
-          'content-encoding': 'gzip',
-          'content-type': 'application/octet-stream',
-          'x-astranull-declared-decompressed-bytes': String(DECLARED_DECOMPRESSED_BYTES),
-          'x-astranull-probe': 'l7-resource-posture',
-        },
-        body: INERT_POSTURE_MARKER_BODY,
-      },
-      {
-        method: 'POST',
-        headers: {
-          'content-encoding': 'br',
-          'content-type': 'application/octet-stream',
-          'x-astranull-declared-decompressed-bytes': String(DECLARED_DECOMPRESSED_BYTES),
-          'x-astranull-probe': 'l7-resource-posture',
-        },
-        body: INERT_POSTURE_MARKER_BODY,
-      },
-    ];
-  }
+  if (markerClass === 'declared_content_encoding') return [];
   return [
     {
       method: 'GET',
       query: `${URI_MARKER_TOKEN}=${'a'.repeat(URI_MARKER_LENGTH - URI_MARKER_TOKEN.length - 1)}`,
       headers: {
-        'x-astranull-declared-uri-length': String(DECLARED_URI_LENGTH),
         'x-astranull-probe': 'l7-resource-posture',
       },
     },
@@ -166,6 +143,13 @@ export async function probeL7ResourcePosture(job, deps = {}) {
     };
   }
 
+  if (markerClass === 'declared_content_encoding') return { external_result: 'not_run', metadata: {
+    probe_kind: kind, marker_class: markerClass, classifier_version: 'capability-observation-v3',
+    observation_only: true, readiness_conclusion: false, delivery_supported: false,
+    not_run_reason: 'approved_business_safe_body_endpoint_required', comparison_complete: false,
+    request_counting_basis: 'logical_operations', body_retained: false,
+  }, requests_sent: 0, duration_ms: 0 };
+
   const endpoint = resolveEndpoint(job);
   if (!endpoint) {
     return {
@@ -189,8 +173,6 @@ export async function probeL7ResourcePosture(job, deps = {}) {
   const specs = requestSpecsForMarkerClass(markerClass).slice(0, maxRequests);
 
   let requestsSent = 0;
-  let enforced = false;
-  let accepted = false;
   const observedStatuses = [];
 
   for (const spec of specs) {
@@ -214,18 +196,14 @@ export async function probeL7ResourcePosture(job, deps = {}) {
       }, deps);
       const status = Number(resp?.status) || 0;
       observedStatuses.push(status);
-      if (ENFORCED_STATUSES.has(status)) enforced = true;
-      else if (status >= 100 && status < 400) accepted = true;
     } catch {
       observedStatuses.push(0);
       break;
     }
-    if (enforced) break;
   }
 
   let externalResult = 'error';
-  if (enforced) externalResult = 'blocked';
-  else if (accepted) externalResult = 'connected';
+  if (observedStatuses.some((status) => status > 0)) externalResult = 'connected';
 
   return {
     external_result: externalResult,
@@ -234,7 +212,11 @@ export async function probeL7ResourcePosture(job, deps = {}) {
       marker_class: markerClass,
       probe_path: endpoint.path,
       observed_statuses: observedStatuses,
-      declared_only: true,
+      classifier_version: 'capability-observation-v3',
+      observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
+      actual_uri_query_bytes: URI_MARKER_LENGTH,
+      parser_limit_confirmed: false,
+      declared_only: false,
       body_retained: false,
       request_counting_basis: 'logical_operations',
     },

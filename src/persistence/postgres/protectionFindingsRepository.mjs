@@ -31,7 +31,7 @@ function mapExisting(row) {
   };
 }
 
-export function createPostgresProtectionFindingsRepository(pool, { audit = null } = {}) {
+export function createPostgresProtectionFindingsRepository(pool, { audit = null, notifications = null } = {}) {
   async function appendAudit(client, ctx, action, findingId, metadata) {
     if (!audit?.appendAuditEvent) return;
     await audit.appendAuditEvent({
@@ -43,6 +43,19 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null 
       resource_id: findingId,
       metadata,
     }, { client });
+  }
+
+  async function enqueueHighSeverity(ctx, row, evaluation) {
+    if (!['high', 'critical'].includes(row.severity) || !notifications?.enqueueNotification) return;
+    // Share the finding transaction; deferred delivery never sends before its domain commit.
+    await notifications.enqueueNotification(ctx, {
+      trigger: 'finding.high_severity',
+      subject: row.title,
+      metadata: { finding_id: row.id, severity: row.severity, source: 'protection_validation',
+        evaluation_id: evaluation.id, test_run_id: row.test_run_id ?? null },
+      dedupeKey: `protection_finding.high_severity:${row.id}:evaluation:${evaluation.id}`,
+      deferToRecovery: true,
+    });
   }
 
   return {
@@ -58,6 +71,7 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null 
       if (!candidates.length) return { ok: true, error: null, created: [], updated: [], retained: [] };
       const at = new Date(now).toISOString();
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
         // Serialize absent rows too: FOR UPDATE alone cannot lock a finding that has not been inserted yet.
         for (const key of [...new Set(candidates.map((row) => row.dedupe_key))].sort()) {
           await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`protection_finding:${ctx.tenantId}:${key}`]);
@@ -105,6 +119,7 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null 
             existing.unshift({ ...row, protection_validation: row.protection_validation });
             created.push(row.id);
             await appendAudit(client, ctx, 'finding.created', row.id, metadata);
+            await enqueueHighSeverity(ctx, row, evaluation);
             continue;
           }
           if (!PATCHABLE_ACTIONS.has(plan.action) || !plan.finding_id) continue;
@@ -121,9 +136,11 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null 
               JSON.stringify(next.protection_validation), at,
             ],
           );
+          const severityIncreased = next.severity !== existing[index].severity;
           existing[index] = next;
           (plan.action === 'exception_retained' ? retained : updated).push(plan.finding_id);
           await appendAudit(client, ctx, 'finding.updated', plan.finding_id, metadata);
+          if (plan.action === 'escalate' || severityIncreased) await enqueueHighSeverity(ctx, next, evaluation);
         }
         return { ok: true, error: null, created, updated, retained, passing: derived.passing.length, skipped: derived.skipped.length };
       });

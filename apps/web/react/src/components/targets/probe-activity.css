@@ -3,6 +3,8 @@
 .probe-activity-head h2 { margin: 0; font-size: 1rem; }
 .probe-activity-head p { margin: 6px 0 0; font-size: .875rem; color: var(--fg-2); }
 .probe-activity-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.probe-activity-run { display: block; overflow-wrap: anywhere; margin-top: 6px; color: var(--fg-2); font-size: .75rem; }
+.probe-activity-warnings { padding: 0 20px 0 36px; color: var(--fg-2); font-size: .75rem; line-height: 1.6; }
 .probe-activity-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 20px 12px; }
 .probe-activity-search { display: flex; gap: 8px; align-items: center; flex: 1 1 240px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .probe-activity-search input { background: transparent; color: var(--fg); border: 0; outline: 0; min-width: 0; width: 100%; font: inherit; font-size: .875rem; }
@@ -35,6 +37,12 @@
 .probe-activity-note, .probe-activity-error { padding: 0 20px; font-size: .75rem; color: var(--fg-2); }
 .probe-activity-error { color: var(--danger); }
 .probe-activity-empty { text-align: center; padding: 28px 16px !important; color: var(--fg-2); }
+.probe-activity-authority { margin: 12px 20px; font-size: .75rem; color: var(--fg-2); }
+.probe-activity-authority summary { cursor: pointer; padding-block: 6px; }
+.probe-activity-authority summary:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.probe-activity-authority dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.probe-activity-authority dt { text-transform: capitalize; }
+.probe-activity-authority dd { margin: 4px 0 0; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); }
 @media (max-width: 640px) {
   .probe-activity-head { flex-direction: column; padding: 16px 12px 8px; }
   .probe-activity-tools { padding-inline: 12px; }

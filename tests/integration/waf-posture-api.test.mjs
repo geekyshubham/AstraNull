@@ -115,9 +115,9 @@ function injectMetadataProbeEvent({ testRunId, nonceHash, externalResult, metada
     test_run_id: testRunId,
     target_id: 'tgt_1',
     check_id: 'waf.marker_rule.safe',
-    source: 'probe_worker',
+    source: 'probe_worker', producer_kind: 'signed_probe',
     signal_type: 'probe_result',
-    timestamp: new Date().toISOString(),
+    timestamp: new Date().toISOString(), ingested_at: new Date().toISOString(),
     nonce_hash: nonceHash,
     metadata: { external_result: externalResult, ...metadata },
   });
@@ -160,9 +160,14 @@ function openWafPostureFindingsForAsset(assetId) {
 
 // Full "protected" needs an explicit direct-origin denial over a healthy baseline (ADR-0008, PV-01).
 function deniedOriginObservation() {
+  const observedAt = new Date().toISOString();
+  const scope = { host: 'waf-app.example.com', path: '/', method: 'HEAD', port: 443,
+    scenario_version: 'origin-comparison-v4', source_perspective: 'external_fixture', worker_id: 'worker_fixture' };
   return classifyDirectOriginObservation({
     response: { status: 403, headers: { get: (name) => (name === 'x-origin-lockdown' ? 'cdn-only' : null) } },
-    baseline: { status_code: 200 },
+    baseline: { status_code: 200, scope, observed_at: observedAt,
+      application_identity: { confirmed: true, method: 'nonce_canary' }, canary_echo: 'fixture_nonce' },
+    scope, observedAt, expectedNonce: 'fixture_nonce',
     declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
   });
 }
@@ -738,12 +743,13 @@ describe('WAF posture API', () => {
     assert.equal(coverage.status, 200);
     assert.equal(coverage.json.total_assets, 1);
     assert.equal(coverage.json.total, 1);
-    assert.equal(coverage.json.protected, 1);
-    assert.equal(coverage.json.coverage_ratio, 1);
-    assert.equal(coverage.json.percentages.protected, 100);
+    assert.equal(coverage.json.protected, 0);
+    assert.equal(coverage.json.unknown, 1, 'retained normalized posture without actual versioned complete scenario proof earns no current assurance');
+    assert.equal(coverage.json.coverage_ratio, 0);
+    assert.equal(coverage.json.percentages.protected, 0);
     assert.ok(Array.isArray(coverage.json.trend));
     assert.ok(coverage.json.trend.length >= 1);
-    assert.equal(coverage.json.trend.at(-1).protected, 1);
+    assert.equal(coverage.json.trend.at(-1).protected, 0);
 
     const posture = fetched.json.current_posture;
     assert.ok(posture.risk_score >= 0);
@@ -810,7 +816,7 @@ describe('WAF posture API', () => {
     assert.equal(finalize.status, 200);
     assert.equal(finalize.json.posture.status, 'unprotected');
     assert.ok(finalize.json.posture.risk_score >= 50);
-    assert.equal(finalize.json.posture.priority_band, 'tier_1');
+    assert.equal(finalize.json.posture.priority_band, 'tier_2');
 
     const vendors = await request(baseUrl, 'GET', '/v1/waf/coverage/vendors', { headers: engineer });
     assert.equal(vendors.status, 200);
@@ -844,18 +850,20 @@ describe('WAF posture API', () => {
     assert.equal(criticality.status, 200);
     const paymentBucket = criticality.json.items.find((item) => item.business_criticality === 'payment');
     assert.ok(paymentBucket);
-    assert.equal(paymentBucket.unprotected, 1);
-    assert.ok(paymentBucket.critical_gap_count >= 1);
+    assert.equal(paymentBucket.unprotected, 0);
+    assert.equal(paymentBucket.asset_count, 1, 'unverified legacy state stays in the full declared cohort');
+    assert.equal(paymentBucket.coverage_ratio, 0);
+    assert.equal(paymentBucket.critical_gap_count, 0);
     assertSerializedSafe(criticality.json, 'coverage-criticality');
 
     const roadmap = await request(baseUrl, 'GET', '/v1/waf/coverage/risk-roadmap', {
       headers: engineer,
     });
     assert.equal(roadmap.status, 200);
-    assert.equal(roadmap.json.method, 'waf_risk_v1');
-    assert.ok(roadmap.json.tiers.tier_1.length >= 1);
-    assert.equal(roadmap.json.tiers.tier_1[0].waf_asset_id, asset.id);
-    assert.ok(roadmap.json.tiers.tier_1[0].recommended_action);
+    assert.equal(roadmap.json.method, 'waf_risk_v2');
+    assert.ok(roadmap.json.tiers.tier_2.length >= 1);
+    assert.equal(roadmap.json.tiers.tier_2[0].waf_asset_id, asset.id);
+    assert.ok(roadmap.json.tiers.tier_2[0].recommended_action);
 
     const consolidation = await request(
       baseUrl,
@@ -2574,7 +2582,7 @@ describe('WAF report export API', () => {
       },
     });
     assert.equal(finalize.status, 200);
-    assert.equal(finalize.json.posture.priority_band, 'tier_1');
+    assert.equal(finalize.json.posture.priority_band, 'tier_2');
 
     getStore().targetGroups = getStore().targetGroups.map((group) =>
       group.id === 'tg_1'
@@ -2609,9 +2617,9 @@ describe('WAF report export API', () => {
       ),
     );
     assert.ok(Array.isArray(exported.json.payload.executive_summary.coverage_trend));
-    assert.ok(exported.json.payload.executive_summary.tier_summary.tier_1_count >= 1);
+    assert.ok(exported.json.payload.executive_summary.tier_summary.tier_2_count >= 1);
     assert.ok(
-      exported.json.payload.executive_summary.tier_summary.tier_1_highlights.some(
+      exported.json.payload.executive_summary.tier_summary.tier_2_highlights.some(
         (item) => item.waf_asset_id === asset.id,
       ),
     );
@@ -2621,7 +2629,7 @@ describe('WAF report export API', () => {
       exported.json.payload.roadmap_reference.api_path,
       '/v1/waf/coverage/risk-roadmap',
     );
-    assert.equal(exported.json.payload.roadmap_reference.method, 'waf_risk_v1');
+    assert.equal(exported.json.payload.roadmap_reference.method, 'waf_risk_v2');
     assert.ok(Array.isArray(exported.json.payload.investment_phases));
     assert.ok(exported.json.payload.investment_phases.length >= 4);
     assert.ok(exported.json.payload.procurement_justification?.narrative);
@@ -2630,11 +2638,11 @@ describe('WAF report export API', () => {
       /Tier 1/i,
     );
     assert.ok(
-      exported.json.payload.procurement_justification.tier_1_examples.some(
+      !exported.json.payload.procurement_justification.tier_1_examples.some(
         (example) => example.waf_asset_id === asset.id,
       ),
     );
-    assert.ok(exported.json.payload.procurement_justification.risk_signals.tier_1_gap_count >= 1);
+    assert.equal(exported.json.payload.procurement_justification.risk_signals.tier_1_gap_count, 0);
     assertSerializedSafe(exported.json, 'board roadmap brief export');
     assert.equal(
       verifyCustodyManifest({

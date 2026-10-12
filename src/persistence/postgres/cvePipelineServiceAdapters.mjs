@@ -4,6 +4,7 @@ import {
   assertCvePlaybookCoordinatedRetestAllowed,
   assertCvePostMitigationRetestAllowed,
   assertCveSafeValidationAllowed,
+  assertCveValidationRequestSafety,
   assertValidStageTransition,
   buildCveMitigationPlaybook,
   buildCvePostMitigationRetestRequest,
@@ -60,6 +61,7 @@ function formatPipelineItem(record) {
     poc_indicator: record.poc_indicator ?? false,
     vendor_advisories: record.vendor_advisories ?? [],
     stage: record.stage ?? record.state,
+    resolution: record.resolution ?? record.triage_summary_json?.resolution ?? { kind: (record.stage ?? record.state) === 'resolved' ? 'legacy_unverified' : 'open', mitigation_verified: false },
     triage_result: record.triage_result ?? null,
     created_at: record.created_at,
     updated_at: record.updated_at,
@@ -81,13 +83,15 @@ function formatAssetMatch(record) {
     validation_status: record.validation_status ?? 'pending',
     last_waf_validation_run_id: record.last_waf_validation_run_id ?? null,
     validation_evidence_json: record.validation_evidence_json ?? null,
+    assurance_status: record.validation_evidence_json?.assurance_status ?? 'not_validated',
+    component_applicability: record.component_applicability ?? record.validation_evidence_json?.component_applicability ?? null,
     created_at: record.created_at,
     updated_at: record.updated_at,
   };
 }
 
 function attachValidationEvidence(matches, validationBindings = {}) {
-  return matches.map((match) => ({
+  return matches.map((match) => formatAssetMatch({
     ...match,
     validation_evidence_json: validationBindings[match.id] ?? match.validation_evidence_json ?? null,
   }));
@@ -585,6 +589,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
       }
 
       try {
+      assertCveValidationRequestSafety(body);
         const now = nowFn().toISOString();
         const txResult = await withTenantContext(pool, ctx.tenantId, async (client) => {
           const validation_runs = [];
@@ -596,14 +601,15 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
           const txOptions = { client };
 
           for (const matchRecord of matches) {
-            const formattedMatch = formatAssetMatch(matchRecord);
+            const formattedMatch = attachValidationEvidence([matchRecord], validation_bindings)[0];
             const checkId = resolveSafeCveValidationCheck(item, formattedMatch);
             if (!checkId) {
               const skipped = await cveRepo.updateCveAssetMatch(ctx, matchRecord.id, {
                 validation_status: 'skipped',
                 updated_at: now,
               }, txOptions);
-              skipped_matches.push(formatAssetMatch(skipped));
+              validation_bindings[matchRecord.id] = { ...(formattedMatch.validation_evidence_json ?? {}), assurance_status: 'not_validated', closure_ready: false, reason: 'cve_specific_scenario_unavailable' };
+              skipped_matches.push(formatAssetMatch({ ...skipped, validation_evidence_json: validation_bindings[matchRecord.id] }));
               continue;
             }
 
@@ -699,6 +705,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
           const updatedItem = await cveRepo.updateCvePipelineItemStage(ctx, item.id, nextStage, {
             updated_at: now,
             validation_bindings,
+            resolution: { kind: 'open', mitigation_verified: false, recorded_at: now },
           }, txOptions);
 
           await auditRepo.appendAuditEvent({
@@ -778,6 +785,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
       }
 
       try {
+      assertCveValidationRequestSafety(body);
         const now = nowFn().toISOString();
         const txResult = await withTenantContext(pool, ctx.tenantId, async (client) => {
           const validation_runs = [];
@@ -800,10 +808,11 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
             const matchRecommendations = recommendationsByMatchId.get(matchRecord.id) ?? [];
             const recommendation = selectLatestDeployedRecommendation(matchRecommendations);
             if (!recommendation) {
+              matchOutcomes.push({ match_id: matchRecord.id, status: 'retest_pending', closure_ready: false, reason: 'mitigation_not_deployed' });
               continue;
             }
 
-            const formattedMatch = formatAssetMatch(matchRecord);
+            const formattedMatch = attachValidationEvidence([matchRecord], validation_bindings)[0];
             const existingEvidence =
               validation_bindings[matchRecord.id] ?? formattedMatch.validation_evidence_json ?? null;
             const existingRun = matchRecord.last_waf_validation_run_id
@@ -815,7 +824,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
               && isRetestEvidenceBinding(existingEvidence);
 
             if (hasPendingRetest) {
-              const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun);
+              const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun, { item, match: formattedMatch, recommendation, binding: existingEvidence, now: nowFn() });
               matchOutcomes.push({ match_id: matchRecord.id, ...outcome });
               updated_matches.push(
                 formatAssetMatch({
@@ -827,11 +836,14 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
             }
 
             if (existingRun?.status === 'finalized' && isRetestEvidenceBinding(existingEvidence)) {
-              const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun);
+              const outcome = deriveCveRetestOutcomeFromValidationRun(existingRun, { item, match: formattedMatch, recommendation, binding: existingEvidence, now: nowFn() });
               const evidence = {
                 ...existingEvidence,
                 validation_status: outcome.status,
                 retest_verdict: outcome.verdict,
+                assurance_status: outcome.assurance_status,
+                closure_ready: outcome.closure_ready,
+                reason: outcome.reason,
                 finalized_at: existingRun.finalized_at ?? now,
               };
               validation_bindings[matchRecord.id] = evidence;
@@ -858,10 +870,13 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
               matchOutcomes.push({
                 match_id: matchRecord.id,
                 status: 'skipped',
-                closure_ready: true,
+                closure_ready: false,
+                assurance_status: 'not_validated',
+                reason: 'cve_specific_scenario_unavailable',
                 verdict: 'skipped',
               });
-              updated_matches.push(formatAssetMatch(skipped));
+              validation_bindings[matchRecord.id] = { ...(formattedMatch.validation_evidence_json ?? {}), assurance_status: 'not_validated', closure_ready: false, reason: 'cve_specific_scenario_unavailable' };
+              updated_matches.push(formatAssetMatch({ ...skipped, validation_evidence_json: validation_bindings[matchRecord.id] }));
               continue;
             }
 
@@ -993,6 +1008,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
           const updatedItem = await cveRepo.updateCvePipelineItemStage(ctx, item.id, nextStage, {
             updated_at: now,
             validation_bindings,
+            resolution: { kind: closure.ready ? 'evidence_verified' : 'open', mitigation_verified: closure.ready, recorded_at: now },
           }, txOptions);
 
           await auditRepo.appendAuditEvent({
@@ -1057,8 +1073,9 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
         const nextStage = assertValidStageTransition(item.stage ?? item.state, stage);
         const now = nowFn().toISOString();
         const previousStage = item.stage ?? item.state;
+        const resolution = { kind: nextStage === 'resolved' ? 'administrative_disposition' : 'open', mitigation_verified: false, recorded_at: now };
         const updated = await cveRepo.updateCvePipelineItemStage(ctx, id, nextStage, {
-          updated_at: now,
+          resolution, updated_at: now,
         });
 
         await auditRepo.appendAuditEvent({
@@ -1072,6 +1089,8 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
             cve_id: item.cve_id,
             previous_stage: previousStage,
             stage: nextStage,
+            disposition: 'administrative',
+            mitigation_verified: false,
           }),
         });
         return { item: formatPipelineItem(updated) };

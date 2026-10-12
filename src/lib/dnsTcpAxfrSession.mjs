@@ -52,6 +52,7 @@ export async function runDnsTcpAxfrQuery({
   beforeProbeIoAttempt,
   recordProbeLogicalAttempt,
   onAttempt,
+  signal,
 }) {
   const queryMessage = buildAxfrDnsMessage(zone, { transactionId, transactionIdFn });
   const queryTransactionId = queryMessage.readUInt16BE(0);
@@ -67,6 +68,7 @@ export async function runDnsTcpAxfrQuery({
       if (cleaned) return;
       cleaned = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       socket?.removeListener?.('connect', onConnect);
       socket?.removeListener?.('data', onData);
       socket?.removeListener?.('timeout', onTimeout);
@@ -83,12 +85,12 @@ export async function runDnsTcpAxfrQuery({
     };
     const closedBeforeFrame = (destroy) => {
       if (responseBuffer.length === 0) {
-        finish({ axfr_refused: true, reason: 'no_response_frame' }, { destroy });
+        finish({ axfr_refused: false, reason: 'no_response_frame' }, { destroy });
         return;
       }
       const parsed = parseDnsResponseHeader(responseBuffer, { transport: 'tcp' });
       finish({
-        axfr_refused: true,
+        axfr_refused: false,
         transaction_id_match: parsed.transaction_id == null
           ? null
           : parsed.transaction_id === queryTransactionId,
@@ -114,13 +116,12 @@ export async function runDnsTcpAxfrQuery({
         transaction_id: responseTransactionId,
         rcode,
         answer_count: answerCount,
-        axfr_refused: wireRefused,
         reason: wireReason,
         dns_message: dnsMessage,
       } = accumulated.parsed;
       if (responseTransactionId != null && responseTransactionId !== queryTransactionId) {
         finish({
-          axfr_refused: true,
+          axfr_refused: false,
           rcode,
           answer_count: answerCount,
           transaction_id_match: false,
@@ -128,9 +129,9 @@ export async function runDnsTcpAxfrQuery({
         });
         return;
       }
-      if (wireRefused) {
+      if (wireReason) {
         finish({
-          axfr_refused: true,
+          axfr_refused: false,
           rcode,
           answer_count: answerCount,
           transaction_id_match: responseTransactionId == null ? null : true,
@@ -157,36 +158,44 @@ export async function runDnsTcpAxfrQuery({
         transaction_id_match: true,
         response_message: (dnsMessage[2] & 0x80) !== 0,
       };
-      if (!metadata.response_message) {
-        finish({ ...metadata, axfr_refused: true, reason: 'not_dns_response' });
+      if (!metadata.response_message || (dnsMessage[2] & 0x78) !== 0 || (dnsMessage[2] & 0x02) !== 0) {
+        finish({ ...metadata, axfr_refused: false, reason: 'not_dns_response' });
         return;
       }
       if (!structure.structure_valid) {
         finish({
           ...metadata,
-          axfr_refused: true,
+          axfr_refused: false,
           reason: structure.reason ?? 'malformed_response',
         });
         return;
       }
       if (rcode !== 0) {
-        finish({ ...metadata, axfr_refused: true });
+        finish({ ...metadata, axfr_refused: rcode === 5, axfr_leak: false,
+          protocol_identity_confirmed: true, transfer_complete: false, reason: rcode === 5 ? 'refused_rcode' : 'dns_error_response' });
         return;
       }
       if (structure.has_complete_soa) {
-        finish({ ...metadata, axfr_leak: true });
+        finish({ ...metadata, axfr_refused: false, axfr_leak: structure.axfr_boundary_soa_match === true,
+          transfer_complete: structure.axfr_boundary_soa_match === true, protocol_identity_confirmed: true,
+          axfr_records_observed: structure.complete_answer_count,
+          reason: structure.axfr_boundary_soa_match ? null : 'bounded_partial_transfer_observation' });
         return;
       }
-      finish({ ...metadata, axfr_refused: true, reason: 'no_complete_soa_answer' });
+      finish({ ...metadata, axfr_refused: false, reason: 'no_complete_soa_answer' });
     };
-    const onTimeout = () => finish({ axfr_refused: true, reason: 'timeout' });
+    const onTimeout = () => finish({ axfr_refused: false, axfr_leak: false, error_class: 'timeout', reason: 'timeout' });
+    const onAbort = () => finish({ axfr_refused: false, axfr_leak: false, error_class: 'timeout', reason: 'probe_canceled' });
     const onError = (error) => finish({
-      axfr_refused: true,
+      axfr_refused: false,
       reason: boundedTransportReason(error),
+      error_class: boundedTransportReason(error),
     });
     const onEnd = () => closedBeforeFrame(true);
     const onClose = () => closedBeforeFrame(false);
 
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
     socket = startProbeIoAttempt(
       { beforeProbeIoAttempt, recordProbeLogicalAttempt },
       'tcp_axfr',

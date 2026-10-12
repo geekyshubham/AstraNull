@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { getCheckById } from './checks.mjs';
+import { CHECK_CATALOG } from './checks.mjs';
+import { approvedScenarioVersion, deriveCheckDefinitionVersion } from '../lib/checkDefinitionVersion.mjs';
 import { assertNoRawWafEvidence } from './wafPosture.mjs';
 
 export const CVE_PIPELINE_STAGES = Object.freeze([
@@ -81,6 +82,10 @@ const FORBIDDEN_CVE_PIPELINE_KEYS = Object.freeze([
 ]);
 
 const FORBIDDEN_KEY_SET = new Set(FORBIDDEN_CVE_PIPELINE_KEYS);
+const FORBIDDEN_VALIDATION_KEY_SET = new Set([
+  ...FORBIDDEN_CVE_PIPELINE_KEYS,
+  'soc_approved', 'approved_by', 'approved_at', 'approved_role', 'reviewed_by', 'reviewed_at',
+]);
 
 const CONFIDENCE_NUMERIC = Object.freeze({
   cnapp_cspm: 0.9,
@@ -134,24 +139,24 @@ function normalizeProductToken(value) {
     .replace(/[^a-z0-9.+_-]+/g, ' ');
 }
 
-function collectForbiddenKeys(value, path = '') {
+function collectForbiddenKeys(value, path = '', forbiddenKeys = FORBIDDEN_KEY_SET) {
   if (value === null || value === undefined || typeof value !== 'object') {
     return [];
   }
   const findings = [];
   if (Array.isArray(value)) {
     value.forEach((entry, index) => {
-      findings.push(...collectForbiddenKeys(entry, `${path}[${index}]`));
+      findings.push(...collectForbiddenKeys(entry, `${path}[${index}]`, forbiddenKeys));
     });
     return findings;
   }
   for (const [key, nested] of Object.entries(value)) {
     const keyPath = path ? `${path}.${key}` : key;
     const normalized = normalizeKey(key);
-    if (FORBIDDEN_KEY_SET.has(normalized)) {
+    if (forbiddenKeys.has(normalized)) {
       findings.push(keyPath);
     }
-    findings.push(...collectForbiddenKeys(nested, keyPath));
+    findings.push(...collectForbiddenKeys(nested, keyPath, forbiddenKeys));
   }
   return findings;
 }
@@ -538,7 +543,7 @@ export function buildWafRuleRecommendation(match, vendor, item = {}) {
       'Monitor false positives and keep a rollback path to the prior policy version.',
     ],
     validation_plan:
-      'Rerun AstraNull WAF marker/CVE-safe validation after deployment to confirm blocking behavior.',
+      'Confirm exact component/version applicability and mitigation scope. Use only an approved CVE-specific scenario if available; a generic WAF marker or fingerprint cannot verify this CVE mitigation.',
     rollback_plan:
       'Revert to the previous WAF policy or rule version, or disable the custom rule if business impact occurs.',
   };
@@ -571,42 +576,32 @@ export function assertValidStageTransition(currentStage, nextStage) {
   throw err;
 }
 
-function boundedProbeLimit(value, fallback, max) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return Math.min(parsed, max);
-}
-
-export function resolveSafeCveValidationCheck(item, match) {
+/** A technology fingerprint has no CVE mitigation meaning. No default CVE scenario exists. */
+export function resolveSafeCveValidationCheck(item, match, catalog = CHECK_CATALOG) {
   validateCvePipelineItem(item);
   if (!match || typeof match !== 'object') {
     const err = new Error('CVE asset match is required to resolve a safe validation check.');
     err.code = 'invalid_cve_pipeline_item';
     throw err;
   }
-  if (match.validation_status === 'inconclusive' || match.validation_status === 'skipped') {
-    return null;
-  }
-  if (!match.exposure_claim_allowed) {
-    return null;
-  }
-  const check = getCheckById(CVE_SAFE_VALIDATION_CHECK_ID);
-  if (!check) {
-    const err = new Error(`Safe CVE validation check is unavailable: ${CVE_SAFE_VALIDATION_CHECK_ID}`);
-    err.code = 'cve_validation_check_unavailable';
-    throw err;
-  }
-  return CVE_SAFE_VALIDATION_CHECK_ID;
+  const applicability = match.component_applicability ?? match.validation_evidence_json?.component_applicability;
+  if (!match.exposure_claim_allowed || applicability?.status !== 'confirmed' || !applicability.component || !applicability.version || applicability.cve_id !== item.cve_id) return null;
+  const check = catalog.find((candidate) => candidate.cve_validation?.approved === true
+    && candidate.cve_validation?.cve_id === item.cve_id
+    && candidate.cve_validation?.component === applicability.component
+    && candidate.cve_validation?.versions?.includes(applicability.version)
+    && candidate.cve_validation?.scenario_version === approvedScenarioVersion(candidate)
+    && candidate.probe_profile?.kind === 'waf_class_marker_probe'
+    && candidate.risk_class === 'safe'
+    && candidate.observation_only !== true && candidate.readiness_conclusion !== false
+    && !['E1', 'E2'].includes(candidate.evidence_tier)
+    && candidate.probe_profile?.observation_only !== true && candidate.probe_profile?.readiness_conclusion !== false);
+  return check?.check_id ?? null;
 }
 
-export function assertCveSafeValidationAllowed(item, match, body = {}) {
-  validateCvePipelineItem(item);
-  if (match === null || match === undefined || typeof match !== 'object' || Array.isArray(match)) {
-    const err = new Error('CVE asset match is required for safe validation.');
-    err.code = 'invalid_cve_pipeline_item';
-    throw err;
-  }
-  const forbidden = collectForbiddenKeys(body);
+/** Reject unsafe fields even when no supported CVE scenario exists. */
+export function assertCveValidationRequestSafety(body = {}) {
+  const forbidden = collectForbiddenKeys(body, '', FORBIDDEN_VALIDATION_KEY_SET);
   if (forbidden.length > 0) {
     const err = new Error(`Forbidden CVE validation field: ${forbidden[0]}`);
     err.code = 'unsafe_cve_pipeline_item';
@@ -621,14 +616,30 @@ export function assertCveSafeValidationAllowed(item, match, body = {}) {
     throw err;
   }
 
+  if (body.risk_class === 'soc_gated' || body.risk_class === 'prohibited') {
+    const err = new Error('soc_gated and prohibited validations require SOC workflow.');
+    err.code = 'unsafe_waf_profile'; throw err;
+  }
+  return true;
+}
+
+export function assertCveSafeValidationAllowed(item, match, body = {}) {
+  validateCvePipelineItem(item);
+  if (match === null || match === undefined || typeof match !== 'object' || Array.isArray(match)) {
+    const err = new Error('CVE asset match is required for safe validation.');
+    err.code = 'invalid_cve_pipeline_item';
+    throw err;
+  }
+  assertCveValidationRequestSafety(body);
+
   if (match.validation_status === 'inconclusive' || match.validation_status === 'skipped') {
     const err = new Error('CVE asset match is not eligible for safe validation.');
     err.code = 'cve_validation_not_applicable';
     throw err;
   }
 
-  const socApproved = parseBooleanDefault(body.soc_approved, false);
-  if (item.known_exploited && match.requires_review && !socApproved) {
+  // No stored execution review is wired here; caller input cannot satisfy this gate.
+  if (item.known_exploited && match.requires_review) {
     const err = new Error(
       'Known-exploited CVE matches requiring review need SOC approval before safe validation.',
     );
@@ -647,35 +658,9 @@ export function assertCveSafeValidationAllowed(item, match, body = {}) {
 
 export function buildSafeCveValidationRequest(item, match, asset = {}) {
   assertCveSafeValidationAllowed(item, match);
-  const checkId = resolveSafeCveValidationCheck(item, match);
-  if (!checkId) {
-    const err = new Error('CVE asset match does not qualify for safe validation.');
-    err.code = 'cve_validation_not_applicable';
-    throw err;
-  }
-
-  const check = getCheckById(checkId);
-  const probe = check?.probe_profile && typeof check.probe_profile === 'object' ? check.probe_profile : {};
-  const wafAssetId = match.waf_asset_id ?? asset.id ?? asset.waf_asset_id ?? null;
-  if (!wafAssetId) {
-    const err = new Error('CVE asset match requires a bound waf_asset_id.');
-    err.code = 'invalid_cve_pipeline_item';
-    throw err;
-  }
-
-  return {
-    waf_asset_id: wafAssetId,
-    modes: ['fingerprint'],
-    probe_profile: {
-      max_requests: boundedProbeLimit(probe.max_requests, 3, 3),
-      timeout_ms: boundedProbeLimit(probe.timeout_ms, 5000, 5000),
-      risk_class: 'safe',
-    },
-    marker_profile: {
-      marker_type: 'header',
-      expected_action: 'log_only_expected',
-    },
-  };
+  // There is no shipped CVE-specific executor. Never substitute a fingerprint or generic marker.
+  const err = new Error('No approved CVE-specific bounded execution adapter is available.');
+  err.code = 'cve_specific_validation_unsupported'; throw err;
 }
 
 export function buildCveValidationEvidenceBinding(item, match, validationRun, checkId) {
@@ -702,7 +687,7 @@ export const CVE_DEPLOYED_RECOMMENDATION_STATUSES = Object.freeze([
 
 export const CVE_RETEST_PIPELINE_STAGES = Object.freeze(['ticket', 'retest']);
 
-const CVE_RETEST_CLOSURE_STATUSES = new Set(['not_exploitable', 'skipped', 'inconclusive']);
+const CVE_RETEST_CLOSURE_STATUSES = new Set(['not_exploitable']);
 
 export function isCveRecommendationDeployed(recommendation) {
   if (!recommendation || typeof recommendation !== 'object') return false;
@@ -728,23 +713,10 @@ export function assertCvePostMitigationRetestAllowed(item, match, recommendation
     throw err;
   }
 
-  const forbidden = collectForbiddenKeys(body);
-  if (forbidden.length > 0) {
-    const err = new Error(`Forbidden CVE retest field: ${forbidden[0]}`);
-    err.code = 'unsafe_cve_pipeline_item';
-    err.forbidden_paths = forbidden;
-    throw err;
-  }
-  try {
-    assertNoRawWafEvidence(body);
-  } catch (rawErr) {
-    const err = new Error(rawErr.message);
-    err.code = 'unsafe_cve_pipeline_item';
-    throw err;
-  }
+  assertCveValidationRequestSafety(body);
 
-  const socApproved = parseBooleanDefault(body.soc_approved, false);
-  if (item.known_exploited && match.requires_review && !socApproved) {
+  // No stored execution review is wired here; caller input cannot satisfy this gate.
+  if (item.known_exploited && match.requires_review) {
     const err = new Error(
       'Known-exploited CVE matches requiring review need SOC approval before post-mitigation retest.',
     );
@@ -763,35 +735,9 @@ export function assertCvePostMitigationRetestAllowed(item, match, recommendation
 
 export function buildCvePostMitigationRetestRequest(item, match, asset = {}, recommendation = {}) {
   assertCvePostMitigationRetestAllowed(item, match, recommendation);
-  const checkId = resolveSafeCveValidationCheck(item, match);
-  if (!checkId) {
-    const err = new Error('CVE asset match does not qualify for post-mitigation retest.');
-    err.code = 'cve_validation_not_applicable';
-    throw err;
-  }
-
-  const check = getCheckById(checkId);
-  const probe = check?.probe_profile && typeof check.probe_profile === 'object' ? check.probe_profile : {};
-  const wafAssetId = match.waf_asset_id ?? asset.id ?? asset.waf_asset_id ?? null;
-  if (!wafAssetId) {
-    const err = new Error('CVE asset match requires a bound waf_asset_id.');
-    err.code = 'invalid_cve_pipeline_item';
-    throw err;
-  }
-
-  return {
-    waf_asset_id: wafAssetId,
-    modes: ['fingerprint'],
-    probe_profile: {
-      max_requests: boundedProbeLimit(probe.max_requests, 3, 3),
-      timeout_ms: boundedProbeLimit(probe.timeout_ms, 5000, 5000),
-      risk_class: 'safe',
-    },
-    marker_profile: {
-      marker_type: 'header',
-      expected_action: 'block',
-    },
-  };
+  // There is no shipped CVE-specific executor. Never substitute a fingerprint or generic marker.
+  const err = new Error('No approved CVE-specific bounded execution adapter is available.');
+  err.code = 'cve_specific_validation_unsupported'; throw err;
 }
 
 export function buildCveRetestEvidenceBinding(item, match, validationRun, checkId, recommendation = {}) {
@@ -805,100 +751,62 @@ export function buildCveRetestEvidenceBinding(item, match, validationRun, checkI
   };
 }
 
-export function deriveCveRetestOutcomeFromValidationRun(validationRun) {
-  if (!validationRun || validationRun.status !== 'finalized') {
-    return {
-      status: 'retest_pending',
-      closure_ready: false,
-      verdict: null,
-    };
-  }
-
-  const summary = validationRun.summary_json && typeof validationRun.summary_json === 'object'
-    ? validationRun.summary_json
-    : {};
-  if (summary.validation_passed === true || summary.posture_status === 'protected') {
-    return {
-      status: 'not_exploitable',
-      closure_ready: true,
-      verdict: 'mitigated',
-    };
-  }
-  if (summary.validation_failed === true || summary.posture_status === 'underprotected') {
-    return {
-      status: 'exposed',
-      closure_ready: true,
-      verdict: 'persistent_exposure',
-    };
-  }
-  return {
-    status: 'inconclusive',
-    closure_ready: true,
-    verdict: 'inconclusive',
-  };
+export function deriveCveRetestOutcomeFromValidationRun(validationRun, context = {}) {
+  const pending = (reason) => ({ status: validationRun?.status === 'finalized' ? 'inconclusive' : 'retest_pending', closure_ready: false, verdict: null, evidence_verified: false, mitigation_verified: false, assurance_status: 'not_validated', reason });
+  if (!validationRun || validationRun.status !== 'finalized') return pending('retest_not_finalized');
+  const { item, match, recommendation, binding, evidence = [], now = new Date(), catalog = CHECK_CATALOG } = context;
+  if (!item || !match || !recommendation || !binding) return pending('cve_specific_lineage_missing');
+  const checkId = resolveSafeCveValidationCheck(item, match, catalog);
+  if (!checkId || checkId === CVE_SAFE_VALIDATION_CHECK_ID) return pending('cve_specific_scenario_unavailable');
+  const check = catalog.find((entry) => entry.check_id === checkId);
+  const version = deriveCheckDefinitionVersion(check);
+  const proof = validationRun.summary_json?.cve_mitigation_evidence;
+  const finalTime = Date.parse(validationRun.finalized_at ?? '');
+  const observedTime = Date.parse(proof?.observed_at ?? '');
+  const deployedTime = Date.parse(recommendation.deployed_at ?? '');
+  const nowMs = new Date(now).getTime();
+  if (![finalTime, observedTime, deployedTime, nowMs].every(Number.isFinite) || observedTime < deployedTime || finalTime < observedTime || observedTime > nowMs || finalTime > nowMs || nowMs - observedTime > 7 * 86400000) return pending('retest_time_incompatible');
+  if (!isCveRecommendationDeployed(recommendation) || binding.retest_phase !== 'post_mitigation' || binding.waf_validation_run_id !== validationRun.id || binding.waf_rule_recommendation_id !== recommendation.id || binding.cve_asset_match_id !== match.id || binding.cve_pipeline_item_id !== item.id || binding.cve_id !== item.cve_id || binding.waf_asset_id !== match.waf_asset_id || recommendation.cve_asset_match_id !== match.id || validationRun.waf_asset_id !== match.waf_asset_id) return pending('retest_lineage_mismatch');
+  if (!proof || proof.complete !== true || proof.producer_kind !== 'signed_probe' || proof.check_id !== checkId || proof.check_version !== version.check_version || proof.scenario_version !== approvedScenarioVersion(check) || proof.cve_id !== item.cve_id || proof.waf_rule_recommendation_id !== recommendation.id || proof.component !== (match.component_applicability ?? match.validation_evidence_json?.component_applicability)?.component || proof.component_version !== (match.component_applicability ?? match.validation_evidence_json?.component_applicability)?.version) return pending('cve_specific_evidence_missing');
+  const ids = Array.isArray(proof.evidence_ids) ? proof.evidence_ids : [];
+  if ([item, match, recommendation].some((row) => row.tenant_id !== validationRun.tenant_id)
+    || match.cve_pipeline_item_id !== item.id || binding.check_id !== checkId
+    || validationRun.check_id !== checkId || validationRun.cve_pipeline_item_id !== item.id
+    || validationRun.cve_asset_match_id !== match.id) return pending('retest_lineage_mismatch');
+  const resultEvents = ids.map((id) => evidence.find((event) => event.id === id));
+  const fields = ['cve_id', 'check_id', 'check_version', 'scenario_version', 'component', 'component_version', 'waf_rule_recommendation_id', 'outcome'];
+  if (!ids.length || resultEvents.some((event) => {
+    const metadata = event?.metadata ?? event?.metadata_json ?? {};
+    const observed = Date.parse(event?.timestamp ?? '');
+    const availability = [event?.created_at, event?.ingested_at].filter((value) => value != null).map((value) => Date.parse(value));
+    return !event || event.producer_kind !== 'signed_probe' || event.signal_type !== 'probe_result'
+      || event.tenant_id !== validationRun.tenant_id || event.test_run_id !== validationRun.id
+      || metadata.complete !== true || metadata.observation_only === true || metadata.readiness_conclusion === false
+      || fields.some((field) => metadata[field] !== proof[field])
+      || metadata.cve_pipeline_item_id !== item.id || metadata.cve_asset_match_id !== match.id || metadata.waf_asset_id !== match.waf_asset_id
+      || !Number.isFinite(observed) || observed < deployedTime || observed > finalTime || observed > nowMs
+      || nowMs - observed > 7 * 86400000 || availability.some((time) => !Number.isFinite(time) || time > finalTime || time > nowMs);
+  }) || Math.min(...resultEvents.map((event) => Date.parse(event.timestamp))) !== observedTime) return pending('referenced_cve_evidence_unverified');
+  if (proof.outcome === 'mitigation_observed') return { status: 'not_exploitable', closure_ready: true, verdict: 'mitigated', evidence_verified: true, mitigation_verified: true, assurance_status: 'verified_for_cve_scenario', reason: null };
+  if (proof.outcome === 'persistent_exposure_observed') return { status: 'exposed', closure_ready: false, verdict: 'persistent_exposure', evidence_verified: true, mitigation_verified: false, assurance_status: 'gap_for_cve_scenario', reason: null };
+  return pending('cve_specific_result_inconclusive');
 }
 
 export function resolveCvePipelineRetestClosure(matchOutcomes = []) {
-  if (!Array.isArray(matchOutcomes) || matchOutcomes.length === 0) {
-    return {
-      ready: false,
-      resolved_match_count: 0,
-      pending_match_count: 0,
-      open_match_count: 0,
-      verdict: null,
-    };
-  }
-
-  let resolved_match_count = 0;
   let pending_match_count = 0;
   let open_match_count = 0;
-
+  let resolved_match_count = 0;
   for (const outcome of matchOutcomes) {
-    if (!outcome?.closure_ready) {
-      pending_match_count += 1;
-      continue;
-    }
-    if (outcome.status === 'not_exploitable') {
-      resolved_match_count += 1;
-      continue;
-    }
-    if (CVE_RETEST_CLOSURE_STATUSES.has(outcome.status)) {
-      resolved_match_count += 1;
-      continue;
-    }
-    open_match_count += 1;
+    if (outcome?.status === 'exposed' && outcome.evidence_verified === true) open_match_count += 1;
+    else if (CVE_RETEST_CLOSURE_STATUSES.has(outcome?.status) && outcome.closure_ready === true && outcome.evidence_verified === true && outcome.mitigation_verified === true && outcome.verdict === 'mitigated') resolved_match_count += 1;
+    else pending_match_count += 1;
   }
-
-  const ready = pending_match_count === 0 && open_match_count === 0 && resolved_match_count > 0;
-  let verdict = null;
-  if (ready) {
-    verdict = 'resolved';
-  } else if (pending_match_count > 0) {
-    verdict = 'retest_pending';
-  } else if (open_match_count > 0) {
-    verdict = 'keep_open';
-  }
-
-  return {
-    ready,
-    resolved_match_count,
-    pending_match_count,
-    open_match_count,
-    verdict,
-  };
+  const ready = matchOutcomes.length > 0 && resolved_match_count === matchOutcomes.length;
+  return { ready, verdict: ready ? 'resolved' : open_match_count ? 'persistent_exposure' : 'retest_pending', pending_match_count, open_match_count, resolved_match_count, assurance_status: ready ? 'verified_for_cve_scenarios' : 'not_validated' };
 }
 
-export const CVE_PLAYBOOK_STATUSES = Object.freeze([
-  'draft',
-  'approved',
-  'retest_pending',
-  'resolved',
-  'accepted_risk',
-]);
-
-const VENDOR_DEPLOYMENT_ORDER = Object.fromEntries(
-  SUPPORTED_VENDORS.map((vendor, index) => [vendor, index + 1]),
-);
+export const CVE_PLAYBOOK_STATUSES = Object.freeze(['draft', 'approved', 'retest_pending', 'resolved', 'accepted_risk']);
+const VENDOR_DEPLOYMENT_ORDER = Object.fromEntries(SUPPORTED_VENDORS.map((vendor, index) => [vendor, index + 1]));
 
 export function resolveVendorDeploymentOrder(vendor) {
   const key = String(vendor ?? 'generic').trim().toLowerCase();

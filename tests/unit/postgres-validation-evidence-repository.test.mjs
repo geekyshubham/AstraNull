@@ -1270,3 +1270,33 @@ describe('postgres validation finalization transaction ownership', () => {
     assert.equal(checkouts, 0, 'missing-client failure must not silently fall back to the pool');
   });
 });
+
+
+describe('complete readiness snapshot reader', () => {
+  it('reads exact material scope and grouped active finding counts in one tenant/cutoff statement without presentation hydration or caps', async () => {
+    const groups = [{ id: 'g', tenant_id: CTX.tenantId, safety_policy: {}, declaration_json: {}, created_at: FIXED_NOW }];
+    const targets = [{ id: 't', tenant_id: CTX.tenantId, target_group_id: 'g', kind: 'fqdn', value: 'app.example.test',
+      protocol: 'https', port: 8443, declaration_json: {}, created_at: FIXED_NOW }];
+    const findings = [{ tenant_id: CTX.tenantId, target_id: 't', status: 'open', severity: 'high', count: 301, created_at: FIXED_NOW }];
+    const pool = createRecordingPool((text) => text.includes('AS policies')
+      ? { rows: [{ groups, targets, findings, runs: [], verdicts: [], events: [], evidence: [], policies: [] }] } : { rows: [] });
+    const repo = createValidationEvidenceRepository(pool);
+    const result = await repo.readReadinessInputs(CTX, { asOf: FIXED_NOW });
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const queries = dataQueries(pool.client); assert.equal(queries.length, 1);
+    const sql = queries[0].text;
+    assert.deepEqual(queries[0].params, [CTX.tenantId, FIXED_NOW]);
+    assert.match(sql, /t\.protocol, t\.port, t\.declaration_json/);
+    assert.match(sql, /t\.deleted_at IS NULL AND g\.deleted_at IS NULL AND g\.archived_at IS NULL/);
+    assert.match(sql, /t\.created_at <= \$2::timestamptz AND g\.created_at <= \$2::timestamptz/);
+    assert.match(sql, /COUNT\(\*\)::int AS count, MAX\(created_at\) AS created_at/);
+    assert.match(sql, /status IN \('open', 'in_progress', 'accepted_risk'\)/);
+    assert.match(sql, /GROUP BY tenant_id, target_id, status, severity/);
+    assert.doesNotMatch(sql, /\bLIMIT\b|loa_signatures|\bINSERT\b|\bUPDATE\b|\bDELETE\b/);
+    assert.deepEqual(result.groups, groups); assert.deepEqual(result.targets, targets);
+    assert.deepEqual(result.findings, []); assert.deepEqual(result.findingCounts, findings);
+    assert.equal(result.finding_counts_complete, true); assert.equal(result.scope_complete, true); assert.equal(result.input_complete, true);
+    await assert.rejects(repo.readReadinessInputs(CTX, { asOf: 'invalid' }), /Invalid readiness cutoff/);
+    assert.equal(dataQueries(pool.client).length, 1);
+  });
+});

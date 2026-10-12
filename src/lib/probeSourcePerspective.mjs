@@ -1,8 +1,6 @@
 // Server-side source perspective for signed probe evidence; never taken from worker-submitted metadata.
 import { SOURCE_PERSPECTIVE_PATTERN } from '../contracts/protectionValidation.mjs';
-import { DEFAULT_SOURCE_PERSPECTIVE } from './entryPathComparison.mjs';
-
-export { DEFAULT_SOURCE_PERSPECTIVE };
+export const DEFAULT_SOURCE_PERSPECTIVE = 'astranull-signed-public-worker';
 
 /** An absent registry uses the shared pool; an invalid configured registry admits no workers. */
 export function approvedProbeSourcesFromEnv(env = process.env) {

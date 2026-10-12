@@ -24,25 +24,33 @@ function baseJob(overrides = {}) {
 }
 
 function dnsResponse(query, options = {}) {
-  const size = Math.max(12, options.size ?? 12);
-  const response = Buffer.alloc(size, 0xa5);
-  query.copy(response, 0, 0, 2);
+  const question = Buffer.from(query.subarray(12));
+  const header = Buffer.alloc(12);
+  query.copy(header, 0, 0, 2);
   if (options.transactionId != null) {
     const transactionId = typeof options.transactionId === 'function'
-      ? options.transactionId(query.readUInt16BE(0))
-      : options.transactionId;
-    response.writeUInt16BE(Number(transactionId) & 0xffff, 0);
+      ? options.transactionId(query.readUInt16BE(0)) : options.transactionId;
+    header.writeUInt16BE(Number(transactionId) & 0xffff, 0);
   }
-  response[2] = 0x80
-    | (options.authoritative === false ? 0 : 0x04)
-    | (options.truncated ? 0x02 : 0);
-  response[3] = options.rcode ?? 0;
-  response.writeUInt16BE(1, 4);
-  response.writeUInt16BE(options.answerCount ?? 0, 6);
-  response.writeUInt16BE(0, 8);
-  response.writeUInt16BE(0, 10);
-  if (options.data) Buffer.from(options.data).copy(response, 12);
-  return response;
+  header[2] = 0x80 | (options.authoritative === false ? 0 : 0x04) | (options.truncated ? 0x02 : 0);
+  header[3] = options.rcode ?? 0;
+  header.writeUInt16BE(1, 4);
+  const answerCount = options.answerCount ?? 0;
+  header.writeUInt16BE(answerCount, 6);
+  const records = [];
+  for (let i = 0; i < answerCount; i += 1) {
+    const fixed = Buffer.alloc(12);
+    fixed.writeUInt16BE(0xc00c, 0);
+    fixed.writeUInt16BE(16, 2);
+    fixed.writeUInt16BE(1, 4);
+    const minimum = header.length + question.length + fixed.length + 1;
+    const content = Buffer.alloc(Math.max(0, (options.size ?? minimum) - minimum), 0x61);
+    if (options.data) Buffer.from(options.data).copy(content);
+    const rdata = Buffer.concat([Buffer.from([content.length]), content]);
+    fixed.writeUInt16BE(rdata.length, 10);
+    records.push(fixed, rdata);
+  }
+  return Buffer.concat([header, question, ...records]);
 }
 
 function udpSocket(options = {}) {
@@ -135,8 +143,9 @@ describe('probeDnsWireQuery', () => {
   it('treats authoritative NXDOMAIN as evidence rather than blocked transport', async () => {
     const outcome = await probeDnsWireQuery(baseJob({
       check_id: 'dns.random_prefix_nxdomain.safe',
-      target: { kind: 'ip', value: '203.0.113.53', metadata: { zone: 'example.test' } },
+      target: { kind: 'fqdn', value: 'example.test' },
     }), injectedResolutionDeps({
+      resolveNsFn: async () => ['203.0.113.53'],
       createSocket: () => udpSocket({ response: { rcode: 3, authoritative: true } }),
     }));
 
@@ -144,19 +153,20 @@ describe('probeDnsWireQuery', () => {
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.rcode, 3);
     assert.equal(outcome.metadata.authoritative, true);
-    assert.equal(outcome.metadata.wildcard_response_detected, false);
+    assert.equal(outcome.metadata.wildcard_response_detected, null);
   });
 
-  it('marks a positive random-prefix answer as a wildcard response', async () => {
+  it('records a positive random-prefix answer without proving a wildcard', async () => {
     const outcome = await probeDnsWireQuery(baseJob({
       check_id: 'dns.random_prefix_nxdomain.safe',
-      target: { kind: 'ip', value: '203.0.113.53', metadata: { zone: 'example.test' } },
+      target: { kind: 'fqdn', value: 'example.test' },
     }), injectedResolutionDeps({
+      resolveNsFn: async () => ['203.0.113.53'],
       createSocket: () => udpSocket({ response: { rcode: 0, answerCount: 1 } }),
     }));
 
     assert.equal(outcome.metadata.query_name, 'random-prefix.example.test');
-    assert.equal(outcome.metadata.wildcard_response_detected, true);
+    assert.equal(outcome.metadata.random_prefix_answer_observed, true);
     assert.equal(outcome.metadata.answer_count, 1);
   });
 
@@ -371,5 +381,51 @@ describe('DNS wire synchronous reservation boundaries', () => {
       (error) => error?.code === 'signed_operation_budget_exceeded',
     );
     assert.deepEqual(events, ['reserve', 'io:udp', 'reserve']);
+  });
+});
+
+
+describe('DNS protocol identity and exact target scope', () => {
+  it('rejects metadata query-zone and resolver retargeting before any resolver/socket I/O', async () => {
+    for (const metadata of [{ zone: 'victim.test' }, { resolver_host: '203.0.113.99' }]) {
+      let io = 0;
+      const result = await probeDnsWireQuery(baseJob({ target: { kind: 'fqdn', value: 'example.test', metadata } }), {
+        resolveNsFn: async () => { io += 1; return []; }, createSocket: () => { io += 1; },
+      });
+      assert.equal(result.external_result, 'not_run');
+      assert.equal(result.requests_sent, 0);
+      assert.equal(io, 0);
+    }
+  });
+
+  it('rejects same-size wrong-question, header-only and QR=0 responses', async () => {
+    for (const corrupt of [
+      (bytes) => bytes.subarray(0, 12),
+      (bytes) => { bytes[13] ^= 1; return bytes; },
+      (bytes) => { bytes[2] &= 0x7f; return bytes; },
+    ]) {
+      const result = await probeDnsWireQuery(baseJob(), injectedResolutionDeps({ createSocket: () => {
+        const socket = new EventEmitter(); socket.close = () => {};
+        socket.send = (query, port, host, done) => {
+          done(null); queueMicrotask(() => socket.emit('message', corrupt(dnsResponse(query)), { address: host, port }));
+        };
+        return socket;
+      } }));
+      assert.equal(result.external_result, 'not_run');
+      assert.equal(result.metadata.protocol_identity_confirmed, false);
+      assert.equal(result.metadata.readiness_conclusion, false);
+    }
+  });
+
+  it('cancels the underlying pending datagram socket at the job deadline', async () => {
+    const controller = new AbortController();
+    let closed = 0;
+    const resultPromise = probeDnsWireQuery(baseJob(), injectedResolutionDeps({ jobDeadlineSignal: controller.signal,
+      createSocket: () => { const socket = udpSocket({ respond: false }); socket.close = () => { closed += 1; }; queueMicrotask(() => controller.abort()); return socket; },
+    }));
+    const result = await resultPromise;
+    assert.equal(result.external_result, 'timeout');
+    assert.equal(closed, 1);
+    assert.equal(result.metadata.readiness_conclusion, false);
   });
 });

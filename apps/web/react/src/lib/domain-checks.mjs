@@ -16,19 +16,19 @@ const DECLARATION_ONLY_KIND = 'metadata_marker';
 
 /** Vector family → category. `layer` decides which efficacy (WAF or CDN) a verdict feeds. */
 export const CHECK_CATEGORIES = Object.freeze({
-  waf: { id: 'waf', label: 'Web application firewall', layer: 'waf', icon: 'shield', how: 'Sends benign attack markers (SQL injection, XSS, traversal, encoding evasions) and checks the edge blocks them before they reach your application.' },
+  waf: { id: 'waf', label: 'Web application firewall', layer: 'waf', icon: 'shield', how: 'Sends bounded safe markers and records external responses against the check expectation. It does not establish internal application receipt or attribute a response to a specific protection layer.' },
   exploit: { id: 'exploit', label: 'Exploit classes', layer: 'waf', icon: 'bug', how: 'Records declared readiness for known exploit classes. No live traffic is sent.' },
-  origin: { id: 'origin', label: 'Origin exposure', layer: 'origin', icon: 'server', how: 'Looks for a path that reaches your origin server directly, which would bypass the WAF and CDN entirely.' },
+  origin: { id: 'origin', label: 'Origin exposure', layer: 'origin', icon: 'server', how: 'Samples a declared alternate endpoint with approved Host/SNI. A response alone does not identify your application, confirm bypass, or prove origin lockdown.' },
   l7: { id: 'l7', label: 'HTTP application layer', layer: 'cdn', icon: 'globe', how: 'Bounded HTTP probes for rate limiting, slow requests, cache abuse, and bot challenges at the edge.' },
   protocol: { id: 'protocol', label: 'Protocol machinery', layer: 'cdn', icon: 'workflow', how: 'HTTP/2, HTTP/3 (QUIC), WebSocket, and gRPC handshake posture probes.' },
   tls: { id: 'tls', label: 'TLS', layer: 'cdn', icon: 'lock', how: 'TLS version, cipher, session, and renegotiation posture checks.' },
   l3_l4: { id: 'l3_l4', label: 'Network and transport', layer: 'cdn', icon: 'network', how: 'TCP and UDP reachability and firewall exposure checks against the declared target.' },
   dns: { id: 'dns', label: 'DNS', layer: 'cdn', icon: 'dns', how: 'Direct DNS queries for resolver, recursion, DNSSEC, zone transfer, and failover posture.' },
-  reflection: { id: 'reflection', label: 'Reflection exposure', layer: 'cdn', icon: 'radio', how: 'Single protocol-correct requests confirm the target is not an open reflector.' },
-  amplification: { id: 'amplification', label: 'Amplification exposure', layer: 'cdn', icon: 'waves', how: 'Checks that the target does not answer small requests with large amplified responses.' },
+  reflection: { id: 'reflection', label: 'Reflection exposure', layer: 'cdn', icon: 'radio', how: 'Records the response, if any, to a bounded approved protocol sample. Silence does not establish that the service is closed or protected.' },
+  amplification: { id: 'amplification', label: 'Amplification exposure', layer: 'cdn', icon: 'waves', how: 'Records request and response sizes only when captured for the bounded sample. It does not establish amplification or flood capacity beyond that sample.' },
   pattern: { id: 'pattern', label: 'Delivery patterns', layer: 'cdn', icon: 'activity', how: 'Records declared readiness for multi-vector and pulse delivery patterns. No live traffic is sent.' },
   operations: { id: 'operations', label: 'Operational readiness', layer: 'ops', icon: 'bell', how: 'Alerting, runbook, and kill-switch readiness self-checks. No traffic reaches your target.' },
-  path: { id: 'path', label: 'Protected path', layer: 'cdn', icon: 'globe', how: 'Sends canary traffic down a declared protected path and confirms it arrives as expected.' },
+  path: { id: 'path', label: 'Protected path', layer: 'cdn', icon: 'globe', how: 'Records a bounded external canary response on the declared path. Without internal receipt evidence it does not confirm arrival or protection inside the application.' },
   high_scale: { id: 'high_scale', label: 'High-scale readiness', layer: 'cdn', icon: 'activity', how: 'SOC-governed high-scale scenarios. Customers request them; only the SOC can run them.' },
 });
 const OTHER_CATEGORY = Object.freeze({ id: 'other', label: 'Other', layer: 'other', icon: 'shield', how: 'Bounded external check.' });
@@ -96,12 +96,21 @@ function runOrder(check) {
   return tierOf(check) === 'E3' ? 2 : 3;
 }
 
+// Older/full catalog projections may omit the server's input flag. Known setup-input
+// protocols still cannot enter an automatic assessment or infer authorization from metadata.
+function requiresDedicatedCheckInput(check) {
+  return check?.requires_additional_input === true
+    || ['host_sni_bypass', 'alert_webhook_ping'].includes(check?.probe_profile?.kind)
+    || list(check?.required_customer_setup).some((value) => typeof value === 'string'
+      && value.startsWith('declared_') && value.endsWith('_probe_path'));
+}
+
 /** Customer-runnable network checks, including observations, available individually. */
 export function individualChecks(checks, target) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
     && !checkExclusionReason(check)
     && checkSupportsTarget(check, target)
-    && check.requires_additional_input !== true
+    && !requiresDedicatedCheckInput(check)
     && check.probe_profile?.kind !== 'ops_readiness'
     && !isDeclarationOnlyCheck(check));
   return [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
@@ -122,7 +131,8 @@ export function targetCheckRequirement(check, target) {
   if (restriction === 'soc_gated') return 'Requires SOC approval and a governed execution workflow.';
   if (restriction) return 'Requires a dedicated workflow; direct customer execution is unavailable.';
   if (!checkSupportsTarget(check, target)) return `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}).`;
-  if (check.requires_additional_input) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
+  if (check.probe_profile?.kind === 'alert_webhook_ping') return 'Requires approved signed alert-webhook scope and its dedicated workflow; no callback is inferred from catalog metadata.';
+  if (requiresDedicatedCheckInput(check)) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
   if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return 'Declaration or operational evidence only; sends no external traffic.';
   return '';
 }
@@ -158,6 +168,9 @@ function verdictEvidenceIds(run) {
 }
 
 function classifyVerdict(verdict, check) {
+  // Retained legacy grades cannot turn a currently observational check into protection credit.
+  if (tierOf(check) === 'E2' || OBSERVATION_ONLY_PROBE_KINDS.includes(check?.probe_profile?.kind)) return 'observed';
+  if (isDeclarationOnlyCheck(check)) return 'inconclusive';
   const key = verdict.toLowerCase();
   if (PASS_VERDICTS.has(key)) return 'passed';
   if (FAIL_VERDICTS.has(key)) return 'failed';
@@ -931,6 +944,19 @@ export function originBindingRole(target) {
   if (kind === 'ip' || (kind === 'url' && isIpLiteral(host))) return 'origin';
   if (ORIGIN_PROTECTED_KINDS.has(kind) || (kind === 'url' && !isIpLiteral(host))) return 'protected';
   return null;
+}
+
+/** Catalog compatibility for a relation review, not readiness credit or runtime authorization. */
+export function originRelationCheckEligible(check, target, pair) {
+  return Boolean(record(check) && record(target) && record(pair)
+    && text(target.id) && text(pair.target_id) === text(target.id)
+    && text(check.check_id) && text(pair.check_id) === text(check.check_id)
+    && text(pair.mechanism) === 'host_sni_bypass'
+    && check.probe_profile?.kind === 'host_sni_bypass'
+    && !checkExclusionReason(check)
+    && check.mechanism_supported !== false && check.probe_profile.delivery_supported !== false
+    && Array.isArray(check.supported_targets) && check.supported_targets.length > 0
+    && checkSupportsTarget(check, target));
 }
 
 const ORIGIN_PROOF_STATES = new Set(['dns_verified', 'user_confirmed']);

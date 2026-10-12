@@ -90,6 +90,8 @@ import { getEvidenceContext } from './services/evidenceContext.mjs';
 import * as productionReleaseEvidence from './services/productionReleaseEvidence.mjs';
 import * as custodyVerification from './services/custodyVerification.mjs';
 import * as evidenceSnapshotSigning from './services/evidenceSnapshotSigning.mjs';
+import { devReviewedOperations } from './services/devReviewedOperations.mjs';
+import { devCveApplicabilityReviews } from './services/devCveApplicabilityReviews.mjs';
 import * as wafPosture from './services/wafPosture.mjs';
 import {
   csvImportRejected,
@@ -193,9 +195,11 @@ function defaultServiceDeps() {
     evidenceSnapshotSigning,
     wafPosture,
     cvePipeline,
+    cveApplicabilityReviews: devCveApplicabilityReviews,
     externalDiscovery,
     supplyChainRisk,
     protectionValidation: devProtectionValidationFacade,
+    reviewedOperations: devReviewedOperations,
   };
 }
 
@@ -271,6 +275,7 @@ function isWafCorePostureRoute(path) {
   if (isWafEdgeDetectionRoute(path)) return false;
   if (isWafActionItemRoute(path)) return false;
   if (isWafCvePipelineRoute(path)) return false;
+  if (path === '/v1/waf/cve-applicability-reviews' || path.startsWith('/v1/waf/cve-applicability-reviews/')) return false;
   if (isWafSupplyChainRoute(path)) return false;
   if (isWafOrchestratorRoute(path)) return false;
   if (path === '/v1/waf/offensive-suites' || path.startsWith('/v1/waf/offensive-requests')) return false;
@@ -1048,7 +1053,7 @@ async function assessControlPlaneReadiness(runtimeConfig, runtimeHealth) {
 }
 
 function respondRateLimited(res, retryAfterSeconds) {
-  const payload = JSON.stringify({ error: 'rate_limited' });
+  const payload = JSON.stringify({ error: 'rate_limited', ...res.errorBodyExtensions });
   res.writeHead(429, {
     ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
@@ -1217,6 +1222,10 @@ export function createServer(options = {}) {
 
   const server = http.createServer(async (req, res) => {
     const url = parseUrl(req);
+    // Passive declaration errors retain the same boundary even before authentication/body parsing.
+    if (/^\/v1\/waf\/cve-applicability-reviews(?:\/|$)/.test(url.pathname)) {
+      res.errorBodyExtensions = { grants_execution: false, execution_available: false };
+    }
 
     try {
       // `/health` is deliberately NOT part of isProbePath any more. It is still
@@ -1433,7 +1442,7 @@ export function createServer(options = {}) {
         if (
           isProbeWorkerRoute(url.pathname, req.method) &&
           req.method === 'POST' &&
-          /^\/internal\/probe\/jobs\/[^/]+\/(result|activity)$/.test(url.pathname)
+          /^\/internal\/probe\/jobs\/[^/]+\/(result|activity|execute|stop)$/.test(url.pathname)
         ) {
           probeBodyText = await readBodyText(req, url.pathname.endsWith('/activity') ? Math.min(runtimeConfig.maxJsonBodyBytes, 32 * 1024) : runtimeConfig.maxJsonBodyBytes);
         }
@@ -1675,6 +1684,27 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!item) return json(res, 404, { error: 'not_found' });
     return json(res, 200, item);
   }
+  const operationMatch = path.match(/^\/v1\/reviewed-operations(?:\/([^/]+)(?:\/(revoke))?)?$/);
+  if (operationMatch || path === '/v1/reviewed-operations/preview') {
+    const service = serviceDeps.reviewedOperations;
+    if (!service || !['preview', 'approve', 'get', 'revoke'].every((name) => typeof service[name] === 'function')) return respondPostgresRouteNotWired(res);
+    const reviewing = method === 'POST' && path !== '/v1/reviewed-operations/preview';
+    const gate = requirePermission(ctx, reviewing ? 'test_run:start' : 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (!ctx.userId || (reviewing && (!['owner', 'admin'].includes(ctx.role) || ctx.serviceAccountId))) return json(res, 403, { error: 'forbidden' });
+    let result;
+    if (method === 'POST' && path === '/v1/reviewed-operations/preview') {
+      result = await service.preview(ctx, await readJsonBody(req, runtimeConfig.maxJsonBodyBytes));
+    } else if (method === 'POST' && path === '/v1/reviewed-operations') {
+      result = await service.approve(ctx, await readJsonBody(req, runtimeConfig.maxJsonBodyBytes));
+    } else if (method === 'GET' && operationMatch?.[1] && !operationMatch[2]) {
+      result = await service.get(ctx, operationMatch[1]);
+    } else if (method === 'POST' && operationMatch?.[2] === 'revoke') {
+      result = await service.revoke(ctx, operationMatch[1]);
+    } else return json(res, 405, { error: 'method_not_allowed' });
+    return json(res, result.status ?? (method === 'POST' && path === '/v1/reviewed-operations' && !result.replayed ? 201 : 200), result);
+  }
+
   if (path === '/v1/evidence/snapshots/sign' && method === 'POST') {
     const gate = requirePermission(ctx, 'evidence:write');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2199,6 +2229,33 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
+  }
+
+  const cveReviewMatch = path.match(/^\/v1\/waf\/cve-applicability-reviews(?:\/([^/]+)(?:\/(revoke))?)?$/);
+  if (cveReviewMatch) {
+    const service = serviceDeps.cveApplicabilityReviews;
+    const noExecution = { grants_execution: false, execution_available: false };
+    if (!service || !['preview', 'approve', 'get', 'revoke'].every((name) => typeof service[name] === 'function')) {
+      return json(res, 503, { error: 'postgres_route_not_wired', ...noExecution });
+    }
+    const reviewing = method === 'POST' && path !== '/v1/waf/cve-applicability-reviews/preview';
+    const gate = requirePermission(ctx, reviewing ? 'waf:write' : 'waf:read');
+    if (!gate.ok) return json(res, gate.status, { ...gate.body, ...noExecution });
+    if (!ctx.userId || (reviewing && (!['owner', 'admin'].includes(ctx.role) || ctx.serviceAccountId))) {
+      return json(res, 403, { error: 'forbidden', ...noExecution });
+    }
+    let result;
+    if (method === 'POST' && path === '/v1/waf/cve-applicability-reviews/preview') {
+      result = await service.preview(ctx, await readJsonBody(req, runtimeConfig.maxJsonBodyBytes));
+    } else if (method === 'POST' && path === '/v1/waf/cve-applicability-reviews') {
+      result = await service.approve(ctx, await readJsonBody(req, runtimeConfig.maxJsonBodyBytes));
+    } else if (method === 'GET' && cveReviewMatch[1] && !cveReviewMatch[2]) {
+      result = await service.get(ctx, cveReviewMatch[1]);
+    } else if (method === 'POST' && cveReviewMatch[2] === 'revoke') {
+      result = await service.revoke(ctx, cveReviewMatch[1]);
+    } else return json(res, 405, { error: 'method_not_allowed', ...noExecution });
+    const created = method === 'POST' && path === '/v1/waf/cve-applicability-reviews' && !result.replayed;
+    return json(res, result.status ?? (created ? 201 : 200), result);
   }
 
   if (method === 'GET' && path === '/v1/waf/cve-pipeline') {
@@ -3499,13 +3556,16 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'test_run:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockValidationScanRoute(serviceDeps, 'getValidationScanActivity', res)) return;
+    const after = url.searchParams.get('after');
+    if (after && after.length > 512) return json(res, 400, { error: 'invalid_activity_cursor' });
     const result = await serviceDeps.validationScans.getValidationScanActivity(ctx, scanActivity[1], {
-      after: url.searchParams.get('after') ?? undefined,
+      after: after ?? undefined,
       limit: url.searchParams.get('limit') ?? undefined,
       runtimeConfig,
       advance: false,
     });
     if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
   }
   if (path === '/v1/test-runs' && method === 'POST') {
@@ -3550,8 +3610,11 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'test_run:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (typeof serviceDeps.testRuns?.getRunActivity !== 'function') return json(res, 503, { error: 'run_activity_unavailable' });
-    const activity = await serviceDeps.testRuns.getRunActivity(ctx, runActivity[1], { limit: url.searchParams.get('limit') });
+    const cursor = url.searchParams.get('cursor');
+    if (cursor && cursor.length > 256) return json(res, 400, { error: 'invalid_activity_cursor' });
+    const activity = await serviceDeps.testRuns.getRunActivity(ctx, runActivity[1], { limit: url.searchParams.get('limit'), cursor });
     if (!activity) return json(res, 404, { error: 'not_found' });
+    if (activity.error) return json(res, activity.status ?? 400, activity);
     return json(res, 200, activity);
   }
   if (runEvents && method === 'GET') {
@@ -4029,6 +4092,17 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (blockPostgresProbeJobsRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const jobs = await probeJobsSvc.listPendingProbeJobsForWorker(ctx, runtimeConfig);
     return json(res, 200, { jobs });
+  }
+  const probeControlMatch = path.match(/^\/internal\/probe\/jobs\/([^/]+)\/(execute|stop)$/);
+  if (probeControlMatch && method === 'POST') {
+    if (!ctx.workerId) return json(res, 401, { error: 'unauthorized' });
+    const operation = probeControlMatch[2] === 'execute' ? 'reserveProbeExecution' : 'acknowledgeProbeStop';
+    if (typeof probeJobsSvc?.[operation] !== 'function') return json(res, 503, { error: 'probe_control_unavailable' });
+    let body;
+    try { body = JSON.parse(options.probeBodyText ?? '{}'); }
+    catch { return json(res, 400, { error: 'invalid_json' }); }
+    const result = await probeJobsSvc[operation](ctx, probeControlMatch[1], body);
+    return json(res, result.error ? (result.status ?? 400) : 201, result);
   }
   const probeActivityMatch = path.match(/^\/internal\/probe\/jobs\/([^/]+)\/activity$/);
   if (probeActivityMatch && method === 'POST') {

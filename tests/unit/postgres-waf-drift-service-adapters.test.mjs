@@ -17,6 +17,7 @@ const ADAPTER_SOURCE = readFileSync(
   'utf8',
 );
 
+import { comparablePosture } from '../helpers/assurance-fixtures.mjs';
 const envSnapshot = { ...process.env };
 const FIXED_NOW = new Date('2026-06-15T12:00:00.000Z');
 
@@ -324,10 +325,10 @@ describe('postgres waf drift service adapter', () => {
           status: 'underprotected',
           reason_codes: ['origin_bypass_confirmed'],
           detected_vendor: 'cloudflare',
-          created_at: '2026-06-01T00:00:00.000Z',
+          created_at: '2026-06-14T00:00:00.000Z',
           is_current: true,
         },
-      ],
+      ].map(comparablePosture),
     });
     const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
 
@@ -358,10 +359,10 @@ describe('postgres waf drift service adapter', () => {
           status: 'unprotected',
           reason_codes: [],
           detected_vendor: null,
-          created_at: '2026-06-01T00:00:00.000Z',
+          created_at: '2026-06-14T00:00:00.000Z',
           is_current: true,
         },
-      ],
+      ].map(comparablePosture),
     });
     const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
 
@@ -375,7 +376,7 @@ describe('postgres waf drift service adapter', () => {
   it('detects every regression from edge-protected posture', async () => {
     Object.assign(process.env, wafEnabledEnv());
     const cases = [
-      { status: 'unprotected', reason_codes: [], expected: 'mode_downgrade' },
+      { status: 'unprotected', reason_codes: ['marker_rule_not_blocking'], expected: 'mode_downgrade' },
       { status: 'underprotected', reason_codes: ['origin_bypass_confirmed'], expected: 'origin_bypass_new' },
       { status: 'underprotected', reason_codes: ['monitor_only_behavior'], expected: 'mode_downgrade' },
     ];
@@ -401,10 +402,10 @@ describe('postgres waf drift service adapter', () => {
             status: testCase.status,
             reason_codes: testCase.reason_codes,
             detected_vendor: 'cloudflare',
-            created_at: '2026-06-01T00:00:00.000Z',
+            created_at: '2026-06-14T00:00:00.000Z',
             is_current: true,
           },
-        ],
+        ].map(comparablePosture),
       });
       const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
       const outcome = await service.detectAssetDrift(demoCtx(), 'waf_asset_1');

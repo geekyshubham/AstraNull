@@ -127,7 +127,7 @@ Detail deep-links (append to /app#...):
   }
 
   delete process.env.ASTRANULL_NO_PERSIST;
-  const store = buildPortalDemoStore();
+  const store = buildPortalDemoStore({ readinessObservedAt: PORTAL_DEMO_IDS.frozenAt });
   rebaseDemoStoreTimestamps(store);
   migrateDevStore(store);
   writeDevStoreToDisk(store);

@@ -3,6 +3,7 @@ import { isCurrentProviderDnsOwnershipProof } from '../lib/connectorProviders/do
 import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { newId } from '../lib/ids.mjs';
+import { allocateOwnershipTransitionAt } from '../lib/ownershipTransitions.mjs';
 import { ownershipParentFor } from '../lib/subdomainEnumeration.mjs';
 import {
   VERIFICATION_RANK,
@@ -127,8 +128,12 @@ export function confirmOwnership(ctx, id) {
   const actorUserId = ctx.userId ?? 'system';
   const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
   let targetVerification = current ?? null;
+  if (current?.source_kind === 'ownership_ambiguous') {
+    return { error: 'ownership_transition_invalid', status: 409 };
+  }
 
   if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.user_confirmed) {
+    const transitionedAt = allocateOwnershipTransitionAt(getStore(), ctx.tenantId, target.id);
     const auditEntry = audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId ?? null,
@@ -152,7 +157,7 @@ export function confirmOwnership(ctx, id) {
         declared_fqdn: record.declared_fqdn,
         confirmed_by_user_id: actorUserId,
       },
-      transitioned_at: now,
+      transitioned_at: transitionedAt,
       transitioned_by: actorUserId,
       audit_entry_id: auditEntry.id,
     };
@@ -242,9 +247,6 @@ function loaScopeTargetIds(loa) {
  * @returns {{ verified: boolean, state: string, source: 'target'|null }}
  */
 export function targetOwnershipProof(ctx, group, targetId) {
-  if (isDemoAutoVerifyTenant(ctx?.tenantId)) {
-    return { verified: true, state: 'user_confirmed', source: 'target' };
-  }
   const store = getStore();
   const groupTargets = store.targets.filter(
     (candidate) =>
@@ -255,6 +257,10 @@ export function targetOwnershipProof(ctx, group, targetId) {
   const target = groupTargets.find((candidate) => candidate.id === targetId);
   if (!target) return ownershipProofFromStates({ targetState: null });
 
+  const verification = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+  if (verification?.source_kind === 'ownership_ambiguous') {
+    return ownershipProofFromStates({ targetState: 'pending' });
+  }
   const own = ownTargetOwnershipProof(ctx, store, target);
   if (own.verified) return own;
   const parent = ownershipParentFor(target, groupTargets);
@@ -312,7 +318,8 @@ export function getLadder(ctx, groupId) {
   );
 
   const total = targets.length;
-  if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+  if (isDemoAutoVerifyTenant(ctx.tenantId)
+    && ![...latestByTarget.values()].some((row) => row.source_kind === 'ownership_ambiguous')) {
     return {
       steps: LADDER_STEP_IDS.map((id) => ({
         id,
@@ -387,7 +394,7 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
     return { error: 'target_not_in_loa_scope', status: 409 };
   }
 
-  const now = new Date().toISOString();
+  const transitionedAt = allocateOwnershipTransitionAt(getStore(), ctx.tenantId, targetId);
   const verification = {
     id: newId('tv'),
     tenant_id: ctx.tenantId,
@@ -400,7 +407,7 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
       loa_id: activeLoa.id,
       loa_custody_digest_sha256: activeLoa.custody_digest_sha256,
     },
-    transitioned_at: now,
+    transitioned_at: transitionedAt,
     transitioned_by: ctx.userId ?? 'system',
     audit_entry_id: null,
   };

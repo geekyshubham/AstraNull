@@ -1106,6 +1106,7 @@ export function getWafCoverage(ctx, options = {}) {
     historicalSnapshots: context.historicalSnapshots,
     coverageRollups: listWafCoverageRollups(ctx, context.windowDays),
     windowDays: context.windowDays,
+    now: options.now ?? new Date(),
   });
 }
 

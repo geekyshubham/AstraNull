@@ -49,7 +49,26 @@ function forbidden(ctx, permission, resourceType) {
 }
 
 export function checkCatalogForReport(catalog = CHECK_CATALOG) {
-  return catalog.map((check) => ({ check_id: check.check_id ?? check.id, probe_profile: check.probe_profile ?? null }));
+  return catalog.map((check) => ({ ...check, check_id: check.check_id ?? check.id }));
+}
+
+async function comparisonEvidence(backend, ctx, evaluations, asOf) {
+  if (typeof backend.loadComparisonEvidence !== 'function') return { input_complete: false };
+  const baselineIds = [...new Set(evaluations.filter((row) => row.kind === 'firewall_change')
+    .map((row) => row.baseline_id).filter(Boolean))];
+  const baselineRows = baselineIds.length && typeof backend.getBaselineCaptureRowsByIds === 'function'
+    ? await backend.getBaselineCaptureRowsByIds(ctx, baselineIds) : [];
+  const grouped = new Map(baselineIds.map((id) => [id, []]));
+  for (const row of baselineRows) {
+    if (row.tenant_id === ctx.tenantId) grouped.get(row.capture_id)?.push(row);
+  }
+  const baselines = [...grouped.values()].map(presentBaselineCapture).filter(Boolean);
+  const refs = [...evaluations.flatMap((evaluation) => [
+    ...(evaluation.items ?? []).flatMap((item) => item.evidence_refs ?? []),
+    ...(evaluation.primary_evidence_set?.references ?? []),
+  ]), ...baselines.flatMap((baseline) => (baseline.entries ?? []).flatMap((entry) => entry.references ?? []))];
+  const runIds = [...new Set(refs.map((ref) => ref.test_run_id))];
+  return { ...await backend.loadComparisonEvidence(ctx, { runIds, asOf }), baselines };
 }
 
 function detectionState(status) {
@@ -200,6 +219,8 @@ export function createProtectionValidationFacade({
       entryPaths: relations,
       pathEvaluations,
       pathExpectations,
+      targets: [target, ...targetsById.values()],
+      evidenceInputs: await comparisonEvidence(backend, ctx, pathEvaluations, at),
       detections,
       checkCatalog: checkCatalogForReport(),
       now: at,
@@ -256,9 +277,13 @@ export function createProtectionValidationFacade({
       ? edgeDetectionSignals(await backend.loadEdgeDetections(ctx, targetIds))
       : [];
     const evaluations = (sources.evaluations ?? []).map((row) => (row.items && row.digest_verified !== undefined ? row : presentEvaluation(row)));
+    const at = now();
+    const evidenceInputs = await comparisonEvidence(backend, ctx, evaluations, at);
     return buildProtectionValidationReportProjection({
       tenantId: ctx.tenantId,
-      generatedAt: now(),
+      generatedAt: at,
+      evidenceInputs,
+      resolveSourcePerspective,
       targets: sources.targets ?? [],
       entryPaths: (sources.entryPaths ?? []).map((row) => ({ ...row, ...presentEntryPath(row) })),
       expectations: sources.expectations ?? [],

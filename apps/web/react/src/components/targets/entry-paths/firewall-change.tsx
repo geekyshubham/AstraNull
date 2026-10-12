@@ -18,9 +18,10 @@ import {
   type PvFailure,
   type TargetCandidate,
 } from '../../../lib/protection-validation-api';
+import { sessionIdentity } from '../../../lib/api';
 import { ConfirmModal } from '../../../lib/crud-ui';
 import { apiErrorMessage } from '../../../lib/error-messages';
-import type { DataItem, PortalConfig, Session } from '../../../lib/types';
+import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../../lib/types';
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -97,9 +98,18 @@ export function FirewallChangeComparison({
   canWrite: boolean;
   canStart: boolean;
   ownershipDone: boolean;
-  onStarted: (message: string) => void;
+  onStarted: (message: string, execution?: AcceptedExecution) => void;
 }) {
   const targetId = str(target, 'id');
+  const startScope = JSON.stringify([targetId, sessionIdentity(session), config.authMode, session.mode, session.access_token, session.expires_at]);
+  const startScopeRef = useRef(startScope);
+  startScopeRef.current = startScope;
+  const startGeneration = useRef(0);
+  useEffect(() => {
+    startScopeRef.current = startScope;
+    startGeneration.current += 1;
+    return () => { startGeneration.current += 1; startScopeRef.current = ''; };
+  }, [startScope]);
   const [expectations, setExpectations] = useState<Loaded<FirewallExpectation>>({ state: 'loading' });
   const [reload, setReload] = useState(0);
   const [changeId, setChangeId] = useStickySelection(session, targetId, 'fw-change');
@@ -229,6 +239,9 @@ export function FirewallChangeComparison({
 
   async function confirm() {
     if (!review) return;
+    const submittedScope = startScope;
+    const submittedGeneration = startGeneration.current;
+    const current = () => startScopeRef.current === submittedScope && startGeneration.current === submittedGeneration;
     setBusy(true);
     setError('');
     setIncompatible('');
@@ -253,20 +266,25 @@ export function FirewallChangeComparison({
         if (written.record.id) setComparisonId(written.record.id);
         setForm('');
       } else {
-        await startReviewedRetest(config, session, { check_id: review.ref.check_id, target_id: review.ref.target_id });
-        onStarted('Retest started for the exact check and target. Select its finalized run as post-change evidence when it finishes.');
+        const runId = await startReviewedRetest(config, session, { check_id: review.ref.check_id, target_id: review.ref.target_id });
+        if (!current()) return;
+        setReview(null);
+        if (!runId) { setError('The retest start was accepted without a recorded run ID. No historical run was substituted; refresh recorded runs.'); return; }
+        onStarted('Retest accepted for the exact check and target. The Inspector follows its recorded execution; finalized evidence must still be explicitly selected for comparison.', { runId, checkId: review.ref.check_id, targetId: review.ref.target_id });
       }
       setReview(null);
       setReload((value) => value + 1);
     } catch (err) {
+      if (!current()) return;
       const code = pvErrorCode(err);
+      if (code === 'accepted_execution_scope_mismatch') setReview(null);
       const text = writeErrorCopy(code, apiErrorMessage(err, 'The request could not be completed. Nothing was changed.'));
       if (code === 'baseline_not_comparable' && review.kind === 'compare') {
         setIncompatible(text);
         setReview(null);
       } else setError(text);
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 

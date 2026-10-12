@@ -7,7 +7,8 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { createServer as createViteServer } from 'vite';
+import { createPortalSourceServer as createViteServer } from '../../helpers/portal-playwright-server.mjs';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
   portalOwnerHeaders,
@@ -185,12 +186,14 @@ test.describe('current-release findings paging against the real API', () => {
     const address = vite.httpServer?.address();
     if (!address || typeof address === 'string') throw new Error('Vite source server did not bind a TCP port.');
     sourceBaseUrl = `http://127.0.0.1:${address.port}`;
-    // Warm the source server once so the first journey does not time out on the cold module graph.
     const warm = await browser.newPage();
-    await injectPortalDevHeadersSession(warm);
-    await warm.goto(`${sourceBaseUrl}/app#findings`, { waitUntil: 'networkidle', timeout: 180_000 }).catch(() => undefined);
-    await warm.getByRole('group', { name: 'Finding status filters' }).waitFor({ timeout: 120_000 }).catch(() => undefined);
-    await warm.close();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, sourceBaseUrl, { hash: 'findings' });
+      await warm.getByRole('group', { name: 'Finding status filters' }).waitFor({ timeout: 120_000 });
+    } finally {
+      await warm.close();
+    }
   });
 
   test.afterAll(async () => {

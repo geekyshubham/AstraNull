@@ -87,7 +87,7 @@ describe('declared login/API entry-path catalog checks', () => {
     for (const spec of ENTRY_CHECKS) {
       const check = getCheckById(spec.id);
       assert.ok(check, spec.id);
-      assert.equal(check.version, '1.0.0');
+      assert.equal(check.version, '1.0.1');
       assert.equal(check.vector_family, 'waf');
       assert.equal(check.safety_class, 'safe');
       assert.equal(check.risk_class, 'safe');
@@ -103,7 +103,7 @@ describe('declared login/API entry-path catalog checks', () => {
       assert.ok(check.probe_profile.timeout_ms <= 5000);
       assert.equal(check.probe_profile.marker, WAF_CLASS_MARKERS[check.probe_profile.marker_class]);
       assert.ok(isInertMarker(check.probe_profile.marker));
-      assert.equal(approvedScenarioVersion(check), 'marker');
+      assert.equal(approvedScenarioVersion(check), 'marker-comparison-v4');
       assert.equal(isCustomerRunnable(check), true);
       assert.equal(checkRequiresAdditionalInput(check), false);
       assert.equal(evidenceTierForCheck(check), 'E3');
@@ -246,7 +246,8 @@ describe('entry-path probe safety and the blocked-baseline prerequisite', () => 
     assert.equal(result.gated_variation_count, 3);
     assert.equal(result.enforcement, 'partial');
     const observed = deriveAttemptObservation({ external_result: 'connected', probe_metadata: { profile_kind: 'waf_class_marker_probe', ...result } });
-    assert.equal(observed.enforcement, 'partial');
+    assert.equal(observed.enforcement, 'unknown');
+    assert.ok(observed.reasons.includes('planned_comparison_incomplete'));
   });
 
   it('never turns unresolved evidence into protection', async () => {

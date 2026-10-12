@@ -2,8 +2,10 @@
  * Dashboard WAF coverage summary (portal revamp §4.3 / migration 0029).
  */
 
-function postureClass(snapshot) {
-  const status = String(snapshot?.status ?? 'unknown').toLowerCase();
+import { assessPostureAssurance } from './wafPostureAssurance.mjs';
+
+function postureClass(snapshot, asset, asOf) {
+  const status = String(assessPostureAssurance({ snapshot, asset, asOf }).status).toLowerCase();
   if (status === 'protected') return 'protected';
   if (status === 'edge_protected') return 'edge_protected';
   if (['underprotected', 'unprotected', 'drift'].includes(status)) return 'underprotected';
@@ -32,7 +34,7 @@ export function computeWafCoverageSummaryRow(input = {}) {
 
   for (const asset of assets) {
     const snapshot = snapshots.get(asset.id) ?? null;
-    const posture = postureClass(snapshot);
+    const posture = postureClass(snapshot, asset, refreshedAt);
     counts[posture] += 1;
 
     const vendorRaw = snapshot?.detected_vendor ?? null;
@@ -82,6 +84,7 @@ export function computeWafCoverageSummaryRow(input = {}) {
     connectors_degraded: connectorsDegraded,
     connectors_disabled: connectorsDisabled,
     refreshed_at: refreshedAt,
+    assurance_version: 'waf-posture-assurance.v2', authoritative: true, assessment_scope: 'tested_scenarios_only_not_origin_lockdown',
   };
 }
 
@@ -95,6 +98,7 @@ export function mapWafCoverageSummaryRow(row) {
       ? row.by_vendor
       : {};
   return {
+    assurance_version: row.assurance_version ?? 'legacy_materialized_summary', authoritative: row.assurance_version === 'waf-posture-assurance.v2', assessment_scope: row.assurance_version ? 'tested_scenarios_only_not_origin_lockdown' : 'recorded_snapshot_counts_not_current_assurance',
     assets_total: Number(row.assets_total ?? 0),
     protected: Number(row.protected ?? 0),
     edge_protected: Number(row.edge_protected ?? 0),

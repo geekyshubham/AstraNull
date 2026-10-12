@@ -361,28 +361,24 @@ describe('vector catalog', () => {
     assert.equal(invalidReflection.payload_profile, undefined);
     assert.equal(invalidReflection.expected_response_shape, undefined);
 
+    assert.throws(() => buildProbeProfile({ kind: 'header_size_probe', http_method: 'POST', nonce_hash_only: true }), /business-safe endpoint/);
     const http = buildProbeProfile({
       kind: 'header_size_probe',
-      http_method: 'POST',
+      http_method: 'HEAD',
       nonce_hash_only: true,
       probe_path: '/declared',
       oversize_header_bytes: 8192,
       body: 'must-be-dropped',
     });
-    assert.equal(http.http_method, 'POST');
+    assert.equal(http.http_method, 'HEAD');
     assert.equal(http.nonce_hash_only, true);
     assert.equal(http.probe_path, '/declared');
     assert.equal(http.oversize_header_bytes, 8192);
     assert.equal(http.body, undefined);
 
-    const invalidHttp = buildProbeProfile({
-      kind: 'header_size_probe',
-      http_method: 'CONNECT',
-      probe_path: '//invalid',
-      oversize_header_bytes: 16385,
-    });
+    assert.throws(() => buildProbeProfile({ kind: 'header_size_probe', probe_path: '//invalid' }), /invalid bounded probe path/);
+    const invalidHttp = buildProbeProfile({ kind: 'header_size_probe', http_method: 'CONNECT', oversize_header_bytes: 16385 });
     assert.equal(invalidHttp.http_method, undefined);
-    assert.equal(invalidHttp.probe_path, undefined);
     assert.equal(invalidHttp.oversize_header_bytes, undefined);
 
     for (const unsafeMethod of ['TRACE', 'PUT', 'DELETE', 'PATCH']) {

@@ -501,14 +501,7 @@ export function TargetsPage({
         </div>
       </div>
 
-      {error ? (
-        <Toast
-          message={error}
-          tone="error"
-          duration={5000}
-          onDismiss={() => setError('')}
-        />
-      ) : null}
+      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       {message && !error ? (
         <Toast
           message={message}

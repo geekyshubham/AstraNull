@@ -1,3 +1,5 @@
+const SUPPORTED_TARGET_KINDS = new Set(['fqdn', 'url', 'ip', 'tcp', 'dns', 'canary']);
+
 /** Return the effective target kind used by check compatibility gates. */
 export function effectiveTargetKind(target) {
   if (/^https?:\/\//i.test(String(target?.value ?? ''))) return 'url';
@@ -10,18 +12,14 @@ export function effectiveTargetKind(target) {
  */
 export function targetKindCompatibilityError(check, target) {
   const targetKind = effectiveTargetKind(target);
-  if (
-    !Array.isArray(check?.supported_targets)
-    || check.supported_targets.length === 0
-    || check.supported_targets.includes(targetKind)
-  ) {
+  if (Array.isArray(check?.supported_targets) && check.supported_targets.length > 0 && check.supported_targets.every((kind) => SUPPORTED_TARGET_KINDS.has(kind)) && check.supported_targets.includes(targetKind)) {
     return null;
   }
   return {
     error: 'target_kind_not_supported',
     status: 400,
-    check_id: check.check_id,
+    check_id: check?.check_id ?? null,
     target_kind: targetKind,
-    supported_targets: [...check.supported_targets],
+    supported_targets: Array.isArray(check?.supported_targets) ? [...check.supported_targets] : [],
   };
 }

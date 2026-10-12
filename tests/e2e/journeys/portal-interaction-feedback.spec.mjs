@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
@@ -26,8 +27,16 @@ import {
 const BANNER = '.form-banner, [role="status"], [role="alert"], .success-panel';
 
 test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
-  test.beforeAll(async () => {
-    await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180000);
+    await startPortalPlaywrightServer({ liveSource: true, mutate: applyPortalBaselineReadinessBoost });
+    const warm = await browser.newPage();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, getPortalPlaywrightBaseUrl());
+    } finally {
+      await warm.close();
+    }
   });
   test.afterAll(async () => {
     await stopPortalPlaywrightServer();
@@ -106,7 +115,7 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     const form = page.locator('#target-declare-form');
     await form.locator('input[name="value"]').fill('   ');
     await form.getByRole('button', { name: 'Add target', exact: true }).click();
-    await expect(page.getByRole('status').filter({ hasText: 'Target value is required.' })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Target value is required.' })).toBeVisible();
     await expect(form).toBeVisible();
   });
 
@@ -176,4 +185,53 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     await page.locator('dialog[open]').getByRole('button', { name: 'Remove target', exact: true }).click();
     await expect(removeButton).toHaveCount(0);
   });
+
+  test('target submit errors remain visible beyond five seconds and preserve the draft for retry', async ({ page }) => {
+    const submitted = [];
+    await page.route('**/v1/targets', (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ status: 409, json: { error: 'target_conflict', message: 'This declaration conflicts with an existing target. Your draft is kept.' } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'targets', getPortalPlaywrightBaseUrl());
+    await page.getByRole('button', { name: 'Add target', exact: true }).click();
+    const form = page.locator('#target-declare-form');
+    await form.getByLabel('Value', { exact: true }).fill('draft.example.test');
+    await form.getByLabel(/^Tags/).fill('team:payments');
+    await form.getByRole('button', { name: 'Add target', exact: true }).click();
+    await expect(page.getByText('This declaration conflicts with an existing target. Your draft is kept.', { exact: true })).toBeVisible();
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(5500);
+    await expect(page.getByRole('alert').filter({ hasText: 'This declaration conflicts' })).toBeVisible();
+    await expect(form.getByLabel('Value', { exact: true })).toHaveValue('draft.example.test');
+    await expect(form.getByLabel(/^Tags/)).toHaveValue('team:payments');
+    await form.getByLabel('Value', { exact: true }).fill('corrected.example.test');
+    await form.getByRole('button', { name: 'Add target', exact: true }).click();
+    await expect.poll(() => submitted.length).toBe(2);
+    expect(submitted[1]).toEqual({ kind: 'fqdn', value: 'corrected.example.test', expected_behavior: 'block_at_edge', tags: ['team:payments'] });
+  });
+
+  test('settings submit errors remain visible beyond five seconds and preserve the organization draft', async ({ page }) => {
+    const submitted = [];
+    await page.route('**/v1/tenants/current', (route) => {
+      if (route.request().method() !== 'PATCH') return route.continue();
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ status: 503, json: { error: 'temporarily_unavailable', message: 'Organization update unavailable. Your changes are kept.' } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'settings', getPortalPlaywrightBaseUrl());
+    const name = page.getByLabel('Organization name', { exact: true });
+    await name.fill('Preserved organization draft');
+    await page.getByRole('button', { name: 'Save organization', exact: true }).click();
+    await expect(page.getByText('Service is temporarily unavailable. Try again shortly.', { exact: true })).toBeVisible();
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(5500);
+    await expect(page.getByRole('alert').filter({ hasText: 'Service is temporarily unavailable' })).toBeVisible();
+    await expect(name).toHaveValue('Preserved organization draft');
+    await page.getByRole('button', { name: 'Save organization', exact: true }).click();
+    await expect.poll(() => submitted.length).toBe(2);
+    expect(submitted[1]).toEqual({ name: 'Preserved organization draft' });
+  });
+
 });

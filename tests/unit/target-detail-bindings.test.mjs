@@ -159,7 +159,13 @@ function postgresPool() {
       }
       if (sql.includes('COUNT(*) FILTER')) return { rows: [{ open_count: 0, closed_count: 0 }] };
       if (sql.includes('DISTINCT ON (r.check_id)')) {
-        assert.equal(params.length, 2, 'latest-run params are [tenantId, targetId]');
+        assert.equal(params.length, 3, 'latest-run proof params are [tenantId, targetId, immutable assessment cutoff]');
+        const cutoff = Date.parse(params[2]);
+        assert.ok(Number.isFinite(cutoff) && cutoff <= Date.now() && cutoff >= Date.now() - 60_000);
+        assert.equal(new Date(cutoff).toISOString(), params[2]);
+        assert.match(sql, /e\.timestamp <= \$3::timestamptz AND e\.ingested_at <= \$3::timestamptz/);
+        assert.match(sql, /e\.nonce_hash = r\.correlation_json->>'nonce_hash'/);
+        assert.match(sql, /e\.created_at <= \$3::timestamptz/);
         assert.equal(params[0], CTX.tenantId);
         assert.equal(params[1], TARGET.id);
         const latest = new Map();

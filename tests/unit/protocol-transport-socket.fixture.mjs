@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import http2 from 'node:http2';
 import net from 'node:net';
@@ -10,14 +11,14 @@ import { pinnedWebSocketUpgrade } from '../../src/lib/pinnedHttpRequest.mjs';
 import { probeGrpcReflection } from '../../src/lib/capabilityProbes.mjs';
 import { executeProbeForJob } from '../../workers/probe-worker.mjs';
 
-function createTlsFixture() {
+export function createTlsFixture({ includeLoopbackIp = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'astranull-protocol-tls-'));
   const keyPath = join(dir, 'key.pem');
   const certPath = join(dir, 'cert.pem');
   execFileSync('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-nodes',
     '-keyout', keyPath, '-out', certPath, '-days', '1',
-    '-subj', '/CN=grpc.test', '-addext', 'subjectAltName=DNS:grpc.test',
+    '-subj', '/CN=grpc.test', '-addext', `subjectAltName=DNS:grpc.test${includeLoopbackIp ? ',IP:127.0.0.1' : ''}`,
   ], { stdio: 'ignore' });
   return {
     dir,
@@ -26,7 +27,7 @@ function createTlsFixture() {
   };
 }
 
-function loopbackDeps(host) {
+export function loopbackDeps(host) {
   return {
     vettedHost: host,
     vettedAddresses: ['127.0.0.1'],
@@ -220,7 +221,7 @@ async function grpcFixture() {
       stream.once('wantTrailers', () => {
         stream.sendTrailers({ 'grpc-status': '0', 'grpc-message': 'fixture-ok' });
       });
-      stream.end(Buffer.from([0, 0, 0, 0, 0]));
+      stream.end(Buffer.from([0, 0, 0, 0, 6, 0x12, 2, 0x3a, 0, 0x32, 0]));
     });
   });
 
@@ -259,8 +260,9 @@ async function grpcFixture() {
   }
 }
 
+// Importing the reusable TLS/pin fixture must not run a watchdog child mode.
 const mode = process.argv[2];
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) try {
   if (mode === 'preflight-http1') await preflightHttp1Fixture();
   else if (mode === 'websocket') await websocketFixture();
   else if (mode === 'grpc') await grpcFixture();

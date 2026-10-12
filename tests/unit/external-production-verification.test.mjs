@@ -106,6 +106,34 @@ describe('external production verification contract', () => {
     assert.equal(validateExternalVerificationManifest(manifest).ok, true);
   });
 
+  for (const mutation of [
+    (records, manifest) => { delete manifest.release_id; },
+    (records, manifest) => { manifest.schema_version = 999; },
+    (records, manifest) => { manifest.domains.enterprise_idp_mfa.token = 'test-only-forbidden-field'; },
+    (records) => { records[0].release_id = 'rel_foreign'; },
+    (records) => { delete records[0].release_id; },
+  ]) {
+    it('withholds all external qualification for invalid manifests or mixed/missing record identities', () => {
+      const records = liveExternalEvidenceRecords();
+      const manifest = liveExternalVerificationManifest();
+      mutation(records, manifest);
+      const report = aggregateExternalProductionVerification(records, { manifest });
+      assert.equal(report.complete, false);
+      assert.equal(report.live_external_count, 0);
+      assert.equal(report.domains.every((domain) => domain.manifest_attested === false), true);
+    });
+  }
+
+  it('does not consume a previous release manifest for a current release audit', () => {
+    const releaseId = 'rel_current_candidate';
+    const report = aggregateProductionReadinessGapAudit({ releaseId, records: liveExternalEvidenceRecords(releaseId) }, {
+      ...closedChecklistOptions, externalVerificationManifest: liveExternalVerificationManifest('rel_previous_candidate'),
+    });
+    assert.equal(report.customer_production_ready, false);
+    assert.equal(report.external_verification.complete, false);
+    assert.ok(report.external_verification.domains.every((domain) => domain.blockers.includes('manifest_release_identity_mismatch')));
+  });
+
   it('keeps customer_production_ready false when repo production_ready is true', () => {
     const releaseId = 'rel_repo_ready';
     const records = stampAcceptedReleaseRecords(
@@ -247,7 +275,7 @@ describe('external production verification contract', () => {
     assert.equal(resolveReleaseIdFromEvidence('/tmp/does-not-exist-records.json'), null);
   });
 
-  it('auto-attaches external verification manifest when evidence exists and manifest is missing', () => {
+  it('never creates a missing manifest, even with legacy auto-attach enabled', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'astranull-ext-verify-'));
     const evidencePath = path.join(dir, 'records.json');
     const manifestPath = path.join(dir, 'external-manifest.json');
@@ -260,8 +288,9 @@ describe('external production verification contract', () => {
       manifest: manifestPath,
       autoAttachManifest: true,
     });
-    assert.equal(existsSync(manifestPath), true);
-    assert.equal(loaded.manifest?.release_id, 'rel_auto_attach');
+    assert.equal(existsSync(manifestPath), false);
+    assert.equal(loaded.manifest, null);
+    assert.throws(() => loadExternalVerificationInputs({ evidence: evidencePath, manifest: manifestPath, releaseId: 'rel_other' }), /release identity mismatch/);
     rmSync(dir, { recursive: true, force: true });
   });
 });

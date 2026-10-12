@@ -12,7 +12,7 @@ const F5_BLOCK_PAGE = '<html><head><title>Request Rejected</title></head><body>T
 const CLOUDFLARE_CHALLENGE = { 'cf-mitigated': 'challenge', 'cf-ray': '8a1b2c3d4e-LHR', server: 'cloudflare' };
 
 function stubResponse(status, headers = {}, body = '') {
-  return { status, headers: new Map(Object.entries(headers)), text: async () => body };
+  return { status, headers: new Map(Object.entries(headers)), bodyText: body, body_complete: true };
 }
 
 function carriesMarker(url, init) {
@@ -112,16 +112,18 @@ describe('WAF enforcement probe reads a bounded GET body', () => {
       { fetchFn: async (_url, init) => { methods.push(init.method); return stubResponse(200, {}, F5_BLOCK_PAGE); } },
     );
     assert.deepEqual(methods, ['GET']);
-    assert.equal(outcome.external_result, 'blocked');
-    assert.equal(outcome.metadata.monitor_only_leak, false);
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.control_action_observed, true);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
+    assert.equal(outcome.metadata.monitor_only_leak, null);
     assert.equal(outcome.metadata.denial_signature.vendor, 'f5');
   });
 });
 
 describe('evasion check versions', () => {
-  it('bumps every waf.evasion_*.safe check to 1.1.0 for the signature-based grading', () => {
+  it('bumps every waf.evasion_*.safe check for truthful wire and complete-comparison grading', () => {
     const evasion = CHECK_CATALOG.filter((check) => /^waf\.evasion_.+\.safe$/.test(check.check_id));
     assert.equal(evasion.length, 41);
-    assert.ok(evasion.every((check) => check.version === '1.1.0'));
+    assert.ok(evasion.every((check) => check.version === '1.1.1' && check.semantics_version === 'probe-catalog-v3'));
   });
 });

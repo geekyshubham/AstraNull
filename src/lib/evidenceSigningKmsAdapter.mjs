@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { createHmac, sign } from 'node:crypto';
 import { canonicalJsonStringify } from './custody.mjs';
 import {
@@ -6,10 +5,13 @@ import {
   isValidKeyReference,
   parseEvidenceSigningKeyMap,
   resolveTenantSigningMaterial,
+  resolveTenantVerificationMaterial,
+  evidenceSigningRequiresAsymmetric,
+  verifyCustodyManifestSignature,
   SHA256_HEX_RE,
 } from './evidenceSigning.mjs';
 
-const DEFAULT_KMS_FETCH_TIMEOUT_MS = 5000;
+import { createEvidenceSigningTransport } from './evidenceSigningTransport.mjs';
 
 function normalizeAlgorithm(raw) {
   if (typeof raw !== 'string') return null;
@@ -22,21 +24,7 @@ function normalizeAlgorithm(raw) {
  * @param {NodeJS.ProcessEnv} env
  */
 export function loadEvidenceSigningKeyMapEnv(env = process.env) {
-  const inline = env.ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON;
-  if (inline !== undefined && inline !== null && String(inline).trim() !== '') {
-    return parseEvidenceSigningKeyMap(env);
-  }
-  const keyFile = String(env.ASTRANULL_EVIDENCE_SIGNING_KEY ?? '').trim();
-  if (keyFile !== '') {
-    let raw;
-    try {
-      raw = readFileSync(keyFile, 'utf8');
-    } catch (err) {
-      throw new Error(`ASTRANULL_EVIDENCE_SIGNING_KEY file is unreadable: ${err?.message ?? 'read_failed'}`);
-    }
-    return parseEvidenceSigningKeyMap({ ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON: raw });
-  }
-  return {};
+  return parseEvidenceSigningKeyMap(env);
 }
 
 function signEnvelopeLocally(envelope, material) {
@@ -140,46 +128,17 @@ export function createEnvBackedEvidenceSigningAdapter(env = process.env, options
 export function createExternalKmsEvidenceSigningAdapter(config) {
   const endpoint = String(config.endpoint ?? '').trim().replace(/\/+$/, '');
   const envRef = config.env ?? process.env;
-  const fetchFn = config.fetchFn ?? globalThis.fetch;
-  const fetchTimeoutMs = Number(config.fetchTimeoutMs ?? envRef.ASTRANULL_KMS_SIGNING_FETCH_TIMEOUT_MS ?? DEFAULT_KMS_FETCH_TIMEOUT_MS);
+  const callKms = createEvidenceSigningTransport({ ...config, endpoint, env: envRef });
 
-  async function callKms(path, body) {
-    if (!endpoint) {
-      return { error: 'kms_signing_not_configured', status: 503 };
-    }
-    if (typeof fetchFn !== 'function') {
-      return { error: 'kms_signing_unavailable', status: 503, detail: 'fetch_unavailable' };
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
-    let res;
+  function verificationMaterial(tenantId, keyReference, algorithm) {
     try {
-      res = await fetchFn(`${endpoint}${path}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-        redirect: 'manual',
-      });
-    } catch (err) {
-      return {
-        error: 'kms_signing_unavailable',
-        status: 503,
-        detail: err?.name === 'AbortError' ? 'timeout' : 'network_error',
-      };
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      return { error: 'kms_signing_unavailable', status: 503, detail: `http_${res.status}` };
-    }
-    let parsed;
-    try {
-      parsed = await res.json();
-    } catch {
-      return { error: 'kms_signing_response_invalid', status: 502 };
-    }
-    return { body: parsed };
+      if (evidenceSigningRequiresAsymmetric(envRef) && algorithm === 'hmac-sha256') {
+        return { error: 'hmac_signing_forbidden_in_production', status: 400 };
+      }
+    } catch { return { error: 'invalid_signing_deployment_config', status: 503 }; }
+    const material = resolveTenantVerificationMaterial({ tenantId, keyReference, algorithm, env: envRef });
+    if (!material.error && !material.signingEnabled) return { error: 'signing_key_retired', status: 400 };
+    return material;
   }
 
   return {
@@ -194,6 +153,8 @@ export function createExternalKmsEvidenceSigningAdapter(config) {
       if (!normalizedAlgorithm) {
         return { error: 'invalid_algorithm', status: 400 };
       }
+      const material = verificationMaterial(tenantId, normalizedReference, normalizedAlgorithm);
+      if (material.error) return material;
       const kmsResult = await callKms('/v1/signing-keys/resolve', {
         tenant_id: tenantId,
         key_reference: normalizedReference,
@@ -206,7 +167,7 @@ export function createExternalKmsEvidenceSigningAdapter(config) {
       const fingerprint = typeof body?.public_key_fingerprint_sha256 === 'string'
         ? body.public_key_fingerprint_sha256.trim()
         : '';
-      if (!SHA256_HEX_RE.test(fingerprint)) {
+      if (fingerprint !== material.publicKeyFingerprintSha256) {
         return { error: 'kms_signing_response_invalid', status: 502 };
       }
       return {
@@ -229,6 +190,8 @@ export function createExternalKmsEvidenceSigningAdapter(config) {
       if (!normalizedAlgorithm) {
         return { error: 'invalid_algorithm', status: 400 };
       }
+      const material = verificationMaterial(tenantId, normalizedReference, normalizedAlgorithm);
+      if (material.error) return material;
       const kmsResult = await callKms('/v1/sign', {
         tenant_id: tenantId,
         key_reference: normalizedReference,
@@ -239,18 +202,24 @@ export function createExternalKmsEvidenceSigningAdapter(config) {
         return kmsResult;
       }
       const body = kmsResult.body;
-      const signature = typeof body?.signature === 'string' ? body.signature.trim() : '';
+      const signature = typeof body?.signature === 'string' ? body.signature : '';
       const fingerprint = typeof body?.public_key_fingerprint_sha256 === 'string'
         ? body.public_key_fingerprint_sha256.trim()
         : '';
-      if (signature === '' || !SHA256_HEX_RE.test(fingerprint)) {
+      const expectedLength = normalizedAlgorithm === 'ed25519' ? 64 : 32;
+      const bytes = Buffer.from(signature, 'base64');
+      if (signature.length !== Math.ceil(expectedLength / 3) * 4
+        || bytes.length !== expectedLength || bytes.toString('base64') !== signature
+        || fingerprint !== material.publicKeyFingerprintSha256
+        || (body.algorithm !== undefined && body.algorithm !== normalizedAlgorithm)
+        || (body.key_reference !== undefined && body.key_reference !== normalizedReference)) {
         return { error: 'kms_signing_response_invalid', status: 502 };
       }
-      return {
-        signature,
-        publicKeyFingerprintSha256: fingerprint,
-        source: 'kms',
-      };
+      const verified = verifyCustodyManifestSignature({ tenantId, custodyManifestDigest: digestHex,
+        signer: { algorithm: normalizedAlgorithm, key_reference: normalizedReference, signature }, env: envRef });
+      if (!verified.ok) return { error: verified.error, status: 502 };
+      return { signature, algorithm: normalizedAlgorithm, keyReference: normalizedReference,
+        publicKeyFingerprintSha256: fingerprint, source: 'kms' };
     },
   };
 }

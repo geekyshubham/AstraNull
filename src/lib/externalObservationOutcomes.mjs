@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { classifyEdgeByAddress } from './edgeFingerprint.mjs';
 
-export const EXTERNAL_OBSERVATION_SEMANTICS_VERSION = 'external-observation-v2';
-export const LEGACY_EXTERNAL_OBSERVATION_SEMANTICS_VERSIONS = Object.freeze(['external-observation-v1']);
+export const EXTERNAL_OBSERVATION_SEMANTICS_VERSION = 'external-observation-v3';
+export const LEGACY_EXTERNAL_OBSERVATION_SEMANTICS_VERSIONS = Object.freeze(['external-observation-v1', 'external-observation-v2']);
 
 export const EXTERNAL_OBSERVATION_OUTCOMES = Object.freeze([
   'response_observed',
@@ -141,18 +141,18 @@ export function baselineHealth(baseline) {
 }
 
 /** Customer-declared block or lockdown response: status plus body hash or header, matched exactly. */
-export function matchDeclaredDenialSignature({ statusCode = null, headers = null, bodyText = null, declared = null } = {}) {
+export function matchDeclaredDenialSignature({ statusCode = null, headers = null, bodyText = null, declared = null, bodyComplete = false } = {}) {
   if (!declared || typeof declared !== 'object') return null;
   const header = headerGetter(headers);
   if (Number.isInteger(declared.status_code) && declared.status_code !== statusCode) return null;
   const wantedHash = typeof declared.body_sha256 === 'string' ? declared.body_sha256.trim().toLowerCase() : '';
   const wantedHeader = declared.header && typeof declared.header.name === 'string' ? declared.header : null;
   if (!wantedHash && !wantedHeader) return null;
-  if (wantedHash && (typeof bodyText !== 'string' || sha256Hex(bodyText) !== wantedHash)) return null;
+  if (wantedHash && (bodyComplete !== true || !/^[a-f0-9]{64}$/.test(wantedHash) || typeof bodyText !== 'string' || sha256Hex(bodyText) !== wantedHash)) return null;
   if (wantedHeader) {
     const observed = header(wantedHeader.name.toLowerCase());
-    if (observed == null) return null;
-    if (typeof wantedHeader.value === 'string' && observed !== wantedHeader.value.trim()) return null;
+    if (observed == null || typeof wantedHeader.value !== 'string' || !wantedHeader.value.trim()) return null;
+    if (observed !== wantedHeader.value.trim()) return null;
   }
   return { kind: 'declared', id: typeof declared.id === 'string' && declared.id ? declared.id.slice(0, 64) : 'declared_response', vendor: null };
 }
@@ -168,8 +168,8 @@ export function matchVendorDenialSignature({ statusCode = null, headers = null, 
 }
 
 /** Declared signature first, then vendor markers. */
-export function matchControlDenialSignature({ statusCode = null, headers = null, bodyText = '', declared = null } = {}) {
-  return matchDeclaredDenialSignature({ statusCode, headers, bodyText, declared })
+export function matchControlDenialSignature({ statusCode = null, headers = null, bodyText = '', declared = null, bodyComplete = false } = {}) {
+  return matchDeclaredDenialSignature({ statusCode, headers, bodyText, declared, bodyComplete })
     ?? matchVendorDenialSignature({ statusCode, headers, bodyText });
 }
 
@@ -206,12 +206,28 @@ function isDeclaredMtlsRejection({ error, statusCode, bodyText, declared }) {
   return statusCode === 400 && /no required ssl certificate was sent/i.test(String(bodyText ?? ''));
 }
 
+/** Independent permitted-path identity must match exact method, scope, source, scenario and freshness. */
+export function originBaselineComparable({ baseline, scope, expectedNonce, observedAt } = {}) {
+  if (baselineHealth(baseline) !== 'healthy' || typeof expectedNonce !== 'string' || !expectedNonce) return false;
+  const prior = baseline?.scope;
+  if (!prior || !scope || !['host', 'path', 'method', 'scenario_version', 'source_perspective', 'worker_id'].every(
+    (key) => typeof scope[key] === 'string' && scope[key] && prior[key] === scope[key],
+  )) return false;
+  if (!Number.isInteger(scope.port) || prior.port !== scope.port) return false;
+  const age = Date.parse(observedAt) - Date.parse(baseline.observed_at);
+  return Number.isFinite(age) && age >= 0 && age <= 60000
+    && baseline.application_identity?.confirmed === true
+    && baseline.application_identity?.method === 'nonce_canary'
+    && baseline.canary_echo === expectedNonce;
+}
+
 /** Classify one direct-origin request, scoped to the tested host/path/source/time. */
 export function classifyDirectOriginObservation({
   attempted = true,
   response = null,
   error = null,
   bodyText = null,
+  bodyComplete = false,
   baseline = null,
   expectedNonce = null,
   expectedMarker = null,
@@ -221,11 +237,13 @@ export function classifyDirectOriginObservation({
   observedAt = null,
 } = {}) {
   const baselineState = baselineHealth(baseline);
+  const baselineComparable = originBaselineComparable({ baseline, scope, expectedNonce, observedAt });
   const status = Number(response?.status);
   const statusCode = !error && Number.isInteger(status) && status >= 100 ? status : null;
   const limitations = ['scoped_to_tested_host_path_source_time', 'responsible_control_not_identified'];
   if (baselineState === 'not_available') limitations.push('baseline_not_available');
   if (baselineState === 'unhealthy') limitations.push('baseline_unhealthy');
+  if (baselineState === 'healthy' && !baselineComparable) limitations.push('baseline_identity_scope_source_or_freshness_not_comparable');
 
   let outcome;
   let identityMethod = null;
@@ -247,7 +265,7 @@ export function classifyDirectOriginObservation({
   else {
     denialSignature = isDeclaredMtlsRejection({ statusCode, bodyText, declared: declaredLockdown })
       ? { kind: 'declared', id: 'declared_mtls_rejection', vendor: null }
-      : matchControlDenialSignature({ statusCode, headers: response, bodyText, declared: declaredLockdown });
+      : matchControlDenialSignature({ statusCode, headers: response, bodyText, declared: declaredLockdown, bodyComplete });
     if (denialSignature) outcome = 'explicit_denial_observed';
     else {
       const unsigned = unsignedStatusOutcome(statusCode);
@@ -288,13 +306,13 @@ export function classifyDirectOriginObservation({
     || outcome === 'explicit_denial_observed';
   const applicationBypassConfirmed = outcome === 'application_identity_confirmed'
     && identityMethod === 'nonce_canary'
-    && baselineState === 'healthy';
+    && baselineState === 'healthy' && baselineComparable;
   const success2xx3xx = statusCode != null && statusCode >= 200 && statusCode < 400;
   const applicationBypassSuspected = !applicationBypassConfirmed && success2xx3xx
     && (outcome === 'application_identity_confirmed' || (outcome === 'response_observed' && supportingSignals.length > 0));
   const originLockdownConfirmed = outcome === 'explicit_denial_observed'
     && denialSignature?.kind === 'declared'
-    && baselineState === 'healthy';
+    && baselineState === 'healthy' && baselineComparable;
 
   return {
     semantics_version: EXTERNAL_OBSERVATION_SEMANTICS_VERSION,
@@ -309,6 +327,9 @@ export function classifyDirectOriginObservation({
     response_observed: responseObserved,
     explicit_denial_observed: outcome === 'explicit_denial_observed',
     baseline: baselineState,
+    baseline_comparable: baselineComparable,
+    readiness_conclusion: applicationBypassConfirmed || originLockdownConfirmed,
+    observation_only: !applicationBypassConfirmed && !originLockdownConfirmed,
     application_identity: { confirmed: identityMethod != null, method: identityMethod },
     supporting_signals: supportingSignals,
     application_bypass_confirmed: applicationBypassConfirmed,
@@ -319,6 +340,10 @@ export function classifyDirectOriginObservation({
       host: typeof scope?.host === 'string' ? scope.host.slice(0, 253) : null,
       path: typeof scope?.path === 'string' ? scope.path.slice(0, 256) : '/',
       port: Number.isInteger(scope?.port) ? scope.port : null,
+      method: typeof scope?.method === 'string' ? scope.method : null,
+      scenario_version: typeof scope?.scenario_version === 'string' ? scope.scenario_version : null,
+      source_perspective: typeof scope?.source_perspective === 'string' ? scope.source_perspective : null,
+      worker_id: typeof scope?.worker_id === 'string' ? scope.worker_id : null,
     },
     observed_at: typeof observedAt === 'string' ? observedAt : null,
     limitations,
@@ -355,7 +380,11 @@ export function originObservationOf(metadata) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   if (!SUPPORTED_VERSIONS.has(value.semantics_version)) return null;
   if (!OUTCOME_SET.has(value.outcome)) return null;
-  return value.semantics_version === EXTERNAL_OBSERVATION_SEMANTICS_VERSION ? value : reinterpretLegacy(value);
+  if (value.semantics_version === EXTERNAL_OBSERVATION_SEMANTICS_VERSION) return value;
+  const legacy = value.semantics_version === 'external-observation-v1' ? reinterpretLegacy(value) : { ...value, legacy_semantics: true };
+  return { ...legacy, application_bypass_confirmed: false, origin_lockdown_confirmed: false,
+    baseline_comparable: false, observation_only: true, readiness_conclusion: false,
+    limitations: [...(legacy.limitations ?? []), 'legacy_baseline_identity_or_completeness_unverified'] };
 }
 
 /** Origin lockdown only from a declared lockdown signature with a healthy baseline, never from a status code or silence. */
@@ -366,6 +395,7 @@ export function metadataConfirmsOriginLockdown(metadata) {
     && observation
     && observation.outcome === 'explicit_denial_observed'
     && observation.denial_signature?.kind === 'declared'
+    && observation.baseline_comparable === true
     && observation.baseline === 'healthy'
     && observation.origin_lockdown_confirmed === true,
   );
@@ -380,6 +410,7 @@ export function metadataConfirmsApplicationBypass(metadata) {
     && observation.application_bypass_confirmed === true
     && observation.application_identity?.confirmed === true
     && observation.application_identity?.method === 'nonce_canary'
+    && observation.baseline_comparable === true
     && observation.baseline === 'healthy',
   );
 }

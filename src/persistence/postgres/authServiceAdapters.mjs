@@ -134,7 +134,17 @@ export function createPostgresAuthServices(repositories, options = {}) {
     async revokeServiceAccount(ctx, id) {
       const revokedAt = nowFn().toISOString();
       const account = await authTokens.revokeServiceAccount(ctx, id, revokedAt);
-      if (!account) return null;
+      if (!account) {
+        await appendAudit({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'service_account.mutation_not_found',
+          resource_type: 'service_account',
+          resource_id: id,
+        });
+        return null;
+      }
       await appendAudit({
         tenant_id: ctx.tenantId,
         actor_user_id: ctx.userId,
@@ -148,7 +158,17 @@ export function createPostgresAuthServices(repositories, options = {}) {
 
     async rotateServiceAccount(ctx, id) {
       const account = await authTokens.getServiceAccountById(ctx, id);
-      if (!account) return null;
+      if (!account) {
+        await appendAudit({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'service_account.mutation_not_found',
+          resource_type: 'service_account',
+          resource_id: id,
+        });
+        return null;
+      }
       if (account.revoked_at) {
         return {
           error: 'service_account_revoked',

@@ -157,7 +157,12 @@ describe('target-detail React contract', () => {
   it('leads with a stateful validation path and explicit check selection', () => {
     const queue = readFileSync(new URL('../../apps/web/react/src/components/targets/domain-protection.tsx', import.meta.url), 'utf8');
     assert.match(DETAIL_SOURCE, /Validate this target/);
-    assert.match(DETAIL_SOURCE, /check_id: effectiveSelectedCheckId/);
+    assert.match(DETAIL_SOURCE, /review\.checkId !== effectiveSelectedCheckId/);
+    assert.match(DETAIL_SOURCE, /const reviewedCheckId = review\.checkId/);
+    assert.match(DETAIL_SOURCE, /body: \{ target_id: entityId, check_id: reviewedCheckId \}/);
+    assert.match(DETAIL_SOURCE, /const created = asDataItem\(accepted\.run\) \?\? accepted/);
+    assert.match(DETAIL_SOURCE, /test_run_id: runId/);
+    assert.match(DETAIL_SOURCE, /record: created/);
     // Selection is one explicit radio per check in the shared check queue; starting needs a review.
     assert.match(queue, /type="radio"/);
     assert.match(DETAIL_SOURCE, /setReview\(\{ mode: 'single', checkId: effectiveSelectedCheckId \}\)/);

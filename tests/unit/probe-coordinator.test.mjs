@@ -8,6 +8,7 @@ import {
   ingestProbeResult,
   listPendingProbeJobsForWorker,
   probeWorkerAuthHeaders,
+  reserveProbeExecution,
   signProbeWorkerRequest,
   verifyProbeJobSignature,
 } from '../../src/services/probeCoordinator.mjs';
@@ -65,12 +66,13 @@ function seedAgent() {
   }
 }
 
-function runtimeSignedWorker() {
+function runtimeSignedWorker(env = {}) {
   return loadRuntimeConfig({
     NODE_ENV: 'test',
     ASTRANULL_NO_PERSIST: '1',
     ASTRANULL_PROBE_MODE: 'signed-worker',
     ASTRANULL_PROBE_WORKER_SECRET: WORKER_SECRET,
+    ...env,
   });
 }
 
@@ -89,6 +91,18 @@ function compliantSafetyAttestation(job) {
     total_operations: totalOperations,
     duration_ms: Math.min(100, timeoutMs),
   };
+}
+
+function authorizeExecution(job, workerId = 'worker-a') {
+  const workerCtx = { tenantId: job.tenant_id, workerId };
+  if (job.status === 'pending') {
+    const leased = listPendingProbeJobsForWorker(workerCtx, runtimeSignedWorker());
+    assert.ok(leased.some((entry) => entry.id === job.id));
+  }
+  const grant = reserveProbeExecution(workerCtx, job.id, { leased_at: job.leased_at });
+  assert.equal(grant.error, undefined, JSON.stringify(grant));
+  assert.equal(grant.authorized, true);
+  return grant;
 }
 
 function probeResultBody(job, externalResult, extra = {}) {
@@ -348,6 +362,16 @@ describe('signed probe coordinator', () => {
     });
     assert.equal(job.constraints.max_requests, check.probe_profile.max_requests);
     assert.equal(job.constraints.timeout_ms, 5000);
+    const executePath = `/internal/probe/jobs/${job.id}/execute`;
+    const executeBody = { leased_at: job.leased_at };
+    const grant = await request(baseUrl, 'POST', executePath, {
+      headers: probeWorkerAuthHeaders('worker-a', { method: 'POST', path: executePath,
+        bodyText: JSON.stringify(executeBody), tenantId: 'ten_demo' }, WORKER_SECRET),
+      body: executeBody,
+    });
+    assert.equal(grant.status, 201);
+    assert.equal(grant.json.authorized, true);
+    assert.equal(grant.json.not_after, job.constraints.not_after);
     const body = probeResultBody(job, 'blocked', { metadata: { region: 'us-east' } });
     const resultPath = `/internal/probe/jobs/${started.probe_job.id}/result`;
     const resultHeaders = probeWorkerAuthHeaders(
@@ -628,6 +652,7 @@ describe('signed probe coordinator', () => {
     const job = getStore().probeJobs[0];
     const workerCtx = { workerId: 'worker-a' };
     const cfg = runtimeSignedWorker();
+    authorizeExecution(job);
     const firstBody = probeResultBody(job, 'blocked');
     const first = ingestProbeResult(workerCtx, job.id, firstBody, cfg);
     assert.equal(first.error, undefined);
@@ -654,6 +679,7 @@ describe('signed probe coordinator', () => {
     run.collection_deadline_at = new Date(Date.now() + 60_000).toISOString();
 
     const job = getStore().probeJobs[0];
+    authorizeExecution(job);
     const out = ingestProbeResult(
       { tenantId: 'ten_demo', workerId: 'worker-a' },
       job.id,
@@ -705,6 +731,7 @@ describe('signed probe coordinator', () => {
     );
     assert.equal(started.error, undefined);
     const job = store.probeJobs.find((row) => row.test_run_id === started.run.id);
+    authorizeExecution(job);
     const ingested = ingestProbeResult(
       { tenantId: 'ten_demo', workerId: 'worker-a' },
       job.id,
@@ -743,6 +770,7 @@ describe('signed probe coordinator', () => {
       runtimeSignedWorker(),
     );
     const job = getStore().probeJobs[0];
+    authorizeExecution(job);
     const out = ingestProbeResult(
       { workerId: 'worker-a' },
       job.id,
@@ -779,6 +807,7 @@ describe('signed probe coordinator', () => {
     );
     const job = getStore().probeJobs[0];
     const workerCtx = { workerId: 'worker-unit' };
+    authorizeExecution(job, workerCtx.workerId);
     const out = ingestProbeResult(
       workerCtx,
       job.id,
@@ -942,7 +971,7 @@ describe('signed probe coordinator', () => {
     assert.equal(job.status, 'pending');
   });
 
-  it('accepts a truly legacy unsplit hostname result', () => {
+  it('refuses new positive evidence from a legacy unsplit job without execution authority', () => {
     freshStore();
     seedAgent();
     startTestRun(
@@ -973,8 +1002,9 @@ describe('signed probe coordinator', () => {
       },
       runtimeSignedWorker(),
     );
-    assert.equal(out.error, undefined);
-    assert.equal(job.status, 'completed');
+    assert.deepEqual(out, { error: 'probe_execution_not_reserved', status: 409 });
+    assert.equal(job.status, 'pending');
+    assert.equal(getStore().events.some((event) => event.test_run_id === job.test_run_id && event.signal_type === 'probe_result'), false);
   });
 
   it('rejects forged or incomplete split operation accounting', () => {
@@ -1094,6 +1124,7 @@ describe('signed probe coordinator', () => {
         runtimeSignedWorker(),
       );
       const job = getStore().probeJobs[0];
+      if (accepted) authorizeExecution(job);
       const out = ingestProbeResult(
         { workerId: 'worker-a' },
         job.id,
@@ -1130,6 +1161,7 @@ describe('signed probe coordinator', () => {
       runtimeSignedWorker(),
     );
     const job = getStore().probeJobs[0];
+    authorizeExecution(job);
     const attestation = {
       ...compliantSafetyAttestation(job),
       duration_ms: 250,
@@ -1163,6 +1195,7 @@ describe('signed probe coordinator', () => {
       runtimeSignedWorker(),
     );
     const job = getStore().probeJobs[0];
+    authorizeExecution(job, 'worker-trusted');
     const out = ingestProbeResult(
       { workerId: 'worker-trusted' },
       job.id,
@@ -1170,6 +1203,9 @@ describe('signed probe coordinator', () => {
         metadata: {
           external_result: 'connected',
           probe_worker_id: 'worker-evil',
+          probe_job_id: 'job-forged',
+          source_perspective: 'invented-source',
+          execution_receipt: { version: 'accepted-probe-execution.v1', digest: '0'.repeat(64) },
           safety_attestation: { requests_sent: 999, duration_ms: 999 },
           request_accounting: { total_operations: 999 },
           probe_logical_attempts: 999,
@@ -1178,7 +1214,7 @@ describe('signed probe coordinator', () => {
           region: 'us-east',
         },
       }),
-      runtimeSignedWorker(),
+      runtimeSignedWorker({ ASTRANULL_APPROVED_PROBE_SOURCES: JSON.stringify({ 'reviewed-source': ['worker-trusted'] }) }),
     );
     assert.equal(out.error, undefined);
     const probeEvent = getStore().events.find(
@@ -1186,6 +1222,12 @@ describe('signed probe coordinator', () => {
     );
     assert.equal(probeEvent.metadata.external_result, 'blocked');
     assert.equal(probeEvent.metadata.probe_worker_id, 'worker-trusted');
+    assert.equal(probeEvent.metadata.probe_job_id, job.id);
+    assert.equal(probeEvent.metadata.source_perspective, 'reviewed-source');
+    assert.equal(probeEvent.metadata.execution_receipt.version, 'accepted-probe-execution.v1');
+    assert.match(probeEvent.metadata.execution_receipt.digest, /^[a-f0-9]{64}$/);
+    assert.notEqual(probeEvent.metadata.execution_receipt.digest, '0'.repeat(64));
+    assert.ok(Number.isFinite(Date.parse(probeEvent.ingested_at)));
     assert.deepEqual(probeEvent.metadata.safety_attestation, compliantSafetyAttestation(job));
     assert.equal(probeEvent.metadata.request_accounting, undefined);
     assert.equal(probeEvent.metadata.probe_logical_attempts, undefined);
@@ -1209,6 +1251,7 @@ describe('signed probe coordinator', () => {
       runtimeSignedWorker(),
     );
     const job = getStore().probeJobs[0];
+    authorizeExecution(job);
     const out = ingestProbeResult(
       { workerId: 'worker-a' },
       job.id,

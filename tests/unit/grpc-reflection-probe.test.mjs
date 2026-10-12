@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { probeGrpcReflection } from '../../src/lib/capabilityProbes.mjs';
+import { probeGrpcReflection, validateGrpcResponseBody } from '../../src/lib/capabilityProbes.mjs';
 import { buildProbeProfile, getCheckById } from '../../src/contracts/checks.mjs';
 import { runProtocolTransportFixture } from './protocol-transport-watchdog.mjs';
 
@@ -21,6 +21,7 @@ function h2Response({
   initialGrpcStatus = null,
   grpcMessage = null,
   contentType = 'application/grpc',
+  responseBody = Buffer.from([0, 0, 0, 0, 6, 0x12, 2, 0x3a, 0, 0x32, 0]),
 } = {}) {
   const headers = new Map([['content-type', contentType]]);
   if (initialGrpcStatus !== null) headers.set('grpc-status', initialGrpcStatus);
@@ -33,6 +34,7 @@ function h2Response({
     pinnedAddress: '93.184.216.34',
     headers,
     trailers,
+    responseBody, responseBytes: responseBody.length,
   };
 }
 
@@ -98,13 +100,13 @@ describe('grpc_reflection_probe (DET-021)', () => {
     assert.equal(result.metadata.reflection_service_routed, null);
   });
 
-  it('classifies unreachable HTTP/2 endpoints as blocked', async () => {
+  it('classifies unreachable HTTP/2 endpoints as transport errors', async () => {
     const result = await probeGrpcReflection(makeJob(), {
       http2RequestFn: async () => {
         throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
       },
     });
-    assert.equal(result.external_result, 'blocked');
+    assert.equal(result.external_result, 'error');
     assert.equal(result.metadata.error_class, 'ECONNREFUSED');
     assert.equal(result.metadata.reflection_service_routed, null);
   });
@@ -113,9 +115,9 @@ describe('grpc_reflection_probe (DET-021)', () => {
     const result = await probeGrpcReflection(makeJob(), {
       http2RequestFn: async () => h2Response({ grpcStatus: '12' }),
     });
-    assert.equal(result.external_result, 'blocked');
-    assert.equal(result.metadata.grpc_endpoint_reachable, true);
-    assert.equal(result.metadata.reflection_service_routed, false);
+    assert.equal(result.external_result, 'not_run');
+    assert.equal(result.metadata.grpc_endpoint_reachable, false);
+    assert.equal(result.metadata.reflection_service_routed, null);
     assert.equal(result.metadata.reflection_service_exposed, false);
   });
 
@@ -127,7 +129,7 @@ describe('grpc_reflection_probe (DET-021)', () => {
     }), {
       http2RequestFn: async (_url, options) => {
         body = options.body;
-        return h2Response();
+        return h2Response({ responseBody: Buffer.from([0, 0, 0, 0, 2, 8, 1]) });
       },
     });
     assert.deepEqual(body, Buffer.from([0, 0, 0, 0, 0]));
@@ -224,5 +226,28 @@ describe('grpc reflection synchronous accounting and hard deadline', () => {
     assert.equal(result.external_result, 'timeout');
     assert.equal(result.metadata.error_class, 'probe_job_deadline_exceeded');
     assert.equal(result.requests_sent, 1);
+  });
+});
+
+
+describe('gRPC golden negative response identity', () => {
+  it('grpc-status:0 and generic or missing framed protobuf never confirm a routed reflection service', async () => {
+    for (const body of [Buffer.alloc(0), Buffer.from('generic HTML'), Buffer.from([0, 0, 0, 0, 0]),
+      Buffer.from([0, 0, 0, 0, 2, 8, 1]), Buffer.from([1, 0, 0, 0, 6, 0x12, 2, 0x3a, 0, 0x32, 0])]) {
+      const result = await probeGrpcReflection(makeJob(), { http2RequestFn: async () => h2Response({ responseBody: body }) });
+      assert.equal(result.external_result, 'not_run');
+      assert.equal(result.metadata.protocol_identity_confirmed, false);
+      assert.equal(result.metadata.reflection_service_exposed, false);
+      assert.equal(result.metadata.readiness_conclusion, false);
+      assert.equal(Object.hasOwn(result.metadata, 'responseBody'), false);
+    }
+  });
+
+  it('strict protobuf identity accepts only the matching list-services request response', () => {
+    const good = Buffer.from([0, 0, 0, 0, 6, 0x12, 2, 0x3a, 0, 0x32, 0]);
+    assert.equal(validateGrpcResponseBody(good, 'reflection'), true);
+    const wrong = Buffer.from(good); wrong[7] = 0x32;
+    assert.equal(validateGrpcResponseBody(wrong, 'reflection'), false);
+    assert.equal(validateGrpcResponseBody(good.subarray(0, 10), 'reflection'), false);
   });
 });

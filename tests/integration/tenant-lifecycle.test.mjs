@@ -3,31 +3,40 @@ import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
 import { getStore } from '../../src/store.mjs';
 import { resetSignupRateLimitsForTests } from '../../src/services/signupIntake.mjs';
-import { demoHeaders, request, staffHeaders } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request, staffHeaders } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 let server;
 let baseUrl;
 
-function bootIsolatedServer() {
-  process.env.ASTRANULL_NO_PERSIST = '1';
+async function bootIsolatedServer() {
   freshStore();
   resetSignupRateLimitsForTests();
-  server?.close();
-  server = createServer();
-  server.listen(0);
+  // This in-memory fixture uses real dev-header staff/customer authorization, not
+  // inherited deployment settings. Probe execution stays simulated; high-scale is disabled.
+  const env = {
+    NODE_ENV: 'test',
+    ASTRANULL_NO_PERSIST: '1',
+    ASTRANULL_AUTH_MODE: 'dev-headers',
+    ASTRANULL_PERSISTENCE_MODE: 'dev-json',
+    ASTRANULL_PROBE_MODE: 'simulation',
+    ASTRANULL_HIGH_SCALE_ADAPTER_MODE: 'disabled',
+    ASTRANULL_PUBLIC_SIGNUP_ENABLED: '1',
+    ASTRANULL_RATE_LIMIT_DISABLED: '0',
+    ASTRANULL_RATE_LIMIT_WINDOW_MS: '60000',
+    ASTRANULL_RATE_LIMIT_MAX_REQUESTS: '600',
+  };
+  server = createServer({ env });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 }
 
-before(() => {
-  bootIsolatedServer();
-});
+before(bootIsolatedServer);
 
-after(() => server?.close());
+after(async () => closeServer(server));
 
 describe('tenant lifecycle (FT-CRUD-TEN-01)', () => {
   it('signup request → approve → provisioned → suspend → reactivate', { timeout: 60_000 }, async () => {
-    bootIsolatedServer();
     const submitted = await request(baseUrl, 'POST', '/v1/signup-requests', {
       body: {
         organization_name: 'Lifecycle Tenant Co',
@@ -38,8 +47,24 @@ describe('tenant lifecycle (FT-CRUD-TEN-01)', () => {
         region: 'us',
       },
     });
-    assert.equal(submitted.status, 201);
+    assert.equal(submitted.status, 201, submitted.text);
+    assert.equal(submitted.json.request.state, 'submitted');
     const requestId = submitted.json.request.id;
+
+    const publicStatus = await request(baseUrl, 'GET', `/v1/signup-requests/${requestId}`);
+    assert.equal(publicStatus.status, 200, publicStatus.text);
+    assert.equal(publicStatus.json.request.id, requestId);
+    assert.equal(publicStatus.json.request.state, 'submitted');
+
+    for (const headers of [{}, demoHeaders('admin')]) {
+      const denied = await request(baseUrl, 'POST', `/internal/admin/signup-requests/${requestId}/approve`, {
+        headers,
+        body: { reason: 'Unauthorized approval', provision: true },
+      });
+      assert.equal(denied.status, 403, denied.text);
+      assert.equal(denied.json.error, 'staff_forbidden');
+    }
+    assert.equal(getStore().signupRequests.find((entry) => entry.id === requestId).state, 'submitted');
 
     const approved = await request(baseUrl, 'POST', `/internal/admin/signup-requests/${requestId}/approve`, {
       headers: staffHeaders('internal_admin'),

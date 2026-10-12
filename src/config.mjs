@@ -12,7 +12,9 @@ import {
   loadSecretEncryptionKey,
 } from './lib/secrets.mjs';
 import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
+import { loadEvidenceSigningConfig } from './lib/evidenceSigningConfig.mjs';
 import { boundedMaxResults } from './lib/subdomainEnumeration.mjs';
+import { approvedProbeSourcesFromEnv } from './lib/probeSourcePerspective.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
 
@@ -457,6 +459,7 @@ export function loadRuntimeConfig(env = process.env) {
   assertBundledStagingOidcFixtureUsable(env);
   const nodeEnv = env.NODE_ENV ?? 'development';
   const deploymentProfile = resolveDeploymentProfile(env);
+  const evidenceSigning = loadEvidenceSigningConfig(env);
   const authMode = resolveAuthMode(env);
 
   if (
@@ -792,6 +795,7 @@ export function loadRuntimeConfig(env = process.env) {
     sessionSecret,
     oidc,
     deploymentProfile,
+    evidenceSigning,
     bundledStagingOidc,
     bundledStagingStaffLogin,
     bundledStagingCustomerLogin,
@@ -813,6 +817,7 @@ export function loadRuntimeConfig(env = process.env) {
     databaseUrlConfigured,
     probeMode,
     probeWorkerSecret,
+    approvedProbeSources: approvedProbeSourcesFromEnv(env),
     probeWorkerSecretConfigured: probeMode === 'signed-worker' && Boolean(probeWorkerSecret),
     connectorJobPrivateKeyConfigured: connectorWorkerConfig.connectorJobPrivateKeyConfigured,
     connectorJobPublicKeyConfigured: connectorWorkerConfig.connectorJobPublicKeyConfigured,

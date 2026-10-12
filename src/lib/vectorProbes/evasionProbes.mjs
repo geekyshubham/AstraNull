@@ -7,10 +7,10 @@
  * a working payload. No count/rate/concurrency/repeat parameter is exposed.
  */
 
+import { SUPPORTED_EVASION_TRANSFORMS } from '../probeEvidenceTiers.mjs';
 import { isLiveCapabilityProbeAuthorized } from '../capabilityProbeAuth.mjs';
+import { BENIGN_CLASS_MARKERS, EVASION_VARIANT_MARKERS } from '../inertWafMarkers.mjs';
 import {
-  BENIGN_CLASS_MARKERS,
-  EVASION_VARIANT_MARKERS,
   isBlockedOrChallenged,
   markerBaselineHealth,
   markerDenialSignature,
@@ -67,14 +67,18 @@ function numericHex(value) {
 
 /**
  * Each encoder receives an inert marker and returns a variant descriptor.
- * `sent_value` is derived solely from the inert marker; `delivery` is metadata only.
+ * `sent_value` is derived solely from the inert marker; supported delivery is attested on wire.
  */
+function encodeComponent(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 const EVASION_TRANSFORM_ENCODERS = Object.freeze({
-  double_url: (m) => ({ sent_value: encodeURIComponent(encodeURIComponent(m)) }),
+  double_url: (m) => ({ sent_value: encodeComponent(encodeComponent(m)) }),
   mixed_url: (m) => ({ sent_value: m.replace(/'/g, '%27').replace(/ /g, '%20').replace(/</g, '%3C') }),
   unicode_normalization: (m) => ({ sent_value: toFullwidth(m) }),
   homoglyph: (m) => ({ sent_value: toHomoglyph(m) }),
-  overlong_utf8: (m) => ({ sent_value: m.replace(/'/g, '%C0%A7'), delivery: { encoding: 'overlong_utf8' } }),
+  overlong_utf8: (m) => ({ sent_value: encodeComponent(m).replace(/%27/g, '%C0%A7'), delivery: { encoding: 'overlong_utf8' } }),
   alt_charset: (m) => ({ sent_value: m, delivery: { content_type: 'text/plain; charset=ibm500' } }),
   html_entity: (m) => ({ sent_value: htmlEntities(m) }),
   js_escape: (m) => ({ sent_value: jsEscapes(m) }),
@@ -82,12 +86,12 @@ const EVASION_TRANSFORM_ENCODERS = Object.freeze({
   css_escape: (m) => ({ sent_value: cssEscapes(m) }),
   base64_wrap: (m) => ({ sent_value: Buffer.from(m, 'utf8').toString('base64'), delivery: { encoding: 'base64' } }),
   numeric_repr: (m) => ({ sent_value: numericHex(m), delivery: { encoding: 'numeric' } }),
-  whitespace: (m, cls) => ({ sent_value: cls === 'sqli' ? EVASION_VARIANT_MARKERS.sqli_comment : m.replace(/-/g, '%09') }),
+  whitespace: (m) => ({ sent_value: m.replace(/ /g, '\t').replace(/-/g, '\t'), delivery: { encoding: 'whitespace_tab' } }),
   lexical_operator: (m, cls) => ({ sent_value: cls === 'sqli' ? EVASION_VARIANT_MARKERS.sqli_comment : m }),
   lexical_tautology: (m, cls) => ({ sent_value: cls === 'sqli' ? EVASION_VARIANT_MARKERS.sqli_case : m }),
   lexical_literal: (m, cls) => ({ sent_value: cls === 'sqli' ? EVASION_VARIANT_MARKERS.sqli_case : m }),
   case_fold: (m, cls) => ({ sent_value: cls === 'sqli' ? EVASION_VARIANT_MARKERS.sqli_case : m.toUpperCase() }),
-  control_char: (m) => ({ sent_value: `%00${m}` }),
+  control_char: (m) => ({ sent_value: `%00${encodeComponent(m)}` }),
   path_matrix: (m) => ({ sent_value: m.replace(/\//, ';v=1/'), delivery: { where: 'path' } }),
   path_suffix: (m) => ({ sent_value: `${m}%2e`, delivery: { where: 'path' } }),
   ip_representation: (m) => ({ sent_value: m, delivery: { where: 'query', ip_form: 'decimal' } }),
@@ -117,6 +121,40 @@ const EVASION_TRANSFORM_ENCODERS = Object.freeze({
 });
 
 export const EVASION_TRANSFORMS = Object.freeze(Object.keys(EVASION_TRANSFORM_ENCODERS));
+
+// Raw framing, body parsers, protocol translation and state-changing methods cannot
+// be exercised by this safe GET transport. Never substitute a query GET for them.
+export { SUPPORTED_EVASION_TRANSFORMS } from '../probeEvidenceTiers.mjs';
+export function isSupportedEvasionTransform(transform) {
+  return SUPPORTED_EVASION_TRANSFORMS.includes(transform);
+}
+
+/** Actual bounded request; unsupported descriptors never reach the transport. */
+export function buildEvasionRequest(targetUrl, variant) {
+  const url = new URL(targetUrl);
+  const headers = {};
+  const delivery = variant.delivery ?? {};
+  if (variant.transform && !isSupportedEvasionTransform(variant.transform)) {
+    throw new Error('unsupported_evasion_delivery');
+  }
+  const value = variant.sent_value == null ? null : String(variant.sent_value);
+  if (value != null && Buffer.byteLength(value) > 4096) throw new Error('marker_delivery_too_large');
+  if (value != null && delivery.where === 'cookie') {
+    headers.cookie = `astranull_probe=${encodeURIComponent(value)}`;
+  } else if (value != null) {
+    const rawEncoded = ['double_url', 'mixed_url', 'overlong_utf8', 'control_char'].includes(variant.transform);
+    const encoded = rawEncoded ? value : encodeURIComponent(value);
+    const prefix = url.search.slice(1);
+    url.search = `${prefix ? `${prefix}&` : ''}${delivery.duplicate_param ? 'probe=astranull-permitted&' : ''}probe=${encoded}`;
+  }
+  return { url: url.href, method: 'GET', headers, delivery: {
+    method: 'GET', where: value == null ? 'none' : (delivery.where === 'cookie' ? 'cookie' : 'query'),
+    duplicate_param: delivery.duplicate_param === true, body_bytes: 0,
+    path_unchanged: url.pathname === new URL(targetUrl).pathname,
+    protocol: url.protocol.slice(0, -1), wire_value_bytes: value == null ? 0 : Buffer.byteLength(value),
+  } };
+}
+
 
 export function isEvasionTransform(transform) {
   return Object.prototype.hasOwnProperty.call(EVASION_TRANSFORM_ENCODERS, transform);
@@ -252,6 +290,17 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
     };
   }
 
+  if (!isSupportedEvasionTransform(transform)) {
+    return { external_result: 'inconclusive', metadata: {
+      probe_kind: kind, classifier_version: 'marker-comparison-v4',
+      evasion_transform: transform, delivery_supported: false,
+      inconclusive_reason: 'unsupported_evasion_delivery',
+      observation_only: true, readiness_conclusion: false, comparison_complete: false,
+      planned_marker_legs: 2, completed_marker_legs: 0, variant_results: [],
+      request_counting_basis: 'logical_operations',
+    }, requests_sent: 0, duration_ms: 0 };
+  }
+
   const targetUrl = resolveTargetUrl(job);
   const fetchFn = deps.fetchFn;
   if (!targetUrl || typeof fetchFn !== 'function') {
@@ -279,13 +328,12 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
   let baselineBlocked = null;
 
   for (const variant of variants) {
-    if (deadlineExceeded(job, deps)) break;
-    const requestUrl = new URL(targetUrl);
-    if (variant.sent_value != null) requestUrl.searchParams.set('probe', variant.sent_value.slice(0, 512));
-    const method = variant.delivery?.method === 'POST' ? 'GET' : (variant.delivery?.method ?? 'GET');
+    if (deadlineExceeded(job, deps) || deps.signal?.aborted || deps.jobDeadlineSignal?.aborted) break;
+    const request = buildEvasionRequest(targetUrl, variant);
+    const method = request.method;
     let snapshot;
     try {
-      const response = await fetchFn(requestUrl.href, { method, redirect: 'manual', signal: deps.signal });
+      const response = await fetchFn(request.url, { method, headers: request.headers, redirect: 'manual', signal: deps.signal });
       snapshot = markerResponseSnapshot(response, await readSignatureBody(response, method), declared);
     } catch {
       snapshot = { ...markerResponseSnapshot(null), transport_error: true };
@@ -308,6 +356,7 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
       reason: graded.reason,
       denial_signature: graded.denial_signature,
       sent_length: variant.sent_value.length,
+      actual_delivery: request.delivery,
       ...(snapshot.transport_error ? { transport_error: true } : {}),
     });
     if (snapshot.transport_error || requestsSent >= budget) break;
@@ -317,7 +366,8 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
   const prerequisite = blockedBaselinePrerequisite(baselineBlocked);
   const transformedResults = results.filter((r) => r.label !== 'baseline' && !r.inconclusive && !r.transport_error);
   const anyTransformedAllowed = transformedResults.some((r) => r.allowed);
-  const allTransformedBlocked = transformedResults.length > 0 && transformedResults.every((r) => r.blocked);
+  const comparisonComplete = permittedHealth === 'healthy' && requestsSent === 3 && results.length === 2 && results.every((r) => !r.inconclusive && !r.transport_error);
+  const allTransformedBlocked = comparisonComplete && transformedResults.length === 1 && transformedResults.every((r) => r.blocked);
 
   let externalResult;
   let evasionSuspected = false;
@@ -328,7 +378,7 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
   } else if (prerequisite !== 'met') {
     externalResult = 'inconclusive';
     inconclusiveReason = prerequisite === 'not_met' ? 'baseline_marker_not_blocked' : 'baseline_marker_not_graded';
-  } else if (anyTransformedAllowed) {
+  } else if (comparisonComplete && anyTransformedAllowed) {
     externalResult = 'external_allowed';
     evasionSuspected = true;
   } else if (allTransformedBlocked) {
@@ -344,6 +394,16 @@ export async function runWafEvasionMarkerProbe(job, deps = {}) {
     metadata: {
       probe_kind: kind,
       profile_kind: kind,
+      classifier_version: 'marker-comparison-v4',
+      assurance_scope: 'inert_marker_rule_action_only',
+      delivery_supported: true,
+      planned_marker_legs: 2,
+      completed_marker_legs: results.filter((row) => !row.inconclusive && !row.transport_error).length,
+      comparison_complete: comparisonComplete,
+      observation_only: externalResult === 'inconclusive',
+      readiness_conclusion: externalResult !== 'inconclusive',
+      enforcement: externalResult === 'external_blocked' ? 'enforced'
+        : externalResult === 'external_allowed' ? 'not_enforced' : 'unknown',
       evasion_transform: transform,
       marker_class: EVASION_MARKER_CLASSES.includes(markerClass) ? markerClass : 'sqli',
       baseline_blocked: baselineBlocked,

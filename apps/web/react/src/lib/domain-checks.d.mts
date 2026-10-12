@@ -159,6 +159,7 @@ export function classifyCohortError(error: unknown): { action: 'refetch' | 'rese
 export function originExposureDetail(input: { protection_profile?: DataItem | null }): {
   status: string; assurance: string; reachabilityStatus: string; testedTargetId: string; scenarioId: string; source: string; limitations: string[];
 };
+export function originRelationCheckEligible(check: unknown, target: unknown, pair: unknown): boolean;
 export function originBindingRole(target: DataItem | null | undefined): 'protected' | 'origin' | null;
 export type OriginCandidate = { id: string; value: string; kind: string; state: string };
 export function originBindingCandidates(targets: DataItem[], protectedTarget: DataItem | null | undefined): { ready: OriginCandidate[]; blocked: OriginCandidate[] };

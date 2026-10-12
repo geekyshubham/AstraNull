@@ -81,6 +81,7 @@ function emptyStore() {
     wafConnectorSnapshots: [],
     cvePipelineItems: [],
     cveAssetMatches: [],
+    cveApplicabilityReviews: [],
     cveMitigationPlaybooks: [],
     wafRuleRecommendations: [],
     discoveryEntities: [],
@@ -103,6 +104,7 @@ function emptyStore() {
     protectionComparisonBaselines: [],
     protectionComparisonEvaluations: [],
     entryPathComparisons: [],
+    reviewedOperations: [],
   };
 }
 

@@ -1,5 +1,6 @@
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
+import { mergeProbeCapture } from '../../lib/probeExecution.mjs';
 
 const PROBE_JOB_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, vector_family, status,
   nonce_hash, nonce_for_worker, probe_profile, constraints_json, target_descriptor_json,
@@ -447,7 +448,9 @@ export function createProbeJobRepository(pool) {
         const expectedLeasedAt = expected.leased_at ?? null;
         const { rows } = await client.query(
           `UPDATE probe_jobs AS j
-           SET status = 'leased', leased_at = $4::timestamptz, leased_by = $3
+           SET status = 'leased', leased_at = CASE
+             WHEN j.status = 'leased' AND j.leased_by = $3 THEN j.leased_at
+             ELSE $4::timestamptz END, leased_by = $3
            WHERE j.tenant_id = $1 AND j.id = $2
              AND j.status = $5
              AND j.leased_by IS NOT DISTINCT FROM $6
@@ -457,6 +460,50 @@ export function createProbeJobRepository(pool) {
           [ctx.tenantId, id, workerId, leasedAt, expectedStatus, expectedLeasedBy, expectedLeasedAt],
         );
         return mapProbeJobRow(rows[0] ?? null);
+      });
+    },
+
+    async reserveExecution(ctx, job, reservation, options = {}) {
+      if (Object.hasOwn(job?.constraints ?? {}, 'reviewed_operation_binding')) return null;
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        // Hold the declared destination and policy rows through the durable grant. The lease
+        // alone is not authorization: ownership or target binding can change after polling.
+        await client.query(`SELECT t.id FROM targets t
+          JOIN target_groups tg ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+          WHERE t.tenant_id = $1 AND t.id = $2 FOR SHARE OF t, tg`, [ctx.tenantId, job.target_id]);
+        const { rows } = await client.query(`UPDATE probe_jobs AS j SET worker_metadata_json =
+          COALESCE(j.worker_metadata_json, '{}'::jsonb) || jsonb_build_object('execution_reservation', $5::jsonb)
+          WHERE j.tenant_id = $1 AND j.id = $2 AND j.status = 'leased' AND j.leased_by = $3
+            AND j.leased_at = $4::timestamptz AND j.ownership_verification_id IS NULL
+            AND NOT (COALESCE(j.worker_metadata_json, '{}'::jsonb) ? 'execution_reservation')
+            AND NOT (COALESCE(j.constraints_json, '{}'::jsonb) ? 'reviewed_operation_binding')
+            AND ${reciprocalOwnershipJobBindingSql('j')}
+            AND ${currentSignedOwnershipProofSql('j')}
+            AND EXISTS (SELECT 1 FROM test_runs tr
+              JOIN targets t ON t.tenant_id = tr.tenant_id AND t.id = tr.target_id
+              JOIN target_groups tg ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+              WHERE tr.tenant_id = j.tenant_id AND tr.id = j.test_run_id AND tr.target_id = j.target_id
+                AND tr.check_id = j.check_id AND tr.status IN ('running', 'collecting')
+                AND tr.target_group_id = t.target_group_id AND t.deleted_at IS NULL
+                AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+                AND t.kind = j.target_descriptor_json->>'kind' AND t.value = j.target_descriptor_json->>'value'
+                AND t.port::text IS NOT DISTINCT FROM j.target_descriptor_json->>'port'
+                AND t.protocol IS NOT DISTINCT FROM j.target_descriptor_json->>'protocol')
+          RETURNING ${PROBE_JOB_COLUMNS_QUALIFIED}`, [ctx.tenantId, job.id, ctx.workerId, job.leased_at, JSON.stringify(reservation)]);
+        return mapProbeJobRow(rows[0]);
+      });
+    },
+
+    async recordJobTelemetry(ctx, job, { capture, acknowledgment } = {}, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const metadata = {};
+        if (capture) metadata.capture = mergeProbeCapture(job.worker_metadata?.capture, capture);
+        if (acknowledgment) metadata.stop_acknowledgment = job.worker_metadata?.stop_acknowledgment ?? acknowledgment;
+        const { rows } = await client.query(`UPDATE probe_jobs SET worker_metadata_json =
+          COALESCE(worker_metadata_json, '{}'::jsonb) || $5::jsonb
+          WHERE tenant_id = $1 AND id = $2 AND leased_by = $3 AND leased_at = $4::timestamptz
+          RETURNING ${PROBE_JOB_COLUMNS}`, [ctx.tenantId, job.id, ctx.workerId, job.leased_at, JSON.stringify(metadata)]);
+        return mapProbeJobRow(rows[0]);
       });
     },
 

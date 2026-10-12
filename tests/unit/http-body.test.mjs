@@ -172,6 +172,35 @@ describe('respondBodyError', () => {
   });
 });
 
+describe('server-owned error response extensions', () => {
+  function response() {
+    return { errorBodyExtensions: { grants_execution: false, execution_available: false },
+      writeHead(status, headers) { this.status = status; this.headers = headers; },
+      end(payload, done) { this.payload = payload; done?.(); } };
+  }
+  it('extends errors without changing successful bodies or their content lengths', () => {
+    const res = response();
+    json(res, 401, { error: 'unauthorized' });
+    assert.deepEqual(JSON.parse(res.payload), { error: 'unauthorized', ...res.errorBodyExtensions });
+    assert.equal(res.headers['Content-Length'], Buffer.byteLength(res.payload));
+    json(res, 200, { ok: true });
+    assert.deepEqual(JSON.parse(res.payload), { ok: true });
+    assert.equal(res.headers['Content-Length'], Buffer.byteLength(res.payload));
+  });
+  it('retains extensions and connection teardown for body errors', () => {
+    const res = response();
+    let destroyed = false;
+    res.socket = { destroyed: false, destroy() { destroyed = true; } };
+    const err = new HttpBodyError('payload_too_large', 413);
+    err.closeConnection = true;
+    respondBodyError(res, err);
+    assert.deepEqual(JSON.parse(res.payload), { error: 'payload_too_large', ...res.errorBodyExtensions });
+    assert.equal(res.headers['Content-Length'], Buffer.byteLength(res.payload));
+    assert.equal(res.headers.Connection, 'close');
+    assert.equal(destroyed, true);
+  });
+});
+
 describe('security headers', () => {
   it('sets nosniff, referrer policy, and framing denial', () => {
     const h = securityHeaders();

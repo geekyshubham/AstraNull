@@ -3,6 +3,7 @@ import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
 import { targetTagsFromRecord } from '../contracts/targetManagement.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { presentTargetDeclaration } from '../lib/targetDeclarations.mjs';
+import { verifiedVerdicts } from '../lib/readinessProjection.mjs';
 import { getStore } from '../store.mjs';
 import { getTargetEdgeDetection } from './targetEdgeDetectionStore.mjs';
 import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
@@ -305,27 +306,30 @@ export function getTargetDetail(ctx, targetId, query = {}) {
   );
   const edgeRow = getTargetEdgeDetection(ctx.tenantId, target.id);
   const policies = (getStore().testPolicies ?? []).filter((policy) => policy.tenant_id === ctx.tenantId);
+  const assessmentAt = new Date();
+  const runById = new Map(runs.map((run) => [run.id, run]));
+  const proofs = verifiedVerdicts({ tenantId: ctx.tenantId, runs,
+    verdicts: (getStore().verdicts ?? []),
+    events: (getStore().events ?? []).filter((event) => {
+      const nonce = runById.get(event.test_run_id)?.correlation?.nonce_hash;
+      return Boolean(nonce) && event.nonce_hash === nonce && Number.isFinite(Date.parse(event.ingested_at ?? ''));
+    }),
+    evidenceItems: getStore().evidenceVault ?? [], nowMs: assessmentAt.getTime() });
   const derived = deriveProtectionProfile({
-    now: new Date(),
-    target: {
-      id: target.id,
-      kind: target.kind,
-      value: target.value,
-      tenant_id: target.tenant_id,
-      target_group_id: target.target_group_id,
-    },
+    now: assessmentAt,
+    target,
+    targetGroup: group ?? null,
     edgeRow,
     policies,
-    observations: [...latestByCheck.values()].map((entry) => ({
-      check_id: entry.run?.check_id,
-      run: entry.run ? {
-        ...entry.run, ...runProvenance(entry.run, ctx.tenantId),
-        probe_metadata: (entry.run.correlation?.nonce_hash ? (getStore().events ?? []).find((event) => event.tenant_id === ctx.tenantId
-          && event.test_run_id === entry.run.id && event.signal_type === 'probe_result'
-          && event.producer_kind === 'signed_probe' && event.nonce_hash === entry.run.correlation.nonce_hash)?.metadata : null) ?? {},
-      } : entry.run,
-      verdict: entry.verdict,
-    })),
+    observations: [...latestByCheck.values()].map((entry) => {
+      const proof = proofs.get(entry.run?.id);
+      return { check_id: entry.run?.check_id, require_recorded_scope: true,
+        evidence_verified: Boolean(proof && proof.verdict.id === entry.verdict?.id), observed_at: proof?.observed_at,
+        run: entry.run ? { ...entry.run, ...runProvenance(entry.run, ctx.tenantId),
+          readiness_result_metadata: proof?.result_metadata ?? [],
+          probe_metadata: proof?.result_metadata[0] ?? {} } : entry.run,
+        verdict: entry.verdict };
+    }),
   });
   const historyRecords = bindingRecordsFromStore(getStore(), ctx.tenantId);
   const attached = attachHistoryReadModel(derived, historyReadModel({

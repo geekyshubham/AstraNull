@@ -13,7 +13,7 @@ import {
 import { ConfirmModal } from '../../../lib/crud-ui';
 import { apiErrorMessage } from '../../../lib/error-messages';
 import { buildDetailHref } from '../../../lib/route-params';
-import type { DataItem, PortalConfig, Session } from '../../../lib/types';
+import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../../lib/types';
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -61,7 +61,7 @@ export function DeclaredEntryPaths({
   canWrite: boolean;
   canStart: boolean;
   ownershipDone: boolean;
-  onStarted: (message: string) => void;
+  onStarted: (message: string, execution?: AcceptedExecution) => void;
 }) {
   const targetId = str(target, 'id');
   const [paths, setPaths] = useState<PathsState>({ state: 'loading' });
@@ -237,7 +237,7 @@ export function DeclaredEntryPaths({
       ) : null}
 
       {paths.state === 'ready' ? (
-        <PathComparisonPanel config={config} session={session} target={target} paths={anchored} canStart={canStart} ownershipDone={ownershipDone} onStarted={(text) => { onStarted(text); setReload((value) => value + 1); }} />
+        <PathComparisonPanel config={config} session={session} target={target} paths={anchored} canStart={canStart} ownershipDone={ownershipDone} onStarted={(text, execution) => { onStarted(text, execution); setReload((value) => value + 1); }} />
       ) : null}
 
       <ConfirmModal

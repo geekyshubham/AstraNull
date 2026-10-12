@@ -1,5 +1,18 @@
 # Recorded probe execution activity
 
+## Current authority and Inspector contract (2026-10-09)
+
+This section supersedes the earlier signing, latest-slice and Stop wording below for the current engineering tree. See [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md). Historical live-verification entries below are prior-release records, not deployment evidence for this remediation.
+
+- Worker `pw2` signs worker identity plus method, full path, timestamp, tenant and raw body. `probe-authority-v2` has immutable issue time, absolute deadline and one execution attempt. `/internal/probe/jobs/:id/execute` must reserve the whole signed allowance before destination I/O; no recovery/reclaim renewal.
+- Activity bodies allow `{ leased_at, items, capture }`; capture is bounded `probe-capture.v1` metadata. Up to 256 immutable lease/sequence items, batches of 16 within 32 KiB. Reporter heartbeats and bounded partition grace abort work on persistent/hung reporting failures or revocation. Activity cannot authorize I/O or supply verdict proof.
+- Run and scan reads support opaque scoped cursors. Advance only over the returned earliest next prefix; ingestion identity preserves late/reordered observations. Invalid/foreign cursors fail with 400. Complete internal readers are distinct from capped public feeds; compatibility fallbacks expose `input_complete: false` and incomplete capture. Retained-event pagination never silently claims packet-complete capture.
+- Accepted Play automatically opens/focuses the exact returned run or scan. Approximately 2.5-second passive polling, bounded reconnect backoff, retained-page dedupe and terminal fetch preserve final events. Historical pins remain pinned; follow-active-child is explicit. Credential rotation rebinds the reader through an opaque credential epoch, without putting raw credentials into reader keys, URLs or logs. Dedicated reviewed starts preserve exact cross-target execution identity; comparison children are bound to the submitted plan, never the newest execution. Missing returned IDs remain explicit. Display pause never changes execution.
+- Assessment display bookmarks retain `ev_display=follow|pinned` and, only for a pinned selection, `ev_pin=<exact run ID>`. Legacy bookmarks follow the active child of their exact assessment. Restoration first reads the exact assessment passively and verifies child membership and target scope before child activity/evidence reads. Invalid, missing, foreign or inaccessible pins remain explicitly unavailable; no newer child or assessment is substituted. Display fields never enter `/v1/evidence-context` or grant execution authority. Pin/Follow changes preserve workspace identity and the exact IDs captured by an open Stop confirmation.
+- Stop uses existing scoped cancel APIs and separately records `stop_requested`, authenticated same-lease worker acknowledgement, worker unavailable, or absolute deadline elapsed. Database cancellation alone is not packet-stop proof. `/internal/probe/jobs/:id/stop` can acknowledge revocation without sending more traffic. UI distinguishes signed maxima/reservation from actual attested operations and recorded metadata loss.
+- Actual approved endpoint/method/path/port/SNI/protocol/source, response facts and bounded redacted previews are shown only when recorded. No invented origin receipt, latencies, internal cloud state or per-packet capture.
+
+
 The target workspace exposes a timestamped activity table and the existing console view. Both show recorded run state, authenticated worker telemetry, and final probe results. Catalog phases, request bounds, and a rotating indicator never produce fabricated requests, timings, provider matches, or HTTP status codes.
 
 ## Worker and persistence

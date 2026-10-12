@@ -41,7 +41,7 @@ import { findingStatus, isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
-import type { DataItem, PortalConfig, Session } from '../lib/types';
+import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
 import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { EmptyState } from '../components/ui/empty-state';
@@ -51,11 +51,13 @@ import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Tabs } from '../components/ui/tabs';
 import { Toast } from '../components/ui/toast';
 import { canStartRun } from '../lib/run-permissions.mjs';
-import { requestJson } from '../lib/api';
+import { requestJson, sessionIdentity } from '../lib/api';
+import { activityItemsToEvents } from '../lib/recorded-activity.mjs';
+import { useRecordedActivity } from '../components/evidence/use-recorded-activity';
 import { prefersReducedMotion } from '../lib/motion';
 import { apiErrorMessage } from '../lib/error-messages';
 import { ConfirmModal } from '../lib/crud-ui';
-import { isScanActive, nextPollDelay, scanErrorMessage } from '../lib/validation-scan.mjs';
+import { isScanActive, scanErrorMessage } from '../lib/validation-scan.mjs';
 import {
   EDGE_DETECTION_CHECK_ID,
   buildCheckRows,
@@ -444,7 +446,13 @@ export function TargetDetailView({
   protectionValidationEnabled?: boolean;
   onRefresh: () => Promise<void>;
 }) {
-  const [detail, setDetail] = useState<TargetDetailPayload | null>(null);
+  const executionScope = `${sessionIdentity(session)}|${entityId}`;
+  const scopeRef = useRef(executionScope);
+  scopeRef.current = executionScope;
+  const [storedDetail, setDetail] = useState<TargetDetailPayload | null>(null);
+  const [detailScope, setDetailScope] = useState('');
+  const detail = detailScope === executionScope ? storedDetail : null;
+  const [acceptedRun, setAcceptedRun] = useState<{ scope: string; id: string; checkId: string; record: DataItem } | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [banner, setBanner] = useState('');
@@ -452,7 +460,6 @@ export function TargetDetailView({
   const [tab, setTabState] = useState<TargetTab>(readTab);
   const [scan, setScan] = useState<DataItem | null>(null);
   const [scanActivity, setScanActivity] = useState<DataItem[]>([]);
-  const [selectedRunEvents, setSelectedRunEvents] = useState<DataItem[]>([]);
   const [targetRuns, setTargetRuns] = useState<DataItem[]>([]);
   const [runsError, setRunsError] = useState('');
   const [fullCatalog, setFullCatalog] = useState<DataItem[] | null>(null);
@@ -473,9 +480,9 @@ export function TargetDetailView({
   const reload = useCallback(async () => {
     const generation = loadGeneration.current;
     const refreshed = await populateTargetDetail(config, session, entityId);
-    if (generation === loadGeneration.current) setDetail(refreshed);
+    if (generation === loadGeneration.current && scopeRef.current === executionScope) { setDetail(refreshed); setDetailScope(executionScope); }
     return refreshed;
-  }, [config, session, entityId]);
+  }, [config, session, entityId, executionScope]);
 
   useEffect(() => {
     loadGeneration.current += 1;
@@ -489,9 +496,9 @@ export function TargetDetailView({
       loading: true,
     }));
     populateTargetDetail(config, session, entityId).then((payload) => {
-      if (generation === loadGeneration.current) setDetail(payload);
+      if (generation === loadGeneration.current && scopeRef.current === executionScope) { setDetail(payload); setDetailScope(executionScope); }
     });
-  }, [config, session, entityId]);
+  }, [config, session, entityId, executionScope]);
 
   // Tab and selected check live in the address so refresh, Back and shared links keep them.
   useEffect(() => {
@@ -557,7 +564,15 @@ export function TargetDetailView({
   const runAll = useMemo(() => (target ? assessmentChecks(checks, target) as DataItem[] : []), [checks, target]);
   const remainingCatalog = useMemo(() => (fullCatalog ?? []).filter((check) => targetCheckRequirement(check, target)), [fullCatalog, target]);
   const selectableChecks = useMemo(() => target ? individualChecks(checks, target) as DataItem[] : [], [checks, target]);
-  const checkRows = useMemo(() => buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[], [selectableChecks, scan, targetRuns]);
+  const scopedAcceptedRun = acceptedRun?.scope === executionScope ? acceptedRun : null;
+  const checkRows = useMemo(() => {
+    const rows = buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[];
+    if (!scopedAcceptedRun) return rows;
+    // Pin the returned execution, not a newest-list guess or a fabricated sorting timestamp.
+    const record = targetRuns.find((run) => run.id === scopedAcceptedRun.id) ?? scopedAcceptedRun.record;
+    const exact = buildCheckRows({ checks: selectableChecks.filter((check) => check.check_id === scopedAcceptedRun.checkId), runs: [record] })[0] as CheckRow | undefined;
+    return exact ? rows.map((row) => row.checkId === exact.checkId ? exact : row) : rows;
+  }, [selectableChecks, scan, targetRuns, scopedAcceptedRun]);
   const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
   const effectiveSelectedCheckId = checkRows.some((row) => row.checkId === selectedCheckId) ? selectedCheckId : '';
   const selectedCheckMissing = Boolean(selectedCheckId) && !effectiveSelectedCheckId && checkRows.length > 0;
@@ -581,9 +596,10 @@ export function TargetDetailView({
   const latestTargetRun = targetRuns[0] ?? null;
   const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId === getString(latestTargetRun, ['id'], '')) ?? null;
   const activityPinnedRow = selectedRow?.runId ? selectedRow : null;
-  const activityRunId = activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '';
-  const activityRunning = activityPinnedRow ? activityPinnedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
-  const activityCheckName = activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : activityRow?.name || ''));
+  const exactAcceptedRun = acceptedRun?.scope === executionScope && (!selectedRow || selectedRow.checkId === acceptedRun.checkId) ? acceptedRun : null;
+  const activityRunId = exactAcceptedRun?.id || (activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '');
+  const activityRunning = exactAcceptedRun ? ['planned', 'running', 'collecting'].includes(getString(targetRuns.find((run) => run.id === exactAcceptedRun.id), ['status'], getString(exactAcceptedRun.record, ['status'], ''))) : activityPinnedRow ? activityPinnedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
+  const activityCheckName = exactAcceptedRun ? displayCheckName(exactAcceptedRun.checkId) : activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : activityRow?.name || ''));
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -615,14 +631,7 @@ export function TargetDetailView({
     if (scanList && Array.isArray(scanList.items)) {
       const activeScan = (scanList.items[0] as DataItem | undefined) ?? null;
       setScan(activeScan);
-      const activeScanId = getString(activeScan, ['id'], '');
-      if (activeScanId) {
-        void requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(activeScanId)}/activity`)
-          .then((act) => {
-            if (generation === loadGeneration.current && act && Array.isArray((act as DataItem).items)) setScanActivity((act as DataItem).items as DataItem[]);
-          })
-          .catch(() => undefined);
-      }
+      // The shared exact-ID reader supplies activity and final pages for this assessment.
     }
     if (runList && Array.isArray(runList.items)) setTargetRuns(runList.items as DataItem[]);
   }, [config, session, entityId]);
@@ -630,15 +639,18 @@ export function TargetDetailView({
   useEffect(() => {
     setScan(null);
     setScanActivity([]);
-    setSelectedRunEvents([]);
     setTargetRuns([]);
     setEdgeLocal('');
     setEdgeError('');
     setEdgeReason('');
     setDnsWatchStartedAt(0);
     setStopSingleRun(null);
+    setAcceptedRun(null);
+    setReview(null);
+    setStopOpen(false);
+    setError(''); setBanner('');
     edgeRetriesRef.current = 0;
-  }, [entityId]);
+  }, [executionScope]);
 
   useEffect(() => {
     let stopped = false;
@@ -662,81 +674,27 @@ export function TargetDetailView({
     return () => window.clearInterval(timer);
   }, [scanActive, activeStandalone?.id, loadTargetActivity]);
 
-  // Follow a multi-check run the user started. Results land in place; the selection never moves.
+  // Table, console and Inspector use one passive reader and retain every available page.
+  const scanReader = useRecordedActivity({ config, session, kind: 'scan', id: scanId });
+  const previousScanState = useRef({ id: '', active: false, fingerprint: false });
   useEffect(() => {
-    if (!scanId || !scanActive) return undefined;
-    let stopped = false;
-    let timer: number | undefined;
-    let errors = 0;
-    let fingerprintWasActive = fingerprintStepActive;
-    const poll = async () => {
-      try {
-        const [next, activity] = await Promise.all([
-          requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}?advance=false`) as Promise<DataItem>,
-          requestJson(config, session, `/v1/validation-scans/${encodeURIComponent(scanId)}/activity`).catch(() => null) as Promise<DataItem | null>,
-        ]);
-        if (stopped) return;
-        errors = 0;
-        setScan(next);
-        if (activity && Array.isArray((activity as DataItem).items)) {
-          setScanActivity((activity as DataItem).items as DataItem[]);
-        }
-        const step = Array.isArray(next.steps)
-          ? (next.steps as DataItem[]).find((row) => getString(row, ['check_id'], '') === EDGE_DETECTION_CHECK_ID)
-          : null;
-        const fingerprintNowActive = ACTIVE_STEP_STATUSES.has(getString(step ?? null, ['status'], ''));
-        if (fingerprintWasActive && !fingerprintNowActive) void reload().catch(() => undefined);
-        fingerprintWasActive = fingerprintNowActive;
-        if (!isScanActive(next)) {
-          void loadTargetActivity();
-          void reload().catch(() => undefined);
-          void onRefresh().catch(() => undefined);
-          return;
-        }
-      } catch {
-        if (stopped) return;
-        errors += 1;
-      }
-      const delay = nextPollDelay({ status: 'running', errorCount: errors });
-      if (delay !== null) timer = window.setTimeout(() => { void poll(); }, delay);
-    };
-    timer = window.setTimeout(() => { void poll(); }, nextPollDelay({ status: 'running' }) ?? 2500);
-    return () => {
-      stopped = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-    // fingerprintStepActive is read once as the starting point; the loop tracks it afterwards.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, session, scanId, scanActive, loadTargetActivity]);
+    const next = scanReader.record;
+    if (!next || next.id !== scanId) return;
+    setScan(next);
+    if (scanReader.snapshot && Array.isArray(scanReader.snapshot.items)) setScanActivity(scanReader.snapshot.items as DataItem[]);
+    const step = Array.isArray(next.steps) ? (next.steps as DataItem[]).find((row) => getString(row, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) : null;
+    const fingerprint = ACTIVE_STEP_STATUSES.has(getString(step ?? null, ['status'], ''));
+    const previous = previousScanState.current;
+    if (previous.id === scanId && ((previous.fingerprint && !fingerprint) || (previous.active && !isScanActive(next)))) {
+      void reload().catch(() => undefined);
+      void loadTargetActivity();
+      void onRefresh().catch(() => undefined);
+    }
+    previousScanState.current = { id: scanId, active: isScanActive(next), fingerprint };
+  }, [scanId, scanReader.record, scanReader.snapshot, reload, loadTargetActivity, onRefresh]);
 
-  // Load live probe events for selected check run if available
-  useEffect(() => {
-    const runId = selectedRow?.runId;
-    if (!runId) {
-      setSelectedRunEvents([]);
-      return undefined;
-    }
-    let stopped = false;
-    setSelectedRunEvents([]);
-    const fetchRunEvents = () => {
-      requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/events`)
-        .then((res) => {
-          if (!stopped && res && Array.isArray((res as DataItem).items)) {
-            setSelectedRunEvents((res as DataItem).items as DataItem[]);
-          }
-        })
-        .catch(() => undefined);
-    };
-    fetchRunEvents();
-    if (selectedRow?.status === 'running') {
-      const timer = window.setInterval(fetchRunEvents, 2500);
-      return () => {
-        stopped = true;
-        window.clearInterval(timer);
-      };
-    }
-    return () => { stopped = true; };
-  }, [config, session, selectedRow?.runId, selectedRow?.status]);
+  const selectedActivityReader = useRecordedActivity({ config, session, id: selectedRow?.runId || '' });
+  const selectedRunEvents = useMemo(() => activityItemsToEvents(selectedActivityReader.snapshot) as DataItem[], [selectedActivityReader.snapshot]);
 
   const queueEdgeDetection = useCallback(async () => {
     if (!entityId) return;
@@ -745,14 +703,20 @@ export function TargetDetailView({
     setEdgeError('');
     setEdgeReason('');
     try {
-      await requestJson(config, session, '/v1/waf/edge-detection', {
+      const accepted = await requestJson(config, session, '/v1/waf/edge-detection', {
         method: 'POST',
         body: { target_id: entityId },
-      });
-      if (generation !== loadGeneration.current) return;
+      }) as DataItem;
+      if (generation !== loadGeneration.current || scopeRef.current !== executionScope) return;
       edgeRetriesRef.current = 0;
       selectCheck(EDGE_DETECTION_CHECK_ID);
       setTab('validate');
+      const detectionRequest = accepted.detection_request as DataItem | undefined;
+      const runId = getString(detectionRequest, ['test_run_id'], '');
+      if (runId) {
+        setAcceptedRun({ scope: executionScope, id: runId, checkId: EDGE_DETECTION_CHECK_ID, record: { id: runId, check_id: EDGE_DETECTION_CHECK_ID, status: getString(detectionRequest, ['run_status'], 'planned') } });
+        openInspector({ entry: 'check_result', target_id: entityId, check_id: EDGE_DETECTION_CHECK_ID, test_run_id: runId }, 'td-detect');
+      }
       await reload().catch(() => undefined);
       void loadTargetActivity();
     } catch (err) {
@@ -764,7 +728,7 @@ export function TargetDetailView({
       setEdgeLocal('error');
       setEdgeError(apiErrorMessage(err, 'WAF/CDN detection could not be queued.'));
     }
-  }, [config, session, entityId, loadTargetActivity, reload, selectCheck, setTab]);
+  }, [config, session, entityId, executionScope, loadTargetActivity, reload, selectCheck, setTab, openInspector]);
 
   // Only after the user explicitly started detection: wait for the target’s execution slot.
   useEffect(() => {
@@ -853,31 +817,43 @@ export function TargetDetailView({
 
   async function startReviewed() {
     if (!review || !target) return;
+    const submittedScope = executionScope;
+    const current = () => scopeRef.current === submittedScope;
     if (review.mode === 'detect') {
       setReview(null);
       await queueEdgeDetection();
       return;
     }
     if (review.mode === 'single') {
-      if (singleDisabledReason) return;
+      if (singleDisabledReason || review.checkId !== effectiveSelectedCheckId) return;
+      const reviewedCheckId = review.checkId;
       setBusy('run');
       setError('');
       setBanner('');
       try {
-        await requestJson(config, session, '/v1/test-runs', {
+        const accepted = await requestJson(config, session, '/v1/test-runs', {
           method: 'POST',
-          body: { target_id: entityId, check_id: effectiveSelectedCheckId },
-        });
+          body: { target_id: entityId, check_id: reviewedCheckId },
+        }) as DataItem;
+        if (!current()) return;
         setReview(null);
-        setBanner(`${displayCheckName(effectiveSelectedCheckId)} started. Its result and evidence appear on this check when recorded.`);
-        await loadTargetActivity();
-        await reload();
+        const created = asDataItem(accepted.run) ?? accepted;
+        const runId = getString(created, ['id'], '');
+        if (!runId) { setError('The start was accepted without a recorded run ID. No historical run was substituted; refresh recorded runs.'); return; }
+        if ((created.target_id && created.target_id !== entityId) || (created.check_id && created.check_id !== reviewedCheckId)) { setError('The accepted execution did not match the reviewed target/check. No other run was substituted.'); return; }
+        setAcceptedRun({ scope: submittedScope, id: runId, checkId: reviewedCheckId, record: created });
+        setTab('validate');
+        openInspector({ entry: 'check_result', target_id: entityId, check_id: reviewedCheckId, test_run_id: runId }, `check-start-${reviewedCheckId}`);
+        setBanner(`${displayCheckName(reviewedCheckId)} accepted. The Inspector follows this exact run and its recorded evidence.`);
+        void loadTargetActivity();
+        void reload().catch(() => undefined);
         void onRefresh().catch(() => undefined);
       } catch (err) {
+        if (!current()) return;
         setReview(null);
         setError(apiErrorMessage(err, 'The check could not start.'));
       } finally {
-        setBusy('');
+        if (current()) setBusy('');
       }
       return;
     }
@@ -893,14 +869,21 @@ export function TargetDetailView({
           name: `All compatible checks · ${targetDisplayValue(target)}`.slice(0, 120),
         },
       }) as DataItem;
+      if (!current()) return;
       setReview(null);
+      setAcceptedRun(null);
       setScan(created);
-      setBanner(`Queued ${runAll.length} bounded checks to run one at a time. Results appear on each check as they land.`);
+      const acceptedScanId = getString(created, ['id'], '');
+      if (!acceptedScanId) { setError('The assessment start returned no recorded ID. No other assessment was substituted.'); return; }
+      setTab('validate');
+      openInspector({ entry: 'validation_scan', target_id: entityId, scan_id: acceptedScanId }, 'td-run-all');
+      setBanner(`Queued ${runAll.length} bounded checks. The Inspector follows the exact assessment and its active child.`);
     } catch (err) {
+      if (!current()) return;
       setReview(null);
       setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'The multi-check run could not start.')));
     } finally {
-      setBusy('');
+      if (current()) setBusy('');
     }
   }
 
@@ -917,7 +900,7 @@ export function TargetDetailView({
       await requestJson(config, session, `/v1/test-runs/${encodeURIComponent(stopSingleRun.id)}/cancel`, {
         method: 'POST', body: { reason: 'Stopped from target execution activity' },
       });
-      setStopSingleRun(null); setBanner('Check stopped. Its recorded activity and results are kept.');
+      setStopSingleRun(null); setBanner('Stop requested. Recorded activity and results are kept; worker acknowledgment is shown separately.');
       await loadTargetActivity(); await reload();
     } catch (reason) { setError(apiErrorMessage(reason, 'The check could not stop. Refresh its current state.')); }
     finally { setBusy(''); }
@@ -978,6 +961,19 @@ export function TargetDetailView({
     } finally {
       setBusy('');
     }
+  }
+
+  function onReviewedExecutionStarted(text: string, execution?: AcceptedExecution) {
+    if (scopeRef.current !== executionScope) return;
+    setBanner(text);
+    if (execution) {
+      const { runId, checkId, targetId, record } = execution;
+      if (!runId || !checkId || !targetId) { setError('The accepted execution identity was incomplete. No historical run was substituted.'); return; }
+      if (targetId === entityId) setAcceptedRun({ scope: executionScope, id: runId, checkId, record: record ?? { id: runId, check_id: checkId, target_id: targetId } });
+      openInspector({ entry: 'check_result', target_id: targetId, check_id: checkId, test_run_id: runId }, `reviewed-start-${runId}`);
+      void loadTargetActivity();
+    }
+    void reload().catch(() => undefined);
   }
 
   function inspectProvider(row: ProviderFamilyRow) {
@@ -1586,7 +1582,7 @@ export function TargetDetailView({
                 canWrite={canWrite}
                 canStart={canStartBoundedRun}
                 ownershipDone={ownershipDone}
-                onStarted={(text) => { setBanner(text); void reload(); }}
+                onStarted={onReviewedExecutionStarted}
                 onChanged={() => { void reload(); }}
               />
             ) : null}
@@ -1603,7 +1599,7 @@ export function TargetDetailView({
                 canWrite={canWrite}
                 canStart={canStartBoundedRun}
                 ownershipDone={ownershipDone}
-                onStarted={(text) => { setBanner(text); void reload(); }}
+                onStarted={onReviewedExecutionStarted}
               />
             ) : null}
           </div>
@@ -1675,6 +1671,7 @@ export function TargetDetailView({
                   {selectedRow ? <><strong>{selectedRow.name}</strong> on <span className="mono">{targetDisplayValue(target)}</span></> : 'No check selected'}
                 </span>
                 <Button
+                  data-focus-key={`check-start-${effectiveSelectedCheckId}`}
                   disabled={!targetEligible || !effectiveSelectedCheckId || busy !== '' || scanActive}
                   title={singleDisabledReason || undefined}
                   onClick={() => setReview({ mode: 'single', checkId: effectiveSelectedCheckId })}
@@ -1816,7 +1813,7 @@ export function TargetDetailView({
                 canWrite={canWrite}
                 canStart={canStartBoundedRun}
                 ownershipDone={ownershipDone}
-                onStarted={(text) => { setBanner(text); void reload(); }}
+                onStarted={onReviewedExecutionStarted}
               />
             ) : null}
             <section aria-labelledby="td-runs-title">
@@ -1933,7 +1930,7 @@ export function TargetDetailView({
         onCancelled={(result) => {
           setStopOpen(false);
           setScan(result);
-          setBanner('Multi-check run stopped. Finished results are kept.');
+          setBanner('Assessment Stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.');
           void loadTargetActivity();
         }}
       />

@@ -1,27 +1,43 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
+import { loadRuntimeConfig } from '../../src/config.mjs';
+import { mintSignedSessionToken } from '../../src/context.mjs';
 
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request, signedSessionHeaders } from '../helpers/http.mjs';
 import { seedPortalBaseline, PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 
 let baseUrl;
 let server;
 
-before(() => {
+const SECRET = 'local-target-detail-hydrator-fixture-secret';
+const env = { NODE_ENV: 'test', ASTRANULL_AUTH_MODE: 'signed-session', ASTRANULL_SESSION_SECRET: SECRET,
+  ASTRANULL_PERSISTENCE_MODE: 'dev-json', ASTRANULL_PROBE_MODE: 'simulation',
+  ASTRANULL_HIGH_SCALE_ADAPTER_MODE: 'disabled', ASTRANULL_NO_PERSIST: '1', ASTRANULL_RATE_LIMIT_DISABLED: '1' };
+const headersFor = (role, tenant) => signedSessionHeaders(role, tenant, `usr_${role}`, SECRET, mintSignedSessionToken);
+
+before(async () => {
   seedPortalBaseline();
-  server = createServer();
-  server.listen(0);
+  server = createServer({ env, runtimeConfig: loadRuntimeConfig(env) });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => closeServer(server));
 
 function ownerHeaders() {
-  return demoHeaders('owner', PORTAL_BASELINE_IDS.tenantId, 'usr_owner');
+  return headersFor('owner', PORTAL_BASELINE_IDS.tenantId);
 }
 
 describe('target detail hydrator (FT-TD-01..07)', () => {
+  it('rejects missing and forged-header identities before returning target detail', async () => {
+    for (const headers of [{}, demoHeaders('owner', PORTAL_BASELINE_IDS.tenantId, 'usr_owner')]) {
+      const res = await request(baseUrl, 'GET', `/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, { headers });
+      assert.equal(res.status, 401, res.text);
+      assert.equal(res.json.error, 'unauthorized');
+      assert.equal(res.json.target, undefined);
+    }
+  });
   it('FT-TD-01 returns full §4.1 shape with seeded scalars', async () => {
     const res = await request(baseUrl, 'GET', `/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, {
       headers: ownerHeaders(),
@@ -155,12 +171,12 @@ describe('target detail hydrator (FT-TD-01..07)', () => {
 
   it('FT-TD-07 tenant isolation + RBAC', async () => {
     const denied = await request(baseUrl, 'GET', `/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, {
-      headers: demoHeaders('viewer', PORTAL_BASELINE_IDS.tenantBId),
+      headers: headersFor('viewer', PORTAL_BASELINE_IDS.tenantBId),
     });
     assert.equal(denied.status, 404);
 
     const allowed = await request(baseUrl, 'GET', `/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, {
-      headers: demoHeaders('viewer', PORTAL_BASELINE_IDS.tenantId),
+      headers: headersFor('viewer', PORTAL_BASELINE_IDS.tenantId),
     });
     assert.equal(allowed.status, 200);
   });

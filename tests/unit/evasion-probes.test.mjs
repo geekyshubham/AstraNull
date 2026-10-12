@@ -63,7 +63,7 @@ test('coverage: registry mapping accounts for exactly the 69 owned EVA IDs', () 
 
 test('coverage: every mapping leaves E0 with a valid tier', () => {
   for (const m of PROPOSED_REGISTRY_MAPPING) {
-    assert.ok(['E1', 'E3', 'E4'].includes(m.target_tier), `${m.registry_id} tier`);
+    assert.ok(['E1', 'E2', 'E3', 'E4'].includes(m.target_tier), `${m.registry_id} tier`);
     assert.ok(Array.isArray(m.add_check_ids) && m.add_check_ids.length > 0, `${m.registry_id} has a check`);
   }
 });
@@ -131,7 +131,7 @@ test('inspection-limit check validates through the real buildProbeProfile', () =
   const validated = buildProbeProfile(check.probe_profile);
   assert.equal(validated.kind, 'waf_inspection_limit_probe');
   assert.ok(validated.max_requests <= 6);
-  assert.equal(validated.http_method, 'POST');
+  assert.equal(validated.http_method, 'HEAD');
   assert.equal(validated.nonce_hash_only, true);
 });
 
@@ -195,7 +195,7 @@ test('runner: an outage that returns 503 to everything is inconclusive', async (
 });
 
 test('runner: an F5 block page served with HTTP 200 counts as a signed block from the bounded body', async () => {
-  const f5 = () => ({ status: 200, headers: {}, text: async () => '<html>The requested URL was rejected. Please consult with your administrator. Your support ID is: 1234</html>' });
+  const f5 = () => ({ status: 200, headers: {}, bodyText: '<html>The requested URL was rejected. Please consult with your administrator. Your support ID is: 1234</html>' });
   const { fetchFn } = countingFetch(['ok', f5(), f5()]);
   const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
   assert.equal(res.external_result, 'external_blocked');
@@ -219,7 +219,7 @@ test('runner: request budget is hard-bounded and retains no response body', asyn
   assert.ok(res.requests_sent <= MAX_WAF_EVASION_MARKER_REQUESTS);
   assert.ok(calls().length <= MAX_WAF_EVASION_MARKER_REQUESTS);
   for (const entry of res.metadata.variant_results) {
-    assert.deepEqual(Object.keys(entry).sort(), ['allowed', 'block_suspected', 'blocked', 'denial_signature', 'inconclusive', 'label', 'reason', 'sent_length', 'status_code']);
+    assert.deepEqual(Object.keys(entry).sort(), ['actual_delivery', 'allowed', 'block_suspected', 'blocked', 'denial_signature', 'inconclusive', 'label', 'reason', 'sent_length', 'status_code']);
   }
   assert.equal(JSON.stringify(res.metadata).includes('cf-ray'), false);
 });
@@ -278,4 +278,52 @@ test('tier reclassification: E4 governed families are recognized, E1 posture jus
       assert.ok(allowedFamilies.has(r.governed_scenario_family), `${r.registry_id} family`);
     }
   }
+});
+
+
+test('unsupported transforms emit zero I/O for every catalogued unsupported wire shape', async () => {
+  const { SUPPORTED_EVASION_TRANSFORMS } = await import('../../src/lib/probeEvidenceTiers.mjs');
+  for (const transform of EVASION_TRANSFORMS.filter((value) => !SUPPORTED_EVASION_TRANSFORMS.includes(value))) {
+    const result = await runWafEvasionMarkerProbe({ target: { value: 'https://fixture.example.test/signed?keep=1' },
+      probe_profile: buildEvasionMarkerProfile({ transform }) }, { fetchFn: async () => { throw new Error('unsupported delivery attempted I/O'); } });
+    assert.equal(result.requests_sent, 0, transform);
+    assert.equal(result.metadata.delivery_supported, false, transform);
+    assert.equal(result.metadata.readiness_conclusion, false, transform);
+    assert.equal(result.metadata.comparison_complete, false, transform);
+  }
+});
+
+test('local HTTP wire preserves Cookie, duplicate parameters and exact raw encoding', async () => {
+  const { createServer } = await import('node:http');
+  const rows = [];
+  const server = createServer((req, res) => {
+    rows.push({ url: req.url, method: req.method, headers: req.headers });
+    res.writeHead(rows.length === 1 ? 200 : 403, rows.length === 1 ? {} : { 'cf-mitigated': 'challenge' });
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const target = `http://127.0.0.1:${server.address().port}/signed/path?keep=1`;
+    for (const transform of ['parameter_location', 'parser_hpp', 'double_url', 'overlong_utf8', 'whitespace']) {
+      rows.length = 0;
+      const result = await runWafEvasionMarkerProbe({ target: { value: target }, probe_profile: buildEvasionMarkerProfile({ transform }) }, { fetchFn: fetch });
+      assert.equal(result.metadata.comparison_complete, true, transform);
+      assert.equal(result.requests_sent, 3);
+      assert.equal(rows.length, 3);
+      for (const row of rows) { assert.equal(row.method, 'GET'); assert.ok(row.url.startsWith('/signed/path?keep=1')); assert.equal(row.headers['content-length'], undefined); }
+      const wire = rows[2];
+      const variant = applyEvasionTransform(transform);
+      if (transform === 'parameter_location') {
+        assert.equal(wire.headers.cookie, `astranull_probe=${encodeURIComponent(variant.sent_value)}`);
+        assert.equal(new URL(wire.url, target).searchParams.has('probe'), false);
+      } else if (transform === 'parser_hpp') {
+        assert.deepEqual(new URL(wire.url, target).searchParams.getAll('probe'), ['astranull-permitted', variant.sent_value]);
+      } else if (transform === 'whitespace') {
+        assert.ok(variant.sent_value.includes('\t'));
+        assert.ok(wire.url.includes('%09'), wire.url);
+        assert.equal(new URL(wire.url, target).searchParams.get('probe'), BENIGN_CLASS_MARKERS.sqli.replace(/ /g, '\t'));
+        assert.equal(variant.sent_value.includes('/**/'), false);
+      } else { assert.ok(wire.url.endsWith(`&probe=${variant.sent_value}`), wire.url); }
+    }
+  } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });

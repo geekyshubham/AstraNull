@@ -33,7 +33,7 @@ function verificationHistory(targetId, finalState) {
       state: 'pending',
       source_kind: 'manual_override',
       source_ref: { seeded: true },
-      transitioned_at: FROZEN,
+      transitioned_at: new Date(Date.parse(FROZEN) - 1).toISOString(),
       transitioned_by: 'system',
       audit_entry_id: `aud_${targetId}_pending`,
     },

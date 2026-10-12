@@ -15,6 +15,7 @@ import { buildRemediationPayload, deliverActionItem, listActionItems } from '../
 import { createActionItem } from '../../src/contracts/wafPosture.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 import { getStore } from '../../src/store.mjs';
+import { buildFindingRemediationPlan, remediationDisposition } from '../../src/lib/remediationPlan.mjs';
 
 const forbiddenExtra = new Set(['raw_payload', 'credentials', 'tokens', 'secrets', 'api_key']);
 
@@ -339,5 +340,48 @@ describe('deliverActionItem service', () => {
     const invalid = await deliverActionItem(ctx, 'ai_delivery_1', 'email', { dry_run: true });
     assert.equal(invalid.error, 'invalid_request');
     assert.equal(invalid.status, 400);
+  });
+});
+
+describe('evidence-specific remediation advice is not verified mitigation', () => {
+  it('ties path guidance to actual evidence, declared scope and compatible retest without inventing an owner or vendor', () => {
+    const finding = { id: 'finding_exact', target_id: 'target_exact', check_id: 'waf.marker.safe', title: 'Observed alternate path', evidence_ids: ['event_a'],
+      protection_validation: { comparison_kind: 'path_validation', scenario: 'marker-comparison-v4',
+        observed: { outcome: 'scoped_application_bypass' }, observed_route: { entry_path_id: 'entry_alt', target_id: 'target_exact' },
+        evidence_refs: [{ evidence_ids: ['event_b', 'event_a'] }] } };
+    const before = structuredClone(finding);
+    const plan = buildFindingRemediationPlan(finding);
+    assert.equal(plan.action_slug, 'review_declared_path_controls');
+    assert.deepEqual(plan.evidence_ids, ['event_a', 'event_b']);
+    assert.deepEqual(plan.affected_scope, finding.protection_validation.observed_route);
+    assert.equal(plan.owner_group, 'unassigned');
+    assert.equal(plan.retest.target_id, finding.target_id);
+    assert.equal(plan.retest.check_id, finding.check_id);
+    assert.equal(plan.retest.scenario, 'marker-comparison-v4');
+    assert.equal(plan.retest.closes_without_verified_result, false);
+    assert.match(plan.steps.join(' '), /legitimate traffic.*approval.*canary rollout.*rollback/);
+    assert.match(plan.description, /Responsible control\/vendor not established/);
+    assert.equal(plan.resolution.mitigation_verified, false);
+    assert.deepEqual(finding, before);
+  });
+  it('unknown or suspected evidence requests review, while sampled ingress and availability gaps get different scoped advice', () => {
+    const unknown = buildFindingRemediationPlan({ id: 'unknown', finding_class: 'suspected_alternate_application_route' });
+    assert.equal(unknown.confidence, 'review_required');
+    assert.equal(unknown.action_slug, 'review_evidence_and_retest');
+    for (const [outcome, action] of [['forbidden_service_newly_reachable', 'review_declared_ingress_change'], ['required_service_newly_unavailable', 'review_service_availability_change']]) {
+      const plan = buildFindingRemediationPlan({ id: 'gap', evidence_ids: ['actual'], protection_validation: {
+        comparison_kind: 'firewall_change', observed: { gap_kind: outcome }, failed_expectation: { source_perspective: 'external-eu' } } });
+      assert.equal(plan.action_slug, action);
+      assert.equal(plan.retest.source_perspective, 'external-eu');
+      assert.equal(plan.resolution.mitigation_verified, false);
+    }
+  });
+  it('delivered, accepted-risk and resolved administrative states never establish technical closure', () => {
+    for (const state of ['delivered', 'accepted_risk', 'resolved']) {
+      const disposition = remediationDisposition({ state });
+      assert.equal(disposition.mitigation_verified, false);
+      assert.equal(disposition.requires_compatible_retest, true);
+      if (state === 'resolved') assert.equal(disposition.kind, 'administrative_disposition');
+    }
   });
 });

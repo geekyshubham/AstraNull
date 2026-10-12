@@ -204,8 +204,8 @@ function fieldState({ reported, unsupported, permissionMissing = false }) {
 
 function freshness(observedAt, now, staleAfterMs) {
   const observedMs = Date.parse(String(observedAt ?? ''));
-  if (!Number.isFinite(observedMs)) return { observed_at: null, age_seconds: null, stale: true };
-  const age = Math.max(0, now - observedMs);
+  if (!Number.isFinite(observedMs) || observedMs > now) return { observed_at: null, age_seconds: null, stale: true };
+  const age = now - observedMs;
   return { observed_at: new Date(observedMs).toISOString(), age_seconds: Math.floor(age / 1000), stale: age > staleAfterMs };
 }
 

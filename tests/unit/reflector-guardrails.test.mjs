@@ -94,7 +94,7 @@ describe('ADR-0007 reflector probe guardrails (runtime)', () => {
   });
 
   it('guardrail 5: output is metadata only — no response bytes are retained or returned', async () => {
-    const secret = Buffer.from('REFLECTED-RESPONSE-BODY-THAT-MUST-NOT-BE-KEPT');
+    const secret = Buffer.from('HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\nUSN: uuid:12345678-1234-1234-1234-123456789abc::upnp:rootdevice\r\nLOCATION: http://fixture.invalid/REFLECTED-RESPONSE-BODY-THAT-MUST-NOT-BE-KEPT\r\n\r\n');
     const sockets = recordingSockets({ reply: secret });
     const result = await probeReflectionService(job(), sockets);
     assert.equal(result.metadata.reflector_confirmed, true);

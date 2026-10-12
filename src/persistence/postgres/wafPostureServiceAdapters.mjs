@@ -1283,6 +1283,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         historicalSnapshots: context.historicalSnapshots,
         coverageRollups,
         windowDays: context.windowDays,
+        now: nowFn(),
       });
     },
 

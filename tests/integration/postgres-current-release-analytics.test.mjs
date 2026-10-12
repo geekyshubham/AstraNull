@@ -8,6 +8,7 @@ import {
   readDeclaredHostAnalytics,
 } from '../../src/persistence/postgres/declaredHostAnalyticsRepository.mjs';
 import { DeclaredHostQueryError } from '../../src/services/declaredHostAnalytics.mjs';
+import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import {
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
@@ -77,12 +78,12 @@ describe('postgres declared host analytics', () => {
         );
       }
 
-      await pool.query(
+      await withTenantContext(pool, TENANT_A, (client) => client.query(
         `INSERT INTO target_verifications (
            id, tenant_id, target_id, state, source_kind, source_ref, transitioned_by, audit_entry_id
          ) VALUES ('tv_down', $1, 'tgt_down', 'unverified', 'dns_txt', '{}'::jsonb, 'system', 'aud_down')`,
         [TENANT_A],
-      );
+      ));
       await pool.query(
         `INSERT INTO findings (
            id, tenant_id, target_group_id, target_id, check_id, title, severity, status
@@ -345,7 +346,7 @@ describe('postgres declared host analytics', () => {
          VALUES ($1, FALSE, 'seed', 1)`,
         [TENANT_A],
       );
-      await pool.query(
+      await withTenantContext(pool, TENANT_A, (client) => client.query(
         `INSERT INTO target_verifications (
            id, tenant_id, target_id, state, source_kind, source_ref, transitioned_by, audit_entry_id
          ) VALUES
@@ -357,7 +358,7 @@ describe('postgres declared host analytics', () => {
           resource_ref_hash: 'zone_hash_ana',
           token: secret,
         })],
-      );
+      ));
 
       async function verificationPage(filters = {}) {
         return withTenantContextAsAppRole(pool, TENANT_A, (client) => (

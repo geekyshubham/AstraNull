@@ -233,9 +233,11 @@ describe('postgres ownership verification service adapters (outside-in)', () => 
     assert.deepEqual(query.params, [CTX.tenantId, 'tg_1', 'tgt_1']);
     assert.match(query.text, /tg\.tenant_id = \$1 AND tg\.id = \$2 AND t\.id = \$3/);
     assert.match(query.text, /t\.deleted_at IS NULL/);
-    assert.match(query.text, /WHEN 'user_confirmed' THEN 4/);
-    // Legacy agent_verified rank is no longer part of the ordering (fails closed).
-    assert.doesNotMatch(query.text, /WHEN 'agent_verified'/);
+    assert.match(query.text, /JOIN target_verification_current current/);
+    assert.match(query.text, /current\.state, current\.source_kind/);
+    assert.match(query.text, /candidate\.transitioned_at = current\.transitioned_at/);
+    // Authority comes from the fail-closed projection, not strength or row identity.
+    assert.doesNotMatch(query.text, /WHEN 'user_confirmed'|WHEN 'agent_verified'/);
   });
 
   it('keeps current provider proof valid after a degraded failed poll retains last_success', async () => {

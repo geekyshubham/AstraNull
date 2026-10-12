@@ -31,6 +31,19 @@ describe('correlateExternalOnlyVerdict', () => {
     assert.equal(r.createsFinding, true);
   });
 
+  it('never treats a timeout as protection when kind metadata is absent or malformed', () => {
+    for (const probeKind of [undefined, null, '', 0, {}, 'unrecognized_kind']) {
+      for (const expectedBehavior of ['must_block_before_origin', 'must_reach_canary']) {
+        for (const probeIoObserved of [false, true]) {
+          const result = correlateExternalOnlyVerdict({ externalResult: 'timeout', probeKind, expectedBehavior, probeIoObserved });
+          assert.equal(result.verdict, 'inconclusive');
+          assert.equal(result.createsFinding, false);
+          assert.equal(result.confidence, 'external_only');
+        }
+      }
+    }
+  });
+
   it('keeps blocked claims inconclusive without attested probe I/O', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'blocked',

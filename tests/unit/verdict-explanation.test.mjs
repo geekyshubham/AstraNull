@@ -37,7 +37,7 @@ function raceRun(overrides = {}) {
     tenant_id: 'ten_demo',
     target_group_id: 'tg_1',
     target_id: 'tgt_1',
-    check_id: 'origin.direct_bypass.safe',
+    check_id: 'waf.http_method_policy_marker.safe',
     status: 'collecting',
     correlation: { nonce_hash: 'nh_1', window_ms: 120_000 },
     probe_external_result: 'connected',
@@ -57,7 +57,11 @@ const PROBE_EVENT = {
   producer_kind: 'signed_probe',
   nonce_hash: 'nh_1',
   timestamp: FIXED_NOW.toISOString(),
-  metadata: { external_result: 'connected' },
+  metadata: { external_result: 'connected', profile_kind: 'waf_class_marker_probe',
+    classifier_version: 'marker-comparison-v4', comparison_complete: true,
+    planned_marker_legs: 2, completed_marker_legs: 2, baseline_health: 'healthy',
+    observation_only: false, readiness_conclusion: true,
+    safety_attestation: { probe_requests_sent: 3, destination_resolver_attempts: 0, requests_sent: 3, total_operations: 3 } },
 };
 
 
@@ -353,6 +357,22 @@ function findingAudits(shared) {
 }
 
 describe('concurrent verdict finalization is single-writer (createVerdictIfAbsent)', () => {
+  it('publishes a timeout as inconclusive when a retained check has no ordinary probe profile', async () => {
+    const shared = createSharedVerdictStore();
+    const service = buildRaceService(shared, {
+      withObservation: true,
+      runOverrides: { check_id: 'waf.offensive_sqli.soc', probe_external_result: 'timeout' },
+    });
+    const verdict = await service.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.confidence, 'external_only');
+    assert.match(verdict.explanation, /timeout cannot establish protection or exposure/i);
+    assert.equal(shared.verdicts.get('run_1').verdict, 'inconclusive');
+    assert.equal(shared.findings.length, 0);
+    assert.equal(shared.findingUpsertCalls, 0);
+    assert.equal(verdictAudits(shared).length, 1);
+  });
+
   it('first finalizer wins: a second finalizer returns the incumbent and adds no audit', async () => {
     const shared = createSharedVerdictStore();
     // ADR-0008: both finalizers see the same external probe evidence (connected ->

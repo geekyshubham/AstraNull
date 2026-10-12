@@ -10,6 +10,7 @@ import {
 } from '../../src/contracts/checks.mjs';
 
 const INPUT_REQUIRING = [
+  'ops.alert_workflow_marker.safe',
   'origin.direct_reachability.safe',
   'origin.direct_bypass.safe',
   'origin.host_sni_bypass.safe',
@@ -22,7 +23,7 @@ const INPUT_REQUIRING = [
   'l7.signup_registration_abuse.validation',
 ];
 
-test('checkRequiresAdditionalInput flags host_sni_bypass and declared probe-path checks', () => {
+test('checkRequiresAdditionalInput flags origin, declared probe-path and approved callback-scope checks', () => {
   for (const id of INPUT_REQUIRING) {
     const check = getCheckById(id);
     assert.ok(check, `check ${id} should still exist in the catalog`);

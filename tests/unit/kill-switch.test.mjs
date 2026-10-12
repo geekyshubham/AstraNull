@@ -354,6 +354,15 @@ function createKillSwitchInterleavingHarness(options = {}) {
     validationEvidence[method] = async () => undefined;
   }
   Object.assign(validationEvidence, {
+    async readSafeAdmissionUsage(ctx, { now, targetId, targetGroupId, customerCheckIds }) {
+      const at = Date.parse(now);
+      const runs = state.testRuns.filter((r) => r.tenant_id === ctx.tenantId);
+      return { input_complete: true,
+        runs_last_hour: runs.filter((r) => customerCheckIds.includes(r.check_id)
+          && Date.parse(r.created_at) >= at - 3600000 && Date.parse(r.created_at) <= at).length,
+        prior_run: runs.filter((r) => r.target_id === targetId && r.target_group_id === targetGroupId)
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] ?? null };
+    },
     async listTestRuns(ctx, opts = {}) {
       let runs = state.testRuns.filter((r) => r.tenant_id === ctx.tenantId);
       if (opts.targetGroupId) runs = runs.filter((r) => r.target_group_id === opts.targetGroupId);

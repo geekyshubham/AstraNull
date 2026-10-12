@@ -17,6 +17,7 @@ import {
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
+import { comparablePosture } from '../helpers/assurance-fixtures.mjs';
 const envSnapshot = { ...process.env };
 
 function restoreEnv() {
@@ -289,7 +290,7 @@ describe('tenant drift scan', () => {
   it('detects regressions from edge-protected posture', () => {
     Object.assign(process.env, wafEnabledEnv());
     const cases = [
-      { status: 'unprotected', reason_codes: [], expected: 'mode_downgrade' },
+      { status: 'unprotected', reason_codes: ['marker_rule_not_blocking'], expected: 'mode_downgrade' },
       { status: 'underprotected', reason_codes: ['origin_bypass_confirmed'], expected: 'origin_bypass_new' },
       { status: 'underprotected', reason_codes: ['monitor_only_behavior'], expected: 'mode_downgrade' },
     ];
@@ -315,10 +316,10 @@ describe('tenant drift scan', () => {
           status: testCase.status,
           reason_codes: testCase.reason_codes,
           detected_vendor: 'cloudflare',
-          created_at: '2026-06-01T00:00:00.000Z',
+          created_at: '2026-10-07T00:00:00.000Z',
           is_current: true,
         },
-      ]);
+      ].map(comparablePosture));
 
       const outcome = detectAssetDrift(demoCtx(), asset.id);
       assert.ok(outcome.drift_events.some((event) => event.drift_type === testCase.expected));
@@ -347,10 +348,10 @@ describe('tenant drift scan', () => {
         status: 'unprotected',
         reason_codes: [],
         detected_vendor: null,
-        created_at: '2026-06-01T00:00:00.000Z',
+        created_at: '2026-10-07T00:00:00.000Z',
         is_current: true,
       },
-    ]);
+    ].map(comparablePosture));
 
     const outcome = detectAssetDrift(demoCtx(), asset.id);
     assert.equal(outcome.drifts_detected, 1);
@@ -396,10 +397,10 @@ describe('tenant drift scan', () => {
         status: 'unknown',
         reason_codes: [],
         detected_vendor: null,
-        created_at: '2026-06-01T00:00:00.000Z',
+        created_at: '2026-10-07T00:00:00.000Z',
         is_current: true,
       },
-    ]);
+    ].map(comparablePosture));
 
     detectAssetDrift(demoCtx(), asset.id);
     const [event] = getStore().wafDriftEvents;
@@ -407,7 +408,8 @@ describe('tenant drift scan', () => {
     assert.equal(event.id, 'drift_existing_critical');
     assert.equal(event.severity, 'critical');
     assert.equal(event.created_at, originalCreatedAt);
-    assert.equal(event.after_summary_json.status, 'unknown');
+    assert.equal(event.after_summary_json.posture_status, 'edge_protected');
+    assert.equal(event.after_summary_json.status, undefined);
   });
 
   it('runDriftScan creates drift events from connector snapshot changes', () => {
@@ -438,9 +440,9 @@ describe('tenant drift scan', () => {
           rule_count: 120,
         },
         observed_at: '2026-06-01T00:00:00.000Z',
-        created_at: '2026-06-01T00:00:00.000Z',
+        created_at: '2026-10-07T00:00:00.000Z',
       },
-    ]);
+    ].map(comparablePosture));
 
     const outcome = runDriftScan(demoCtx());
     assert.ok(outcome.scan_result);

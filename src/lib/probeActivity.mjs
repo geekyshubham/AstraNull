@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { normalizeProbeCapture } from './probeExecution.mjs';
 import { presentProductDetectionEvidence } from './productDetectionEvidence.mjs';
 import { redactPayloadPreview, PROBE_PREVIEW_CHARS, previewContentType } from './probePayloadPreview.mjs';
 
@@ -93,7 +94,7 @@ export function emitProbeActivity(deps, item) {
 
 export function normalizeProbeActivityBatch(body, job, now = new Date()) {
   if (!body || typeof body !== 'object' || Array.isArray(body)
-    || Object.keys(body).some((key) => !['leased_at', 'items'].includes(key))
+    || Object.keys(body).some((key) => !['leased_at', 'items', 'capture'].includes(key))
     || !Array.isArray(body.items) || body.items.length > MAX_PROBE_ACTIVITY_BATCH) {
     return { error: 'invalid_probe_activity', status: 400 };
   }
@@ -102,7 +103,9 @@ export function normalizeProbeActivityBatch(body, job, now = new Date()) {
   if (items.some((item) => !item) || new Set(items.map((item) => item.sequence)).size !== items.length) {
     return { error: 'invalid_probe_activity', status: 400 };
   }
-  return { items };
+  const capture = body.capture == null ? null : normalizeProbeCapture(body.capture, now);
+  if (body.capture != null && !capture) return { error: 'invalid_probe_capture', status: 400 };
+  return { items, capture };
 }
 
 export function probeActivityEvent(job, item, workerId) {
@@ -114,7 +117,7 @@ export function probeActivityEvent(job, item, workerId) {
     nonce_hash: job.nonce_hash, timestamp: item.at,
     metadata: { activity: item, probe_job_id: job.id, probe_worker_id: workerId,
       vector_family: job.vector_family ?? null, probe_kind: job.probe_profile?.kind ?? null,
-      marker_class: job.probe_profile?.marker_class ?? null },
+      marker_class: job.probe_profile?.marker_class ?? null, leased_at: job.leased_at ?? null },
   };
 }
 
@@ -123,12 +126,15 @@ export function sameProbeActivity(left, right) {
 }
 
 export function projectRunActivity(run, events, limit = 200) {
-  const bounded = Math.max(1, Math.min(MAX_PROBE_ACTIVITY_ITEMS, Number(limit) || 200));
+  const paginated = limit != null && typeof limit === 'object';
+  const options = paginated ? limit : { limit };
+  const job = options.job ?? null;
+  const bounded = Math.max(1, Math.min(MAX_PROBE_ACTIVITY_ITEMS, Math.floor(Number(options.limit)) || 200));
   const items = [];
   const startedAt = run.started_at ?? run.created_at;
   if (startedAt) items.push({ id: `run:${run.id}:started`, at: startedAt, stage: run.started_at ? 'run_started' : 'run_created', source: 'run_state', operation: run.check_id });
   if (['cancelled', 'canceled'].includes(run.status) && run.completed_at) {
-    items.push({ id: `run:${run.id}:stopped`, at: run.completed_at, stage: 'run_stopped', source: 'run_state', operation: run.check_id });
+    items.push({ id: `run:${run.id}:stopped`, at: run.completed_at, stage: 'stop_requested', source: 'run_state', operation: run.check_id });
   }
   let requestsSent = null;
   for (const event of events ?? []) {
@@ -136,7 +142,9 @@ export function projectRunActivity(run, events, limit = 200) {
     if (event.signal_type === 'probe_activity' && event.producer_kind === 'signed_probe') {
       const activity = event.metadata?.activity;
       const normalized = normalizeProbeActivityItem(activity, new Date(activity?.at));
-      if (normalized) items.push({ id: event.id, ...normalized, source: 'signed_worker', check_id: event.check_id,
+      if (normalized) items.push({ id: event.id, ...normalized, recorded_at: event.ingested_at ?? event.timestamp,
+        source: 'signed_worker', source_context: { job_id: event.metadata?.probe_job_id ?? null,
+          worker_id: event.metadata?.probe_worker_id ?? null, leased_at: event.metadata?.leased_at ?? null }, check_id: event.check_id,
         vector_family: event.metadata?.vector_family ?? run.vector_family ?? null,
         probe_kind: event.metadata?.probe_kind ?? null, marker_class: event.metadata?.marker_class ?? null });
     }
@@ -144,7 +152,7 @@ export function projectRunActivity(run, events, limit = 200) {
       const metadata = event.metadata ?? {};
       const count = metadata.safety_attestation?.requests_sent;
       if (Number.isInteger(count) && count >= 0) requestsSent = count;
-      items.push({ id: event.id, at: event.timestamp, stage: 'result_received',
+      items.push({ id: event.id, at: event.timestamp, recorded_at: event.ingested_at ?? event.timestamp, stage: 'result_received',
         source: event.producer_kind === 'signed_probe' ? 'signed_worker' : 'simulation',
         operation: metadata.probe_kind ?? 'probe',
         ...(Number.isInteger(metadata.status_code) ? { status_code: metadata.status_code } : {}),
@@ -166,9 +174,44 @@ export function projectRunActivity(run, events, limit = 200) {
       });
     }
   }
-  items.sort((a, b) => String(a.at).localeCompare(String(b.at)) || (a.sequence ?? 0) - (b.sequence ?? 0));
+  items.sort((a, b) => String(paginated ? (a.recorded_at ?? a.at) : a.at).localeCompare(String(paginated ? (b.recorded_at ?? b.at) : b.at))
+    || String(a.id).localeCompare(String(b.id)));
+  const after = options.cursor ? items.findIndex((item) => item.id === options.cursor) : -1;
+  if (options.cursor && after < 0) return { error: 'invalid_activity_cursor', status: 400 };
+  const page = paginated ? items.slice(after + 1, after + 1 + bounded) : items.slice(-bounded);
+  const hasMore = paginated ? after + 1 + page.length < items.length : items.length > bounded;
+  const stats = job?.worker_metadata?.capture ?? null;
+  const currentItems = items.filter((item) => item.source === 'signed_worker' && item.sequence != null
+    && (!job || (item.source_context?.job_id === job.id && item.source_context?.leased_at === job.leased_at)));
+  const seen = new Set(currentItems.map((item) => item.sequence));
+  const gaps = [];
+  const expected = stats?.last_sequence ?? Math.max(0, ...seen);
+  for (let seq = 1; seq <= Math.min(MAX_PROBE_ACTIVITY_ITEMS, expected); seq += 1) {
+    if (seen.has(seq)) continue;
+    const prior = gaps[gaps.length - 1];
+    if (prior?.to === seq - 1) prior.to = seq;
+    else gaps.push({ from: seq, to: seq });
+  }
+  const incomplete = gaps.length > 0 || (stats?.dropped_count ?? 0) > 0 || (stats?.delivery_failures ?? 0) > 0;
+  const capture = { status: !stats ? 'unknown' : incomplete ? 'incomplete' : stats.finalized_at ? 'complete' : 'recording',
+    limit: MAX_PROBE_ACTIVITY_ITEMS, recorded_count: seen.size, dropped_count: stats?.dropped_count ?? null,
+    delivery_failures: stats?.delivery_failures ?? null, sequence_gaps: gaps, finalized_at: stats?.finalized_at ?? null,
+    perspective: 'recorded_metadata_only' };
+  const requestedAt = ['cancelled', 'canceled'].includes(run.status) ? run.completed_at ?? null : null;
+  const acknowledgment = job?.worker_metadata?.stop_acknowledgment;
+  const deadline = job?.constraints?.not_after ?? run.collection_deadline_at ?? null;
+  const expired = Number.isFinite(Date.parse(deadline)) && Date.parse(deadline) <= Date.now();
+  const stop = { state: acknowledgment ? 'acknowledged' : !requestedAt ? 'not_requested' : expired ? 'deadline_elapsed'
+    : Date.now() - Date.parse(requestedAt) >= 4000 ? 'unreachable' : 'requested', requested_at: requestedAt,
+    acknowledged_at: acknowledgment?.acknowledged_at ?? null, deadline_at: deadline,
+    reason: acknowledgment?.reason ?? (requestedAt ? 'worker_acknowledgment_not_received' : null) };
   return presentProductDetectionEvidence({ run_id: run.id, check_id: run.check_id, target_id: run.target_id,
     status: run.status, vector_family: run.vector_family ?? null, created_at: run.created_at ?? null, started_at: run.started_at ?? null, completed_at: run.completed_at ?? null,
     requests_sent: requestsSent, telemetry_recorded: items.some((item) => item.source === 'signed_worker' && item.stage !== 'result_received'),
-    items: items.slice(-bounded), count: Math.min(items.length, bounded), truncated: items.length > bounded });
+    source_context: job ? { job_id: job.id, worker_id: job.leased_by ?? null, leased_at: job.leased_at ?? null } : null,
+    authorized_bounds: job?.job_signature ? Object.fromEntries(['max_probe_requests', 'max_destination_resolver_attempts',
+      'max_total_operations', 'timeout_ms', 'not_after', 'authority_version'].filter((key) => job.constraints?.[key] != null)
+      .map((key) => [key, job.constraints[key]])) : null,
+    capture, stop, pagination: { next_cursor: page.at(-1)?.id ?? options.cursor ?? null, has_more: hasMore, total_recorded: items.length },
+    items: page, count: page.length, truncated: hasMore });
 }

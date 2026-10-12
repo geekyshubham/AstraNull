@@ -88,15 +88,17 @@ describe('721-vector library contract', () => {
     }
   });
 
-  it('classifies APP-001 as a genuine semantic-safe rate-limit row', () => {
+  it('keeps APP-001 flood assurance SOC-governed and the tiny rate sample observational', () => {
     const rateLimit = VECTOR_LIBRARY.find((row) => row.vector_id === 'APP-001');
     assert.ok(rateLimit);
-    assert.equal(rateLimit.evidence_tier, 'E3');
-    assert.equal(rateLimit.evidence_capability, 'semantic_safe');
-    assert.equal(rateLimit.execution_disposition, 'safe_validation_available');
-    assert.ok(rateLimit.semantic_safe_check_ids.includes('l7.http_get_flood.validation'));
-    assert.match(rateLimit.failure_means, /throttle|challenge/i);
-    assert.match(rateLimit.failure_means, /declared RPS limits/i);
+    assert.equal(rateLimit.evidence_tier, 'E4');
+    assert.equal(rateLimit.evidence_capability, 'soc_governed');
+    assert.equal(rateLimit.execution_disposition, 'soc_gated_only');
+    assert.deepEqual(rateLimit.semantic_safe_check_ids, []);
+    assert.ok(rateLimit.transport_check_ids.includes('l7.http_get_flood.validation'));
+    assert.ok(rateLimit.soc_check_ids.includes('high_scale.application.request_only'));
+    assert.match(rateLimit.failure_means, /Only authorized SOC-governed evidence/);
+    assert.match(rateLimit.failure_means, /not an exposure result/i);
     assert.equal(rateLimit.expected_controls, rateLimit.primary_controls);
   });
 
@@ -159,24 +161,28 @@ describe('721-vector library contract', () => {
     assert.deepEqual([...rowRunnableIds].sort(), matrix.runnable_safe_check_ids);
     assert.equal(matrix.summary.runnable_safe_check_count, matrix.runnable_safe_check_ids.length);
     assert.deepEqual(matrix.summary.evidence_capabilities, {
-      semantic_safe: 273,
-      soc_governed: 258,
+      semantic_safe: 71,
+      soc_governed: 269,
       declaration_only: 102,
-      transport_only: 39,
+      transport_only: 230,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.execution_dispositions, {
-      safe_validation_available: 414,
-      soc_gated_only: 258,
+      safe_validation_available: 367,
+      not_currently_runnable: 36,
+      soc_gated_only: 269,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.evidence_execution_matrix, {
-      semantic_safe: { safe_validation_available: 273 },
-      soc_governed: { soc_gated_only: 258 },
+      semantic_safe: { safe_validation_available: 71 },
+      soc_governed: { soc_gated_only: 269 },
       declaration_only: { safe_validation_available: 102 },
-      transport_only: { safe_validation_available: 39 },
+      transport_only: { safe_validation_available: 194, not_currently_runnable: 36 },
       monitor_only: { monitor_only: 49 },
     });
+    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 357, additional_input_required: 10,
+      target_incompatible: 0, soc_gated: 269, monitor_only: 49, not_runnable: 36 });
+    assert.equal(matrix.summary.runnable_safe_check_count, 161);
     for (const vectorId of ['APP-003', 'NET-016']) {
       const row = matrix.rows.find((candidate) => candidate.vector_id === vectorId);
       assert.equal(row?.target_disposition, 'soc_gated', vectorId);
@@ -189,6 +195,29 @@ describe('721-vector library contract', () => {
       assert.ok(row.runnable_safe_check_ids.every((checkId) => row.safe_check_ids.includes(checkId)));
     }
   });
+});
+
+it('does not lend unrelated grouped E3 comparisons to unsupported evasion mechanisms', async () => {
+  const { PROPOSED_REGISTRY_MAPPING } = await import('../../src/contracts/manifests/evasion.manifest.mjs');
+  const matrix = buildVectorTargetMatrix();
+  for (const mapping of PROPOSED_REGISTRY_MAPPING.filter((entry) => entry.mechanism_supported === false)) {
+    const row = matrix.rows.find((entry) => entry.vector_id === mapping.registry_id);
+    assert.deepEqual(row.safe_check_ids, mapping.add_check_ids, mapping.registry_id);
+    assert.equal(row.evidence_tier, 'E2', mapping.registry_id);
+    assert.equal(row.target_disposition, 'not_runnable', mapping.registry_id);
+    assert.equal(row.execution_disposition, 'not_currently_runnable', mapping.registry_id);
+    assert.deepEqual(row.runnable_safe_check_ids, [], mapping.registry_id);
+    assert.deepEqual(row.semantic_safe_check_ids, [], mapping.registry_id);
+    assert.ok(row.blocked_safe_checks.every((check) => check.reasons.includes('unsupported_delivery')), mapping.registry_id);
+  }
+  for (const target_kind of ['url', 'ip', 'tcp', 'dns', 'canary']) {
+    const targetMatrix = buildVectorTargetMatrix({ target_kind });
+    for (const id of ['EVA-017', 'EVA-018', 'EVA-019', 'EVA-028', 'EVA-067']) {
+      const row = targetMatrix.rows.find((entry) => entry.vector_id === id);
+      assert.equal(row.target_disposition, 'not_runnable', `${target_kind}/${id}`);
+      assert.deepEqual(row.runnable_safe_check_ids, [], `${target_kind}/${id}`);
+    }
+  }
 });
 
 describe('GET /v1/vectors', () => {

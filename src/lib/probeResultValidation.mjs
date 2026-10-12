@@ -55,6 +55,9 @@ const ALLOWED_ATTESTATION_META_KEYS = new Set(['worker_version', 'region', 'comp
 export const PROBE_EVENT_RESERVED_METADATA_KEYS = new Set([
   'external_result',
   'probe_worker_id',
+  'probe_job_id',
+  'source_perspective',
+  'execution_receipt',
   'safety_attestation',
   'profile_kind',
   'probe_kind',

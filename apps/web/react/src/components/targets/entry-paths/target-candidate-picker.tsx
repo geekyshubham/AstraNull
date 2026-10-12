@@ -60,8 +60,12 @@ export function TargetCandidatePicker({
     const controller = listController.current;
     if (list.state !== 'ready' || list.loadingMore || !list.nextCursor || !controller || controller.signal.aborted) return;
     setList({ ...list, loadingMore: true, moreError: '' });
-    const result = await listTargetCandidates(config, session, { q: query || undefined, cursor: list.nextCursor }, controller.signal);
-    if (controller.signal.aborted) return;
+    const result = await listTargetCandidates(config, session, { q: query || undefined, cursor: list.nextCursor }, controller.signal)
+      .catch((error) => {
+        if (controller.signal.aborted) return null;
+        throw error;
+      });
+    if (!result || controller.signal.aborted) return;
     setList((current) => {
       if (current.state !== 'ready') return current;
       if (result.state !== 'ready') return { ...current, loadingMore: false, moreError: 'More targets could not load. Retry.' };

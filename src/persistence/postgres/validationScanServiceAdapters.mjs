@@ -1354,9 +1354,12 @@ export function createPostgresValidationScanServices(repositories, options = {})
       const steps = await repo.listSteps(ctx, scan.id);
       const childRunIds = steps.map((step) => step.test_run_id).filter(Boolean);
       const limit = Math.max(1, Math.min(500, Number(callOptions.limit) || 200));
-      const auditEntries = await repo.listAuditEntriesForScan(ctx, { scanId: scan.id, runIds: childRunIds, limit: 500 });
+      const complete = typeof validationEvidence.listRunActivityEvents === 'function';
+      const auditEntries = await repo.listAuditEntriesForScan(ctx, { scanId: scan.id, runIds: childRunIds, limit: 500, complete });
       let runEvents = [];
-      if (childRunIds.length && typeof validationEvidence.loadRunEvidenceBatch === 'function') {
+      if (complete && childRunIds.length) {
+        runEvents = await validationEvidence.listRunActivityEvents(ctx, childRunIds, { includeAllSignals: true });
+      } else if (childRunIds.length && typeof validationEvidence.loadRunEvidenceBatch === 'function') {
         const batch = await validationEvidence.loadRunEvidenceBatch(ctx, {
           runIds: [],
           eventRunIds: childRunIds,
@@ -1372,12 +1375,15 @@ export function createPostgresValidationScanServices(repositories, options = {})
         after: callOptions.after ?? null,
         limit,
       });
+      if (page.error) return page;
       return {
         scan_id: scan.id,
         status: scan.status,
         items: page.items,
         count: page.items.length,
         cursor: page.cursor,
+        pagination: page.pagination,
+        capture: { status: complete ? 'unknown' : 'incomplete', input_complete: complete, perspective: 'recorded_metadata_only' },
       };
     },
 

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES } from '../probeEvidenceTiers.mjs';
 
 export const MAX_PAYLOAD_BYTES = 512;
 
@@ -31,7 +32,7 @@ function responseSizeClass(byteCount) {
   return 'large';
 }
 
-function classifyReflection(requestBytes, responseBytes, responseReceived = responseBytes != null) {
+function classifyReflection(profile, requestBytes, responseBytes, responseReceived = responseBytes != null) {
   const requestLength = Buffer.isBuffer(requestBytes)
     ? requestBytes.length
     : Math.max(0, Number(requestBytes) || 0);
@@ -43,8 +44,42 @@ function classifyReflection(requestBytes, responseBytes, responseReceived = resp
       ? Math.round((responseLength / requestLength) * 100) / 100
       : null,
     response_size_class: responseReceived ? responseSizeClass(responseLength) : 'none',
-    reflector_confirmed: Boolean(responseReceived),
+    protocol_identity_confirmed: Boolean(responseReceived && validResponse(profile, requestBytes, responseBytes)),
+    reflector_confirmed: Boolean(responseReceived && validResponse(profile, requestBytes, responseBytes)),
+    assurance_scope: 'single_direct_service_response_not_spoofed_reflection_or_capacity',
   };
+}
+
+
+function validResponse(profile, request, response) {
+  if (!Buffer.isBuffer(request) || !Buffer.isBuffer(response) || response.length > 65536) return false;
+  if (profile === 'natpmp_external_address') return response.length === 12 && response[0] === 0 && response[1] === 128 && response.readUInt16BE(2) === 0;
+  if (profile === 'slp_srvrqst') {
+    if (response.length < 18 || response[0] !== 2 || response[1] !== 2 || response.readUIntBE(2,3) !== response.length || !response.subarray(10,12).equals(request.subarray(10,12))) return false;
+    // No fragmented/extended reply is accepted as a complete bounded response.
+    if (response.readUInt16BE(5) !== 0 || response.readUIntBE(7, 3) !== 0) return false;
+    const languageLength = response.readUInt16BE(12);
+    if (languageLength !== request.readUInt16BE(12)
+      || !response.subarray(14, 14 + languageLength).equals(request.subarray(14, 14 + languageLength))) return false;
+    let offset = 14 + languageLength;
+    if (offset + 4 > response.length || response.readUInt16BE(offset) !== 0) return false;
+    const urlCount = response.readUInt16BE(offset + 2);
+    if (urlCount > 1024) return false;
+    offset += 4;
+    for (let index = 0; index < urlCount; index += 1) {
+      if (offset + 5 > response.length || response[offset] !== 0) return false;
+      const urlLength = response.readUInt16BE(offset + 3);
+      offset += 5;
+      if (urlLength === 0 || offset + urlLength + 1 > response.length) return false;
+      const url = response.subarray(offset, offset + urlLength).toString('ascii');
+      if (!/^service:service-agent:[^\s\x00-\x1f]+$/.test(url)) return false;
+      offset += urlLength;
+      // Authentication blocks need a separate supported parser, not length guessing.
+      if (response[offset++] !== 0) return false;
+    }
+    return offset === response.length;
+  }
+  return false;
 }
 
 function buildSlpServiceRequest(ctx) {
@@ -138,7 +173,9 @@ function entry(id, transport, defaultPort, build) {
     transport,
     default_port: defaultPort,
     build: boundedPayload(build),
-    classify: classifyReflection,
+    classify: (request, response, received) => classifyReflection(id, request, response, received),
+    identity_supported: ['slp_srvrqst', 'natpmp_external_address'].includes(id),
+    execution_supported: !UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES.includes(id),
   });
 }
 

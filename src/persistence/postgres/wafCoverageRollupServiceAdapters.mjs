@@ -1,6 +1,7 @@
 import { loadRuntimeConfig } from '../../config.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { buildCoverageRollupRecord } from '../../services/wafCoverageRollupWorker.mjs';
+import { validCoverageRollupDate } from '../../services/wafCoverageService.mjs';
 import { resolveScheduledTenantIds } from '../../lib/scheduledTenantScope.mjs';
 
 /** @type {readonly string[]} */
@@ -59,6 +60,10 @@ export function createPostgresWafCoverageRollupServices(repositories) {
       const now = ctx.now instanceof Date ? ctx.now : new Date();
       const rollupDate = ctx.rollupDate ?? now.toISOString().slice(0, 10);
 
+      if (!validCoverageRollupDate(rollupDate, now)) return { error: 'invalid_or_future_rollup_date', status: 400 };
+      const canReadHistory = typeof wafPosture.listWafPostureSnapshotsForTenant === 'function';
+      if (!canReadHistory && rollupDate < now.toISOString().slice(0, 10)) return { error: 'historical_inputs_unavailable', status: 409 };
+
       if (ctx.dryRun) {
         const assets = await wafPosture.listWafAssets(ctx);
         const snapshots = await wafPosture.listCurrentPostureSnapshots(ctx);
@@ -75,11 +80,12 @@ export function createPostgresWafCoverageRollupServices(repositories) {
       }
 
       const assets = await wafPosture.listWafAssets(ctx);
-      const snapshots = await wafPosture.listCurrentPostureSnapshots(ctx);
+      const snapshots = canReadHistory ? await wafPosture.listWafPostureSnapshotsForTenant(ctx) : await wafPosture.listCurrentPostureSnapshots(ctx);
       const currentSnapshotsByAsset = indexCurrentSnapshots(snapshots);
       const metrics = buildCoverageRollupRecord({
         assets,
         currentSnapshotsByAsset,
+        historicalSnapshots: snapshots,
         rollupDate,
         now,
       });
@@ -107,6 +113,7 @@ export function createPostgresWafCoverageRollupServices(repositories) {
           excluded: record.excluded,
           coverage_ratio: record.coverage_ratio,
           created_at: record.created_at,
+          cutoff_at: metrics.cutoff_at, cohort_rule: metrics.cohort_rule, semantics_version: metrics.semantics_version, assurance_claim: metrics.assurance_claim,
         },
       };
     },
@@ -133,7 +140,7 @@ export function createPostgresWafCoverageRollupServices(repositories) {
           dryRun: ctx.dryRun,
           now: ctx.now,
         });
-        if (outcome.skipped) return outcome;
+        if (outcome.skipped || outcome.error) return outcome;
         results.push(outcome.rollup_result ?? outcome.scope ?? { tenant_id: tenantId });
       }
 

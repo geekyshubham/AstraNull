@@ -1,10 +1,14 @@
 import { expect, test } from '@playwright/test';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import AxeBuilder from '@axe-core/playwright';
+import { assessmentChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import {
   getPortalPlaywrightBaseUrl,
   startPortalPlaywrightServer,
   stopPortalPlaywrightServer,
+  seedPortalPlaywrightStore,
 } from '../../helpers/portal-playwright-server.mjs';
 import {
   gotoPortalRoute,
@@ -25,6 +29,8 @@ import {
 
 const VERIFIED_FRESH_TARGET = 'tgt_checkout_2';
 const UNVERIFIED_TARGET = 'tgt_checkout_4';
+const GRADED_PASS_CHECK = 'waf.http_method_policy_marker.safe';
+const GRADED_GAP_CHECK = 'waf.crlf_injection_marker.safe';
 
 const EDGE_DETECTION = {
   status: 'detected',
@@ -59,7 +65,7 @@ function verdictStep(checkId, position, verdict, explanation) {
     response: { external_result: verdict === 'edge_exposed' ? 'connected' : 'blocked', status_code: verdict === 'edge_exposed' ? 200 : 403 },
     requests_sent: 2,
     requests_simulated: false,
-    verdict: { verdict, confidence: 'external_only', explanation },
+    verdict: { verdict, confidence: 'external_only', explanation, evidence_ids: [`evt_fx_${position}`] },
   };
 }
 
@@ -75,9 +81,9 @@ function completedScan(targetId) {
     completed_at: '2030-01-01T00:20:00.000Z',
     summary: { total: 3, completed: 3 },
     steps: [
-      verdictStep('waf.fingerprint.safe', 0, 'edge_protected', 'External probe was blocked at the edge.'),
-      verdictStep('waf.marker_rule.safe', 1, 'edge_exposed', 'External probe reached the declared path; the edge did not block traffic before origin.'),
-      verdictStep('origin.leak_scan.safe', 2, 'edge_protected', 'Origin was not reachable directly.'),
+      verdictStep(GRADED_PASS_CHECK, 0, 'edge_protected', 'The evaluated bounded marker was blocked at the edge.'),
+      verdictStep(GRADED_GAP_CHECK, 1, 'edge_exposed', 'The evaluated marker reached the declared path; the edge did not block this scenario.'),
+      verdictStep('origin.leak_scan.safe', 2, 'inconclusive', 'Recorded leak-scan observations do not prove origin exposure or protection.'),
     ],
   };
 }
@@ -90,12 +96,24 @@ async function expectNoBlockingAxeViolations(page, selector) {
 }
 
 test.describe('target workspace: recorded attribution, checks and reviewed runs (FT-DOMAIN-01)', () => {
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180000);
+    await startPortalPlaywrightServer({ liveSource: true, env: { ASTRANULL_PROBE_MODE: 'simulation' } });
+    const warm = await browser.newPage();
+    try {
+      await injectPortalDevHeadersSession(warm);
+      await assertPortalInitialLoad(warm, getPortalPlaywrightBaseUrl());
+    } finally {
+      await warm.close();
+    }
+  });
   test.beforeEach(async ({ page }) => {
+    test.setTimeout(90000);
     page.on('pageerror', (error) => console.error('browser-runtime-error:', error.stack));
-    await startPortalPlaywrightServer();
+    seedPortalPlaywrightStore(applyPortalBaselineReadinessBoost);
   });
 
-  test.afterEach(async () => {
+  test.afterAll(async () => {
     await stopPortalPlaywrightServer();
   });
 
@@ -143,13 +161,13 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(gapRow).toContainText('How it works');
     await expect(gapRow).toContainText('Upper bound');
     await expect(gapRow).toContainText('HTTP 200');
-    await expect(gapRow).toContainText('the edge did not block traffic before origin');
-    await expect(page).toHaveURL(/check=waf\.marker_rule\.safe/);
+    await expect(gapRow).toContainText('the edge did not block this scenario');
+    await expect(page).toHaveURL(/check=waf\.crlf_injection_marker\.safe/);
     await gapRow.getByRole('button', { name: 'View evidence' }).click();
     await expect(page.locator('.inspector-panel').getByRole('heading', { name: 'Check result' })).toBeVisible();
     await expect(page.locator('.inspector-panel')).not.toContainText(/wafw00f|cdncheck/i);
     await expect(page.locator('.target-detail-view')).not.toContainText(/wafw00f|cdncheck/i);
-    await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.marker_rule\.safe&ev_run=run_fx_1/);
+    await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.crlf_injection_marker\.safe&ev_run=run_fx_1/);
     await page.keyboard.press('Escape');
     await panel.getByRole('button', { name: /^All/ }).click();
     await expect(panel.locator('.td-cat').filter({ hasText: 'Origin exposure' })).toBeVisible();
@@ -205,7 +223,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.getByRole('tab', { name: /Validate/ })).toHaveAttribute('aria-selected', 'true');
   });
 
-  test('a freshly onboarded verified domain does not probe on load; detection starts only after review', async ({ page }) => {
+  test('opening a verified domain is passive; manually requested detection starts only after review', async ({ page }) => {
     const edgePosts = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && request.url().includes('/v1/waf/edge-detection')) edgePosts.push(request.postDataJSON());
@@ -214,7 +232,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
 
     const observations = page.locator('.td-observations');
-    await expect(observations).toContainText('It starts only when someone chooses Detect WAF and CDN');
+    await expect(observations).toContainText('Initial WAF/CDN detection is queued when this domain is added. It starts after ownership and execution requirements are met.');
     await page.waitForTimeout(800);
     expect(edgePosts, 'opening a target never starts a probe').toEqual([]);
 
@@ -227,7 +245,11 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await observations.getByRole('button', { name: 'Detect WAF and CDN' }).click();
     dialog = page.locator('dialog.modal-confirm[open]');
+    const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/waf/edge-detection');
     await dialog.getByRole('button', { name: 'Start detection' }).click();
+    const accepted = await (await acceptedResponse).json();
+    await expect(page.locator('.inspector-panel .probe-activity-run')).toHaveText(accepted.detection_request.test_run_id);
+    await page.locator('.inspector-panel').getByRole('button', { name: 'Close Check result' }).click();
     await expect.poll(() => edgePosts.length).toBe(1);
     expect(edgePosts[0]).toEqual({ target_id: VERIFIED_FRESH_TARGET });
     await expect(page.getByRole('tab', { name: /^Validate/ })).toHaveAttribute('aria-selected', 'true');
@@ -268,7 +290,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
-    await expect(panel).toContainText('251 checks in the full catalog');
+    const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
+    await expect(panel).toContainText(`${catalog.items.length} checks in the full catalog`);
     await panel.locator('.td-catalog-requirements summary').click();
     await expect(panel.locator('.td-catalog-requirements')).toContainText('origin.direct_bypass.safe');
     await expect(panel.locator('.td-catalog-requirements')).toContainText('Requires SOC approval');
@@ -281,7 +304,12 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
     await expect(dialog).toContainText('one at a time inside your safe-run limits');
     await expect(dialog).toContainText('The server re-checks ownership');
+    const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/validation-scans');
     await dialog.getByRole('button', { name: 'Start all checks' }).click();
+    const accepted = await (await acceptedResponse).json();
+    await expect(page).toHaveURL(new RegExp(`ev_scan=${accepted.id}`));
+    await expect(page.locator('.inspector-panel')).toContainText(accepted.id);
+    await page.locator('.inspector-panel').getByRole('button', { name: 'Close Assessment execution' }).click();
 
     await expect.poll(() => scanBodies.length).toBe(1);
     const body = scanBodies[0];
@@ -291,6 +319,13 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(body.check_ids[0]).toBe('waf.fingerprint.safe');
     expect(body.check_ids.length).toBeGreaterThan(112);
     expect(body.check_ids).toContain('dns.authoritative_response.safe');
+    const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
+    const selectable = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks`, { headers }).then((response) => response.json());
+    const target = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, { headers }).then((response) => response.json());
+    expect(body.check_ids).toEqual(assessmentChecks(selectable.items, target.target).map((check) => check.check_id));
+    expect(new Set(body.check_ids).size).toBe(body.check_ids.length);
+    expect(accepted.steps.map((step) => step.check_id)).toEqual(body.check_ids);
+    expect(new Set(accepted.steps.map((step) => step.target_id))).toEqual(new Set([PORTAL_BASELINE_IDS.targetId]));
 
     await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: WAF and CDN Fingerprint/);
     await expect(panel.getByRole('button', { name: 'Stop run' })).toBeVisible();
@@ -299,7 +334,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await panel.getByRole('button', { name: 'Stop run' }).click();
     const stop = page.locator('dialog.modal-confirm[open]');
     await stop.getByRole('button', { name: /Stop/ }).last().click();
-    await expect(page.getByText('Multi-check run stopped. Finished results are kept.')).toBeVisible();
+    await expect(page.getByText('Assessment Stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.')).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Review all/ })).toBeVisible();
   });
 });

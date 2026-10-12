@@ -1,4 +1,6 @@
+import { buildFindingRemediationPlan, remediationDisposition, REMEDIATION_STATES } from '../../lib/remediationPlan.mjs';
 import { randomBytes } from 'node:crypto';
+import { dnsOwnershipDomain, dnsOwnershipTargetBinding, dnsOwnershipChallengeMatchesTarget } from '../../lib/dnsOwnershipTarget.mjs';
 import { normalizeTargetInput, targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { encodeBase32 } from '../../lib/base32.mjs';
 import { mapProviderInventory } from '../../lib/connectorInventory.mjs';
@@ -304,8 +306,13 @@ export function createPostgresPortalRevampServices(deps) {
       };
     },
     async issueDnsOwnershipChallenge(ctx, { target_group_id, target_id }) {
-      const target = await portalRevamp.resolveFqdnTarget(ctx, target_group_id, target_id ?? null);
+      const target = target_id
+        ? await portalRevamp.getActiveTarget(ctx, target_group_id, target_id)
+        : await portalRevamp.resolveFqdnTarget(ctx, target_group_id, null);
       if (!target) return { error: target_id ? 'target_not_found' : 'no_fqdn_target', status: target_id ? 404 : 409 };
+      if (!['fqdn', 'url'].includes(target.kind)) return { error: 'no_fqdn_target', status: 409 };
+      const domain = dnsOwnershipDomain(target);
+      if (!domain) return { error: 'invalid_dns_ownership_target', status: 400 };
 
       const now = nowFn();
       const pending = (await portalRevamp.listDnsChallengesByGroup(ctx, target_group_id))
@@ -323,14 +330,20 @@ export function createPostgresPortalRevampServices(deps) {
         id: newId('dns'),
         target_group_id,
         target_id: target.id,
-        record_name: `_astranull-challenge.${String(target.value).trim().toLowerCase()}`,
+        record_name: `_astranull-challenge.${domain}`,
+        last_check_result: target.kind === 'url' ? { dns_target_binding: dnsOwnershipTargetBinding(target) } : null,
         record_value: encodeBase32(randomBytes(32)),
         ttl_seconds: 60,
         state: 'pending',
         issued_at,
         expires_at,
       };
-      const challenge = await portalRevamp.insertDnsChallenge(ctx, record, auditRepo);
+      let challenge;
+      try { challenge = await portalRevamp.insertDnsChallenge(ctx, record, auditRepo); }
+      catch (error) {
+        if (error?.code === 'challenge_binding_changed') return { error: 'challenge_binding_changed', status: 409 };
+        throw error;
+      }
       return { challenge, audit_entry_id: challenge.audit_entry_id };
     },
     async verifyDnsOwnership(ctx, { target_group_id, challenge_id }, options = {}) {
@@ -339,8 +352,11 @@ export function createPostgresPortalRevampServices(deps) {
         ? await portalRevamp.findDnsChallenge(ctx, challenge_id)
         : null;
       if (!challenge && !challenge_id) {
-        challenge = (await portalRevamp.listDnsChallengesByGroup(ctx, target_group_id))
-          .find((row) => row.state === 'pending');
+        for (const row of await portalRevamp.listDnsChallengesByGroup(ctx, target_group_id)) {
+          if (row.state !== 'pending' || !row.target_id) continue;
+          const implicitTarget = await portalRevamp.getActiveTarget(ctx, target_group_id, row.target_id);
+          if (implicitTarget?.kind === 'fqdn') { challenge = row; break; }
+        }
       }
       if (!challenge || challenge.target_group_id !== target_group_id) {
         return { error: 'challenge_not_found', status: 404 };
@@ -352,6 +368,9 @@ export function createPostgresPortalRevampServices(deps) {
         challenge.target_id,
       );
       if (!target) return { error: 'target_not_found', status: 404 };
+      if (target.kind === 'url' && !dnsOwnershipChallengeMatchesTarget(challenge, target)) {
+        return { error: 'challenge_binding_changed', status: 409 };
+      }
       if (challenge.state !== 'pending') {
         return {
           challenge,
@@ -361,7 +380,9 @@ export function createPostgresPortalRevampServices(deps) {
       }
 
       const lookupStartedAt = nowFn();
-      if (new Date(challenge.expires_at).getTime() <= lookupStartedAt.getTime()) {
+      const expiresAt = new Date(challenge.expires_at).getTime();
+      if (challenge.expires_at == null || !Number.isFinite(expiresAt)) return { error: 'challenge_binding_changed', status: 409 };
+      if (expiresAt <= lookupStartedAt.getTime()) {
         return portalRevamp.finalizeDnsOwnershipCheck(ctx, {
           challenge_id: challenge.id,
           target_group_id,
@@ -377,6 +398,24 @@ export function createPostgresPortalRevampServices(deps) {
         return { error: 'rate_limited', status: 429, retry_after_seconds: rate.retryAfterSeconds };
       }
 
+      const snapshot = await portalRevamp.getDnsOwnershipCheckSnapshot(ctx, {
+        challenge_id: challenge.id, target_group_id, target_id: challenge.target_id,
+      });
+      if (snapshot?.error) return snapshot;
+      if (!snapshot?.challenge || !snapshot?.lookup_binding || snapshot.checked_at == null
+        || !Number.isFinite(new Date(snapshot.checked_at).getTime())) return { error: 'dns_lookup_binding_missing', status: 503 };
+      challenge = structuredClone(snapshot.challenge);
+      if (challenge.state !== 'pending') return {
+        challenge, verified: challenge.state === 'resolved', audit_entry_id: challenge.audit_entry_id,
+      };
+      const lookupBinding = structuredClone(snapshot.lookup_binding);
+      if (new Date(challenge.expires_at).getTime() <= new Date(snapshot.checked_at).getTime()) {
+        return portalRevamp.finalizeDnsOwnershipCheck(ctx, {
+          challenge_id: challenge.id, target_group_id, finalized_at: snapshot.checked_at,
+          lookup_binding: lookupBinding, matched: false, last_check_result: { matched: false, expired: true },
+          transitioned_by: ctx.userId ?? 'system',
+        }, auditRepo);
+      }
       let lookup;
       let timedOut = false;
       try {
@@ -392,6 +431,7 @@ export function createPostgresPortalRevampServices(deps) {
         challenge_id: challenge.id,
         target_group_id,
         finalized_at: finalizedAt.toISOString(),
+        lookup_binding: lookupBinding,
         matched,
         last_check_result: {
           resolver: 'system',
@@ -509,23 +549,19 @@ export function createPostgresPortalRevampServices(deps) {
 
   const remediation = {
     async attachToFinding(ctx, findingId, payload = {}) {
+      if (typeof validationEvidence?.getFinding !== 'function') return { error: 'finding_evidence_unavailable', status: 503 };
+      const finding = await validationEvidence.getFinding(ctx, findingId);
+      if (!finding || finding.tenant_id !== ctx.tenantId) return { error: 'not_found', status: 404 };
       const existing = await portalRevamp.getFindingRemediationByFinding(ctx, findingId);
-      if (existing) return { remediation: existing };
-
-      const steps = Array.isArray(payload.steps)
-        ? payload.steps.map((step) => String(step))
-        : ['Review finding evidence', 'Apply recommended control change', 'Re-run validation'];
+      if (existing) return { remediation: { ...existing, resolution: remediationDisposition(existing) } };
+      const plan = buildFindingRemediationPlan(finding, payload);
+      const auditId = newId('aud');
       const record = await portalRevamp.insertFindingRemediation(ctx, {
-        id: `rem_${Date.now()}`,
-        finding_id: findingId,
-        action_slug: String(payload.action_slug ?? 'origin_restrict'),
-        owner_group: String(payload.owner_group ?? 'edge-sre'),
-        state: 'open',
-        description: String(payload.description ?? 'Remediation plan for linked finding.'),
-        steps,
-        audit_entry_id: `aud_${Date.now()}`,
+        id: newId('rem'), finding_id: findingId, ...plan, state: 'open', audit_entry_id: auditId,
       });
-      return { remediation: record };
+      if (!record) return { error: 'not_found', status: 404 };
+      await auditRepo.appendAuditEvent({ id: auditId, tenant_id: ctx.tenantId, actor_user_id: ctx.userId, actor_role: ctx.role, action: 'finding.remediation.attached', resource_type: 'finding_remediation', resource_id: record.id, metadata: { finding_id: findingId, action_slug: plan.action_slug, mitigation_verified: false } });
+      return { remediation: { ...plan, ...record, resolution: remediationDisposition(record) }, audit_entry_id: auditId };
     },
     async deliver(_ctx, actionItemId, channel, targetRef) {
       return {
@@ -539,11 +575,13 @@ export function createPostgresPortalRevampServices(deps) {
       };
     },
     async updateState(ctx, remediationId, state) {
-      const record = await portalRevamp.updateFindingRemediation(ctx, remediationId, {
-        state: String(state ?? '').trim(),
-      });
+      const next = String(state ?? '').trim();
+      if (!REMEDIATION_STATES.includes(next)) return { error: 'invalid_state', status: 400 };
+      const record = await portalRevamp.updateFindingRemediation(ctx, remediationId, { state: next });
       if (!record) return { error: 'not_found', status: 404 };
-      return { remediation: record };
+      const resolution = remediationDisposition(record);
+      await auditRepo.appendAuditEvent({ tenant_id: ctx.tenantId, actor_user_id: ctx.userId, actor_role: ctx.role, action: 'finding.remediation.updated', resource_type: 'finding_remediation', resource_id: remediationId, metadata: { state: next, disposition: resolution } });
+      return { remediation: { ...record, resolution } };
     },
   };
 

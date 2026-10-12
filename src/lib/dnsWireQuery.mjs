@@ -26,7 +26,7 @@ function normalizedDnsName(value) {
 }
 
 export function dnsQueryNameForJob(job) {
-  const value = normalizedDnsName(job.target?.metadata?.zone ?? job.target?.value);
+  const value = normalizedDnsName(job.target?.value);
   if (!value) return null;
   const checkId = String(job.check_id ?? '');
   const nonce = String(job.nonce ?? '').trim();
@@ -41,39 +41,45 @@ function remainingTimeoutMs(started, timeoutMs) {
   return Math.max(0, timeoutMs - (Date.now() - started));
 }
 
-function withTimeout(promise, timeoutMs) {
+function withTimeout(promise, timeoutMs, signal, cancel = () => {}) {
   if (timeoutMs <= 0) {
     return Promise.reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
   }
   let timer;
+  let onAbort;
   return Promise.race([
     promise,
     new Promise((_, reject) => {
+      onAbort = () => { cancel(); reject(Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' })); };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    }),
+    new Promise((_, reject) => {
       timer = setTimeout(
-        () => reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })),
+        () => { cancel(); reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })); },
         timeoutMs,
       );
     }),
-  ]).finally(() => clearTimeout(timer));
+  ]).finally(() => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); });
 }
 
 async function resolveDnsDestination(job, deps, queryName, started, timeoutMs) {
-  const resolverHost = normalizedDnsName(job.target?.metadata?.resolver_host);
   const targetValue = normalizedDnsName(job.target?.value);
-  const directHost = resolverHost || (net.isIP(targetValue) !== 0 ? targetValue : null);
+  const directHost = net.isIP(targetValue) !== 0 ? targetValue : null;
   if (directHost) {
     return withTimeout(
       resolvePinnedDestination(directHost, deps),
-      remainingTimeoutMs(started, timeoutMs),
+      remainingTimeoutMs(started, timeoutMs), deps.jobDeadlineSignal,
     );
   }
 
-  const zone = normalizedDnsName(job.target?.metadata?.zone ?? targetValue ?? queryName);
+  const zone = targetValue || queryName;
   deps.recordDestinationResolverAttempt?.('ns');
-  const resolveNsFn = deps.resolveNsFn ?? dns.resolveNs;
+  const resolver = deps.resolveNsFn ? null : new dns.Resolver();
+  const resolveNsFn = deps.resolveNsFn ?? resolver.resolveNs.bind(resolver);
   const nameservers = await withTimeout(
     resolveNsFn(zone),
-    remainingTimeoutMs(started, timeoutMs),
+    remainingTimeoutMs(started, timeoutMs), deps.jobDeadlineSignal, () => resolver?.cancel(),
   );
   const nameserver = Array.isArray(nameservers)
     ? nameservers.find((value) => typeof value === 'string' && value.trim())
@@ -90,6 +96,7 @@ async function resolveDnsDestination(job, deps, queryName, started, timeoutMs) {
 
 function sendDnsUdp(createSocket, query, endpoint, timeoutMs, transactionId, deps, operation, onAttempt) {
   return new Promise((resolve, reject) => {
+    if (deps.jobDeadlineSignal?.aborted) { reject(Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' })); return; }
     const socket = startProbeIoAttempt(
       deps,
       operation,
@@ -104,6 +111,7 @@ function sendDnsUdp(createSocket, query, endpoint, timeoutMs, transactionId, dep
       clearTimeout(timer);
       socket.removeListener?.('message', onMessage);
       socket.removeListener?.('error', onError);
+      deps.jobDeadlineSignal?.removeEventListener('abort', onAbort);
       try {
         socket.close();
       } catch {
@@ -124,6 +132,8 @@ function sendDnsUdp(createSocket, query, endpoint, timeoutMs, transactionId, dep
       });
     };
     const onError = (error) => settle(null, error);
+    const onAbort = () => settle(null, Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' }));
+    deps.jobDeadlineSignal?.addEventListener('abort', onAbort, { once: true });
     socket.on('message', onMessage);
     socket.once('error', onError);
     timer = setTimeout(
@@ -146,10 +156,13 @@ function sendDnsTcp(connectFn, query, endpoint, timeoutMs, transactionId, deps, 
     let responseBuffer = Buffer.alloc(0);
     let timer;
     let socket;
+    const onAbort = () => settle(null, Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' }));
+    if (deps.jobDeadlineSignal?.aborted) { reject(Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' })); return; }
     const settle = (value, error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      deps.jobDeadlineSignal?.removeEventListener('abort', onAbort);
       try {
         socket.destroy();
       } catch {
@@ -158,6 +171,7 @@ function sendDnsTcp(connectFn, query, endpoint, timeoutMs, transactionId, deps, 
       if (error) reject(error);
       else resolve(value);
     };
+    deps.jobDeadlineSignal?.addEventListener('abort', onAbort, { once: true });
     socket = startProbeIoAttempt(
       deps,
       operation,
@@ -221,6 +235,7 @@ function dnsOutcome(job, fields, externalResult, requestsSent, started) {
     metadata: {
       probe_kind: 'dns_wire_query',
       ...fields,
+      classifier_version: 'dns-message-identity-v3', observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
       duration_ms: durationMs,
     },
     requests_sent: requestsSent,
@@ -245,9 +260,17 @@ export async function probeDnsWireQuery(job, deps = {}) {
     amplification_ratio: null,
     truncated: false,
     tcp_fallback_used: false,
-    wildcard_response_detected: false,
+    wildcard_response_detected: null,
+    random_prefix_answer_observed: false,
+    protocol_identity_confirmed: false,
     authoritative: false,
   };
+  const targetName = normalizedDnsName(job.target?.value).toLowerCase();
+  const declaredZone = normalizedDnsName(job.target?.metadata?.zone).toLowerCase();
+  const declaredResolver = normalizedDnsName(job.target?.metadata?.resolver_host).toLowerCase();
+  if ((declaredZone && declaredZone !== targetName) || (declaredResolver && declaredResolver !== targetName)) {
+    return dnsOutcome(job, { ...base, error_class: 'dns_scope_not_target_bound', not_run_reason: 'dns_scope_not_target_bound' }, 'not_run', 0, started);
+  }
   if (!queryName || !['udp', 'tcp', 'auto'].includes(requestedTransport) || maxRequests < 1) {
     return dnsOutcome(job, { ...base, error_class: 'unsupported_dns_query' }, 'error', 0, started);
   }
@@ -321,16 +344,22 @@ export async function probeDnsWireQuery(job, deps = {}) {
 
     const rcode = response.parsed?.rcode ?? null;
     const answerCount = response.parsed?.answer_count ?? 0;
-    let strictMetadata = {};
+    const message = response.parsed.dns_message;
+    const structure = parseDnsResponseStructure(message, {
+      expectedQuestion: { name: queryName, qtype: DNS_QTYPE_CODES[qtype], qclass: 1 },
+    });
+    if (!structure.structure_valid || (message[2] & 0x80) === 0 || (message[2] & 0x78) !== 0) {
+      return dnsOutcome(job, { ...base, rcode, response_bytes: response.response_bytes,
+        error_class: structure.reason ?? 'not_dns_response' }, 'not_run', requestsSent, started);
+    }
+    let strictMetadata = { question_matches: true, protocol_identity_confirmed: true,
+      message_complete: !response.parsed.truncated };
     if (job.probe_profile?.strict_dns_answer === true) {
-      const structure = parseDnsResponseStructure(response.parsed.dns_message, {
-        expectedQuestion: { name: queryName, qtype: DNS_QTYPE_CODES[qtype], qclass: 1 },
-      });
-      if (!structure.structure_valid || !response.parsed.authoritative || truncated || rcode !== 0
+      if (!structure.structure_valid || !response.parsed.authoritative || response.parsed.truncated || rcode !== 0
         || (answerCount > 0 && structure.matching_answer_count === 0)) {
         return dnsOutcome(job, { ...base, rcode, error_class: structure.reason ?? 'non_definitive_dns_response' }, 'error', requestsSent, started);
       }
-      strictMetadata = { matching_answer_count: structure.matching_answer_count };
+      strictMetadata = { ...strictMetadata, matching_answer_count: structure.matching_answer_count };
     }
     const randomPrefix = String(job.check_id ?? '').includes('random_prefix');
     const wildcardResponseDetected = randomPrefix && rcode === 0 && answerCount > 0;
@@ -343,7 +372,8 @@ export async function probeDnsWireQuery(job, deps = {}) {
       amplification_ratio: amplificationRatio(response.response_bytes, query.length),
       truncated,
       tcp_fallback_used: tcpFallbackUsed,
-      wildcard_response_detected: wildcardResponseDetected,
+      wildcard_response_detected: null,
+      random_prefix_answer_observed: wildcardResponseDetected,
       authoritative: Boolean(response.parsed?.authoritative),
       ...strictMetadata,
     }, 'connected', requestsSent, started);
@@ -356,9 +386,7 @@ export async function probeDnsWireQuery(job, deps = {}) {
       ? 'error'
       : (code === 'ETIMEOUT'
         ? 'timeout'
-        : (['EDESTINATION', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNREFUSED'].includes(code)
-          ? 'blocked'
-          : 'error'));
+        : 'error');
     return dnsOutcome(job, {
       ...base,
       error_class: code || 'dns_wire_query_failed',

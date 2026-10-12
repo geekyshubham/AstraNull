@@ -191,6 +191,9 @@ export type StatePayload = {
 
 export type DataItem = Record<string, unknown>;
 
+/** An accepted execution, bound to the exact reviewed target/check, never a newest-list match. */
+export type AcceptedExecution = { runId: string; checkId: string; targetId: string; record?: DataItem };
+
 /** `GET /v1/findings` envelope fields kept beside the loaded page (docs/backend/current-release-findings.md). */
 export type FindingsListMeta = {
   total: number | null;

@@ -1,7 +1,7 @@
 import { loadRuntimeConfig } from '../config.mjs';
 import { computeWafCoverageSummaryRow } from '../lib/wafCoverageSummary.mjs';
 import { newId } from '../lib/ids.mjs';
-import { computeCoverageDailyRollup } from './wafCoverageService.mjs';
+import { computeCoverageDailyRollup, validCoverageRollupDate } from './wafCoverageService.mjs';
 import { getStore, persistStore } from '../store.mjs';
 
 function wafFeatureGate() {
@@ -71,6 +71,8 @@ export function buildCoverageRollupRecord(input = {}) {
   const metrics = computeCoverageDailyRollup({
     assets: input.assets ?? [],
     currentSnapshotsByAsset: input.currentSnapshotsByAsset ?? new Map(),
+    historicalSnapshots: input.historicalSnapshots ?? [],
+    now,
     rollupDate,
   });
   return {
@@ -124,6 +126,8 @@ export function runCoverageRollup(ctx) {
   const now = ctx.now ?? new Date();
   const rollupDate = ctx.rollupDate ?? now.toISOString().slice(0, 10);
 
+  if (!validCoverageRollupDate(rollupDate, now)) return { error: 'invalid_or_future_rollup_date', status: 400 };
+
   if (ctx.dryRun) {
     return {
       dry_run: true,
@@ -135,7 +139,7 @@ export function runCoverageRollup(ctx) {
   const assets = store.wafAssets.filter((asset) => asset.tenant_id === tenantId);
   const snapshots = store.wafPostureSnapshots.filter((snap) => snap.tenant_id === tenantId);
   const currentSnapshotsByAsset = indexCurrentSnapshots(snapshots);
-  const metrics = buildCoverageRollupRecord({ assets, currentSnapshotsByAsset, rollupDate, now });
+  const metrics = buildCoverageRollupRecord({ assets, currentSnapshotsByAsset, historicalSnapshots: snapshots, rollupDate, now });
 
   const existingIndex = store.wafCoverageDailyRollups.findIndex(
     (row) => row.tenant_id === tenantId && row.rollup_date === rollupDate,
@@ -168,6 +172,7 @@ export function runCoverageRollup(ctx) {
       excluded: record.excluded,
       coverage_ratio: record.coverage_ratio,
       created_at: record.created_at,
+      cutoff_at: metrics.cutoff_at, cohort_rule: metrics.cohort_rule, semantics_version: metrics.semantics_version, assurance_claim: metrics.assurance_claim,
     },
   };
 }
@@ -198,7 +203,7 @@ export function runScheduledCoverageRollups(ctx = {}) {
       dryRun: ctx.dryRun,
       now: ctx.now,
     });
-    if (outcome.skipped) return outcome;
+    if (outcome.skipped || outcome.error) return outcome;
     results.push(outcome.rollup_result ?? outcome.scope ?? { tenant_id: tenantId });
   }
 

@@ -9,6 +9,7 @@ import {
   classifyPathValidationItem,
   normalizeComparisonEvaluation,
   normalizeEntryPathDeclaration,
+  normalizeEvidenceReference,
   normalizeFirewallExpectation,
   normalizePathValidationExpectation,
 } from '../../src/contracts/protectionValidation.mjs';
@@ -23,6 +24,8 @@ import {
   selectCurrentPathItems,
   verifyProtectionReportConclusion,
 } from '../../src/lib/protectionValidationReport.mjs';
+import { deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
+import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
 import { deriveProtectionFindingCandidates } from '../../src/lib/protectionValidationFindings.mjs';
 
 const TENANT = 'ten_pvr';
@@ -68,9 +71,9 @@ const PATH_EXPECTATIONS = [
 ];
 
 const CATALOG = [
-  { check_id: 'waf.marker.sqli', probe_profile: { kind: 'waf_class_marker_probe' } },
-  { check_id: 'origin.host_sni_bypass.safe', probe_profile: { kind: 'host_sni_bypass' } },
-  { check_id: 'net.tcp.reachability', probe_profile: { kind: 'tcp_connect' } },
+  { check_id: 'waf.marker.sqli', version: '1.1.0', scenario_version: 's1', probe_profile: { kind: 'waf_class_marker_probe', scenario_family: SCENARIO } },
+  { check_id: 'origin.host_sni_bypass.safe', version: '1.1.0', scenario_version: 's1', probe_profile: { kind: 'host_sni_bypass' } },
+  { check_id: 'net.tcp.reachability', version: '1.1.0', scenario_version: 's1', probe_profile: { kind: 'tcp_connect' } },
 ];
 
 function ref(run, targetId, observedAt, checkId = 'waf.marker.sqli') {
@@ -81,12 +84,24 @@ function ref(run, targetId, observedAt, checkId = 'waf.marker.sqli') {
   };
 }
 
+const PERFORMED = new Map();
 function pathItem(rel, args, refs) {
+  for (const reference of refs) PERFORMED.set(reference.test_run_id, { rel, ...args });
   return { entry_path_id: rel.id, scenario: SCENARIO, ...classifyPathValidationItem({ relation: rel, primaryBaselineHealth: 'healthy', primaryEnforcement: 'enforced', ...args }), evidence_refs: refs };
 }
 
 function evaluation(kind, id, at, items, extra = {}, tenantId = TENANT) {
-  return { ...normalizeComparisonEvaluation({ kind, tenant_id: tenantId, evaluated_at: at, items, ...extra }), id };
+  const captured = { ...normalizeComparisonEvaluation({ kind, tenant_id: tenantId, evaluated_at: at, items, ...extra }), id };
+  const performed = items.flatMap((item) => item.evidence_refs ?? []).map((reference) => PERFORMED.get(reference.test_run_id)).find(Boolean);
+  const expectation = PATH_EXPECTATIONS.find((row) => row.anchor_target_id === performed?.rel.anchor_target_id);
+  if (kind === 'path_validation' && expectation) {
+    const reference = normalizeEvidenceReference(ref(`primary_${id}`, expectation.anchor_target_id, at));
+    captured.primary_evidence_set = { tenant_id: tenantId, anchor_target_id: expectation.anchor_target_id,
+      target_id: expectation.anchor_target_id, expectation_id: expectation.id, expectation_digest: expectation.digest,
+      expectation_version: expectation.expectation_version, references: [reference] };
+    PERFORMED.set(reference.test_run_id, { enforcement: 'enforced', observation: 'response_observed' });
+  }
+  return captured;
 }
 
 const OLD_APP_EVAL = evaluation('path_validation', 'pvc_old', T0, [
@@ -141,6 +156,28 @@ const DETECTIONS = [
   { tenant_id: OTHER, target_id: 'tgt_alt', layer: 'waf', provider: 'provider_z', state: 'detected' },
 ];
 
+function proofInputs(evaluations = [...PATH_EVALS, FW_EVAL], targets = TARGETS) {
+  const runs = [], events = [];
+  for (const evaluation of evaluations) for (const reference of [...evaluation.items.flatMap((item) => item.evidence_refs), ...(evaluation.primary_evidence_set?.references ?? [])]) {
+    const check = CATALOG.find((row) => row.check_id === reference.check_id);
+    const scopedTarget = targets.find((row) => row.id === reference.target_id);
+    if (!check || !scopedTarget) continue;
+    runs.push({ id: reference.test_run_id, correlation: { nonce_hash: `nonce_${reference.test_run_id}` }, tenant_id: evaluation.tenant_id, target_id: scopedTarget.id,
+      check_id: reference.check_id, ...deriveRunEvidenceStamp(check, undefined, { probeMode: 'signed-worker', scenarioVersion: 's1' }),
+      status: reference.run_status, created_at: reference.observed_at, completed_at: reference.observed_at,
+      safety_constraints: { assurance_scope: deriveAssuranceScope({ target: scopedTarget }) } });
+    const performed = PERFORMED.get(reference.test_run_id) ?? {};
+    for (const id of reference.evidence_ids) events.push({ id, nonce_hash: `nonce_${reference.test_run_id}`, tenant_id: evaluation.tenant_id, test_run_id: reference.test_run_id,
+      signal_type: 'probe_result', producer_kind: 'signed_probe', timestamp: reference.observed_at, ingested_at: reference.observed_at,
+      metadata: { source_perspective: reference.source_perspective, complete: true, classifier_version: 'marker-comparison-v4', comparison_complete: true,
+        planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy',
+        permitted_baseline: { status_code: 200 }, status_code: 200,
+        marker_results: [{ blocked: performed.enforcement === 'enforced', allowed: performed.enforcement !== 'enforced' }],
+        application_identity: { confirmed: performed.observation === 'application_identity_confirmed', method: 'nonce_canary' } } });
+  }
+  return { runs, events, evidenceItems: [], input_complete: true };
+}
+
 function build(overrides = {}) {
   return buildProtectionValidationReport({
     tenantId: TENANT,
@@ -153,6 +190,7 @@ function build(overrides = {}) {
     firewallEvaluations: [FW_EVAL],
     detections: DETECTIONS,
     checkCatalog: CATALOG,
+    evidenceInputs: proofInputs([...(overrides.pathEvaluations ?? PATH_EVALS), ...(overrides.firewallEvaluations ?? [FW_EVAL])], overrides.proofTargets ?? TARGETS),
     ...overrides,
   });
 }
@@ -181,11 +219,13 @@ describe('protection validation report predicates', () => {
   });
 
   it('projects matrix rows with detection separate from unattributed path enforcement', () => {
-    const { rows } = projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: ENTRY_PATHS.filter((row) => row.status === 'active' && row.tenant_id === TENANT), pathEvaluations: PATH_EVALS, pathExpectations: PATH_EXPECTATIONS, detections: DETECTIONS, checkCatalog: CATALOG, now: NOW });
+    const { rows } = projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: ENTRY_PATHS.filter((row) => row.status === 'active' && row.tenant_id === TENANT), pathEvaluations: PATH_EVALS, pathExpectations: PATH_EXPECTATIONS, detections: DETECTIONS, targets: TARGETS, evidenceInputs: proofInputs(), checkCatalog: CATALOG, now: NOW });
     const row = (id) => rows.find((entry) => entry.entry_path_id === id);
     const layer = (id, name) => row(id).layers.find((entry) => entry.layer === name);
     assert.equal(row('ep_alt').outcome, 'scoped_application_bypass');
-    assert.equal(layer('ep_alt', 'waf').observed_enforcement, 'not_enforced');
+    assert.equal(layer('ep_alt', 'waf').observed_enforcement, 'not_tested'
+    );
+    assert.equal(row('ep_alt').path_observed_enforcement, 'not_enforced');
     assert.equal(layer('ep_alt', 'waf').attribution, 'unattributed');
     assert.equal(layer('ep_alt', 'waf').confirmed_scoped_bypass, 'confirmed');
     assert.ok(layer('ep_alt', 'waf').evidence_limitations.includes('stacked_layer_attribution_not_established'));
@@ -195,7 +235,7 @@ describe('protection validation report predicates', () => {
     assert.equal(layer('ep_shop_alt', 'waf').observed_enforcement, 'not_tested');
     assert.ok(layer('ep_shop_alt', 'ddos').evidence_limitations.includes('not_capacity_assurance'));
     assert.equal(layer('ep_origin', 'waf').vendor_detection, 'not_detected');
-    assert.equal(layer('ep_origin', 'waf').observed_enforcement, 'inconclusive');
+    assert.equal(layer('ep_origin', 'waf').observed_enforcement, 'not_tested');
     assert.equal(row('ep_login').outcome, 'inconclusive');
     assert.equal(row('ep_alt').latest_comparison_id, 'pvc_app');
     for (const entry of rows) {
@@ -209,19 +249,26 @@ describe('protection validation report predicates', () => {
 describe('per-layer enforcement is only projected onto layers the scenario measures', () => {
   const stacked = relation('ep_stacked', 'tgt_app', { entry_target_id: 'tgt_alt', relation_kind: 'alternate_hostname', expected_behavior: 'must_be_protected_by_layers', required_layers: ['waf', 'network_firewall', 'ddos'] });
   const hidden = relation('ep_hidden_layers', 'tgt_app', { entry_target_id: 'tgt_hidden', relation_kind: 'alternate_hostname', expected_behavior: 'must_not_be_reachable', required_layers: ['waf', 'network_firewall', 'ddos'] });
-  const project = (rel, args, checkId) => projectProtectionMatrixRows({
-    tenantId: TENANT,
-    entryPaths: [rel],
-    pathEvaluations: [evaluation('path_validation', `pvc_${rel.id}`, T1, [pathItem(rel, args, [ref(`run_${rel.id}`, rel.entry_target_id, T1, checkId)])])],
-    checkCatalog: CATALOG,
-    now: NOW,
-  }).rows[0];
+  const project = (rel, args, checkId) => {
+    const expected = { ...normalizePathValidationExpectation({ scenario: SCENARIO,
+      layer_outcomes: Object.fromEntries(rel.required_layers.map((name) => [name, 'enforce'])) },
+      { tenantId: TENANT, anchorTargetId: rel.anchor_target_id }), id: 'pvx_layers' };
+    const captured = evaluation('path_validation', `pvc_${rel.id}`, T1,
+      [pathItem(rel, args, [ref(`run_${rel.id}`, rel.entry_target_id, T1, checkId)])]);
+    Object.assign(captured.primary_evidence_set, { expectation_id: expected.id, expectation_digest: expected.digest,
+      expectation_version: expected.expectation_version });
+    return projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: [rel], pathEvaluations: [captured],
+      checkCatalog: CATALOG, pathExpectations: [expected], targets: TARGETS,
+      evidenceInputs: proofInputs([captured]), now: NOW }).rows[0];
+  };
   const layer = (row, name) => row.layers.find((entry) => entry.layer === name);
 
   it('never turns a WAF marker result into firewall or DDoS enforcement', () => {
     const row = project(stacked, { observation: 'explicit_denial_observed', enforcement: 'enforced' }, 'waf.marker.sqli');
     assert.equal(row.outcome, 'consistent_enforcement');
-    assert.equal(layer(row, 'waf').observed_enforcement, 'enforced');
+    assert.equal(layer(row, 'waf').observed_enforcement, 'not_tested'
+    );
+    assert.equal(row.path_observed_enforcement, 'enforced');
     for (const name of ['network_firewall', 'ddos']) {
       assert.equal(layer(row, name).observed_enforcement, 'not_tested', name);
       assert.ok(layer(row, name).evidence_limitations.includes('layer_not_measured_by_scenario'), name);
@@ -266,16 +313,16 @@ describe('buildProtectionValidationReport', () => {
     assert.equal(report.units.applications.gap, 1);
     assert.equal(report.units.applications.incomplete, 1);
     assert.equal(report.units.hosts.denominator, 8);
-    assert.equal(report.units.hosts.gap, 2);
+    assert.equal(report.units.hosts.gap, 1);
     assert.equal(report.units.entry_paths.denominator, 9);
     assert.equal(report.units.entry_paths.by_outcome.scoped_application_bypass, 1);
     assert.equal(report.units.entry_paths.by_outcome.not_tested, 1);
-    assert.equal(report.units.entry_paths.by_status.validated, 4);
-    assert.equal(report.units.entry_paths.by_status.observation_only, 1);
+    assert.equal(report.units.entry_paths.by_status.validated, 1);
+    assert.equal(report.units.entry_paths.by_status.observation_only, 2);
     assert.equal(report.units.target_check_pairs.denominator, 8);
-    assert.equal(report.units.target_check_pairs.observation_only, 2);
-    assert.equal(report.units.target_check_pairs.readiness_eligible, 6);
-    assert.equal(report.readiness.conclusions_excluded, 4);
+    assert.equal(report.units.target_check_pairs.observation_only, 4);
+    assert.equal(report.units.target_check_pairs.readiness_eligible, 4);
+    assert.equal(report.readiness.conclusions_excluded, 7);
   });
 
   it('does not double-count hosts detected by several providers and never treats detection as enforcement', () => {
@@ -292,8 +339,8 @@ describe('buildProtectionValidationReport', () => {
     const enforcement = report.enforcement.layers.waf;
     assert.equal(enforcement.attribution, 'unattributed');
     assert.equal(enforcement.denominator, 7);
-    assert.equal(enforcement.not_tested, 2);
-    assert.equal(enforcement.not_enforced, 1);
+    assert.equal(enforcement.not_tested, 7);
+    assert.equal(enforcement.not_enforced, 0);
     assert.equal(report.enforcement.layers.ddos.denominator, 1);
     assert.equal(report.enforcement.layers.ddos.enforced, 0);
   });
@@ -325,7 +372,7 @@ describe('buildProtectionValidationReport', () => {
   it('does not validate an application when a required control layer has not been measured', () => {
     const primary = relation('ep_primary', 'tgt_app', { entry_target_id: 'tgt_app', relation_kind: 'primary_route', expected_behavior: 'must_be_protected_by_layers', required_layers: ['waf', 'ddos'] });
     const result = build({ entryPaths: [primary], pathEvaluations: [APP_EVAL], firewallExpectations: [], firewallEvaluations: [] });
-    assert.equal(result.enforcement.layers.waf.enforced, 1);
+    assert.equal(result.enforcement.layers.waf.enforced, 0);
     assert.equal(result.enforcement.layers.ddos.enforced, 0);
     assert.equal(result.units.entry_paths.by_status.validated, 0);
     assert.equal(result.units.applications.validated, 0);
@@ -342,8 +389,9 @@ describe('buildProtectionValidationReport', () => {
   it('uses the expectation captured by an evaluation rather than newer layer declarations', () => {
     const old = { ...normalizePathValidationExpectation({ anchor_target_id: 'tgt_app', scenario: SCENARIO, layer_outcomes: { waf: 'enforce' } }, { tenantId: TENANT }), id: 'pvx_old' };
     const latest = { ...normalizePathValidationExpectation({ anchor_target_id: 'tgt_app', scenario: SCENARIO, layer_outcomes: { waf: 'enforce', cdn_edge: 'enforce' } }, { tenantId: TENANT, expectationVersion: 2 }), id: 'pvx_new' };
-    const projected = projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: [PATHS.primary], pathEvaluations: [{ ...APP_EVAL, expectation_id: old.id }], pathExpectations: [old, latest], checkCatalog: CATALOG, now: NOW });
-    assert.equal(projected.rows[0].layers.find((layer) => layer.layer === 'waf').observed_enforcement, 'enforced');
+    const projected = projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: [PATHS.primary], pathEvaluations: [{ ...APP_EVAL, expectation_id: old.id }], pathExpectations: [old, latest], targets: TARGETS, evidenceInputs: proofInputs(), checkCatalog: CATALOG, now: NOW });
+    assert.equal(projected.rows[0].layers.find((layer) => layer.layer === 'waf').observed_enforcement, 'not_tested');
+    assert.equal(projected.rows[0].layers.find((layer) => layer.layer === 'waf').path_observed_enforcement, 'enforced');
     assert.equal(projected.rows[0].layers.find((layer) => layer.layer === 'cdn_edge').observed_enforcement, 'not_tested');
   });
 
@@ -358,14 +406,14 @@ describe('buildProtectionValidationReport', () => {
       entry_path_archived: 1,
       evaluation_digest_mismatch: 1,
       expectation_archived: 1,
-      observation_only_check: 2,
+      observation_only_check: 4,
       target_not_active: 1,
     });
     assert.ok(report.exclusions.other_tenant_or_invalid_rows >= 2);
     assert.equal(report.exclusions.evaluation_items_for_inactive_paths, 1);
     assert.equal(report.incomplete_scope.complete, false);
     assert.deepEqual(report.incomplete_scope.not_tested_paths, { ids: ['ep_shop_alt'], total: 1, truncated: false });
-    assert.deepEqual(report.incomplete_scope.inconclusive_paths.ids, ['ep_login']);
+    assert.deepEqual(report.incomplete_scope.inconclusive_paths.ids, ['ep_login', 'ep_origin', 'ep_primary', 'ep_shop_alt_shared']);
     assert.deepEqual(report.incomplete_scope.untested_firewall_expectations.ids, ['fwx_untested']);
     assert.ok(report.incomplete_scope.reasons.includes('observation_only_evidence'));
     assert.ok(report.incomplete_scope.reasons.includes('firewall_expectations_unresolved'));
@@ -384,12 +432,12 @@ describe('buildProtectionValidationReport', () => {
     assert.match(report.unknowns.statement, /never count as validated and do not create findings/);
     assert.ok(report.statements.includes(report.unknowns.statement));
     assert.equal(report.units.entry_paths.denominator, 9);
-    assert.equal(report.units.entry_paths.by_status.unknown, 1);
+    assert.equal(report.units.entry_paths.by_status.unknown, 4);
     assert.equal(report.units.entry_paths.by_status.not_tested, 1);
     assert.equal(report.units.firewall_expectations.denominator, 4);
-    assert.equal(report.units.firewall_expectations.by_status.not_comparable, 1);
+    assert.equal(report.units.firewall_expectations.by_status.not_comparable, 3);
     assert.equal(report.units.firewall_expectations.by_status.not_tested, 1);
-    assert.equal(report.units.entry_paths.by_status.validated + report.units.firewall_expectations.by_status.accepted, 5);
+    assert.equal(report.units.entry_paths.by_status.validated + report.units.firewall_expectations.by_status.accepted, 1);
     const pathFindings = deriveProtectionFindingCandidates({ evaluation: APP_EVAL, entryPaths: ENTRY_PATHS, expectations: PATH_EXPECTATIONS }).candidates;
     const fwFindings = deriveProtectionFindingCandidates({ evaluation: FW_EVAL, expectations: FW }).candidates;
     assert.equal(pathFindings.some((candidate) => candidate.observed_route.entry_path_id === 'ep_login'), false);
@@ -410,13 +458,14 @@ describe('buildProtectionValidationReport', () => {
     assert.equal(shop.units.applications.validated, 0);
     assert.equal(shop.unknowns.by_reason.evidence_not_finalized, 1);
     const row = projectProtectionMatrixRows({ tenantId: TENANT, entryPaths: [PATHS.shopPrimary], pathEvaluations: [unfinalized], pathExpectations: PATH_EXPECTATIONS, checkCatalog: CATALOG, now: NOW }).rows[0];
-    assert.equal(row.layers.find((entry) => entry.layer === 'waf').observed_enforcement, 'inconclusive');
+    assert.equal(row.layers.find((entry) => entry.layer === 'waf').observed_enforcement, 'not_tested');
     assert.deepEqual(deriveProtectionFindingCandidates({ evaluation: unfinalized, entryPaths: ENTRY_PATHS }).passing, []);
   });
 
   it('reports firewall expectations without inflating acceptance or readiness', () => {
-    assert.deepEqual(report.units.firewall_expectations.by_status, { accepted: 1, gap: 1, inconclusive: 0, not_tested: 1, stale: 0, not_comparable: 1 });
-    assert.equal(report.units.firewall_expectations.gaps.forbidden_service_newly_reachable, 1);
+    assert.deepEqual(report.units.firewall_expectations.by_status, { accepted: 0, gap: 0, inconclusive: 0, not_tested: 1, stale: 0, not_comparable: 3 });
+    assert.equal(report.units.firewall_expectations.gaps.forbidden_service_newly_reachable, 0);
+    assert.ok(report.conclusions.filter((row) => row.subject.expectation_id).every((row) => row.current_assurance.reasons.includes('actual_firewall_comparison_unverified')));
     assert.equal(report.readiness.inflates_readiness, false);
     const gap = report.conclusions.find((conclusion) => conclusion.subject.expectation_id === 'fwx_gap');
     assert.equal(gap.readiness_eligible, false);
@@ -429,9 +478,9 @@ describe('buildProtectionValidationReport', () => {
   it('marks passing evidence stale outside the freshness window instead of validated', () => {
     const later = build({ generatedAt: '2026-12-31T00:00:00.000Z' });
     assert.equal(later.units.entry_paths.by_status.validated, 0);
-    assert.equal(later.units.entry_paths.by_status.stale, 5);
+    assert.equal(later.units.entry_paths.by_status.stale, 7);
     assert.equal(later.units.entry_paths.by_status.observation_only, 0);
-    assert.equal(later.units.firewall_expectations.by_status.stale, 1);
+    assert.equal(later.units.firewall_expectations.by_status.stale, 2);
     assert.ok(later.incomplete_scope.reasons.includes('stale_evidence'));
   });
 
@@ -486,5 +535,189 @@ describe('firewall report selection (D11c)', () => {
     assert.equal(selected.get(FW[1].id).evaluation.id, 'fwc_2');
     const reversed = selectCurrentFirewallItems([later, FW_EVAL], { tenantId: TENANT }).selected;
     assert.equal(reversed.get(FW[0].id).evaluation.id, 'fwc_1');
+  });
+});
+
+
+describe('current report assurance resolves immutable actual evidence', () => {
+  function scenarioWorld({ observed = T1, secondObserved = observed, outcome = 'consistent_enforcement' } = {}) {
+    const args = outcome === 'scoped_application_bypass'
+      ? { observation: 'application_identity_confirmed', enforcement: 'not_enforced' }
+      : { observation: 'explicit_denial_observed', enforcement: 'enforced' };
+    const comparison = evaluation('path_validation', 'pvc_exact', T2, [
+      pathItem(PATHS.alt, args, [ref('run_exact_a', 'tgt_alt', observed), ref('run_exact_b', 'tgt_alt', secondObserved)]),
+    ]);
+    const evidenceInputs = proofInputs([comparison]);
+    const project = (overrides = {}) => {
+      const options = { tenantId: TENANT, targets: TARGETS, entryPaths: [PATHS.alt], pathEvaluations: [comparison],
+        pathExpectations: PATH_EXPECTATIONS, checkCatalog: CATALOG, evidenceInputs, now: overrides.generatedAt ?? NOW, ...overrides };
+      return { ...build({ entryPaths: [PATHS.alt], pathEvaluations: [comparison], firewallExpectations: [], firewallEvaluations: [], evidenceInputs, ...overrides }),
+        matrix: projectProtectionMatrixRows(options) };
+    };
+    return { comparison, evidenceInputs, project };
+  }
+
+  it('shows actual fresh path behavior but never attributes it to two independent controls', () => {
+    const world = scenarioWorld();
+    const result = world.project();
+    const row = result.matrix.rows[0];
+    assert.equal(row.current_assurance.status, 'tested_path_scenario_only');
+    assert.equal(row.path_observed_enforcement, 'enforced');
+    for (const layer of ['waf', 'cdn_edge']) {
+      assert.equal(row.layers.find((entry) => entry.layer === layer).observed_enforcement, 'not_tested');
+      assert.equal(result.enforcement.layers[layer].enforced, 0);
+    }
+    assert.equal(result.units.applications.validated, 0);
+    assert.equal(result.conclusions[0].result_role, 'retained_immutable_comparison');
+  });
+
+  it('withdraws recorded group/policy credit after material edits or unresolved current scope, retaining custody', () => {
+    const world = scenarioWorld();
+    const group = { id: 'grp_report', tenant_id: TENANT, created_at: T0, safety_policy: { max_rps: 5 } };
+    const policy = { id: 'pol_report', tenant_id: TENANT, created_at: T0, enabled: true, schedule_revision: 1 };
+    world.evidenceInputs.groups = [group];
+    world.evidenceInputs.policies = [policy];
+    for (const run of world.evidenceInputs.runs) run.safety_constraints.assurance_scope = deriveAssuranceScope({
+      target: TARGETS.find((row) => row.id === run.target_id), targetGroup: group, policy });
+    assert.equal(world.project().matrix.rows[0].current_assurance.status, 'tested_path_scenario_only');
+    const custody = JSON.stringify(world);
+    for (const [field, reason, mutate] of [
+      ['groups', 'target_group_definition_changed', (rows) => [{ ...rows[0], safety_policy: { max_rps: 10 } }]],
+      ['groups', 'target_group_unavailable', () => []],
+      ['groups', 'target_group_unavailable', (rows) => [{ ...rows[0], tenant_id: OTHER }]],
+      ['groups', 'target_group_unavailable', (rows) => [{ ...rows[0], archived_at: T2 }]],
+      ['policies', 'policy_definition_changed', (rows) => [{ ...rows[0], schedule_revision: 2 }]],
+      ['policies', 'policy_unavailable', () => []],
+      ['policies', 'policy_unavailable', (rows) => [{ ...rows[0], created_at: '2026-10-05T00:00:00.000Z' }]],
+    ]) {
+      const input = { ...world.evidenceInputs, [field]: mutate(world.evidenceInputs[field]) };
+      const result = world.project({ evidenceInputs: input });
+      assert.equal(result.matrix.rows[0].current_assurance.status, 'not_established', reason);
+      assert.ok(result.matrix.rows[0].current_assurance.reasons.includes(reason), reason);
+      assert.equal(result.conclusions[0].evaluation_digest, world.comparison.evaluation_digest);
+      assert.equal(result.conclusions[0].result, 'consistent_enforcement');
+    }
+    assert.equal(JSON.stringify(world), custody);
+  });
+
+  it('requires the performed outcome, actual blocked primary, and exact scenario rather than complete unrelated metadata', () => {
+    for (const [reason, mutate] of [
+      ['actual_outcome_mismatch', (world) => { world.evidenceInputs.events[0].metadata.marker_results = [{ blocked: false, allowed: true }]; }],
+      ['actual_outcome_mismatch', (world) => { delete world.evidenceInputs.events[0].metadata.marker_results; }],
+      ['actual_primary_comparison_unverified', (world) => { world.evidenceInputs.events.at(-1).metadata.marker_results = [{ blocked: false, allowed: true }]; }],
+      ['actual_primary_comparison_missing', (world) => { delete world.comparison.primary_evidence_set; }],
+      ['actual_primary_comparison_missing', (world) => { world.comparison.primary_evidence_set.expectation_digest = 'f'.repeat(64); }],
+    ]) {
+      const world = scenarioWorld();
+      const digest = world.comparison.evaluation_digest;
+      mutate(world);
+      const custody = JSON.stringify(world);
+      const result = world.project();
+      assert.equal(result.matrix.rows[0].current_assurance.status, 'not_established', reason);
+      assert.ok(result.matrix.rows[0].current_assurance.reasons.includes(reason), reason);
+      assert.equal(result.conclusions[0].evaluation_digest, digest);
+      assert.equal(result.conclusions[0].result, 'consistent_enforcement');
+      assert.equal(JSON.stringify(world), custody);
+    }
+    const world = scenarioWorld();
+    const changed = CATALOG.map((check) => ({ ...check, probe_profile: { ...check.probe_profile, scenario_family: 'unrelated.scenario' } }));
+    assert.ok(world.project({ checkCatalog: changed }).matrix.rows[0].current_assurance.reasons.includes('actual_scenario_binding_mismatch'));
+    const bypass = scenarioWorld({ outcome: 'scoped_application_bypass' });
+    assert.equal(bypass.project().matrix.rows[0].current_assurance.status, 'tested_path_scenario_only');
+    delete bypass.evidenceInputs.events[0].metadata.application_identity;
+    assert.ok(bypass.project().matrix.rows[0].current_assurance.reasons.includes('actual_outcome_mismatch'));
+  });
+
+  it('expires on the oldest required observation rather than its newer partner or refreshed vault', () => {
+    const world = scenarioWorld({ observed: '2026-09-01T00:00:00.000Z', secondObserved: T2 });
+    const result = world.project();
+    assert.equal(result.matrix.rows[0].freshness.state, 'stale');
+    assert.equal(result.matrix.rows[0].freshness.observed_at, '2026-09-01T00:00:00.000Z');
+    assert.equal(result.matrix.rows[0].current_assurance.status, 'not_established');
+    assert.equal(result.conclusions[0].result, 'consistent_enforcement');
+  });
+
+  it('does not convert retained bypass identity or gaps into a current claim after expiry', () => {
+    const world = scenarioWorld({ outcome: 'scoped_application_bypass' });
+    const result = world.project({ generatedAt: '2026-11-02T00:00:00.000Z' });
+    assert.equal(result.conclusions[0].result, 'scoped_application_bypass');
+    assert.equal(result.units.entry_paths.by_status.gap, 0);
+    assert.equal(result.units.entry_paths.by_status.stale, 1);
+    const layer = result.matrix.rows[0].layers.find((entry) => entry.layer === 'waf');
+    assert.equal(layer.retained_path_observed_enforcement, 'not_enforced');
+    assert.equal(layer.path_observed_enforcement, 'inconclusive');
+    assert.equal(layer.confirmed_scoped_bypass, 'unknown');
+    assert.equal(layer.application_identity, 'not_established');
+  });
+
+  it('rejects every missing, unsigned, cross-tenant, late, incomplete or baseline-invalid required leg', () => {
+    const mutations = {
+      absent: (input) => input.events.pop(),
+      wrong_nonce: (input) => { input.events[1].nonce_hash = 'another_run_nonce'; },
+      missing_run_nonce: (input) => { delete input.runs[1].correlation; },
+      missing_source: (input) => { delete input.events[1].metadata.source_perspective; },
+      wrong_source: (input) => { input.events[1].metadata.source_perspective = 'other-worker'; },
+      missing_ingestion: (input) => { delete input.events[1].ingested_at; },
+      unsigned: (input) => { input.events[1].producer_kind = 'manual'; },
+      wrong_run: (input) => { input.events[1].test_run_id = 'other_run'; },
+      wrong_tenant: (input) => { input.events[1].tenant_id = OTHER; },
+      late_ingestion: (input) => { input.events[1].ingested_at = '2026-10-05T00:00:00.000Z'; },
+      observation_time: (input) => { input.events[1].timestamp = T2; },
+      incomplete: (input) => { input.events[1].metadata.comparison_complete = false; },
+      unhealthy_baseline: (input) => { input.events[1].metadata.permitted_baseline_health = 'unhealthy'; },
+      missing_leg: (input) => { input.events[1].metadata.completed_marker_legs = 1; },
+      missing_scope: (input) => { delete input.runs[1].safety_constraints; },
+      bounded_inputs: (input) => { input.input_complete = false; },
+    };
+    for (const [name, mutate] of Object.entries(mutations)) {
+      const world = scenarioWorld();
+      mutate(world.evidenceInputs);
+      const result = world.project();
+      assert.equal(result.matrix.rows[0].current_assurance.status, 'not_established', name);
+      assert.equal(result.conclusions[0].readiness_eligible, false, name);
+      assert.equal(result.conclusions[0].evaluation_digest, world.comparison.evaluation_digest, name);
+    }
+    const world = scenarioWorld();
+    assert.ok(world.project({ evidenceInputs: null }).matrix.rows[0].current_assurance.reasons.includes('complete_evidence_inputs_unavailable'));
+  });
+
+  it('rejects a future required leg and mixed unfinalized refs without rewriting the captured outcome', () => {
+    const future = scenarioWorld({ secondObserved: '2026-10-05T00:00:00.000Z' });
+    assert.equal(future.project().matrix.rows[0].freshness.state, 'future_evidence');
+    const world = scenarioWorld();
+    const item = world.comparison.items[0];
+    const mixed = evaluation('path_validation', 'pvc_mixed', T2, [{ ...item, evidence_refs: item.evidence_refs.map((row, index) => index ? { ...row, run_status: 'running' } : row) }]);
+    const result = world.project({ pathEvaluations: [mixed] });
+    assert.ok(result.matrix.rows[0].current_assurance.reasons.includes('required_finalized_evidence_missing'));
+    assert.equal(result.units.entry_paths.by_status.validated, 0);
+  });
+
+  it('invalidates material target, path, expectation and check changes while retaining custody', () => {
+    const world = scenarioWorld();
+    const before = JSON.stringify(world);
+    const changes = [
+      { targets: TARGETS.map((row) => row.id === 'tgt_alt' ? { ...row, value: 'new.example.test' } : row) },
+      { targets: TARGETS.map((row) => row.id === 'tgt_alt' ? { ...row, port: 8443 } : row) },
+      { targets: TARGETS.map((row) => row.id === 'tgt_alt' ? { ...row, protocol: 'http' } : row) },
+      { entryPaths: [{ ...PATHS.alt, material_updated_at: T2 }] },
+      { pathExpectations: PATH_EXPECTATIONS.map((row) => row.anchor_target_id === 'tgt_app' ? { ...row, material_updated_at: T2 } : row) },
+      { checkCatalog: CATALOG.map((row) => row.check_id === 'waf.marker.sqli' ? { ...row, version: '1.2.0' } : row) },
+    ];
+    for (const change of changes) {
+      const result = world.project(change);
+      assert.equal(result.matrix.rows[0].current_assurance.status, 'not_established');
+      assert.equal(result.conclusions[0].evaluation_digest, world.comparison.evaluation_digest);
+      assert.deepEqual(verifyProtectionReportConclusion(result.conclusions[0], [world.comparison]), { ok: true, reason: null });
+    }
+    assert.equal(JSON.stringify(world), before);
+  });
+
+  it('does not call an application validated when its only current sampled route is not a primary', () => {
+    const route = relation('ep_public_only', 'tgt_app', { entry_target_id: 'tgt_alt', relation_kind: 'alternate_hostname', expected_behavior: 'intentionally_public' });
+    const comparison = evaluation('path_validation', 'pvc_public', T1, [pathItem(route, { observation: 'response_observed' }, [ref('run_public', 'tgt_alt', T1)])]);
+    const result = build({ entryPaths: [route], pathEvaluations: [comparison], firewallExpectations: [], firewallEvaluations: [], evidenceInputs: proofInputs([comparison]) });
+    assert.equal(result.units.entry_paths.by_status.validated, 1);
+    assert.equal(result.units.applications.validated, 0);
+    assert.ok(result.incomplete_scope.reasons.includes('applications_without_primary_route'));
   });
 });

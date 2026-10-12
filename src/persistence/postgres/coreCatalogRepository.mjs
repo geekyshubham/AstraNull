@@ -1640,10 +1640,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
           const summaryRows = await client.query(
             `SELECT (
                SELECT tv.state
-               FROM target_verifications tv
+               FROM target_verification_current tv
                WHERE tv.tenant_id = t.tenant_id AND tv.target_id = t.id
-               ORDER BY tv.transitioned_at DESC, tv.id DESC
-               LIMIT 1
              ) AS state
              FROM targets t
              WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.deleted_at IS NULL`,

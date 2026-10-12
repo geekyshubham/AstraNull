@@ -1,7 +1,6 @@
-import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { createServer as createViteServer } from 'vite';
+import { buildPortalActionInventory, assertSourcePortalAction } from '../../helpers/portal-action-coverage.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { ACTIVE_STEP_STATUSES, MAX_SCAN_CHECKS } from '../../../src/contracts/validationScanManagement.mjs';
 import {
@@ -44,7 +43,7 @@ const CHECK_PICKER_SEARCH = 'Search by name, check id, section, or probe kind';
 const DNS_SECTION = 'DNS Service Exhaustion';
 
 let sourceBaseUrl = '';
-let vite;
+const actionInventory = buildPortalActionInventory();
 
 function pad(value) {
   return String(value).padStart(2, '0');
@@ -94,25 +93,11 @@ function scanIdFromHash(url) {
 
 test.describe('validation scans (FT-SCAN-01)', () => {
   test.beforeAll(async () => {
-    const { baseUrl: apiBaseUrl } = await startPortalPlaywrightServer();
-    vite = await createViteServer({
-      configFile: path.resolve('vite.config.ts'),
-      logLevel: 'silent',
-      server: {
-        host: '127.0.0.1',
-        port: 0,
-        strictPort: false,
-        proxy: { '/v1': apiBaseUrl, '/ready': apiBaseUrl, '/internal': apiBaseUrl },
-      },
-    });
-    await vite.listen();
-    const address = vite.httpServer?.address();
-    if (!address || typeof address === 'string') throw new Error('Vite source server did not bind.');
-    sourceBaseUrl = `http://127.0.0.1:${address.port}`;
+    const { webBaseUrl } = await startPortalPlaywrightServer({ liveSource: true });
+    sourceBaseUrl = webBaseUrl;
   });
 
   test.afterAll(async () => {
-    await vite?.close();
     await stopPortalPlaywrightServer();
   });
 
@@ -349,6 +334,149 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await expect(page.locator('.scan-detail-view')).toContainText('Cancelled', { timeout: 15_000 });
     expect(findStoredScanForTest(created.id)?.status).toBe('cancelled');
     expect(findStoredScanForTest(nextOccurrenceId)?.status).toBe('cancelled');
+  });
+
+  test('invalid keyboard review, individual/section/clear selection, review cancel, delayed failure, duplicate prevention, exact retry and reload', async ({ page }, testInfo) => {
+    await injectPortalDevHeadersSession(page);
+    const writes = [];
+    let releaseFailure;
+    const heldFailure = new Promise((resolve) => { releaseFailure = resolve; });
+    await page.route('**/v1/validation-scans', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      writes.push(route.request().postDataJSON());
+      if (writes.length === 1) {
+        await heldFailure;
+        return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporarily_unavailable', message: 'Synthetic scan admission outage' }) });
+      }
+      return route.continue();
+    });
+    await gotoPortalRoute(page, 'runs', sourceBaseUrl);
+    await page.getByRole('button', { name: 'Start validation scan', exact: true }).click();
+    const modal = launcher(page);
+    const review = modal.getByRole('button', { name: 'Review scan', exact: true });
+    await expect(review).toBeDisabled();
+    expect(writes).toEqual([]);
+    const domain = modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox');
+    await domain.check();
+    await domain.uncheck();
+    await expect(domain).not.toBeChecked();
+    await expect(review).toBeDisabled();
+    await domain.check();
+    const section = modal.getByRole('checkbox', { name: new RegExp(`Select all \\d+ applicable checks in ${DNS_SECTION}`) });
+    await section.check();
+    const selectedCount = Number((await section.getAttribute('aria-label')).match(/Select all (\d+)/)[1]);
+    await expect(modal.locator('.check-picker-selected')).toHaveText(`${selectedCount} of ${MAX_SCAN_CHECKS} selected`);
+    await section.uncheck();
+    await expect(modal.locator('.check-picker-selected')).toHaveText(`0 of ${MAX_SCAN_CHECKS} selected`);
+    await section.check();
+    await modal.getByRole('button', { name: 'Clear selection', exact: true }).click();
+    await expect(modal.locator('.check-picker-selected')).toHaveText(`0 of ${MAX_SCAN_CHECKS} selected`);
+    await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill('origin leak');
+    const check = modal.locator('li.check-picker-row').filter({ hasText: PORTAL_BASELINE_IDS.checkId }).getByRole('checkbox');
+    await check.check();
+    await check.uncheck();
+    await expect(review).toBeDisabled();
+    await check.check();
+    const name = modal.getByLabel('Scan name (optional)');
+    await name.fill('x'.repeat(501));
+    await name.press('Enter');
+    await assertSourcePortalAction(testInfo, actionInventory, { owner: 'ValidationScanLauncher', kind: 'form-keyboard', handler: 'review' }, 'invalid', async () => {
+      await expect(modal.getByRole('alert')).toContainText(/Name must be at most \d+ characters/);
+      await expect(confirmDialog(page)).toHaveCount(0);
+      expect(writes).toEqual([]);
+      return ['Enter submits review validation; overlong scan name produces field alert, no review dialog and zero API writes'];
+    });
+    await name.fill('Failure retry schedule');
+    await modal.getByRole('radio', { name: 'Schedule for later' }).check();
+    const scheduledFor = new Date(Date.now() + 3_600_000); scheduledFor.setSeconds(0, 0);
+    await modal.getByLabel('Scheduled for').fill(localDatetimeValue(scheduledFor));
+    await review.click();
+    await confirmDialog(page).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await assertSourcePortalAction(testInfo, actionInventory, { owner: 'ValidationScanLauncher', handler: 'setReviewing(false)' }, 'cancel', async () => {
+      await expect(confirmDialog(page)).toHaveCount(0);
+      await expect(name).toHaveValue('Failure retry schedule');
+      await expect(domain).toBeChecked(); await expect(check).toBeChecked();
+      expect(writes).toEqual([]);
+      return ['Review cancel emits zero writes and retains exact domain/check/name/schedule draft'];
+    });
+    await review.click();
+    const confirm = confirmDialog(page);
+    await confirm.getByRole('button', { name: 'Schedule scan', exact: true }).click();
+    try {
+      await assertSourcePortalAction(testInfo, actionInventory, { owner: 'ValidationScanLauncher', handler: 'void submit()' }, 'busy', async () => {
+        await expect.poll(() => writes.length).toBe(1);
+        await expect(confirm.getByRole('button', { name: /Schedule scan|Working/ })).toBeDisabled();
+        await expect(confirm.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+        await confirm.locator('form').dispatchEvent('submit');
+        await page.waitForTimeout(150);
+        expect(writes).toHaveLength(1);
+        return ['Delayed request disables confirm/cancel; repeated form submit produces exactly one POST'];
+      });
+    } finally { releaseFailure(); }
+    await expect(modal.getByRole('alert')).toContainText('Synthetic scan admission outage');
+    await expect(name).toHaveValue('Failure retry schedule');
+    await expect(domain).toBeChecked(); await expect(check).toBeChecked();
+    await expect(review).toBeEnabled();
+    await review.click();
+    const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && /\/v1\/validation-scans$/.test(response.url()) && response.status() === 201);
+    await confirmDialog(page).getByRole('button', { name: 'Schedule scan', exact: true }).click();
+    const accepted = await (await acceptedResponse).json();
+    await assertSourcePortalAction(testInfo, actionInventory, { owner: 'ValidationScanLauncher', handler: 'void submit()' }, 'error-retry', async () => {
+      await expect(modal).toBeHidden();
+      expect(writes).toHaveLength(2); expect(writes[1]).toEqual(writes[0]);
+      expect(writes[1]).toEqual({ target_ids: [PORTAL_BASELINE_IDS.targetId], check_ids: [PORTAL_BASELINE_IDS.checkId], name: 'Failure retry schedule', scheduled_for: scheduledFor.toISOString() });
+      expect(findStoredScanForTest(accepted.id)?.status).toBe('scheduled');
+      return ['Failed submit preserves draft; explicit retry sends identical exact-target/check/schedule payload and one accepted stored scan'];
+    });
+    await page.reload({ waitUntil: 'networkidle' });
+    await assertSourcePortalAction(testInfo, actionInventory, { owner: 'ValidationScanLauncher', handler: 'void submit()' }, 'reload', async () => {
+      await expect(page.locator('.validation-scans-table tbody tr').filter({ hasText: 'Failure retry schedule' })).toHaveCount(1);
+      expect(writes).toHaveLength(2); expect(findStoredScanForTest(accepted.id)?.name).toBe('Failure retry schedule');
+      return ['Reload retains accepted scheduled row and causes no extra POST'];
+    });
+  });
+
+  test('scheduled scan no-op edit produces zero PATCH and reschedule creates a separate exact-scope occurrence', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    let created;
+    const requests = [];
+    page.on('request', (request) => { if (['POST', 'PATCH'].includes(request.method()) && /\/v1\/validation-scans(?:\/[^/?]+)?$/.test(request.url())) requests.push({ method: request.method(), body: request.postDataJSON() }); });
+    await gotoPortalRoute(page, 'runs', sourceBaseUrl);
+    await page.getByRole('button', { name: 'Start validation scan', exact: true }).click();
+    const modal = launcher(page);
+    await modal.locator('.domain-picker-option').filter({ hasText: /^checkout\.acme\.com/ }).getByRole('checkbox').check();
+    await modal.getByPlaceholder(CHECK_PICKER_SEARCH).fill('origin leak');
+    await modal.locator('li.check-picker-row').filter({ hasText: PORTAL_BASELINE_IDS.checkId }).getByRole('checkbox').check();
+    await modal.getByLabel('Scan name (optional)').fill('No-op edit occurrence');
+    await modal.getByRole('radio', { name: 'Schedule for later' }).check();
+    await modal.getByLabel('Scheduled for').fill(localDatetimeValue(new Date(Date.now() + 3_600_000)));
+    await modal.getByRole('button', { name: 'Review scan' }).click();
+    const response = page.waitForResponse((response) => response.request().method() === 'POST' && /\/v1\/validation-scans$/.test(response.url()) && response.status() === 201);
+    await confirmDialog(page).getByRole('button', { name: 'Schedule scan', exact: true }).click();
+    created = await (await response).json();
+    const row = page.locator('.validation-scans-table tbody tr').filter({ hasText: 'No-op edit occurrence' });
+    await row.getByRole('button', { name: 'Edit scan No-op edit occurrence' }).click();
+    await launcher(page).getByRole('button', { name: 'Review scan' }).click();
+    await confirmDialog(page).getByRole('button', { name: 'Save changes', exact: true }).click();
+    await expect(launcher(page)).toBeHidden();
+    expect(requests.filter((request) => request.method === 'PATCH')).toEqual([]);
+    expect(findStoredScanForTest(created.id)?.name).toBe('No-op edit occurrence');
+    await row.getByRole('button', { name: 'Cancel scan No-op edit occurrence' }).click();
+    await confirmDialog(page).getByRole('button', { name: /Cancel scan|Stop scan/, exact: true }).click();
+    await expect(row).toContainText('Cancelled');
+    await row.getByRole('button', { name: 'Schedule scan No-op edit occurrence again' }).click();
+    await launcher(page).getByLabel('Scan name (optional)').fill('Rescheduled independent occurrence');
+    await launcher(page).getByLabel('Scheduled for').fill(localDatetimeValue(new Date(Date.now() + 7_200_000)));
+    await launcher(page).getByRole('button', { name: 'Review scan' }).click();
+    const rescheduledResponse = page.waitForResponse((response) => response.request().method() === 'POST' && /\/v1\/validation-scans$/.test(response.url()) && response.status() === 201);
+    await confirmDialog(page).getByRole('button', { name: 'Schedule scan', exact: true }).click();
+    const rescheduled = await (await rescheduledResponse).json();
+    expect(rescheduled.id).not.toBe(created.id);
+    expect(rescheduled.target_ids).toEqual(created.target_ids); expect(rescheduled.check_ids).toEqual(created.check_ids);
+    expect(findStoredScanForTest(created.id)?.status).toBe('cancelled');
+    expect(requests.filter((request) => request.method === 'PATCH')).toEqual([]);
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.locator('.validation-scans-table tbody tr').filter({ hasText: 'Rescheduled independent occurrence' })).toContainText('Scheduled');
   });
 
   test('auditor can read scans and the runs page but sees no start, stop, edit, or cancel controls', async ({ page }) => {

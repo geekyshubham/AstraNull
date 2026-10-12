@@ -33,6 +33,7 @@ async function backfillPostgres(tenantId, env) {
   const ctx = { tenantId, userId: 'system:demo-auto-verify', role: SYSTEM_CTX_ROLE };
   try {
     return await withTenantContext(pool, tenantId, async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenantId]);
       const { rows } = await client.query(
         `SELECT t.id, t.target_group_id
          FROM targets t
@@ -40,6 +41,7 @@ async function backfillPostgres(tenantId, env) {
            ON v.tenant_id = t.tenant_id AND v.target_id = t.id
          WHERE t.tenant_id = $1
            AND t.deleted_at IS NULL
+           AND v.source_kind IS DISTINCT FROM 'ownership_ambiguous'
            AND (v.state IS NULL OR v.state NOT IN ('dns_verified', 'provider_verified', 'user_confirmed'))
          ORDER BY t.id`,
         [tenantId],

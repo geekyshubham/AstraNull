@@ -76,16 +76,16 @@ test.describe('portal truth surfaces', () => {
   });
 
   test('run detail excludes public_api evidence lookalikes and refuses positive placement', async ({ page }) => {
-    const runId = 'run_checkout_1';
+    let runId = '';
     const publicProbeMarker = 'untrusted-probe-decoy';
     const publicAgentMarker = 'untrusted-agent-decoy';
     const publicNoObservationMarker = 'untrusted-no-observation-decoy';
 
     await startPortalPlaywrightServer({
       mutate: (store) => {
-        applyPortalBaselineReadinessBoost(store);
-        const run = store.testRuns.find((entry) => entry.id === runId);
-        run.check_id = 'origin.leak_scan.safe';
+        // Use the complete test-only signed-marker transcript, not the legacy unbacked run.
+        const { run } = applyPortalBaselineReadinessBoost(store);
+        runId = run.id;
         run.correlation = { nonce_hash: 'nonce-public-decoy', window_ms: 120_000 };
 
         const verdict = store.verdicts.find((entry) => entry.test_run_id === runId);

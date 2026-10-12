@@ -6,7 +6,6 @@ import {
   aggregateExternalProductionVerification,
   validateExternalVerificationManifest,
 } from '../src/contracts/externalProductionVerification.mjs';
-import { ensureExternalVerificationManifest } from './attach-external-verification-markers.mjs';
 import { parseEvidenceInput } from './production-readiness-gap-audit.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,19 +57,14 @@ export function loadExternalVerificationInputs(options = {}) {
     const parsed = readJsonFile(evidencePath, 'Evidence bundle');
     const normalized = parseEvidenceInput(parsed);
     records = normalized.records;
+    if (releaseId !== null && normalized.releaseId !== releaseId) throw new Error('Evidence bundle release identity mismatch');
     releaseId = releaseId ?? normalized.releaseId;
   }
 
   const manifestPath = options.manifest ?? DEFAULT_MANIFEST;
   let manifest = null;
-  if (options.autoAttachManifest !== false && existsSync(evidencePath)) {
-    manifest = ensureExternalVerificationManifest({
-      out: manifestPath,
-      evidence: evidencePath,
-      releaseId,
-      force: options.forceManifest === true,
-    });
-  } else if (existsSync(manifestPath)) {
+  // Validation consumes retained inputs; even legacy auto-attach options grant no writes.
+  if (existsSync(manifestPath)) {
     manifest = readJsonFile(manifestPath, 'External verification manifest');
   }
 
@@ -103,7 +97,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const { records, manifest, releaseId } = loadExternalVerificationInputs(opts);
-  const report = aggregateExternalProductionVerification(records, { manifest });
+  const report = aggregateExternalProductionVerification(records, { manifest, releaseId });
   report.release_id = releaseId;
   report.evidence_path = opts.evidence;
   report.manifest_path = existsSync(opts.manifest) ? opts.manifest : null;

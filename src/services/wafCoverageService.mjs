@@ -1,3 +1,4 @@
+import { assessPostureAssurance, assetInCohortAsOf, snapshotAvailableAsOf, snapshotObservedAt } from '../lib/wafPostureAssurance.mjs';
 import {
   WAF_RISK_METHOD,
   assignPriorityBand,
@@ -31,8 +32,8 @@ function emptyStatusCounts() {
   };
 }
 
-function statusForAsset(asset, snapshot) {
-  const status = snapshot?.status ?? asset?.status ?? 'unknown';
+function statusForAsset(asset, snapshot, asOf = new Date()) {
+  const status = assessPostureAssurance({ asset, snapshot, asOf }).status;
   return STATUS_KEYS.includes(status) ? status : 'unknown';
 }
 
@@ -74,58 +75,43 @@ function buildDailyDateKeys(windowDays = 90, now = new Date()) {
 function indexSnapshotsByAsset(snapshots = []) {
   const byAsset = new Map();
   for (const snapshot of snapshots) {
-    const assetId = snapshot.waf_asset_id;
-    if (!assetId) continue;
-    const existing = byAsset.get(assetId) ?? [];
+    if (!snapshot?.waf_asset_id) continue;
+    const existing = byAsset.get(snapshot.waf_asset_id) ?? [];
     existing.push(snapshot);
-    byAsset.set(assetId, existing);
+    byAsset.set(snapshot.waf_asset_id, existing);
   }
-  for (const [assetId, rows] of byAsset.entries()) {
-    rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-    byAsset.set(assetId, rows);
-  }
+  for (const records of byAsset.values()) records.sort((a, b) => String(snapshotObservedAt(a)).localeCompare(String(snapshotObservedAt(b))) || String(a.created_at).localeCompare(String(b.created_at)));
   return byAsset;
 }
 
-function latestSnapshotAsOf(byAsset, assetId, dayKey) {
-  const rows = byAsset.get(assetId) ?? [];
-  const cutoff = `${dayKey}T23:59:59.999Z`;
-  let latest = null;
-  for (const row of rows) {
-    if (String(row.created_at) <= cutoff) latest = row;
-  }
-  return latest;
+function cutoffForDay(dayKey, now) {
+  const end = Date.parse(`${dayKey}T23:59:59.999Z`);
+  return new Date(Math.min(end, new Date(now).getTime()));
 }
 
-export function buildCoverageTrend({
-  assets = [],
-  historicalSnapshots = [],
-  currentSnapshotsByAsset = new Map(),
-  windowDays = 90,
-  now = new Date(),
-} = {}) {
-  const dateKeys = buildDailyDateKeys(windowDays, now);
-  const byAsset = indexSnapshotsByAsset(historicalSnapshots);
-  const trend = [];
-
-  for (const dayKey of dateKeys) {
-    const counts = emptyStatusCounts();
-    for (const asset of assets) {
-      const snapshot =
-        latestSnapshotAsOf(byAsset, asset.id, dayKey)
-        ?? currentSnapshotsByAsset.get(asset.id)
-        ?? null;
-      const status = statusForAsset(asset, snapshot);
-      counts[status] += 1;
-    }
-    const total = assets.length;
-    trend.push({
-      date: dayKey,
-      coverage_ratio: coverageRatioFromCounts(counts, total),
-      ...counts,
-    });
+function historicalBucket({ assets, snapshots, dayKey, now }) {
+  const cutoff = cutoffForDay(dayKey, now);
+  const byAsset = indexSnapshotsByAsset(snapshots);
+  const counts = emptyStatusCounts();
+  let total = 0;
+  let unknownCohort = 0;
+  for (const asset of assets) {
+    const records = byAsset.get(asset.id) ?? [];
+    const firstKnown = records.filter((record) => snapshotAvailableAsOf(record, cutoff)).map((record) => record.created_at ?? snapshotObservedAt(record)).sort()[0] ?? null;
+    if (!asset.created_at) unknownCohort += 1;
+    if (!assetInCohortAsOf(asset, cutoff, firstKnown)) continue;
+    total += 1;
+    // Observation and availability both precede cutoff. Never consult current asset.status.
+    const snapshot = records.filter((record) => snapshotAvailableAsOf(record, cutoff)).at(-1) ?? null;
+    const status = snapshot ? assessPostureAssurance({ snapshot, asOf: cutoff }).status : 'unknown';
+    counts[STATUS_KEYS.includes(status) ? status : 'unknown'] += 1;
   }
-  return trend;
+  return { date: dayKey, total_assets: total, ...counts, coverage_ratio: coverageRatioFromCounts(counts, total), cutoff_at: cutoff.toISOString(), cohort_rule: 'declared_before_cutoff_not_retired_at_cutoff', unknown_cohort_count: unknownCohort, semantics_version: 'waf-coverage-history.v2', assurance_claim: 'observations_available_at_cutoff_only' };
+}
+
+export function buildCoverageTrend({ assets = [], historicalSnapshots = [], currentSnapshotsByAsset = new Map(), windowDays = 90, now = new Date() } = {}) {
+  const snapshots = [...(Array.isArray(historicalSnapshots) ? historicalSnapshots : []), ...currentSnapshotsByAsset.values()];
+  return buildDailyDateKeys(windowDays, now).map((dayKey) => historicalBucket({ assets, snapshots, dayKey, now }));
 }
 
 function normalizeCoverageRollupTrend(coverageRollups = []) {
@@ -149,29 +135,15 @@ function normalizeCoverageRollupTrend(coverageRollups = []) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export function computeCoverageDailyRollup({
-  assets = [],
-  currentSnapshotsByAsset = new Map(),
-  rollupDate = new Date().toISOString().slice(0, 10),
-} = {}) {
-  const counts = emptyStatusCounts();
-  for (const asset of assets) {
-    const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
-    counts[status] += 1;
-  }
-  const total = assets.length;
-  return {
-    rollup_date: rollupDate,
-    total_assets: total,
-    protected: counts.protected,
-    edge_protected: counts.edge_protected,
-    underprotected: counts.underprotected,
-    unprotected: counts.unprotected,
-    unknown: counts.unknown,
-    excluded: counts.excluded,
-    coverage_ratio: coverageRatioFromCounts(counts, total),
-  };
+export function validCoverageRollupDate(rollupDate, now = new Date()) {
+  const parsed = typeof rollupDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rollupDate) ? new Date(`${rollupDate}T00:00:00.000Z`) : null;
+  return Boolean(parsed && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === rollupDate && rollupDate <= new Date(now).toISOString().slice(0, 10));
+}
+
+export function computeCoverageDailyRollup({ assets = [], currentSnapshotsByAsset = new Map(), historicalSnapshots = [], rollupDate = new Date().toISOString().slice(0, 10), now = new Date() } = {}) {
+  if (!validCoverageRollupDate(rollupDate, now)) throw new RangeError('invalid_or_future_rollup_date');
+  const bucket = historicalBucket({ assets, snapshots: [...(Array.isArray(historicalSnapshots) ? historicalSnapshots : []), ...currentSnapshotsByAsset.values()], dayKey: rollupDate, now });
+  return { ...bucket, rollup_date: rollupDate };
 }
 
 export function buildCoverageSummary({
@@ -185,13 +157,13 @@ export function buildCoverageSummary({
   const counts = emptyStatusCounts();
   for (const asset of assets) {
     const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
+    const status = statusForAsset(asset, snapshot, now);
     counts[status] += 1;
   }
   const total = assets.length;
   const coverage_ratio = coverageRatioFromCounts(counts, total);
   const percentages = percentagesFromCounts(counts, total);
-  const rollupTrend = normalizeCoverageRollupTrend(coverageRollups);
+  const rollupTrend = normalizeCoverageRollupTrend(coverageRollups).filter((row) => row.date >= addDaysUtc(now.toISOString().slice(0, 10), -windowDays + 1) && row.date <= now.toISOString().slice(0, 10)).map((row) => ({ ...row, semantics_version: 'legacy_persisted_rollup', assurance_claim: 'historical_rollup_not_current_assurance' }));
   const trend = rollupTrend.length > 0
     ? rollupTrend
     : buildCoverageTrend({
@@ -210,6 +182,8 @@ export function buildCoverageSummary({
     percentages,
     trend,
     window_days: windowDays,
+    assurance_version: 'waf-posture-assurance.v2',
+    assessment_scope: 'tested_scenarios_only_not_origin_lockdown',
   };
 }
 
@@ -222,11 +196,12 @@ function vendorKey(snapshot, asset) {
 export function buildVendorBreakdown({
   assets = [],
   currentSnapshotsByAsset = new Map(),
+  now = new Date(),
 } = {}) {
   const buckets = new Map();
   for (const asset of assets) {
     const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
+    const status = statusForAsset(asset, snapshot, now);
     const key = vendorKey(snapshot, asset);
     const [vendor, product] = key.split('::');
     const bucket = buckets.get(key) ?? {
@@ -317,8 +292,8 @@ function resolveEntityForAsset(asset, entities = [], targetGroups = []) {
   };
 }
 
-function isCriticalGap(asset, snapshot) {
-  const status = statusForAsset(asset, snapshot);
+function isCriticalGap(asset, snapshot, now) {
+  const status = statusForAsset(asset, snapshot, now);
   if (!['unprotected', 'underprotected'].includes(status)) return false;
   const criticality = String(asset.business_criticality ?? '').trim().toLowerCase();
   return CRITICAL_BUSINESS_VALUES.has(criticality);
@@ -330,11 +305,12 @@ export function buildEntityRollup({
   entities = [],
   targetGroups = [],
   entityTypeFilter = null,
+  now = new Date(),
 } = {}) {
   const buckets = new Map();
   for (const asset of assets) {
     const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
+    const status = statusForAsset(asset, snapshot, now);
     const entity = resolveEntityForAsset(asset, entities, targetGroups);
     if (entityTypeFilter && entity.entity_type !== entityTypeFilter) continue;
 
@@ -353,7 +329,7 @@ export function buildEntityRollup({
     };
     bucket.asset_count += 1;
     bucket[status] += 1;
-    if (isCriticalGap(asset, snapshot)) bucket.critical_gap_count += 1;
+    if (isCriticalGap(asset, snapshot, now)) bucket.critical_gap_count += 1;
     buckets.set(entity.entity_id, bucket);
   }
 
@@ -434,6 +410,7 @@ export function buildCriticalityRollup({
   assets = [],
   currentSnapshotsByAsset = new Map(),
   criticalityFilter = null,
+  now = new Date(),
 } = {}) {
   const buckets = new Map();
   for (const asset of assets) {
@@ -446,7 +423,7 @@ export function buildCriticalityRollup({
     }
 
     const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
+    const status = statusForAsset(asset, snapshot, now);
 
     const bucket = buckets.get(businessCriticality) ?? {
       business_criticality: businessCriticality,
@@ -461,7 +438,7 @@ export function buildCriticalityRollup({
     };
     bucket.asset_count += 1;
     bucket[status] += 1;
-    if (isCriticalGap(asset, snapshot)) bucket.critical_gap_count += 1;
+    if (isCriticalGap(asset, snapshot, now)) bucket.critical_gap_count += 1;
     buckets.set(businessCriticality, bucket);
   }
 
@@ -503,11 +480,12 @@ export function buildGeographyRollup({
   environments = [],
   entities = [],
   regionCodeFilter = null,
+  now = new Date(),
 } = {}) {
   const buckets = new Map();
   for (const asset of assets) {
     const snapshot = currentSnapshotsByAsset.get(asset.id) ?? null;
-    const status = statusForAsset(asset, snapshot);
+    const status = statusForAsset(asset, snapshot, now);
     const region = resolveRegionForAsset(asset, targetGroups, environments, entities);
     if (regionCodeFilter && region.region_code !== regionCodeFilter) continue;
 
@@ -657,7 +635,8 @@ export function buildRiskRoadmap({
         ?? deriveRecommendedAction({ factors: assessment.factors, snapshot, priorityBand: band }),
       finding_ids: findingsByAsset.get(asset.id) ?? [],
       action_item_ids: actionItemsByAsset.get(asset.id) ?? [],
-      posture_status: snapshot.status ?? asset.status ?? 'unknown',
+      posture_status: assessment.current_assurance.status,
+      current_assurance: assessment.current_assurance,
     };
     if (!tiers[band]) tiers[band] = [];
     if (tiers[band].length < limitPerTier) tiers[band].push(item);
@@ -675,6 +654,7 @@ export function buildVendorConsolidation({
   currentSnapshotsByAsset = new Map(),
   connectors = [],
   driftEvents = [],
+  now = new Date(),
 } = {}) {
   const vendorFootprint = new Map();
   const hostVendors = new Map();
@@ -691,7 +671,7 @@ export function buildVendorConsolidation({
       protected_count: 0,
     };
     bucket.asset_count += 1;
-    if (statusForAsset(asset, snapshot) === 'protected') bucket.protected_count += 1;
+    if (statusForAsset(asset, snapshot, now) === 'protected') bucket.protected_count += 1;
     vendorFootprint.set(key, bucket);
 
     const hostname = hostnameFromCanonicalUrl(asset.canonical_url) ?? asset.id;

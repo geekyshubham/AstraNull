@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
   parseHttp3AltSvc,
@@ -101,6 +102,8 @@ describe('safe network probes', () => {
     assert.equal(outcome.metadata.datagram_bytes > 0, true);
     assert.equal(outcome.metadata.response_received, true);
     assert.equal(outcome.metadata.response_bytes, responsePayload.length);
+    assert.equal(outcome.metadata.observation_complete, true);
+    assert.equal(outcome.metadata.pinned_address, '203.0.113.20');
     assert.equal(outcome.metadata.response_size_class, 'tiny');
     assert.equal(JSON.stringify(outcome.metadata).includes(responsePayload.toString('utf8')), false);
     assert.equal(sentHost, '203.0.113.20');
@@ -197,14 +200,16 @@ describe('safe network probes', () => {
         target: { value: 'canary' },
       }),
     );
-    assert.equal(outcome.external_result, 'error');
-    assert.equal(outcome.metadata.error_class, 'missing_webhook_url');
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.not_run_reason, 'approved_signed_callback_scope_required');
+    assert.equal(outcome.requests_sent, 0);
   });
 
   it('probeAlertWebhookPing treats HTTP 2xx as connected', async () => {
     const outcome = await probeAlertWebhookPing(
       baseJob({
         probe_profile: { kind: 'alert_webhook_ping', marker: 'test-marker' },
+        constraints: { timeout_ms: 1000, max_requests: 1, alert_webhook_url: 'https://hooks.example.test/ping' },
         target: {
           value: 'canary',
           metadata: { alert_webhook_url: 'https://hooks.example.test/ping' },
@@ -228,6 +233,7 @@ describe('safe network probes', () => {
   function webhookJob(url) {
     return baseJob({
       probe_profile: { kind: 'alert_webhook_ping', marker: 'test-marker' },
+      constraints: { timeout_ms: 1000, max_requests: 1, alert_webhook_url: url },
       target: { value: 'canary', metadata: { alert_webhook_url: url } },
     });
   }
@@ -337,6 +343,9 @@ describe('safe network probes', () => {
             once(event, fn) {
               handlers[event] = fn;
             },
+            removeListener(event, fn) {
+              if (handlers[event] === fn) delete handlers[event];
+            },
             getProtocol: () => 'TLSv1.3',
             getCipher: () => ({ name: 'TLS_AES_128_GCM_SHA256' }),
             authorized: true,
@@ -370,6 +379,9 @@ describe('safe network probes', () => {
             once(event, fn) {
               handlers[event] = fn;
             },
+            removeListener(event, fn) {
+              if (handlers[event] === fn) delete handlers[event];
+            },
             end() {},
             destroy() {},
           };
@@ -380,7 +392,7 @@ describe('safe network probes', () => {
         },
       },
     );
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'ECONNREFUSED');
   });
 
@@ -396,6 +408,7 @@ describe('safe network probes', () => {
         vettedAddresses: ['93.184.216.34'],
         connectFn: () => ({
           once() {},
+          removeListener() {},
           end() {},
           destroy() {},
         }),
@@ -416,16 +429,11 @@ describe('safe network probes', () => {
         vettedHost: 'edge.example.test',
         vettedAddresses: ['93.184.216.34'],
         connectFn: () => {
-          const handlers = {};
-          const session = {
-            once(event, fn) {
-              handlers[event] = fn;
-            },
-            close() {},
-            destroy() {},
-          };
+          const session = new EventEmitter();
+          session.close = () => {};
+          session.destroy = () => {};
           queueMicrotask(() => {
-            handlers.remoteSettings?.({
+            session.emit('remoteSettings', {
               maxConcurrentStreams: 128,
               enablePush: false,
             });
@@ -450,24 +458,58 @@ describe('safe network probes', () => {
         vettedHost: 'edge.example.test',
         vettedAddresses: ['93.184.216.34'],
         connectFn: () => {
-          const handlers = {};
-          const session = {
-            once(event, fn) {
-              handlers[event] = fn;
-            },
-            close() {},
-            destroy() {},
-          };
+          const session = new EventEmitter();
+          session.close = () => {};
+          session.destroy = () => {};
           queueMicrotask(() => {
-            handlers.error?.(Object.assign(new Error('unreachable'), { code: 'EHOSTUNREACH' }));
+            session.emit('error', Object.assign(new Error('unreachable'), { code: 'EHOSTUNREACH' }));
           });
           return session;
         },
       },
     );
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'EHOSTUNREACH');
   });
+
+  for (const terminal of ['abort', 'close', 'timeout']) {
+    it(`probeHttp2Settings ${terminal} before peer SETTINGS never reports default settings`, async () => {
+      const controller = new AbortController();
+      const session = new EventEmitter();
+      session.remoteSettings = { maxConcurrentStreams: 100, enablePush: true };
+      let closed = 0;
+      let destroyed = 0;
+      session.close = () => { closed += 1; };
+      session.destroy = () => { destroyed += 1; };
+      const outcome = await probeHttp2Settings(baseJob({
+        constraints: { max_requests: 1, timeout_ms: 20 },
+        probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 20 },
+        target: { kind: 'url', value: 'https://edge.example.test/' },
+      }), {
+        vettedHost: 'edge.example.test', vettedAddresses: ['203.0.113.10'],
+        jobDeadlineSignal: controller.signal,
+        connectFn: () => {
+          queueMicrotask(() => {
+            session.emit('connect');
+            if (terminal === 'abort') controller.abort();
+            if (terminal === 'close') session.emit('close');
+          });
+          return session;
+        },
+      });
+      assert.equal(outcome.external_result, terminal === 'timeout' ? 'timeout' : 'error');
+      assert.equal(outcome.metadata.error_class, terminal === 'timeout' ? 'timeout' : terminal === 'close' ? 'ECONNRESET' : 'ABORT_ERR');
+      assert.equal(outcome.requests_sent, 1);
+      assert.equal(outcome.metadata.max_concurrent_streams, undefined);
+      assert.equal(outcome.metadata.enable_push, undefined);
+      assert.equal(closed, 1);
+      assert.equal(destroyed, 1);
+      assert.equal(session.listenerCount('remoteSettings'), 0);
+      assert.equal(session.listenerCount('close'), 0);
+      // A late socket error must be consumed after terminal settlement.
+      session.emit('error', new Error('late error'));
+    });
+  }
 
   it('probeWebsocketUpgradePosture requires HTTP-capable target', async () => {
     const outcome = await probeWebsocketUpgradePosture(
@@ -500,6 +542,7 @@ describe('safe network probes', () => {
               get(name) {
                 if (name === 'upgrade') return 'websocket';
                 if (name === 'connection') return 'Upgrade';
+                if (name === 'sec-websocket-accept') return createHash('sha1').update(options.headers['Sec-WebSocket-Key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
                 return null;
               },
             },
@@ -535,8 +578,10 @@ describe('safe network probes', () => {
         }),
       },
     );
-    assert.equal(outcome.external_result, 'blocked');
-    assert.equal(outcome.metadata.upgrade_denied, true);
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.upgrade_denied, false);
+    assert.equal(outcome.metadata.handshake_identity_confirmed, false);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.metadata.status_code, 403);
   });
 
@@ -554,7 +599,7 @@ describe('safe network probes', () => {
         }),
       },
     );
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'not_run');
     assert.equal(outcome.metadata.upgrade_required, true);
     assert.equal(outcome.metadata.status_code, 426);
   });
@@ -593,7 +638,7 @@ describe('safe network probes', () => {
         },
       },
     );
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'ENOTFOUND');
     assert.equal(outcome.requests_sent, 1);
   });
@@ -606,6 +651,7 @@ describe('safe network probe synchronous reservation boundaries', () => {
   });
   const reservedWebhookJob = () => baseJob({
     probe_profile: { kind: 'alert_webhook_ping', marker: 'test-marker' },
+    constraints: { timeout_ms: 1000, max_requests: 1, alert_webhook_url: 'https://hooks.example.test/ping' },
     target: {
       value: 'canary',
       metadata: { alert_webhook_url: 'https://hooks.example.test/ping' },

@@ -7,7 +7,7 @@ import { rebaseDemoStoreTimestamps } from '../../scripts/seed-dev-portal-demo.mj
 const NOW = new Date('2026-08-24T09:00:00.000Z');
 
 function seededStore() {
-  return rebaseDemoStoreTimestamps(buildPortalDemoStore(), NOW);
+  return rebaseDemoStoreTimestamps(buildPortalDemoStore({ readinessObservedAt: PORTAL_DEMO_IDS.frozenAt }), NOW);
 }
 
 describe('seed:dev-demo freshness', () => {

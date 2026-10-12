@@ -176,6 +176,8 @@ export function buildProtectionValidationReportProjection({
   evaluations = [],
   detections = [],
   checkCatalog = [],
+  evidenceInputs = null,
+  resolveSourcePerspective = undefined,
   scope = {},
   format = 'json',
 } = {}) {
@@ -193,6 +195,8 @@ export function buildProtectionValidationReportProjection({
     firewallEvaluations: tenantEvaluations.filter((row) => row.kind === 'firewall_change'),
     detections,
     checkCatalog,
+    evidenceInputs,
+    resolveSourcePerspective,
     scope,
   });
   if (format === 'csv') return { format: 'csv', content: protectionValidationReportCsv(report), report_kind: report.report_kind };

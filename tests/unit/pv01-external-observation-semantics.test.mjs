@@ -28,6 +28,13 @@ import { inconclusiveReason } from '../../src/lib/inconclusiveReasons.mjs';
 
 const EDGE_URL = 'https://edge.example.test/';
 const NONCE = 'nonce-pv01-synthetic';
+const ORIGIN_SCOPE = { host: 'edge.example.test', path: '/', port: 443, method: 'GET',
+  scenario_version: 'marker-comparison-v4', source_perspective: 'astranull-signed-public-worker', worker_id: 'local-fixture' };
+function comparableOriginBaseline() {
+  return { expectedNonce: NONCE, scope: ORIGIN_SCOPE, observedAt: '2026-10-08T00:00:01.000Z',
+    baseline: { status_code: 200, scope: ORIGIN_SCOPE, observed_at: '2026-10-08T00:00:00.000Z',
+      application_identity: { confirmed: true, method: 'nonce_canary' }, canary_echo: NONCE } };
+}
 
 it('does not mistake a generic AWS storage authorization error for WAF enforcement', () => {
   assert.equal(matchControlDenialSignature({ statusCode: 403, bodyText: '<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>' }), null);
@@ -49,7 +56,8 @@ function mockResponse(status, headers = {}) {
 function edgeFetch({ baselineStatus = 200, server = 'cloudflare' } = {}) {
   return async (url, init) => {
     const isBaseline = url === EDGE_URL && init?.headers?.['User-Agent'] && init?.method !== 'POST';
-    if (isBaseline) return mockResponse(baselineStatus, { server, 'cf-ray': '1' });
+    if (isBaseline) return mockResponse(baselineStatus, { server, 'cf-ray': '1',
+      'x-astranull-canary-echo': init?.headers?.['x-astranull-nonce'] });
     return mockResponse(403, { server, 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
   };
 }
@@ -62,6 +70,7 @@ function scan({ originBypassFn, baselineStatus, server, canaryNonce } = {}) {
     directIp: '198.51.100.7',
     hostname: 'edge.example.test',
     fetchFn: edgeFetch({ baselineStatus, server }),
+    originScope: ORIGIN_SCOPE,
     originBypassFn,
     ...(canaryNonce ? { canaryNonce } : {}),
   });
@@ -267,7 +276,8 @@ describe('PV-01 negative regressions: header similarity never confirms bypass', 
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.application_bypass_confirmed, false);
     assert.equal(outcome.metadata.origin_observation.outcome, 'response_observed');
-    assert.match(correlateHostSni(outcome).explanation, /application identity was not confirmed/i);
+    assert.equal(correlateHostSni(outcome).verdict, 'inconclusive');
+    assert.match(correlateHostSni(outcome).explanation, /transport or liveness metadata only/i);
   });
 
   it('standalone executor prefers the nonce-bound canary echo but stays suspected without a healthy baseline', async () => {
@@ -284,8 +294,10 @@ describe('PV-01 negative regressions: header similarity never confirms bypass', 
     assert.equal(outcome.metadata.application_bypass_suspected, true);
     assert.equal(metadataConfirmsApplicationBypass(outcome.metadata), false);
     const verdict = correlateHostSni(outcome);
-    assert.equal(verdict.verdict, 'edge_exposed');
-    assert.match(verdict.explanation, /suspected rather than confirmed/);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.createsFinding, false);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
+    assert.match(verdict.explanation, /transport or liveness metadata only/);
     assert.equal(originIdentityLabel(outcome.metadata), 'Confirmed by nonce-bound canary echo; no permitted-path baseline captured, bypass suspected');
   });
 
@@ -344,6 +356,8 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
       directIp: '198.51.100.7',
       hostname: 'edge.example.test',
       fetchFn: edgeFetch(),
+      canaryNonce: NONCE,
+      originScope: ORIGIN_SCOPE,
       declaredOriginLockdown: LOCKDOWN,
       originBypassFn: async () => ({ res: mockResponse(403, { server: 'origin-nginx', 'x-origin-lockdown': 'cdn-only' }), error: null }),
     });
@@ -398,7 +412,7 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
   it('standalone executor 401/403/404 are origin responses, never denials or readiness credit', () => {
     return (async () => {
       for (const [status, headers, reason, verdictName, findings] of [
-        [401, { 'www-authenticate': 'Basic realm="app"' }, 'authentication_challenge', 'edge_exposed', true],
+        [401, { 'www-authenticate': 'Basic realm="app"' }, 'authentication_challenge', 'inconclusive', false],
         [403, {}, 'unattributed_denial', 'inconclusive', false],
         [404, {}, 'unattributed_denial', 'inconclusive', false],
       ]) {
@@ -415,7 +429,7 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
         assert.equal(originOutcomeFromProbe({ ...outcome.metadata, external_result: outcome.external_result }), 'reachable');
       }
       const challenge = await probeHostSniBypass(hostSniJob(), { fetchFn: async () => mockResponse(401, {}) });
-      assert.match(correlateHostSni(challenge).explanation, /authentication challenge observed/);
+      assert.match(correlateHostSni(challenge).explanation, /transport or liveness metadata only/);
       assert.equal(originObservationLabel(challenge.metadata), 'Origin HTTP service reachable directly; authentication challenge observed');
     })();
   });
@@ -445,21 +459,22 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
     assert.equal(observation.origin_lockdown_confirmed, false);
     const verdict = correlateHostSni({ external_result: 'blocked', metadata: { probe_kind: 'host_sni_bypass', origin_observation: observation } });
     assert.equal(verdict.verdict, 'inconclusive');
-    assert.match(verdict.explanation, /customer-declared lockdown/);
+    assert.match(verdict.explanation, /transport or liveness metadata only/);
   });
 
-  it('declared lockdown over a healthy baseline is a scoped pass that does not identify the rule', () => {
+  it('pure classifier confirms a comparable declared-lockdown fixture but standalone execution has no approved producer', () => {
     const observation = classifyDirectOriginObservation({
       response: mockResponse(403),
       bodyText: 'Access denied',
-      baseline: { status_code: 200 },
+      bodyComplete: true,
+      ...comparableOriginBaseline(),
       declaredLockdown: { status_code: 403, body_sha256: createHash('sha256').update('Access denied').digest('hex') },
-      scope: { host: 'edge.example.test', path: '/' },
     });
     assert.equal(observation.origin_lockdown_confirmed, true);
     const verdict = correlateHostSni({ external_result: 'blocked', metadata: { probe_kind: 'host_sni_bypass', origin_observation: observation } });
-    assert.equal(verdict.verdict, 'edge_protected');
-    assert.match(verdict.explanation, /not identified/i);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.createsFinding, false);
+    assert.match(verdict.explanation, /transport or liveness metadata only/i);
     const wrongBody = classifyDirectOriginObservation({
       response: mockResponse(403),
       bodyText: 'Forbidden',
@@ -471,7 +486,7 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
 
   it('an mTLS rejection counts only when mTLS was declared for the origin', () => {
     const error = Object.assign(new Error('alert'), { code: 'ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED' });
-    const declared = classifyDirectOriginObservation({ error, baseline: { status_code: 200 }, declaredLockdown: { mtls: true } });
+    const declared = classifyDirectOriginObservation({ error, ...comparableOriginBaseline(), declaredLockdown: { mtls: true } });
     assert.equal(declared.outcome, 'explicit_denial_observed');
     assert.equal(declared.denial_signature.id, 'declared_mtls_rejection');
     assert.equal(declared.origin_lockdown_confirmed, true);
@@ -577,11 +592,71 @@ describe('PV-01 versions and labels agree', () => {
 
   it('classifier vocabulary is complete and portal labels match the backend', () => {
     assert.deepEqual([...EXTERNAL_OBSERVATION_OUTCOMES].sort(), Object.keys(EXTERNAL_OBSERVATION_LABELS).sort());
-    assert.equal(classifyDirectOriginObservation({ attempted: false }).semantics_version, 'external-observation-v2');
+    assert.equal(classifyDirectOriginObservation({ attempted: false }).semantics_version, 'external-observation-v3');
     assert.equal(classifyDirectOriginObservation({ attempted: false }).outcome, 'not_tested');
     const portal = readFileSync(new URL('../../apps/web/react/src/lib/origin-observation.mjs', import.meta.url), 'utf8');
     for (const [outcome, label] of Object.entries(EXTERNAL_OBSERVATION_LABELS)) {
       assert.ok(portal.includes(`${outcome}: '${label}'`), `${outcome} label drifted`);
     }
   });
+});
+
+
+it('a matching body prefix without complete body evidence cannot confirm declared lockdown', () => {
+  const text = 'Access denied';
+  const declaredLockdown = { status_code: 403, body_sha256: createHash('sha256').update(text).digest('hex') };
+  const result = classifyDirectOriginObservation({ response: mockResponse(403), bodyText: text,
+    bodyComplete: false, declaredLockdown, ...comparableOriginBaseline() });
+  assert.equal(result.origin_lockdown_confirmed, false);
+  assert.equal(result.denial_signature, null);
+});
+
+it('redirected nonce echoes never acquire the original direct-origin baseline scope', async () => {
+  let baselineCalls = 0;
+  const result = await runOutsideInWafScan({ url: EDGE_URL, budget: 16, followRedirects: true,
+    canaryNonce: NONCE, originScope: ORIGIN_SCOPE, directIp: '198.51.100.7',
+    fetchFn: async (_url, init) => {
+      if (init.activity_phase === 'baseline') {
+        baselineCalls += 1;
+        return baselineCalls === 1 ? mockResponse(302, { location: '/different' })
+          : mockResponse(200, { 'x-astranull-canary-echo': NONCE });
+      }
+      return mockResponse(403, { 'cf-mitigated': 'challenge' });
+    },
+    originBypassFn: async () => ({ res: mockResponse(403, { 'x-origin-policy': 'cdn-only' }), error: null }),
+    declaredOriginLockdown: { status_code: 403, header: { name: 'x-origin-policy', value: 'cdn-only' } },
+  });
+  assert.equal(result.permitted_baseline.scope, null);
+  assert.equal(result.origin_observation.baseline_comparable, false);
+  assert.equal(result.origin_observation.origin_lockdown_confirmed, false);
+});
+
+it('an unavailable scanner origin executor is explicitly unsupported, never origin assurance', async () => {
+  const result = await runOutsideInWafScan({ url: EDGE_URL, budget: 16, directIp: '198.51.100.7', fetchFn: edgeFetch() });
+  assert.ok(result.unsupported_phases.includes('origin_bypass'));
+  assert.equal(result.phases_planned.includes('origin_bypass'), false);
+  assert.equal(result.origin_observation.outcome, 'not_tested');
+  assert.equal(result.origin_observation.origin_lockdown_confirmed, false);
+});
+
+
+it('legacy v1/v2 confirmations remain readable and immutable but cannot establish current assurance', () => {
+  for (const semantics_version of ['external-observation-v1', 'external-observation-v2']) {
+    const origin_observation = Object.freeze({ semantics_version, outcome: 'application_identity_confirmed',
+      status_code: 200, application_bypass_confirmed: true, origin_lockdown_confirmed: true,
+      baseline_comparable: true, baseline: 'healthy',
+      application_identity: Object.freeze({ confirmed: true, method: 'nonce_canary' }),
+      limitations: Object.freeze([]) });
+    const metadata = Object.freeze({ application_bypass_confirmed: true, origin_lockdown_confirmed: true, origin_observation });
+    const before = JSON.stringify(metadata);
+    const reread = originObservationOf(metadata);
+    assert.equal(reread.legacy_semantics, true);
+    assert.equal(reread.application_bypass_confirmed, false);
+    assert.equal(reread.origin_lockdown_confirmed, false);
+    assert.equal(reread.baseline_comparable, false);
+    assert.equal(reread.readiness_conclusion, false);
+    assert.equal(metadataConfirmsApplicationBypass(metadata), false);
+    assert.equal(metadataConfirmsOriginLockdown(metadata), false);
+    assert.equal(JSON.stringify(metadata), before);
+  }
 });

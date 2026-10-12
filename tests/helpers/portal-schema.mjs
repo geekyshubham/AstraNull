@@ -250,6 +250,9 @@ const FRESHNESS_POLICY_SHAPE = {
 };
 
 const COVERAGE_COUNTS_SHAPE = {
+  passed_count: 'number',
+  gap_count: 'number',
+  setup_required_count: 'number',
   applicable_count: 'number',
   evaluated_count: 'number',
   conclusive_count: 'number',
@@ -451,6 +454,12 @@ export const TARGET_DETAIL_SHAPE = {
       reason: 'string', label: 'string', next_step: 'string', count: 'number', check_ids: ['string'],
     }],
     pairs: [{
+      target_id: 'string',
+      scenario_version: NULLABLE_STRING,
+      mechanism: NULLABLE_STRING,
+      current_assurance: 'string',
+      retest_required: 'boolean',
+      'outcome?': 'string',
       check_id: 'string',
       dimension: 'string',
       state: 'string',
@@ -575,6 +584,9 @@ export const EVIDENCE_SHAPE = {
 };
 
 export const WAF_SUMMARY_SHAPE = {
+  assurance_version: 'string',
+  authoritative: 'boolean',
+  assessment_scope: 'string',
   assets_total: 'number',
   protected: 'number',
   edge_protected: 'number',

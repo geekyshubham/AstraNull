@@ -106,3 +106,5 @@ export function failureCopy(failure: unknown, subject?: string): string;
 export function writeErrorCopy(code: string, fallback: string): string;
 export function splitEntryPathsByAnchor<T extends { anchor_target_id: string }>(items: readonly T[], targetId: string): { anchored: T[]; referenced: T[] };
 export function authorizationView(path: unknown): { authorized: boolean | null; label: string; tone: Tone };
+
+export function findingExclusionView(item: unknown, inferFromEvidence?: boolean): { excluded: boolean; reason: string };

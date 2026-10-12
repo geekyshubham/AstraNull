@@ -342,7 +342,7 @@ function resolveDomainTier(domainId, records = [], manifest = null) {
 export function validateExternalVerificationManifest(manifest = {}) {
   const forbidden = [];
   const gaps = [];
-  if (!hasValue(manifest?.schema_version)) gaps.push('schema_version');
+  if (manifest?.schema_version !== 1) gaps.push('schema_version');
   if (manifest?.artifact_type !== 'external_production_verification_manifest') {
     gaps.push('artifact_type');
   }
@@ -382,9 +382,16 @@ export function validateExternalVerificationManifest(manifest = {}) {
 export function aggregateExternalProductionVerification(records = [], options = {}) {
   const manifest = options.manifest ?? null;
   const manifestValidation = manifest ? validateExternalVerificationManifest(manifest) : null;
+  const releaseId = options.releaseId ?? manifest?.release_id ?? null;
+  const scopeGaps = [];
+  if (manifest && !manifestValidation.ok) scopeGaps.push('manifest_invalid');
+  if (manifest && (!hasValue(releaseId) || manifest.release_id !== releaseId)) scopeGaps.push('manifest_release_identity_mismatch');
+  if (manifest && records.some((record) => record?.release_id !== releaseId)) scopeGaps.push('evidence_release_identity_mismatch');
 
   const domains = EXTERNAL_VERIFICATION_DOMAINS.map((domain) => {
-    const resolved = resolveDomainTier(domain.id, records, manifest);
+    const resolved = scopeGaps.length
+      ? { tier: 'unverified', manifest_attested: false, blockers: [...scopeGaps] }
+      : resolveDomainTier(domain.id, records, manifest);
     return {
       id: domain.id,
       label: domain.label,
@@ -420,6 +427,7 @@ export function aggregateExternalProductionVerification(records = [], options = 
   return {
     schema_version: 1,
     artifact_type: 'external_production_verification',
+    release_id: releaseId,
     complete,
     live_external_count: liveCount,
     metadata_only_count: metadataCount,

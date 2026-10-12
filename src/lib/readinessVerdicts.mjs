@@ -44,8 +44,9 @@ export function verdictSupportsReadiness(verdict) {
 }
 
 export function catalogCheckSupportsReadiness(checkId) {
-  const probeKind = readinessChecksById.get(checkId)?.probe_profile?.kind;
-  return typeof probeKind === 'string' && !OBSERVATION_ONLY_PROBE_KIND_SET.has(probeKind);
+  const check = readinessChecksById.get(checkId);
+  const probeKind = check?.probe_profile?.kind;
+  return typeof probeKind === 'string' && !['metadata_marker', 'ops_readiness'].includes(probeKind) && evidenceTierForCheck(check) !== 'E2' && !OBSERVATION_ONLY_PROBE_KIND_SET.has(probeKind) && check.observation_only !== true && check.readiness_conclusion !== false && check.probe_profile?.observation_only !== true && check.probe_profile?.readiness_conclusion !== false;
 }
 
 export function runVerdictSupportsReadiness(run, verdict) {

@@ -8,31 +8,31 @@ import {
   resetSignupRateLimitsForTests,
 } from '../../src/services/signupIntake.mjs';
 import { DEFAULT_PRIVACY } from '../../src/lib/privacySettings.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 let server;
 let baseUrl;
 
-function bootIsolatedServer() {
+async function bootIsolatedServer() {
+  await closeServer(server);
   process.env.ASTRANULL_NO_PERSIST = '1';
   freshStore();
   resetSignupRateLimitsForTests();
-  server?.close();
-  server = createServer();
+  server = createServer({ env: { ...process.env, ASTRANULL_NO_PERSIST: '1', ASTRANULL_PERSISTENCE_MODE: 'memory', ASTRANULL_AUTH_MODE: 'dev-headers' } });
   server.listen(0);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 }
 
-before(() => {
-  bootIsolatedServer();
+before(async () => {
+  await bootIsolatedServer();
 });
 
-after(() => server?.close());
+after(() => closeServer(server));
 
 describe('misc portal endpoints (FT-RST-01, FT-SUP-01, FT-PRV-01)', () => {
   it('FT-RST-01 restore clears deleted_at/by and rejects non-archived groups', async () => {
-    bootIsolatedServer();
+    await bootIsolatedServer();
     const headers = demoHeaders('engineer');
     const created = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers,
@@ -65,7 +65,7 @@ describe('misc portal endpoints (FT-RST-01, FT-SUP-01, FT-PRV-01)', () => {
   });
 
   it('FT-SUP-01 signup events are ordered, truncated, and rate-limited', async () => {
-    bootIsolatedServer();
+    await bootIsolatedServer();
     const created = createSignupRequest({
       organization_name: 'Queue Co',
       contact_email: 'owner@queue.example',
@@ -108,10 +108,10 @@ describe('misc portal endpoints (FT-RST-01, FT-SUP-01, FT-PRV-01)', () => {
   });
 
   it('FT-PRV-01 fresh tenant privacy defaults and PATCH retention persist', async () => {
-    bootIsolatedServer();
+    await bootIsolatedServer();
     const headers = demoHeaders('admin');
     const tenant = await request(baseUrl, 'GET', '/v1/tenants/current', { headers });
-    assert.equal(tenant.status, 200);
+    assert.equal(tenant.status, 200, JSON.stringify(tenant.json));
     assert.equal(tenant.json.privacy_settings.metadata_retention_days, DEFAULT_PRIVACY.metadata_retention_days);
     assert.equal(tenant.json.privacy_settings.evidence_retention_days, DEFAULT_PRIVACY.evidence_retention_days);
     assert.equal(tenant.json.privacy_settings.audit_retention_days, DEFAULT_PRIVACY.audit_retention_days);
@@ -126,12 +126,13 @@ describe('misc portal endpoints (FT-RST-01, FT-SUP-01, FT-PRV-01)', () => {
         },
       },
     });
-    assert.equal(patched.status, 200);
+    assert.equal(patched.status, 200, JSON.stringify(patched.json));
     assert.equal(patched.json.privacy_settings.metadata_retention_days, 400);
     assert.equal(patched.json.privacy_settings.evidence_retention_days, 1900);
     assert.equal(patched.json.privacy_settings.audit_retention_days, 2600);
 
     const reloaded = await request(baseUrl, 'GET', '/v1/tenants/current', { headers });
+    assert.equal(reloaded.status, 200, JSON.stringify(reloaded.json));
     assert.equal(reloaded.json.privacy_settings.metadata_retention_days, 400);
   });
 });

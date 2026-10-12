@@ -645,11 +645,11 @@ function enrichPortalDemoStore(store) {
   return store;
 }
 
-export function buildPortalDemoStore() {
+export function buildPortalDemoStore({ readinessObservedAt } = {}) {
   const store = buildPortalBaselineStore();
   replaceTenantReferences(store, PORTAL_BASELINE_IDS.tenantId, IDS.tenantId);
   replaceTenantBReferences(store, PORTAL_BASELINE_IDS.tenantBId, IDS.tenantBId);
-  applyPortalBaselineReadinessBoost(store);
+  applyPortalBaselineReadinessBoost(store, { observedAt: readinessObservedAt });
   enrichPortalDemoStore(store);
   return store;
 }

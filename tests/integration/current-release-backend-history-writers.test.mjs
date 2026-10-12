@@ -232,7 +232,7 @@ describe('postgres current-release history writers', () => {
         }, { probeMode: 'simulation' });
         assert.equal(forgedStart.error, undefined, JSON.stringify(forgedStart));
         assert.equal(forgedStart.run.check_version, CATALOG_VERSION);
-        assert.equal(forgedStart.run.scenario_version, 'fingerprint');
+        assert.equal(forgedStart.run.scenario_version, getCheckById(CHECK).probe_profile.scenario_version);
         assert.equal(forgedStart.run.producer_kind, 'internal_simulation');
         assert.equal(forgedStart.run.expected_behavior, 'must_block_before_origin');
         assert.equal(forgedStart.run.expected_behavior_json.source, 'catalog_default');

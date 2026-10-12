@@ -13,6 +13,8 @@ import {
   CUSTODY_SCHEMA_VERSION,
   sha256CanonicalJson,
 } from './custody.mjs';
+import { readFileSync } from 'node:fs';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { resolveDeploymentProfile } from './deploymentProfile.mjs';
 
 const BASE64_DER_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -192,20 +194,21 @@ export function deriveHmacSigningKeyId({ secret, keyId }) {
   return createHmac('sha256', secret).update(EVIDENCE_SIGNING_KEY_ID_DOMAIN).digest('hex');
 }
 
-/**
- * Evidence custody signed with a shared symmetric secret cannot be attributed to
- * a single holder and is repudiable, so production deployments must use ed25519
- * or a KMS-held key. Gated on the deployment profile only: `NODE_ENV` is
- * `production` on hosted-staging deployments too, and gating on it would refuse
- * signing for a deployment that is not production.
- * @param {NodeJS.ProcessEnv} env
- */
-function isHmacForbiddenForProfile(env) {
+/** New production signatures must remain asymmetric, including hosted runtimes. */
+export function evidenceSigningRequiresAsymmetric(env = process.env) {
+  const profile = resolveDeploymentProfile(env);
+  return profile === 'production' || env.NODE_ENV === 'production';
+}
+
+function signingPolicyError(env, algorithm) {
   try {
-    return resolveDeploymentProfile(env) === 'production';
+    if (evidenceSigningRequiresAsymmetric(env) && algorithm === 'hmac-sha256') {
+      return { error: 'hmac_signing_forbidden_in_production', status: 400 };
+    }
   } catch {
-    return false;
+    return { error: 'invalid_signing_deployment_config', status: 500 };
   }
+  return null;
 }
 
 function normalizeAlgorithm(raw) {
@@ -319,9 +322,15 @@ export function digestCustodyManifestMetadata(custody) {
  * @param {NodeJS.ProcessEnv} env
  */
 export function parseEvidenceSigningKeyMap(env = process.env) {
-  const raw = env.ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON;
+  let raw = env.ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON;
   if (raw === undefined || raw === null || String(raw).trim() === '') {
-    return {};
+    const keyFile = String(env.ASTRANULL_EVIDENCE_SIGNING_KEY ?? '').trim();
+    if (!keyFile) return {};
+    try {
+      raw = readFileSync(keyFile, 'utf8');
+    } catch {
+      throw new Error('ASTRANULL_EVIDENCE_SIGNING_KEY file is unreadable.');
+    }
   }
   let parsed;
   try {
@@ -382,6 +391,14 @@ function loadEd25519PublicKey(publicKeySpkiDerBase64) {
     if (publicKey.asymmetricKeyType && publicKey.asymmetricKeyType !== 'ed25519') {
       return { error: 'invalid_public_key' };
     }
+    const der = publicKey.export({ type: 'spki', format: 'der' });
+    if (der.toString('base64') !== trimmed) return { error: 'invalid_public_key' };
+    // OpenSSL import/verify accepts some small-order Ed25519 keys. Require a canonical,
+    // nonidentity prime-order public point before trusting the native signature verifier.
+    const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+    const point = ed25519.Point.fromBytes(raw, false);
+    point.assertValidity();
+    if (point.isSmallOrder() || !point.isTorsionFree()) return { error: 'invalid_public_key' };
     return { publicKey, publicKeyDerBase64: trimmed };
   } catch {
     return { error: 'invalid_public_key' };
@@ -407,9 +424,8 @@ export function resolveTenantSigningMaterial(input) {
     return { error: 'invalid_algorithm', status: 400 };
   }
   const env = input.env ?? process.env;
-  if (algorithm === 'hmac-sha256' && isHmacForbiddenForProfile(env)) {
-    return { error: 'hmac_signing_forbidden_in_production', status: 400 };
-  }
+  const policyError = signingPolicyError(env, algorithm);
+  if (policyError) return policyError;
   let keyMap;
   try {
     keyMap = parseEvidenceSigningKeyMap(env);
@@ -425,10 +441,17 @@ export function resolveTenantSigningMaterial(input) {
   if (entryAlgorithm !== algorithm) {
     return { error: 'signing_key_algorithm_mismatch', status: 400 };
   }
+  if (entry.signing_enabled === false) return { error: 'signing_key_retired', status: 400 };
   if (algorithm === 'ed25519') {
     const loaded = loadEd25519PrivateKey(entry.private_key_pkcs8_der_base64);
     if (loaded.error) {
       return { error: loaded.error, status: 400 };
+    }
+    if (entry.public_key_spki_der_base64) {
+      const publicMaterial = loadEd25519PublicKey(entry.public_key_spki_der_base64);
+      if (publicMaterial.error || fingerprintPublicKeyDerBase64(publicMaterial.publicKeyDerBase64) !== fingerprintPublicKeyDerBase64(loaded.publicKeyDerBase64)) {
+        return { error: 'signing_key_public_private_mismatch', status: 400 };
+      }
     }
     return {
       algorithm,
@@ -487,7 +510,7 @@ export function resolveTenantVerificationMaterial(input) {
     return { error: 'signing_key_algorithm_mismatch', status: 400 };
   }
   if (algorithm === 'ed25519') {
-    if (typeof entry.private_key_pkcs8_der_base64 === 'string' && entry.private_key_pkcs8_der_base64.trim() !== '') {
+    if (!entry.public_key_spki_der_base64 && typeof entry.private_key_pkcs8_der_base64 === 'string' && entry.private_key_pkcs8_der_base64.trim() !== '') {
       const loaded = loadEd25519PrivateKey(entry.private_key_pkcs8_der_base64);
       if (loaded.error) {
         return { error: loaded.error, status: 400 };
@@ -495,6 +518,7 @@ export function resolveTenantVerificationMaterial(input) {
       return {
         algorithm,
         keyReference,
+        signingEnabled: entry.signing_enabled !== false,
         publicKeyDerBase64: loaded.publicKeyDerBase64,
         publicKeyFingerprintSha256: fingerprintPublicKeyDerBase64(loaded.publicKeyDerBase64),
       };
@@ -506,6 +530,7 @@ export function resolveTenantVerificationMaterial(input) {
     return {
       algorithm,
       keyReference,
+      signingEnabled: entry.signing_enabled !== false,
       publicKeyDerBase64: loaded.publicKeyDerBase64,
       publicKeyFingerprintSha256: fingerprintPublicKeyDerBase64(loaded.publicKeyDerBase64),
     };
@@ -522,6 +547,7 @@ export function resolveTenantVerificationMaterial(input) {
   return {
     algorithm,
     keyReference,
+    signingEnabled: entry.signing_enabled !== false,
     secret: secret.trim(),
     publicKeyFingerprintSha256: deriveHmacSigningKeyId({
       secret: secret.trim(),
@@ -691,22 +717,56 @@ export async function signCustodyManifestMetadataAsync(input) {
   if (!isValidKeyReference(keyReference)) {
     return { error: 'invalid_key_reference', status: 400 };
   }
+  const env = input.env ?? process.env;
+  const policyError = signingPolicyError(env, algorithm);
+  if (policyError) return policyError;
+  const material = resolveTenantVerificationMaterial({ tenantId, keyReference, algorithm, env });
+  if (material.error) return { error: material.error, status: material.status ?? 400 };
+  if (!material.signingEnabled) return { error: 'signing_key_retired', status: 400 };
+  if (algorithm === 'hmac-sha256') {
+    const validated = validateHmacSecretEntropy(material.secret);
+    if (!validated.ok) return { error: validated.error, status: 400 };
+  }
   const adapter = input.signingAdapter;
   if (!adapter || typeof adapter.signDigest !== 'function') {
     return { error: 'signing_adapter_missing', status: 500 };
   }
-  const signedDigest = await adapter.signDigest({
-    tenantId,
-    algorithm,
-    digest: digestResult.digest,
-    keyReference,
-  });
+  let signedDigest;
+  try {
+    signedDigest = await adapter.signDigest({ tenantId, algorithm, digest: digestResult.digest, keyReference });
+  } catch {
+    return { error: 'signing_adapter_unavailable', status: 503 };
+  }
+  if (!isPlainObject(signedDigest)) return { error: 'signing_receipt_invalid', status: 502 };
   if (signedDigest.error) {
-    return {
-      error: signedDigest.error,
-      status: signedDigest.status ?? 400,
-      detail: signedDigest.detail,
-    };
+    const errors = new Set(['kms_signing_not_configured', 'kms_signing_endpoint_invalid',
+      'kms_signing_origin_not_approved', 'kms_signing_limits_invalid', 'kms_signing_auth_unavailable',
+      'kms_signing_auth_invalid', 'kms_signing_unavailable', 'kms_signing_response_invalid',
+      'invalid_signing_deployment_config', 'invalid_signing_key_config', 'signing_key_retired',
+      'signature_verification_failed']);
+    const error = errors.has(signedDigest.error) ? signedDigest.error : 'signing_adapter_unavailable';
+    const status = error === 'kms_signing_response_invalid' || error === 'signature_verification_failed' ? 502 : 503;
+    return { error, status };
+  }
+  if (signedDigest.source !== undefined && !['env', 'kms'].includes(signedDigest.source)) {
+    return { error: 'signing_receipt_invalid', status: 502 };
+  }
+  if ((signedDigest.algorithm !== undefined && signedDigest.algorithm !== algorithm)
+    || (signedDigest.keyReference !== undefined && signedDigest.keyReference !== keyReference)
+    || signedDigest.publicKeyFingerprintSha256 !== material.publicKeyFingerprintSha256) {
+    return { error: 'signing_receipt_key_mismatch', status: 502 };
+  }
+  const signature = signedDigest.signature;
+  const expectedLength = algorithm === 'ed25519' ? 64 : 32;
+  if (typeof signature !== 'string' || signature.length !== Math.ceil(expectedLength / 3) * 4
+    || !BASE64_DER_RE.test(signature)) return { error: 'signing_receipt_invalid', status: 502 };
+  const bytes = Buffer.from(signature, 'base64');
+  if (bytes.length !== expectedLength || bytes.toString('base64') !== signature) {
+    return { error: 'signing_receipt_invalid', status: 502 };
+  }
+  const envelope = buildCustodySigningEnvelope({ tenantId, custodyManifestDigest: digestResult.digest });
+  if (!verifyEnvelopeSignature(envelope, signature, material)) {
+    return { error: 'signature_verification_failed', status: 502 };
   }
   const nowFn = input.now ?? (() => new Date());
   return buildSignedCustodyManifestResult({

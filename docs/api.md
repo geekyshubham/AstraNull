@@ -1,5 +1,24 @@
 # AstraNull API reference (production contract)
 
+## Audit execution and assurance contract (2026-10-09)
+
+These additive current contracts supersede conflicting historical agent-era examples below. See ADR-0008/0019/0021. No customer agent/environment endpoints are reintroduced and no new provider integration or SOC workflow is added.
+
+| Endpoint/field | Current contract |
+|---|---|
+| `POST /internal/probe/jobs/:id/execute` | Worker-only `pw2` authentication; body `{ leased_at }`. Rechecks exact active authorized target kind/value/port/protocol, ownership, signed absolute deadline, tenant kill switch and original lease; one durable whole-budget reservation. Successful creation returns 201 `{ authorized: true, reservation_id, not_after }`. Missing adapter is 503. Ambiguous/lost grants never authorize another execution. |
+| `POST /internal/probe/jobs/:id/activity` | Worker/tenant/raw-body/lease-bound immutable sequence items and optional bounded `probe-capture.v1` capture. Limits 32 KiB/16 batch/256 job items. No verdict authority. Revoked leases reject new activity; repeated identical ordinals are idempotent and conflicting replay is 409. |
+| `POST /internal/probe/jobs/:id/stop` | Authenticated exact-holder/original-lease acknowledgement of stop with bounded capture; allowed after cancellation because it authorizes no traffic. Not equivalent to database cancellation alone. |
+| `GET /v1/test-runs/:id/activity`, scan activity | Permission-checked passive reads with scoped opaque cursor pagination, bounds, source, capture, Stop and `input_complete` metadata. Earliest next ingestion prefix only; invalid/foreign cursor 400. Capped compatibility inputs cannot claim complete capture. |
+| Safe run admission | Complete internal accounting, atomic definitions/kill/budget/window checks. Missing/invalid complete usage returns audited 503 `safe_admission_usage_unavailable`; no list-cap bypass or scope widening. Existing denied hourly/cooldown status contracts remain. |
+| Readiness | `readiness-assessment.v2`, coverage policy `protection-profile.coverage.v2`, seven-day target/check compatible proof, governance zero credit; incomplete inputs yield `score: null`. Retest/version/scope/unknown counts are explicit. |
+| `GET /v1/reports/protection-validation` | Passive existing-gate/permission read. Recorded conclusions and actual-proof-derived `current_assurance`, ignored-for-findings reasons, incomplete sources and not-tested scope stay distinct. Report's labelled 30-day freshness never extends seven-day readiness. Configuration requires access and remains `explanation_only`. |
+| Current assurance scope | `assurance-scope.v3` losslessly hashes target kind/value/port/protocol and material declaration/policy/group definitions, including credential-like text and literal JSON keys. Stored v1/v2 scopes remain readable but require retest; no custody rewrite or silent upgrade. Exact tenant/run signed event or linked vault proof, matching run correlation nonce and immutable ingestion availability, is resolved before current credit. Retained positive verdicts cannot override contradictory actual enforcement. Recorded current group/policy definitions must also resolve and match; unresolved scope withholds credit. |
+| Protection finding notification | Existing subscribed high/critical create/escalation outbox is atomically queued in the same tenant transaction; recovery delivery only after commit, deduplicated. No new channel/test-send/provider integration. |
+
+Execution authority is `probe-authority-v2`: original immutable `issued_at`, `not_after` (maximum 120 seconds and bounded by collection/window), `execution_attempts: 1`. `execution-reservation.v1` / `reserved_unknown` conservatively account signed allowance, not measured operations. Reclaim cannot renew it. Fresh positive results require exact persisted reservation, worker and lease; zero-I/O diagnostics and durable historical reconciliation are not new authorization. Legacy authority is rejected for fresh execution, not accepted unsigned. No new schema migration is required for these JSON metadata additions. Control plane/workers require a coordinated compatible release; current local verification does not imply deployment.
+
+
 This document defines the **production API contract** for AstraNull and records **current implementation status** in developer validation mode. Route shapes and permissions below are the target unless marked as a production release blocker.
 
 ## Authentication
@@ -384,6 +403,39 @@ Implemented as read-only WAF analytics routes in developer validation and docume
 
 CVE playbook routes (`/v1/waf/cve-pipeline/:id/playbook`, `/playbook/approve`, and `/coordinated-retest`) are implemented with `waf:read`, `waf:write`, and `waf:run` respectively; see [Multi-Vendor CVE Playbook](detection/17-multi-vendor-cve-mitigation-playbook.md).
 
+CVE validation (`POST /v1/waf/cve-pipeline/:id/validate`) and post-mitigation retest (`POST /v1/waf/cve-pipeline/:id/retest`) reject caller-supplied `soc_approved`, `approved_by`, `approved_at`, `approved_role`, `reviewed_by`, and `reviewed_at` with `400 unsafe_cve_pipeline_item`. This includes camel-case aliases and nested objects/arrays, and does not depend on whether the supplied value is true or false. These requests cannot manufacture approval; known-exploited matches requiring execution review remain gated. Existing persisted validation bindings are rehydrated before checks and retained on repeated unsupported validation/retest, without promoting unreviewed applicability to confirmed evidence. No approved CVE-specific executor is shipped: absent exact scenarios remain skipped/not validated, create no generic fingerprint run, and cannot establish mitigation closure. Customer applicability declarations, workflow approval, generic WAF markers and deployment metadata are not CVE mitigation proof.
+
+### Customer CVE applicability declaration reviews
+
+This passive API stores authenticated customer declarations, not externally verified applicability or execution approval ([ADR-0024](adr/0024-customer-cve-applicability-declarations.md)). It uses the existing WAF feature flag; feature-off returns `404 waf_feature_disabled`. Human read/preview requires `waf:read`; approval/revocation requires an owner/admin with `waf:write` and applicable token scopes. Service accounts are denied, including read/preview. Authentication and mutation-role checks precede body parsing.
+
+| Method | Path | Request / response |
+|---|---|---|
+| POST | `/v1/waf/cve-applicability-reviews/preview` | Typed declaration below; `200 { plan, plan_digest, grants_execution: false, execution_available: false }`. No mutation. |
+| POST | `/v1/waf/cve-applicability-reviews` | Same declaration plus exact `reviewed_plan_digest`; `201` review, or `200` same-digest replay with `replayed: true`. One approval audit. |
+| GET | `/v1/waf/cve-applicability-reviews/:id` | `200` immutable review plus `current_review_gap` (`null` means only that the declaration review remains current); foreign/missing identity returns `404`. |
+| POST | `/v1/waf/cve-applicability-reviews/:id/revoke` | No body required; `200` terminally revoked review and revocation audit. Repeated revocation or approval replay after revocation returns `409 cve_review_revoked`. |
+
+```json
+{
+  "cve_pipeline_item_id": "cve_declared_item",
+  "cve_id": "CVE-2026-12345",
+  "cve_asset_match_id": "cvm_declared_match",
+  "waf_asset_id": "waf_declared_asset",
+  "component": "declared-component",
+  "component_version": "1.2.3",
+  "declared_applicability": "unknown",
+  "source": "manual",
+  "supporting_metadata": []
+}
+```
+
+`declared_applicability` is `applicable`, `not_applicable`, or `unknown`; `source` is `manual`, `sbom`, `cmdb`, or `vendor_advisory`. Optional `supporting_metadata` defaults to `[]` and accepts at most eight exact `{ kind, reference_id, sha256 }` entries. Kinds are `sbom`, `cmdb`, `vendor_advisory`, or `change_record`; references are bounded typed identifiers and SHA-256 values are 64 lowercase hex characters. Explicit `null`, URLs, retrieved content, credentials, raw payloads, callbacks, and caller-owned actors/timestamps are rejected. Source labels and hashes do not establish authenticity of external contents.
+
+Approval binds exact same-tenant item/CVE/match/asset and material item/match/asset/linked-target definitions. The server derives reviewer, role, and time. A stale/missing preview digest returns `409 reviewed_plan_digest_mismatch`; malformed declarations return `400`; missing/foreign lineage returns `404`; incompatible lineage returns `409`. Reads expose material drift or revocation without rewriting history. No expiry is claimed as a traffic allowance: this declaration grants none. All review results explicitly set both execution flags to false, including early authentication, feature-disabled, malformed/oversized-body and rate-limit errors. Oversized-body rejection still closes the connection without draining the upload; `429` retains `Retry-After`. Unrelated API families are unchanged. Infrastructure failures return redacted `500 internal_error` with a logged correlation ID.
+
+The review remains `evidence_classification: customer_declaration`, with `external_applicability_verified`, `exposure_claim_allowed`, and `observed_enforcement` all false. It does not update legacy confirmed applicability, lower execution gates, contact endpoints, create runs/jobs/reservations, affect readiness scores, or close mitigation. PostgreSQL requires operator-applied migration `0076_cve_applicability_reviews.sql`, exact-lineage tenant FKs, FORCE RLS, immutable history, and atomic audits. Missing/partial injected services return `503 postgres_route_not_wired` without dev-store fallback. No production migration is performed by this implementation.
+
 ### WAF connector framework
 
 The connector routes are also disabled when `ASTRANULL_WAF_POSTURE_ENABLED` is off. The current slice is metadata-only: it stores connector configuration summaries and operator-provided normalized snapshots, but does not call provider APIs, discover assets, or require credentials for core validation. Credential material must live in the secret vault and be referenced by `secret_id`; raw configs, headers, bodies, logs, plaintext tokens, and full policy bodies are rejected.
@@ -417,6 +469,8 @@ The connector routes are also disabled when `ASTRANULL_WAF_POSTURE_ENABLED` is o
 
 API calls authenticate with `Authorization: Bearer <svc_…>`. RBAC checks require matching scope (or `*`) in addition to role permission. Revoked or invalid tokens return `401`. Service account tokens do not satisfy agent or probe-worker authentication.
 
+Rotation and revocation of an ID absent from the caller's tenant return the same `404 { error: "not_found" }` whether the ID is nonexistent or belongs elsewhere. Both dev and PostgreSQL services persist `service_account.mutation_not_found` under the caller's tenant/user/role and attempted resource ID. They perform no cross-tenant existence lookup and include no token, hash, salt or submitted credential in that audit. Role/scope denials remain separately audited as `rbac.denied`; denial auditing is not a business-state mutation.
+
 ## Secrets (integration credentials)
 
 Tenant-scoped integration secrets are stored as **AES-256-GCM** envelopes. The public API never returns plaintext, ciphertext, or auth tags, and there is **no** decrypt endpoint—plaintext is accepted only on create and rotate.
@@ -427,7 +481,7 @@ Tenant-scoped integration secrets are stored as **AES-256-GCM** envelopes. The p
 | GET | `/v1/secrets` | `secret:read` | — | `{ items }` metadata-only records per tenant. |
 | POST | `/v1/secrets/:id/rotate` | `secret:rotate` | `{ plaintext, metadata? }` | `200` updated metadata + redacted envelope; `404` `{ error: "not_found" }`; `503` when encryption key is unset. |
 
-Sensitive metadata keys are redacted on store and in responses. Internal workflows may decrypt for authorized use only (not exposed on `/v1`).
+Sensitive metadata keys are redacted on store and in responses. Internal workflows may decrypt for authorized use only (not exposed on `/v1`). A rotation whose scoped secret lookup returns no record preserves the generic 404 and appends `secret.rotate_not_found` under the caller's tenant/user/role and attempted resource ID, in both dev and PostgreSQL services. Neither submitted plaintext nor another tenant's existence or metadata is included.
 
 ## Agents (outbound)
 
@@ -554,7 +608,7 @@ Report and finding exports attach a metadata-only **custody** manifest (`schema_
 
 - **Digest:** `content_sha256` is SHA-256 over the export payload using deterministic `json-key-sorted-v1` canonical JSON (plain objects/arrays only; unsupported types fail verification).
 - **Linkage:** `previous_audit_hash` matches the global tamper-evident audit chain predecessor for the `report.exported` / `finding.exported` event; `previous_tenant_audit_hash` may be present when a prior tenant-scoped audit entry exists.
-- **Verification:** clients can call `POST /v1/custody/verify` with `{ payload, custody }` (`audit:read`) or the local `verifyCustodyManifest({ payload, custody })` helper. Both recompute the digest; neither performs KMS/signature validation yet.
+- **Digest verification:** clients can call `POST /v1/custody/verify` with `{ payload, custody }` (`audit:read`) or the local `verifyCustodyManifest({ payload, custody })` helper. Both recompute the content digest; this endpoint does not verify a detached signature. Snapshot signing independently verifies the returned signature before issuing signed metadata; digest verification alone is not signed-custody acceptance.
 - **Verification response:** `/v1/custody/verify` returns `{ ok, verification }` with safe manifest metadata and `error` such as `custody_missing` or `content_sha256_mismatch`; it does not echo the submitted payload.
 - **Audit metadata:** export audit rows record only `format`, `content_sha256`, and `custody_schema_version` (no full manifest duplication).
 - **Verification audit:** custody verification records `custody.verified` with metadata-only status, artifact type, digest, and schema version.
@@ -564,6 +618,18 @@ Report and finding exports attach a metadata-only **custody** manifest (`schema_
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
 | POST | `/v1/custody/verify` | `audit:read` | `{ payload, custody }` | `200` `{ ok, verification }`; safe metadata only, no payload echo. Audits `custody.verified`. |
+
+### Independently verified snapshot signing
+
+`POST /v1/evidence/snapshots/sign` requires `evidence:write`. Body: `{ custody, key_reference, algorithm }`; success: `201` `{ signed }`. Signing covers the canonical `astranull.evidence_signing.v1` envelope containing the custody manifest digest, tenant, and canonicalization/schema identifiers, not raw digest bytes. Tenant/key trust is operator-configured through `ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON` or the JSON key-map file `ASTRANULL_EVIDENCE_SIGNING_KEY`. Adapter-supplied public keys do not establish trust. The issuer verifies the exact signature against canonical, nonidentity prime-order Ed25519 public trust before returning a signed receipt. Fingerprints are SHA-256 over decoded SPKI DER.
+
+Production profile **or** `NODE_ENV=production` forbids new HMAC issuance. Historical HMAC verification remains available through the verification helper. Retired entries (`signing_enabled: false`) retain historical verification but cannot issue new signatures. Missing, malformed, mismatched, or untrusted material fails closed; historical evidence is not rewritten.
+
+An external signer uses the existing `/v1/signing-keys/resolve` and `/v1/sign` adapter contract, not a native cloud-provider SDK. Real-mode transport requires HTTPS, an explicitly approved origin, and bearer authentication (inline or a control-plane-only credential file). It rejects redirects, URL credentials/query/fragment, oversized/invalid responses, and uses one bounded header/body deadline. Only explicit nonproduction `local-staging` permits loopback HTTP. No cloud access is added to customer workflows.
+
+Successful verified issuance audits `evidence.snapshot_signed`; failures audit `evidence.snapshot_sign_failed` with rejection status only. Adapter diagnostics, credentials, structured source fields, submitted payloads, and signatures are not forwarded in failure metadata. Unknown adapter errors become `signing_adapter_unavailable`; malformed receipts and cryptographic failures never receive success audits.
+
+Startup validates configured trust and transport. `ASTRANULL_REQUIRE_EVIDENCE_SIGNING=1` requires at least one active usable trusted signing key. Optional absent signing is explicitly unavailable, not ready. Configuration readiness always retains `operationalAcceptance: not_verified`: it is not real signer availability, immutable storage, retention/legal-hold, or human approval. See [ADR-0022](adr/0022-independent-signing-and-firewall-proof.md).
 
 ## Events and evidence
 
@@ -813,6 +879,78 @@ Report `primary` is null unless `summary` or the report row has `primary_test_ru
 Provider `subject` adds `status`, `provider` (null when zero or several), `product`, `source`, `reason`, `confidence`, `conflict`, `corpus`, `observed_at`, and `proof`. `proof` is string arrays, each capped at 16: `{ "matched_signals": [], "methods": [], "cnames": [], "addresses": [], "fingerprints": [] }`. The current summary renderer drops arrays, so read `subject.proof` directly. Each distinct provider is a `provider_layer` alternative with the same scalar fields plus that layer's arrays. `primary` is set only when at least one signal, CNAME, address, or fingerprint is present. A method label alone leaves `primary: null`, `evaluation.status: "not_recorded"`, and `unavailable_reason: "no_refs"`. DNS and origin hosting stay `not_recorded` / `unknown` with `reason: "no_origin_hosting_observation"` until that family has its own observation. Headers, bodies, cookies, and authorization values are not copied.
 
 `request_summary` and `response_summary` copy only recorded primitive fields from the one selected event (`engine`, `method`, `path` with the query removed, `protocol`, `max_requests`, `timeout_ms`, `external_result`, `status_code`, `received_at`). Recorded values are not recased. Missing fields are `{ "status": "not_recorded" }`. Evaluation from a stored verdict forces `confidence: "external_only"`. Responses are passed through `redactObject` again. Raw headers, cookies, authorization, bodies, URL queries, and agent or placement metadata are not returned. `GET /v1/test-runs/:id/events` remains the raw bounded event list and is not this payload.
+
+## Reviewed inert-operation preflight
+
+Version: `reviewed-inert-operation.v1`. Decision: [ADR-0023](adr/0023-reviewed-inert-operation-preflight.md). These are **passive preflight records, not execution authorization**. Every successful response explicitly returns `grants_execution: false` and `execution_available: false`; no request below starts traffic, creates a run or increases a worker allowance.
+
+| Method | Route | Permission and behavior |
+|---|---|---|
+| POST | `/v1/reviewed-operations/preview` | Authenticated `test_run:read`; reconstruct current exact plan without writing approval or audit |
+| POST | `/v1/reviewed-operations` | Human owner/admin with `test_run:start`; insert reviewed plan and transactional approval audit; `201` new, `200` same-digest replay |
+| GET | `/v1/reviewed-operations/:id` | Authenticated `test_run:read`; immutable history plus current review gap |
+| POST | `/v1/reviewed-operations/:id/revoke` | Human owner/admin with `test_run:start`; terminal revocation and transactional audit |
+
+Token scopes also apply; service accounts cannot approve or revoke. Tenant foreign ids return `404 target_not_found` or `404 operation_not_found`. PostgreSQL requires all four service methods; missing wiring returns `503 postgres_route_not_wired` without dev fallback. Forbidden actors are rejected before parsing approval bodies. Unsupported methods return `405 method_not_allowed` for authorized callers.
+
+Preview input, followed by the unchanged input plus the returned `reviewed_plan_digest` for approval:
+
+```json
+{
+  "target_id": "tgt_declared_url",
+  "check_id": "waf.evasion_alt_charset.safe",
+  "template": "inert-json-v1",
+  "semantics": "inert_diagnostic",
+  "side_effects": "none",
+  "expires_at": "2026-10-10T01:00:00.000Z"
+}
+```
+
+A URL review now requires its own current direct `dns_verified` / `dns_txt` proof with exact server-issued `source_ref.dns_target_binding` material identity (`dns-ownership-target.v2`). A sibling FQDN, inherited/provider/manual/demo proof or legacy URL row without this binding cannot approve a review. Changing the URL, port, protocol, expected behavior or declaration invalidates that proof for new review, not only the old plan. Missing or mismatched proof returns `409 ownership_not_verified`; no history is rewritten. Version v2 uses lossless canonical material hashing, distinct from catalog credential-version redaction; old v1 bindings cannot qualify current URL proof and are never silently upgraded.
+
+Reviewed execution implementation was stopped on 2026-10-11. `POST /v1/test-runs` explicitly rejects a valid `reviewed_operation_id` with `409 reviewed_operation_execution_unavailable` before admission/replay/dispatch, rather than ignoring the selection. Malformed selectors return `400 invalid_reviewed_operation_selection`; client-supplied reviewed bindings/approval authority return `400 reviewed_operation_authority_not_allowed`. These denials hold even with injected lifecycle dependencies. Job construction, worker direct/signed execution and polling reject stored reviewed bindings before destination lookup or transport; reservation/activity/result ingestion also withhold execution. The unfinished customer component is not mounted, and `/internal/probe/jobs/:id/reviewed-claim` is not a registered worker route. PostgreSQL runtime does not construct the interrupted lifecycle from configuration; worker startup explicitly rejects `ASTRANULL_REVIEWED_SAFE_EXECUTION_ENABLED=1`. Ordinary omitted-selector behavior and existing Stop acknowledgment remain unchanged. Passive review never grants execution.
+
+The timestamp is illustrative, not a currently valid authorization. Expiry requires a valid UTC ISO date/time with seconds and optional three-digit milliseconds, strictly after review and at most 24 hours later. The target must be active, directly owned and an exact HTTP(S) URL; URL credentials, existing query/fragment and conflicting declared port are rejected. The check must be safe, URL-applicable and in the supported marker/inspection kind allowlist. `marker-query-v1` pins GET, no request body and `fixed-asn-probe-query.v1`; `inert-json-v1` pins POST, at most 1,024 body bytes and `fixed-asn-marker-json.v1`, for evasion markers only. Both pin four maximum probe operations in a future plan, **not four performed or authorized requests**. A supported review template does not mean the check's mechanism delivery is implemented. Check version/digest follow credential-stable catalog semantics; the detached binding separately losslessly hashes and exactly reconstructs the concrete supported profile. Current query serialization uses fixed marker-class constants and enumerated transforms, not arbitrary profile marker text. New serializers consuming additional text must introduce lossless reviewed authority rather than rely on catalog credential redaction.
+
+Unknown fields, raw bodies, arbitrary headers, callbacks, endpoint overrides and client-supplied actors/approval flags return `400 operation_field_not_allowed`. Other validation codes include `invalid_operation_identity`, `exact_url_target_required`, `invalid_operation_endpoint`, `operation_endpoint_port_mismatch`, `operation_check_not_supported`, `operation_template_not_supported`, `inert_semantics_required`, `operation_expiry_invalid` and `409 ownership_not_verified`. Approval requires the recomputed exact digest, otherwise `409 reviewed_plan_digest_mismatch`.
+
+The returned plan includes tenant/target identity, target definition digest, check id/version/full definition digest, scenario version, endpoint, method, fixed schema/bounds and expiry. Persisted rows add server-stamped `approved_by`, `approved_role`, `approved_at`, `revoked_at` and `revoked_by`. Approval/revocation audit actions are `reviewed_operation.approved` and `reviewed_operation.revoked`; metadata contains target id and plan digest, not request payloads. PostgreSQL audit failure rolls back the mutation. There is no list/update/delete API and no synthetic history backfill.
+
+Reads expose `current_review_gap: null` only when the typed plan still reconstructs, ownership remains verified, scope/catalog are unchanged and review is unexpired/unrevoked. Other values include `operation_revoked`, `operation_expired`, `operation_target_changed`, `operation_check_changed`, `operation_review_invalid` and `ownership_not_verified`. These are review states, never protection verdicts. Revocation and same-digest reapproval after revocation return `409 operation_revoked`; historical rows remain readable. Future signed dispatch/reservation binding and fresh independent controls are still required before enabling any new serializers.
+
+### Detached reviewed execution grant contract (not a runtime endpoint)
+
+`reviewed-execution-grant.v1` is a typed server/worker library foundation only. It is not returned by the ordinary execution reservation API and does not make any review executable. The Ed25519 envelope uses purpose `astranull.reviewed-operation.execution-grant` and pins the exact original canonical signed job payload plus original signature digest, tenant/job/run/check/target/nonce, authenticated worker/lease, complete reservation, budgets and unchanged deadlines. Original job constraints never acquire a later reservation.
+
+`verifyReviewedExecutionGrant({ grant, context, trust, mode: 'current' })` compares the exact typed context (`originalJob`, `reservation`, `check`, authenticated `tenantId`, `workerId`, `leasedAt`, fresh `now`) and independently verifies purpose-pinned public trust. A current result is `{ ok: true, verification: 'current' }`; historical verification explicitly returns `{ ok: true, verification: 'historical', execution_valid: false }`, never a current execution fallback. The caller must separately verify the original HMAC and current database review, DNS, lease and reservation authority. Pure success is not an execution permission, protection result or persistent issuance record.
+
+Dedicated adapter configuration is **not startup/deployment-wired**:
+
+- `ASTRANULL_REVIEWED_EXECUTION_GRANT_TRUST_JSON`: strict public-only `{ version: 'reviewed-execution-grant-trust.v1', purpose: 'astranull.reviewed-operation.execution-grant', tenants: { [tenantId]: { [keyReference]: { algorithm: 'ed25519', public_key_spki_der_base64, public_key_fingerprint_sha256, signing_enabled } } } }`. No private key or HMAC entry is accepted; retired keys cannot establish current capability.
+- `ASTRANULL_REVIEWED_EXECUTION_GRANT_SIGNING_KEYS_JSON`: dedicated local signer map, separate from public-only trust. It has no custody/worker-secret fallback.
+- External adapter uses `ASTRANULL_REVIEWED_EXECUTION_GRANT_SIGNING_ENDPOINT`, `..._SIGNING_ALLOWED_ORIGINS`, `..._SIGNING_BEARER_TOKEN`, `..._SIGNING_FETCH_TIMEOUT_MS` and `..._SIGNING_MAX_RESPONSE_BYTES`. HTTPS, allowlisted origin, bounded response/cancellation and locally verified actual signature remain mandatory, including in development. The external signer adapter path is `/v1/reviewed-execution-grants/sign`, **not an AstraNull public HTTP route**.
+
+The ordinary worker `/execute` reservation and `/result` ingestion paths explicitly reject reviewed jobs with `409 reviewed_operation_execution_unavailable` until lifecycle integration exists; the ordinary PostgreSQL reservation also checks stored constraints, not only a stale caller descriptor. Polling does not request that unsigned reservation for a reviewed job. Stop acknowledgment remains available. No grant persistence, unique issuance/reissue policy, recovery, worker dispatch or accepted result custody is supplied by this detached contract. A separate internal current-authority loader is documented below; it does not make the grant contract runtime-executable.
+
+### Internal current-authority loader (not a runtime endpoint)
+
+`createReviewedOperationAuthority({ backend }).withCurrentAuthority(ctx, request, callback, options)` reads current server authority. Build requests are exactly `{ mode: 'build', reviewId, targetId, checkId, originalAuthority: { issued_at, not_after } }`; compare requests are exactly `{ mode: 'compare', targetId, checkId, binding }`, using the stored binding's review/original authority only. Canonical UTC three-digit millisecond authority clocks are mandatory. Extra caller records/selectors/deadlines, accessors and non-JSON bindings fail closed without invoking the success callback.
+
+PostgreSQL retains audit-first/advisory/active-group/full-target/all-direct-history/review locks through validation and callback. Full exact-microsecond ownership history is selected before lossless zero-microsecond normalization; real sub-millisecond, malformed, ambiguous, old or unbound authority is not upgraded or replaced by an older proof. Fresh database time is sampled after waits. An explicit `options.client` must be the exact active same-pool/same-tenant managed client, not a raw pool, autocommit or untracked manual transaction. Caught nested callback errors still force enclosing rollback.
+
+Snapshots are detached and deeply frozen, with finite driver Dates converted to ISO strings. Both execution flags remain false. Dev supports synchronous consumers only and does not promise writer locks or signing safety. Failure codes include `invalid_reviewed_operation_authority_request`, `invalid_reviewed_operation_authority_options`, `reviewed_operation_authority_client_invalid`, `reviewed_operation_authority_snapshot_invalid` and existing current binding/review/ownership/expiry gaps. Consumer exceptions propagate; they are not success authority.
+
+This internal prerequisite verifies no original HMAC, grant, reservation, lease, kill switch or admission obligation. A callback finishing inside an enclosing transaction does not establish a committed issuance record. No external signing, traffic, new public route or reviewed execution is enabled.
+
+### Internal durable grant issuance (under local acceptance; not a runtime endpoint)
+
+`createReviewedExecutionGrantIssuance({ repository, probeWorkerSecret, trust, keyReference, signingAdapter, timeoutMs }).issueOnce(ctx, request)` accepts exactly `{ jobId, reservationId }` and server-authenticated `{ tenantId, workerId }`. Caller records, clients, approvals, clocks or grants are not accepted. A PostgreSQL-only durable repository loads the actual original job/run/reservation, authenticates the unchanged original HMAC and compares current authority. Dev has no nondurable fallback. Dedicated grant adapters are still not automatically constructed or startup/deployment-wired.
+
+The issuance ledger consumes a unique tenant/job, tenant/run and tenant/reservation opportunity. Claim and audit commit before one signer call outside transactions; outcome and audit commit before returning a grant. Active enclosing managed transactions are rejected. The exact prepared envelope is signed without rebuilding its time, budgets or original deadlines. Real current time and active pinned trust are checked immediately before signer invocation, after its response and after outcome commit. Finalization additionally rereads actual material, ownership, review, run, kill switch, job, lease and reservation. Unknown or lost outcomes cannot be reclaimed, retried, refunded or renewed. A still-current issued replay returns the identical stored grant with no signer I/O.
+
+Success includes `{ ok: true, grant, issuance_id, replayed, grants_execution: false, execution_available: false }`; failure retains both false execution flags and does not expose database/signer diagnostics. Internal audits are `reviewed_execution_grant.signing_claimed`, `reviewed_execution_grant.issued` and `reviewed_execution_grant.closed_unknown`, with identifiers/digests rather than payloads, plaintext nonces or secrets. Storage uses additive migration `0078`; no production application is performed.
+
+**Acceptance is in progress.** This service is unregistered, creates no reservation, and exposes no public HTTP route. Existing ordinary reviewed admission/reservation/result/polling/worker guards remain in place. Test-seeded persisted reservations are not a delivered customer execution workflow. See [proposed ADR-0025](adr/0025-durable-reviewed-grant-issuance.md) and the [verification ledger](implementation/missing-capabilities-production-acceptance.md) for actual results; the preceding loader/browser/backend checkpoints do not certify this newer source.
 
 ## Application entry paths and firewall change acceptance
 
@@ -1254,6 +1392,10 @@ Marker probes (`waf_class_marker_probe`, `waf_evasion_marker_probe`, `waf_enforc
 
 Other correlation rules from the 2026-10-06 staging run: a completed TLS handshake (`tls_audit`) is a TLS-profile result (`protected`, or `exposed` with the listed profile issues), never "blocked at the edge"; a bounded port scan whose only open ports are 80/443 is `allowed_as_expected` with no finding; WAF effectiveness ignores inconclusive marker rows instead of voiding the definitive ones. `l3.forbidden_tcp_port.safe`, `l3.forbidden_udp_port.safe` and `l3.ipv6_reachability.safe` also accept `tcp` (`host:port` or `[IPv6]:port`) targets; an unbracketed IPv6 literal is never split into host and port.
 
+**Timeout correlation (2026-10-11 repair).** In both ordinary dev-store and PostgreSQL finalization, `external_result: "timeout"` is always `inconclusive` with `external_only` confidence and creates no finding or readiness credit. This holds even with attested probe I/O, a must-block expectation, and absent, malformed or unrecognized probe-kind metadata. A timeout is never an alias for `blocked`: it cannot distinguish filtering from an unavailable service. Existing more-specific coverage-gap/observation explanations remain inconclusive. This restores the existing conservative contract; it adds no execution permission and does not rewrite historical verdicts or custody records.
+
+**Destination cancellation normalization (2026-10-11 repair).** The existing bounded slow-header executor returns `external_result: "error"`, zero `requests_sent`, `error_class: "probe_job_deadline_exceeded"` and `readiness_conclusion: false` when its destination validation is aborted or exhausts the original deadline before connection. It does not connect or renew authority. Signed operation-budget rejection remains a failure rather than being converted into a successful outcome. Resolver fixtures use the actual `resolve4Fn`/`resolve6Fn` interface; no system DNS is required by these cancellation regressions.
+
 **Source perspectives.** A run's source perspective is resolved on the server from the signed worker id, never from worker-submitted metadata. With `ASTRANULL_APPROVED_PROBE_SOURCES` (JSON object of perspective to worker ids), only registered workers have a source; unknown workers are `source_missing`. Without it, every signed worker belongs to the shared pool `astranull-signed-public-worker`.
 
 **Matrix.** `GET /v1/targets/:targetId/protection-validation` lists active paths anchored on the target. Rows add `entry_target_value`, `scenarios[]` (current item per scenario with `evaluation_id` and `freshness`), and `layers[].configuration`. `configuration` is explanation-only connector evidence (`evidence_role: "explanation_only"`, `absence_means: "unknown"`); it never changes `vendor_detection` or `observed_enforcement`. The response adds `counts`, `exclusions`, and `configuration_access` (`granted`, `redacted`, or `disabled`). Configuration uses the same gate as connector snapshots: `ASTRANULL_WAF_POSTURE_ENABLED`, tenant connectors, and the `waf:connector_read` permission (and API-key scope). When access is `redacted` (for example `viewer` or `soc`), rows omit `layers[].configuration` and `GET /v1/targets/:id` attaches only `protection_profile.configuration: { "configuration_access": "redacted" }`. A layer's `observed_enforcement` is set only when the driving check measures that layer (WAF/edge markers and direct-origin or HEAD checks measure `waf` and `cdn_edge`; bounded port checks measure `network_firewall`; nothing measures `ddos`). Other declared layers stay `not_tested` with the `layer_not_measured_by_scenario` limitation.
@@ -1272,6 +1414,18 @@ Other correlation rules from the 2026-10-06 staging run: a completed TLS handsha
 - Origin protection-finding retests with a missing or different `origin_binding_id` return `409 retest_not_authorized` with `retest_scope_mismatch` before dispatch. Mapped firewall findings and retests bind to the declared post-change target.
 - A malformed or explicitly empty `ASTRANULL_APPROVED_PROBE_SOURCES` admits no workers; conflicting assignments give that worker no perspective. An unset registry alone uses the shared public pool. Explicit false tenant feature overrides also apply to demo tenants.
 
+### Independently reconstructed firewall proof (2026-10-09)
+
+Route shapes and permissions are unchanged; capture/evaluation/report remain passive. Current report qualification additionally loads the exact digest-covered baseline pre references and evaluation post references, complete exact-run accepted jobs/events/vault mappings, and reconstructs the retained classification. Exact-run capture/evaluation reads are not truncated by the 256-item presentation limit.
+
+Accepted result ingestion server-stamps `probe_job_id`, configured `source_perspective`, and `execution_receipt` (`accepted-probe-execution.v1`). Workers cannot submit these reserved fields. The receipt binds the original worker/lease, immutable signed job and constraints, durable reservation, nonce, actual result and attestation; it is a server custody binding, not a standalone worker signature or new traffic authorization. PostgreSQL lease formatting is normalized to the same ISO instant for verification, without changing signed authority JSON. An explicitly configured runtime source registry is used consistently at ingestion and read-time qualification, not replaced by process environment.
+
+Finite TCP, UDP, bounded-port and host/SNI producers add `observation_complete` only for the actually completed bounded observation. TCP/UDP also expose pinned address and actual port; host/SNI exposes the performed port and still retains `comparison_complete: false`. TLS completion remains a finite handshake fact. This distinction permits firewall sample proof without implying a complete multi-leg WAF comparison; false/missing completion, UDP silence, ordinary refusal or absent samples never become protection.
+
+Qualified firewall conclusions have `current_assurance.status: sampled_ingress_only`, `readiness_eligible: false`, and no capacity, appliance traversal, routing, internal layer or DDoS readiness claim. Missing accepted receipts, wrong worker/nonce/scope, pre/post run reuse, omitted contradictory events, later ingestion and altered retained observations withhold current assurance; retained evaluations are not rewritten or synthetically backfilled.
+
+Firewall `freshness` uses the shorter baseline/report window and oldest required actual sample, with `window_seconds`, `report_window_seconds`, and `baseline_window_seconds`. A newer declared reference timestamp cannot renew an older event. Expired actual samples display `stale` and the distinct assurance reason `actual_firewall_sample_expired`. See [ADR-0022](adr/0022-independent-signing-and-firewall-proof.md).
+
 ### Provider detection and live activity correction (2026-10-08)
 
 `POST /v1/waf/edge-detection` retains its exact target-ID request shape and asynchronous response. It now starts `waf.fingerprint.safe` version `2.1.0`, kind `waf_fingerprint_observation`: one ordinary pinned GET and up to three counted CNAME lookups, with a five-second deadline. Detection is observation-only and outside readiness coverage; it never starts marker, POST, evasion, or origin-bypass requests. Historical versions remain retained.
@@ -1288,9 +1442,11 @@ The portal selects declared targets directly. Human API requests can use `x-astr
 - `POST /v1/validation-scans` accepts `target_ids: string[]` (or an exact `target_id`) plus `check_ids`. IDs are validated in full before creation; duplicate IDs are removed; at most 500 target/check steps are planned. Cross-policy selected domains keep their own windows, cooldowns, concurrency, and rate controls. Scheduled occurrences retain the captured explicit selection. A target-filtered list includes assessments containing that target.
 - `POST /v1/high-scale-requests` accepts exact target IDs or a `target_ids` set; governed scope hashes and authoritative artifact approvals bind to that exact set. Every selected target must have current ownership/authorization, and SOC controls remain mandatory.
 - `DELETE /v1/targets/:id` retains evidence and refuses an active execution on that target.
-- `GET /v1/targets/:id/dns-ownership`, `POST .../issue`, and `POST .../verify` bind challenges to the exact target. Verification rejects a challenge belonging to another target, even if it shares the retained policy.
+- `GET /v1/targets/:id/dns-ownership`, `POST .../issue`, and `POST .../verify` bind challenges to the exact target. Verification rejects a challenge belonging to another target, even if it shares the retained policy. Both dev and PostgreSQL finalization recheck the exact challenge and active scope after asynchronous TXT lookup: removed challenge/target/policy returns 404, changed challenge/destination binding returns `409 challenge_binding_changed`, and intervening same-tenant same-target ownership returns `409 ownership_state_changed`. Neither conflict appends proof or a success audit. Malformed/nonfinite pending clocks and mismatched declared hostname/kind fail before DNS. Fresh expiry still returns `409 challenge_expired`; parallel successful completion returns the retained result/audit reference without duplicate proof/audit only after checking the captured challenge/target material, including exact private clocks. A competing completion may change ownership generation but cannot turn a stale material snapshot into `verified: true`. PostgreSQL obtains a server-only exact lookup snapshot under the tenant audit lock, releases locks before DNS, then rechecks the immutable snapshot and SHA-256 of complete target verification history under that same lock at finalization. Missing/malformed internal binding fails with `503 dns_lookup_binding_missing`; it is not a caller input or execution authority. A fresh database clock after snapshot locking also prevents starting DNS after an intervening lock wait crosses expiry. Existing challenge/verification/audit writes remain one transaction; completion time is recorded after lookup and the dev target-state mirror is tenant-filtered. Explicit target issuance accepts legitimate declared HTTP(S) URLs and FQDNs; compatibility issuance/verification without exact target/challenge selection remains FQDN-only. URL issuance performs no endpoint request: it derives `_astranull-challenge.<host>` and persists the exact server-owned `dns-ownership-target.v2` target/material binding. Binding survives failed checks, expiry and terminal replay, and successful direct proof retains it in `source_ref.dns_target_binding`; siblings and edited material cannot inherit it. Credentials, query/fragment-bearing stored URLs, IP/unsafe/malformed hosts and protocol/port conflicts return `400 invalid_dns_ownership_target`. Existing target-intake normalization is unchanged. Full scoped provenance participates in the history generation; private PostgreSQL snapshot/finalization clocks retain microseconds while public timestamps retain existing formatting. This DNS finalization slice does not establish a new ownership revocation endpoint, endpoint inertness or execution authority. Additive chronology hardening is documented separately below.
 - `GET /v1/targets/:id/authorization` returns only an active authorization covering that target. `POST` captures only that target and requires explicit attestation and a valid signer; a conflicting scope is rejected. Distinct domain signatures can coexist on a retained policy, while overlapping active scope returns `409 loa_active`. Historical signatures and custody digests are retained.
 - `POST /v1/targets:csv` accepts the same bounded CSV/multipart contract as existing imports. All rows are validated before writing; imports need no group selection.
+
+Ownership chronology (migration `0077`, 2026-10-10): latest proof is ordered by the exact stored instant, not by strength or random ID. Equivalent latest authority duplicates retain proof; conflicting state/source/reference at the latest instant, or invalid scoped clocks, return the existing `pending` state with `source_kind: ownership_ambiguous` and empty `source_ref`. Demo and inherited proof must not upgrade this marker, and confirmation from an old verified challenge returns `409 ownership_transition_invalid` without proof/audit mutation. New dev and PostgreSQL transitions advance by whole milliseconds beyond complete target history; invalid history or impossible advancement fails closed. SQL failures roll back proof and linked success audits. This does not add a public state or endpoint, rewrite history, renew DNS/LOA expiry, grant execution or imply enforcement. Normal operator migration is required before PostgreSQL rollout; no production migration was performed.
 
 Legacy compatibility routes remain available to existing integrations while customer navigation and selection use targets. IDs, original custody artifacts, and existing policy histories are preserved.
 

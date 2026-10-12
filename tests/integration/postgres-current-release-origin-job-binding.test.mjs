@@ -290,9 +290,8 @@ describe('postgres origin job binding (signed scope serialization + snapshot fin
       assert.equal(check.default_expected_behavior, 'must_block_before_origin');
       const finalized = await testRuns.finalizeTestRun(CTX, runId, { force: true });
       assert.equal(finalized?.error, undefined, JSON.stringify(finalized));
-      assert.equal(finalized.verdict.verdict, 'edge_exposed');
-      assert.match(finalized.verdict.explanation, /Origin response observed/);
-      assert.match(finalized.verdict.explanation, /application identity was not confirmed/);
+      assert.equal(finalized.verdict.verdict, 'inconclusive');
+      assert.match(finalized.verdict.explanation, /transport or liveness metadata only|observation only/);
 
       // --- 3b. Catalog drifts after start; a new stamped run keeps the start snapshot ---
       const drifted = await testRuns.startTestRun(
@@ -305,7 +304,7 @@ describe('postgres origin job binding (signed scope serialization + snapshot fin
         check.default_expected_behavior = 'must_reach_canary';
         assert.equal(drifted.run.expected_behavior_json.value, 'must_block_before_origin', 'start snapshot ignores later catalog drift');
         const driftedFinalize = await testRuns.finalizeTestRun(CTX, drifted.run.id, { force: true });
-        assert.equal(driftedFinalize.verdict.verdict, 'edge_exposed', 'snapshot, not drifted catalog, governs the verdict');
+        assert.equal(driftedFinalize.verdict.verdict, 'inconclusive', 'the immutable snapshot survives drift, but simulation and liveness never establish assurance');
 
         // --- 3c. Legacy unstamped run keeps the truthful today-catalog fallback ---
         await seedRunRow(pool, 'run_pg_legacy', {
@@ -314,7 +313,7 @@ describe('postgres origin job binding (signed scope serialization + snapshot fin
           expected_behavior_json: null,
         });
         const legacy = await testRuns.finalizeTestRun(CTX, 'run_pg_legacy', { force: true });
-        assert.equal(legacy.verdict.verdict, 'allowed_as_expected', 'legacy unstamped runs fall back to today\'s catalog truthfully');
+        assert.equal(legacy.verdict.verdict, 'inconclusive', 'legacy liveness cannot become technical assurance from the current catalog');
 
         // --- 3d. Stamped run with no recorded snapshot stays inconclusive, never a phantom PASS ---
         await seedRunRow(pool, 'run_pg_null_snapshot', {
@@ -324,7 +323,7 @@ describe('postgres origin job binding (signed scope serialization + snapshot fin
         });
         const unrecorded = await testRuns.finalizeTestRun(CTX, 'run_pg_null_snapshot', { force: true });
         assert.equal(unrecorded.verdict.verdict, 'inconclusive');
-        assert.equal(unrecorded.verdict.explanation, 'Insufficient external probe evidence for a definitive verdict.');
+        assert.match(unrecorded.verdict.explanation, /transport or liveness metadata only|observation only/);
       } finally {
         check.default_expected_behavior = 'must_block_before_origin';
       }

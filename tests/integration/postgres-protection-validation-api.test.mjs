@@ -111,6 +111,14 @@ describe('protection validation over the Postgres runtime', () => {
       server.listen(0);
       const baseUrl = `http://127.0.0.1:${server.address().port}`;
       try {
+        const context = { tenantId: TENANT, userId: 'usr_pv_admin', role: 'admin' };
+        for (const channel of ['in_app', 'webhook']) {
+          const rule = await runtime.services.notifications.createNotificationRule(context, {
+            name: `Protection ${channel}`, channel, triggers: ['finding.high_severity'],
+            ...(channel === 'webhook' ? { destination: 'https://notifications.example.test/hook' } : {}),
+          });
+          assert.equal(rule.error, undefined, JSON.stringify(rule));
+        }
         const expectation = await request(baseUrl, 'POST', '/v1/firewall-expectations', {
           headers: admin(),
           body: { destination_target_id: 'tgt_pg_api_fw', protocol: 'tcp', port: 443, expected: 'allow', source_perspective: SOURCE, change_id: 'CHG-PG-1' },
@@ -147,6 +155,21 @@ describe('protection validation over the Postgres runtime', () => {
         assert.equal(findings.rows[0].finding_class, 'observed_availability_gap');
         assert.equal(findings.rows[0].target_group_id, null);
         assert.equal(findings.rows[0].evaluation_id, comparison.json.id);
+        const alerts = await ownerPool.query(`SELECT id, metadata_json, dedupe_key FROM notification_events
+          WHERE tenant_id = $1 AND trigger = 'finding.high_severity'`, [TENANT]);
+        assert.equal(alerts.rows.length, 1, 'replaying a comparison never re-emits its finding');
+        assert.equal(alerts.rows[0].metadata_json.finding_id, findings.rows[0].id);
+        assert.equal(alerts.rows[0].metadata_json.evaluation_id, comparison.json.id);
+        assert.equal(alerts.rows[0].metadata_json.source, 'protection_validation');
+        const attempts = await ownerPool.query(`SELECT channel, status, reason FROM notification_delivery_attempts
+          WHERE tenant_id = $1 AND notification_event_id = $2`, [TENANT, alerts.rows[0].id]);
+        assert.equal(attempts.rows.length, 2);
+        assert.equal(attempts.rows.find((row) => row.channel === 'webhook').reason, 'outbox_pending_delivery');
+        assert.equal(attempts.rows.find((row) => row.channel === 'webhook').status, 'provider_retry_scheduled');
+        const foreignAlerts = await withTenantContext(appPool, 'ten_other', (client) => client.query(
+          'SELECT id FROM notification_events WHERE tenant_id = $1', [TENANT]));
+        assert.equal(foreignAlerts.rows.length, 0, 'outbox remains tenant isolated');
+
         const audits = await ownerPool.query(
           `SELECT action, count(*)::int AS n FROM audit_logs WHERE tenant_id = $1
              AND action IN ('firewall_baseline.captured', 'firewall_comparison.evaluated', 'finding.created') GROUP BY action`,
@@ -161,17 +184,36 @@ describe('protection validation over the Postgres runtime', () => {
         const low = { ...normalizeComparisonEvaluation({ ...comparison.json, items: comparison.json.items.map((item) => ({
           ...item, status: 'matched', gap_kind: null, expectation_met: false, pre_state: 'not_observed', post_state: 'not_observed',
         })) }), id: 'fwc_concurrent_low' };
-        const findingRepository = createPostgresProtectionFindingsRepository(appPool);
-        const context = { tenantId: TENANT, userId: 'usr_pv_admin', role: 'admin' };
         const records = { expectations: [{ ...expectation.json, tenant_id: TENANT }], baseline: baseline.json };
+        const failing = createPostgresProtectionFindingsRepository(appPool, {
+          notifications: { enqueueNotification: async (...args) => {
+            await runtime.services.notifications.enqueueNotification(...args);
+            throw new Error('fixture_outbox_failure');
+          } },
+        });
+        await assert.rejects(failing.upsertProtectionFindingsFromEvaluation(context, comparison.json, records), /fixture_outbox_failure/);
+        assert.equal((await ownerPool.query('SELECT id FROM findings WHERE tenant_id = $1', [TENANT])).rows.length, 0);
+        assert.equal((await ownerPool.query('SELECT id FROM notification_events WHERE tenant_id = $1', [TENANT])).rows.length, 1,
+          'finding, pending attempts and notification audit roll back together');
+        const subscribed = createPostgresProtectionFindingsRepository(appPool, { notifications: runtime.services.notifications });
         const concurrent = await Promise.all([
-          findingRepository.upsertProtectionFindingsFromEvaluation(context, low, records),
-          findingRepository.upsertProtectionFindingsFromEvaluation(context, comparison.json, records),
+          subscribed.upsertProtectionFindingsFromEvaluation(context, low, records),
+          subscribed.upsertProtectionFindingsFromEvaluation(context, comparison.json, records),
         ]);
         assert.ok(concurrent.every((result) => result.ok));
         const winner = await ownerPool.query('SELECT id, severity, priority FROM findings WHERE tenant_id = $1 AND source = $2', [TENANT, 'protection_validation']);
         assert.equal(winner.rows.length, 1);
         assert.equal(winner.rows[0].severity, 'high');
+        assert.equal((await ownerPool.query('SELECT id FROM notification_events WHERE tenant_id = $1', [TENANT])).rows.length, 2,
+          'the racing create/escalation emits once');
+        await ownerPool.query('UPDATE notification_rules SET enabled = false WHERE tenant_id = $1', [TENANT]);
+        await ownerPool.query('DELETE FROM findings WHERE tenant_id = $1', [TENANT]);
+        await subscribed.upsertProtectionFindingsFromEvaluation(context, comparison.json, records);
+        assert.equal((await ownerPool.query('SELECT id FROM notification_events WHERE tenant_id = $1', [TENANT])).rows.length, 2,
+          'disabled subscriptions never enqueue');
+        const current = await ownerPool.query('SELECT id FROM findings WHERE tenant_id = $1', [TENANT]);
+        winner.rows[0].id = current.rows[0].id;
+
         findings.rows[0].id = winner.rows[0].id;
 
         const findingRead = await request(baseUrl, 'GET', `/v1/findings/${findings.rows[0].id}`, { headers: viewer() });

@@ -430,6 +430,118 @@ describe('postgres validation scan service adapter', () => {
     assert.equal(actions.filter((action) => action === SCAN_AUDIT_ACTIONS.stepDenied).length, 1);
   });
 
+  it('bounds thrown start retries to the failed step and continues every remaining target/check pair', async () => {
+    let attempts = 0;
+    const harness = createHarness({
+      startTestRun: async ({ ctx, body, dispatchOptions, runs }) => {
+        attempts += 1;
+        if (attempts <= 2) throw new Error('fixture child admission failed');
+        const run = {
+          id: `run_${attempts}`, tenant_id: ctx.tenantId, target_group_id: body.target_group_id,
+          target_id: body.target_id, check_id: body.check_id, status: 'collecting',
+          scan_id: dispatchOptions.scanDispatch.scan_id, scan_step_id: dispatchOptions.scanDispatch.step_id,
+          created_at: NOW.toISOString(), completed_at: null,
+        };
+        runs.set(run.id, run);
+        return { run, jobs_dispatched: 0 };
+      },
+    });
+    const scan = await harness.services.createValidationScan(CTX, {
+      target_group_id: GROUP_ID, check_ids: [CHECK_ID, SECOND_CHECK_ID],
+    }, RUNTIME_CONFIG, { now: NOW });
+    assert.equal(scan.steps.length, 4);
+    assert.equal(harness.startCalls.length, 1);
+    assert.equal(scan.steps[0].status, 'pending');
+    await harness.services.advanceScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG, now: NOW });
+    let current = await harness.services.getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG });
+    assert.deepEqual(current.steps.map((step) => step.status), ['denied', 'collecting', 'pending', 'pending']);
+    assert.equal(current.steps[0].attempts, 2);
+    assert.equal(current.steps[0].error_code, 'start_test_run_failed');
+    assert.equal(current.abort_reason, null);
+    for (const id of ['run_3', 'run_4', 'run_5']) await harness.finishRun(id, 'verdicted');
+    current = await harness.services.getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG });
+    assert.equal(current.status, 'completed');
+    assert.deepEqual(current.steps.map((step) => step.status), ['denied', 'verdicted', 'verdicted', 'verdicted']);
+    assert.deepEqual(current.steps.map((step) => step.attempts), [2, 1, 1, 1]);
+    assert.equal(harness.startCalls.length, 5);
+    assert.equal(harness.runs.size, 3);
+    assert.equal(harness.fake.audits.filter((entry) => entry.action === SCAN_AUDIT_ACTIONS.stepDenied).length, 1);
+    const pairs = new Set(harness.startCalls.slice(2).map(({ body }) => `${body.target_id}/${body.check_id}`));
+    assert.equal(pairs.size, 3);
+    await harness.services.advanceScan(CTX, scan.id, { runtimeConfig: RUNTIME_CONFIG, now: NOW });
+    assert.equal(harness.startCalls.length, 5, 'terminal scans cannot retry the failed step');
+  });
+
+  it('recovers a created child after link persistence fails without creating a duplicate child', async () => {
+    const harness = createHarness();
+    const updateStep = harness.fake.repo.updateStep;
+    let failLink = true;
+    harness.fake.repo.updateStep = async (...args) => {
+      if (failLink && args[2].test_run_id) {
+        failLink = false;
+        throw new Error('fixture child link write failed');
+      }
+      return updateStep(...args);
+    };
+    await assert.rejects(harness.services.createValidationScan(CTX, {
+      target_group_id: GROUP_ID, target_id: TARGET_A, check_ids: [CHECK_ID, SECOND_CHECK_ID],
+    }, RUNTIME_CONFIG, { now: NOW }), /fixture child link write failed/);
+    const scanId = [...harness.fake.scans.keys()][0];
+    assert.equal(harness.runs.size, 1);
+    assert.equal(harness.startCalls.length, 1);
+    const advanced = await harness.services.advanceScan(CTX, scanId, { runtimeConfig: RUNTIME_CONFIG, now: NOW });
+    assert.equal(advanced.waiting, true);
+    const current = await harness.services.getValidationScan(CTX, scanId, { runtimeConfig: RUNTIME_CONFIG });
+    assert.equal(current.steps[0].test_run_id, 'run_1');
+    assert.equal(current.steps[0].status, 'collecting');
+    assert.equal(current.steps[0].attempts, 1);
+    assert.equal(harness.startCalls.length, 1);
+    assert.equal(harness.runs.size, 1);
+    await harness.finishRun('run_1', 'verdicted');
+    const following = await harness.services.getValidationScan(CTX, scanId, { runtimeConfig: RUNTIME_CONFIG });
+    assert.deepEqual(following.steps.map((step) => step.test_run_id), ['run_1', 'run_2']);
+    assert.deepEqual(following.steps.map((step) => step.status), ['verdicted', 'collecting']);
+    assert.equal(harness.startCalls.length, 2);
+    await harness.finishRun('run_2', 'verdicted');
+    const completed = await harness.services.getValidationScan(CTX, scanId, { runtimeConfig: RUNTIME_CONFIG });
+    assert.equal(completed.status, 'completed');
+    assert.deepEqual(completed.steps.map((step) => step.attempts), [1, 1]);
+    assert.equal(harness.startCalls.length, 2);
+  });
+
+  it('waits for a failed-release lease to expire and recovers its existing child without redispatch', async () => {
+    const harness = createHarness();
+    const updateScan = harness.fake.repo.updateScan;
+    let failRelease = true;
+    harness.fake.repo.updateScan = async (...args) => {
+      if (failRelease && args[2].lease_token === null && harness.runs.size === 1) {
+        failRelease = false;
+        throw new Error('fixture lease release write failed');
+      }
+      return updateScan(...args);
+    };
+    await assert.rejects(harness.services.createValidationScan(CTX, {
+      target_group_id: GROUP_ID, target_id: TARGET_A, check_ids: [CHECK_ID],
+    }, RUNTIME_CONFIG, { now: NOW }), /fixture lease release write failed/);
+    const stored = [...harness.fake.scans.values()][0];
+    assert.ok(stored.lease_token);
+    assert.equal(harness.runs.size, 1);
+    const originalRun = { ...harness.runs.get('run_1') };
+    const waiting = await harness.services.advanceScan(CTX, stored.id, { runtimeConfig: RUNTIME_CONFIG, now: NOW });
+    assert.equal(waiting.reason, 'leased');
+    assert.equal(harness.startCalls.length, 1);
+    const afterExpiry = new Date(Date.parse(stored.lease_expires_at) + 1);
+    const recovered = await harness.services.advanceScan(CTX, stored.id, { runtimeConfig: RUNTIME_CONFIG, now: afterExpiry });
+    assert.equal(recovered.waiting, true);
+    const current = await harness.services.getValidationScan(CTX, stored.id, { runtimeConfig: RUNTIME_CONFIG });
+    assert.equal(current.steps[0].test_run_id, 'run_1');
+    assert.equal(current.steps[0].status, 'collecting');
+    assert.equal(current.steps[0].attempts, 1);
+    assert.equal(harness.startCalls.length, 1);
+    assert.equal(harness.runs.size, 1);
+    assert.deepEqual(harness.runs.get('run_1'), originalRun);
+  });
+
   it('blocks a second immediate scan for the same group and hides other tenants', async () => {
     const harness = createHarness();
     await harness.services.createValidationScan(CTX, { target_group_id: GROUP_ID, check_ids: [CHECK_ID] }, RUNTIME_CONFIG, { now: NOW });
@@ -578,7 +690,12 @@ describe('postgres validation scan service adapter', () => {
     assert.equal(activity.items[2].test_run_id, 'run_1');
     const paged = await harness.services.getValidationScanActivity(CTX, scan.id, { after: activity.items[0].id, limit: 1 });
     assert.equal(paged.count, 1);
-    assert.equal(paged.items[0].action, 'test_run.started');
+    assert.equal(paged.items[0].action, SCAN_AUDIT_ACTIONS.stepStarted);
+    assert.equal(paged.pagination.has_more, true);
+    const finalPage = await harness.services.getValidationScanActivity(CTX, scan.id, { after: paged.cursor, limit: 1 });
+    assert.equal(finalPage.items[0].action, 'test_run.started');
+    assert.equal(finalPage.pagination.has_more, false);
+    assert.equal(activity.capture.input_complete, false, 'capped mock readers are not complete inputs');
   });
 
   it('reports a lock contention as not acquired instead of running two executors', async () => {

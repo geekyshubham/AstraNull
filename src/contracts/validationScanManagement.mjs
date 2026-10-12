@@ -601,7 +601,8 @@ export function decodeActivityCursor(value) {
     const eventKey = Array.isArray(parsed?.e) && Number.isFinite(Number(parsed.e[0]))
       ? [Number(parsed.e[0]), String(parsed.e[1] ?? '')]
       : null;
-    if (!Number.isFinite(auditSequence)) return null;
+    if (!Number.isSafeInteger(auditSequence) || auditSequence < 0
+      || (parsed?.e != null && (!eventKey || !Number.isFinite(eventKey[0]) || eventKey[0] < 0 || eventKey[1].length > 256))) return null;
     return { auditSequence, eventKey };
   } catch {
     return null;
@@ -642,23 +643,23 @@ function mergeByIngestion(audits, events, limit) {
 }
 
 export function paginateActivity(items, { after = null, limit = 200 } = {}) {
-  const bounded = Math.max(1, Math.min(500, Number(limit) || 200));
+  const bounded = Math.max(1, Math.min(500, Math.floor(Number(limit)) || 200));
   const cursor = after ? decodeActivityCursor(after) : null;
-  if (!after || (!cursor && !items.some((item) => item.id === after))) {
-    const page = items.slice(-bounded);
-    return { items: page.map(stripIngest), cursor: cursorAfter(items, null) };
+  const legacyIndex = after && !cursor ? items.findIndex((item) => item.id === after) : -1;
+  if (after && !cursor && legacyIndex < 0) return { error: 'invalid_activity_cursor', status: 400 };
+  if (cursor && ((cursor.auditSequence > 0 && !items.some((item) => item.ingest?.source === 'audit' && item.ingest.sequence === cursor.auditSequence))
+    || (cursor.eventKey && !items.some((item) => item.ingest?.source === 'event' && compareKeys(item.ingest.key, cursor.eventKey) === 0)))) {
+    return { error: 'invalid_activity_cursor', status: 400 };
   }
-  if (!cursor) {
-    const index = items.findIndex((item) => item.id === after);
-    const page = items.slice(index + 1).slice(-bounded);
-    return { items: page.map(stripIngest), cursor: cursorAfter(items, null) };
-  }
-  const fresh = items.filter((item) => isNewerThanCursor(item, cursor));
+  const fresh = legacyIndex >= 0 ? items.slice(legacyIndex + 1)
+    : cursor ? items.filter((item) => isNewerThanCursor(item, cursor)) : items;
   const audits = fresh.filter((item) => item.ingest?.source === 'audit').sort((l, r) => l.ingest.sequence - r.ingest.sequence);
   const events = fresh.filter((item) => item.ingest?.source === 'event').sort((l, r) => compareKeys(l.ingest.key, r.ingest.key));
   const selected = new Set(mergeByIngestion(audits, events, bounded));
-  const page = items.filter((item) => selected.has(item));
-  return { items: page.map(stripIngest), cursor: cursorAfter(page, cursor) };
+  const page = fresh.filter((item) => selected.has(item));
+  const next = cursorAfter(page, cursor);
+  return { items: page.map(stripIngest), cursor: next,
+    pagination: { next_cursor: next, has_more: fresh.length > page.length, total_recorded: items.length } };
 }
 
 export function buildActivityItems({ scan, steps = [], auditEntries = [], runEvents = [] }) {

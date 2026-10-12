@@ -178,7 +178,7 @@ describe('bound run approved-scope propagation (signed probe job)', () => {
     assert.equal(tls.captured[0].servername, 'app.example');
     assert.equal(tls.captured[0].port, 8443);
     assert.equal(tls.captured[0].path, '/health');
-    assert.equal(tls.captured[0].headers.Host, 'app.example');
+    assert.equal(tls.captured[0].headers.Host, 'app.example:8443');
   });
 
   it('keeps the signed path override authoritative when the caller labels a different path', async () => {
@@ -276,7 +276,7 @@ describe('bound run approved-scope propagation (signed probe job)', () => {
     assert.equal(captured.host, '203.0.113.10', 'socket destination stays the target literal');
     assert.equal(captured.port, 8443);
     assert.equal(captured.path, '/health');
-    assert.equal(captured.headers.Host, 'bound.example');
+    assert.equal(captured.headers.Host, 'bound.example:8443');
     assert.equal(outcome.metadata.protected_host, 'bound.example');
     assert.equal(outcome.metadata.error_class, undefined);
 
@@ -301,7 +301,7 @@ describe('bound run approved-scope propagation (signed probe job)', () => {
       },
     );
     assert.equal(urlSeen.url, 'https://203.0.113.10:8443/health');
-    assert.equal(urlSeen.host, 'bound.example');
+    assert.equal(urlSeen.host, 'bound.example:8443');
     assert.equal(urlSeen.path, '/health');
 
     // HTTP URL targets rebuild onto the approved port/path, not the URL's own.
@@ -409,8 +409,8 @@ describe('stamped run expected behavior snapshot at finalization', () => {
     check.default_expected_behavior = 'must_reach_canary';
 
     const finalized = finalizeTestRun(CONTEXT, run.id, { force: true });
-    assert.equal(finalized.verdict.verdict, 'edge_exposed');
-    assert.equal(finalized.verdict.explanation.includes('did not block traffic before origin'), true);
+    assert.equal(run.expected_behavior_json.value, 'must_block_before_origin', 'captured catalog A is retained despite later B');
+    assert.equal(finalized.verdict.verdict, 'inconclusive', 'simulation and observation-only metadata do not establish exposure');
   });
 
   it('legacy unstamped runs keep the truthful catalog fallback and stamped null stays unrecorded', () => {
@@ -455,11 +455,11 @@ describe('stamped run expected behavior snapshot at finalization', () => {
       );
 
       const legacy = finalizeTestRun(CONTEXT, LEGACY_RUN_ID, { force: true });
-      assert.equal(legacy.verdict.verdict, 'allowed_as_expected', 'legacy unstamped runs fall back to today\'s catalog truthfully');
+      assert.equal(legacy.verdict.verdict, 'inconclusive', 'legacy liveness metadata cannot establish the current catalog expectation');
 
       const unrecorded = finalizeTestRun(CONTEXT, NULL_SNAPSHOT_RUN_ID, { force: true });
       assert.equal(unrecorded.verdict.verdict, 'inconclusive', 'a stamped run without a recorded snapshot must not read today\'s catalog');
-      assert.equal(unrecorded.verdict.explanation, 'Insufficient external probe evidence for a definitive verdict.');
+      assert.match(unrecorded.verdict.explanation, /transport or liveness metadata only/);
     } finally {
       check.default_expected_behavior = 'must_block_before_origin';
     }

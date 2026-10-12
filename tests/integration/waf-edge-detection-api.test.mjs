@@ -397,6 +397,23 @@ describe('WAF edge detection signed-worker safety path', () => {
       && entry.resource_id === accepted.json.detection_request.test_run_id
     )));
 
+    const pollPath = '/internal/probe/jobs';
+    const poll = await request(baseUrl, 'GET', pollPath, {
+      headers: probeWorkerAuthHeaders('worker-edge-1', { method: 'GET', path: pollPath, tenantId: 'ten_demo' }, WORKER_SECRET),
+    });
+    assert.equal(poll.status, 200);
+    const leased = poll.json.jobs.find((entry) => entry.id === job.id);
+    assert.ok(leased);
+    const executePath = `/internal/probe/jobs/${job.id}/execute`;
+    const executeBody = { leased_at: leased.leased_at };
+    const grant = await request(baseUrl, 'POST', executePath, {
+      headers: probeWorkerAuthHeaders('worker-edge-1', { method: 'POST', path: executePath,
+        bodyText: JSON.stringify(executeBody), tenantId: 'ten_demo' }, WORKER_SECRET),
+      body: executeBody,
+    });
+    assert.equal(grant.status, 201, JSON.stringify(grant.json));
+    assert.equal(grant.json.authorized, true);
+
     const probeRequestsSent = 1;
     const destinationResolverAttempts = job.constraints.min_destination_resolver_attempts;
     const totalOperations = probeRequestsSent + destinationResolverAttempts;

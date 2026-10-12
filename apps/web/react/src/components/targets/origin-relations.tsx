@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
   originBindingCandidates,
   originBindingErrorCode,
   originBindingErrorMessage,
   originBindingRole,
+  originRelationCheckEligible,
   originBindingScope,
 } from '../../lib/domain-checks.mjs';
 import { archiveOriginBinding, createOriginBinding, fetchTargetOriginBindings, type OriginBindingList } from '../../lib/target-detail-api';
-import { requestJson } from '../../lib/api';
+import { requestJson, sessionIdentity } from '../../lib/api';
 import { ConfirmModal } from '../../lib/crud-ui';
 import { buildDetailHref } from '../../lib/route-params';
-import type { DataItem, PortalConfig, Session } from '../../lib/types';
+import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -75,11 +76,20 @@ export function OriginRelations({
   canWrite: boolean;
   canStart: boolean;
   ownershipDone: boolean;
-  onStarted: (message: string, runId: string) => void;
+  onStarted: (message: string, execution: AcceptedExecution) => void;
   /** Re-read the target profile after a relation write, so reachability reflects the current relations. */
   onChanged: () => void;
 }) {
   const targetId = str(target, 'id');
+  const startScope = JSON.stringify([targetId, sessionIdentity(session), config.authMode, session.mode, session.access_token, session.expires_at]);
+  const startScopeRef = useRef(startScope);
+  startScopeRef.current = startScope;
+  const startGeneration = useRef(0);
+  useEffect(() => {
+    startScopeRef.current = startScope;
+    startGeneration.current += 1;
+    return () => { startGeneration.current += 1; startScopeRef.current = ''; };
+  }, [startScope]);
   const role = originBindingRole(target);
   const [list, setList] = useState<OriginBindingList | null>(null);
   const [reload, setReload] = useState(0);
@@ -137,11 +147,11 @@ export function OriginRelations({
     if (role !== 'origin' || !canStart) return undefined;
     const controller = new AbortController();
     setApproved({ state: 'loading' });
-    loadApprovedOriginChecks(config, session, targetId, controller.signal).then((result) => {
+    loadApprovedOriginChecks(config, session, target, controller.signal).then((result) => {
       if (!controller.signal.aborted) setApproved(result);
     });
     return () => controller.abort();
-  }, [config, session, targetId, role, canStart, approvedReload]);
+  }, [config, session, target, targetId, role, canStart, approvedReload]);
 
   const originChecks = approved.state === 'ready' ? approved.items : [];
   const [checkChoice, setCheckChoice] = useState<Record<string, string>>({});
@@ -166,6 +176,9 @@ export function OriginRelations({
 
   async function confirm() {
     if (!review) return;
+    const submittedScope = startScope;
+    const submittedGeneration = startGeneration.current;
+    const current = () => startScopeRef.current === submittedScope && startGeneration.current === submittedGeneration;
     setBusy(true);
     setError('');
     try {
@@ -180,7 +193,7 @@ export function OriginRelations({
         await archiveOriginBinding(config, session, str(review.binding, 'id'));
         setMessage('Origin relation archived. Earlier results stay in history.');
       } else {
-        const run = await requestJson(config, session, '/v1/test-runs', {
+        const accepted = await requestJson(config, session, '/v1/test-runs', {
           method: 'POST',
           body: {
             check_id: checkIdOf(review.check),
@@ -188,17 +201,25 @@ export function OriginRelations({
             origin_binding_id: str(review.binding, 'id'),
           },
         }) as DataItem;
-        onStarted('Origin check started under this relation. Its result appears in history once it is finalized.', str(run, 'id'));
+        if (!current()) return;
+        setReview(null);
+        const run = rec(accepted.run) ?? accepted;
+        const runId = str(run, 'id');
+        const checkId = checkIdOf(review.check);
+        if (!runId) { setError('The origin start was accepted without a recorded run ID. No historical run was substituted; refresh recorded runs.'); return; }
+        if ((run.target_id && run.target_id !== targetId) || (run.check_id && run.check_id !== checkId)) { setError('The accepted origin execution did not match the reviewed target/check. No other run was substituted.'); return; }
+        onStarted('Origin check accepted under this exact relation. The Inspector follows its recorded execution; no protection or readiness result is inferred.', { runId, checkId, targetId, record: run });
       }
       if (review.kind !== 'check') onChanged();
       setReview(null);
       setReload((value) => value + 1);
     } catch (err) {
+      if (!current()) return;
       setError(originBindingErrorMessage(err));
       // A scope conflict needs a different choice, so return to the kept form; nothing was replaced.
       if (review.kind === 'create' && originBindingErrorCode(err) === 'scope_conflict') setReview(null);
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 
@@ -396,21 +417,26 @@ type ApprovedOriginChecks = { state: 'loading' } | { state: 'ready'; items: Data
 const CHECK_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /**
- * Approved origin checks for one origin target: the `setup_required` pairs from
- * `GET /v1/targets/:id/compatible-checks`, each read in full from `GET /v1/checks/:id` and kept
- * only when its probe profile is the host/SNI origin kind the server accepts under a relation.
+ * Target-compatible host/SNI pairs, each verified against its exact current definition.
+ * Readiness exclusions (including E2 observation_only) are not launch eligibility. The chosen
+ * relation, ownership, preflight and server authorization gates still apply at review/start.
  */
-async function loadApprovedOriginChecks(config: PortalConfig, session: Session, targetId: string, signal: AbortSignal): Promise<ApprovedOriginChecks> {
+async function loadApprovedOriginChecks(config: PortalConfig, session: Session, target: DataItem, signal: AbortSignal): Promise<ApprovedOriginChecks> {
   try {
+    const targetId = str(target, 'id');
     const payload = rec(await requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}/compatible-checks`, { signal }));
+    if (str(payload, 'target_id') !== targetId) return { state: 'error', message: 'Approved origin checks did not match this target.' };
     const pairs = Array.isArray(payload?.checks) ? payload!.checks as unknown[] : Array.isArray(rec(payload?.coverage)?.pairs) ? rec(payload?.coverage)!.pairs as unknown[] : [];
-    const ids = [...new Set(pairs.map(rec)
-      .filter((pair): pair is DataItem => pair !== null && (str(pair, 'exclusion_reason') === 'setup_required' || str(pair, 'pair_reason') === 'setup_required'))
-      .map((pair) => str(pair, 'check_id'))
-      .filter((id) => CHECK_ID_PATTERN.test(id)))];
-    const definitions = await Promise.all(ids.map((id) => requestJson(config, session, `/v1/checks/${encodeURIComponent(id)}`, { signal })
-      .then((body) => rec(rec(body)?.check))));
-    const items = definitions.filter((check): check is DataItem => check !== null && str(rec(check.probe_profile), 'kind') === 'host_sni_bypass');
+    const candidates = pairs.map(rec).filter((pair): pair is DataItem => pair !== null
+      && str(pair, 'target_id') === targetId && str(pair, 'mechanism') === 'host_sni_bypass'
+      && CHECK_ID_PATTERN.test(str(pair, 'check_id')));
+    const byId = new Map(candidates.map((pair) => [str(pair, 'check_id'), pair]));
+    const definitions = await Promise.all([...byId].map(([id, pair]) => requestJson(config, session, `/v1/checks/${encodeURIComponent(id)}`, { signal })
+      .then((body) => {
+        const check = rec(rec(body)?.check);
+        return str(check, 'check_id') === id && originRelationCheckEligible(check, target, pair) ? check : null;
+      })));
+    const items = definitions.filter((check): check is DataItem => check !== null);
     return { state: 'ready', items };
   } catch (err) {
     return { state: 'error', message: err instanceof Error ? err.message : 'Approved origin checks could not load.' };

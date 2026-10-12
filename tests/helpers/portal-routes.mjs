@@ -22,7 +22,6 @@ export const NAV_ROUTE_IDS = Object.freeze([
   'targets',
   'checks',
   'test-policies',
-  'runs',
   'findings',
   'reports',
   'integrations',
@@ -44,8 +43,9 @@ export const STAFF_NAV_ROUTE_IDS = Object.freeze([
   'internal-soc',
 ]);
 
-/** Deep-link detail routes from `navigation.ts` DETAIL_ROUTE_ITEMS. */
+/** Deep-link/detail routes, including the legacy runs list, from DETAIL_ROUTE_ITEMS. */
 export const DETAIL_ROUTE_IDS = Object.freeze([
+  'runs',
   'target-detail',
   'run-detail',
   'scan-detail',

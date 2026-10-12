@@ -51,7 +51,7 @@ const RESOURCE_FAMILY_IDS = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id)
 function authorizedJob(overrides = {}) {
   return {
     target: { kind: 'url', value: 'https://protected.example' },
-    probe_profile: { kind: L7_RESOURCE_POSTURE_PROBE_KIND, marker_class: 'declared_content_encoding', timeout_ms: 5000 },
+    probe_profile: { kind: L7_RESOURCE_POSTURE_PROBE_KIND, marker_class: 'declared_oversize_uri', timeout_ms: 5000 },
     ...overrides,
   };
 }
@@ -88,13 +88,13 @@ test('registry mappings reference existing or newly-proposed checks and reach th
   }
 });
 
-test('HTTP/2 frame evidence is E3 while HTTP/3 Alt-Svc observation remains E2', () => {
+test('HTTP/2 SETTINGS/frame and HTTP/3 Alt-Svc observations remain E2', () => {
   const byId = new Map(CHECK_CATALOG.map((c) => [c.check_id, c]));
   const h2 = byId.get('l7.http2_continuation.readiness');
   const h3 = byId.get('protocol.http3_control_stream.readiness');
   assert.equal(h2.probe_profile.kind, 'http2_frame_probe');
   assert.equal(h3.probe_profile.kind, 'http3_control_probe');
-  assert.equal(evidenceTierForProbeKind('http2_frame_probe'), 'E3');
+  assert.equal(evidenceTierForProbeKind('http2_frame_probe'), 'E2');
   assert.equal(evidenceTierForProbeKind('http3_control_probe'), 'E2');
   assert.equal(
     PROPOSED_REGISTRY_MAPPING.find((row) => row.registry_id === 'APP-196').target_tier,
@@ -177,7 +177,7 @@ test('buildL7ResourcePostureProfile is hard-bounded and validated', () => {
   assert.equal(boundedPostureTimeoutMs(1234), 1234);
 });
 
-test('probe grades an enforcing origin as blocked and never exceeds the request bound', () => {
+test('a 413 on the actual small URI is only a response observation', () => {
   const sent = [];
   const requestFn = async (url, options) => {
     sent.push({ url, options });
@@ -185,10 +185,12 @@ test('probe grades an enforcing origin as blocked and never exceeds the request 
   };
   return probeL7ResourcePosture(authorizedJob({ signedJobVerified: undefined }), { signedJobVerified: true, requestFn })
     .then((res) => {
-      assert.equal(res.external_result, 'blocked');
+      assert.equal(res.external_result, 'connected');
+      assert.equal(res.metadata.readiness_conclusion, false);
+      assert.equal(res.metadata.parser_limit_confirmed, false);
       assert.ok(res.requests_sent >= 1 && res.requests_sent <= L7_RESOURCE_POSTURE_MAX_REQUESTS);
       assert.equal(res.metadata.body_retained, false);
-      assert.equal(res.metadata.declared_only, true);
+      assert.equal(res.metadata.declared_only, false);
       // Enforcement short-circuits, so at most the declared bound of requests is sent.
       assert.ok(sent.length <= L7_RESOURCE_POSTURE_MAX_REQUESTS);
     });
@@ -212,7 +214,7 @@ test('probe derives only from signed target.value, preserves its path/query, and
     constraints: { max_requests: 99, max_probe_requests: 1 },
     probe_profile: {
       kind: L7_RESOURCE_POSTURE_PROBE_KIND,
-      marker_class: 'declared_content_encoding',
+      marker_class: 'declared_oversize_uri',
       max_requests: 2,
     },
   }), {
@@ -225,7 +227,12 @@ test('probe derives only from signed target.value, preserves its path/query, and
   assert.equal(res.external_result, 'connected');
   assert.equal(res.requests_sent, 1);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://protected.example/signed/path?keep=1');
+  const delivered = new URL(calls[0].url);
+  assert.equal(delivered.pathname, '/signed/path');
+  assert.equal(delivered.searchParams.get('keep'), '1');
+  assert.equal(delivered.searchParams.get('astranull-inert').length, 1008);
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.body, undefined);
   assert.doesNotMatch(calls[0].url, /attacker\.invalid/);
 });
 
@@ -308,5 +315,18 @@ test('SAFETY: probe/manifest sources contain no bomb, flood, or collision genera
   assert.ok(manifestSrc.length > 0);
   for (const f of PROPOSED_PROFILE_FIELDS) {
     assert.equal(f.field, 'marker_class');
+  }
+});
+
+
+test('compressed-body delivery remains unsupported with zero I/O and invalid shape/budgets fail closed', async () => {
+  const profile = buildL7ResourcePostureProfile({ marker_class: 'declared_content_encoding' });
+  const result = await probeL7ResourcePosture({ target: { value: 'https://fixture.example.test/orders' }, probe_profile: profile },
+    { requestFn: async () => { throw new Error('unsafe business request attempted'); }, fetchFn: async () => { throw new Error('unsafe business request attempted'); } });
+  assert.equal(result.requests_sent, 0);
+  assert.equal(result.metadata.delivery_supported, false);
+  assert.equal(result.metadata.readiness_conclusion, false);
+  for (const overrides of [{ max_requests: 1.5 }, { timeout_ms: 2.5 }, { probe_path: '//other.example' }]) {
+    assert.throws(() => buildL7ResourcePostureProfile({ marker_class: 'declared_oversize_uri', ...overrides }));
   }
 });

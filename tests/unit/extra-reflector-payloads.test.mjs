@@ -52,7 +52,7 @@ test('every payload is one bounded Buffer <=512 bytes', () => {
 
 test('entry surface exposes no count/repeat/concurrency knob', () => {
   for (const [id, spec] of Object.entries(EXTRA_REFLECTOR_PAYLOADS)) {
-    assert.deepEqual(Object.keys(spec).sort(), ['build', 'classify', 'default_port', 'id', 'transport'], `${id} keys`);
+    assert.deepEqual(Object.keys(spec).sort(), ['build', 'classify', 'default_port', 'execution_supported', 'id', 'identity_supported', 'transport'], `${id} keys`);
     assert.ok(spec.build.length <= 1, `${id} builder takes at most a single ctx arg`);
   }
 });
@@ -109,8 +109,10 @@ test('IPP request is a read-only Get-Printer-Attributes with no third-party call
   assert.ok(text.includes('ipp://localhost/ipp/print'), 'printer-uri is localhost only');
 });
 
-test('module contains no flood/exploit/socket tooling', () => {
-  const forbidden = ['dgram', 'socket', 'setInterval', 'setTimeout', 'startblast', 'flood', 'concurrenc', 'while (', 'for ('];
+test('module contains no flood/exploit/socket tooling; bounded response parsing is not a traffic loop', () => {
+  assert.match(MODULE_SOURCE, /urlCount > 1024/);
+  assert.match(MODULE_SOURCE, /response.length > 65536/);
+  const forbidden = ['dgram', 'socket', 'setInterval', 'setTimeout', 'startblast', 'flood', 'concurrenc', 'while ('];
   for (const token of forbidden) {
     assert.ok(!MODULE_SOURCE.includes(token), `must not reference "${token}"`);
   }
@@ -119,8 +121,9 @@ test('module contains no flood/exploit/socket tooling', () => {
 test('classify emits bounded reflection metadata with no retained body', () => {
   const req = EXTRA_REFLECTOR_PAYLOADS.slp_srvrqst.build(CTX);
   const result = EXTRA_REFLECTOR_PAYLOADS.slp_srvrqst.classify(req, Buffer.alloc(300));
-  assert.deepEqual(Object.keys(result).sort(), ['amplification_ratio', 'reflector_confirmed', 'response_size_class']);
-  assert.equal(result.reflector_confirmed, true);
+  assert.deepEqual(Object.keys(result).sort(), ['amplification_ratio', 'assurance_scope', 'protocol_identity_confirmed', 'reflector_confirmed', 'response_size_class']);
+  assert.equal(result.reflector_confirmed, false);
+  assert.equal(result.protocol_identity_confirmed, false);
   assert.equal(result.response_size_class, 'small');
   const none = EXTRA_REFLECTOR_PAYLOADS.slp_srvrqst.classify(req, null, false);
   assert.equal(none.reflector_confirmed, false);
@@ -189,4 +192,30 @@ test('E3 registry mappings attach exactly the new safe checks', () => {
       assert.ok(proposedIds.has(id), `${id} is a proposed check`);
     }
   }
+});
+
+
+test('SLP response requires complete matched language, transaction, URL and authentication structure', () => {
+  const entry = EXTRA_REFLECTOR_PAYLOADS.slp_srvrqst;
+  const request = entry.build(CTX);
+  const header = Buffer.from(request.subarray(0, 16));
+  header[1] = 2;
+  const url = Buffer.from('service:service-agent://fixture.invalid');
+  const fields = Buffer.alloc(9);
+  fields.writeUInt16BE(1, 2);
+  fields.writeUInt16BE(60, 5);
+  fields.writeUInt16BE(url.length, 7);
+  const good = Buffer.concat([header, fields, url, Buffer.from([0])]);
+  good.writeUIntBE(good.length, 2, 3);
+  assert.equal(entry.classify(request, good).protocol_identity_confirmed, true);
+  for (const mutate of [
+    (bytes) => { bytes[10] ^= 1; },
+    (bytes) => { bytes[14] = 120; },
+    (bytes) => { bytes.writeUInt16BE(2, 18); },
+    (bytes) => { bytes[bytes.length - 1] = 1; },
+    (bytes) => { bytes.writeUIntBE(16, 7, 3); },
+  ]) { const bad = Buffer.from(good); mutate(bad); assert.equal(entry.classify(request, bad).protocol_identity_confirmed, false); }
+  const truncated = good.subarray(0, good.length - 1);
+  assert.equal(entry.classify(request, truncated).protocol_identity_confirmed, false);
+  assert.equal(entry.classify(request, good.length).protocol_identity_confirmed, false);
 });

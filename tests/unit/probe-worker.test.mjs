@@ -95,7 +95,16 @@ function baseJob(overrides = {}) {
     ...overrides,
   };
   if (overrides.probe_profile) job.probe_profile = overrides.probe_profile;
-  if (overrides.constraints) job.constraints = { ...job.constraints, ...overrides.constraints };
+  const issuedAt = Date.now();
+  job.constraints = {
+    authority_version: 'probe-authority-v2',
+    issued_at: new Date(issuedAt).toISOString(),
+    not_after: new Date(issuedAt + 120_000).toISOString(),
+    execution_attempts: 1,
+    max_requests: check.probe_profile.max_requests,
+    timeout_ms: check.probe_profile.timeout_ms,
+    ...overrides.constraints,
+  };
   job.job_signature = signProbeJob(job, WORKER_SECRET);
   return job;
 }
@@ -348,7 +357,7 @@ describe('probe worker safety accounting', () => {
     const signedJob = buildSignedProbeJobRecord({
       run: { id: 'run_akamai', tenant_id: 'ten_demo', safety_constraints: check.safety_constraints },
       check, target: { id: 'tgt_akamai', kind: 'fqdn', value: 'barclays.com' },
-      probeWorkerSecret: WORKER_SECRET, now: new Date('2026-10-08T00:00:00Z'), newId: () => 'pjob_akamai',
+      probeWorkerSecret: WORKER_SECRET, now: new Date(), newId: () => 'pjob_akamai',
     });
     let httpRequests = 0;
     const result = await processJob({ secret: WORKER_SECRET }, signedJob, {
@@ -425,7 +434,7 @@ describe('probe worker safety accounting', () => {
         value: 'https://edge.example.test/signed-path',
       },
       probeWorkerSecret: WORKER_SECRET,
-      now: new Date('2026-09-01T00:00:00.000Z'),
+      now: new Date(),
       newId: () => 'pjob_waf_real_catalog_accounting',
     });
 
@@ -611,9 +620,9 @@ describe('probe worker safety accounting', () => {
     },
     {
       kind: 'l7_resource_posture_probe',
-      checkId: 'l7.compressed_request_decompression.posture',
-      expected: 'blocked',
-      status: 413,
+      checkId: 'l7.request_parser_size.posture',
+      expected: 'connected',
+      status: 414,
     },
   ];
 
@@ -646,8 +655,8 @@ describe('probe worker safety accounting', () => {
           },
         });
         assert.ok(
-          signedJob.probe_profile.max_requests > 1,
-          `${scenario.kind} must retain its generated catalog budget before signed reduction`,
+          signedJob.probe_profile.max_requests >= 1,
+          `${scenario.kind} must retain its generated catalog budget`,
         );
         const calls = [];
         let resolverCalls = 0;
@@ -1204,20 +1213,8 @@ describe('probe job signature verification', () => {
     const reordered = {
       ...job,
       job_signature: signature,
-      probe_profile: {
-        kind: job.probe_profile.kind,
-        marker: job.probe_profile.marker,
-        max_requests: job.probe_profile.max_requests,
-        method: job.probe_profile.method,
-        timeout_ms: job.probe_profile.timeout_ms,
-      },
-      constraints: {
-        max_concurrent_runs_per_target_group: job.constraints.max_concurrent_runs_per_target_group,
-        max_duration_seconds: job.constraints.max_duration_seconds,
-        max_events: job.constraints.max_events,
-        max_requests: job.constraints.max_requests,
-        timeout_ms: job.constraints.timeout_ms,
-      },
+      probe_profile: Object.fromEntries(Object.entries(job.probe_profile).reverse()),
+      constraints: Object.fromEntries(Object.entries(job.constraints).reverse()),
       target: {
         expected_behavior: job.target.expected_behavior,
         id: job.target.id,
@@ -1718,6 +1715,9 @@ describe('probe worker TCP helper', () => {
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'tcp_connect');
     assert.equal(outcome.metadata.profile_kind, 'tcp_connect');
+    assert.equal(outcome.metadata.observation_complete, true);
+    assert.equal(outcome.metadata.pinned_address, '127.0.0.1');
+    assert.equal(outcome.metadata.target_port, port);
 
     await new Promise((resolve) => server.close(resolve));
   });
@@ -1937,6 +1937,7 @@ describe('executeProbeForJob routing', () => {
           const socket = {
             on: (event, fn) => { handlers[event] = fn; },
             once: (event, fn) => { handlers[event] = fn; },
+            removeListener: (event, fn) => { if (handlers[event] === fn) delete handlers[event]; },
             destroy: () => {},
             write: () => {},
             end: () => {},
@@ -1962,7 +1963,7 @@ describe('executeProbeForJob routing', () => {
     });
   }
 
-  it('routes Host/SNI bypass with declared URL port and path preserved', async () => {
+  it('routes Host/SNI bypass only to the exact signed origin port and path', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     const check = getCheckById('origin.direct_bypass.safe');
     let captured = null;
@@ -1972,10 +1973,10 @@ describe('executeProbeForJob routing', () => {
       probe_profile: check.probe_profile,
       target: {
         kind: 'url',
-        value: 'https://edge.test:8443/health?probe=1',
-        metadata: { direct_origin_ip: '198.51.100.7' },
+        value: 'https://198.51.100.7:8443/unapproved?probe=1',
       },
-      constraints: { timeout_ms: 500, max_requests: 1 },
+      constraints: { timeout_ms: 500, max_requests: 1,
+        origin_scope: { host: 'edge.test', sni: 'edge.test', port: 8443, path: '/health' } },
     });
     const outcome = await executeProbeForJob(job, {
       signedJobVerified: true,
@@ -1986,7 +1987,7 @@ describe('executeProbeForJob routing', () => {
         return { status: 200, headers: { get: () => null } };
       },
     });
-    assert.equal(captured.url, 'http://198.51.100.7:8443/health?probe=1');
+    assert.equal(captured.url, 'https://198.51.100.7:8443/health');
     assert.equal(captured.init.headers.Host, 'edge.test:8443');
     assert.equal(outcome.metadata.probe_kind, 'host_sni_bypass');
     assert.equal(outcome.external_result, 'connected');
@@ -2053,8 +2054,9 @@ describe('executeProbeForJob routing', () => {
       target: { kind: 'canary', value: 'canary' },
     });
     const outcome = await executeProbeForJob(job);
-    assert.equal(outcome.external_result, 'error');
-    assert.equal(outcome.metadata.error_class, 'missing_webhook_url');
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.not_run_reason, 'approved_signed_callback_scope_required');
+    assert.equal(outcome.requests_sent, 0);
   });
 
   it('routes tls_session profile kind to bounded TLS probe', async () => {
@@ -2375,7 +2377,10 @@ describe('probe worker authoritative pre-attempt accounting regressions', () => 
       },
     });
 
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'not_run');
+    assert.equal(outcome.metadata.not_run_reason, 'insufficient_marker_comparison');
+    assert.equal(outcome.metadata.observation_only, true);
+    assert.equal(outcome.metadata.readiness_conclusion, false);
     assert.equal(outcome.probe_requests_sent, 1);
     assert.equal(outcome.metadata.request_accounting.probe_logical_attempts, 1);
     assert.equal(outcome.destination_resolver_attempts, 2);

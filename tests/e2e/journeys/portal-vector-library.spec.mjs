@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { createServer as createViteServer } from 'vite';
+import { createPortalSourceServer as createViteServer } from '../../helpers/portal-playwright-server.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
   startPortalPlaywrightServer,
@@ -88,8 +88,8 @@ test.describe('target-first check library workflow', () => {
     await expect(counts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(/^\d+$/);
 
     const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
-    await search.fill('APP-001');
-    const appRow = page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-001' });
+    await search.fill('EVA-004');
+    const appRow = page.locator('.vector-library-table tbody tr').filter({ hasText: 'EVA-004' });
     await expect(appRow).toHaveCount(1);
     await expect(appRow).toContainText('Bounded check available');
     await appRow.getByRole('button', { name: 'Review' }).click();
@@ -209,8 +209,8 @@ test.describe('target-first check library workflow', () => {
     await chooseFirstRealOption(page, 'Target');
     await expect(page.getByLabel('Catalog and check counts')).toContainText('Review only');
     const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
-    await search.fill('APP-001');
-    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-001' }).getByRole('button', { name: 'Review' }).click();
+    await search.fill('EVA-004');
+    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'EVA-004' }).getByRole('button', { name: 'Review' }).click();
     const detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('only owners, admins, and engineers can start bounded checks');
     await expect(detail.getByRole('button', { name: 'Mapped bounded check' })).toHaveCount(0);

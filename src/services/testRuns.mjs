@@ -8,11 +8,13 @@ import {
   isCustomerRunnable,
 } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
+import { validateReviewedOperationSelection } from '../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
 import { scanIncludesTarget } from '../lib/targetExecutionScope.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { redactObject } from '../lib/redact.mjs';
 import { projectRunActivity } from '../lib/probeActivity.mjs';
+import { deriveAssuranceScope } from '../lib/assuranceScope.mjs';
 import { scrubRunForCustomer } from '../lib/outsideInEvidence.mjs';
 import { recordEvidence } from './evidence.mjs';
 import { newId } from '../lib/ids.mjs';
@@ -177,7 +179,8 @@ export function finalizeTestRun(ctx, id, { force = false } = {}) {
 export function getRunActivity(ctx, id, options = {}) {
   const run = getStore().testRuns.find((entry) => entry.id === id && entry.tenant_id === ctx.tenantId);
   if (!run) return null;
-  return projectRunActivity(run, getRunEvents(ctx, id), options.limit);
+  const job = getStore().probeJobs.find((entry) => entry.test_run_id === id && entry.tenant_id === ctx.tenantId) ?? null;
+  return projectRunActivity(run, getRunEvents(ctx, id), { ...options, job });
 }
 
 export function getTestRun(ctx, id) {
@@ -405,6 +408,9 @@ export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
 }
 
 export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, options = {}) {
+  const selection = validateReviewedOperationSelection(body);
+  if (!selection.ok) return { error: selection.error, status: selection.status };
+  if (!selection.legacy) return { error: 'reviewed_operation_execution_unavailable', status: 409 };
   const check = getCheckById(body.check_id);
   if (!check) return { error: 'unknown_check', status: 400 };
   if (!isCustomerRunnable(check)) {
@@ -702,7 +708,12 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     scenarioVersion: approvedScenarioVersion(check, opsReadiness ? resolveOpsReadinessScenario(check) : null),
   });
 
-  const safetyConstraints = effectiveSafetyConstraints(check, group);
+  const openWindowEnds = (group.safe_test_windows ?? []).filter((window) =>
+    new Date(window.start_at).getTime() <= Date.now() && new Date(window.end_at).getTime() >= Date.now())
+    .map((window) => new Date(window.end_at).getTime());
+  const safetyConstraints = { ...effectiveSafetyConstraints(check, group),
+    assurance_scope: deriveAssuranceScope({ target, policy: policyBinding.policy ?? null, targetGroup: group }),
+    ...(openWindowEnds.length ? { safe_window_not_after: new Date(Math.max(...openWindowEnds)).toISOString() } : {}) };
   const runId = newId('run');
   const run = {
     id: runId,
@@ -878,20 +889,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
 
 
 function finalizeNoObservation(run) {
-  const store = getStore();
-  if (wouldExceedEventCap(run, 1)) {
-    audit({
-      tenant_id: run.tenant_id,
-      actor_user_id: 'system',
-      actor_role: 'system',
-      action: 'test_run.event_cap_denied',
-      resource_type: 'test_run',
-      resource_id: run.id,
-      metadata: { phase: 'collection_window_elapsed' },
-    });
-    persistStore();
-    return null;
-  }
+  // Publication uses accepted evidence; it does not append another probe event.
   return finalizeVerdictIfReady(run, { finalizedWithoutObservation: true });
 }
 

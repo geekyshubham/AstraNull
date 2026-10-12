@@ -1,4 +1,6 @@
 import { useIsolatedDevDataDir } from './dev-data-dir.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createServer } from '../../src/server.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
@@ -39,6 +41,8 @@ const runtime = {
   server: null,
   baseUrl: null,
   port: null,
+  sourceUi: null,
+  sourceBaseUrl: null,
 };
 
 function applyTestEnv() {
@@ -116,6 +120,18 @@ async function waitForPortalPlaywrightReady(baseUrl) {
   throw new Error(`portal playwright server never became reachable at ${baseUrl}: ${lastError?.message ?? 'unknown'}`);
 }
 
+/** Shared source lifecycle; diagnostic specs may override mode/cache without touching developer caches. */
+export async function createPortalSourceServer(options = {}) {
+  const { createServer: createViteServer } = await import('vite');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  return createViteServer({
+    configFile: path.join(root, 'vite.config.ts'),
+    root: path.join(root, 'apps/web/react'),
+    logLevel: 'error',
+    ...options,
+  });
+}
+
 /**
  * @param {{ mutate?: (store: ReturnType<typeof buildPortalBaselineStore>) => void }} [options]
  */
@@ -142,11 +158,23 @@ export async function startPortalPlaywrightServer(options = {}) {
 
   await waitForPortalPlaywrightReady(baseUrl);
 
-  return { server, baseUrl, port };
+  // Opt-in source harness: the API stays real; no generated/tracked portal bundle is rewritten.
+  if (options.liveSource) {
+    runtime.sourceUi = await createPortalSourceServer({
+      server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, proxy: { '/v1': baseUrl, '/ready': baseUrl, '/internal': baseUrl } },
+    });
+    await runtime.sourceUi.listen();
+    runtime.sourceBaseUrl = `http://127.0.0.1:${runtime.sourceUi.httpServer.address().port}`;
+  }
+
+  return { server, baseUrl, port, webBaseUrl: runtime.sourceBaseUrl ?? baseUrl };
 }
 
 export async function stopPortalPlaywrightServer() {
-  const { server } = runtime;
+  const { server, sourceUi } = runtime;
+  runtime.sourceUi = null;
+  runtime.sourceBaseUrl = null;
+  await sourceUi?.close();
   runtime.server = null;
   runtime.baseUrl = null;
   runtime.port = null;
@@ -161,7 +189,7 @@ export async function stopPortalPlaywrightServer() {
 
 export function getPortalPlaywrightBaseUrl() {
   if (!runtime.baseUrl) throw new Error('portal playwright server is not running');
-  return runtime.baseUrl;
+  return runtime.sourceBaseUrl ?? runtime.baseUrl;
 }
 
 export function getPortalPlaywrightPort() {

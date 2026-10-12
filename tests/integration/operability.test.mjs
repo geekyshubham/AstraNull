@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
-import { demoHeaders, request } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 let baseUrl;
@@ -14,6 +14,8 @@ before(() => {
       ...process.env,
       ASTRANULL_MAX_JSON_BODY_BYTES: '128',
       ASTRANULL_NO_PERSIST: '1',
+      ASTRANULL_PERSISTENCE_MODE: 'memory',
+      ASTRANULL_AUTH_MODE: 'dev-headers',
     },
   });
   server.listen(0);
@@ -21,18 +23,21 @@ before(() => {
   baseUrl = `http://127.0.0.1:${port}`;
 });
 
-after(() => server.close());
+after(() => closeServer(server));
 
 describe('API rate limiting', () => {
   let rateBaseUrl;
   let rateServer;
 
-  before(() => {
+  beforeEach(() => {
     freshStore();
     rateServer = createServer({
       env: {
         ...process.env,
         ASTRANULL_NO_PERSIST: '1',
+        ASTRANULL_PERSISTENCE_MODE: 'memory',
+        ASTRANULL_AUTH_MODE: 'dev-headers',
+        ASTRANULL_RATE_LIMIT_DISABLED: '0',
         ASTRANULL_RATE_LIMIT_MAX_REQUESTS: '2',
         ASTRANULL_RATE_LIMIT_WINDOW_MS: '60000',
       },
@@ -42,13 +47,16 @@ describe('API rate limiting', () => {
     rateBaseUrl = `http://127.0.0.1:${port}`;
   });
 
-  after(() => rateServer.close());
+  afterEach(() => closeServer(rateServer));
 
   it('returns 429 on third API request from the same client with Retry-After', async () => {
-    const path = '/v1/target-groups';
+    const path = '/v1/targets';
     const headers = demoHeaders('viewer');
-    assert.equal((await request(rateBaseUrl, 'GET', path, { headers })).status, 200);
-    assert.equal((await request(rateBaseUrl, 'GET', path, { headers })).status, 200);
+    for (let index = 0; index < 2; index++) {
+      const allowed = await request(rateBaseUrl, 'GET', path, { headers });
+      assert.equal(allowed.status, 200, JSON.stringify(allowed.json));
+      assert.ok(Array.isArray(allowed.json.items));
+    }
     const res = await fetch(`${rateBaseUrl}${path}`, { method: 'GET', headers });
     const json = await res.json();
     assert.equal(res.status, 429);
@@ -57,13 +65,18 @@ describe('API rate limiting', () => {
   });
 
   it('GET /health stays 200 after API limit is exceeded', async () => {
-    const path = '/v1/target-groups';
+    const path = '/v1/targets';
     const headers = demoHeaders('viewer');
-    await request(rateBaseUrl, 'GET', path, { headers });
-    await request(rateBaseUrl, 'GET', path, { headers });
-    await request(rateBaseUrl, 'GET', path, { headers });
+    for (let index = 0; index < 2; index++) {
+      const allowed = await request(rateBaseUrl, 'GET', path, { headers });
+      assert.equal(allowed.status, 200, JSON.stringify(allowed.json));
+    }
+    const limited = await request(rateBaseUrl, 'GET', path, { headers });
+    assert.equal(limited.status, 429, JSON.stringify(limited.json));
+    assert.equal(limited.json.error, 'rate_limited');
+    assert.ok(limited.headers['retry-after']);
     const health = await request(rateBaseUrl, 'GET', '/health');
-    assert.equal(health.status, 200);
+    assert.equal(health.status, 200, JSON.stringify(health.json));
     assert.equal(health.json.status, 'ok');
   });
 });
@@ -90,7 +103,7 @@ describe('control-plane operability', () => {
   });
 
   it('returns 400 invalid_json for malformed JSON body', async () => {
-    const res = await request(baseUrl, 'POST', '/v1/target-groups', {
+    const res = await request(baseUrl, 'POST', '/v1/targets', {
       headers: demoHeaders('admin'),
       rawBody: '{not-json',
     });
@@ -99,7 +112,7 @@ describe('control-plane operability', () => {
   });
 
   it('returns 413 payload_too_large for oversized JSON body', async () => {
-    const res = await request(baseUrl, 'POST', '/v1/target-groups', {
+    const res = await request(baseUrl, 'POST', '/v1/targets', {
       headers: demoHeaders('admin'),
       rawBody: `{"name":"${'x'.repeat(200)}"}`,
     });

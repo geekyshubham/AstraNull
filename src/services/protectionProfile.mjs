@@ -3,13 +3,9 @@
  * Reads recorded rows only. Does not score readiness, start probes, or copy one
  * provider family onto another.
  */
-import { CHECK_CATALOG, checkRequiresAdditionalInput, isCustomerRunnable } from '../contracts/checks.mjs';
-import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
-import { evidenceBackedVerdict } from '../lib/targetDetailRows.mjs';
-import { approvedScenarioVersion, deriveCheckDefinitionVersion } from '../lib/checkDefinitionVersion.mjs';
 import { assessOriginReachability } from './originBindings.mjs';
-import { OBSERVATION_ONLY_PROBE_KINDS } from '../lib/probeEvidenceTiers.mjs';
-import { inconclusiveReason } from '../lib/inconclusiveReasons.mjs';
+import { COVERAGE_FRESHNESS_POLICY, coverageFrom } from '../lib/protectionCoverage.mjs';
+export { COVERAGE_FRESHNESS_POLICY } from '../lib/protectionCoverage.mjs';
 import {
   assessComparability,
   classifyAttempt,
@@ -17,7 +13,7 @@ import {
   projectObservation,
 } from './targetHistory.mjs';
 
-export const PROTECTION_PROFILE_VERSION = 'protection-profile.v1';
+export const PROTECTION_PROFILE_VERSION = 'protection-profile.v2';
 
 /** Per-family observation age. Not the 30-day group readiness window. */
 export const OBSERVATION_FRESHNESS_POLICY = Object.freeze({
@@ -27,15 +23,6 @@ export const OBSERVATION_FRESHNESS_POLICY = Object.freeze({
   unit: 'family_observation',
 });
 
-/** Applicable target/check pair age. Separate from marker effectiveness. */
-export const COVERAGE_FRESHNESS_POLICY = Object.freeze({
-  id: 'protection-profile.coverage.v1',
-  version: 1,
-  max_age_ms: 7 * 24 * 60 * 60 * 1000,
-  unit: 'target_check_pair',
-});
-
-const PLAN_VERSION = 'catalog+policy';
 const OBSERVED_FAMILY_STATUSES = new Set(['detected', 'not_detected', 'inconclusive']);
 const FAMILY_STATUSES = new Set([
   'detected',
@@ -45,24 +32,6 @@ const FAMILY_STATUSES = new Set([
   'not_recorded',
   'unknown',
 ]);
-const OPEN_RUN_STATUSES = new Set(['planned', 'running', 'collecting', 'queued', 'pending']);
-const DIMENSION_BY_FAMILY = Object.freeze({
-  l7: 'application',
-  waf: 'application',
-  path: 'application',
-  pattern: 'application',
-  exploit: 'application',
-  origin: 'origin',
-  l3_l4: 'network',
-  protocol: 'network',
-  tls: 'network',
-  reflection: 'network',
-  amplification: 'network',
-  dns: 'dns',
-  operations: 'operations',
-});
-const DIMENSIONS = Object.freeze(['application', 'origin', 'network', 'dns', 'operations', 'other']);
-
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
@@ -132,6 +101,7 @@ function freshnessFor(status, observedAt, nowMs) {
   if (!observedAt) return 'unknown';
   const observedMs = Date.parse(observedAt);
   if (!Number.isFinite(observedMs)) return 'unknown';
+  if (observedMs > nowMs) return 'unknown';
   return nowMs - observedMs > OBSERVATION_FRESHNESS_POLICY.max_age_ms ? 'stale' : 'current';
 }
 
@@ -279,16 +249,6 @@ function effectivenessFrom(row) {
   };
 }
 
-function summaryOf(run) {
-  return asRecord(run?.summary_json) ?? asRecord(run?.summary) ?? {};
-}
-
-function recordedText(run, verdict, key) {
-  const summary = summaryOf(run);
-  const verdictMeta = asRecord(verdict?.metadata) ?? asRecord(verdict?.metadata_json) ?? {};
-  return text(run?.[key]) ?? text(summary[key]) ?? text(verdict?.[key]) ?? text(verdictMeta[key]);
-}
-
 /**
  * A recorded direct-origin probe is not an origin binding. Status stays
  * not_tested or unknown until a later slice supplies an authorized binding id.
@@ -320,303 +280,6 @@ function originFrom(row) {
   };
 }
 
-function percentage(numerator, denominator) {
-  if (!denominator) return null;
-  return Math.round((numerator / denominator) * 100);
-}
-
-function summarizePairs(pairs) {
-  const applicable = pairs.filter((pair) => pair.state !== 'excluded');
-  const count = (state) => applicable.filter((pair) => pair.state === state).length;
-  const conclusive = count('conclusive');
-  const inconclusive = count('inconclusive');
-  const notRun = count('not_run');
-  const stale = count('stale');
-  const unknown = count('unknown');
-  const partial = count('partial');
-  const applicableCount = applicable.length;
-  return {
-    applicable_count: applicableCount,
-    evaluated_count: conclusive + inconclusive + stale,
-    conclusive_count: conclusive,
-    inconclusive_count: inconclusive,
-    not_run_count: notRun,
-    stale_count: stale,
-    unknown_count: unknown,
-    partial_count: partial,
-    excluded_count: pairs.filter((pair) => pair.state === 'excluded').length,
-    percentage: percentage(conclusive, applicableCount),
-    percentage_reason: applicableCount === 0 ? 'not_applicable' : 'conclusive_over_applicable',
-  };
-}
-
-function dimensionStatus(summary) {
-  if (summary.applicable_count === 0) return 'not_applicable';
-  if (summary.conclusive_count === summary.applicable_count) return 'conclusive';
-  if (summary.conclusive_count > 0) return 'partial';
-  if (
-    summary.evaluated_count === 0
-    && summary.unknown_count === 0
-    && summary.partial_count === 0
-  ) return 'not_run';
-  if (
-    summary.stale_count > 0
-    && summary.inconclusive_count === 0
-    && summary.partial_count === 0
-    && summary.unknown_count === 0
-  ) return 'stale';
-  if (
-    summary.unknown_count > 0
-    && summary.inconclusive_count === 0
-    && summary.stale_count === 0
-    && summary.partial_count === 0
-  ) return 'unknown';
-  if (summary.conclusive_count === 0 && summary.inconclusive_count === 0 && summary.stale_count === 0) {
-    return 'partial';
-  }
-  if (summary.conclusive_count === 0) return 'inconclusive';
-  return 'partial';
-}
-
-function policyForCheck(policies, target, checkId) {
-  const matches = (policies ?? []).filter((policy) => {
-    if (!policy || policy.archived_at || policy.state === 'archived') return false;
-    if (policy.check_id !== checkId) return false;
-    if (policy.tenant_id && target.tenant_id && policy.tenant_id !== target.tenant_id) return false;
-    if (policy.target_group_id && target.target_group_id && policy.target_group_id !== target.target_group_id) return false;
-    return !policy.target_id || policy.target_id === target.id;
-  });
-  return matches.find((policy) => policy.target_id) ?? matches[0] ?? null;
-}
-
-const FINALIZED_RUN_STATUSES = new Set(['completed', 'verdicted']);
-const CANCELED_RUN_STATUSES = new Set(['cancelled', 'canceled']);
-
-function provenanceOf(run, verdict) {
-  const summary = summaryOf(run);
-  const producer = text(run?.producer_kind) ?? text(summary.producer_kind);
-  const simulation = text(run?.simulation) ?? text(summary.simulation);
-  const label = text(run?.evidence_label) ?? text(summary.evidence_label);
-  const source = text(run?.source) ?? text(summary.source) ?? text(summary.provenance) ?? text(verdict?.source_kind);
-  // ponytail: only recorded producer/simulation/label marks a run as simulated.
-  // Unmarked rows are not re-probed. Upgrade path: stamp producer_kind on the run row.
-  if (
-    producer === 'internal_simulation'
-    || simulation === 'SAFE_PROBE_SIMULATION'
-    || label === 'probe_simulation_evidence'
-    || text(run?.probe_mode) === 'simulation'
-    || text(summary.probe_mode) === 'simulation'
-  ) return 'internal_simulation';
-  if (
-    producer === 'customer_declaration'
-    || producer === 'manual'
-    || source === 'manual_declaration'
-    || source === 'customer_declaration'
-  ) return 'manual_declaration';
-  if (producer === 'signed_probe' || producer === 'live_external') return 'external';
-  return 'unspecified';
-}
-
-function retainedFacts(run, verdict, provenance, observedAt) {
-  if (!run) return null;
-  return {
-    verdict: text(verdict?.verdict),
-    observed_at: observedAt,
-    provenance,
-    check_version: recordedText(run, verdict, 'check_version'),
-    scenario_version: recordedText(run, verdict, 'scenario_version'),
-    run_status: text(run.status),
-  };
-}
-
-function versionGapFor(check, run, verdict) {
-  const catalogVersion = deriveCheckDefinitionVersion(check).check_version;
-  const recordedCheck = recordedText(run, verdict, 'check_version');
-  if (!recordedCheck) return 'missing_check_version';
-  if (!catalogVersion || recordedCheck !== catalogVersion) return 'check_version_mismatch';
-  const scenario = approvedScenarioVersion(check);
-  if (!scenario) return null;
-  const recordedScenario = recordedText(run, verdict, 'scenario_version');
-  if (!recordedScenario) return 'missing_scenario_version';
-  if (recordedScenario !== scenario) return 'scenario_version_mismatch';
-  return null;
-}
-
-function pairOutcome(state, fields) {
-  return {
-    state,
-    prior_state: fields.prior_state ?? null,
-    observed_at: fields.observed_at ?? null,
-    freshness: fields.freshness,
-    provenance: fields.provenance,
-    live_external: fields.live_external === true,
-    pair_reason: fields.pair_reason ?? null,
-    retained: fields.retained ?? null,
-  };
-}
-
-function pairState(run, verdict, check, nowMs) {
-  if (!run) {
-    return pairOutcome('not_run', {
-      freshness: 'not_recorded',
-      provenance: 'not_recorded',
-      pair_reason: 'no_run',
-    });
-  }
-  const provenance = provenanceOf(run, verdict);
-  const observedAt = isoOrNull(run.completed_at);
-  const retained = retainedFacts(run, verdict, provenance, observedAt);
-  const runStatus = String(run.status ?? '').trim().toLowerCase();
-  const base = { observed_at: observedAt, provenance, retained, live_external: false };
-  if (CANCELED_RUN_STATUSES.has(runStatus)) {
-    return pairOutcome('unknown', { ...base, freshness: 'unknown', pair_reason: 'canceled' });
-  }
-  if (!FINALIZED_RUN_STATUSES.has(runStatus) || OPEN_RUN_STATUSES.has(runStatus)) {
-    return pairOutcome('unknown', { ...base, freshness: 'unknown', pair_reason: 'unfinalized' });
-  }
-  if (!observedAt) {
-    return pairOutcome('unknown', { ...base, freshness: 'unknown', pair_reason: 'observation_time_unknown' });
-  }
-  const backed = evidenceBackedVerdict(verdict);
-  if (!backed) {
-    return pairOutcome('unknown', { ...base, freshness: 'unknown', pair_reason: 'no_evidence' });
-  }
-  const observedMs = Date.parse(observedAt);
-  const stale = Number.isFinite(observedMs) && nowMs - observedMs > COVERAGE_FRESHNESS_POLICY.max_age_ms;
-  if (provenance === 'internal_simulation' || provenance === 'manual_declaration') {
-    return pairOutcome('unknown', {
-      ...base,
-      freshness: stale ? 'stale' : 'unknown',
-      pair_reason: provenance,
-    });
-  }
-  const versionGap = versionGapFor(check, run, verdict);
-  if (versionGap) {
-    return pairOutcome('partial', {
-      ...base,
-      freshness: stale ? 'stale' : 'unknown',
-      pair_reason: versionGap,
-    });
-  }
-  const inconclusive = /inconclusive|unknown|error|pending/i.test(backed);
-  const prior = inconclusive ? 'inconclusive' : 'conclusive';
-  if (stale) {
-    return pairOutcome('stale', { ...base, prior_state: prior, freshness: 'stale', pair_reason: 'stale' });
-  }
-  return pairOutcome(prior, {
-    ...base,
-    freshness: 'current',
-    live_external: prior === 'conclusive',
-  });
-}
-
-function coverageFrom({ target, policies, observations, catalog, nowMs }) {
-  const byCheck = new Map();
-  for (const entry of observations ?? []) {
-    const checkId = entry?.check_id ?? entry?.run?.check_id;
-    if (checkId) byCheck.set(checkId, entry);
-  }
-  const pairs = [];
-  const inconclusiveReasons = new Map();
-  for (const check of catalog ?? CHECK_CATALOG) {
-    if (!check?.check_id || !isCustomerRunnable(check)) continue;
-    if (targetKindCompatibilityError(check, target)) continue;
-    const declarationOnly = text(check.evidence_tier)?.toUpperCase() === 'E1'
-      || check.probe_profile?.kind === 'metadata_marker'
-      || check.probe_profile?.kind === 'ops_readiness';
-    const observationOnly = text(check.evidence_tier)?.toUpperCase() === 'E2'
-      || OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind);
-    const excluded = declarationOnly || observationOnly || checkRequiresAdditionalInput(check);
-    const exclusionReason = declarationOnly ? 'declaration_only' : observationOnly ? 'observation_only' : 'setup_required';
-    const policy = policyForCheck(policies, target, check.check_id);
-    const policyBinding = !policy
-      ? 'no_policy'
-      : (typeof policy.target_id === 'string' && policy.target_id.trim()
-        ? 'bound'
-        : 'test_policy_target_binding_missing');
-    const launch = {
-      launch_eligibility: { status: 'not_evaluated', reason: 'runtime_gates_not_evaluated' },
-      launchable: null,
-      launch_block_reason: 'not_evaluated',
-      policy_binding: policyBinding,
-    };
-    const dimension = DIMENSION_BY_FAMILY[check.vector_family] ?? 'other';
-    if (excluded) {
-      pairs.push({
-        check_id: check.check_id,
-        dimension,
-        state: 'excluded',
-        prior_state: null,
-        exclusion_reason: exclusionReason,
-        last_run_id: null,
-        observed_at: null,
-        freshness: 'not_applicable',
-        provenance: 'not_recorded',
-        live_external: false,
-        pair_reason: exclusionReason,
-        retained: null,
-        policy_id: policy?.id ?? null,
-        ...launch,
-      });
-      continue;
-    }
-    const entry = byCheck.get(check.check_id) ?? null;
-    const outcome = pairState(entry?.run ?? null, entry?.verdict ?? null, check, nowMs);
-    if (outcome.state === 'inconclusive') {
-      const reason = inconclusiveReason({ probeKind: check.probe_profile?.kind, externalResult: entry?.run?.probe_external_result, metadata: entry?.run?.probe_metadata ?? {} });
-      const group = inconclusiveReasons.get(reason.reason) ?? { reason: reason.reason, label: reason.label, next_step: reason.next_step, count: 0, check_ids: [] };
-      group.count += 1;
-      group.check_ids.push(check.check_id);
-      inconclusiveReasons.set(reason.reason, group);
-    }
-    pairs.push({
-      check_id: check.check_id,
-      dimension,
-      state: outcome.state,
-      prior_state: outcome.prior_state,
-      exclusion_reason: null,
-      last_run_id: entry?.run?.id ?? null,
-      observed_at: outcome.observed_at,
-      freshness: outcome.freshness,
-      provenance: outcome.provenance,
-      live_external: outcome.live_external,
-      pair_reason: outcome.pair_reason,
-      retained: outcome.retained,
-      policy_id: policy?.id ?? null,
-      ...launch,
-    });
-  }
-  pairs.sort((left, right) => left.check_id.localeCompare(right.check_id));
-  const summary = summarizePairs(pairs);
-  const dimensions = DIMENSIONS.map((id) => {
-    const scoped = pairs.filter((pair) => pair.dimension === id);
-    const dimensionSummary = summarizePairs(scoped);
-    return {
-      id,
-      unit: 'target_check_pair',
-      status: dimensionStatus(dimensionSummary),
-      ...dimensionSummary,
-      freshness_policy_id: COVERAGE_FRESHNESS_POLICY.id,
-      scope: { target_id: target.id, plan_version: PLAN_VERSION },
-    };
-  });
-  return {
-    coverage: {
-      unit: 'target_check_pair',
-      plan_version: PLAN_VERSION,
-      as_of: new Date(nowMs).toISOString(),
-      freshness_policy: COVERAGE_FRESHNESS_POLICY,
-      runtime_launch_gates: 'not_evaluated',
-      scope: { target_id: target.id, plan_version: PLAN_VERSION },
-      ...summary,
-      observation_only_count: pairs.filter((pair) => pair.exclusion_reason === 'observation_only').length,
-      inconclusive_reasons: [...inconclusiveReasons.values()].sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)),
-      pairs,
-    },
-    dimensions,
-  };
-}
-
 /**
  * @param {{
  *   now?: Date | string | number,
@@ -634,6 +297,7 @@ export function deriveProtectionProfile(input) {
   const { coverage, dimensions } = coverageFrom({
     target: input.target,
     policies: input.policies ?? [],
+    targetGroup: input.targetGroup ?? null,
     observations: input.observations ?? [],
     catalog: input.catalog,
     nowMs: clock,

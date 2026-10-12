@@ -1,5 +1,10 @@
 # Provider-neutral protection validation: rollout notes
 
+## Audit follow-up, not deployment (2026-10-09)
+
+Current authority/readiness/report semantics are in [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md). Legacy status-code/classifier versions below are historical rollout records, not current proof eligibility. No production migrations, deployments, public/customer probes or live notification sends were performed by this audit follow-up. Isolated local PostgreSQL tests apply fixture schemas/migrations; those are not production changes. The existing migrations below remain historical prerequisites, not instructions executed in this session. Existing configuration remains explanation-only; no connector expansion is in scope. Unsupported signed declaration producers and standalone origin permitted baseline remain explicit acceptance boundaries. Live worker-stop/provider and human UX acceptance remain open.
+
+
 Status: local engineering verification only. Staging and live acceptance are outstanding (see "Open release gates"). Deployment is a separate, explicit release action. Nothing in this document is a production-completion claim.
 
 Related: [plan](../implementation/provider-neutral-protection-validation-plan.md), [detection/23](../detection/23-application-entry-path-validation.md), [ADR-0017](../adr/0017-application-entry-path-validation.md), [API](../api.md#application-entry-paths-and-firewall-change-acceptance), [origin execution rules](current-release-origin-execution.md), [ADR-0014](../adr/0014-inconclusive-readiness-coverage.md).
@@ -123,7 +128,7 @@ These remain open, so every PV row in `PROGRESS.md` stays `[~]`:
 - Scenarios the staging run could not cover: explicit deny, application identity (needs a nonce-bound canary, plan open question 2), pre/post regression on a real change, and declared login/API paths (no login/API URL was linked from the test site).
 - Postgres comparison lifecycle under live signed workers (local Postgres integration only), and hosted deployment verification of the runner and PV flag env. The Compose file now forwards the same PV flags and approved source registry to the control plane and test-policy runner; no deployment was performed during review.
 - A producer for declared signatures: nothing yet fills the signed `declared_origin_lockdown` or `declared_block_signature` profile fields from a customer declaration, so origin lockdown is never confirmed and only vendor signatures count as blocks. Host/SNI and scanner origin legs send HEAD, so a body-hash declaration can only match on GET legs.
-- Product decisions: whether the "status code is never evidence on its own" rule also applies to `probeBotChallenge`, `probeRateLimitSequence` and the HTTP method-policy status list; outbox delivery for high/critical protection findings in Postgres.
+- Current code decision (2026-10-09): bare status/header/auth walls never independently prove bot, rate or method-policy protection. High/critical protection-finding creation or meaningful escalation now queues the existing subscribed notification outbox atomically in PostgreSQL with deferred recovery delivery; local app-role tests cover rollback/replay/races/disabled rules/RLS. Live provider delivery and hosted acceptance remain open.
 - A `host_sni_bypass` permitted-path baseline (budget and design change) so direct-origin denials can confirm lockdown.
 - Human sign-off on the rendered protection-validation pages. An automated review at 375/768/1024/1440 px in both themes, keyboard-only and with reduced motion was done on 2026-10-06 (11 defects fixed, spec checks added); a person has not yet reviewed it.
 

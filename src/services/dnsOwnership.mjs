@@ -1,8 +1,11 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { canonicalJsonStringify } from '../lib/custody.mjs';
+import { dnsOwnershipDomain, dnsOwnershipTargetBinding, dnsOwnershipChallengeMatchesTarget, dnsOwnershipLookupTarget } from '../lib/dnsOwnershipTarget.mjs';
 import { audit } from '../audit.mjs';
 import { encodeBase32 } from '../lib/base32.mjs';
 import { newId } from '../lib/ids.mjs';
 import { normalizeChallengeStateForRead } from '../lib/ownershipPolicy.mjs';
+import { allocateOwnershipTransitionAt } from '../lib/ownershipTransitions.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
 
@@ -47,20 +50,6 @@ function findTarget(ctx, targetGroupId, targetId) {
   );
 }
 
-function resolveFqdnDomain(ctx, targetGroupId, targetId) {
-  const target = targetId
-    ? findTarget(ctx, targetGroupId, targetId)
-    : getStore().targets.find(
-        (t) =>
-          t.tenant_id === ctx.tenantId
-          && t.target_group_id === targetGroupId
-          && t.kind === 'fqdn'
-          && !t.deleted_at,
-      );
-  if (!target?.value) return null;
-  return String(target.value).trim().toLowerCase();
-}
-
 function flattenTxtRecords(records) {
   if (!Array.isArray(records)) return [];
   const out = [];
@@ -98,7 +87,8 @@ function formatChallenge(row) {
 function expireChallenge(ctx, challenge) {
   challenge.state = 'expired';
   challenge.last_checked_at = nowIso();
-  challenge.last_check_result = { matched: false, expired: true };
+  challenge.last_check_result = { ...(challenge.last_check_result?.dns_target_binding
+    ? { dns_target_binding: challenge.last_check_result.dns_target_binding } : {}), matched: false, expired: true };
   const auditEntry = audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
@@ -124,7 +114,7 @@ function findPendingChallengeForTarget(ctx, targetGroupId, targetId) {
   ) ?? null;
 }
 
-function appendTargetVerification(ctx, targetId, challengeId, auditEntryId) {
+function appendTargetVerification(ctx, targetId, challengeId, auditEntryId, transitionedAt, targetBinding) {
   const id = newId('tv');
   const record = {
     id,
@@ -132,16 +122,30 @@ function appendTargetVerification(ctx, targetId, challengeId, auditEntryId) {
     target_id: targetId,
     state: 'dns_verified',
     source_kind: 'dns_txt',
-    source_ref: { dns_challenge_id: challengeId },
-    transitioned_at: nowIso(),
+    source_ref: { dns_challenge_id: challengeId,
+      ...(targetBinding ? { dns_target_binding: structuredClone(targetBinding) } : {}) },
+    transitioned_at: transitionedAt,
     transitioned_by: ctx.userId ?? 'system',
     audit_entry_id: auditEntryId,
   };
   if (!getStore().targetVerifications) getStore().targetVerifications = [];
   getStore().targetVerifications.push(record);
-  const target = getStore().targets.find((t) => t.id === targetId);
+  const target = getStore().targets.find((t) => t.id === targetId && t.tenant_id === ctx.tenantId && !t.deleted_at);
   if (target) target.verify_state = 'dns_verified';
   return record;
+}
+
+function challengeBinding(challenge) {
+  return JSON.stringify([challenge.tenant_id, challenge.target_group_id, challenge.target_id,
+    challenge.record_name, challenge.record_value, challenge.issued_at, challenge.expires_at,
+    challenge.last_check_result?.dns_target_binding ?? null]);
+}
+
+function ownershipGeneration(ctx, targetId) {
+  const history = (getStore().targetVerifications ?? [])
+    .filter((row) => row.tenant_id === ctx.tenantId && row.target_id === targetId)
+    .map((row) => canonicalJsonStringify(row)).sort();
+  return createHash('sha256').update(canonicalJsonStringify(history)).digest('hex');
 }
 
 function checkVerifyRateLimit(targetId) {
@@ -199,11 +203,11 @@ export function issueChallenge(ctx, groupId, targetId) {
           && !t.deleted_at,
       );
   if (targetId && !fqdnTarget) return { error: 'target_not_found', status: 404 };
-  if (fqdnTarget?.kind !== 'fqdn') return { error: 'no_fqdn_target', status: 409 };
-  const effectiveTargetId = fqdnTarget?.id ?? null;
+  if (!['fqdn', 'url'].includes(fqdnTarget?.kind)) return { error: 'no_fqdn_target', status: 409 };
+  const effectiveTargetId = fqdnTarget.id;
 
-  const domain = resolveFqdnDomain(ctx, groupId, effectiveTargetId);
-  if (!domain) return { error: 'no_fqdn_target', status: 409 };
+  const domain = dnsOwnershipDomain(fqdnTarget);
+  if (!domain) return { error: 'invalid_dns_ownership_target', status: 400 };
 
   if (effectiveTargetId && findPendingChallengeForTarget(ctx, groupId, effectiveTargetId)) {
     return { error: 'challenge_active', status: 409 };
@@ -225,7 +229,7 @@ export function issueChallenge(ctx, groupId, targetId) {
     expires_at,
     resolved_at: null,
     last_checked_at: null,
-    last_check_result: null,
+    last_check_result: fqdnTarget.kind === 'url' ? { dns_target_binding: dnsOwnershipTargetBinding(fqdnTarget) } : null,
     audit_entry_id: null,
   };
 
@@ -256,7 +260,7 @@ export function issueChallenge(ctx, groupId, targetId) {
  * @param {{ resolveTxt?: (name: string) => Promise<unknown> }} [options]
  */
 export async function verifyChallenge(ctx, challengeId, options = {}) {
-  const challenge = (getStore().dnsChallenges ?? []).find(
+  let challenge = (getStore().dnsChallenges ?? []).find(
     (row) => row.id === challengeId && row.tenant_id === ctx.tenantId,
   );
   if (!challenge) return { error: 'challenge_not_found', status: 404 };
@@ -267,19 +271,27 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
   const group = findActiveTargetGroup(ctx, challenge.target_group_id);
   if (!group) return { error: 'target_group_not_found', status: 404 };
   if (!challenge.target_id) return { error: 'challenge_target_not_bound', status: 409 };
-  if (!findTarget(ctx, challenge.target_group_id, challenge.target_id)) {
-    return { error: 'target_not_found', status: 404 };
+  const target = findTarget(ctx, challenge.target_group_id, challenge.target_id);
+  if (!target) return { error: 'target_not_found', status: 404 };
+  if (!dnsOwnershipChallengeMatchesTarget(challenge, target)) {
+    return { error: 'challenge_binding_changed', status: 409 };
   }
 
   if (challenge.state !== 'pending') {
     return {
       challenge: formatChallenge(challenge),
       verified: challenge.state === 'resolved',
+      audit_entry_id: challenge.audit_entry_id ?? null,
     };
   }
 
-  if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+  const expiresAt = new Date(challenge.expires_at).getTime();
+  if (challenge.expires_at == null || !Number.isFinite(expiresAt)) return { error: 'challenge_binding_changed', status: 409 };
+  if (expiresAt <= Date.now()) {
     return expireChallenge(ctx, challenge);
+  }
+  if (challenge.issued_at == null || !Number.isFinite(new Date(challenge.issued_at).getTime())) {
+    return { error: 'challenge_binding_changed', status: 409 };
   }
 
   const rateKey = challenge.target_id ?? challenge.id;
@@ -288,7 +300,9 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
     return { error: 'rate_limited', status: 429, retry_after_seconds: rate.retryAfterSeconds };
   }
 
-  const checked_at = nowIso();
+  const originalBinding = challengeBinding(challenge);
+  const originalTarget = canonicalJsonStringify(dnsOwnershipLookupTarget(target));
+  const originalOwnership = ownershipGeneration(ctx, target.id);
   let lookup;
   let timedOut = false;
   // Non-production DNS ownership simulation: when ASTRANULL_DNS_SIMULATE=1 and NODE_ENV is not
@@ -314,14 +328,34 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
     }
   }
 
-  if (new Date(challenge.expires_at).getTime() <= Date.now()) {
-    return expireChallenge(ctx, challenge);
+  // Finalization is synchronous: an older lookup cannot overwrite lifecycle or ownership changes.
+  const current = (getStore().dnsChallenges ?? []).find((row) => row.id === challengeId && row.tenant_id === ctx.tenantId);
+  if (!current) return { error: 'challenge_not_found', status: 404 };
+  if (challengeBinding(current) !== originalBinding) {
+    if (current.state === 'pending' && new Date(current.expires_at).getTime() <= Date.now()) return expireChallenge(ctx, current);
+    return { error: 'challenge_binding_changed', status: 409 };
   }
+  if (!findActiveTargetGroup(ctx, current.target_group_id)) return { error: 'target_group_not_found', status: 404 };
+  const currentTarget = findTarget(ctx, current.target_group_id, current.target_id);
+  if (!currentTarget) return { error: 'target_not_found', status: 404 };
+  if (canonicalJsonStringify(dnsOwnershipLookupTarget(currentTarget)) !== originalTarget
+    || !dnsOwnershipChallengeMatchesTarget(current, currentTarget)) return { error: 'challenge_binding_changed', status: 409 };
+  challenge = current;
+  if (challenge.state !== 'pending') return { challenge: formatChallenge(challenge),
+    verified: challenge.state === 'resolved', audit_entry_id: challenge.audit_entry_id ?? null };
+  if (new Date(challenge.expires_at).getTime() <= Date.now()) return expireChallenge(ctx, challenge);
+  if (ownershipGeneration(ctx, current.target_id) !== originalOwnership) return { error: 'ownership_state_changed', status: 409 };
 
+  const checked_at = nowIso();
   const values = flattenTxtRecords(lookup);
   const matched = values.some((v) => v === challenge.record_value);
+  const transitionedAt = matched
+    ? allocateOwnershipTransitionAt(getStore(), ctx.tenantId, challenge.target_id)
+    : null;
   challenge.last_checked_at = checked_at;
+  const targetBinding = challenge.last_check_result?.dns_target_binding;
   challenge.last_check_result = {
+    ...(targetBinding ? { dns_target_binding: structuredClone(targetBinding) } : {}),
     resolver: 'system',
     records: values,
     matched,
@@ -342,7 +376,7 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
       metadata: { target_group_id: challenge.target_group_id, target_id: challenge.target_id },
     });
     if (challenge.target_id) {
-      appendTargetVerification(ctx, challenge.target_id, challenge.id, auditEntry.id);
+      appendTargetVerification(ctx, challenge.target_id, challenge.id, auditEntry.id, transitionedAt, targetBinding);
     }
   } else {
     auditEntry = audit({
@@ -356,6 +390,7 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
     });
   }
 
+  challenge.audit_entry_id = auditEntry.id;
   persistStore();
 
   const response = {
@@ -418,7 +453,8 @@ export async function verifyDnsOwnership(ctx, { target_group_id, challenge_id },
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === target_group_id
-      && row.state === 'pending',
+      && row.state === 'pending'
+      && findTarget(ctx, target_group_id, row.target_id)?.kind === 'fqdn',
   );
   if (!pending) return { error: 'no_dns_challenge', status: 409 };
   return verifyChallenge(ctx, pending.id, { ...options, targetGroupId: target_group_id });

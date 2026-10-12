@@ -485,7 +485,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 }, {
         queryCounter: plain,
       });
-      assert.equal(plain.count, 14, 'target lookup + detail reads, plus observation history and origin bindings');
+      assert.equal(plain.count, 15, 'target lookup + detail reads, observation history, origin bindings and current assurance policy');
 
       const page1 = await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 });
       const legacy = { count: 0 };
@@ -495,7 +495,7 @@ describeMaybe('target detail findings keyset pagination', () => {
         { findings_limit: 5, findings_cursor: encodeCursor({ id: page1.findings.at(-1).id }) },
         { queryCounter: legacy },
       );
-      assert.equal(legacy.count, 15, 'legacy cursor adds one indexed resolution lookup');
+      assert.equal(legacy.count, 16, 'legacy cursor adds one indexed resolution lookup');
     });
   });
 });

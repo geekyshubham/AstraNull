@@ -9,8 +9,8 @@
  * in this module. One probe kind, hard-bounded at 8 requests, no rate/count knob.
  */
 
+import { BENIGN_CLASS_MARKERS } from '../inertWafMarkers.mjs';
 import {
-  BENIGN_CLASS_MARKERS,
   isBlockedOrChallenged,
   markerBaselineHealth,
   markerDenialSignature,
@@ -41,29 +41,29 @@ const INERT_JWT = (() => {
 
 /**
  * Inert WAF-class markers. Each is a detection string a WAF rule flags; none is a
- * working exploit. URL-bearing markers point only at the RFC-6761 `.invalid` sink,
- * which never resolves. Operator/signature tokens (`$ne`, `${jndi:`, `<!DOCTYPE`,
- * `__proto__`) are carried as plain strings that match nothing and mutate nothing.
+ * working exploit. Lookup, external-entity, formula, template-evaluation and prototype
+ * assignment forms are deliberately absent: even a non-resolving URL can trigger work.
+ * These tokens test only explicitly configured marker-rule behavior, not exploit mitigation.
  */
 export const WAF_CLASS_MARKERS = Object.freeze({
   ...BENIGN_CLASS_MARKERS,
-  ssrf: 'http://astranull-ssrf-probe.invalid/marker',
-  xxe: '<!DOCTYPE astranull [<!ENTITY astranullXxeProbe SYSTEM "http://astranull-xxe-probe.invalid/e">]>',
+  ssrf: 'astranull-ssrf-marker-inert',
+  xxe: 'astranull-xxe-marker-inert',
   deserialization: 'rO0ABQ-astranull-deser-probe-INERT',
   request_smuggling: 'astranull-smuggle-probe-CL0TE-inert',
   nosql: '$ne:astranull-nosql-probe-inert',
   jwt_tamper: INERT_JWT,
-  ssti: '{{astranull-ssti-probe-inert}}',
-  open_redirect: '//astranull-open-redirect-probe.invalid/',
+  ssti: 'astranull-ssti-marker-inert',
+  open_redirect: 'astranull-redirect-marker-inert',
   crlf: 'astranull-crlf-probe%0d%0aX-Astranull-Probe:inert',
-  prototype_pollution: '__proto__.astranull_proto_probe_inert',
+  prototype_pollution: 'astranull-prototype-marker-inert',
   xpath: "astranull-xpath-probe' and '1'='0",
-  csv_injection: '=astranull_csv_probe_inert',
-  ldap: '${jndi:ldap://astranull-jndi-probe.invalid/a}',
+  csv_injection: 'astranull-csv-marker-inert',
+  ldap: 'astranull-ldap-marker-inert',
   file_upload_marker: 'astranull-upload-probe.php.txt',
   http_method_policy: 'astranull-method-policy-probe-TRACK-inert',
   session_marker: 'astranull-session-probe-inert',
-  cors_marker: 'https://astranull-cors-probe.invalid',
+  cors_marker: 'astranull-cors-marker-inert',
 });
 
 /** Marker classes this probe kind understands. */
@@ -110,12 +110,13 @@ export const FORBIDDEN_PAYLOAD_SIGNATURES = Object.freeze([
   'ping -c',
   ' && ',
   '| bash',
+  '://', '//', '<!doctype', '<!entity', '${', '{{', '__proto__', 'constructor.prototype',
 ]);
 
 /** True iff the marker embeds the benign sentinel and no working-payload signature. */
 export function isInertMarker(marker) {
   const text = String(marker ?? '').toLowerCase();
-  if (!text.includes(BENIGN_MARKER_SENTINEL)) return false;
+  if (!text.includes(BENIGN_MARKER_SENTINEL) || /^[=+@]/.test(text)) return false;
   return !FORBIDDEN_PAYLOAD_SIGNATURES.some((sig) => text.includes(sig.toLowerCase()));
 }
 
@@ -225,14 +226,24 @@ export async function runWafClassMarkerProbe(options = {}) {
   }
 
   const anyAllowed = markerResults.some((r) => r.allowed === true);
-  const anyBlocked = markerResults.some((r) => r.blocked === true);
+  const comparisonComplete = markerBaselineHealth(baseline) === 'healthy' && markerResults.length === placements.length - 1
+    && markerResults.every((r) => !r.inconclusive && !r.transport_error && !r.error_class);
+  const allBlocked = comparisonComplete && markerResults.every((r) => r.blocked === true);
   let posture = 'inconclusive';
-  if (markerResults.length > 0) {
+  if (comparisonComplete) {
     if (anyAllowed) posture = 'exposed';
-    else if (anyBlocked) posture = 'protected';
+    else if (allBlocked) posture = 'protected';
   }
 
   return {
+    classifier_version: 'marker-comparison-v4',
+    assurance_scope: 'inert_marker_rule_action_only',
+    planned_marker_legs: placements.length - 1,
+    completed_marker_legs: markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length,
+    comparison_complete: comparisonComplete,
+    baseline_health: markerBaselineHealth(baseline),
+    observation_only: !comparisonComplete,
+    readiness_conclusion: comparisonComplete,
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,
@@ -256,7 +267,8 @@ function canaryEchoMatches(res, expectedNonce) {
 async function fetchGrade(fetchFn, requestUrl, headers, timeoutMs, method = 'GET', expectedNonce = null, declared = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const safeMethod = ENTRY_PATH_SAFE_METHODS.includes(method) ? method : 'GET';
+  if (!ENTRY_PATH_SAFE_METHODS.includes(method)) return { ...markerResponseSnapshot(null), transport_error: true, error_class: 'unsupported_method' };
+  const safeMethod = method;
   try {
     const res = await fetchFn(requestUrl, {
       method: safeMethod,
@@ -344,12 +356,12 @@ export function buildEntryPathRequest(baseUrl, markerClass, variation) {
   return { url: url.href, method: variation.method, headers };
 }
 
-function enforcementFromResults(results) {
+function enforcementFromResults(results, plannedCount) {
   const graded = results.filter((row) => !row.inconclusive && !row.error_class);
   const blocked = graded.filter((row) => row.blocked).length;
   const allowed = graded.filter((row) => row.allowed).length;
   if (blocked + allowed === 0) return 'unknown';
-  if (allowed === 0) return 'enforced';
+  if (allowed === 0) return results.length === plannedCount && graded.length === plannedCount && blocked === plannedCount ? 'enforced' : 'unknown';
   if (blocked === 0) return 'not_enforced';
   return 'partial';
 }
@@ -441,13 +453,22 @@ export async function runEntryPathMarkerProbe(options = {}) {
     }
   }
 
-  const enforcement = health === 'healthy' ? enforcementFromResults(markerResults) : 'unknown';
+  const enforcement = health === 'healthy' ? enforcementFromResults(markerResults, variations.length) : 'unknown';
   const identityConfirmed = health === 'healthy' && baseline.canary_echo_matched === true;
-  const posture = enforcement === 'enforced' ? 'protected'
+  const comparisonComplete = health === 'healthy' && markerResults.length === variations.length
+    && markerResults.every((row) => !row.inconclusive && !row.error_class);
+  const posture = !comparisonComplete ? 'inconclusive' : enforcement === 'enforced' ? 'protected'
     : enforcement === 'not_enforced' || enforcement === 'partial' ? 'exposed'
       : 'inconclusive';
   return {
     entry_path_scenario: scenario,
+    classifier_version: 'marker-comparison-v4',
+    assurance_scope: 'inert_marker_rule_action_only',
+    planned_marker_legs: variations.length,
+    completed_marker_legs: markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length,
+    comparison_complete: comparisonComplete,
+    observation_only: !comparisonComplete,
+    readiness_conclusion: comparisonComplete,
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,

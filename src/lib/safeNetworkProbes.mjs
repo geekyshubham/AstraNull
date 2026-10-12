@@ -2,7 +2,7 @@
  * Bounded safe network probes — single datagram/request caps, no amplification or flooding.
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import dgram from 'node:dgram';
 import http2 from 'node:http2';
 import net from 'node:net';
@@ -70,7 +70,8 @@ function resolvePortForJob(job, fallback = 443) {
 
 function withProfileKind(job, metadata) {
   const profileKind = job.probe_profile?.kind ?? metadata.probe_kind ?? null;
-  return { profile_kind: profileKind, ...metadata };
+  return { profile_kind: profileKind, ...metadata, classifier_version: 'protocol-identity-v3',
+    observation_only: true, readiness_conclusion: false, evidence_tier: 'E2' };
 }
 
 function safeUdpPayload(job) {
@@ -112,7 +113,7 @@ export function isExpectedUdpPeer(rinfo, host, port) {
  * @param {string} host
  * @param {number} timeoutMs
  */
-function sendUdpDatagram(socket, payload, port, host, timeoutMs) {
+function sendUdpDatagram(socket, payload, port, host, timeoutMs, { captureResponse = false, signal } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;
@@ -121,6 +122,7 @@ function sendUdpDatagram(socket, payload, port, host, timeoutMs) {
       clearTimeout(timer);
       socket.removeListener?.('message', onMessage);
       socket.removeListener?.('error', onError);
+      signal?.removeEventListener('abort', onAbort);
       try {
         socket.close();
       } catch {
@@ -143,9 +145,13 @@ function sendUdpDatagram(socket, payload, port, host, timeoutMs) {
         response_received: true,
         response_bytes: responseBytes,
         response_size_class: udpResponseSizeClass(responseBytes),
+        ...(captureResponse ? { response_payload: Buffer.from(message).subarray(0, 65536), response_complete: responseBytes <= 65536 } : {}),
       });
     };
     const onError = (error) => settle(null, error);
+    const onAbort = () => settle(null, Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' }));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) { onAbort(); return; }
 
     socket.on('message', onMessage);
     socket.once('error', onError);
@@ -185,10 +191,14 @@ function sendTcpPayload(connectFn, payload, endpoint, timeoutMs, deps, onReserve
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;
+    let socket;
+    const onAbort = () => settle(null, Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' }));
+    if (deps.jobDeadlineSignal?.aborted) { reject(Object.assign(new Error('probe canceled'), { code: 'ETIMEOUT' })); return; }
     const settle = (value, error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      deps.jobDeadlineSignal?.removeEventListener('abort', onAbort);
       try {
         socket.destroy();
       } catch {
@@ -197,7 +207,7 @@ function sendTcpPayload(connectFn, payload, endpoint, timeoutMs, deps, onReserve
       if (error) reject(error);
       else resolve(value);
     };
-    const socket = startProbeIoAttempt(
+    socket = startProbeIoAttempt(
       deps,
       'reflection_tcp',
       () => connectFn({ host: endpoint.host, port: endpoint.port }, () => {
@@ -211,10 +221,19 @@ function sendTcpPayload(connectFn, payload, endpoint, timeoutMs, deps, onReserve
       }),
       onReserved,
     );
-    socket.once('data', (chunk) => settle({
-      response_received: true,
-      response_bytes: Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk ?? ''),
-    }));
+    let responsePayload = Buffer.alloc(0);
+    let responseTruncated = false;
+    deps.jobDeadlineSignal?.addEventListener('abort', onAbort, { once: true });
+    if (deps.jobDeadlineSignal?.aborted) { onAbort(); return; }
+    socket.on('data', (chunk) => {
+      const received = Buffer.concat([responsePayload, Buffer.from(chunk ?? [])]);
+      responseTruncated ||= received.length > 65536;
+      responsePayload = received.subarray(0, 65536);
+      if (responsePayload.length < 4) return;
+      const frameLength = (responsePayload.readUInt32BE(0) & 0x7fffffff) + 4;
+      if (frameLength > 65536) { settle({ response_received: true, response_bytes: responsePayload.length, response_payload: responsePayload, response_complete: false }); return; }
+      if (responsePayload.length >= frameLength) settle({ response_received: true, response_bytes: responsePayload.length, response_payload: responsePayload, response_complete: !responseTruncated && responsePayload.length === frameLength });
+    });
     socket.once('end', () => settle({ response_received: false, response_bytes: 0 }));
     socket.once('close', () => settle({ response_received: false, response_bytes: 0 }));
     socket.once('error', (error) => settle(null, error));
@@ -236,6 +255,7 @@ function reflectionFailure(job, metadata, externalResult, requestsSent, started)
     metadata: {
       probe_kind: 'reflection_service_probe',
       ...metadata,
+      classifier_version: 'protocol-identity-v3', observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
       duration_ms: durationMs,
     },
     requests_sent: requestsSent,
@@ -243,9 +263,28 @@ function reflectionFailure(job, metadata, externalResult, requestsSent, started)
   };
 }
 
+/** Select only authoritative no-delivery branches; no resolver or transport is initialized. */
+export async function networkProbeNoDeliveryOutcome(job, deps = {}) {
+  const profile = job.probe_profile ?? {};
+  if (profile.kind === 'reflection_service_probe') {
+    const payload = reflectorPayloadForProfile(profile.payload_profile ?? 'generic_probe');
+    if (!payload || payload.execution_supported === false) return probeReflectionService(job, deps);
+  }
+  if (profile.kind === 'alert_webhook_ping') {
+    const approved = job.constraints?.alert_webhook_url;
+    if (typeof approved !== 'string' || !approved || resolveAlertWebhookUrl(job) !== approved) {
+      return probeAlertWebhookPing(job, deps);
+    }
+  }
+  return null;
+}
+
 export async function probeReflectionService(job, deps = {}) {
   const profileName = job.probe_profile?.payload_profile ?? 'generic_probe';
   const payloadProfile = reflectorPayloadForProfile(profileName);
+  if (!payloadProfile || payloadProfile.execution_supported === false) {
+    return reflectionFailure(job, { payload_profile: profileName, delivery_supported: false, not_run_reason: 'unsupported_or_unapproved_protocol_request', reflector_confirmed: false }, 'not_run', 0, Date.now());
+  }
   const endpoint = reflectionEndpoint(job, payloadProfile);
   const started = Date.now();
   if (!endpoint) {
@@ -306,6 +345,7 @@ export async function probeReflectionService(job, deps = {}) {
           endpoint.port,
           pinned.address,
           attemptTimeoutMs,
+          { captureResponse: true, signal: deps.jobDeadlineSignal },
         );
         if (response.response_received) break;
       }
@@ -313,7 +353,7 @@ export async function probeReflectionService(job, deps = {}) {
 
     const classification = payloadProfile.classify(
       payload,
-      response.response_bytes,
+      response.response_complete === true ? response.response_payload ?? null : null,
       response.response_received,
     );
     if (!response.response_received) {
@@ -330,7 +370,10 @@ export async function probeReflectionService(job, deps = {}) {
       response_received: true,
       response_bytes: response.response_bytes,
       ...classification,
-    }, 'connected', requestsSent, started);
+      response_complete: response.response_complete === true,
+      identity_supported: payloadProfile.identity_supported === true,
+      response_body_retained: false,
+    }, classification.protocol_identity_confirmed ? 'connected' : 'not_run', requestsSent, started);
   } catch (error) {
     const code = error?.code ?? '';
     const externalResult = requestsSent === 0
@@ -338,7 +381,7 @@ export async function probeReflectionService(job, deps = {}) {
       : (code === 'ETIMEOUT'
         ? 'timeout'
         : (['EACCES', 'EPERM', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EDESTINATION'].includes(code)
-          ? 'blocked'
+          ? 'error'
           : 'error'));
     return reflectionFailure(job, {
       ...baseMetadata,
@@ -399,6 +442,8 @@ export async function probeUdpDatagram(job, deps = {}) {
         duration_ms: durationMs,
         target_port: endpoint.port,
         datagram_bytes: payload.length,
+        observation_complete: requestsSent === 1,
+        pinned_address: pinned.address,
         response_received: response.response_received,
         response_bytes: response.response_bytes,
         response_size_class: response.response_size_class,
@@ -417,6 +462,7 @@ export async function probeUdpDatagram(job, deps = {}) {
           error_class: 'timeout',
           duration_ms: durationMs,
           target_port: endpoint.port,
+          observation_complete: requestsSent === 1,
         }),
         requests_sent: requestsSent,
         duration_ms: durationMs,
@@ -431,7 +477,7 @@ export async function probeUdpDatagram(job, deps = {}) {
       || code === 'EDESTINATION'
     ) {
       return {
-        external_result: requestsSent > 0 ? 'blocked' : 'error',
+        external_result: 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'udp_probe',
           error_class: code,
@@ -512,7 +558,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
   }
   if (TLS_BLOCKED_CODES.has(code) || code === 'EDESTINATION') {
     return {
-      external_result: requestsSent > 0 ? 'blocked' : 'error',
+      external_result: 'error',
       metadata: withProfileKind(job, {
         probe_kind: probeKind,
         error_class: code,
@@ -541,6 +587,9 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
  */
 function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
   return new Promise((resolve, reject) => {
+    const signal = deps.jobDeadlineSignal;
+    const stopped = () => Object.assign(new Error('Probe stopped.'), { code: 'ETIMEOUT', name: 'AbortError' });
+    if (signal?.aborted) { reject(stopped()); return; }
     let settled = false;
     const socket = startProbeIoAttempt(
       deps,
@@ -556,17 +605,14 @@ function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
       onReserved,
     );
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
-    }, timeoutMs);
-
+    const timer = setTimeout(() => settle(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), timeoutMs);
+    const onAbort = () => settle(stopped());
     const settle = (err, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      socket.removeListener('secureConnect', onSecureConnect);
       if (err) {
         socket.destroy();
         reject(err);
@@ -576,14 +622,17 @@ function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
       resolve(result);
     };
 
-    socket.once('secureConnect', () => {
+    const onSecureConnect = () => {
       settle(null, {
         tls_protocol: socket.getProtocol(),
         cipher: socket.getCipher()?.name ?? null,
         authorized: socket.authorized,
       });
-    });
+    };
+    socket.once('secureConnect', onSecureConnect);
     socket.once('error', (err) => settle(err));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -611,18 +660,17 @@ function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connec
       onReserved,
     );
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      session.close();
-      session.destroy();
-      reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
-    }, timeoutMs);
-
+    const signal = deps.jobDeadlineSignal ?? deps.signal;
+    const timer = setTimeout(() => settle(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), timeoutMs);
+    const onAbort = () => settle(Object.assign(new Error('Probe stopped.'), { code: 'ABORT_ERR', name: 'AbortError' }));
+    const onClose = () => settle(Object.assign(new Error('HTTP/2 closed before peer SETTINGS.'), { code: 'ECONNRESET' }));
     const settle = (err, settings) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      session.removeListener('remoteSettings', captureSettings);
+      session.removeListener('close', onClose);
       session.close();
       if (err) {
         session.destroy();
@@ -639,13 +687,12 @@ function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connec
       });
     };
 
+    // Node exposes protocol defaults at connect; only this event proves peer SETTINGS arrived.
     session.once('remoteSettings', captureSettings);
-    session.once('connect', () => {
-      if (settled) return;
-      const remote = session.remoteSettings;
-      if (remote && Object.keys(remote).length > 0) captureSettings(remote);
-    });
+    session.once('close', onClose);
     session.once('error', (err) => settle(err));
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -886,7 +933,15 @@ export function resolveAlertWebhookUrl(job) {
  * }} deps
  */
 export async function probeAlertWebhookPing(job, deps = {}) {
-  const webhookUrl = resolveAlertWebhookUrl(job);
+  const declared = resolveAlertWebhookUrl(job);
+  const approved = job.constraints?.alert_webhook_url;
+  if (typeof approved !== 'string' || !approved || declared !== approved) {
+    return { external_result: 'not_run', metadata: withProfileKind(job, {
+      probe_kind: 'alert_webhook_ping', not_run_reason: 'approved_signed_callback_scope_required',
+      delivery_supported: false, observation_only: true, readiness_conclusion: false,
+    }), requests_sent: 0, duration_ms: 0 };
+  }
+  const webhookUrl = approved;
   if (!webhookUrl) {
     return {
       external_result: 'error',
@@ -915,7 +970,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
   }
 
   // Cleartext webhooks would leak the marker/nonce and are trivially redirectable.
-  if (parsedUrl.protocol !== 'https:') {
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.hash) {
     return {
       external_result: 'error',
       metadata: withProfileKind(job, {
@@ -1059,8 +1114,8 @@ function safeWebsocketKey() {
   return randomBytes(16).toString('base64');
 }
 
-function classifyWebsocketUpgradeStatus(status) {
-  if (status === 101) {
+function classifyWebsocketUpgradeStatus(status, identityConfirmed) {
+  if (status === 101 && identityConfirmed) {
     return {
       external_result: 'connected',
       upgrade_accepted: true,
@@ -1070,15 +1125,15 @@ function classifyWebsocketUpgradeStatus(status) {
   }
   if (WEBSOCKET_UPGRADE_DENIED_STATUSES.has(status)) {
     return {
-      external_result: 'blocked',
+      external_result: 'not_run',
       upgrade_accepted: false,
-      upgrade_denied: true,
+      upgrade_denied: false,
       upgrade_required: false,
     };
   }
   if (status === 426) {
     return {
-      external_result: 'blocked',
+      external_result: 'not_run',
       upgrade_accepted: false,
       upgrade_denied: false,
       upgrade_required: true,
@@ -1132,6 +1187,10 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
   const controller = new AbortController();
+  const upstreamSignal = deps.jobDeadlineSignal;
+  const onAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) onAbort();
+  else upstreamSignal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let requestsSent = 0;
 
@@ -1146,6 +1205,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
   if (job.nonce) headers['x-astranull-nonce'] = String(job.nonce);
 
   try {
+    controller.signal.throwIfAborted();
     const res = await startProbeIoAttempt(
       deps,
       'websocket_upgrade',
@@ -1159,13 +1219,16 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
       () => { requestsSent = 1; },
     );
     const durationMs = Date.now() - started;
-    const classification = classifyWebsocketUpgradeStatus(res.status);
+    const expectedAccept = createHash('sha1').update(headers['Sec-WebSocket-Key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    const identityConfirmed = res.status === 101 && res.headers.get('sec-websocket-accept') === expectedAccept && String(res.headers.get('upgrade')).toLowerCase() === 'websocket' && String(res.headers.get('connection')).toLowerCase().split(/\s*,\s*/).includes('upgrade');
+    const classification = classifyWebsocketUpgradeStatus(res.status, identityConfirmed);
     return {
       external_result: classification.external_result,
       metadata: withProfileKind(job, {
         probe_kind: 'websocket_upgrade_posture',
         status_code: res.status,
         upgrade_accepted: classification.upgrade_accepted,
+        handshake_identity_confirmed: identityConfirmed,
         upgrade_denied: classification.upgrade_denied,
         upgrade_required: classification.upgrade_required,
         response_upgrade_header: res.headers.get('upgrade'),
@@ -1192,7 +1255,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
     }
     if (TLS_BLOCKED_CODES.has(code)) {
       return {
-        external_result: 'blocked',
+        external_result: 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'websocket_upgrade_posture',
           error_class: code,
@@ -1214,5 +1277,6 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
     };
   } finally {
     clearTimeout(timer);
+    upstreamSignal?.removeEventListener('abort', onAbort);
   }
 }

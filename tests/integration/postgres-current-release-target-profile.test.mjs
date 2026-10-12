@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createPortalRevampRepository } from '../../src/persistence/postgres/portalRevampRepository.mjs';
+import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { approvedScenarioVersion, deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
 import {
@@ -79,30 +80,41 @@ async function seed(pool) {
   );
 }
 
+async function stampScope(pool, runId) {
+  const target = (await pool.query('SELECT * FROM targets WHERE tenant_id = $1 AND id = $2', [TENANT, TARGET])).rows[0];
+  const group = (await pool.query('SELECT * FROM target_groups WHERE tenant_id = $1 AND id = $2', [TENANT, GROUP])).rows[0];
+  await pool.query('UPDATE test_runs SET safety_constraints = $1::jsonb WHERE tenant_id = $2 AND id = $3',
+    [JSON.stringify({ assurance_scope: deriveAssuranceScope({ target, targetGroup: group }) }), TENANT, runId]);
+}
+
 describe('postgres current-release target profile', () => {
-  it('groups inconclusive reasons from the stored result and nonce-bound signed evidence', { timeout: 120_000 }, async (t) => {
+  it('keeps an unsupported nonce-bound marker attempt partial without inventing a complete comparison', { timeout: 120_000 }, async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) { t.skip(availability.reason); return; }
     await withEphemeralPostgres(async (pool) => {
       await seed(pool);
-      const check = getCheckById('waf.enforcement.safe');
-      const stamp = deriveRunEvidenceStamp(check);
+      const check = getCheckById('waf.http_method_policy_marker.safe');
+      const stamp = deriveRunEvidenceStamp(check, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(check) });
       await pool.query(
         `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status, completed_at, check_version, scenario_version, producer_kind, probe_external_result, correlation_json)
          VALUES ('run_reason', $1, $2, $3, $4, 'verdicted', now(), $5, $6, 'signed_probe', 'error', '{"nonce_hash":"reason_nonce"}')`,
         [TENANT, GROUP, TARGET, check.check_id, stamp.check_version, stamp.scenario_version],
       );
+      await stampScope(pool, 'run_reason');
       for (const [id, nonce, error] of [['evt_reason', 'reason_nonce', 'unsupported_target'], ['evt_wrong_nonce', 'wrong_nonce', 'ESERVFAIL']]) {
         await pool.query(
           `INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, metadata_json)
-           VALUES ($1, $2, 'run_reason', 'probe_result', 'signed_probe', $3, now() + interval '1 second', $4::jsonb)`,
+           VALUES ($1, $2, 'run_reason', 'probe_result', 'signed_probe', $3, now(), $4::jsonb)`,
           [id, TENANT, nonce, JSON.stringify({ error_class: error })],
         );
       }
       await pool.query(`INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, evidence_ids) VALUES ('verdict_reason', $1, 'run_reason', 'inconclusive', ARRAY['evt_reason'])`, [TENANT]);
       const detail = await createPortalRevampRepository(pool).getTargetDetailBundle(CTX, TARGET, {});
-      assert.equal(detail.coverage.inconclusive_count, 1);
-      assert.deepEqual(detail.coverage.inconclusive_reasons.map(r => [r.reason, r.count, r.check_ids]), [['endpoint_setup_required', 1, [check.check_id]]]);
+      assert.equal(detail.coverage.inconclusive_count, 0);
+      const pair = detail.coverage.pairs.find((row) => row.check_id === check.check_id);
+      assert.equal(pair.state, 'partial');
+      assert.equal(pair.pair_reason, 'complete_marker_comparison_missing');
+      assert.equal(pair.current_assurance, 'retest_required');
       assert.ok(detail.coverage.observation_only_count > 0);
     });
   });
@@ -112,14 +124,20 @@ describe('postgres current-release target profile', () => {
     if (!availability.available) { t.skip(availability.reason); return; }
     await withEphemeralPostgres(async (pool) => {
       await seed(pool);
-      const checkId = 'waf.inspection_limit.safe';
+      const checkId = 'waf.http_method_policy_marker.safe';
       const check = getCheckById(checkId);
       const scenarioVersion = approvedScenarioVersion(check);
-      await pool.query(`UPDATE test_runs SET check_id = $1 WHERE id = 'run_target_profile'`, [checkId]);
+      await pool.query(`UPDATE test_runs SET check_id = $1, correlation_json = '{"nonce_hash":"profile_nonce"}',
+        producer_kind = 'signed_probe', completed_at = now() WHERE id = 'run_target_profile'`, [checkId]);
+      await pool.query(`INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json)
+        VALUES ('evidence_profile_live', $1, 'run_target_profile', 'probe_result', 'signed_probe', 'profile_nonce', now(), now(), $2::jsonb)`,
+        [TENANT, JSON.stringify({ classifier_version: 'marker-comparison-v4', comparison_complete: true,
+          planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy', enforcement: 'enforced', evidence_complete: true })]);
+      await stampScope(pool, 'run_target_profile');
       const portal = createPortalRevampRepository(pool);
       await pool.query(
         `INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, confidence, evidence_ids)
-         VALUES ('verdict_profile_live', $1, 'run_target_profile', 'edge_exposed', 'external_only', ARRAY['evidence_profile_live'])`,
+         VALUES ('verdict_profile_live', $1, 'run_target_profile', 'edge_protected', 'external_only', ARRAY['evidence_profile_live'])`,
         [TENANT],
       );
       const pairFor = async () => (await portal.getTargetDetailBundle(CTX, TARGET, {})).coverage.pairs
@@ -138,11 +156,40 @@ describe('postgres current-release target profile', () => {
       assert.equal(live.live_external, true);
       assert.equal(live.retained.check_version, currentVersion);
       assert.equal(live.retained.scenario_version, scenarioVersion);
+      assert.equal(live.outcome, 'pass');
+      const observedCustody = (await pool.query(`SELECT r.safety_constraints, v.verdict, v.evidence_ids
+        FROM test_runs r JOIN verdicts v ON v.test_run_id = r.id WHERE r.id = 'run_target_profile'`)).rows;
+      await pool.query(`UPDATE events SET metadata_json = jsonb_set(metadata_json, '{enforcement}', '"not_enforced"') WHERE id = 'evidence_profile_live'`);
+      assert.equal((await pairFor()).pair_reason, 'actual_positive_outcome_mismatch');
+      assert.deepEqual((await pool.query(`SELECT r.safety_constraints, v.verdict, v.evidence_ids
+        FROM test_runs r JOIN verdicts v ON v.test_run_id = r.id WHERE r.id = 'run_target_profile'`)).rows, observedCustody);
+      await pool.query(`UPDATE events SET metadata_json = jsonb_set(metadata_json, '{enforcement}', '"enforced"') WHERE id = 'evidence_profile_live'`);
+
+      await pool.query(`UPDATE verdicts SET verdict = 'edge_exposed' WHERE id = 'verdict_profile_live'`);
+      assert.equal((await pairFor()).outcome, 'gap');
+      await assert.rejects(pool.query(`INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, evidence_ids, created_at)
+        VALUES ('verdict_profile_newer_unresolved', $1, 'run_target_profile', 'edge_protected', ARRAY['unresolved'], now())`, [TENANT]),
+        (error) => error.constraint === 'uniq_verdict_per_test_run');
+      await pool.query(`UPDATE verdicts SET verdict = 'edge_protected', evidence_ids = ARRAY['unresolved'] WHERE id = 'verdict_profile_live'`);
+      assert.equal((await pairFor()).pair_reason, 'no_evidence', 'an unresolved positive cannot borrow any nonce-bound event not cited by its exact verdict');
+      await pool.query(`UPDATE verdicts SET verdict = 'edge_protected', evidence_ids = ARRAY['evidence_profile_live'] WHERE id = 'verdict_profile_live'`);
+      await pool.query(`UPDATE events SET nonce_hash = 'wrong_nonce' WHERE id = 'evidence_profile_live'`);
+      assert.equal((await pairFor()).pair_reason, 'no_evidence');
+      await pool.query(`UPDATE events SET nonce_hash = 'profile_nonce' WHERE id = 'evidence_profile_live'`);
       await pool.query(`UPDATE test_runs SET producer_kind = 'internal_simulation' WHERE id = 'run_target_profile'`);
       assert.equal((await pairFor()).live_external, false);
       assert.equal((await pairFor()).pair_reason, 'internal_simulation');
       await pool.query(`UPDATE test_runs SET producer_kind = 'signed_probe', scenario_version = 'old-scenario' WHERE id = 'run_target_profile'`);
       assert.equal((await pairFor()).pair_reason, 'scenario_version_mismatch');
+      await pool.query(`UPDATE test_runs SET scenario_version = $1 WHERE id = 'run_target_profile'`, [scenarioVersion]);
+      const custody = (await pool.query(`SELECT r.safety_constraints, r.provenance_json, v.evidence_ids
+        FROM test_runs r JOIN verdicts v ON v.test_run_id = r.id WHERE r.id = 'run_target_profile'`)).rows;
+      await pool.query(`UPDATE targets SET port = 8443 WHERE id = $1`, [TARGET]);
+      assert.equal((await pairFor()).pair_reason, 'target_definition_changed');
+      await pool.query(`UPDATE targets SET port = NULL, protocol = 'http' WHERE id = $1`, [TARGET]);
+      assert.equal((await pairFor()).pair_reason, 'target_definition_changed');
+      assert.deepEqual((await pool.query(`SELECT r.safety_constraints, r.provenance_json, v.evidence_ids
+        FROM test_runs r JOIN verdicts v ON v.test_run_id = r.id WHERE r.id = 'run_target_profile'`)).rows, custody);
     });
   });
 

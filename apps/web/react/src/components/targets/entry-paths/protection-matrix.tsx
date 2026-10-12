@@ -1,9 +1,16 @@
-import { useEffect, useRef } from 'react';
-import type { LayerEvidence, MatrixPath, ProtectionMatrix as Matrix } from '../../../lib/protection-validation-api';
+import { useEffect, useRef, useState } from 'react';
+import { getProtectionValidationReport, type LayerEvidence, type MatrixPath, type ProtectionMatrix as Matrix, type ProtectionReport, type PvFailure } from '../../../lib/protection-validation-api';
+import { sessionIdentity } from '../../../lib/api';
+import type { PortalConfig, Session } from '../../../lib/types';
+import { Button } from '../../ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import {
   EXPECTED_BEHAVIOR_LABELS,
+  findingExclusionView,
+  compatibilityReasonLabels,
+  FIREWALL_STATUS_LABELS,
   freshnessView,
   LAYER_DIMENSION_LABELS,
   LAYER_LABELS,
@@ -17,12 +24,18 @@ import {
   RELATION_KIND_LABELS,
   toneFrom,
 } from './presenter.mjs';
-import { EvidenceRefList, LimitationList } from './shared';
+import { EvidenceRefList, FailureNotice, LimitationList } from './shared';
+import './entry-paths.css';
 
 const DIMENSIONS = ['declared_intent', 'vendor_detection', 'observed_enforcement', 'application_identity', 'suspected_bypass', 'confirmed_scoped_bypass'] as const;
 
 function layerOf(path: MatrixPath, layer: string): LayerEvidence | null {
   return path.layers.find((item) => item.layer === layer) ?? null;
+}
+
+function pathExclusions(path: MatrixPath) {
+  const items = path.scenarios.length ? path.scenarios : [path];
+  return items.map((item) => ({ scenario: 'scenario' in item ? item.scenario : '', ...findingExclusionView(item, true) })).filter((item) => item.excluded);
 }
 
 function pathName(path: MatrixPath) {
@@ -96,6 +109,7 @@ export function ProtectionMatrixTable({
                     <div className="pv-badges">
                       <Badge tone={toneFrom(PATH_OUTCOME_TONES, path.outcome)}>{labelFrom(PATH_OUTCOME_LABELS, path.outcome)}</Badge>
                       {fresh.state === 'stale' ? <Badge tone="warn">Stale</Badge> : null}
+                      {pathExclusions(path).length ? <Badge tone="muted">Evidence excluded from findings</Badge> : null}
                     </div>
                     {path.observation ? <span className="td-muted small">{labelFrom(pathObservationLabels(path.relation_kind), path.observation)}</span> : null}
                   </td>
@@ -145,6 +159,30 @@ export function ProtectionMatrixTable({
               </div>
             )) : null}
           </dl>
+          {pathExclusions(selectedPath).length ? (
+            <div className="pv-notice" data-tone="warn" data-state="ignored-for-findings">
+              <div><strong>Excluded from findings</strong><p>Unavailable evidence does not create or update a finding. This path stays visible in unknown or not-tested coverage; exclusion is not a passing result.</p>
+                <ul>{pathExclusions(selectedPath).map((item, index) => <li key={`${item.scenario}-${index}`}>{item.scenario ? <code>{item.scenario}: </code> : null}{item.reason}</li>)}</ul>
+              </div>
+            </div>
+          ) : null}
+          {selected ? (
+            <section className="pv-section" aria-label="Optional configuration context">
+              <h4>Optional configuration context — explanation only</h4>
+              <p className="td-muted small">Snapshot configuration explains declarations only. It never changes the observed result, supplies missing evidence, establishes protection or authorizes execution. Missing configuration remains unknown.</p>
+              {matrix.configuration_access === 'redacted' ? <p className="td-muted small">Your role cannot read connector configuration.</p>
+                : matrix.configuration_access === 'disabled' ? <p className="td-muted small">Optional connectors are disabled. External validation does not require them.</p>
+                : selected.configuration ? (
+                  <dl className="pv-dl">
+                    <div className="pv-dl-row"><dt>Configuration state</dt><dd>{labelFrom({}, selected.configuration.status)}</dd></div>
+                    <div className="pv-dl-row"><dt>Reported policy coverage</dt><dd>{labelFrom({}, selected.configuration.coverage)} — configuration, not measured behavior</dd></div>
+                    <div className="pv-dl-row"><dt>Snapshot records</dt><dd>{selected.configuration.record_count ?? 'Not reported'}</dd></div>
+                    <div className="pv-dl-row"><dt>Provider labels</dt><dd>{selected.configuration.provider_labels.join(', ') || 'Not reported'}</dd></div>
+                    <div className="pv-dl-row"><dt>Snapshot limitations</dt><dd>{selected.configuration.markers.map((value) => labelFrom({}, value)).join(' · ') || 'None reported; completeness is not established'}</dd></div>
+                  </dl>
+                ) : <p className="td-muted small">No permitted explanation-only configuration is available.</p>}
+            </section>
+          ) : null}
           {selected?.layer === 'ddos' ? <p className="td-muted small">A bounded external check never establishes DDoS capacity or resilience.</p> : null}
           <LimitationList values={selected ? selected.evidence_limitations : selectedPath.limitations} />
           <h4>Evidence</h4>
@@ -155,5 +193,69 @@ export function ProtectionMatrixTable({
         <p className="td-muted small">Select a path or a layer cell to inspect its recorded evidence. Selecting reads results only; it never starts a check.</p>
       )}
     </div>
+  );
+}
+
+
+type ReportState = { key: string; state: 'loading' } | { key: string; state: 'ready'; value: ProtectionReport } | { key: string; state: 'failed'; failure: PvFailure };
+
+/** Current passive projection, deliberately separate from sealed generated snapshots. */
+export function ProtectionValidationReportPanel({ config, session }: { config: PortalConfig; session: Session }) {
+  const key = `${sessionIdentity(session)}|${config.authMode}`;
+  const [stored, setStored] = useState<ReportState>({ key, state: 'loading' });
+  const [reload, setReload] = useState(0);
+  const state: ReportState = stored.key === key ? stored : { key, state: 'loading' };
+  useEffect(() => {
+    let current = true;
+    const controller = new AbortController();
+    setStored({ key, state: 'loading' });
+    void getProtectionValidationReport(config, session, controller.signal).then((result) => {
+      if (!current) return;
+      if (result.state !== 'ready') setStored({ key, state: 'failed', failure: result });
+      else if (result.value.tenant_id !== session.tenant_id) setStored({ key, state: 'failed', failure: { state: 'unavailable', code: 'scope_mismatch', status: 400, message: 'The report did not match this workspace. No other report was substituted.' } });
+      else setStored({ key, state: 'ready', value: result.value });
+    }).catch(() => { if (current) setStored({ key, state: 'failed', failure: { state: 'transport_error', message: 'Current protection validation could not load. No check was started.' } }); });
+    return () => { current = false; controller.abort(); };
+  }, [config, session, key, reload]);
+  const report = state.state === 'ready' ? state.value : null;
+  return (
+    <Card className="protection-validation-report" role="region" aria-label="Current protection validation report">
+      <CardHeader><div><CardTitle>Current protection validation</CardTitle><CardDescription>Passive current coverage, not a generated or sealed report snapshot. Reading and refreshing send no probe traffic and create no findings.</CardDescription></div>
+        <Button size="sm" variant="secondary" disabled={state.state === 'loading'} onClick={() => setReload((value) => value + 1)}>Refresh current coverage</Button>
+      </CardHeader>
+      <CardContent className="pv-section">
+        {state.state === 'loading' ? <p role="status">Loading current protection validation…</p> : null}
+        {state.state === 'failed' ? <FailureNotice failure={state.failure} subject="current protection validation" onRetry={() => setReload((value) => value + 1)} /> : null}
+        {report ? <>
+          <p className="muted small">Read at {formatDate(report.generated_at)}. Results below are retained immutable comparisons; they are not a claim of current protection.</p>
+          {report.source_records_complete !== true || report.conclusions_truncated ? <p className="pv-notice" data-tone="warn">Partial view: source records or conclusion listings are incomplete. Missing rows are not validated coverage.</p> : null}
+          <p>{report.unknown_statement || 'Unknown and not-tested coverage remains visible. Missing evidence does not create findings or count as validated.'}</p>
+          {report.incomplete_reasons.length ? <p className="pv-break">Incomplete coverage: {report.incomplete_reasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
+          {Object.keys(report.unknown_reasons).length ? <ul aria-label="Unknown coverage reasons">{Object.entries(report.unknown_reasons).map(([reason, count]) => <li key={reason}>{labelFrom({}, reason)}: {count}</li>)}</ul> : null}
+          {[['Not-tested entry paths', report.not_tested_paths], ['Not-tested firewall expectations', report.untested_firewall_expectations]].map(([label, raw]) => {
+            const coverage = raw as ProtectionReport['not_tested_paths'];
+            return coverage.ids.length || coverage.total ? <p key={String(label)} className="pv-break"><strong>{String(label)}</strong>: {coverage.ids.join(', ') || 'Identifiers not listed'}{coverage.truncated ? ` (partial identifiers; ${coverage.total ?? 'unknown'} total)` : ''}</p> : null;
+          })}
+          {report.conclusions.length ? <div className="pv-matrix-wrap" role="region" aria-label="Protection validation conclusions, scrollable" tabIndex={0}>
+            <table className="pv-matrix">
+              <caption className="sr-only">Every available conclusion, including results excluded from findings. Finding use and current assurance are independent.</caption>
+              <thead><tr><th scope="col">Subject / scenario</th><th scope="col">Retained result</th><th scope="col">Finding use</th><th scope="col">Current assurance</th></tr></thead>
+              <tbody>{report.conclusions.map((item) => {
+                const excluded = findingExclusionView(item);
+                return <tr key={item.id} data-conclusion-id={item.id}>
+                  <th scope="row" className="pv-break">{item.subject.entry_path_id || item.subject.expectation_id || item.id}{item.scenario ? <div>{item.scenario}</div> : null}</th>
+                  <td>{labelFrom(item.comparison_kind === 'firewall_change' ? FIREWALL_STATUS_LABELS : PATH_OUTCOME_LABELS, item.result)}</td>
+                  <td>{excluded.excluded ? <><strong>Excluded from findings</strong><p>{excluded.reason}</p><small>Does not create or update findings. Not a passing result.</small></> : item.ignored_for_findings === false ? 'Not excluded by the report; this does not prove that a finding exists.' : 'Finding eligibility not recorded'}</td>
+                  <td>{labelFrom({}, item.current_assurance?.status || 'unknown')}{item.current_assurance?.reasons.length ? <p>{compatibilityReasonLabels(item.current_assurance.reasons).map((reason) => reason.label).join(' · ')}</p> : null}
+                    <p>{item.readiness_eligible === true ? 'Eligible only for the report’s bounded readiness scope.' : item.readiness_eligible === false ? `Excluded from readiness: ${labelFrom({}, item.readiness_exclusion_reason || 'reason_not_recorded')}` : 'Readiness eligibility not recorded'}</p>
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div> : <p>No comparison conclusions are recorded. Unknown and not-tested declarations above are not hidden.</p>}
+          {report.conclusions_truncated ? <p className="muted small">Showing {report.conclusions.length} of {report.conclusions_total ?? 'an unknown number of'} conclusions.</p> : null}
+        </> : null}
+      </CardContent>
+    </Card>
   );
 }

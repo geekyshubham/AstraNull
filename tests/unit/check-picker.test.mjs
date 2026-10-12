@@ -52,7 +52,7 @@ describe('check picker selection rules', () => {
   it('excludes SOC-gated, monitor-only, and non-runnable checks with counts', () => {
     const result = selectableChecks([safeFqdn, safeAny, socGated, monitorOnly, notRunnable, noSection]);
     assert.deepEqual(result.checks.map((check) => check.check_id), ['dns.safe', 'l7.safe', 'misc.safe']);
-    assert.deepEqual(result.excluded, { soc_gated: 1, monitor_only: 1, not_customer_runnable: 1, total: 3 });
+    assert.deepEqual(result.excluded, { soc_gated: 1, monitor_only: 1, not_customer_runnable: 1, unsupported_delivery: 0, total: 3 });
     assert.equal(checkExclusionReason(socGated), 'soc_gated');
     assert.equal(checkExclusionReason(monitorOnly), 'monitor_only');
     assert.equal(checkExclusionReason(notRunnable), 'not_customer_runnable');
@@ -113,4 +113,15 @@ describe('check picker selection rules', () => {
     assert.deepEqual(filterChecks(checks, 'metadata_marker').map((check) => check.check_id), ['misc.safe']);
     assert.equal(filterChecks(checks, '').length, 3);
   });
+});
+
+
+it('does not advertise mechanisms with explicit unsupported transport or execution flags', () => {
+  const flags = [{ mechanism_supported: false }, { probe_profile: { ...safeAny.probe_profile, delivery_supported: false } }, { probe_profile: { ...safeAny.probe_profile, execution_supported: false } }];
+  for (const flag of flags) assert.equal(checkExclusionReason({ ...safeAny, ...flag }), 'unsupported_delivery');
+  const unsupported = CHECK_CATALOG.filter((check) => check.mechanism_supported === false || check.probe_profile?.delivery_supported === false || check.probe_profile?.execution_supported === false);
+  assert.ok(unsupported.length > 0);
+  assert.deepEqual(selectableChecks(unsupported).checks, []);
+  assert.equal(checkExclusionReason(CHECK_CATALOG.find((check) => check.check_id === 'reflect.ipp_callback_exposure.safe')), 'unsupported_delivery');
+  assert.equal(checkExclusionReason(safeAny), null, 'legacy omission alone does not establish unsupported delivery');
 });

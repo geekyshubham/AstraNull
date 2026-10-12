@@ -7,7 +7,7 @@ import {
   normalizeDeclarationInput,
   presentTargetDeclaration,
 } from '../../src/lib/targetDeclarations.mjs';
-import { deriveProtectionProfile } from '../../src/services/protectionProfile.mjs';
+import { deriveProtectionProfile as projectProtectionProfile } from '../../src/services/protectionProfile.mjs';
 import { getTargetDetail } from '../../src/services/targetDetail.mjs';
 import {
   addTarget,
@@ -18,11 +18,23 @@ import {
 } from '../../src/services/targetGroups.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { assuranceWorld, addAssuredObservation } from '../helpers/assurance-fixtures.mjs';
 
 const ctx = { tenantId: 'ten_demo', userId: 'usr_profile', role: 'engineer' };
 const NOW = '2026-10-04T00:00:00.000Z';
 const FRESH = '2026-10-03T00:00:00.000Z';
 const STALE = '2026-09-01T00:00:00.000Z';
+
+// Synthetic state-machine checks use the same required schema as reviewed definitions.
+// These fixture IDs are never admitted to the production catalog or dispatched.
+function fixtureDefinition(check) {
+  return { required_customer_setup: [], prerequisites: [], evidence_required: [], stop_conditions: [],
+    ...check, ...(check.probe_profile ? { probe_profile: { kind: 'waf_class_marker_probe', max_requests: 2,
+      timeout_ms: 1000, ...check.probe_profile } } : {}) };
+}
+function deriveProtectionProfile(input) {
+  return projectProtectionProfile({ ...input, catalog: input.catalog?.map(fixtureDefinition) });
+}
 
 const CATALOG = [
   { check_id: 'app.ok', version: '1.0.0', vector_family: 'l7', supported_targets: ['fqdn'] },
@@ -33,7 +45,8 @@ const CATALOG = [
     check_id: 'setup.excluded',
     vector_family: 'origin',
     supported_targets: ['fqdn'],
-    probe_profile: { kind: 'host_sni_bypass' },
+    required_customer_setup: ['declared_fixture_probe_path'],
+    probe_profile: { kind: 'waf_class_marker_probe' },
   },
   { check_id: 'soc.hidden', vector_family: 'l7', risk_class: 'soc_gated', supported_targets: ['fqdn'] },
   { check_id: 'ip.only', vector_family: 'protocol', supported_targets: ['ip'] },
@@ -354,12 +367,12 @@ describe('protection profile derivation', () => {
   };
 
   it('uses the same catalog version derivation as run creation and distinguishes missing and changed versions', () => {
-    const check = { check_id: 'waf.digest', vector_family: 'waf', supported_targets: ['fqdn'], probe_profile: { scenario_family: 'marker' } };
+    const check = fixtureDefinition({ check_id: 'waf.digest', vector_family: 'waf', supported_targets: ['fqdn'], probe_profile: { scenario_family: 'marker' } });
     const stamp = deriveRunEvidenceStamp(check, {}, { probeMode: 'signed-worker', scenarioVersion: 'marker' });
     const coverageFor = (overrides) => deriveProtectionProfile({
       now: NOW, target, catalog: [check], observations: [{
         check_id: check.check_id,
-        run: { id: 'run_digest', status: 'verdicted', completed_at: FRESH, ...stamp, ...overrides },
+        run: { producer_kind: 'signed_probe', id: 'run_digest', status: 'verdicted', completed_at: FRESH, ...stamp, probe_metadata: { classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy' }, ...overrides },
         verdict: { verdict: 'edge_exposed', evidence_ids: ['ev_digest'] },
       }],
     }).coverage.pairs[0];
@@ -490,18 +503,18 @@ describe('protection profile derivation', () => {
       }],
       observations: [
         {
-          check_id: 'app.ok',
-          run: { id: 'run_ok', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
-          verdict: { verdict: 'blocked', evidence_ids: ['ev_ok'] },
+          check_id: 'app.ok', evidence_verified: true,
+          run: { readiness_result_metadata: [{ enforcement: 'enforced' }], producer_kind: 'signed_probe', id: 'run_ok', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
+          verdict: { verdict: 'protected', evidence_ids: ['ev_ok'] },
         },
         {
           check_id: 'app.stale',
-          run: { id: 'run_stale', status: 'completed', completed_at: STALE, check_version: '1.0.0' },
-          verdict: { verdict: 'allowed', evidence_ids: ['ev_stale'] },
+          run: { producer_kind: 'signed_probe', id: 'run_stale', status: 'completed', completed_at: STALE, check_version: '1.0.0' },
+          verdict: { verdict: 'exposed', evidence_ids: ['ev_stale'] },
         },
         {
           check_id: 'net.inconclusive',
-          run: { id: 'run_inc', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_inc', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
           verdict: { verdict: 'inconclusive', evidence_ids: ['ev_inc'] },
         },
       ],
@@ -593,37 +606,38 @@ describe('protection profile derivation', () => {
       observations: [
         {
           check_id: 'time.missing',
-          run: { id: 'run_time', status: 'completed', started_at: FRESH, check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_time', status: 'completed', started_at: FRESH, check_version: '1.0.0' },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_time'] },
         },
         {
           check_id: 'run.canceled',
-          run: { id: 'run_cancel', status: 'cancelled', completed_at: FRESH, check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_cancel', status: 'cancelled', completed_at: FRESH, check_version: '1.0.0' },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_cancel'] },
         },
         {
           check_id: 'run.open',
-          run: { id: 'run_open', status: 'collecting', check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_open', status: 'collecting', check_version: '1.0.0' },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_open'] },
         },
         {
           check_id: 'no.evidence',
-          run: { id: 'run_none', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_none', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
           verdict: { verdict: 'blocked', evidence_ids: [] },
         },
         {
           check_id: 'version.missing',
-          run: { id: 'run_version', status: 'completed', completed_at: FRESH },
+          run: { producer_kind: 'signed_probe', id: 'run_version', status: 'completed', completed_at: FRESH },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_version'] },
         },
         {
           check_id: 'scenario.missing',
-          run: { id: 'run_scenario', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
+          run: { producer_kind: 'signed_probe', id: 'run_scenario', status: 'completed', completed_at: FRESH, check_version: '1.0.0' },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_scenario'] },
         },
         {
           check_id: 'sim.run',
           run: {
+            producer_kind: 'signed_probe',
             id: 'run_sim',
             status: 'completed',
             completed_at: FRESH,
@@ -637,11 +651,13 @@ describe('protection profile derivation', () => {
         {
           check_id: 'manual.run',
           run: {
+            producer_kind: 'signed_probe',
             id: 'run_manual',
             status: 'completed',
             completed_at: FRESH,
             check_version: '1.0.0',
             source: 'manual_declaration',
+            producer_kind: 'customer_declaration',
           },
           verdict: { verdict: 'blocked', evidence_ids: ['ev_manual'] },
         },
@@ -670,5 +686,56 @@ describe('protection profile derivation', () => {
     assert.equal(adversarial.coverage.percentage, 0);
     assert.equal(adversarial.coverage.unknown_count, 6);
     assert.equal(adversarial.coverage.partial_count, 2);
+  });
+});
+
+
+describe('actual signed proof in the dev target profile reader', () => {
+  beforeEach(() => freshStore());
+  function recordedWorld() {
+    const world = assuranceWorld(); addAssuredObservation(world, { outcome: 'edge_protected', observedAt: new Date(Date.now() - 1000).toISOString() });
+    Object.assign(getStore(), { targets: world.targets, targetGroups: world.groups, testRuns: world.runs,
+      verdicts: world.verdicts, events: world.events, evidenceVault: world.evidenceItems, testPolicies: [] });
+    return world;
+  }
+  function pair(world) {
+    return getTargetDetail(ctx, world.targets[0].id).coverage.pairs.find((row) => row.check_id === world.catalog[0].check_id);
+  }
+  it('credits complete scoped edge denial only from actual same-run nonce-bound signed events or available linked vault references', () => {
+    const world = recordedWorld();
+    assert.equal(pair(world).state, 'conclusive'); assert.equal(pair(world).outcome, 'pass');
+    world.evidenceItems.push({ id: 'vault_profile', tenant_id: world.tenantId, test_run_id: world.runs[0].id,
+      related_event_id: world.events[0].id, created_at: world.events[0].timestamp });
+    world.verdicts[0].evidence_ids = ['vault_profile'];
+    assert.equal(pair(world).state, 'conclusive');
+    const custody = JSON.stringify([world.runs, world.verdicts, world.events, world.evidenceItems]);
+    world.targets[0].port = 8443;
+    assert.equal(pair(world).pair_reason, 'target_definition_changed');
+    assert.equal(JSON.stringify([world.runs, world.verdicts, world.events, world.evidenceItems]), custody);
+  });
+  it('does not let a newer unresolved positive verdict borrow an older valid gap proof on the same run', () => {
+    const world = recordedWorld(); world.verdicts[0].verdict = 'edge_exposed';
+    assert.equal(pair(world).outcome, 'gap');
+    world.verdicts.push({ ...world.verdicts[0], id: 'newer_unresolved_verdict', verdict: 'edge_protected',
+      evidence_ids: ['unresolved_evidence'], created_at: new Date().toISOString() });
+    const result = pair(world);
+    assert.equal(result.state, 'unknown'); assert.equal(result.pair_reason, 'no_evidence');
+    assert.equal(result.live_external, false);
+  });
+  it('never credits unresolved, cross-run, cross-tenant, wrong/missing nonce, unsigned, missing-ingestion, future or incomplete proof', () => {
+    for (const mutate of [
+      w => { w.verdicts[0].evidence_ids = ['missing']; },
+      w => { w.events[0].test_run_id = 'other_run'; },
+      w => { w.events[0].tenant_id = 'other_tenant'; },
+      w => { w.events[0].nonce_hash = 'wrong_nonce'; },
+      w => { delete w.runs[0].correlation; },
+      w => { w.events[0].producer_kind = 'customer_declaration'; },
+      w => { delete w.events[0].ingested_at; },
+      w => { w.events[0].ingested_at = new Date(Date.now() + 60000).toISOString(); },
+      w => { w.events[0].metadata.comparison_complete = false; },
+      w => { w.events[0].metadata.enforcement = 'not_enforced'; },
+      w => { delete w.events[0].metadata.enforcement; },
+      w => { delete w.runs[0].safety_constraints.assurance_scope; },
+    ]) { const world = recordedWorld(); mutate(world); assert.notEqual(pair(world).state, 'conclusive'); }
   });
 });

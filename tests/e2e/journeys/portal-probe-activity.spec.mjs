@@ -1,8 +1,16 @@
 import { mkdir } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
+import { getStore } from '../../../src/store.mjs';
+import { probeWorkerAuthHeaders, verifyProbeJobSignature } from '../../../src/services/probeCoordinator.mjs';
+import { processJob } from '../../../workers/probe-worker.mjs';
+import { createProbeActivityReporter } from '../../../workers/probe-activity-reporter.mjs';
+import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { getPortalPlaywrightBaseUrl, startPortalPlaywrightServer, stopPortalPlaywrightServer } from '../../helpers/portal-playwright-server.mjs';
+import { getPortalPlaywrightBaseUrl, seedPortalPlaywrightStore, startPortalPlaywrightServer, stopPortalPlaywrightServer } from '../../helpers/portal-playwright-server.mjs';
 import { gotoPortalRoute, injectPortalDevHeadersSession, PORTAL_SESSION } from '../../helpers/portal-playwright-session.mjs';
+import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 
 const TARGET = 'tgt_checkout_2';
 const RUN = 'run_activity_ui';
@@ -41,8 +49,48 @@ async function fixture(page, role = 'owner') {
   return { cancels, reads: () => reads };
 }
 
-test.beforeEach(async () => { await startPortalPlaywrightServer(); });
-test.afterEach(async () => { await stopPortalPlaywrightServer(); });
+const LOCAL_TARGET = 'tgt_local_activity';
+const LOCAL_CHECK = 'waf.entry_path_api_marker.safe';
+const SECRET = '938d3c93a4befa41b096eae03ad0902bc90b4e006b8c8ba0454cc517711b9948';
+let wireServer;
+let apiBase;
+let wireBase;
+let wireCalls = [];
+let delayWire = false;
+function seed(store) {
+  applyPortalBaselineReadinessBoost(store);
+  store.targets.push({ ...store.targets[0], id: LOCAL_TARGET, kind: 'url', value: `${wireBase}/api?private=local-customer-secret-123`, normalized_value: `${wireBase}/api?private=local-customer-secret-123`, expected_behavior: 'must_block_before_origin', declaration: { allowed_scope: { ports: [Number(new URL(wireBase).port)] } } });
+  store.targetVerifications.push({ id: 'tv_local_activity', tenant_id: PORTAL_BASELINE_IDS.tenantId, target_id: LOCAL_TARGET, state: 'dns_verified', source_kind: 'manual_override', transitioned_at: new Date().toISOString(), transitioned_by: 'test_fixture' });
+}
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(180000);
+  // Only loopback is ever contacted by the connected worker tests. No production policy changes.
+  wireServer = createHttpServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const marker = [req.url, req.headers['x-astranull-marker'], body].join(' ').includes('astranull');
+    wireCalls.push({ method: req.method, path: req.url, body, marker });
+    if (delayWire) await new Promise((resolve) => setTimeout(resolve, 1800));
+    res.writeHead(marker ? 403 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ fixture: 'local-wire-observed', blocked: marker, password: 'private-response-password' }));
+  });
+  await new Promise((resolve) => wireServer.listen(0, '127.0.0.1', resolve));
+  wireBase = `http://127.0.0.1:${wireServer.address().port}`;
+  const started = await startPortalPlaywrightServer({ liveSource: true, mutate: seed, env: { ASTRANULL_PROBE_MODE: 'signed-worker', ASTRANULL_PROBE_WORKER_SECRET: SECRET } });
+  apiBase = started.baseUrl;
+  const warm = await browser.newPage();
+  try {
+    await injectPortalDevHeadersSession(warm);
+    await assertPortalInitialLoad(warm, getPortalPlaywrightBaseUrl());
+  } finally {
+    await warm.close();
+  }
+});
+test.beforeEach(() => { seedPortalPlaywrightStore(seed); wireCalls = []; delayWire = false; });
+test.afterAll(async () => {
+  await stopPortalPlaywrightServer();
+  wireServer?.closeAllConnections?.();
+  if (wireServer) await new Promise((resolve) => wireServer.close(resolve));
+});
 
 test('recorded requests, omitted attempts, details, search, pause, and standalone Stop work', async ({ page }) => {
   const state = await fixture(page);
@@ -128,6 +176,7 @@ test('a pause on an older run cannot leave the next active run with an empty liv
 for (const width of [375, 768, 1024, 1440]) {
   for (const theme of ['dark', 'light']) {
     test(`activity table stays accessible and contained at ${width}px in ${theme}`, async ({ page }) => {
+      test.setTimeout(90000); // Axe's cross-frame pass is slower under concurrent backend checks.
       await page.setViewportSize({ width, height: 1000 });
       await page.addInitScript((mode) => localStorage.setItem('astranull.theme', mode), theme);
       await fixture(page);
@@ -141,3 +190,586 @@ for (const width of [375, 768, 1024, 1440]) {
     });
   }
 }
+
+function contextFor(runId, complete = true, checkId = CHECK, targetId = TARGET) {
+  return { subject: { target_id: targetId, check_id: checkId },
+    answer: { outcome: complete ? 'edge_protected' : '', observed_behavior: complete ? `Recorded blocked response for ${runId}` : 'Waiting for the signed final observation', expected_behavior: 'Block the reviewed bounded marker', explanation: complete ? 'This exact scenario was evaluated; it is not broad protection or capacity proof.' : '' },
+    primary: { test_run_id: runId, verdict_id: complete ? `vrd_${runId}` : null, evidence_ids: complete ? [`evt_${runId}_result`] : [], observed_at: AT }, unavailable_reason: complete ? null : 'partial' };
+}
+function activityFor(runId, items = LOGS, extra = {}) {
+  return { run_id: runId, target_id: TARGET, check_id: CHECK, status: 'collecting', telemetry_recorded: true, items, count: items.length,
+    pagination: { next_cursor: items.at(-1)?.id ?? null, has_more: false, total_recorded: items.length }, capture: { status: 'recording', recorded_count: items.length }, ...extra };
+}
+async function openExact(page, runId = RUN, role = 'owner') {
+  await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role });
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}&inspect=check_result&ev_target=${TARGET}&ev_check=${CHECK}&ev_run=${runId}`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.inspector-panel .ei-execution')).toBeVisible();
+}
+async function mockContext(page, callback = (runId) => contextFor(runId)) {
+  await page.route('**/v1/evidence-context?*', (route) => route.fulfill({ json: callback(new URL(route.request().url()).searchParams.get('test_run_id')) }));
+}
+
+test('reviewed Play opens and focuses the exact returned run, including fast completion and final evidence refresh', async ({ page }) => {
+  test.setTimeout(45000);
+  const accepted = 'run_exact_accepted'; let reads = 0; const bodies = [];
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [{ id: 'run_old_capped_list', target_id: TARGET, check_id: CHECK, status: 'completed', created_at: AT }] } }));
+  await page.route('**/v1/test-runs', (route) => { if (route.request().method() !== 'POST') return route.continue(); bodies.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { run: { id: accepted, target_id: TARGET, check_id: CHECK, status: 'collecting' }, jobs_dispatched: 0 } }); });
+  await page.route(`**/v1/test-runs/${accepted}/activity?*`, (route) => {
+    reads += 1;
+    return route.fulfill({ json: activityFor(accepted, reads > 1 ? [...LOGS, { id: 'fast_final', at: AT, stage: 'result_received', source: 'signed_worker', outcome: 'blocked', requests_sent: 1 }] : LOGS, { status: 'verdicted', requests_sent: reads > 1 ? 1 : null, capture: { status: reads > 1 ? 'complete' : 'recording' } }) });
+  });
+  await mockContext(page, (id) => contextFor(id, id === accepted && reads > 1));
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`);
+  const play = page.getByRole('button', { name: 'Review and start', exact: true });
+  await play.click();
+  const review = page.locator('dialog.modal-confirm[open]');
+  await expect(review).toContainText('Upper bound');
+  expect(bodies).toEqual([]);
+  await review.getByRole('button', { name: 'Start check', exact: true }).click();
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector.getByRole('heading', { name: 'Check result', exact: true })).toBeFocused();
+  await expect(page).toHaveURL(new RegExp(`ev_run=${accepted}`));
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(accepted);
+  await expect(inspector).toContainText('HTTP 418');
+  await expect(inspector).not.toContainText('run_old_capped_list');
+  await expect(inspector).toContainText(`evt_${accepted}_result`, { timeout: 12000 });
+  await expect(inspector).toContainText('Recorded blocked response for run exact accepted');
+  await expect(inspector.locator('.probe-activity-status')).toContainText('1 attested operations');
+  expect(bodies).toEqual([{ target_id: TARGET, check_id: CHECK }]);
+  const executionUrl = page.url();
+  await inspector.getByRole('button', { name: 'Close Check result' }).click();
+  await expect(play).toBeFocused();
+  await expect(page.locator('.td-check[data-selected=true]')).toContainText('HTTP 418');
+  await expect(page.locator('.td-check[data-selected=true]')).not.toContainText('run_old_capped_list');
+  await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [{ id: 'run_newer_after_acceptance', target_id: TARGET, check_id: CHECK, status: 'completed', created_at: '2035-01-01T00:00:00.000Z' }] } }));
+  await page.goto(executionUrl);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`ev_run=${accepted}`));
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(accepted);
+  await expect(inspector).not.toContainText('run_newer_after_acceptance');
+  await expect(inspector).toContainText(`evt_${accepted}_result`);
+  expect(bodies).toEqual([{ target_id: TARGET, check_id: CHECK }]);
+});
+
+for (const status of [409, 403, 503]) {
+  test(`ordinary Play reports ${status} rejection truthfully and retries only after renewed confirmation`, async ({ page }) => {
+    test.setTimeout(45000);
+    const accepted = `run_retry_after_${status}`;
+    const bodies = [];
+    let rejectAttempt;
+    const rejectionGate = new Promise((resolve) => { rejectAttempt = resolve; });
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [] } }));
+    await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [] } }));
+    await page.route('**/v1/test-runs', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      bodies.push(route.request().postDataJSON());
+      if (bodies.length === 1) {
+        await rejectionGate;
+        return route.fulfill({ status, json: { error: 'fixture_start_rejected' } });
+      }
+      return route.fulfill({ status: 201, json: { run: { id: accepted, target_id: TARGET, check_id: CHECK, status: 'collecting' }, jobs_dispatched: 0 } });
+    });
+    await page.route(`**/v1/test-runs/${accepted}/activity?*`, (route) => route.fulfill({ json: activityFor(accepted) }));
+    await mockContext(page, (id) => contextFor(id, false));
+    await injectPortalDevHeadersSession(page);
+    await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&check=${CHECK}`);
+    const play = page.getByRole('button', { name: 'Review and start', exact: true });
+    const review = page.locator('dialog.modal-confirm[open]');
+    await play.click();
+    expect(bodies).toEqual([]);
+    await review.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(bodies).toEqual([]);
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+    await play.click();
+    const start = review.getByRole('button', { name: 'Start check', exact: true });
+    await start.click();
+    await expect.poll(() => bodies.length).toBe(1);
+    await expect(review.locator('button[type=submit]')).toBeDisabled();
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+    rejectAttempt();
+    await expect(page.getByText(status >= 500 ? 'Service is temporarily unavailable. Try again shortly.' : 'Fixture start rejected.', { exact: true })).toBeVisible();
+    if (status >= 500) await expect(page.getByText('Fixture start rejected.', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.inspector-panel')).toHaveCount(0);
+    expect(page.url()).not.toContain('ev_run=');
+    await expect(page.getByText('Worker acknowledged', { exact: true })).toHaveCount(0);
+    expect(bodies).toEqual([{ target_id: TARGET, check_id: CHECK }]);
+    await play.click();
+    expect(bodies).toHaveLength(1);
+    await review.getByRole('button', { name: 'Start check', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`ev_run=${accepted}`));
+    await expect(page.locator('.inspector-panel .probe-activity-run')).toHaveText(accepted);
+    expect(bodies).toEqual([{ target_id: TARGET, check_id: CHECK }, { target_id: TARGET, check_id: CHECK }]);
+  });
+}
+
+test('Inspector retains paged immutable records across reconnect, freezes paused display, and explains omissions', async ({ page }) => {
+  test.setTimeout(45000);
+  let fail = false; let more = false; const cursors = []; const mutations = [];
+  page.on('request', (request) => { if (request.url().includes('/v1/') && request.method() !== 'GET') mutations.push(request.url()); });
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor'); cursors.push(cursor);
+    if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: 'offline' } }); }
+    const items = !cursor ? [LOGS[0]] : [LOGS[0], ...LOGS.slice(1), ...(more ? [{ id: 'after_pause', at: AT, source: 'signed_worker', stage: 'response_received', method: 'GET', status_code: 429 }] : [])];
+    return route.fulfill({ json: activityFor(RUN, items, { pagination: { next_cursor: !cursor ? LOGS[0].id : more ? 'after_pause' : LOGS.at(-1).id, has_more: !cursor, total_recorded: 5 }, capture: { status: 'incomplete', dropped_count: 2, delivery_failures: 1, sequence_gaps: [{ from: 5, to: 6 }] } }) });
+  });
+  await openExact(page);
+  const panel = page.locator('.inspector-panel .probe-activity');
+  await expect(panel).toContainText('4 recorded events retained');
+  await expect(panel).toContainText('2 activity events omitted');
+  await expect(panel).toContainText('5–6');
+  await panel.getByRole('button', { name: 'Pause updates', exact: true }).click();
+  more = true;
+  await page.waitForTimeout(2800);
+  await expect(panel).not.toContainText('HTTP 429');
+  await expect(panel).toContainText('execution continues');
+  await panel.getByRole('button', { name: 'Resume updates', exact: true }).click();
+  await expect(panel).toContainText('HTTP 429');
+  await expect(panel).toContainText('5 recorded events retained');
+  fail = true;
+  await expect(panel).toContainText('Disconnected', { timeout: 9000 });
+  await expect(panel).toContainText('HTTP 418');
+  await panel.getByRole('button', { name: 'Reconnect', exact: true }).click();
+  await expect(panel).not.toContainText('Disconnected');
+  expect(cursors.at(-1)).toBe('after_pause');
+  expect(mutations).toEqual([]);
+});
+
+test('historical references stay pinned and delayed replies cannot cross role or exact-run changes', async ({ page }) => {
+  test.setTimeout(45000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const older = 'run_history_pinned'; const newer = 'run_new_scope';
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${older}/activity?*`, async (route) => { await gate; await route.fulfill({ json: activityFor(older, [{ ...LOGS[0], id: 'old_private_row', method: 'OLDOWNER' }]) }); });
+  await page.route(`**/v1/test-runs/${newer}/activity?*`, (route) => route.fulfill({ json: activityFor(newer, [{ ...LOGS[0], id: 'new_public_row', method: 'NEWVIEWER' }]) }));
+  await openExact(page, older);
+  await page.getByRole('button', { name: /Role \(dev\)/ }).click();
+  await page.getByRole('option', { name: /viewer/i }).click();
+  await page.evaluate((id) => { const params = new URLSearchParams(location.hash.split('?')[1]); params.set('ev_run', id); location.hash = `target-detail?${params}`; }, newer);
+  release();
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector).toContainText('NEWVIEWER');
+  await expect(inspector).not.toContainText('OLDOWNER');
+  await expect(inspector.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
+  await expect(page).toHaveURL(/ev_run=run_new_scope/);
+  await page.waitForTimeout(2800);
+  await expect(inspector).not.toContainText('OLDOWNER');
+});
+
+test('assessment follows only its own active child, pinning holds, and child Stop freezes the confirmed ID', async ({ page }) => {
+  test.setTimeout(45000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const scanId = 'scan_exact_workspace'; const first = 'run_scan_child_a'; const second = 'run_scan_child_b'; let active = first; const cancelled = [];
+  const scan = () => ({ id: scanId, target_id: TARGET, status: 'running', steps: [{ id: 'step_a', check_id: CHECK, target_id: TARGET, test_run_id: first, status: active === first ? 'running' : 'verdicted' }, { id: 'step_b', check_id: CHECK, target_id: TARGET, test_run_id: second, status: active === second ? 'running' : 'planned' }] });
+  await mockContext(page);
+  await page.route(`**/v1/validation-scans/${scanId}?*`, (route) => { expect(new URL(route.request().url()).searchParams.get('advance')).toBe('false'); return route.fulfill({ json: scan() }); });
+  await page.route(`**/v1/validation-scans/${scanId}/activity?*`, (route) => route.fulfill({ json: { scan_id: scanId, status: 'running', items: [], pagination: { next_cursor: null, has_more: false, total_recorded: 0 }, capture: { status: 'unknown' } } }));
+  for (const id of [first, second]) {
+    await page.route(`**/v1/test-runs/${id}/activity?*`, (route) => route.fulfill({ json: activityFor(id, [{ ...LOGS[0], id: `evt_${id}`, phase: id }]) }));
+    await page.route(`**/v1/test-runs/${id}/cancel`, (route) => { cancelled.push(id); return route.fulfill({ json: { id, status: 'cancelled' } }); });
+  }
+  await page.route(`**/v1/validation-scans/${scanId}/cancel`, (route) => { cancelled.push(scanId); return route.fulfill({ json: { id: scanId, status: 'cancelled' } }); });
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}`);
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
+  await inspector.getByRole('button', { name: 'Pin this check', exact: true }).click(); active = second;
+  await page.waitForTimeout(2800);
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
+  await expect(inspector).toContainText('Pinned child');
+  await inspector.getByRole('button', { name: 'Follow active check', exact: true }).first().click();
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(second);
+  await inspector.getByRole('button', { name: 'Stop check', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'Stop this exact check?' });
+  await expect(confirm).toContainText('Other checks in the assessment may continue');
+  active = first; await page.waitForTimeout(2800);
+  await page.evaluate((id) => { const params = new URLSearchParams(location.hash.split('?')[1]); params.set('ev_display', 'pinned'); params.set('ev_pin', id); location.hash = `target-detail?${params}`; }, first);
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Stop check', exact: true }).click();
+  await expect.poll(() => cancelled).toEqual([second]);
+  await inspector.getByRole('button', { name: 'Stop assessment', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Stop this assessment?' }).getByRole('button', { name: 'Stop assessment', exact: true }).click();
+  await expect.poll(() => cancelled).toEqual([second, scanId]);
+});
+
+test('assessment A restores pinned A1 on reload despite active A2 and newer B, then explicit Follow selects A2 without mutations', async ({ page }) => {
+  test.setTimeout(45000);
+  const scanId = 'scan_pin_restore_a'; const first = 'run_pin_restore_a1'; const second = 'run_pin_restore_a2'; const newer = 'scan_pin_restore_b';
+  let active = first; const mutations = []; const passiveReads = []; const contextQueries = [];
+  page.on('request', (request) => { if (request.url().includes('/v1/') && request.method() !== 'GET') mutations.push(request.url()); });
+  const scan = () => ({ id: scanId, target_id: TARGET, status: 'running', steps: [
+    { id: 'restore_step_a1', target_id: TARGET, check_id: CHECK, test_run_id: first, status: active === first ? 'running' : 'verdicted' },
+    { id: 'restore_step_a2', target_id: TARGET, check_id: CHECK, test_run_id: second, status: active === second ? 'running' : 'planned' },
+  ] });
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [{ id: newer, target_id: TARGET, status: 'running', created_at: '2035-01-01T00:00:00.000Z', steps: [] }] } }));
+  await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route(`**/v1/validation-scans/${scanId}?*`, (route) => { passiveReads.push(route.request().url()); expect(new URL(route.request().url()).searchParams.get('advance')).toBe('false'); return route.fulfill({ json: scan() }); });
+  await page.route(`**/v1/validation-scans/${scanId}/activity?*`, (route) => route.fulfill({ json: { scan_id: scanId, status: 'running', items: [], pagination: { has_more: false, next_cursor: null } } }));
+  await page.route('**/v1/evidence-context?*', (route) => { const params = new URL(route.request().url()).searchParams; contextQueries.push(Object.fromEntries(params)); return route.fulfill({ json: contextFor(params.get('test_run_id')) }); });
+  for (const id of [first, second]) await page.route(`**/v1/test-runs/${id}/activity?*`, (route) => route.fulfill({ json: activityFor(id, [{ ...LOGS[0], id: `evt_${id}`, phase: id }]) }));
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}`);
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
+  await inspector.getByRole('button', { name: 'Pin this check', exact: true }).click();
+  active = second;
+  await expect(page).toHaveURL(/ev_display=pinned.*ev_pin=run_pin_restore_a1/);
+  await expect(inspector.getByRole('combobox', { name: 'Inspect a recorded child' }).locator('option[value="run_pin_restore_a2"]')).toHaveCount(1);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}.*ev_display=pinned.*ev_pin=${first}`));
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
+  await expect(inspector).toContainText('Pinned child');
+  await expect(inspector).not.toContainText(newer);
+  await expect(inspector).toContainText(`evt_${first}_result`);
+  await inspector.getByRole('button', { name: 'Follow active check', exact: true }).first().click();
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(second);
+  await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}.*ev_display=follow`));
+  expect(new URL(page.url()).hash).not.toContain('ev_pin=');
+  expect(mutations).toEqual([]);
+  expect(passiveReads.length).toBeGreaterThan(1);
+  for (const params of contextQueries) {
+    expect(Object.keys(params).sort()).toEqual(['check_id', 'entry', 'target_id', 'test_run_id']);
+    expect([first, second]).toContain(params.test_run_id);
+  }
+});
+
+for (const invalid of ['missing', 'unrelated', 'other-target', 'malformed', 'forbidden-scan', 'forbidden-child']) {
+  test(`restored assessment pin is explicitly unavailable for ${invalid}, without latest substitution`, async ({ page }) => {
+    const scanId = `scan_pin_${invalid}`; const pinned = `run_pin_${invalid}`; const active = `run_active_${invalid}`;
+    const mutations = []; const childReads = []; const contextReads = [];
+    page.on('request', (request) => { if (request.url().includes('/v1/') && request.method() !== 'GET') mutations.push(request.url()); });
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [] } }));
+    await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [] } }));
+    await page.route(`**/v1/validation-scans/${scanId}?*`, (route) => {
+      expect(new URL(route.request().url()).searchParams.get('advance')).toBe('false');
+      if (invalid === 'forbidden-scan') return route.fulfill({ status: 403, json: { error: 'forbidden' } });
+      return route.fulfill({ json: { id: scanId, target_id: TARGET, status: 'running', steps: [
+        ...(invalid === 'other-target' || invalid === 'forbidden-child' ? [{ id: 'pin_step', test_run_id: pinned, check_id: CHECK, target_id: invalid === 'other-target' ? 'tgt_foreign_pin' : TARGET, status: 'verdicted' }] : []),
+        { id: 'active_step', test_run_id: active, check_id: CHECK, target_id: TARGET, status: 'running' },
+      ] } });
+    });
+    await page.route(`**/v1/validation-scans/${scanId}/activity?*`, (route) => route.fulfill({ json: { scan_id: scanId, status: 'running', items: [], has_more: false } }));
+    await page.route('**/v1/test-runs/*/activity?*', (route) => { childReads.push(route.request().url()); return route.fulfill({ status: 403, json: { error: 'forbidden' } }); });
+    await page.route('**/v1/evidence-context?*', (route) => { contextReads.push(route.request().url()); return route.fulfill({ json: contextFor(active) }); });
+    await injectPortalDevHeadersSession(page);
+    const pinParam = invalid === 'missing' ? '' : `&ev_pin=${invalid === 'malformed' ? 'bad%20pin' : pinned}`;
+    await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}&ev_display=pinned${pinParam}`);
+    const inspector = page.locator('.inspector-panel');
+    await expect(inspector).toContainText('Pinned child unavailable');
+    await expect(inspector.locator('.probe-activity-run')).toHaveCount(0);
+    await expect(inspector).not.toContainText(`evt_${active}_result`);
+    await expect(inspector.getByRole('button', { name: 'Stop check', exact: true })).toHaveCount(0);
+    expect(childReads.every((url) => invalid === 'forbidden-child' && new URL(url).pathname === `/v1/test-runs/${pinned}/activity`)).toBe(true);
+    expect(contextReads).toEqual([]); expect(mutations).toEqual([]);
+  });
+}
+
+test('restored pin revalidates membership after role, tenant and session changes before any child read', async ({ page }) => {
+  test.setTimeout(45000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const scanId = 'scan_pin_scope'; const pinned = 'run_pin_scope'; const childReads = []; const scanScopes = [];
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route(`**/v1/validation-scans/${scanId}?*`, async (route) => {
+    const headers = route.request().headers(); scanScopes.push([headers['x-tenant-id'], headers['x-user-id'], headers['x-role']]);
+    expect(new URL(route.request().url()).searchParams.get('advance')).toBe('false');
+    if (headers['x-role'] !== 'owner' || headers['x-tenant-id'] !== PORTAL_BASELINE_IDS.tenantId || headers['x-user-id'] !== 'usr_owner') return route.fulfill({ status: 403, json: { error: 'forbidden' } });
+    await gate; return route.fulfill({ json: { id: scanId, target_id: TARGET, status: 'running', steps: [{ target_id: TARGET, check_id: CHECK, test_run_id: pinned, status: 'running' }] } });
+  });
+  await page.route(`**/v1/validation-scans/${scanId}/activity?*`, (route) => route.fulfill({ json: { scan_id: scanId, status: 'running', items: [], has_more: false } }));
+  await page.route(`**/v1/test-runs/${pinned}/activity?*`, (route) => { childReads.push(route.request().headers()); return route.fulfill({ json: activityFor(pinned) }); });
+  const href = `${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}&ev_display=pinned&ev_pin=${pinned}`;
+  await injectPortalDevHeadersSession(page); await page.goto(href);
+  await expect.poll(() => scanScopes.length).toBeGreaterThan(0);
+  await page.getByRole('button', { name: /Role \(dev\)/ }).click();
+  await page.getByRole('option', { name: /viewer/i }).click();
+  await expect.poll(() => scanScopes.some(([, , role]) => role === 'viewer')).toBe(true);
+  release();
+  await expect(page.locator('.inspector-panel')).toContainText('Pinned child unavailable');
+  expect(childReads).toEqual([]);
+  await page.evaluate(() => {
+    sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify({ mode: 'dev-headers', principal: 'customer', role: 'viewer', tenant_id: 'ten_foreign_pin', user_id: 'usr_foreign_pin' }));
+    location.hash = 'targets';
+  });
+  await expect(page).toHaveURL(/#targets/);
+  // Same-document navigation keeps the replacement session; a reload would rerun the owner init script.
+  await page.evaluate((hash) => { location.hash = hash; }, new URL(href).hash);
+  await expect.poll(() => scanScopes.some(([tenant, user]) => tenant === 'ten_foreign_pin' && user === 'usr_foreign_pin')).toBe(true);
+  await expect(page.locator('.inspector-panel')).toContainText('Pinned child unavailable');
+  expect(childReads).toEqual([]);
+});
+
+test('recorded Stop remains requested until real acknowledgment; deadline and unreachable never imply success', async ({ page }) => {
+  test.setTimeout(45000);
+  let state = 'not_requested'; const cancels = [];
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, (route) => route.fulfill({ json: activityFor(RUN, LOGS, { status: state === 'not_requested' ? 'collecting' : 'cancelled', stop: { state } }) }));
+  await page.route(`**/v1/test-runs/${RUN}/cancel`, (route) => { state = 'requested'; cancels.push(route.request().postDataJSON()); return route.fulfill({ json: { id: RUN, status: 'cancelled' } }); });
+  await openExact(page);
+  const inspector = page.locator('.inspector-panel');
+  await inspector.getByRole('button', { name: 'Stop check', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Stop this exact check?' }).getByRole('button', { name: 'Stop check', exact: true }).click();
+  await expect(inspector).toContainText('worker acknowledgment pending');
+  await expect(inspector).not.toContainText('Worker acknowledged Stop');
+  state = 'unreachable';
+  await expect(inspector).toContainText('Worker unreachable · Stop is not confirmed', { timeout: 9000 });
+  // Explicit Reopen re-reads this exact terminal execution; no different run is chosen.
+  await inspector.getByRole('button', { name: 'Close Check result' }).click();
+  state = 'deadline_elapsed'; await openExact(page);
+  await expect(page.locator('.inspector-panel')).toContainText('Authorization deadline elapsed · worker Stop is not confirmed');
+  await page.locator('.inspector-panel').getByRole('button', { name: 'Close Check result' }).click();
+  state = 'acknowledged'; await openExact(page);
+  await expect(page.locator('.inspector-panel')).toContainText('Worker acknowledged Stop');
+  expect(cancels).toHaveLength(1);
+});
+
+test('live Inspector is keyboard reachable and contained across themes, reduced motion and four widths', async ({ page }) => {
+  test.setTimeout(120000);
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, (route) => route.fulfill({ json: activityFor(RUN, LOGS, { source_context: { worker_id: 'local-test-worker', job_id: 'job_signed', leased_at: AT }, authorized_bounds: { max_probe_requests: 4, max_total_operations: 6, timeout_ms: 5000 } }) }));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openExact(page);
+  const inspector = page.locator('.inspector-panel');
+  const heading = inspector.getByRole('heading', { name: 'Check result', exact: true });
+  await expect(heading).toBeFocused();
+  let previousMode = await inspector.getAttribute('data-mode');
+  for (const width of [375, 768, 1024, 1440]) for (const theme of ['dark', 'light']) {
+    await test.step(`${width}px ${theme}`, async () => {
+      await page.setViewportSize({ width, height: 950 });
+      await page.evaluate((value) => document.documentElement.setAttribute('data-theme', value), theme);
+      const mode = width >= 1360 ? 'docked' : width <= 699 ? 'sheet' : 'drawer';
+      await expect(inspector).toBeVisible();
+      await expect(inspector).toHaveAttribute('data-mode', mode);
+      // A breakpoint transition hands focus to the heading on the next animation frame.
+      // Finish that handoff before focusing a row; visibility alone does not settle focus.
+      if (mode !== previousMode) await expect(heading).toBeFocused();
+      previousMode = mode;
+      const details = inspector.getByRole('button', { name: 'Details for event log_payload' });
+      await expect(details).toHaveAttribute('aria-expanded', 'false');
+      await details.focus();
+      await expect(details).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(details).toHaveAttribute('aria-expanded', 'true');
+      await expect(inspector.locator('.probe-activity-detail')).toContainText('<html>Request blocked</html>');
+      await expect(inspector.locator('.probe-activity-detail html')).toHaveCount(0);
+      await details.click();
+      await expect(details).toHaveAttribute('aria-expanded', 'false');
+      await expect(inspector.locator('.probe-activity-detail')).toHaveCount(0);
+      expect(await inspector.evaluate((node) => node.scrollWidth - node.clientWidth), `${width} ${theme}`).toBeLessThanOrEqual(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+      const axe = await new AxeBuilder({ page }).include('.inspector-panel').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+      expect(axe.violations.filter((item) => ['serious', 'critical'].includes(item.impact ?? '')).map((item) => `${item.id}: ${item.nodes.map((node) => node.target).join(' ')}`)).toEqual([]);
+    });
+  }
+});
+
+test('reviewed run-all opens and passively reconnects/reloads the exact accepted assessment', async ({ page }) => {
+  test.setTimeout(45000);
+  const scanId = 'scan_review_accepted'; const child = 'run_review_child'; const bodies = []; const mutations = [];
+  let fail = false;
+  page.on('request', (request) => { if (request.url().includes('/v1/') && request.method() !== 'GET') mutations.push(request.url()); });
+  const scan = { id: scanId, target_id: TARGET, status: 'running', steps: [{ id: 'review_step', check_id: CHECK, target_id: TARGET, test_run_id: child, status: 'running' }] };
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [{ id: 'scan_stale_latest', target_id: TARGET, status: 'completed', steps: [] }] } }));
+  await page.route('**/v1/validation-scans', (route) => { if (route.request().method() !== 'POST') return route.continue(); bodies.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: scan }); });
+  await page.route(`**/v1/validation-scans/${scanId}?*`, (route) => { expect(new URL(route.request().url()).searchParams.get('advance')).toBe('false'); return route.fulfill({ json: scan }); });
+  await page.route(`**/v1/validation-scans/${scanId}/activity?*`, (route) => route.fulfill({ json: { scan_id: scanId, status: 'running', items: [], pagination: { next_cursor: null, has_more: false }, capture: { status: 'unknown' } } }));
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${child}/activity?*`, (route) => {
+    if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: 'offline' } }); }
+    return route.fulfill({ json: activityFor(child) });
+  });
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate`);
+  await page.locator('.td-checks').getByRole('button', { name: /^Review all/ }).click();
+  const review = page.locator('dialog.modal-confirm[open]');
+  await expect(review).toContainText('The server re-checks ownership'); expect(bodies).toEqual([]);
+  await review.getByRole('button', { name: 'Start all checks', exact: true }).click();
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector.getByRole('heading', { name: 'Assessment execution', exact: true })).toBeFocused();
+  await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}`));
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(child);
+  await expect(inspector).not.toContainText('scan_stale_latest');
+  expect(bodies).toHaveLength(1); expect(bodies[0].target_id).toBe(TARGET); expect(bodies[0].target_group_id).toBeUndefined();
+  const executionUrl = page.url();
+  fail = true;
+  await expect(inspector).toContainText('Disconnected', { timeout: 9000 });
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(child);
+  await inspector.getByRole('button', { name: 'Reconnect', exact: true }).click();
+  await expect(inspector).not.toContainText('Disconnected');
+  await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}`));
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [{ id: 'scan_newer_after_acceptance', target_id: TARGET, status: 'running', created_at: '2035-01-01T00:00:00.000Z', steps: [] }] } }));
+  await page.goto(executionUrl);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}`));
+  await expect(inspector.locator('.probe-activity-run')).toHaveText(child);
+  await expect(inspector).not.toContainText('scan_newer_after_acceptance');
+  expect(bodies).toHaveLength(1);
+  expect(mutations).toHaveLength(1);
+  expect(new URL(mutations[0]).pathname).toBe('/v1/validation-scans');
+});
+
+test('reviewed detection uses its returned exact run and does not probe before confirmation', async ({ page }) => {
+  const exact = 'run_detection_accepted'; const posts = [];
+  await page.route('**/v1/waf/edge-detection', (route) => { if (route.request().method() !== 'POST') return route.continue(); posts.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { detection_request: { test_run_id: exact, run_status: 'running' } } }); });
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${exact}/activity?*`, (route) => route.fulfill({ json: activityFor(exact) }));
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}`);
+  await page.locator('.td-observations').getByRole('button', { name: 'Detect WAF and CDN', exact: true }).click();
+  expect(posts).toEqual([]);
+  await page.locator('dialog.modal-confirm[open]').getByRole('button', { name: 'Start detection', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`ev_run=${exact}`));
+  await expect(page.locator('.inspector-panel .probe-activity-run')).toHaveText(exact);
+  expect(posts).toEqual([{ target_id: TARGET }]);
+});
+
+test('Stop Cancel and Escape keep the Inspector open and restore nested-modal focus on phone and tablet', async ({ page }) => {
+  await mockContext(page);
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, (route) => route.fulfill({ json: activityFor(RUN) }));
+  const mutations = [];
+  page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/v1/')) mutations.push(request.url()); });
+  await openExact(page);
+  for (const width of [375, 768]) {
+    await page.setViewportSize({ width, height: 950 });
+    const inspector = page.locator('.inspector-panel'); const stop = inspector.getByRole('button', { name: 'Stop check', exact: true });
+    await stop.click();
+    await page.getByRole('dialog', { name: 'Stop this exact check?' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(inspector).toBeVisible(); await expect(stop).toBeFocused();
+    await stop.click(); await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Stop this exact check?' })).toHaveCount(0);
+    await expect(inspector).toBeVisible(); await expect(stop).toBeFocused();
+  }
+  expect(mutations).toEqual([]);
+});
+
+test('activity revocation discards retained verdicts and events even in a paused Inspector', async ({ page }) => {
+  let revoked = false;
+  await mockContext(page);
+  await page.route('**/v1/test-runs?*', (route) => route.fulfill({ json: { items: [{ id: RUN, target_id: TARGET, check_id: CHECK, status: 'collecting', created_at: AT }] } }));
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, (route) => revoked ? route.fulfill({ status: 403, json: { error: 'forbidden' } }) : route.fulfill({ json: activityFor(RUN, [{ ...LOGS[0], method: 'PRIVATEOWNER' }]) }));
+  await openExact(page);
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector).toContainText('PRIVATEOWNER'); await expect(inspector).toContainText(`evt_${RUN}_result`);
+  await inspector.getByRole('button', { name: 'Pause updates', exact: true }).click(); revoked = true;
+  await expect(inspector).toContainText('Access required', { timeout: 9000 });
+  await expect(inspector).not.toContainText('PRIVATEOWNER'); await expect(inspector).not.toContainText(`evt_${RUN}_result`);
+  await expect(inspector.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
+});
+
+test('late context and activity cannot cross a tenant and user switch in the same page', async ({ page }) => {
+  test.setTimeout(45000);
+  let release; const gate = new Promise((resolve) => { release = resolve; }); const scopes = [];
+  await page.route('**/v1/evidence-context?*', async (route) => {
+    const headers = route.request().headers(); scopes.push([headers['x-tenant-id'], headers['x-user-id']]);
+    if (headers['x-tenant-id'] !== PORTAL_BASELINE_IDS.tenantId) return route.fulfill({ json: { state: 'not_found' } });
+    await gate; return route.fulfill({ json: { ...contextFor(RUN), answer: { observed_behavior: 'PRIORWORKSPACEEVIDENCE' } } });
+  });
+  await page.route(`**/v1/test-runs/${RUN}/activity?*`, async (route) => {
+    if (route.request().headers()['x-tenant-id'] !== PORTAL_BASELINE_IDS.tenantId) return route.fulfill({ status: 404, json: { error: 'not_found', state: 'not_found' } });
+    await gate; return route.fulfill({ json: activityFor(RUN, [{ ...LOGS[0], method: 'PRIORWORKSPACEACTIVITY' }]) });
+  });
+  await openExact(page);
+  await page.evaluate(() => {
+    sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify({ mode: 'dev-headers', principal: 'customer', role: 'viewer', tenant_id: 'ten_other_activity', user_id: 'usr_other_activity' }));
+    location.hash = 'targets';
+  });
+  await expect(page).toHaveURL(/#targets/);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=check_result&ev_target=${TARGET}&ev_check=${CHECK}&ev_run=${RUN}`);
+  await expect.poll(() => scopes.some(([tenant, user]) => tenant === 'ten_other_activity' && user === 'usr_other_activity')).toBe(true);
+  release();
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector).toContainText('No longer available');
+  await expect(inspector).not.toContainText('PRIORWORKSPACE');
+  await expect(inspector.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
+});
+
+async function signed(method, path, body, { tamper = false } = {}) {
+  const bodyText = body == null ? '' : JSON.stringify(body);
+  const headers = { ...probeWorkerAuthHeaders('worker_browser_local', { method, path, bodyText, tenantId: PORTAL_BASELINE_IDS.tenantId }, SECRET), ...(body ? { 'content-type': 'application/json' } : {}) };
+  const response = await fetch(`${apiBase}${path}`, { method, headers, body: body ? (tamper ? JSON.stringify({ ...body, leased_at: 'tampered' }) : bodyText) : undefined });
+  return { status: response.status, json: await response.json() };
+}
+async function startLocalReviewed(page) {
+  await injectPortalDevHeadersSession(page);
+  await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${LOCAL_TARGET}&tab=validate&check=${LOCAL_CHECK}`);
+  await page.getByRole('button', { name: 'Review and start', exact: true }).click();
+  const accepted = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/test-runs');
+  await page.locator('dialog.modal-confirm[open]').getByRole('button', { name: 'Start check', exact: true }).click();
+  const response = await accepted; expect(response.status()).toBe(201);
+  const { run } = await response.json();
+  expect(run.id).toBeTruthy();
+  await expect(page).toHaveURL(new RegExp(`ev_run=${run.id}`));
+  await expect(page.locator('.inspector-panel .probe-activity-run')).toHaveText(run.id);
+  return run;
+}
+async function leasedLocal(run) {
+  const lease = await signed('GET', '/internal/probe/jobs'); expect(lease.status).toBe(200);
+  const job = lease.json.jobs.find((item) => item.test_run_id === run.id); expect(job).toBeTruthy();
+  expect(verifyProbeJobSignature(job, SECRET)).toBe(true);
+  const path = `/internal/probe/jobs/${job.id}/execute`;
+  const tampered = await signed('POST', path, { leased_at: job.leased_at }, { tamper: true }); expect(tampered.status).toBe(401);
+  const grant = await signed('POST', path, { leased_at: job.leased_at });
+  expect(grant).toMatchObject({ status: 201, json: { authorized: true, not_after: job.constraints.not_after } });
+  expect(grant.json.reservation_id).toBeTruthy();
+  expect((await signed('POST', path, { leased_at: job.leased_at })).status).toBe(409);
+  return job;
+}
+
+test('connected reviewed Play observes real loopback HTTP through signed worker capture and final evidence, with secret redaction', async ({ page }) => {
+  test.setTimeout(60000);
+  const run = await startLocalReviewed(page); const job = await leasedLocal(run);
+  const reporter = createProbeActivityReporter(job, (body) => signed('POST', `/internal/probe/jobs/${job.id}/activity`, body));
+  let result;
+  try { result = await processJob({ secret: SECRET }, job, { destinationPolicy: { allowLoopback: true, allowPrivate: false }, onProbeActivity: reporter.record }); }
+  finally { await reporter.close(); }
+  expect(result.safety_attestation.requests_sent).toBe(wireCalls.length);
+  expect(wireCalls.length).toBeGreaterThan(1);
+  expect(wireCalls.some((call) => call.method === 'GET' && call.marker)).toBe(true);
+  expect(wireCalls.every((call) => ['GET', 'HEAD'].includes(call.method) && call.body === '')).toBe(true);
+  expect((await signed('POST', `/internal/probe/jobs/${job.id}/result`, result)).status).toBe(201);
+  // Advance only the deterministic test collection clock, not the passive GET or network work.
+  const stored = getStore().testRuns.find((item) => item.id === run.id); stored.collection_deadline_at = new Date(Date.now() - 1000).toISOString();
+  const { maybeFinalizeRunAfterProbeIngest } = await import('../../../src/services/testRuns.mjs');
+  maybeFinalizeRunAfterProbeIngest({ tenantId: PORTAL_BASELINE_IDS.tenantId }, run.id);
+  const inspector = page.locator('.inspector-panel');
+  await expect(inspector.locator('.probe-activity-table')).toContainText('GET', { timeout: 15000 });
+  await expect(inspector.locator('.probe-activity-table')).toContainText('HTTP 403');
+  await expect(inspector.locator('.probe-activity-status')).toContainText(`${wireCalls.length} attested operations`);
+  const activity = await fetch(`${apiBase}/v1/test-runs/${run.id}/activity?limit=256`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
+  expect(JSON.stringify(activity)).not.toMatch(/local-customer-secret-123|private-response-password/);
+  const payload = activity.items.find((item) => item.response_payload_preview?.includes('local-wire-observed')); expect(payload).toBeTruthy();
+  await inspector.getByRole('button', { name: `Details for event ${payload.id}` }).click();
+  await expect(inspector.locator('.probe-activity-detail')).toContainText('local-wire-observed');
+  await expect(inspector).not.toContainText('private-response-password');
+  await expect(inspector).not.toContainText('local-customer-secret-123');
+  await expect(inspector).toContainText('worker_browser_local');
+  await expect(inspector.locator('.ei-evidence-list, .ei-ids, a[href*="evidence-detail"]')).not.toHaveCount(0, { timeout: 15000 });
+  expect(activity.source_context.worker_id).toBe('worker_browser_local');
+  expect(activity.authorized_bounds.max_total_operations).toBe(job.constraints.max_total_operations);
+});
+
+test('connected Stop is exact, keeps recorded requests, and shows only the actual signed worker acknowledgment', async ({ page }) => {
+  test.setTimeout(60000); delayWire = true;
+  const run = await startLocalReviewed(page); const job = await leasedLocal(run);
+  const cancellation = new AbortController(); let reason;
+  const reporter = createProbeActivityReporter(job, (body) => signed('POST', `/internal/probe/jobs/${job.id}/activity`, body), { heartbeatMs: 100, partitionGraceMs: 2500, onStop: (stop) => { reason = stop.reason; cancellation.abort(); } });
+  const working = processJob({ secret: SECRET }, job, { destinationPolicy: { allowLoopback: true, allowPrivate: false }, cancellationSignal: cancellation.signal, onProbeActivity: reporter.record });
+  await expect.poll(() => wireCalls.length).toBeGreaterThan(0);
+  const inspector = page.locator('.inspector-panel');
+  await inspector.getByRole('button', { name: 'Stop check', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Stop this exact check?' }).getByRole('button', { name: 'Stop check', exact: true }).click();
+  await expect(inspector).toContainText('worker acknowledgment pending');
+  await working; await reporter.close();
+  expect(cancellation.signal.aborted).toBe(true);
+  await expect(inspector).not.toContainText('Worker acknowledged Stop');
+  const ack = await signed('POST', `/internal/probe/jobs/${job.id}/stop`, { leased_at: job.leased_at, reason, capture: reporter.snapshot() });
+  expect(ack).toMatchObject({ status: 201, json: { acknowledged: true } });
+  await expect(inspector).toContainText('Worker acknowledged Stop', { timeout: 12000 });
+  await expect(inspector.locator('.probe-activity-status')).not.toContainText('0 recorded events retained');
+  expect(wireCalls.length).toBeLessThanOrEqual(job.constraints.max_probe_requests);
+});

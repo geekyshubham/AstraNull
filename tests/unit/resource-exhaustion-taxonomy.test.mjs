@@ -144,10 +144,10 @@ describe('resource-exhaustion taxonomy', () => {
         pending: summary.pending,
         total: summary.total,
       },
-      { implemented: 82, partial: 81, soc_only: 86, pending: 0, total: 249 },
+      { implemented: 8, partial: 152, soc_only: 89, pending: 0, total: 249 },
     );
     const validation = validateResourceExhaustionTaxonomy();
-    assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 65.5);
+    assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 64.3);
     t.diagnostic(`coverage distribution: ${JSON.stringify(summary)}`);
   });
 
@@ -155,7 +155,7 @@ describe('resource-exhaustion taxonomy', () => {
     assert.equal(evidenceTierForCheck({}), 'E4');
     assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'metadata_marker' } }), 'E1');
     assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'http_head' } }), 'E2');
-    assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'rate_limit_sequence' } }), 'E3');
+    assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'rate_limit_sequence' } }), 'E2');
     assert.equal(evidenceTierForTaxonomyCheckIds([
       'l3.forbidden_udp_port.safe',
       'high_scale.volumetric.request_only',
@@ -163,14 +163,14 @@ describe('resource-exhaustion taxonomy', () => {
     assert.equal(evidenceTierForTaxonomyCheckIds([
       'l7.http_get_flood.validation',
       'high_scale.application.request_only',
-    ]), 'E3');
+    ]), 'E4');
   });
 
   it('derives status from the best mapped evidence tier', () => {
     for (const id of ['ATT-017', 'ATT-018', 'ATT-019', 'ATT-020', 'ATT-115']) {
       assert.equal(
         ATTACK_VECTOR_REGISTRY.find((entry) => entry.id === id)?.coverage_status,
-        'implemented',
+        'partial',
         id,
       );
     }

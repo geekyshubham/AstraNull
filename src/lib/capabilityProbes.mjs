@@ -19,6 +19,7 @@ import {
   classifyDirectOriginObservation,
   matchControlDenialSignature,
 } from './externalObservationOutcomes.mjs';
+import { OBSERVATION_ONLY_PROBE_KINDS } from './probeEvidenceTiers.mjs';
 import { probeQuicReachability } from './safeNetworkProbes.mjs';
 import {
   API_DOC_PATHS,
@@ -35,6 +36,7 @@ import {
   OUTSIDE_IN_SCAN_DEFAULT_BUDGET,
   readBoundedResponseBody,
   readSignatureBody,
+  signatureBodyComplete,
   runOutsideInWafScan,
 } from './outsideInWafScanner.mjs';
 import { enrichProbeMetadataWithWafCatalog } from './wafProductCatalog.mjs';
@@ -45,6 +47,8 @@ import {
 } from './vectorProbes/wafClassProbes.mjs';
 import {
   MAX_WAF_EVASION_MARKER_REQUESTS,
+  isEvasionTransform,
+  isSupportedEvasionTransform,
   runWafEvasionMarkerProbe as runRawWafEvasionMarkerProbe,
 } from './vectorProbes/evasionProbes.mjs';
 import {
@@ -184,11 +188,15 @@ function recordProbeLogicalAttempt(deps, operation) {
 }
 
 async function withinRemainingProbeTime(promise, job, deps) {
+  const observed = Promise.resolve(promise);
   const timeoutMs = remainingProbeTimeoutMs(job, deps);
-  if (timeoutMs <= 0) throw probeDeadlineError();
+  if (timeoutMs <= 0) {
+    void observed.catch(() => {});
+    throw probeDeadlineError();
+  }
   let timer;
   return Promise.race([
-    Promise.resolve(promise),
+    observed,
     new Promise((_, reject) => {
       timer = setTimeout(() => reject(probeDeadlineError()), timeoutMs);
     }),
@@ -233,9 +241,16 @@ function deadlineOutcome(job, kind, deps, requestsSent, metadata = {}) {
   };
 }
 
+export const CAPABILITY_OBSERVATION_VERSION = 'capability-observation-v3';
 function withKind(job, kind, metadata) {
-  return { profile_kind: kind, probe_kind: kind, ...metadata };
+  const observationOnly = OBSERVATION_ONLY_PROBE_KINDS.includes(kind) || Boolean(metadata?.error_class);
+  return { profile_kind: kind, probe_kind: kind, classifier_version: CAPABILITY_OBSERVATION_VERSION,
+    ...metadata, ...(observationOnly ? {
+      observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
+      assurance_limits: 'Bounded external observations; no capacity, exploit mitigation or policy assurance.',
+    } : {}) };
 }
+
 
 function apexDomain(job) {
   const value = String(job.target?.value ?? '').trim();
@@ -293,8 +308,8 @@ function isBoundScopePathValue(value) {
  *
  * The control plane signs `constraints.origin_scope` ({host, sni, port, path}) from the
  * server-validated binding derivation at run start — never from request or target metadata.
- * Only a shape-valid, self-consistent snapshot is consumed here; anything malformed means
- * the job is handled with legacy unbound resolution.
+ * Only a shape-valid, self-consistent snapshot is consumed here. Authority-v2 or an
+ * explicitly supplied malformed scope fails closed before I/O; no metadata fallback.
  *
  * @param {Record<string, unknown> | null | undefined} job
  * @returns {{ host: string, sni: string, port: number | null, path: string | null } | null}
@@ -362,7 +377,9 @@ function resolveHostSniTargets(job) {
     // layer; the socket destination itself remains the independently verified,
     // target-bound origin address resolved below.
     hostname = approvedScope.host;
-    hostHeader = approvedScope.host;
+    const defaultPort = targetValue.startsWith('http://') ? 80 : 443;
+    hostHeader = approvedScope.port != null && approvedScope.port !== defaultPort
+      ? `${approvedScope.host}:${approvedScope.port}` : approvedScope.host;
     requestPort = approvedScope.port;
     requestPath = approvedScope.path ?? '/';
   }
@@ -394,40 +411,49 @@ function httpsHeadWithSni(directIp, hostname, {
   path = '/',
 } = {}, deps = {}, onReserved) {
   const requestFn = deps.httpsRequestFn ?? https.request;
-  return new Promise((resolve) => {
-    const req = startProbeIoAttempt(
-      deps,
-      'https_head',
-      () => requestFn(
-        {
-          host: directIp,
-          ...(port != null ? { port } : {}),
-          servername: hostname,
-          path,
-          method: 'HEAD',
-          headers: { Host: hostHeader, ...headers },
-          timeout: timeoutMs,
-          rejectUnauthorized: false,
-        },
-        (res) => {
-          res.resume();
-          resolve({
-            res: {
-              status: res.statusCode ?? 0,
-              headers: { get: (name) => res.headers[String(name).toLowerCase()] ?? null },
-            },
-            error: null,
-          });
-        },
-      ),
-      onReserved,
-    );
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({ res: null, error: Object.assign(new Error('timeout'), { name: 'AbortError' }) });
-    });
-    req.on('error', (err) => resolve({ res: null, error: err }));
-    req.end();
+  return new Promise((resolve, reject) => {
+    let req;
+    let settled = false;
+    let timer;
+    const signal = deps.jobDeadlineSignal;
+    const finish = (result, destroy = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      req?.removeListener?.('timeout', onAbort);
+      if (destroy) req?.destroy?.();
+      resolve(result);
+    };
+    const onAbort = () => finish({ res: null, error: probeDeadlineError() }, true);
+    const onError = (error) => finish({ res: null, error }, true);
+    if (signal?.aborted || timeoutMs <= 0) return onAbort();
+    try {
+      req = startProbeIoAttempt(deps, 'https_head', () => requestFn({
+        host: directIp, ...(port != null ? { port } : {}),
+        servername: hostname, path, method: 'HEAD',
+        headers: { Host: hostHeader, ...headers }, timeout: timeoutMs,
+        rejectUnauthorized: false,
+      }, (res) => {
+        res.resume();
+        finish({ res: { status: res.statusCode ?? 0,
+          headers: { get: (name) => res.headers[String(name).toLowerCase()] ?? null },
+        }, error: null });
+      }), onReserved);
+      req.on('error', onError);
+      req.once?.('close', () => req.removeListener?.('error', onError));
+      if (settled) { req.destroy?.(); return; }
+      req.on('timeout', onAbort);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(onAbort, timeoutMs);
+      if (signal?.aborted) return onAbort();
+      req.end();
+    } catch (error) {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      req?.destroy?.();
+      reject(error);
+    }
   });
 }
 
@@ -493,7 +519,7 @@ function classifyFetchError(err, { reachability = false } = {}) {
     reachability
     && (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH')
   ) {
-    return 'blocked';
+    return 'error';
   }
   return 'error';
 }
@@ -883,6 +909,9 @@ export async function probeOriginLeakScan(job, deps = {}) {
  */
 export async function probeHostSniBypass(job, deps = {}) {
   const kind = 'host_sni_bypass';
+  if ((job?.constraints?.origin_scope != null || job?.constraints?.authority_version === 'probe-authority-v2') && !approvedSignedOriginScope(job)) {
+    return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'invalid_signed_origin_scope', readiness_conclusion: false, observation_only: true }), requests_sent: 0, duration_ms: 0 };
+  }
   const { hostname, hostHeader, directIp, requestUrl, requestPort, requestPath } = resolveHostSniTargets(job);
   if (!hostname || !directIp) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'missing_direct_ip_or_host' }), requests_sent: 0, duration_ms: 0 };
@@ -964,7 +993,9 @@ export async function probeHostSniBypass(job, deps = {}) {
     expectedMarker,
     declaredLockdown: job.probe_profile?.declared_origin_lockdown ?? null,
     directAddress: pinnedDirectIp,
-    scope: { host: hostname, path: String(requestPath || '/').split('?')[0] || '/', port: requestPort ?? null },
+    scope: { host: hostname, path: String(requestPath || '/'), port: requestPort ?? (job.target?.value?.startsWith('http://') ? 80 : 443),
+      method: 'HEAD', scenario_version: job.probe_profile?.scenario_version ?? 'probe-observation-v3',
+      source_perspective: deps.sourcePerspective ?? 'astranull-signed-public-worker', worker_id: deps.workerId ?? job.worker_id ?? null },
     observedAt: new Date().toISOString(),
   });
   const external = observation.outcome === 'explicit_denial_observed'
@@ -989,6 +1020,9 @@ export async function probeHostSniBypass(job, deps = {}) {
       // Deprecated alias: network response observed, never an application bypass or protection claim.
       bypass_signal: observation.response_observed,
       origin_observation: observation,
+      observation_complete: true,
+      target_port: requestPort ?? (job.target?.value?.startsWith('http://') ? 80 : 443),
+      observation_only: true, readiness_conclusion: false, comparison_complete: false,
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',
     }),
@@ -1095,6 +1129,8 @@ export async function probePortScanBounded(job, deps = {}) {
       closed_ports,
       risky_admin_ports_open: risky_open,
       exposure_count: open_ports.length,
+      observation_complete: ports.length > 0 && requestsSent === ports.length
+        && open_ports.length + filtered_ports.length + closed_ports.length === ports.length,
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -1117,13 +1153,17 @@ function capabilityProbeAuthorizationFailure(job, kind, deps) {
 }
 
 function httpProbeEndpoint(job, configuredPath) {
-  const probePath = normalizeProbeHttpPath(configuredPath) ?? '/';
+  if (configuredPath != null && !normalizeProbeHttpPath(configuredPath)) return null;
+  const configured = normalizeProbeHttpPath(configuredPath);
   const targetValue = String(job.target?.value ?? '').trim();
   try {
     const origin = /^https?:\/\//i.test(targetValue)
       ? new URL(targetValue).origin
       : baseUrlForHost(apexDomain(job) ?? '').replace(/\/$/, '');
-    return origin ? { url: new URL(probePath, `${origin}/`).href, probePath } : null;
+    const url = configured ? new URL(configured, `${origin}/`) : new URL(/^https?:\/\//i.test(targetValue) ? targetValue : `${origin}/`);
+    if (url.username || url.password || !['http:', 'https:'].includes(url.protocol)) return null;
+    url.hash = '';
+    return origin ? { url: url.href, probePath: `${url.pathname}${url.search}` } : null;
   } catch {
     return null;
   }
@@ -1137,15 +1177,7 @@ function inertProbeMarker(job) {
 async function signatureBodyOf(res, method, job, deps) {
   const remaining = Math.max(0, Math.min(1_000, remainingProbeTimeoutMs(job, deps)));
   if (!res || remaining <= 0) return '';
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(''), remaining);
-  });
-  try {
-    return await Promise.race([readSignatureBody(res, method), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return readSignatureBody(res, method, { timeoutMs: remaining, signal: deps.jobDeadlineSignal });
 }
 
 function blockedHttpStatus(status) {
@@ -1165,7 +1197,7 @@ export function classifyMarkerResponse(res, { baselineStatus = null, declared = 
   const out = (fields) => ({ blocked: false, allowed: false, inconclusive: false, block_suspected: false, denial_signature: null, reason: null, ...fields });
   if (!Number.isInteger(status)) return out({ inconclusive: true, reason: 'rst_or_drop_unattributed' });
   const header = MARKER_SIGNATURE_HEADERS.find((name) => res.headers?.get?.(name) != null);
-  const signature = matchControlDenialSignature({ statusCode: status, headers: res, bodyText, declared })
+  const signature = matchControlDenialSignature({ statusCode: status, headers: res, bodyText, declared, bodyComplete: signatureBodyComplete(res) })
     ?? (header ? { kind: 'vendor', id: `challenge_header:${header}`, vendor: null } : null);
   if (signature) return out({ blocked: true, denial_signature: signature });
   if (UNSIGNED_MARKER_STATUS_REASONS[status]) return out({ inconclusive: true, reason: UNSIGNED_MARKER_STATUS_REASONS[status] });
@@ -1200,7 +1232,7 @@ export async function probeRateLimitSequence(job, deps = {}) {
       duration_ms: 0,
     };
   }
-  if (method === 'POST' && job.probe_profile?.nonce_hash_only !== true) {
+  if (method === 'POST') {
     return {
       external_result: 'error',
       metadata: withKind(job, kind, {
@@ -1258,18 +1290,22 @@ export async function probeRateLimitSequence(job, deps = {}) {
       break;
     }
     statuses.push(res.status);
-    if (res.status === 429 || res.status === 403 || res.status === 503) throttled = true;
+    // Status is a response observation, not attribution to a rate-limiting control.
+    if (res.status === 429) throttled = true;
+    await res.body?.cancel?.().catch?.(() => {});
   }
 
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: throttled ? 'blocked' : (transportError ? 'error' : 'connected'),
+    external_result: transportError ? 'error' : 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       status_sequence: statuses,
       throttled,
       ...(transportError ? { error_class: transportError } : {}),
-      rate_limit_enforced: throttled,
+      rate_limit_enforced: null,
+      throttle_status_observed: throttled,
+      control_attribution: 'unknown',
       probe_path: endpoint.probePath,
       http_method: method,
       request_counting_basis: 'logical_operations',
@@ -1334,12 +1370,13 @@ export async function probeHttpMethodMatrix(job, deps = {}) {
       continue;
     }
     const statusCode = res.status;
-    const blocked = blockedHttpStatus(statusCode);
+    const rejected = statusCode === 405;
+    const blocked = false;
     const observedAllow = res.headers?.get?.('allow') ?? null;
     if (observedAllow && allowHeader == null) allowHeader = observedAllow;
-    if (blocked) methods_blocked.push(method);
-    else methods_allowed.push(method);
-    method_statuses.push({ method, status_code: statusCode, blocked });
+    if (statusCode >= 200 && statusCode < 300) methods_allowed.push(method);
+    method_statuses.push({ method, status_code: statusCode, rejected_status: rejected, blocked: false });
+    await res.body?.cancel?.().catch?.(() => {});
   }
 
   const advertisedMethods = allowHeader
@@ -1350,9 +1387,7 @@ export async function probeHttpMethodMatrix(job, deps = {}) {
     .filter((method) => !safeSemanticMethods.has(method));
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: allowHeader == null
-      ? 'error'
-      : (unsafeMethodsAdvertised.length > 0 ? 'connected' : 'blocked'),
+    external_result: method_errors.length === method_statuses.length ? 'error' : 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
@@ -1435,14 +1470,15 @@ export async function probeHeaderSizeBoundary(job, deps = {}) {
   return {
     external_result: transportError
       ? 'error'
-      : (comparisonComplete ? (boundaryEnforced ? 'blocked' : 'connected') : 'not_run'),
+      : (comparisonComplete ? 'connected' : 'not_run'),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
       baseline_status: baselineStatus,
       oversize_status: oversizeStatus,
       oversize_bytes: oversizeBytes,
-      boundary_enforced: boundaryEnforced,
+      boundary_enforced: null,
+      boundary_rejection_status_observed: boundaryEnforced,
       comparison_complete: comparisonComplete,
       ...(transportError ? { error_class: transportError } : {}),
       request_counting_basis: 'logical_operations',
@@ -1464,7 +1500,14 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
   deps = ensureProbeDeadline(job, deps);
   if (remainingProbeTimeoutMs(job, deps) <= 0) return deadlineOutcome(job, kind, deps, 0);
   const parsed = new URL(endpoint.url);
-  const destination = await vetProbeDestinationHost(parsed.hostname, deps);
+  let destination;
+  try {
+    destination = await vetProbeDestinationHost(parsed.hostname, deps);
+  } catch (error) {
+    if (isOperationBudgetError(error)) throw error;
+    if (isProbeDeadlineError(error, deps)) return deadlineOutcome(job, kind, deps, 0);
+    throw error;
+  }
   if (!destination.ok || destination.addresses.length === 0) {
     return {
       external_result: 'error',
@@ -1475,6 +1518,7 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
   }
 
   const timeoutMs = remainingProbeTimeoutMs(job, deps);
+  if (timeoutMs <= 0 || deps.jobDeadlineSignal?.aborted) return deadlineOutcome(job, kind, deps, 0);
   const connectFn = deps.connectFn ?? (parsed.protocol === 'https:' ? tls.connect : net.connect);
   const connectOptions = {
     host: destination.addresses[0],
@@ -1496,26 +1540,38 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
     );
     await new Promise((resolve, reject) => {
       let settled = false;
+      let timer;
+      const signal = deps.jobDeadlineSignal;
+      const connectedEvent = parsed.protocol === 'https:' ? 'secureConnect' : 'connect';
       const finish = (closedByServer, error = null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        for (const [event, listener] of [[connectedEvent, onConnect], ['end', onEnd], ['close', onEnd]]) {
+          socket.removeListener?.(event, listener);
+        }
         connectionClosedByServer = closedByServer;
         if (error) reject(error);
         else resolve();
       };
-      const timer = setTimeout(() => finish(false), timeoutMs);
-      const connectedEvent = parsed.protocol === 'https:' ? 'secureConnect' : 'connect';
-      socket.once(connectedEvent, () => {
+      const onAbort = () => finish(false, probeDeadlineError());
+      const onError = (error) => finish(false, error);
+      const onEnd = () => finish(true);
+      const onConnect = () => {
+        if (settled || signal?.aborted) return;
         try {
           socket.write(`HEAD ${endpoint.probePath} HTTP/1.1\r\nHost: ${parsed.host}\r\nX-AstraNull-Marker: `);
-        } catch (error) {
-          finish(false, error);
-        }
-      });
-      socket.once('end', () => finish(true));
-      socket.once('close', () => finish(true));
-      socket.once('error', (error) => finish(true, error));
+        } catch (error) { finish(false, error); }
+      };
+      timer = setTimeout(() => finish(false), timeoutMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) return onAbort();
+      socket.once(connectedEvent, onConnect);
+      if (settled) return;
+      socket.once('end', onEnd);
+      socket.once('close', onEnd);
+      socket.once('error', onError);
     });
   } catch (error) {
     const durationMs = observedProbeDurationMs(deps, started);
@@ -1526,7 +1582,7 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
         probe_path: endpoint.probePath,
         header_timeout_ms: durationMs,
         connection_closed_by_server: connectionClosedByServer,
-        timeout_enforced: false,
+        timeout_enforced: null,
         request_counting_basis: 'logical_operations',
       }),
       requests_sent: requestsSent,
@@ -1538,13 +1594,13 @@ export async function probeSlowHeaderTimeout(job, deps = {}) {
 
   const durationMs = observedProbeDurationMs(deps, started);
   return {
-    external_result: connectionClosedByServer ? 'blocked' : 'connected',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
       header_timeout_ms: durationMs,
       connection_closed_by_server: connectionClosedByServer,
-      timeout_enforced: connectionClosedByServer,
+      timeout_enforced: null,
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -1626,6 +1682,18 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
     );
     settings = await waitForHttp2Settings(session, job, deps);
 
+    let resetStream = null;
+    if (budget >= 3) {
+      // The existing PING settles after this stream is queued; keep its request side open
+      // until the single CANCEL instead of destroying an unsent, already-ended HEAD stream.
+      resetStream = startProbeIoAttempt(
+        deps,
+        'http2_single_reset',
+        () => session.request({ ':method': 'HEAD', ':path': endpoint.probePath }, { endStream: false }),
+        () => { requestsSent += 1; },
+      );
+      resetStream.once?.('error', () => {});
+    }
     if (budget >= 2) {
       pingRttMs = await withinRemainingProbeTime(new Promise((resolve, reject) => {
         startProbeIoAttempt(deps, 'http2_ping', () => session.ping(Buffer.alloc(8), (error, duration) => {
@@ -1636,18 +1704,37 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
     }
 
     if (budget >= 3) {
+      const stream = resetStream;
+      let onReady;
+      let onError;
+      const signal = deps.jobDeadlineSignal;
+      let onAbort;
       try {
-        const stream = startProbeIoAttempt(
-          deps,
-          'http2_single_reset',
-          () => session.request({ ':method': 'HEAD', ':path': endpoint.probePath }),
-          () => { requestsSent += 1; },
-        );
-        stream.once?.('error', () => {});
-        stream.close(http2.constants.NGHTTP2_CANCEL);
-        resetAccepted = true;
-      } catch {
+        if (stream.closed || stream.destroyed) throw new Error('HTTP/2 stream closed before reset.');
+        resetAccepted = await withinRemainingProbeTime(new Promise((resolve, reject) => {
+          onReady = () => {
+            try {
+              if (remainingProbeTimeoutMs(job, deps) <= 0) throw probeDeadlineError();
+              // Await the opened stream's close before destroying its session. An immediate
+              // reset/destroy can discard both HEADERS and RST_STREAM before they reach the peer.
+              stream.close(http2.constants.NGHTTP2_CANCEL, () => resolve(true));
+            } catch (error) { reject(error); }
+          };
+          onError = reject;
+          onAbort = () => reject(probeDeadlineError());
+          stream.once?.('error', onError);
+          signal?.addEventListener('abort', onAbort, { once: true });
+          if (signal?.aborted) onAbort();
+          else if (stream.pending) stream.once('ready', onReady);
+          else onReady();
+        }), job, deps);
+      } catch (error) {
+        if (isProbeDeadlineError(error, deps) || isOperationBudgetError(error)) throw error;
         resetAccepted = false;
+      } finally {
+        if (onReady) stream?.removeListener?.('ready', onReady);
+        if (onError) stream?.removeListener?.('error', onError);
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
       }
     }
 
@@ -1688,16 +1775,14 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
   const maxConcurrentStreams = settings.maxConcurrentStreams ?? null;
   const headerTableSize = settings.headerTableSize ?? null;
   const maxHeaderListSize = settings.maxHeaderListSize ?? null;
-  const mitigationHint = Number.isSafeInteger(maxConcurrentStreams) && maxConcurrentStreams > 0;
+  const mitigationHint = null;
   const hpackLimitsAdvertised = Number.isSafeInteger(headerTableSize)
     && headerTableSize >= 0
     && Number.isSafeInteger(maxHeaderListSize)
     && maxHeaderListSize > 0
     && maxHeaderListSize < 0xffff_ffff;
   const settingsAssertion = job.probe_profile?.settings_assertion ?? null;
-  const semanticResult = settingsAssertion === 'hpack_limits'
-    ? (hpackLimitsAdvertised ? 'blocked' : 'connected')
-    : (mitigationHint && continuationBoundAdvertised !== false ? 'blocked' : 'connected');
+  const semanticResult = 'connected';
   const durationMs = observedProbeDurationMs(deps);
   return {
     external_result: semanticResult,
@@ -1743,159 +1828,17 @@ export async function probeWafInspectionLimit(job, deps = {}) {
   const kind = 'waf_inspection_limit_probe';
   const unauthorized = capabilityProbeAuthorizationFailure(job, kind, deps);
   if (unauthorized) return unauthorized;
-  const endpoint = httpProbeEndpoint(job, job.probe_profile?.probe_path);
-  if (!endpoint) {
-    return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
-  }
-
-  deps = ensureProbeDeadline(job, deps);
-  const marker = BENIGN_CLASS_MARKERS.sqli;
-  const bodyBytes = 8_192;
-  const formFieldCount = 64;
-  const jsonDepth = 8;
-  const headerBlockBytes = 8_192;
-  let nestedJson = marker;
-  for (let depth = 0; depth < jsonDepth; depth += 1) nestedJson = { a: nestedJson };
-  const formFields = Array.from({ length: formFieldCount - 1 }, (_, index) => `f${index}=a`);
-  formFields.push(`marker=${encodeURIComponent(marker)}`);
-  const variants = [
-    {
-      variant: 'marker_past_large_body',
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: `${'a'.repeat(bodyBytes)}${marker}`,
-    },
-    {
-      variant: 'marker_after_high_field_count',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formFields.join('&'),
-    },
-    {
-      variant: 'marker_in_deep_json',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(nestedJson),
-    },
-    {
-      variant: 'marker_after_large_header_block',
-      method: 'HEAD',
-      headers: {
-        'x-astranull-padding': 'a'.repeat(headerBlockBytes),
-        'x-astranull-marker': marker,
-      },
-    },
-  ];
-  const budget = resolveBoundedSequenceBudget(job, { ceiling: 6 });
-  let requestsSent = 0;
-  let baselineStatus = null;
-  let baselineBlocked = false;
-  let baselineClass = null;
-  let transportError = null;
-  const variantResults = [];
-
-  if (budget > 0) {
-    const baseline = await boundedFetch(endpoint.url, {
-      timeoutMs: remainingProbeTimeoutMs(job, deps),
-      fetchOptions: {
-        method: 'HEAD',
-        redirect: 'manual',
-        headers: { 'x-astranull-marker': marker },
-      },
-    }, deps);
-    if (baseline.attempted) requestsSent += 1;
-    if (!baseline.attempted || isProbeDeadlineError(baseline.error, deps)) {
-      return deadlineOutcome(job, kind, deps, requestsSent, { probe_path: endpoint.probePath, variants: variantResults });
-    }
-    if (baseline.error) {
-      transportError = baseline.error.code ?? baseline.error.name ?? 'probe_transport_error';
-    } else {
-      baselineStatus = baseline.res.status;
-      baselineClass = classifyMarkerResponse(baseline.res, { declared: job.probe_profile?.declared_block_signature ?? null });
-      baselineBlocked = baselineClass.blocked;
-    }
-  }
-
-  for (const variant of variants.slice(0, Math.max(0, budget - requestsSent))) {
-    if (transportError) break;
-    if (remainingProbeTimeoutMs(job, deps) <= 0) {
-      return deadlineOutcome(job, kind, deps, requestsSent, {
-        probe_path: endpoint.probePath,
-        baseline_status: baselineStatus,
-        variants: variantResults,
-      });
-    }
-    const { res, error, attempted } = await boundedFetch(endpoint.url, {
-      timeoutMs: remainingProbeTimeoutMs(job, deps),
-      fetchOptions: {
-        method: variant.method,
-        redirect: 'manual',
-        headers: variant.headers,
-        ...(variant.body != null ? { body: variant.body } : {}),
-      },
-    }, deps);
-    if (attempted) requestsSent += 1;
-    if (!attempted || isProbeDeadlineError(error, deps)) {
-      return deadlineOutcome(job, kind, deps, requestsSent, {
-        probe_path: endpoint.probePath,
-        baseline_status: baselineStatus,
-        variants: variantResults,
-      });
-    }
-    if (error) {
-      transportError = error.code ?? error.name ?? 'probe_transport_error';
-      variantResults.push({
-        variant: variant.variant,
-        status_code: 0,
-        blocked: false,
-        error_class: transportError,
-      });
-      break;
-    }
-    const statusCode = res.status;
-    const bodyText = await signatureBodyOf(res, variant.method, job, deps);
-    const graded = classifyMarkerResponse(res, { declared: job.probe_profile?.declared_block_signature ?? null, bodyText });
-    variantResults.push({
-      variant: variant.variant,
-      status_code: statusCode,
-      blocked: graded.blocked,
-      allowed: graded.allowed,
-      inconclusive: graded.inconclusive,
-      ...(graded.denial_signature ? { denial_signature: graded.denial_signature } : {}),
-      ...(graded.reason ? { reason: graded.reason } : {}),
-    });
-  }
-
-  const gradedVariants = variantResults.filter((variant) => !variant.error_class && !variant.inconclusive);
-  const inspectionLimitBypassSuspected = baselineBlocked && gradedVariants.some((variant) => variant.allowed);
-  const comparisonComplete = baselineBlocked && gradedVariants.length > 0;
-  const durationMs = observedProbeDurationMs(deps);
-  return {
-    external_result: inspectionLimitBypassSuspected
-      ? 'connected'
-      : (transportError ? 'error' : (comparisonComplete ? 'blocked' : 'not_run')),
-    metadata: withKind(job, kind, {
-      duration_ms: durationMs,
-      probe_path: endpoint.probePath,
-      baseline_status: baselineStatus,
-      baseline_blocked: baselineBlocked,
-      baseline_denial_signature: baselineClass?.denial_signature ?? null,
-      ...(baselineClass?.reason ? { baseline_reason: baselineClass.reason } : {}),
-      ignored_variant_count: variantResults.filter((variant) => variant.inconclusive).length,
-      inspection_limit_bypass_suspected: inspectionLimitBypassSuspected,
-      fail_open_signal: inspectionLimitBypassSuspected,
-      comparison_complete: comparisonComplete,
-      ...(transportError ? { error_class: transportError } : {}),
-      variants: variantResults,
-      body_bytes: bodyBytes,
-      form_field_count: formFieldCount,
-      json_depth: jsonDepth,
-      header_block_bytes: headerBlockBytes,
-      request_counting_basis: 'logical_operations',
-    }),
-    requests_sent: requestsSent,
-    duration_ms: durationMs,
-  };
+  // Body/form/JSON parser limits require an explicitly approved business-safe sink.
+  // A nonce or a small body does not authorize POST into a login/API/business route.
+  // No sink contract exists for this catalog scenario: do not substitute header/query delivery.
+  return { external_result: 'not_run', metadata: withKind(job, kind, {
+    not_run_reason: 'approved_business_safe_body_endpoint_required',
+    delivery_supported: false, comparison_complete: false,
+    planned_marker_legs: 4, completed_marker_legs: 0, variants: [],
+    baseline_blocked: null, inspection_limit_bypass_suspected: null, fail_open_signal: null,
+    observation_only: true, readiness_conclusion: false,
+    request_counting_basis: 'logical_operations',
+  }), requests_sent: 0, duration_ms: 0 };
 }
 
 /**
@@ -2013,17 +1956,24 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     wafRequired: fingerprintOnly ? false : job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
     fetchFn: deadlineFetch,
+    jobDeadlineSignal: deps.jobDeadlineSignal,
     onPhase: (entry) => deps.onProbeActivity?.({ stage: 'phase_completed', operation: entry.phase,
       ...(Number.isInteger(entry.status_code) && entry.status_code >= 100 ? { status_code: entry.status_code } : {}),
       ...(entry.error_class ? { error_class: entry.error_class } : {}) }),
     canaryNonce: job.nonce ?? null,
+    originScope: { host: hostname, path: new URL(url).pathname + new URL(url).search,
+      port: Number(new URL(url).port) || (new URL(url).protocol === 'https:' ? 443 : 80),
+      method: 'GET', scenario_version: job.probe_profile?.scenario_version ?? 'marker-comparison-v4',
+      source_perspective: deps.sourcePerspective ?? 'astranull-signed-public-worker',
+      worker_id: deps.workerId ?? job.worker_id ?? null },
     declaredBlockSignature: job.probe_profile?.declared_block_signature ?? null,
     declaredOriginLockdown: job.probe_profile?.declared_origin_lockdown ?? null,
-    originBypassFn: directIp && hostname
+    originBypassFn: directIp && hostname && job.constraints?.authority_version !== 'probe-authority-v2'
       ? async ({ directIp: ip, hostname: host, canaryNonce }) => {
         try {
-          const res = await deadlineFetch(`http://${ip}/`, {
-            method: 'HEAD',
+          const targetUrl = new URL(url);
+          const res = await deadlineFetch(directHttpProbeUrl(ip, Number(targetUrl.port) || (targetUrl.protocol === 'https:' ? 443 : 80), targetUrl.pathname + targetUrl.search), {
+            method: 'GET',
             redirect: 'manual',
             headers: { Host: host, ...(canaryNonce ? { [CANARY_NONCE_REQUEST_HEADER]: canaryNonce } : {}) },
           });
@@ -2115,11 +2065,15 @@ export async function probeWafEnforcement(job, deps = {}) {
   const monitor_only = res.status >= 200 && res.status < 300 && graded.allowed;
 
   return {
-    external_result: enforced ? 'blocked' : graded.allowed ? 'connected' : 'not_run',
+    external_result: 'not_run',
     metadata: withKind(job, kind, {
       status_code: res.status,
-      waf_enforced: enforced,
-      monitor_only_leak: monitor_only,
+      waf_enforced: null,
+      control_action_observed: enforced,
+      monitor_only_leak: null,
+      comparison_complete: false,
+      observation_only: true, readiness_conclusion: false,
+      not_run_reason: 'independent_permitted_baseline_not_available',
       denial_signature: graded.denial_signature,
       ...(graded.denial_signature?.vendor ? { waf_product_hint: graded.denial_signature.vendor } : {}),
       ...(graded.inconclusive ? { inconclusive_reason: graded.reason, block_suspected: graded.block_suspected } : {}),
@@ -2164,7 +2118,7 @@ export async function probeDnssecPosture(job, deps = {}) {
   const durationMs = observedProbeDurationMs(deps);
   const dnssec_configured = dnskey_count > 0;
   return {
-    external_result: dnssec_configured ? 'blocked' : 'connected',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       query_name: zone,
@@ -2175,8 +2129,9 @@ export async function probeDnssecPosture(job, deps = {}) {
       ds_count: null,
       dnssec_chain_validated: false,
       assurance: 'authoritative_dnskey_presence_only',
-      dnssec_configured,
-      dnssec_missing: !dnssec_configured,
+      dnssec_configured: null,
+      dnskey_present: dnssec_configured,
+      dnssec_missing: null,
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: wire.requests_sent,
@@ -2225,9 +2180,10 @@ export async function probeAxfrLeak(job, deps = {}) {
   if (!nameservers.length) {
     const durationMs = observedProbeDurationMs(deps);
     return {
-      external_result: 'blocked',
+      external_result: 'not_run',
       metadata: withKind(job, kind, {
-        axfr_refused: true,
+        axfr_refused: false,
+        observation_only: true, readiness_conclusion: false,
         reason: 'no_nameservers',
         zone,
         resolver_attempts: resolverAttempts,
@@ -2281,6 +2237,7 @@ export async function probeAxfrLeak(job, deps = {}) {
     transactionIdFn: deps.axfrTransactionIdFn,
     beforeProbeIoAttempt: deps.beforeProbeIoAttempt,
     recordProbeLogicalAttempt: deps.recordProbeLogicalAttempt,
+    signal: deps.jobDeadlineSignal,
     onAttempt: () => {
       requestsSent += 1;
       transportAttempts += 1;
@@ -2290,12 +2247,14 @@ export async function probeAxfrLeak(job, deps = {}) {
   const durationMs = observedProbeDurationMs(deps);
   const leaked = outcome.axfr_leak === true;
   return {
-    external_result: leaked ? 'connected' : 'blocked',
+    external_result: leaked ? 'connected' : outcome.axfr_refused === true ? 'blocked' : outcome.error_class === 'timeout' ? 'timeout' : 'not_run',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       zone,
       nameserver: nsHost,
       ...outcome,
+      observation_only: !leaked && outcome.axfr_refused !== true,
+      readiness_conclusion: leaked || outcome.axfr_refused === true,
       resolver_attempts: resolverAttempts,
       destination_vetting_resolver_attempts: net.isIP(nsHost) === 0 ? 2 : 0,
       transport_attempts: transportAttempts,
@@ -2345,40 +2304,47 @@ export async function probeTlsAudit(job, deps = {}) {
         'tls_connect',
         () => connectFn({
         host: hostVerdict.addresses[0],
-        port: 443,
-        servername: host,
+        port: Number(job.target?.port) || Number(httpProbeEndpoint(job)?.url ? new URL(httpProbeEndpoint(job).url).port : '') || 443,
+        ...(net.isIP(host) === 0 ? { servername: host } : {}),
           rejectUnauthorized: false,
         }),
         () => { requestsSent = 1; },
       );
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        socket.destroy();
-        reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
-      }, remainingProbeTimeoutMs(job, deps));
-      socket.once('secureConnect', () => {
+      const signal = deps.jobDeadlineSignal;
+      const timer = setTimeout(() => settle(Object.assign(new Error('timeout'), { code: 'ETIMEOUT', name: 'AbortError' })), remainingProbeTimeoutMs(job, deps));
+      const onAbort = () => settle(probeDeadlineError());
+      const settle = (err, result) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        socket.removeListener('secureConnect', onSecureConnect);
+        if (err) {
+          socket.destroy();
+          reject(err);
+          return;
+        }
+        socket.end();
+        resolve(result);
+      };
+      const onSecureConnect = () => {
         const cert = socket.getPeerCertificate();
-        resolve({
+        settle(null, {
           tls_protocol: socket.getProtocol(),
           cipher: socket.getCipher()?.name ?? null,
           authorized: socket.authorized,
+          certificate_hostname_match: cert && Object.keys(cert).length > 0 ? !tls.checkServerIdentity(host, cert) : null,
+          certificate_not_yet_valid: cert?.valid_from ? new Date(cert.valid_from).getTime() > Date.now() : null,
           valid_to: cert?.valid_to ?? null,
           issuer: cert?.issuer?.O ?? null,
           subject: cert?.subject?.CN ?? null,
           days_to_expiry: cert?.valid_to ? Math.floor((new Date(cert.valid_to) - Date.now()) / 86400000) : null,
         });
-        socket.end();
-      });
-      socket.once('error', (err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      });
+      };
+      socket.once('secureConnect', onSecureConnect);
+      socket.once('error', (err) => settle(err));
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
     });
 
     const durationMs = observedProbeDurationMs(deps);
@@ -2388,10 +2354,14 @@ export async function probeTlsAudit(job, deps = {}) {
     if (weak_tls) issues.push('weak_tls_protocol');
     if (cert_expired) issues.push('cert_expired');
     if (!session.authorized) issues.push('unauthorized_chain');
+    if (session.certificate_hostname_match === false) issues.push('certificate_hostname_mismatch');
+    if (session.certificate_not_yet_valid === true) issues.push('certificate_not_yet_valid');
 
     return {
-      external_result: issues.length ? 'connected' : 'blocked',
-      metadata: withKind(job, kind, { duration_ms: durationMs, ...session, tls_issues: issues }),
+      external_result: 'connected',
+      metadata: withKind(job, kind, { duration_ms: durationMs, ...session, tls_issues: issues,
+        complete: true, target_port: Number(job.target?.port) || Number(httpProbeEndpoint(job)?.url ? new URL(httpProbeEndpoint(job).url).port : '') || 443,
+        pinned_address: hostVerdict.addresses[0] }),
       requests_sent: requestsSent,
       duration_ms: durationMs,
     };
@@ -2399,7 +2369,10 @@ export async function probeTlsAudit(job, deps = {}) {
     const durationMs = observedProbeDurationMs(deps);
     return {
       external_result: classifyFetchError(err),
-      metadata: withKind(job, kind, { error_class: err.code ?? err.name, duration_ms: durationMs }),
+      metadata: withKind(job, kind, { error_class: err.code ?? err.name, duration_ms: durationMs,
+        complete: requestsSent === 1,
+        target_port: Number(job.target?.port) || Number(httpProbeEndpoint(job)?.url ? new URL(httpProbeEndpoint(job).url).port : '') || 443,
+        pinned_address: hostVerdict.addresses[0] }),
       requests_sent: requestsSent,
       duration_ms: durationMs,
     };
@@ -2456,18 +2429,11 @@ export async function probeCacheAbuse(job, deps = {}) {
   }
 
   const durationMs = observedProbeDurationMs(deps);
-  const sensitive_cached = observations.some((o) => o.cache_control?.includes('public') && !o.cache_control?.includes('no-store'));
-  const cache_key_weakness = observations.length >= 3
-    && observations[0].x_cache != null
-    && observations[0].x_cache === observations[1].x_cache
-    && observations[0].x_cache === observations[2].x_cache;
-
-  const weaknessObserved = sensitive_cached || cache_key_weakness;
-  const comparisonComplete = observations.length === urls.length;
+  const sensitive_cached = null;
+  const cache_key_weakness = null;
+  const comparisonComplete = observations.length === 3;
   return {
-    external_result: weaknessObserved
-      ? 'connected'
-      : (transportError ? 'error' : (comparisonComplete ? 'blocked' : 'not_run')),
+    external_result: transportError ? 'error' : observations.length ? 'connected' : 'not_run',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       observations,
@@ -2487,9 +2453,8 @@ export async function probeCacheAbuse(job, deps = {}) {
  */
 export async function probeApiSurfaceScan(job, deps = {}) {
   const kind = 'api_surface_scan';
-  const origin = job.target?.value?.startsWith('http')
-    ? new URL(job.target.value).origin
-    : baseUrlForHost(apexDomain(job) ?? '').replace(/\/$/, '');
+  const endpoint = httpProbeEndpoint(job);
+  const origin = endpoint ? new URL(endpoint.url).origin : null;
 
   if (!origin) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
@@ -2497,7 +2462,12 @@ export async function probeApiSurfaceScan(job, deps = {}) {
 
   deps = ensureProbeDeadline(job, deps);
   const budget = resolveProbeRequestBudget(job);
-  const paths = (job.probe_profile?.paths ?? API_DOC_PATHS).slice(0, budget);
+  const configuredPaths = job.probe_profile?.paths ?? API_DOC_PATHS;
+  if (!Array.isArray(configuredPaths) || configuredPaths.some((path) => !normalizeProbeHttpPath(path))) {
+    return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsafe_api_probe_path' }), requests_sent: 0, duration_ms: 0 };
+  }
+  const paths = configuredPaths.slice(0, budget);
+  const path_observations = [];
   const exposed_paths = [];
   const path_errors = [];
   let requestsSent = 0;
@@ -2518,18 +2488,18 @@ export async function probeApiSurfaceScan(job, deps = {}) {
       path_errors.push({ path, error_class: error.code ?? error.name ?? 'probe_transport_error' });
       continue;
     }
-    if (res.status >= 200 && res.status < 400) {
-      exposed_paths.push({ path, status: res.status });
-    }
+    path_observations.push({ path, status: res.status, content_type: res.headers?.get?.('content-type') ?? null, redirect_observed: res.status >= 300 && res.status < 400 });
   }
 
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: exposed_paths.length ? 'connected' : (path_errors.length ? 'error' : 'blocked'),
+    external_result: path_observations.length ? 'connected' : path_errors.length ? 'error' : 'not_run',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       exposed_paths,
-      exposure_count: exposed_paths.length,
+      path_observations,
+      api_identity_confirmed: false,
+      exposure_count: null,
       path_errors,
       ...(exposed_paths.length === 0 && path_errors.length > 0
         ? { error_class: path_errors[0].error_class }
@@ -2575,13 +2545,17 @@ export async function probeCorsPosture(job, deps = {}) {
   }
 
   const acao = res.headers.get('access-control-allow-origin');
-  const weak_cors = acao === '*' || acao === 'https://probe.invalid.astranull';
+  const weak_cors = null;
+  const origin_permission_advertised = acao === '*' || acao === 'https://probe.invalid.astranull';
   return {
-    external_result: weak_cors ? 'connected' : 'blocked',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       status_code: res.status,
       access_control_allow_origin: acao,
       weak_cors,
+      origin_permission_advertised,
+      credentials_advertised: res.headers.get('access-control-allow-credentials') === 'true',
+      sensitive_exposure_confirmed: false,
       duration_ms: durationMs,
     }),
     requests_sent: 1,
@@ -2622,16 +2596,20 @@ export async function probeBotChallenge(job, deps = {}) {
     };
   }
 
-  const challenged = res.status === 403 || res.status === 401 || res.status === 429 || res.status === 302;
+  const actionSignature = matchControlDenialSignature({ statusCode: res.status, headers: res, declared: job.probe_profile?.declared_block_signature ?? null });
+  const challenged = Boolean(actionSignature);
   const challenge_header = res.headers.get('cf-mitigated') ?? res.headers.get('x-bot-challenge') ?? null;
   const no_challenge = res.status >= 200 && res.status < 300 && !challenge_header;
 
   return {
-    external_result: challenged ? 'blocked' : 'connected',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       status_code: res.status,
       challenge_header,
-      bot_challenge_missing: no_challenge,
+      bot_challenge_missing: null,
+      challenge_observed: challenged,
+      denial_signature: actionSignature,
+      challenge_not_observed: no_challenge,
       duration_ms: durationMs,
     }),
     requests_sent: 1,
@@ -2644,17 +2622,16 @@ export async function probeBotChallenge(job, deps = {}) {
  */
 export async function probeGraphqlPosture(job, deps = {}) {
   const kind = 'graphql_posture_probe';
-  const path = normalizeProbeHttpPath(job.probe_profile?.graphql_path) ?? '/graphql';
-  const origin = job.target?.value?.startsWith('http')
-    ? new URL(job.target.value).origin
-    : baseUrlForHost(apexDomain(job) ?? '').replace(/\/$/, '');
+  const endpoint = httpProbeEndpoint(job, job.probe_profile?.graphql_path ?? (/^https?:\/\//i.test(job.target?.value ?? '') ? null : '/graphql'));
+  const path = endpoint?.probePath;
+  const origin = endpoint ? new URL(endpoint.url).origin : null;
 
   if (!origin) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
 
   const started = Date.now();
-  const { res, error } = await boundedFetch(`${origin}${path}`, {
+  const { res, error } = await boundedFetch(endpoint?.url ?? `${origin}${path}`, {
     timeoutMs: job.constraints?.timeout_ms ?? 5000,
     fetchOptions: {
       method: 'HEAD',
@@ -2675,14 +2652,17 @@ export async function probeGraphqlPosture(job, deps = {}) {
 
   const exposed = res.status >= 200 && res.status < 400;
   const complexity_limits_advertised = Boolean(
-    res.headers.get('x-graphql-complexity-limit') ?? res.headers.get('x-rate-limit-limit'),
+    res.headers.get('x-graphql-complexity-limit'),
   );
 
   return {
-    external_result: exposed && !complexity_limits_advertised ? 'connected' : 'blocked',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       status_code: res.status,
-      graphql_exposed: exposed,
+      graphql_exposed: null,
+      route_response_observed: exposed,
+      graphql_identity_confirmed: false,
+      complexity_enforcement_confirmed: false,
       complexity_limits_advertised,
       duration_ms: durationMs,
     }),
@@ -2764,13 +2744,15 @@ export async function probeOpenRecursion(job, deps = {}) {
 
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: open_recursion ? 'connected' : 'blocked',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       resolver_host: resolverHost,
       resolver_address: resolverAddress,
       recursion_test_name: queryName,
-      open_recursion_detected: open_recursion,
+      open_recursion_detected: null,
+      same_target_answer_observed: open_recursion,
+      recursion_proof_available: false,
       resolver_attempts: requestsSent,
       request_counting_basis: 'logical_operations',
     }),
@@ -2837,7 +2819,7 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
         secondary_results,
       });
     }
-    secondary_results.push({ nameserver: ns, reachable: addrs.length > 0, addresses: addrs.slice(0, 2) });
+    secondary_results.push({ nameserver: ns, hostname_resolved: addrs.length > 0, reachable: null, addresses: addrs.slice(0, 2) });
   }
 
   const weak_failover = nameservers.length < 2
@@ -2845,14 +2827,16 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
   const durationMs = observedProbeDurationMs(deps);
 
   return {
-    external_result: weak_failover ? 'connected' : 'blocked',
+    external_result: 'connected',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       zone,
       nameserver_count: nameservers.length,
       nameservers: nameservers.slice(0, 4),
       secondary_results,
-      weak_failover,
+      weak_failover: null,
+      nameserver_count_below_two: nameservers.length < 2,
+      failover_exercised: false,
       resolver_attempts: requestsSent,
       request_counting_basis: 'logical_operations',
     }),
@@ -2861,7 +2845,7 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
   };
 }
 
-const DELEGATED_SAFE_HTTP_METHODS = new Set(['GET', 'POST']);
+const DELEGATED_SAFE_HTTP_METHODS = new Set(['GET', 'HEAD']);
 const DELEGATED_MAX_ACTUAL_BODY_BYTES = 4096;
 const DELEGATED_FORBIDDEN_HEADERS = new Set([
   'connection',
@@ -2925,7 +2909,7 @@ function createDelegatedHttpTransport(job, deps, state) {
       .some((name) => DELEGATED_FORBIDDEN_HEADERS.has(name));
     if (
       !DELEGATED_SAFE_HTTP_METHODS.has(method)
-      || (method === 'GET' && init.body != null)
+      || (['GET', 'HEAD'].includes(method) && init.body != null)
       || bodyBytes > DELEGATED_MAX_ACTUAL_BODY_BYTES
       || hasForbiddenHeader
     ) {
@@ -2948,12 +2932,13 @@ function createDelegatedHttpTransport(job, deps, state) {
       state.error = outcome.error;
       throw outcome.error;
     }
-    try {
-      await outcome.res?.body?.cancel?.();
-    } catch {
-      // Headers/status are the complete delegated evidence; body disposal is best effort.
-    }
-    return outcome.res;
+    const bodyText = await signatureBodyOf(outcome.res, method, job, deps);
+    if (method === 'HEAD') await outcome.res?.body?.cancel?.().catch?.(() => {});
+    // Preserve the bounded transient prefix for downstream signature grading.
+    return { status: outcome.res.status, headers: outcome.res.headers,
+      bodyText, body_complete: signatureBodyComplete(outcome.res),
+      body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(bodyText)); controller.close(); } }),
+    };
   };
   return { targetUrl, request };
 }
@@ -3014,7 +2999,11 @@ export async function probeWafClassMarker(job, deps = {}) {
 
   const rawMetadata = { ...(raw ?? {}) };
   delete rawMetadata.requests_sent;
-  const hasMarkerEvidence = Array.isArray(raw?.marker_results) && raw.marker_results.length > 0;
+  const hasMarkerEvidence = Array.isArray(raw?.marker_results) && raw.marker_results.length > 0
+    && raw.comparison_complete === true && raw.classifier_version === 'marker-comparison-v4'
+    && Number.isSafeInteger(raw.planned_marker_legs) && raw.planned_marker_legs > 0
+    && raw.completed_marker_legs === raw.planned_marker_legs
+    && (raw.baseline_health ?? raw.permitted_baseline?.health) === 'healthy';
   const externalResult = raw?.error_class
     ? 'error'
     : hasMarkerEvidence && raw.posture === 'protected'
@@ -3070,7 +3059,11 @@ export async function probeWafEvasionMarker(job, deps = {}) {
   const failure = delegatedFailureOutcome(job, kind, deps, state, raw?.metadata);
   if (failure) return failure;
 
-  const externalResult = raw?.external_result === 'external_blocked'
+  const comparisonComplete = raw?.metadata?.comparison_complete === true
+    && raw.metadata.classifier_version === 'marker-comparison-v4'
+    && raw.metadata.permitted_baseline_health === 'healthy'
+    && raw.metadata.planned_marker_legs === 2 && raw.metadata.completed_marker_legs === 2;
+  const externalResult = raw?.external_result === 'error' ? 'error' : !comparisonComplete ? 'not_run' : raw?.external_result === 'external_blocked'
     ? 'blocked'
     : raw?.external_result === 'external_allowed'
       ? 'connected'
@@ -3140,6 +3133,21 @@ export async function probeDelegatedL7ResourcePosture(job, deps = {}) {
   };
 }
 
+/** Existing metadata-only refusals must precede destination resolution. Never run an injected producer here. */
+export async function capabilityProbeNoDeliveryOutcome(job, deps = {}) {
+  const profile = job.probe_profile ?? {};
+  if (profile.kind === 'waf_inspection_limit_probe') return probeWafInspectionLimit(job, deps);
+  if (profile.kind === 'waf_evasion_marker_probe'
+    && isEvasionTransform(profile.evasion_transform)
+    && !isSupportedEvasionTransform(profile.evasion_transform)) {
+    return probeWafEvasionMarker(job, { ...deps, wafEvasionProbeFn: runRawWafEvasionMarkerProbe });
+  }
+  if (profile.kind === 'l7_resource_posture_probe' && profile.marker_class === 'declared_content_encoding') {
+    return probeDelegatedL7ResourcePosture(job, { ...deps, l7ResourceProbeFn: runRawL7ResourcePostureProbe });
+  }
+  return null;
+}
+
 export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   waf_fingerprint_observation: probeOutsideInWafScan,
   outside_in_waf_scan: probeOutsideInWafScan,
@@ -3178,7 +3186,8 @@ const GRPC_REFLECTION_PATHS = new Set([
 const DEFAULT_GRPC_REFLECTION_PATH = '/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo';
 
 function grpcRequestSpec(configuredPath) {
-  const path = normalizeProbeHttpPath(configuredPath) ?? DEFAULT_GRPC_REFLECTION_PATH;
+  const path = configuredPath == null ? DEFAULT_GRPC_REFLECTION_PATH : normalizeProbeHttpPath(configuredPath);
+  if (!path) return null;
   if (GRPC_REFLECTION_PATHS.has(path)) {
     // ServerReflectionRequest.list_services = "" (field 7, length-delimited),
     // wrapped in one uncompressed gRPC frame.
@@ -3193,6 +3202,70 @@ function grpcRequestSpec(configuredPath) {
     return { path, service: 'health', body: Buffer.from([0, 0, 0, 0, 0]) };
   }
   return null;
+}
+
+/** Strict bounded protobuf framing for the two fixed, read-only gRPC requests. */
+function protobufFields(bytes) {
+  let offset = 0;
+  const fields = [];
+  const varint = () => {
+    let value = 0;
+    for (let count = 0; count < 5; count += 1) {
+      if (offset >= bytes.length) throw new RangeError('truncated protobuf');
+      const byte = bytes[offset++];
+      value += (byte & 127) * (2 ** (count * 7));
+      if ((byte & 128) === 0) {
+        if (!Number.isSafeInteger(value) || value > 0xffffffff) throw new RangeError('protobuf value too large');
+        return value;
+      }
+    }
+    throw new RangeError('protobuf varint too large');
+  };
+  while (offset < bytes.length) {
+    if (fields.length >= 256) throw new RangeError('too many protobuf fields');
+    const key = varint();
+    const number = Math.floor(key / 8);
+    const wire = key & 7;
+    if (number < 1 || ![0, 1, 2, 5].includes(wire)) throw new RangeError('invalid protobuf field');
+    let value;
+    if (wire === 0) value = varint();
+    else {
+      const size = wire === 2 ? varint() : wire === 1 ? 8 : 4;
+      if (offset + size > bytes.length) throw new RangeError('truncated protobuf field');
+      value = bytes.subarray(offset, offset + size);
+      offset += size;
+    }
+    fields.push({ number, wire, value });
+  }
+  return fields;
+}
+
+export function validateGrpcResponseBody(body, service) {
+  if (!Buffer.isBuffer(body) || body.length < 5 || body.length > 65536 || body[0] !== 0
+    || body.readUInt32BE(1) !== body.length - 5) return false;
+  try {
+    const fields = protobufFields(body.subarray(5));
+    if (service === 'health') {
+      return fields.length === 1 && fields[0].number === 1 && fields[0].wire === 0
+        && fields[0].value >= 0 && fields[0].value <= 3;
+    }
+    if (service !== 'reflection') return false;
+    const original = fields.filter((field) => field.number === 2);
+    const lists = fields.filter((field) => field.number === 6);
+    if (original.length !== 1 || lists.length !== 1 || original[0].wire !== 2 || lists[0].wire !== 2
+      || fields.some((field) => ![1, 2, 6].includes(field.number))) return false;
+    const request = protobufFields(original[0].value);
+    if (request.length !== 1 || request[0].number !== 7 || request[0].wire !== 2 || request[0].value.length !== 0) return false;
+    const services = protobufFields(lists[0].value);
+    return services.every((field) => {
+      if (field.number !== 1 || field.wire !== 2) return false;
+      const name = protobufFields(field.value);
+      return name.length === 1 && name[0].number === 1 && name[0].wire === 2
+        && /^[A-Za-z_][A-Za-z0-9_.]{0,252}$/.test(name[0].value.toString('utf8'));
+    });
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3277,6 +3350,7 @@ export async function probeGrpcReflection(job, deps = {}) {
         signal: controller.signal,
         timeoutMs: boundedTimeout,
         maxResponseBytes: 64 * 1024,
+        captureResponseBody: true,
       }),
       () => { requestsSent = 1; },
     );
@@ -3335,21 +3409,24 @@ export async function probeGrpcReflection(job, deps = {}) {
     && res.status < 300
     && contentTypeIsGrpc
     && grpcStatus !== null;
-  const requestSucceeded = grpcEndpointReachable && grpcStatus === '0';
+  const protocolIdentityConfirmed = grpcEndpointReachable && grpcStatus === '0'
+    && validateGrpcResponseBody(res.responseBody, requestSpec.service);
+  const requestSucceeded = protocolIdentityConfirmed;
   const isReflection = requestSpec.service === 'reflection';
-  const reflectionServiceRouted = isReflection && grpcEndpointReachable
-    ? grpcStatus !== '12'
-    : null;
+  const reflectionServiceRouted = isReflection && protocolIdentityConfirmed ? true : null;
 
   return {
-    external_result: requestSucceeded ? 'connected' : 'blocked',
+    external_result: requestSucceeded ? 'connected' : 'not_run',
     metadata: withKind(job, kind, {
       status_code: res.status,
       grpc_status: grpcStatus,
       grpc_status_source: grpcStatusSource,
       grpc_message_present: Boolean(grpcMessage),
       content_type_is_grpc: contentTypeIsGrpc,
-      grpc_endpoint_reachable: grpcEndpointReachable,
+      grpc_endpoint_reachable: protocolIdentityConfirmed,
+      route_response_observed: grpcEndpointReachable,
+      protocol_identity_confirmed: protocolIdentityConfirmed,
+      response_bytes: res.responseBytes ?? null,
       grpc_request_succeeded: requestSucceeded,
       grpc_probe_service: requestSpec.service,
       grpc_transport: 'h2_tls',

@@ -60,6 +60,10 @@ function signingEnv(extra = {}) {
           algorithm: 'ed25519',
           private_key_pkcs8_der_base64: ed25519.private_key_pkcs8_der_base64,
         },
+        [KMS_KEY_REF]: {
+          algorithm: 'ed25519',
+          public_key_spki_der_base64: ed25519.public_key_spki_der_base64,
+        },
         [HMAC_KEY_REF]: {
           algorithm: 'hmac-sha256',
           secret: HMAC_SECRET,
@@ -108,6 +112,7 @@ describe('evidence signing KMS adapter', () => {
       keyReference: KEY_REF,
       algorithm: 'ed25519',
       signingAdapter: adapter,
+      env,
       now: () => new Date('2026-07-03T12:02:00.000Z'),
     });
     assert.equal(signed.error, undefined);
@@ -130,6 +135,7 @@ describe('evidence signing KMS adapter', () => {
   it('external KMS adapter fails closed when endpoint is unreachable', async () => {
     const adapter = createExternalKmsEvidenceSigningAdapter({
       endpoint: 'http://127.0.0.1:1',
+      env: { ...signingEnv(), ASTRANULL_DEPLOYMENT_PROFILE: 'local-staging' },
       fetchTimeoutMs: 200,
     });
     const resolved = await adapter.resolveSigningKey({
@@ -160,42 +166,33 @@ describe('evidence signing KMS adapter', () => {
       keyReference: KEY_REF,
       algorithm: 'ed25519',
       signingAdapter: localAdapter,
+      env,
     });
     assert.equal(localSigned.error, undefined);
 
     const fetchFn = async (url, init) => {
+      assert.equal(init.headers.authorization, 'Bearer fixture-token');
       const body = JSON.parse(String(init.body));
       if (String(url).endsWith('/v1/signing-keys/resolve')) {
-        return {
-          ok: true,
-          async json() {
-            return {
-              public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256,
-            };
-          },
-        };
+        return Response.json({ public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256 });
       }
       if (String(url).endsWith('/v1/sign')) {
         assert.equal(body.tenant_id, TENANT);
         assert.equal(body.key_reference, KMS_KEY_REF);
         assert.equal(body.algorithm, 'ed25519');
         assert.match(body.digest, /^[a-f0-9]{64}$/);
-        return {
-          ok: true,
-          async json() {
-            return {
-              signature: localSigned.signed.signature,
-              public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256,
-            };
-          },
-        };
+        return Response.json({ signature: localSigned.signed.signature,
+          public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256 });
       }
-      return { ok: false, status: 404, async json() { return {}; } };
+      return Response.json({}, { status: 404 });
     };
 
     const kmsEnv = {
-      ASTRANULL_KMS_SIGNING_ENDPOINT: 'https://kms.example.test',
       ...env,
+      NODE_ENV: 'production',
+      ASTRANULL_KMS_SIGNING_ENDPOINT: 'https://kms.example.test',
+      ASTRANULL_KMS_SIGNING_ALLOWED_ORIGINS: 'https://kms.example.test',
+      ASTRANULL_KMS_SIGNING_BEARER_TOKEN: 'fixture-token',
     };
     const adapter = createEvidenceSigningKmsAdapter({ env: kmsEnv, fetchFn });
     assert.equal(adapter.mode, 'kms');
@@ -214,6 +211,7 @@ describe('evidence signing KMS adapter', () => {
       keyReference: KMS_KEY_REF,
       algorithm: 'ed25519',
       signingAdapter: adapter,
+      env: kmsEnv,
     });
     assert.equal(signed.error, undefined);
     assert.equal(signed.signed.signing_source, 'kms');
@@ -230,29 +228,12 @@ describe('evidence signing KMS adapter', () => {
       keyReference: KEY_REF,
       algorithm: 'ed25519',
       signingAdapter: localAdapter,
+      env,
     });
 
-    const fetchFn = async (url) => {
-      if (String(url).endsWith('/v1/sign')) {
-        return {
-          ok: true,
-          async json() {
-            return {
-              signature: localSigned.signed.signature,
-              public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256,
-            };
-          },
-        };
-      }
-      return {
-        ok: true,
-        async json() {
-          return {
-            public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256,
-          };
-        },
-      };
-    };
+    const fetchFn = async (url) => Response.json(String(url).endsWith('/v1/sign')
+      ? { signature: localSigned.signed.signature, public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256 }
+      : { public_key_fingerprint_sha256: localSigned.signed.public_key_fingerprint_sha256 });
 
     const result = await signEvidenceSnapshotCustody(
       { tenantId: TENANT, userId: 'usr_soc', role: 'soc' },

@@ -2,6 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { getCheckById } from '../../src/contracts/checks.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
 import { decodeCursor } from '../../src/lib/cursorPagination.mjs';
 import { closePgPool, createPgPool } from '../../src/persistence/postgres/pool.mjs';
@@ -322,7 +323,7 @@ describe('declared-host analytics API', () => {
       const exact = await get(baseUrl, `/v1/checks/${MARKER}`);
       assert.equal(exact.status, 200, exact.text);
       assert.equal(exact.json.check.check_id, MARKER);
-      assert.equal(exact.json.check.version, '1.1.0');
+      assert.equal(exact.json.check.version, getCheckById(MARKER).version);
       assert.equal(exact.json.check.supported_targets.includes('fqdn'), true);
       assert.equal(typeof exact.json.check.section_id, 'string');
       assert.equal((await get(baseUrl, '/v1/checks/missing.check.safe')).status, 404);

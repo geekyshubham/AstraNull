@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { CHECK_CATALOG, customerSelectableChecks } from '../../src/contracts/checks.mjs';
+import { CHECK_CATALOG, customerSelectableChecks, checkRequiresAdditionalInput } from '../../src/contracts/checks.mjs';
+import { coverageFrom } from '../../src/lib/protectionCoverage.mjs';
 import { MAX_SCAN_CHECKS, MAX_SCAN_STEPS, planScanSteps } from '../../src/contracts/validationScanManagement.mjs';
 import {
   CHECK_CATEGORIES,
@@ -16,6 +17,7 @@ import {
   retainedCoveragePairs,
   runAllChecks,
   individualChecks,
+  originRelationCheckEligible,
   assessmentChecks,
   targetCheckRequirement,
   shouldAutoDetectEdge,
@@ -44,9 +46,11 @@ function row(rows, id) {
 describe('run-all check set for a domain', () => {
   const runAll = runAllChecks(CATALOG, DOMAIN);
 
-  it('runs origin first and keeps provider-only detection outside readiness checks', () => {
+  it('includes only currently graded checks and keeps origin candidates first when any are eligible', () => {
     assert.ok(!runAll.some((check) => check.check_id === EDGE_DETECTION_CHECK_ID));
-    assert.equal(runAll[0].vector_family, 'origin');
+    const originCount = runAll.filter((check) => check.vector_family === 'origin').length;
+    assert.ok(runAll.slice(0, originCount).every((check) => check.vector_family === 'origin'));
+    assert.ok(!runAll.some((check) => check.check_id === 'origin.leak_scan.safe'), 'observational leak scan is not readiness proof');
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E1' && check.probe_profile?.kind !== 'metadata_marker'));
     assert.ok(runAll.every((check) => check.evidence_tier !== 'E2'));
     assert.ok(runAll.every((check) => check.probe_profile?.kind !== 'ops_readiness'));
@@ -83,7 +87,7 @@ describe('per-check status rows', () => {
       ],
     };
     const rows = buildCheckRows({ checks, scan });
-    assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).status, 'passed');
+    assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).status, 'observed', 'legacy positive fingerprint fields never claim current protection');
     assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).explanation, 'Blocked at the edge.');
     assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).requestsSent, 9);
     assert.equal(row(rows, 'waf.marker_rule.safe').status, 'running');
@@ -101,9 +105,9 @@ describe('per-check status rows', () => {
       { id: 'run_x', check_id: 'waf.marker_rule.safe', status: 'completed', started_at: '2030-01-02T00:00:00.000Z', verdict: { verdict: 'protected', evidence_ids: [] } },
     ];
     const rows = buildCheckRows({ checks, scan, runs });
-    assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).status, 'failed');
+    assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).status, 'observed', 'provider observations do not become graded gaps');
     assert.equal(row(rows, EDGE_DETECTION_CHECK_ID).runId, 'run_new');
-    assert.equal(row(rows, 'waf.marker_rule.safe').status, 'inconclusive');
+    assert.equal(row(rows, 'waf.marker_rule.safe').status, 'observed');
     assert.equal(row(rows, 'origin.leak_scan.safe').status, 'not_run');
   });
 
@@ -114,12 +118,14 @@ describe('per-check status rows', () => {
     assert.doesNotMatch(rendered.name, /\bAPI\b/);
   });
 
-  it('groups rows by category with failures first', () => {
+  it('groups rows by category with current graded failures first and observations separate', () => {
+    const protectedCheck = byId('waf.http_method_policy_marker.safe');
+    const exposedCheck = byId('waf.crlf_injection_marker.safe');
     const scan = { steps: [
-      { check_id: EDGE_DETECTION_CHECK_ID, status: 'verdicted', verdict: { verdict: 'edge_protected' } },
-      { check_id: 'waf.marker_rule.safe', status: 'verdicted', verdict: { verdict: 'edge_exposed' } },
+      { check_id: protectedCheck.check_id, status: 'verdicted', verdict: { verdict: 'edge_protected', evidence_ids: ['evt_protected'] } },
+      { check_id: exposedCheck.check_id, status: 'verdicted', verdict: { verdict: 'edge_exposed', evidence_ids: ['evt_exposed'] } },
     ] };
-    const groups = groupRowsByCategory(buildCheckRows({ checks, scan }));
+    const groups = groupRowsByCategory(buildCheckRows({ checks: [...checks, protectedCheck, exposedCheck], scan }));
     assert.equal(groups[0].category.id, 'waf');
     assert.equal(groups[0].rows[0].status, 'failed');
     assert.equal(groups[0].counts.passed, 1);
@@ -223,7 +229,7 @@ it('individual selection retains compatible observations without adding them to 
 });
 
 it('full assessments include every compatible automatic network check, while readiness ignores observations', () => {
-  const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: ['host_sni_bypass'].includes(check.probe_profile?.kind) || check.required_customer_setup?.some((value) => value.startsWith('declared_') && value.endsWith('_probe_path')) }));
+  const full = CHECK_CATALOG.map((check) => ({ ...check, requires_additional_input: checkRequiresAdditionalInput(check) }));
   const assessment = assessmentChecks(full, DOMAIN);
   assert.equal(assessment[0].check_id, EDGE_DETECTION_CHECK_ID);
   assert.deepEqual(new Set(assessment.map((check) => check.check_id)), new Set(individualChecks(CATALOG, DOMAIN).map((check) => check.check_id)));
@@ -235,4 +241,69 @@ it('full assessments include every compatible automatic network check, while rea
   assert.match(targetCheckRequirement({ ...byId('origin.leak_scan.safe'), requires_additional_input: true }, DOMAIN), /Declare/);
   assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), risk_class: 'soc_gated' }, DOMAIN), /SOC approval/);
   assert.match(targetCheckRequirement({ ...byId(EDGE_DETECTION_CHECK_ID), supported_targets: ['ip'] }, DOMAIN), /compatible endpoint/);
+});
+
+
+describe('origin relation check approval is separate from readiness eligibility', () => {
+  const target = { id: 'tgt_origin', kind: 'ip', value: '203.0.113.10' };
+  const { coverage } = coverageFrom({ target, catalog: CHECK_CATALOG });
+  const check = CHECK_CATALOG.find((item) => item.check_id === 'origin.direct_bypass.safe');
+  const pair = coverage.pairs.find((item) => item.check_id === check.check_id);
+
+  it('offers exact compatible E2 origin definitions without granting readiness credit or changing pairs', () => {
+    const before = structuredClone(pair);
+    assert.equal(check.evidence_tier, 'E2');
+    assert.equal(pair.exclusion_reason, 'observation_only');
+    assert.equal(pair.launchable, null, 'runtime authorization is still unevaluated');
+    assert.equal(originRelationCheckEligible(check, target, pair), true);
+    assert.deepEqual(pair, before);
+    assert.equal(originRelationCheckEligible(check, target, { ...pair, exclusion_reason: 'setup_required' }), true);
+  });
+
+  it('rejects mismatched target/check, missing metadata, incompatible or gated definitions', () => {
+    for (const invalid of [null, { ...pair, target_id: 'other' }, { ...pair, check_id: 'other' }, { ...pair, mechanism: 'metadata_marker' }]) {
+      assert.equal(originRelationCheckEligible(check, target, invalid), false);
+    }
+    for (const invalid of [null, { ...check, supported_targets: ['fqdn'] }, { ...check, supported_targets: [] }, { ...check, safety_class: 'soc' }, { ...check, risk_class: 'soc_gated' }, { ...check, safety_constraints: { customer_runnable: false } }, { ...check, probe_profile: { kind: 'metadata_marker' } }, { ...check, mechanism_supported: false }]) {
+      assert.equal(originRelationCheckEligible(invalid, target, pair), false);
+    }
+    const hostnameOnly = CHECK_CATALOG.find((item) => item.check_id === 'origin.host_sni_bypass.safe');
+    assert.equal(coverage.pairs.some((item) => item.check_id === hostnameOnly.check_id), false);
+    assert.equal(originRelationCheckEligible(hostnameOnly, target, { ...pair, check_id: hostnameOnly.check_id }), false);
+  });
+});
+
+
+it('never derives an alert callback or automatic assessment scope from catalog metadata alone', () => {
+  const alert = CHECK_CATALOG.find((check) => check.check_id === 'ops.alert_workflow_marker.safe');
+  assert.equal(checkRequiresAdditionalInput(alert), true);
+  for (const input of [alert, { ...alert, requires_additional_input: true }, { ...alert, requires_additional_input: false }]) {
+    assert.deepEqual(assessmentChecks([input], DOMAIN), []);
+    assert.deepEqual(individualChecks([input], DOMAIN), []);
+    assert.match(targetCheckRequirement(input, DOMAIN), /approved signed alert-webhook scope/);
+  }
+});
+
+
+it('keeps unsupported mechanisms out of individual and automatic checks even on legacy flag projections', () => {
+  const unsupported = CHECK_CATALOG.filter((check) => check.mechanism_supported === false || check.probe_profile?.delivery_supported === false || check.probe_profile?.execution_supported === false);
+  for (const target of [DOMAIN, { id: 'ip', kind: 'ip', value: '203.0.113.10' }]) {
+    assert.deepEqual(individualChecks(unsupported, target), []);
+    assert.deepEqual(assessmentChecks(unsupported, target), []);
+  }
+  const ipp = CHECK_CATALOG.find((check) => check.check_id === 'reflect.ipp_callback_exposure.safe');
+  const { mechanism_supported, ...legacy } = ipp;
+  assert.deepEqual(individualChecks([legacy], DOMAIN), [], 'profile delivery flag remains authoritative if top-level flag is absent');
+  const sample = { ...CHECK_CATALOG.find((check) => check.check_id === EDGE_DETECTION_CHECK_ID), probe_profile: { kind: 'waf_fingerprint' }, mechanism_supported: true };
+  for (const flag of [{ mechanism_supported: false }, { probe_profile: { kind: 'waf_fingerprint', delivery_supported: false } }, { probe_profile: { kind: 'waf_fingerprint', execution_supported: false } }]) assert.deepEqual(assessmentChecks([{ ...sample, ...flag }], DOMAIN), []);
+});
+
+it('category guidance confines claims to bounded outside-in observations', () => {
+  assert.match(CHECK_CATEGORIES.waf.how, /does not establish internal application receipt/);
+  assert.match(CHECK_CATEGORIES.origin.how, /declared alternate endpoint/);
+  assert.match(CHECK_CATEGORIES.origin.how, /response alone does not identify your application, confirm bypass, or prove origin lockdown/);
+  assert.doesNotMatch(CHECK_CATEGORIES.origin.how, /bypass the WAF and CDN entirely/);
+  assert.match(CHECK_CATEGORIES.reflection.how, /Silence does not establish/);
+  assert.match(CHECK_CATEGORIES.amplification.how, /does not establish amplification or flood capacity/);
+  assert.match(CHECK_CATEGORIES.path.how, /does not confirm arrival or protection inside/);
 });

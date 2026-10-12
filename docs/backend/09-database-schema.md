@@ -19,6 +19,12 @@ Org and RBAC primitives. Environments carry `privacy_settings` and `settings_jso
 
 Customer-declared scope (no inventory discovery). Target groups store `safety_policy` and `safe_test_windows` JSON for safe-test guardrails. Targets use `kind` + `value` (fqdn/url/ip_port, etc.).
 
+### Ownership transition history (`0077_ownership_transition_order`)
+
+`target_verifications` remains append-only. The additive migration does not rewrite legacy rows: `target_verification_current` uses exact timestamp order and permits equivalent latest state/source-kind/JSON-source-reference duplicates, but projects conflicting latest authority or malformed/nonfinite/unrepresentable scoped history as `pending`, `source_kind: ownership_ambiguous`, `source_ref: {}`. The view remains tenant-filtered and `security_invoker`; demo/inheritance fallbacks cannot restore that authority.
+
+The insert trigger verifies the current tenant, takes the canonical tenant audit lock before the target row lock, and advances to a whole-millisecond timestamp beyond all same-target history. It rejects invalid input/history and unrepresentable successors with SQLSTATE `23514`, rolling back linked transaction audits. Legacy microseconds are compared before normalization, not treated as equal milliseconds. Expiry/deadline clocks are unchanged; logical ordering never renews permission. Fresh-schema contract and migration are kept identical and validated with mutation tests. Actual local application-role upgrade/concurrency tests preserve complete historical rows; they are not production migration acceptance. See [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md#ownership-chronology-hardening-2026-10-10).
+
 ### bootstrap_tokens
 
 Hashed install secrets with optional environment/target group binding and registration limits.
@@ -44,6 +50,18 @@ Indexes: `uniq_active_validation_scan_per_group` (one pending or running scan pe
 ### probe_jobs
 
 Signed external probe dispatch (`job_signature`, `constraints_json`, `target_descriptor_json`, lease/completion fields). Used when `probeMode=signed-worker`.
+
+### Internal reviewed grant issuance (`0078_reviewed_execution_grant_issuances`)
+
+Local implementation and acceptance are **in progress**; this additive migration has not been applied to production. `reviewed_execution_grant_issuances` permanently consumes one independent signing opportunity per tenant/job, tenant/run and tenant/reservation. Composite job/run/review-plan foreign keys and FORCE RLS preserve tenant lineage. The row stores the original canonical signed job payload and unchanged HMAC signature, exact prepared independent envelope and digests, actual persisted reservation, current assurance-v3/direct-DNS-v2 provenance, and a random completion-token hash. Private keys, worker/bearer secrets and plaintext job nonces are not stored here.
+
+An insert starts `signing_unknown`; only one transition to `issued` or `closed_unknown` is allowed. Original claim fields and terminal history cannot be changed, deleted, reopened, reclaimed or refunded. Typed bounded JSON/clock/budget/digest checks constrain storage, but do not authenticate either signature, prove canonical byte generation or establish current execution authority. The orchestrator must authenticate the actual original HMAC, commit claim plus audit before external signing, revalidate current records and the independent signature afterward, and commit outcome plus audit before returning a grant. An ambiguous outcome leaves the opportunity consumed.
+
+There is no registered grant route or enabled reviewed reservation/execution lifecycle. Ordinary reviewed runtime paths still deny before destination I/O; local tests may seed stored reservations without delivering a reachable reservation workflow. See [proposed ADR-0025](../adr/0025-durable-reviewed-grant-issuance.md) and the [acceptance ledger](../implementation/missing-capabilities-production-acceptance.md) for current test status and limits.
+
+### Held reviewed lifecycle source (not an active migration)
+
+The interrupted `0079_reviewed_safe_execution_lifecycle.sql` is preserved at `docs/implementation/held-source/0079_reviewed_safe_execution_lifecycle.sql`, outside `db/migrations`. It is not discovered by normal startup/migration inventory, is not included in `db/schema.sql`, and must not be applied to make tests pass. Lifecycle implementation was stopped on 2026-10-11; the proposed reservation/claim/acceptance tables are not delivered runtime schema. No production application or rollback was performed. Existing migration `0078` and its internal non-executable issuance boundary are unchanged.
 
 ### agent_jobs
 
@@ -110,6 +128,12 @@ Tenant-scoped release gate evidence records for security review, migration apply
 ## WAF posture tables (`0008_waf_posture`)
 
 Additive schema for WAF readiness validation (see `docs/backend/12-waf-posture-data-model.md`). Approved assets (`waf_assets`) link to declared `target_groups` / `targets`; discovery candidates (`external_asset_candidates`) are not directly testable until approved into targets. Safe validation envelopes (`waf_validation_runs`, `waf_scenario_results`, `waf_fingerprints`) store metadata-only JSONB summaries—no raw payloads, bodies, headers, or packet captures. Posture state (`waf_posture_snapshots`, `waf_baselines`, `waf_drift_events`) and optional read-only connectors (`waf_connectors`, `waf_connector_snapshots`, default `disabled`) normalize vendor config into hashes and summaries. CVE tracking (`cve_pipeline_items`, `cve_asset_matches`) and human-reviewed `waf_rule_recommendations` tie into existing `findings` via composite tenant FKs. Global catalog: `waf_products` (no RLS). `findings` gains `findings_tenant_id_id_key` for drift/CVE links.
+
+### Passive customer CVE declarations (`0076_cve_applicability_reviews`)
+
+`cve_applicability_reviews` persists `cve-component-declaration.v1` plans independently of mutable validation bindings. It binds exact same-tenant item/CVE, asset match/item/asset, and WAF asset through composite foreign keys and new parent lineage keys. Records contain bounded typed component/version/source/reference metadata and material definition digests, never raw support contents or execution permission. JSON checks require customer-declaration classification and false external-applicability/exposure/enforcement/execution flags. Human owner/admin actors and finite timestamps are constrained; tenant/digest uniqueness serializes replay, and a trigger permits only one terminal revocation while preserving immutable history.
+
+The table enables and forces RLS with `app.tenant_id` policies. The isolated PostgreSQL review repository locks current match/item/asset/linked-target definitions and commits review plus audit atomically. Local non-owner/non-BYPASSRLS regressions verify actual isolation, composite FK/check enforcement, concurrent replay/revocation, lock blocking and audit rollback. Supporting hashes/references remain declarations, not authenticated evidence; the service does not backfill or write legacy confirmed applicability, scoring, runs, jobs or reservations. `db/schema.sql` contains the identical additive DDL. Normal operator migration is required; no production migration was run. See [ADR-0024](../adr/0024-customer-cve-applicability-declarations.md) and the [API contract](../api.md#customer-cve-applicability-declaration-reviews).
 
 ### SOC-gated WAF offensive workflow (`0057_waf_offensive_workflow`)
 

@@ -15,10 +15,12 @@ import {
   type PathComparison,
   type PvFailure,
 } from '../../../lib/protection-validation-api';
+import { sessionIdentity } from '../../../lib/api';
 import { ConfirmModal } from '../../../lib/crud-ui';
+import { useOpenInspector } from '../../evidence/use-inspector';
 import { apiErrorMessage } from '../../../lib/error-messages';
 import { expectationConflictLabel } from '../../../lib/expectation-conflicts.mjs';
-import type { DataItem, PortalConfig, Session } from '../../../lib/types';
+import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../../../lib/types';
 import { formatDate } from '../../../lib/utils';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
@@ -87,9 +89,20 @@ export function PathComparisonPanel({
   paths: EntryPath[];
   canStart: boolean;
   ownershipDone: boolean;
-  onStarted: (message: string) => void;
+  onStarted: (message: string, execution?: AcceptedExecution) => void;
 }) {
   const targetId = str(target, 'id');
+  const startScope = JSON.stringify([targetId, sessionIdentity(session), config.authMode, session.mode, session.access_token, session.expires_at]);
+  const startScopeRef = useRef(startScope);
+  startScopeRef.current = startScope;
+  const startGeneration = useRef(0);
+  useEffect(() => {
+    startScopeRef.current = startScope;
+    startGeneration.current += 1;
+    return () => { startGeneration.current += 1; startScopeRef.current = ''; };
+  }, [startScope]);
+  const openInspector = useOpenInspector();
+  const [acceptedExecutions, setAcceptedExecutions] = useState<{ scope: string; comparisonId: string; items: AcceptedExecution[] } | null>(null);
   const active = useMemo(() => paths.filter((path) => path.status === 'active'), [paths]);
   const byId = useMemo(() => new Map(paths.map((path) => [path.id, path])), [paths]);
   const [list, setList] = useState<ListState>({ state: 'loading' });
@@ -190,16 +203,35 @@ export function PathComparisonPanel({
 
   async function confirmStart() {
     if (!review) return;
+    const submittedScope = startScope;
+    const submittedGeneration = startGeneration.current;
+    const current = () => startScopeRef.current === submittedScope && startGeneration.current === submittedGeneration;
     setBusy(true);
     setError('');
     try {
       const started = await startEntryPathComparison(config, session, review.request, review.plan.plan_digest);
+      if (!current()) return;
       setReview(null);
       setComposing(false);
-      if (started.id) setSelectedId(started.id);
+      if (!started.id) { setError('The comparison start was accepted without a recorded comparison ID. No historical comparison or run was substituted.'); return; }
+      if (started.anchor_target_id !== targetId || started.primary_entry_path_id !== review.plan.primary_entry_path_id || started.plan_digest !== review.plan.plan_digest) { setError('The accepted comparison did not match the reviewed target/plan. No other execution was substituted.'); return; }
+      setSelectedId(started.id);
       setReload((value) => value + 1);
-      onStarted('Reviewed comparison started. Each path runs as its own bounded check; results appear here once finalized.');
+      const executions: AcceptedExecution[] = [];
+      for (const item of started.items) {
+        if (!item.test_run_id) continue;
+        const planned = review.plan.items.find((candidate) => candidate.entry_path_id === item.entry_path_id && candidate.eligible);
+        if (!planned?.target_id || !planned.check_id) { setError('An accepted comparison execution was not bound to the reviewed plan. No other run was substituted.'); return; }
+        executions.push({ runId: item.test_run_id, checkId: planned.check_id, targetId: planned.target_id });
+      }
+      setAcceptedExecutions({ scope: submittedScope, comparisonId: started.id, items: executions });
+      const primaryRunId = started.items.find((item) => item.entry_path_id === started.primary_entry_path_id)?.test_run_id;
+      const focused = executions.find((execution) => execution.runId === primaryRunId) ?? executions[0];
+      onStarted(focused
+        ? 'Reviewed comparison accepted. The Inspector follows an exact returned child execution; each path retains its own result.'
+        : 'Reviewed comparison accepted, but no child execution ID was returned yet. No historical run was substituted; use this exact comparison to read recorded progress.', focused);
     } catch (err) {
+      if (!current()) return;
       const code = pvErrorCode(err);
       setError(writeErrorCopy(code, apiErrorMessage(err, 'The comparison could not start. Nothing was started.')));
       if (code === 'reviewed_plan_mismatch') {
@@ -207,7 +239,7 @@ export function PathComparisonPanel({
         void reviewPlan(review.request);
       }
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 
@@ -259,6 +291,20 @@ export function PathComparisonPanel({
       {startBlocker && !composing ? <p className="td-muted small">{startBlocker}</p> : null}
       {message ? <p className="form-banner" role="status">{message}</p> : null}
       {error && !review && !stopOpen ? <p className="td-form-error" role="alert">{error}</p> : null}
+
+      {acceptedExecutions?.scope === startScope && acceptedExecutions.comparisonId === selectedId && acceptedExecutions.items.length ? (
+        <div className="pv-card" role="region" aria-label="Accepted comparison executions">
+          <strong>Exact accepted executions</strong>
+          <ul className="pv-refs">
+            {acceptedExecutions.items.map((execution) => (
+              <li className="pv-ref" key={execution.runId}>
+                <code className="pv-break">{execution.runId} · {execution.checkId} · {execution.targetId}</code>
+                <Button size="sm" variant="ghost" data-focus-key={`comparison-run-${execution.runId}`} onClick={() => openInspector({ entry: 'check_result', target_id: execution.targetId, check_id: execution.checkId, test_run_id: execution.runId }, `comparison-run-${execution.runId}`)}>Inspect execution {execution.runId}</Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {composing ? (
         <form className="pv-form" noValidate onSubmit={(event) => { event.preventDefault(); void reviewPlan(requestFromDraft()); }} aria-labelledby="pv-compose-title">

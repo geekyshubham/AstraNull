@@ -44,7 +44,7 @@ export const PATH_UNRESOLVED_OUTCOMES = Object.freeze(['inconclusive', 'not_test
 export const FIREWALL_UNRESOLVED_STATUSES = Object.freeze(['inconclusive', 'not_tested', 'stale', 'not_comparable']);
 
 function hasFinalizedEvidence(item) {
-  return Array.isArray(item?.evidence_refs) && item.evidence_refs.some((ref) => ref && ref.finalized !== false);
+  return Array.isArray(item?.evidence_refs) && item.evidence_refs.length > 0 && item.evidence_refs.every((ref) => ref?.finalized === true && Array.isArray(ref.evidence_ids) && ref.evidence_ids.length > 0 && Number.isFinite(Date.parse(ref.observed_at ?? '')));
 }
 
 export function isUnavailableEvidenceItem(kind, item) {

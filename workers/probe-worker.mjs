@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { writeFileSync } from 'node:fs';
 import {
   CAPABILITY_PROBE_DISPATCH,
+  capabilityProbeNoDeliveryOutcome,
   executeCapabilityProbe,
   minimumProbeRequestsForKind,
 } from '../src/lib/capabilityProbes.mjs';
@@ -19,6 +20,7 @@ import { pinnedFetch, resolvePinnedDestination } from '../src/lib/pinnedHttpRequ
 import { createProbePreAttempt, startProbeIoAttempt } from '../src/lib/probeAttempt.mjs';
 import {
   parseNetworkEndpoint,
+  networkProbeNoDeliveryOutcome,
   probeAlertWebhookPing,
   probeHttp2Settings,
   probeQuicReachability,
@@ -33,6 +35,7 @@ import { resolveDeploymentProfile } from '../src/lib/deploymentProfile.mjs';
 import {
   initialDestinationResolverAttemptsForJob,
   maxDestinationResolverAttemptsForJob,
+  probeAuthority,
 } from '../src/lib/probeJobs.mjs';
 import { assertProbeDestinationAllowed } from '../src/lib/probeEndpoint.mjs';
 import { validateHmacSecretEntropy } from '../src/lib/evidenceSigning.mjs';
@@ -152,6 +155,9 @@ export function parseWorkerConfig(argv = process.argv.slice(2), env = process.en
     );
   }
 
+  if (env.ASTRANULL_REVIEWED_SAFE_EXECUTION_ENABLED === '1') {
+    throw new Error('Reviewed operation execution remains unavailable.');
+  }
   return {
     apiUrl: apiUrl.replace(/\/$/, ''),
     workerId: String(workerId),
@@ -168,7 +174,7 @@ export function workerSigningPath(_apiUrl, routePath) {
   return routePath;
 }
 
-async function signedFetch(config, method, path, body) {
+async function signedFetch(config, method, path, body, options = {}) {
   const bodyText = body == null ? '' : JSON.stringify(body);
   const fullPath = workerSigningPath(config.apiUrl, path);
   const headers = {
@@ -186,7 +192,7 @@ async function signedFetch(config, method, path, body) {
     method,
     headers,
     body: body == null ? undefined : bodyText,
-    signal: AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(Math.min(CONTROL_REQUEST_TIMEOUT_MS, options.timeoutMs ?? CONTROL_REQUEST_TIMEOUT_MS)),
   });
   const text = await res.text();
   let json;
@@ -226,7 +232,8 @@ function signedProbeTimeoutMs(job) {
 
 function createProbeDeadline(job) {
   const startedNs = process.hrtime.bigint();
-  const timeoutMs = signedProbeTimeoutMs(job);
+  const authority = job?.constraints?.authority_version ? probeAuthority(job) : null;
+  const timeoutMs = authority ? Math.max(0, Math.min(signedProbeTimeoutMs(job), Math.floor(authority.remaining_ms))) : signedProbeTimeoutMs(job);
   const deadlineNs = startedNs + BigInt(timeoutMs) * NANOSECONDS_PER_MILLISECOND;
   const controller = new AbortController();
   const timer = setTimeout(
@@ -310,6 +317,8 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'marker_probes',
   'marker_results',
   'variant_results',
+  'reviewed_execution.legs',
+  'reviewed_execution.legs.snapshot.header_names',
   'variants',
   'phases',
   'methods_used',
@@ -733,9 +742,14 @@ export async function probeHttpHead(job, deps = {}) {
 
   const started = Date.now();
   const controller = new AbortController();
+  const upstreamSignal = deps.jobDeadlineSignal;
+  const onAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) onAbort();
+  else upstreamSignal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let requestsSent = 0;
   try {
+    controller.signal.throwIfAborted();
     const sensitiveHeaders = {};
     if (job.nonce) sensitiveHeaders['x-astranull-nonce'] = job.nonce;
     const marker = job.probe_profile?.marker;
@@ -847,6 +861,7 @@ export async function probeHttpHead(job, deps = {}) {
     };
   } finally {
     clearTimeout(timer);
+    upstreamSignal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -991,6 +1006,8 @@ export async function probeTcpConnect(job, deps = {}) {
               probe_kind: 'tcp_connect',
               duration_ms: durationMs,
               target_port: endpoint.port,
+              observation_complete: requestsSent === 1,
+              pinned_address: pinned.address,
             }),
             requests_sent: requestsSent,
             duration_ms: durationMs,
@@ -1012,6 +1029,9 @@ export async function probeTcpConnect(job, deps = {}) {
           probe_kind: 'tcp_connect',
           error_class: 'timeout',
           duration_ms: durationMs,
+          target_port: endpoint.port,
+          observation_complete: requestsSent === 1,
+          pinned_address: pinned.address,
         }),
         requests_sent: requestsSent,
         duration_ms: durationMs,
@@ -1032,6 +1052,9 @@ export async function probeTcpConnect(job, deps = {}) {
           probe_kind: 'tcp_connect',
           error_class: code || 'connect_failed',
           duration_ms: durationMs,
+          target_port: endpoint.port,
+          observation_complete: requestsSent === 1,
+          pinned_address: pinned.address,
         }),
         requests_sent: requestsSent,
         duration_ms: durationMs,
@@ -1258,6 +1281,10 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
     };
   }
 
+  const noDelivery = await capabilityProbeNoDeliveryOutcome(job, deps)
+    ?? await networkProbeNoDeliveryOutcome(job, deps);
+  if (noDelivery) return noDelivery;
+
   // Destination chokepoint. Metadata markers send no packets. DNS wire/DNSSEC helpers
   // classify and pin the authoritative nameserver after their counted NS lookup.
   // Other helpers must clear the classifier here before transport is touched.
@@ -1320,6 +1347,15 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
 }
 
 export async function executeProbeForJob(job, deps = {}) {
+  const reviewed = Object.hasOwn(job?.constraints ?? {}, 'reviewed_operation_binding');
+  if (reviewed) {
+    const noIo = (reason) => ({ external_result: 'error', metadata: { probe_kind: job.probe_profile?.kind ?? 'unknown',
+      error_class: reason, not_run: true }, requests_sent: 0, probe_requests_sent: 0, destination_resolver_attempts: 0, total_operations: 0, duration_ms: 0 });
+    return noIo('reviewed_operation_execution_unavailable');
+  } else {
+    // A caller-created flag cannot select the reviewed producer on an ordinary job.
+    deps = { ...deps }; delete deps.reviewedClaim;
+  }
   const timing = createProbeDeadline(job);
   let providerObservation = null;
   const cancel = () => timing.controller.abort(Object.assign(new Error('Probe stopped.'), { code: 'probe_stopped' }));
@@ -1392,6 +1428,7 @@ export async function executeProbeForJob(job, deps = {}) {
     observedJobDurationMs: () => timing.durationMs(),
     onProviderObservation: (metadata) => { providerObservation = metadata; },
     recordProbeLogicalAttempt,
+    reviewedProbeAttempts: () => accounting.probeLogicalAttempts,
     beforeProbeIoAttempt,
     recordDestinationResolverAttempt: () => {
       assertCanAttempt();
@@ -1460,10 +1497,15 @@ export async function processJob(config, job, deps = {}) {
     );
   }
 
+  const authority = probeAuthority(job);
+  if (!authority.ok) {
+    emitProbeActivity(deps, { stage: 'request_not_sent', operation: job.probe_profile?.kind ?? 'probe', reason: authority.reason });
+    return buildResultBody(job, 'error', { probe_kind: job.probe_profile?.kind ?? 'unknown',
+      error_class: authority.reason, not_run: true }, { requests_sent: 0, duration_ms: 0 });
+  }
   emitProbeActivity(deps, { stage: 'job_started', operation: job.probe_profile?.kind ?? 'probe' });
   const outcome = await executeProbeForJob(job, {
     ...deps,
-    probeWorkerSecret: config.secret,
     signedJobVerified: true,
   });
   if ((outcome.probe_requests_sent ?? outcome.requests_sent) === 0) {
@@ -1515,14 +1557,36 @@ export async function pollAndProcessOnce(config) {
   }
   const jobs = listed.json?.jobs ?? [];
   return processLeasedProbeBatch(jobs, async (job) => {
+    const reviewed = Object.hasOwn(job?.constraints ?? {}, 'reviewed_operation_binding');
+    if (reviewed) {
+      return { job_id: job.id, external_result: 'not_run', reason: 'reviewed_operation_execution_unavailable' };
+    }
     const cancellation = new AbortController();
+    const authority = probeAuthority(job);
+    if (verifyProbeJobSignature(job, config.secret) && authority.ok) {
+      const grant = await signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/execute`, { leased_at: job.leased_at });
+      if (grant.status !== 201 || grant.json?.authorized !== true || !grant.json?.reservation_id
+        || grant.json?.not_after !== authority.not_after) {
+        return { job_id: job.id, external_result: 'not_run', reason: grant.json?.error ?? 'probe_execution_not_authorized' };
+      }
+    }
+    let stopReason = 'worker_cancelled';
     const reporter = createProbeActivityReporter(job,
-      (batch) => signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/activity`, batch),
-      { onStop: () => cancellation.abort() });
+      (batch) => signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/activity`, batch, { timeoutMs: 1500 }),
+      { onStop: ({ reason }) => { stopReason = reason; cancellation.abort(); } });
     let body;
     try { body = await processJob(config, job, { onProbeActivity: reporter.record, cancellationSignal: cancellation.signal }); }
     finally { await reporter.close(); }
-    if (cancellation.signal.aborted) return { job_id: job.id, external_result: 'stopped' };
+    if (cancellation.signal.aborted) {
+      let acknowledged = false;
+      try {
+        const ack = await signedFetch(config, 'POST', `/internal/probe/jobs/${job.id}/stop`, {
+          leased_at: job.leased_at, reason: stopReason, capture: reporter.snapshot(),
+        }, { timeoutMs: 1500 });
+        acknowledged = ack.status === 201 && ack.json?.acknowledged === true;
+      } catch { /* A partition cannot be reported as a measured Stop acknowledgment. */ }
+      return { job_id: job.id, external_result: 'stopped', stop_acknowledged: acknowledged };
+    }
     const resultPath = `/internal/probe/jobs/${job.id}/result`;
     const posted = await signedFetch(config, 'POST', resultPath, body);
     if (isPermanentResultRejection(posted.status)) {

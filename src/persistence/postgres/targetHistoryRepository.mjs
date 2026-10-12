@@ -273,7 +273,8 @@ export function createTargetHistoryRepository(pool) {
           [ctx.tenantId, targetIds],
         );
         const verifications = await client.query(
-          `SELECT id, tenant_id, target_id, state, source_kind, source_ref, transitioned_at, transitioned_by
+          `SELECT id, tenant_id, target_id, state, source_kind, source_ref,
+                  ${exact('transitioned_at')} AS transitioned_at, transitioned_by
            FROM target_verifications
            WHERE tenant_id = $1 AND target_id = ANY($2::text[])`,
           [ctx.tenantId, targetIds],

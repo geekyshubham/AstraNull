@@ -71,7 +71,17 @@ export function listServiceAccounts(ctx) {
 export function revokeServiceAccount(ctx, id) {
   const store = getStore();
   const account = store.serviceAccounts.find((a) => a.id === id && a.tenant_id === ctx.tenantId);
-  if (!account) return null;
+  if (!account) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'service_account.mutation_not_found',
+      resource_type: 'service_account',
+      resource_id: id,
+    });
+    return null;
+  }
   account.revoked_at = new Date().toISOString();
   audit({
     tenant_id: ctx.tenantId,
@@ -88,7 +98,17 @@ export function revokeServiceAccount(ctx, id) {
 export function rotateServiceAccount(ctx, id) {
   const store = getStore();
   const account = store.serviceAccounts.find((a) => a.id === id && a.tenant_id === ctx.tenantId);
-  if (!account) return null;
+  if (!account) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'service_account.mutation_not_found',
+      resource_type: 'service_account',
+      resource_id: id,
+    });
+    return null;
+  }
   if (account.revoked_at) {
     return {
       error: 'service_account_revoked',

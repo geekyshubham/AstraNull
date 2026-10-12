@@ -116,9 +116,11 @@ describe('D6: one filtered port no longer ends the bounded port scan', () => {
     assert.ok(outcome.duration_ms <= 600, String(outcome.duration_ms));
   });
 
-  it('runs the catalog scan with the 5 s job ceiling at version 1.1.0', () => {
+  it('runs the catalog scan with the unchanged 5 s ceiling and revised observation semantics', () => {
     const check = CHECK_CATALOG.find((row) => row.check_id === 'l3.firewall_exposure_scan.safe');
-    assert.equal(check.version, '1.1.0');
+    assert.equal(check.version, '1.1.1');
+    assert.equal(check.probe_profile.observation_only, true);
+    assert.equal(check.probe_profile.readiness_conclusion, false);
     assert.equal(check.probe_profile.timeout_ms, 5000);
   });
 });
@@ -132,18 +134,19 @@ describe('D7: a completed TLS 1.3 handshake is a TLS profile observation, not an
       probeIoObserved: true,
       probeMetadata: { tls_protocol: 'TLSv1.3', authorized: true, tls_issues: [] },
     });
-    assert.equal(verdict.verdict, 'protected');
+    assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(verdict.createsFinding, false);
     assert.equal(/blocked at the edge/i.test(verdict.explanation), false);
   });
 
-  it('reports profile issues as a TLS exposure', () => {
+  it('does not turn TLS configuration issues into edge protection or exposure assurance', () => {
     const verdict = correlateExternalOnlyVerdict({
       externalResult: 'connected', expectedBehavior: 'must_block_before_origin', probeKind: 'tls_audit', probeIoObserved: true,
       probeMetadata: { tls_protocol: 'TLSv1', tls_issues: ['weak_tls_protocol'] },
     });
-    assert.equal(verdict.verdict, 'exposed');
-    assert.match(verdict.explanation, /weak_tls_protocol/);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.createsFinding, false);
+    assert.match(verdict.explanation, /transport or liveness metadata only/);
   });
 });
 
@@ -168,15 +171,15 @@ describe('D9: web service ports alone are not a firewall exposure', () => {
     probeMetadata: { open_ports: openPorts, filtered_ports: [22, 3389], closed_ports: [] },
   });
 
-  it('records an open 443 as expected without a finding', () => {
+  it('does not equate an open 443 with expected firewall behavior', () => {
     const verdict = verdictFor([443]);
-    assert.equal(verdict.verdict, 'allowed_as_expected');
+    assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(verdict.createsFinding, false);
   });
 
-  it('still raises an exposure when an admin port is open', () => {
+  it('does not infer edge exposure from an admin port without a scoped policy comparison', () => {
     const verdict = verdictFor([443, 22]);
-    assert.equal(verdict.verdict, 'edge_exposed');
-    assert.equal(verdict.createsFinding, true);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.createsFinding, false);
   });
 });

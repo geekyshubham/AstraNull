@@ -94,6 +94,10 @@ import {
 } from './entryPathComparisonServiceAdapters.mjs';
 import { createProtectionRetestAuthorizer } from '../../services/protectionValidationRetest.mjs';
 import { probeSourceResolverFromEnv } from '../../lib/probeSourcePerspective.mjs';
+import { createReviewedOperationRepository } from './reviewedOperationRepository.mjs';
+import { createReviewedOperationService } from '../../services/reviewedOperations.mjs';
+import { createCveApplicabilityReviewRepository } from './cveApplicabilityReviewRepository.mjs';
+import { createCveApplicabilityReviewService } from '../../services/cveApplicabilityReviews.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -292,6 +296,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const authServices = createPostgresAuthServices(repositories, options.authServiceOptions);
     const passwordAuthServices = createPostgresPasswordAuthServices(repositories);
     let protectionRetestAuthorizer = null;
+    const reviewedOperationBackend = createReviewedOperationRepository(pool, repositories.audit);
     const validationServices = createPostgresValidationServices(repositories, {
       resolveProtectionRetestAuthorization: (ctx, finding) => protectionRetestAuthorizer?.(ctx, finding) ?? null,
     });
@@ -358,6 +363,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     });
     const probeJobServices = createPostgresProbeJobServices(repositories, {
       ownershipVerification: ownershipVerificationBase,
+      resolveSourcePerspective: probeSourceResolverFromEnv(env),
     });
     const highScaleServices = createPostgresHighScaleServices(repositories, {
       notifications: notificationServices,
@@ -470,7 +476,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       evidence: createPostgresFirewallEvidenceReader(pool),
       resolveSourcePerspective: probeSourceResolverFromEnv(env),
       comparisons: entryPathComparisons,
-      findings: createPostgresProtectionFindingsRepository(pool, { audit: repositories.audit }),
+      findings: createPostgresProtectionFindingsRepository(pool, { audit: repositories.audit, notifications: notificationServices }),
     });
     const services = {
       ...catalogServices,
@@ -534,6 +540,8 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         }),
       },
       protectionValidation,
+      reviewedOperations: createReviewedOperationService({ backend: reviewedOperationBackend }),
+      cveApplicabilityReviews: createCveApplicabilityReviewService({ backend: createCveApplicabilityReviewRepository(pool, repositories.audit) }),
       ...(entryPathComparisons ? { entryPathComparisons } : {}),
       loa: portalRevampServices.loa,
       targetDetail: portalRevampServices.targetDetail,

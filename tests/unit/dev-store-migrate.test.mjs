@@ -141,6 +141,7 @@ describe('dev store migration', () => {
     assert.deepEqual(after.wafConnectorSnapshots, []);
     assert.deepEqual(after.cvePipelineItems, []);
     assert.deepEqual(after.cveAssetMatches, []);
+    assert.deepEqual(after.cveApplicabilityReviews, []);
     assert.deepEqual(after.wafRuleRecommendations, []);
     assert.deepEqual(after.discoveryEntities, []);
     assert.deepEqual(after.discoveryCandidates, []);
@@ -317,6 +318,7 @@ describe('dev store migration', () => {
       wafConnectorSnapshots: [],
       cvePipelineItems: [],
       cveAssetMatches: [],
+      cveApplicabilityReviews: [],
       cveMitigationPlaybooks: [],
       wafRuleRecommendations: [],
       discoveryEntities: [],
@@ -342,6 +344,7 @@ describe('dev store migration', () => {
       protectionComparisonBaselines: [],
       protectionComparisonEvaluations: [],
       entryPathComparisons: [],
+      reviewedOperations: [],
     };
     resetStoreForTests(data);
     assert.equal(migrateDevStore(getStore()), false);

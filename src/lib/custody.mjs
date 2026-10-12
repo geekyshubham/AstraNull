@@ -87,7 +87,7 @@ function normalizeForCanonical(value) {
     if (!isPlainObject(value)) {
       throw unsupportedType(value, 'class_instance');
     }
-    const out = {};
+    const out = Object.create(null);
     const keys = Object.keys(value).sort();
     for (const key of keys) {
       const v = value[key];

@@ -62,7 +62,8 @@ export function securityHeaders() {
 }
 
 export function json(res, status, body) {
-  const payload = JSON.stringify(res.targetOnlyPresentation ? presentTargetSelection(body) : body);
+  const responseBody = status >= 400 && res.errorBodyExtensions ? { ...body, ...res.errorBodyExtensions } : body;
+  const payload = JSON.stringify(res.targetOnlyPresentation ? presentTargetSelection(responseBody) : responseBody);
   res.writeHead(status, {
     ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
@@ -147,7 +148,7 @@ function abortOversized(req) {
  * @param {HttpBodyError & { closeConnection?: boolean }} err
  */
 export function respondBodyError(res, err) {
-  const payload = JSON.stringify({ error: err.code });
+  const payload = JSON.stringify({ error: err.code, ...res.errorBodyExtensions });
   // Capture the socket up front: it is already detached by the time the write
   // callback runs, which is how the first attempt at this crashed.
   const socket = res.socket;

@@ -35,8 +35,7 @@ function correlateObservationOnlyVerdict(probeKind) {
 }
 
 function correlateProbeFailure(externalResult, probeKind, metadata) {
-  const knownKindTimedOut = externalResult === 'timeout' && typeof probeKind === 'string';
-  if (!['error', 'not_run'].includes(externalResult) && !knownKindTimedOut) return null;
+  if (!['error', 'not_run', 'timeout'].includes(externalResult)) return null;
   const reason = inconclusiveReason({ externalResult, probeKind, metadata });
   return {
     verdict: 'inconclusive',
@@ -208,12 +207,14 @@ export function correlateExternalOnlyVerdict({
   probeIoObserved = false,
   probeMetadata = {},
 }) {
+  // Coverage-gap explanations are themselves always inconclusive. Keep their precise
+  // CDN/proxy/routing reason without allowing an observational kind to claim assurance.
+  const evidenceGap = correlateEvidenceGap(probeKind, probeMetadata);
+  if (evidenceGap) return evidenceGap;
+
   if (isObservationOnlyProbeKind(probeKind)) {
     return correlateObservationOnlyVerdict(probeKind);
   }
-
-  const evidenceGap = correlateEvidenceGap(probeKind, probeMetadata);
-  if (evidenceGap) return evidenceGap;
 
   const probeFailure = correlateProbeFailure(externalResult, probeKind, probeMetadata);
   if (probeFailure) return probeFailure;
@@ -240,7 +241,7 @@ export function correlateExternalOnlyVerdict({
     if (tlsVerdict) return tlsVerdict;
   }
 
-  const blocked = externalResult === 'blocked' || externalResult === 'timeout';
+  const blocked = externalResult === 'blocked';
   const connected = externalResult === 'connected' || externalResult === 'allowed';
 
   if (probeKind === 'port_scan_bounded' && connected && probeIoObserved === true) {
@@ -252,13 +253,18 @@ export function correlateExternalOnlyVerdict({
     return {
       verdict: 'inconclusive',
       confidence: 'external_only',
-      explanation: 'Blocked/timeout metadata had no attested probe I/O and cannot establish edge protection.',
+      explanation: 'Blocked metadata had no attested probe I/O and cannot establish edge protection.',
       createsFinding: false,
     };
   }
 
   if (probeKind === 'host_sni_bypass' && expectedBehavior === 'must_block_before_origin') {
     return correlateDirectOriginVerdict({ blocked, connected, probeMetadata });
+  }
+
+  if (probeKind === 'waf_evasion_marker_probe' && connected
+    && probeMetadata.assurance_scope === 'inert_marker_rule_action_only') {
+    return evidenceGapVerdict('The transformed inert marker was allowed while its reference marker was blocked. This records a normalization difference for the tested scenario, not application exploitability or confirmed origin exposure.');
   }
 
   if (expectedBehavior === 'must_block_before_origin') {

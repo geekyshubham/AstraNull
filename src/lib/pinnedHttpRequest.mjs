@@ -446,6 +446,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
     let trailers = {};
     let receivedBytes = 0;
     let responseCapture = null;
+    const transientChunks = options.captureResponseBody === true ? [] : null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -480,6 +481,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
         pinnedAddress: pinned.address,
         httpVersion: '2.0',
         responseBytes: receivedBytes,
+        ...(transientChunks ? { responseBody: Buffer.concat(transientChunks, receivedBytes) } : {}),
       };
       closeTransport();
       resolve(result);
@@ -515,6 +517,7 @@ export async function pinnedHttp2Request(urlValue, options = {}, deps = {}) {
           finishReject(Object.assign(new Error('HTTP/2 response exceeds bounded limit'), { code: 'ERESPONSETOOLARGE' }));
           return;
         }
+        transientChunks?.push(Buffer.from(chunk));
         responseCapture?.chunk(chunk);
       });
       stream.once('aborted', () => {

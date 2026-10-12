@@ -123,6 +123,11 @@ function itemState(comparison, id) {
 
 function markerMetadata({ allowed = 0, blocked = 3 } = {}) {
   return {
+    classifier_version: 'marker-comparison-v4',
+    comparison_complete: true,
+    planned_marker_legs: blocked + allowed,
+    completed_marker_legs: blocked + allowed,
+    permitted_baseline_health: 'healthy',
     phases: [{ phase: 'baseline', status_code: 200 }],
     marker_results: [
       ...Array.from({ length: blocked }, (_, i) => ({ phase: `b${i}`, blocked: true, allowed: false, inconclusive: false, status_code: 403 })),

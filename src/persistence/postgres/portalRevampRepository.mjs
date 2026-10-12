@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { dnsOwnershipChallengeMatchesTarget, dnsOwnershipLookupTarget } from '../../lib/dnsOwnershipTarget.mjs';
 import { encodeBase32 } from '../../lib/base32.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
 import {
@@ -13,6 +14,7 @@ import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { isDemoAutoVerifyTenant } from '../../lib/demoAutoVerify.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { presentTargetDeclaration } from '../../lib/targetDeclarations.mjs';
+import { verifiedVerdicts } from '../../lib/readinessProjection.mjs';
 import { currentOriginProof } from '../../services/originBindings.mjs';
 import { attachHistoryReadModel, deriveProtectionProfile, historyReadModel } from '../../services/protectionProfile.mjs';
 import {
@@ -70,6 +72,34 @@ function mapDnsRow(row) {
   };
 }
 
+function dnsLookupBinding(challenge, target, generation, exactClocks = {}) {
+  return {
+    version: 'dns-ownership-check.v1',
+    challenge: [challenge.tenant_id, challenge.id, challenge.target_group_id, challenge.target_id,
+      challenge.record_name, challenge.record_value,
+      exactClocks.binding_issued_at ?? challenge.issued_at, exactClocks.binding_expires_at ?? challenge.expires_at,
+      ...(challenge.last_check_result?.dns_target_binding ? [challenge.last_check_result.dns_target_binding] : [])],
+    target: dnsOwnershipLookupTarget(target),
+    ownership_generation: generation,
+  };
+}
+
+async function dnsOwnershipGeneration(client, tenantId, targetId) {
+  const { rows } = await client.query(
+    `SELECT encode(sha256(convert_to(
+       COALESCE(jsonb_agg(to_jsonb(tv) ORDER BY tv.id), '[]'::jsonb)::text, 'UTF8'
+     )), 'hex') AS generation
+     FROM target_verifications tv
+     WHERE tv.tenant_id = $1 AND tv.target_id = $2`,
+    [tenantId, targetId],
+  );
+  const generation = rows[0]?.generation;
+  if (typeof generation !== 'string' || !/^[a-f0-9]{64}$/.test(generation)) {
+    throw new Error('DNS ownership snapshot requires a complete verification generation.');
+  }
+  return generation;
+}
+
 /**
  * Hard caps for the target-detail hydrator's unbounded reads.
  *
@@ -88,6 +118,7 @@ export const PORTAL_REVAMP_REPOSITORY_METHODS = Object.freeze([
   'listDnsChallengesByGroup',
   'insertDnsChallenge',
   'findDnsChallenge',
+  'getDnsOwnershipCheckSnapshot',
   'updateDnsChallenge',
   'finalizeDnsOwnershipCheck',
   'resolveFqdnDomain',
@@ -156,6 +187,49 @@ export function createPortalRevampRepository(pool) {
       });
     },
 
+    async getDnsOwnershipCheckSnapshot(ctx, input) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        // Release all locks before the external lookup; finalization rechecks this exact snapshot.
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+        const challengeResult = await client.query(
+          `SELECT *,
+             to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS binding_issued_at,
+             to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS binding_expires_at
+           FROM dns_challenges
+           WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
+           FOR SHARE`,
+          [ctx.tenantId, input.challenge_id, input.target_group_id],
+        );
+        const challenge = mapDnsRow(challengeResult.rows[0] ?? null);
+        if (!challenge) return { error: 'challenge_not_found', status: 404 };
+        if (challenge.target_id !== input.target_id) return { error: 'challenge_binding_changed', status: 409 };
+        const targetResult = await client.query(
+          `SELECT t.* FROM target_groups tg
+           JOIN targets t ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
+           WHERE tg.tenant_id = $1 AND tg.id = $2
+             AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+             AND t.id = $3 AND t.deleted_at IS NULL
+           FOR SHARE OF tg, t`,
+          [ctx.tenantId, input.target_group_id, challenge.target_id],
+        );
+        const target = targetResult.rows[0] ?? null;
+        if (!target) return { error: 'target_not_found', status: 404 };
+        if (!dnsOwnershipChallengeMatchesTarget(challenge, target)
+          || !Number.isFinite(new Date(challenge.issued_at).getTime())
+          || !Number.isFinite(new Date(challenge.expires_at).getTime())) {
+          return { error: 'challenge_binding_changed', status: 409 };
+        }
+        const generation = await dnsOwnershipGeneration(client, ctx.tenantId, challenge.target_id);
+        const clock = await client.query('SELECT clock_timestamp() AS checked_at');
+        const checkedAt = clock.rows[0]?.checked_at;
+        if (checkedAt == null || !Number.isFinite(new Date(checkedAt).getTime())) {
+          throw new Error('DNS ownership snapshot requires a fresh database timestamp.');
+        }
+        return { challenge, target, checked_at: new Date(checkedAt).toISOString(),
+          lookup_binding: dnsLookupBinding(challenge, target, generation, challengeResult.rows[0]) };
+      });
+    },
+
     async insertDnsChallenge(ctx, record, auditRepo) {
       return withAuditedPortalMutation(pool, ctx, auditRepo, {
         action: 'dns_ownership.challenge_issued',
@@ -163,11 +237,25 @@ export function createPortalRevampRepository(pool) {
         resource_id: record.id,
         metadata: { target_group_id: record.target_group_id, target_id: record.target_id },
       }, async (client, auditEntry) => {
+        if (record.last_check_result?.dns_target_binding) {
+          const { rows: targets } = await client.query(
+            `SELECT t.* FROM targets t JOIN target_groups tg
+               ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+             WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.id = $3
+               AND t.deleted_at IS NULL AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+             FOR SHARE OF t, tg`, [ctx.tenantId, record.target_group_id, record.target_id],
+          );
+          if (!targets[0] || !dnsOwnershipChallengeMatchesTarget({ ...record, tenant_id: ctx.tenantId }, targets[0])) {
+            const error = new Error('challenge_binding_changed');
+            error.code = 'challenge_binding_changed';
+            throw error; // Rolls back the preceding transactional issuance audit too.
+          }
+        }
         const { rows } = await client.query(
           `INSERT INTO dns_challenges (
              id, tenant_id, target_group_id, target_id, record_name, record_value,
-             ttl_seconds, state, issued_at, expires_at, audit_entry_id
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::timestamptz,$11)
+             ttl_seconds, state, issued_at, expires_at, audit_entry_id, last_check_result
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::timestamptz,$11,$12::jsonb)
            RETURNING *`,
           [
             record.id,
@@ -181,6 +269,7 @@ export function createPortalRevampRepository(pool) {
             record.issued_at,
             record.expires_at,
             auditEntry.id,
+            record.last_check_result ? JSON.stringify(record.last_check_result) : null,
           ],
         );
         return mapDnsRow(rows[0]);
@@ -235,7 +324,10 @@ export function createPortalRevampRepository(pool) {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
 
         const challengeResult = await client.query(
-          `SELECT * FROM dns_challenges
+          `SELECT *,
+             to_char(issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS binding_issued_at,
+             to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS binding_expires_at
+           FROM dns_challenges
            WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
            FOR UPDATE`,
           [ctx.tenantId, input.challenge_id, input.target_group_id],
@@ -258,7 +350,32 @@ export function createPortalRevampRepository(pool) {
         const target = activeTargetResult.rows[0] ?? null;
         if (!target) return { error: 'target_not_found', status: 404 };
 
+        const original = input.lookup_binding;
+        const lookupBindingGap = () => {
+          if (!original || original.version !== 'dns-ownership-check.v1'
+            || !Array.isArray(original.challenge) || !original.target || typeof original.target !== 'object'
+            || typeof original.ownership_generation !== 'string'
+            || !/^[a-f0-9]{64}$/.test(original.ownership_generation)
+            || Object.keys(original).some((key) => !['version', 'challenge', 'target', 'ownership_generation'].includes(key))) {
+            return { error: 'dns_lookup_binding_missing', status: 503 };
+          }
+          const current = dnsLookupBinding(challenge, target, null, challengeResult.rows[0]);
+          if (!dnsOwnershipChallengeMatchesTarget(challenge, target)
+            || JSON.stringify(original.challenge) !== JSON.stringify(current.challenge)
+            || JSON.stringify(original.target) !== JSON.stringify(current.target)) {
+            return { error: 'challenge_binding_changed', status: 409 };
+          }
+          return null;
+        };
+        // A competing success may advance ownership history, but cannot retie lookup material.
+        if (original) {
+          const gap = lookupBindingGap();
+          if (gap) return gap;
+        }
         if (challenge.state !== 'pending') {
+          if (!dnsOwnershipChallengeMatchesTarget(challenge, target)) {
+            return { error: 'challenge_binding_changed', status: 409 };
+          }
           return {
             challenge,
             target,
@@ -267,13 +384,17 @@ export function createPortalRevampRepository(pool) {
           };
         }
 
+        const generation = input.lookup_binding
+          ? await dnsOwnershipGeneration(client, ctx.tenantId, challenge.target_id) : null;
         const finalizationClock = await client.query(
           `SELECT GREATEST(clock_timestamp(), $1::timestamptz) AS finalized_at`,
           [requestedFinalizedAt.toISOString()],
         );
-        const finalizedAt = new Date(
-          finalizationClock.rows[0]?.finalized_at ?? requestedFinalizedAt,
-        );
+        const databaseFinalizedAt = finalizationClock.rows[0]?.finalized_at;
+        if (databaseFinalizedAt == null || !Number.isFinite(new Date(databaseFinalizedAt).getTime())) {
+          throw new Error('DNS ownership finalization requires a fresh database timestamp.');
+        }
+        const finalizedAt = new Date(databaseFinalizedAt);
         const expiresAt = new Date(challenge.expires_at);
         if (!Number.isFinite(expiresAt.getTime())) {
           throw new Error('DNS challenge has an invalid expires_at timestamp.');
@@ -283,6 +404,8 @@ export function createPortalRevampRepository(pool) {
           ...(input.last_check_result && typeof input.last_check_result === 'object'
             ? input.last_check_result
             : {}),
+          // Issuance binding is server-owned historical material, never resolver/caller metadata.
+          dns_target_binding: challenge.last_check_result?.dns_target_binding ?? null,
           matched: expired ? false : input.matched === true,
           ...(expired ? { expired: true } : {}),
         };
@@ -323,6 +446,10 @@ export function createPortalRevampRepository(pool) {
           challenge = mapDnsRow(rows[0]);
           return { error: 'challenge_expired', status: 409, challenge };
         }
+
+        const gap = lookupBindingGap();
+        if (gap) return gap;
+        if (generation !== original.ownership_generation) return { error: 'ownership_state_changed', status: 409 };
 
         if (input.matched === true) {
           const challengeAudit = await auditRepo.appendAuditEvent({
@@ -380,7 +507,8 @@ export function createPortalRevampRepository(pool) {
               input.verification_id,
               ctx.tenantId,
               challenge.target_id,
-              JSON.stringify({ dns_challenge_id: challenge.id }),
+              JSON.stringify({ dns_challenge_id: challenge.id,
+                ...(target.kind === 'url' ? { dns_target_binding: challenge.last_check_result.dns_target_binding } : {}) }),
               finalizedAt.toISOString(),
               input.transitioned_by,
               verificationAudit.id,
@@ -495,7 +623,7 @@ export function createPortalRevampRepository(pool) {
            WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.id = $3
              AND t.deleted_at IS NULL AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
            LIMIT 1`,
-          [ctx.tenantId, groupId, targetId == null ? null : Array.isArray(targetId) ? targetId : [targetId]],
+          [ctx.tenantId, groupId, targetId],
         );
         return rows[0] ?? null;
       });
@@ -667,11 +795,16 @@ export function createPortalRevampRepository(pool) {
         if (!activeLoa) return { error: 'loa_missing', status: 409 };
 
         const currentResult = await client.query(
-          `SELECT * FROM target_verifications
-           WHERE tenant_id = $1 AND target_id = $2
-           ORDER BY transitioned_at DESC, id DESC
+          `SELECT tv.*, current.state AS state, current.source_kind AS source_kind,
+                  current.source_ref AS source_ref
+           FROM target_verifications tv
+           JOIN target_verification_current current
+             ON current.tenant_id = tv.tenant_id AND current.target_id = tv.target_id
+               AND current.transitioned_at = tv.transitioned_at
+           WHERE tv.tenant_id = $1 AND tv.target_id = $2
+           ORDER BY tv.id DESC
            LIMIT 1
-           FOR UPDATE`,
+           FOR UPDATE OF tv`,
           [ctx.tenantId, input.target_id],
         );
         const current = currentResult.rows[0] ?? null;
@@ -849,6 +982,7 @@ export function createPortalRevampRepository(pool) {
     },
 
     async getTargetDetailBundle(ctx, targetId, query = {}, options = {}) {
+      const assessmentAt = new Date();
       const counter = options.queryCounter;
       const bump = () => { if (counter) counter.count += 1; };
 
@@ -989,7 +1123,7 @@ export function createPortalRevampRepository(pool) {
         );
         bump();
         const policies = await client.query(
-          `SELECT id, tenant_id, target_group_id, target_id, check_id, cadence, state, enabled, archived_at
+          `SELECT id, tenant_id, target_group_id, target_id, check_id, cadence, state, enabled, archived_at, expected_verdict, safe_windows, schedule_revision, safety_policy_snapshot, created_at, updated_at
            FROM test_policies
            WHERE tenant_id = $1 AND target_group_id = $2
              AND (target_id IS NULL OR target_id = $3)
@@ -1000,14 +1134,15 @@ export function createPortalRevampRepository(pool) {
         bump();
         const latestRuns = await client.query(
           `SELECT DISTINCT ON (r.check_id)
-                  r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at, r.summary_json,
+                  r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at, r.summary_json, r.correlation_json,
                   r.probe_external_result, pr.metadata_json AS probe_metadata,
-                  r.check_version, r.scenario_version,
-                  v.id AS verdict_id, v.verdict, v.evidence_ids,
+                  pe.events AS profile_events, pv.evidence AS profile_evidence,
+                  r.check_version, r.scenario_version, r.tenant_id, r.target_id, r.target_group_id, r.policy_id, r.safety_constraints, r.provenance_json,
+                  v.id AS verdict_id, v.verdict, v.evidence_ids, v.created_at AS verdict_created_at,
                   COALESCE(r.producer_kind, ev.producer_kind) AS producer_kind, ev.evidence_label, ev.simulation
            FROM test_runs r
            LEFT JOIN LATERAL (
-             SELECT id, verdict, evidence_ids FROM verdicts
+             SELECT id, verdict, evidence_ids, created_at FROM verdicts
              WHERE tenant_id = r.tenant_id AND test_run_id = r.id
              ORDER BY created_at DESC, id DESC LIMIT 1
            ) v ON TRUE
@@ -1029,9 +1164,20 @@ export function createPortalRevampRepository(pool) {
                AND e.nonce_hash = r.correlation_json->>'nonce_hash'
              ORDER BY e.timestamp DESC, e.id DESC LIMIT 1
            ) pr ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) AS events FROM events e
+             WHERE e.tenant_id = r.tenant_id AND e.test_run_id = r.id
+               AND e.signal_type = 'probe_result' AND e.producer_kind = 'signed_probe'
+               AND e.timestamp <= $3::timestamptz AND e.ingested_at <= $3::timestamptz
+               AND e.nonce_hash = r.correlation_json->>'nonce_hash'
+           ) pe ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) AS evidence FROM evidence_vault e
+             WHERE e.tenant_id = r.tenant_id AND e.test_run_id = r.id AND e.created_at <= $3::timestamptz
+           ) pv ON TRUE
            WHERE r.tenant_id = $1 AND r.target_id = $2
            ORDER BY r.check_id, COALESCE(r.started_at, r.created_at) DESC, r.id DESC`,
-          [ctx.tenantId, targetId],
+          [ctx.tenantId, targetId, assessmentAt.toISOString()],
         );
         bump();
         const currentVerification = await client.query(
@@ -1091,7 +1237,8 @@ export function createPortalRevampRepository(pool) {
         // history array and `latest` (the final element) keep their original semantics.
         const verificationRows = verifications.rows.slice().reverse();
         let latest = currentVerification.rows[0] ?? verificationRows[verificationRows.length - 1];
-        if (!ownershipProofFromStates({ targetState: latest?.state }).verified && subdomainParentId(target)) {
+        if (latest?.source_kind !== 'ownership_ambiguous'
+          && !ownershipProofFromStates({ targetState: latest?.state }).verified && subdomainParentId(target)) {
           bump();
           const parentResult = await client.query(`SELECT parent.*, verification.state AS verification_state
             FROM targets parent JOIN target_groups policy ON policy.tenant_id = parent.tenant_id AND policy.id = parent.target_group_id
@@ -1104,7 +1251,7 @@ export function createPortalRevampRepository(pool) {
               source_ref: { inherited_from_target_id: parent.id, method: 'parent_domain' } };
           }
         }
-        if (isDemoAutoVerifyTenant(ctx.tenantId)) {
+        if (isDemoAutoVerifyTenant(ctx.tenantId) && latest?.source_kind !== 'ownership_ambiguous') {
           if (!latest || !['user_confirmed', 'dns_verified', 'provider_verified', 'verified'].includes(latest.state)) {
             latest = {
               state: 'user_confirmed',
@@ -1205,22 +1352,27 @@ export function createPortalRevampRepository(pool) {
           };
         }
         const edgeRow = edgeDetection.rows[0] ?? null;
+        bump();
+        const currentGroup = await client.query(`SELECT id, tenant_id, expected_behavior_default, safety_policy, declaration_json, created_at FROM target_groups WHERE tenant_id = $1 AND id = $2`, [ctx.tenantId, target.target_group_id]);
+        const profileVerdict = (row) => row.verdict_id ? { ...verdictOf(row), tenant_id: row.tenant_id,
+          test_run_id: row.id, created_at: row.verdict_created_at } : null;
+        const proofs = verifiedVerdicts({ tenantId: ctx.tenantId, runs: latestRuns.rows,
+          verdicts: latestRuns.rows.map(profileVerdict).filter(Boolean),
+          events: latestRuns.rows.flatMap((row) => row.profile_events ?? []),
+          evidenceItems: latestRuns.rows.flatMap((row) => row.profile_evidence ?? []), nowMs: assessmentAt.getTime() });
         const derived = deriveProtectionProfile({
-          now: new Date(),
-          target: {
-            id: target.id,
-            kind: target.kind,
-            value: target.value,
-            tenant_id: target.tenant_id,
-            target_group_id: target.target_group_id,
-          },
+          now: assessmentAt,
+          target,
+          targetGroup: currentGroup.rows[0] ?? null,
           edgeRow,
           policies: policies.rows,
-          observations: latestRuns.rows.map((row) => ({
-            check_id: row.check_id,
-            run: row,
-            verdict: verdictOf(row),
-          })),
+          observations: latestRuns.rows.map((row) => {
+            const proof = proofs.get(row.id);
+            return { check_id: row.check_id, require_recorded_scope: true,
+              evidence_verified: Boolean(proof && proof.verdict.id === row.verdict_id), observed_at: proof?.observed_at,
+              run: { ...row, readiness_result_metadata: proof?.result_metadata ?? [],
+                probe_metadata: proof?.result_metadata[0] ?? {} }, verdict: verdictOf(row) };
+          }),
         });
         const attached = attachHistoryReadModel(derived, historyReadModel({
           observations: observationHistory.rows,
@@ -1437,7 +1589,8 @@ export function createPortalRevampRepository(pool) {
         const { rows } = await client.query(
           `INSERT INTO finding_remediations (
              id, tenant_id, finding_id, action_slug, owner_group, description, steps, audit_entry_id
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7::text[],$8) RETURNING *`,
+           ) SELECT $1,$2,$3,$4,$5,$6,$7::text[],$8
+           FROM findings WHERE tenant_id = $2 AND id = $3 RETURNING *`,
           [
             record.id,
             ctx.tenantId,

@@ -57,6 +57,53 @@ export type EntryPath = {
   archived_at: string | null;
 };
 
+export type CurrentAssurance = { status: string; reasons: string[]; retest_required: boolean };
+export type ConfigurationLayer = {
+  evidence_role: 'explanation_only';
+  status: string;
+  record_count: number | null;
+  coverage: string;
+  provider_labels: string[];
+  markers: string[];
+};
+export type MatrixScenario = {
+  scenario: string;
+  outcome: string;
+  reasons: string[];
+  compatibility_reasons: string[];
+  evidence_refs: EvidenceRef[];
+  ignored_for_findings?: boolean;
+  current_assurance: CurrentAssurance | null;
+};
+export type ProtectionConclusion = {
+  id: string;
+  subject: Record<string, string>;
+  comparison_kind: string;
+  scenario: string;
+  result: string;
+  ignored_for_findings: boolean | null;
+  reasons: string[];
+  compatibility_reasons: string[];
+  evidence_refs: EvidenceRef[];
+  readiness_eligible: boolean | null;
+  readiness_exclusion_reason: string;
+  current_assurance: CurrentAssurance | null;
+};
+export type CoverageIds = { ids: string[]; total: number | null; truncated: boolean };
+export type ProtectionReport = {
+  tenant_id: string;
+  generated_at: string;
+  source_records_complete: boolean | null;
+  conclusions_truncated: boolean;
+  conclusions_total: number | null;
+  incomplete_reasons: string[];
+  unknown_statement: string;
+  unknown_reasons: Record<string, number>;
+  not_tested_paths: CoverageIds;
+  untested_firewall_expectations: CoverageIds;
+  conclusions: ProtectionConclusion[];
+};
+
 export type LayerEvidence = {
   layer: string;
   declared_intent: string;
@@ -70,6 +117,8 @@ export type LayerEvidence = {
   evidence_refs: EvidenceRef[];
   freshness: Freshness;
   observation: string;
+  configuration: ConfigurationLayer | null;
+  current_assurance: CurrentAssurance | null;
 };
 
 export type MatrixPath = {
@@ -91,12 +140,16 @@ export type MatrixPath = {
   latest_comparison_id: string | null;
   freshness: Freshness;
   limitations: string[];
+  scenarios: MatrixScenario[];
+  ignored_for_findings?: boolean;
+  current_assurance: CurrentAssurance | null;
 };
 
 export type ProtectionMatrix = {
   target_id: string;
   generated_at: string;
   connectors_required: boolean;
+  configuration_access: 'granted' | 'redacted' | 'disabled' | 'unknown';
   scope_complete?: boolean;
   paths: MatrixPath[];
   limitations: string[];
@@ -359,7 +412,19 @@ export function parseEntryPath(value: unknown): EntryPath {
   };
 }
 
-function parseLayer(value: unknown): LayerEvidence {
+function assurance(value: unknown): CurrentAssurance | null {
+  const item = rec(value);
+  return item ? { status: str(item.status), reasons: strings(item.reasons), retest_required: item.retest_required === true } : null;
+}
+
+function parseConfiguration(value: unknown, access: unknown): ConfigurationLayer | null {
+  const item = rec(value);
+  // The server gate is authoritative. Never surface a configuration accidentally included in a redacted response.
+  if (access !== 'granted' || item?.evidence_role !== 'explanation_only') return null;
+  return { evidence_role: 'explanation_only', status: str(item.status), record_count: num(item.record_count), coverage: str(item.coverage) || 'unknown', provider_labels: strings(item.provider_labels), markers: strings(item.markers) };
+}
+
+function parseLayer(value: unknown, access: unknown): LayerEvidence {
   const layer = rec(value) ?? {};
   return {
     layer: str(layer.layer),
@@ -374,6 +439,8 @@ function parseLayer(value: unknown): LayerEvidence {
     evidence_refs: refs(layer.evidence_refs),
     freshness: freshness(layer.freshness),
     observation: str(layer.observation),
+    configuration: parseConfiguration(layer.configuration, access),
+    current_assurance: assurance(layer.current_assurance),
   };
 }
 
@@ -383,6 +450,7 @@ export function parseMatrix(value: unknown): ProtectionMatrix {
     target_id: str(payload.target_id),
     generated_at: str(payload.generated_at),
     connectors_required: payload.connectors_required === true,
+    configuration_access: payload.configuration_access === 'granted' ? 'granted' : payload.configuration_access === 'redacted' ? 'redacted' : payload.configuration_access === 'disabled' ? 'disabled' : 'unknown',
     scope_complete: typeof payload.scope_complete === 'boolean' ? payload.scope_complete : undefined,
     limitations: strings(payload.limitations),
     paths: records(payload.paths).map((path) => ({
@@ -399,12 +467,44 @@ export function parseMatrix(value: unknown): ProtectionMatrix {
       outcome: str(path.outcome) || 'not_tested',
       attribution: str(path.attribution),
       observation: str(path.observation),
-      layers: records(path.layers).map(parseLayer),
+      layers: records(path.layers).map((layer) => parseLayer(layer, payload.configuration_access)),
       evidence_refs: refs(path.evidence_refs),
       latest_comparison_id: strOrNull(path.latest_comparison_id),
       freshness: freshness(path.freshness),
       limitations: strings(path.limitations),
+      ignored_for_findings: typeof path.ignored_for_findings === 'boolean' ? path.ignored_for_findings : undefined,
+      current_assurance: assurance(path.current_assurance),
+      scenarios: records(path.scenarios).map((item) => ({ scenario: str(item.scenario), outcome: str(item.outcome), reasons: strings(item.reasons), compatibility_reasons: strings(item.compatibility_reasons), evidence_refs: refs(item.evidence_refs), ignored_for_findings: typeof item.ignored_for_findings === 'boolean' ? item.ignored_for_findings : undefined, current_assurance: assurance(item.current_assurance) })),
     })).filter((path) => path.entry_path_id),
+  };
+}
+
+function coverageIds(value: unknown): CoverageIds {
+  const item = rec(value);
+  return { ids: strings(item?.ids), total: num(item?.total), truncated: item?.truncated === true };
+}
+
+export function parseProtectionReport(value: unknown): ProtectionReport {
+  const payload = rec(value) ?? {};
+  const unknowns = rec(payload.unknowns) ?? {};
+  const incomplete = rec(payload.incomplete_scope) ?? {};
+  const scope = rec(payload.scope) ?? {};
+  return {
+    tenant_id: str(payload.tenant_id), generated_at: str(payload.generated_at),
+    source_records_complete: bool(scope.source_records_complete),
+    conclusions_truncated: payload.conclusions_truncated === true,
+    conclusions_total: num(payload.conclusions_total),
+    incomplete_reasons: strings(incomplete.reasons),
+    unknown_statement: str(unknowns.statement),
+    unknown_reasons: Object.fromEntries(Object.entries(rec(unknowns.by_reason) ?? {}).filter(([, count]) => typeof count === 'number' && Number.isFinite(count) && count >= 0)) as Record<string, number>,
+    not_tested_paths: coverageIds(incomplete.not_tested_paths),
+    untested_firewall_expectations: coverageIds(incomplete.untested_firewall_expectations),
+    conclusions: records(payload.conclusions).map((item) => ({
+      id: str(item.id), subject: Object.fromEntries(Object.entries(rec(item.subject) ?? {}).filter(([, value]) => typeof value === 'string')) as Record<string, string>,
+      comparison_kind: str(item.comparison_kind), scenario: str(item.scenario), result: str(item.result),
+      ignored_for_findings: bool(item.ignored_for_findings), reasons: strings(item.reasons), compatibility_reasons: strings(item.compatibility_reasons),
+      evidence_refs: refs(item.evidence_refs), readiness_eligible: bool(item.readiness_eligible), readiness_exclusion_reason: str(item.readiness_exclusion_reason), current_assurance: assurance(item.current_assurance),
+    })).filter((item) => item.id),
   };
 }
 
@@ -552,6 +652,10 @@ export function getEntryPath(config: PortalConfig, session: Session, entryPathId
   return read(config, session, `/v1/entry-paths/${enc(entryPathId)}`, parseEntryPath, signal, { missingMeansUnsupported: false });
 }
 
+export function getProtectionValidationReport(config: PortalConfig, session: Session, signal?: AbortSignal) {
+  return read(config, session, '/v1/reports/protection-validation', parseProtectionReport, signal);
+}
+
 export function getProtectionMatrix(config: PortalConfig, session: Session, targetId: string, signal?: AbortSignal) {
   return read(config, session, `/v1/targets/${enc(targetId)}/protection-validation`, parseMatrix, signal);
 }
@@ -661,5 +765,10 @@ export function cancelRun(config: PortalConfig, session: Session, runId: string,
 /** Reviewed single-check retest through the existing gated run start; no destination fields are sent. */
 export async function startReviewedRetest(config: PortalConfig, session: Session, body: { check_id: string; target_id: string }) {
   const payload = rec(await requestJson(config, session, '/v1/test-runs', { method: 'POST', body })) ?? {};
-  return str(rec(payload.run)?.id ?? payload.id);
+  const run = rec(payload.run) ?? payload;
+  if ((run.target_id && run.target_id !== body.target_id) || (run.check_id && run.check_id !== body.check_id)) {
+    const message = 'The accepted retest execution did not match the reviewed target/check. No other run was substituted.';
+    throw Object.assign(new Error(message), { payload: { error: 'accepted_execution_scope_mismatch', message } });
+  }
+  return str(run.id);
 }

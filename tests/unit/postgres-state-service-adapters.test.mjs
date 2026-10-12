@@ -15,6 +15,8 @@ import {
 } from '../../src/persistence/postgres/stateServiceAdapters.mjs';
 import { ARTIFACT_PROOF_FIELDS, REQUIRED_ARTIFACT_TYPES } from '../../src/lib/highScalePolicy.mjs';
 import { computeTargetGroupScopeHash } from '../../src/lib/scopeHash.mjs';
+import { projectReadiness } from '../../src/lib/readinessProjection.mjs';
+import { assuranceWorld, addAssuredObservation } from '../helpers/assurance-fixtures.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,7 +45,7 @@ function stubRepositories(overrides = {}) {
   ];
   const findings = overrides.findings ?? [{ id: 'find_1', tenant_id: 'ten_demo', status: 'open' }];
   const evidence = overrides.evidence ?? [
-    { id: 'ev_1', tenant_id: 'ten_demo', test_run_id: 'run_1', created_at: RECENT_TS },
+    { id: 'ev_1', tenant_id: 'ten_demo', test_run_id: 'run_1', related_event_id: 'evt_1', created_at: RECENT_TS },
   ];
   const events = overrides.events ?? [
     {
@@ -51,7 +53,8 @@ function stubRepositories(overrides = {}) {
       tenant_id: 'ten_demo',
       test_run_id: 'run_1',
       signal_type: 'probe_result',
-      timestamp: RECENT_TS,
+      producer_kind: 'signed_probe',
+      timestamp: RECENT_TS, ingested_at: RECENT_TS, nonce_hash: 'state_fixture_nonce',
     },
   ];
   const verdict = overrides.verdict ?? {
@@ -286,7 +289,7 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.recent_runs.length, 5);
   });
 
-  it('recomputes authoritative zero instead of returning stale unversioned score 97', async () => {
+  it('labels legacy score without inventing complete inputs from capped readers', async () => {
     const repositories = stubRepositories({
       groups: [],
       agents: [],
@@ -305,7 +308,9 @@ describe('postgres state service adapter', () => {
 
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
 
-    assert.equal(payload.readiness.score, 0);
+    assert.equal(payload.readiness.score, null);
+    assert.equal(payload.readiness.legacy_snapshot.snapshot.score, 97);
+    assert.equal(payload.readiness.legacy_snapshot.authoritative, false);
     assert.equal(payload.readiness.persistence, 'postgres');
   });
   it('uses an aggregate open-finding count without materializing finding rows', async () => {
@@ -326,7 +331,7 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.open_findings, 100_000);
     assert.match(
       payload.readiness.factors.find((factor) => factor.key === 'verdicts').detail,
-      /100000 open finding\(s\)/,
+      /Absence of findings is not proof of protection/,
     );
   });
 
@@ -371,7 +376,7 @@ describe('postgres state service adapter', () => {
           created_at: '2026-06-11T00:00:00.000Z',
         },
         {
-          id: 'run_1',
+          id: 'run_1', correlation: { nonce_hash: 'state_fixture_nonce' },
           tenant_id: 'ten_demo',
           target_group_id: 'tg_1',
           status: 'verdicted',
@@ -407,15 +412,16 @@ describe('postgres state service adapter', () => {
       updated_by: 'soc_1',
     });
 
-    assert.ok(payload.readiness.score >= 0);
+    assert.equal(payload.readiness.score, null);
+    assert.equal(payload.readiness.score_status, 'incomplete_inputs');
     const factorKeys = payload.readiness.factors.map((f) => f.key);
     assert.ok(factorKeys.includes('coverage'));
     assert.ok(factorKeys.includes('verdicts'));
     assert.ok(factorKeys.includes('evidence_freshness'));
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 11);
+    assert.equal(soc.score, 0);
     assert.match(soc.detail, /Kill switch state recorded/);
-    assert.match(soc.detail, /Other request\(s\) still pending gates/);
+    assert.match(soc.detail, /Pending gates remain/);
     assert.equal(payload.readiness.persistence, 'postgres');
   });
 
@@ -456,11 +462,11 @@ describe('postgres state service adapter', () => {
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
 
     for (const key of ['coverage', 'verdicts', 'evidence_freshness']) {
-      assert.equal(payload.readiness.factors.find((factor) => factor.key === key).score, 0, key);
+      assert.equal(payload.readiness.factors.find((factor) => factor.key === key).score, key === 'evidence_freshness' ? 0 : null, key);
     }
   });
 
-  it('preserves readiness credit for an evidence-bound ops readiness verdict', async () => {
+  it('does not treat ops declarations or capped feeds as technical assurance', async () => {
     const repositories = stubRepositories({
       agents: [],
       findings: [],
@@ -499,9 +505,9 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
 
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'coverage').score, 44);
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'verdicts').score, 28);
-    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness').score, 17);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'coverage').score, null);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'verdicts').score, null);
+    assert.equal(payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness').score, 0);
   });
 
   it('does not award readiness for vault evidence linked to a legacy reserved event', async () => {
@@ -529,9 +535,9 @@ describe('postgres state service adapter', () => {
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
     const coverage = payload.readiness.factors.find((factor) => factor.key === 'coverage');
     const freshness = payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness');
-    assert.equal(coverage.score, 0);
+    assert.equal(coverage.score, null);
     assert.equal(freshness.score, 0);
-    assert.match(freshness.detail, /No evidence-backed validations yet/);
+    assert.match(freshness.detail, /Metadata refresh never renews evidence/);
   });
 
   it('loads trusted linked evidence for a run beyond the newest thirty', async () => {
@@ -581,8 +587,8 @@ describe('postgres state service adapter', () => {
     const coverage = payload.readiness.factors.find((factor) => factor.key === 'coverage');
     const freshness = payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness');
 
-    assert.equal(coverage.score, 44);
-    assert.equal(freshness.score, 17);
+    assert.equal(coverage.score, null);
+    assert.equal(freshness.score, 0);
   });
 
   it('reports pending high-scale gates without awarding SOC readiness credit', async () => {
@@ -603,12 +609,12 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.high_scale_requests, 1);
     assert.equal(payload.high_scale_status, 'pending');
     assert.equal(soc.score, 0);
-    assert.match(soc.detail, /Pending high-scale workflow gates remain/);
+    assert.match(soc.detail, /Pending gates remain/);
     assert.match(soc.detail, /SOC approvals 1\/2/);
     assert.match(soc.detail, /missing accepted artifacts/);
   });
 
-  it('awards SOC readiness for accepted authorization pack and two distinct approvers', async () => {
+  it('records governance but no protection credit for accepted authorization pack and two distinct approvers', async () => {
     const repositories = stubRepositories({
       highScaleRequests: [
         {
@@ -626,12 +632,12 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 11);
+    assert.equal(soc.score, 0);
     assert.match(soc.detail, /authorization pack accepted/);
     assert.match(soc.detail, /2 SOC approver/);
   });
 
-  it('awards SOC readiness for kill-switch evidence and returns only safe fields', async () => {
+  it('records governance without protection credit for kill-switch evidence and returns only safe fields', async () => {
     const repositories = stubRepositories({
       killSwitchRecord: {
         tenant_id: 'ten_demo',
@@ -645,7 +651,7 @@ describe('postgres state service adapter', () => {
     const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
     const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
-    assert.equal(soc.score, 11);
+    assert.equal(soc.score, 0);
     assert.match(soc.detail, /Kill switch state recorded/);
     assert.deepEqual(Object.keys(payload.kill_switch).sort(), [
       'active',
@@ -655,5 +661,58 @@ describe('postgres state service adapter', () => {
       'updated_by',
     ]);
     assert.equal(payload.kill_switch.reason, 'drill');
+  });
+});
+
+
+describe('complete-reader Postgres/readiness parity', () => {
+  function repositoriesFor(world) {
+    const repositories = stubRepositories({ groups: world.groups, targets: world.targets, runs: world.runs.slice(0, 500), evidence: world.evidenceItems, findings: world.findings });
+    repositories.validationEvidence.readReadinessInputs = async (ctx, { asOf }) => {
+      assert.equal(ctx.tenantId, world.tenantId); assert.equal(asOf.toISOString(), world.asOf);
+      return { runs: world.runs, verdicts: world.verdicts, events: world.events, evidenceItems: world.evidenceItems, findings: world.findings, policies: world.policies, input_complete: true };
+    };
+    repositories.validationEvidence.loadRunEvidenceBatch = () => { throw new Error('complete reader must not use bounded evidence for assessment'); };
+    return repositories;
+  }
+  async function assess(world) {
+    const state = createPostgresStateServices(repositoriesFor(world), { now: () => new Date(world.asOf), catalog: world.catalog });
+    return (await state.getState({ tenantId: world.tenantId, role: 'admin' })).readiness;
+  }
+  it('exactly matches shared dev semantics for target-pair coverage and finding severity', async () => {
+    const world = assuranceWorld({ targetCount: 2, checkCount: 2 }); addAssuredObservation(world);
+    world.findings.push({ id: 'f', tenant_id: world.tenantId, severity: 'high', status: 'accepted_risk' });
+    assert.deepEqual(await assess(world), { ...projectReadiness(world), persistence: 'postgres' });
+    assert.equal((await assess(world)).score, 15);
+  });
+  it('uses complete cohorts beyond the 500-run feed and never silently truncates the denominator', async () => {
+    const world = assuranceWorld({ targetCount: 501 }); for (const target of world.targets) addAssuredObservation(world, { target });
+    const result = await assess(world); assert.equal(result.score, 100); assert.equal(result.coverage.applicable_count, 501);
+    world.events.at(-1).producer_kind = 'legacy_untrusted'; assert.equal((await assess(world)).score, 99);
+  });
+  it('keeps unsigned, incomplete, observation-only and stale proofs at zero in both modes', async () => {
+    for (const mutation of [(w) => { w.events[0].producer_kind = 'legacy_untrusted'; }, (w) => { w.events[0].metadata.comparison_complete = false; }, (w) => { w.events[0].metadata.enforcement = 'not_enforced'; }, (w) => { delete w.events[0].metadata.enforcement; }, (w) => { w.events[0].nonce_hash = 'wrong_nonce'; }, (w) => { delete w.events[0].ingested_at; }, (w) => { w.catalog[0].observation_only = true; }, (w) => { w.asOf = '2026-10-20T12:00:00.000Z'; }]) {
+      const world = assuranceWorld(); addAssuredObservation(world); mutation(world);
+      assert.deepEqual(await assess(world), { ...projectReadiness(world), persistence: 'postgres' }); assert.equal((await assess(world)).score, 0);
+    }
+  });
+  it('invalidates material scope/check changes at read time without rewriting custody', async () => {
+    const world = assuranceWorld(); addAssuredObservation(world); const before = structuredClone({ runs: world.runs, verdicts: world.verdicts, events: world.events }); world.targets[0].value += '/changed';
+    const result = await assess(world); assert.equal(result.current_assurance.status, 'retest_required'); assert.equal(result.score, 0);
+    assert.deepEqual({ runs: world.runs, verdicts: world.verdicts, events: world.events }, before);
+  });
+  it('uses exact complete snapshot scope without expensive list-page hydration and falls back only without explicit scope proof', async () => {
+    const world = assuranceWorld(); addAssuredObservation(world); const repos = repositoriesFor(world);
+    repos.coreCatalog.listTargets = repos.coreCatalog.listTargetGroups = () => { throw new Error('presentation hydration must not run'); };
+    repos.validationEvidence.readReadinessInputs = async () => ({ ...world, scope_complete: true });
+    const result = await createPostgresStateServices(repos, { now: () => new Date(world.asOf), catalog: world.catalog }).getState({ tenantId: world.tenantId });
+    assert.deepEqual(result.readiness, { ...projectReadiness(world), persistence: 'postgres' });
+    assert.equal(result.target_groups, world.groups.length);
+  });
+  it('still refuses a reader that explicitly declares incomplete inputs', async () => {
+    const world = assuranceWorld(); addAssuredObservation(world); const repos = repositoriesFor(world);
+    repos.validationEvidence.readReadinessInputs = async () => ({ ...world, input_complete: false });
+    const result = await createPostgresStateServices(repos, { now: () => new Date(world.asOf), catalog: world.catalog }).getState({ tenantId: world.tenantId });
+    assert.equal(result.readiness.score, null); assert.equal(result.readiness.input_complete, false);
   });
 });

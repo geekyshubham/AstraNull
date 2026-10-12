@@ -68,17 +68,14 @@ function validSoaResponse(query, transactionId) {
   fixed.writeUInt32BE(60, 4);
   fixed.writeUInt16BE(rdata.length, 8);
   return Buffer.concat([
-    responseHeader(transactionId, { questions: 1, answers: 1 }),
-    question,
-    owner,
-    fixed,
-    rdata,
+    responseHeader(transactionId, { questions: 1, answers: 2 }),
+    question, owner, fixed, rdata, owner, fixed, rdata,
   ]);
 }
 
 describe('dnsTcpAxfrSession', () => {
   it('runDnsTcpAxfrQuery accumulates split TCP chunks and reports REFUSED rcode', async () => {
-    const refusedDns = responseHeader(0x4242, { rcode: 5 });
+    const refusedDns = Buffer.concat([responseHeader(0x4242, { rcode: 5, questions: 1 }), dnsQuestion('example.test')]);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
     const chunk1 = refusedFramed.subarray(0, 4);
     const chunk2 = refusedFramed.subarray(4);
@@ -106,6 +103,7 @@ describe('dnsTcpAxfrSession', () => {
       });
 
       assert.equal(outcome.axfr_refused, true);
+      assert.equal(outcome.protocol_identity_confirmed, true);
       assert.equal(outcome.rcode, 5);
       assert.notEqual(outcome.axfr_leak, true);
     } finally {
@@ -118,7 +116,7 @@ describe('dnsTcpAxfrSession', () => {
       () => responseHeader(0x4243, { rcode: 5 }),
       { transactionId: 0x4242 },
     );
-    assert.equal(outcome.axfr_refused, true);
+    assert.equal(outcome.axfr_refused, false);
     assert.equal(outcome.transaction_id_match, false);
     assert.equal(outcome.reason, 'transaction_id_mismatch');
     assert.notEqual(outcome.axfr_leak, true);
@@ -135,7 +133,7 @@ describe('dnsTcpAxfrSession', () => {
         ]);
       },
     );
-    assert.equal(outcome.axfr_refused, true);
+    assert.equal(outcome.axfr_refused, false);
     assert.equal(outcome.answer_count, 1);
     assert.equal(outcome.complete_answer_count, 0);
     assert.equal(outcome.soa_answer_count, 0);
@@ -143,15 +141,16 @@ describe('dnsTcpAxfrSession', () => {
     assert.notEqual(outcome.axfr_leak, true);
   });
 
-  it('accepts only a framed response containing a complete SOA RR', async () => {
+  it('confirms only a framed transfer with matching opening and closing SOA records', async () => {
     const outcome = await runWithLocalAxfrResponse(
       (query) => validSoaResponse(query, 0x4242),
       { split: true },
     );
     assert.equal(outcome.axfr_leak, true);
-    assert.equal(outcome.answer_count, 1);
-    assert.equal(outcome.complete_answer_count, 1);
-    assert.equal(outcome.soa_answer_count, 1);
+    assert.equal(outcome.answer_count, 2);
+    assert.equal(outcome.complete_answer_count, 2);
+    assert.equal(outcome.soa_answer_count, 2);
+    assert.equal(outcome.transfer_complete, true);
     assert.equal(outcome.has_complete_answer, true);
     assert.equal(outcome.has_complete_soa, true);
     assert.equal(outcome.transaction_id_match, true);
@@ -183,11 +182,8 @@ function soaResponseWithQuestion(question, transactionId = 0x4242) {
   fixed.writeUInt32BE(60, 4);
   fixed.writeUInt16BE(rdata.length, 8);
   return Buffer.concat([
-    responseHeader(transactionId, { questions: 1, answers: 1 }),
-    question,
-    owner,
-    fixed,
-    rdata,
+    responseHeader(transactionId, { questions: 1, answers: 2 }),
+    question, owner, fixed, rdata, owner, fixed, rdata,
   ]);
 }
 
@@ -207,7 +203,7 @@ describe('dnsTcpAxfrSession adversarial framing and question binding', () => {
       const outcome = await runWithLocalAxfrResponse(
         () => soaResponseWithQuestion(question),
       );
-      assert.equal(outcome.axfr_refused, true, label);
+      assert.equal(outcome.axfr_refused, false, label);
       assert.equal(outcome.question_matches, false, label);
       assert.equal(outcome.reason, 'question_mismatch', label);
       assert.notEqual(outcome.axfr_leak, true, label);
@@ -218,7 +214,7 @@ describe('dnsTcpAxfrSession adversarial framing and question binding', () => {
     const absent = await runWithLocalAxfrResponse(
       () => responseHeader(0x4242, { questions: 0 }),
     );
-    assert.equal(absent.axfr_refused, true);
+    assert.equal(absent.axfr_refused, false);
     assert.equal(absent.reason, 'unexpected_question_count');
 
     const first = dnsQuestion('example.test');
@@ -230,7 +226,7 @@ describe('dnsTcpAxfrSession adversarial framing and question binding', () => {
         compressedSecond,
       ]),
     );
-    assert.equal(multiple.axfr_refused, true);
+    assert.equal(multiple.axfr_refused, false);
     assert.equal(multiple.reason, 'unexpected_question_count');
     assert.notEqual(multiple.axfr_leak, true);
   });
@@ -258,7 +254,7 @@ describe('dnsTcpAxfrSession adversarial framing and question binding', () => {
         transactionId: 0x4242,
         connectFn: (options) => net.connect({ ...options, port }),
       });
-      assert.equal(outcome.axfr_refused, true);
+      assert.equal(outcome.axfr_refused, false);
       assert.equal(outcome.reason, 'incomplete_frame');
       assert.ok(Date.now() - started < 500, 'partial close waited for the timeout');
     } finally {
@@ -282,7 +278,7 @@ describe('dnsTcpAxfrSession adversarial framing and question binding', () => {
         transactionId: 0x4242,
         connectFn: (options) => net.connect({ ...options, port }),
       });
-      assert.equal(outcome.axfr_refused, true);
+      assert.equal(outcome.axfr_refused, false);
       assert.equal(outcome.reason, 'no_response_frame');
       assert.ok(Date.now() - started < 500, 'zero-frame close waited for the timeout');
     } finally {
@@ -373,5 +369,45 @@ describe('AXFR TCP synchronous reservation boundary', () => {
       (error) => error?.code === 'signed_operation_budget_exceeded',
     );
     assert.equal(connectCalls, 0);
+  });
+});
+
+
+describe('AXFR identity negatives and cancellation', () => {
+  it('keeps a single SOA as a partial record observation, not a transfer or refusal', async () => {
+    const result = await runWithLocalAxfrResponse((query) => {
+      const bytes = validSoaResponse(query, 0x4242);
+      const questionLength = query.length - 2 - 12;
+      const rrLength = (bytes.length - 12 - questionLength) / 2;
+      const partial = bytes.subarray(0, bytes.length - rrLength);
+      partial.writeUInt16BE(1, 6);
+      return partial;
+    });
+    assert.equal(result.axfr_leak, false);
+    assert.equal(result.axfr_refused, false);
+    assert.equal(result.transfer_complete, false);
+    assert.equal(result.reason, 'bounded_partial_transfer_observation');
+    assert.equal(result.axfr_records_observed, 1);
+  });
+
+  it('header-only REFUSED with no matched question is not denial proof', async () => {
+    const result = await runWithLocalAxfrResponse(() => responseHeader(0x4242, { rcode: 5 }));
+    assert.equal(result.axfr_refused, false);
+    assert.equal(result.reason, 'unexpected_question_count');
+  });
+
+  it('deadline cancellation destroys a pending TCP socket and does not claim refusal', async () => {
+    const controller = new AbortController();
+    const socket = new EventEmitter();
+    let destroyed = 0;
+    socket.write = () => {};
+    socket.destroy = () => { destroyed += 1; };
+    const pending = runDnsTcpAxfrQuery({ nsHost: '127.0.0.1', zone: 'example.test',
+      timeoutMs: 5000, transactionId: 0x4242, connectFn: () => socket, signal: controller.signal });
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.axfr_refused, false);
+    assert.equal(result.error_class, 'timeout');
+    assert.equal(destroyed, 1);
   });
 });

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createPostgresProbeJobServices } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
 import { probeJobLeaseTtlSeconds } from '../../src/persistence/postgres/probeJobRepository.mjs';
+import { executionReservation } from '../../src/lib/probeExecution.mjs';
 
 const TENANT = 'ten_demo';
 const WORKER = 'pw_worker_1';
@@ -11,11 +12,18 @@ const OTHER_WORKER = 'pw_worker_2';
 const WORKER_CTX = { tenantId: TENANT, workerId: WORKER, role: 'probe_worker' };
 const OTHER_WORKER_CTX = { tenantId: TENANT, workerId: OTHER_WORKER, role: 'probe_worker' };
 const NOW = '2026-06-01T12:00:00.000Z';
-const CONSTRAINTS = { max_requests: 1, timeout_ms: 5000, max_duration_seconds: 120 };
+const CONSTRAINTS = {
+  max_requests: 1, max_probe_requests: 1, min_destination_resolver_attempts: 0,
+  max_destination_resolver_attempts: 0, max_total_operations: 1,
+  timeout_ms: 5000, max_duration_seconds: 120, execution_attempts: 1,
+  authority_version: 'probe-authority-v2', issued_at: NOW,
+  not_after: '2026-06-01T12:02:00.000Z',
+};
 
 const VALID_BODY = Object.freeze({
   external_result: 'connected',
-  safety_attestation: { requests_sent: 1, duration_ms: 10 },
+  safety_attestation: { requests_sent: 1, probe_requests_sent: 1,
+    destination_resolver_attempts: 0, total_operations: 1, duration_ms: 10 },
 });
 
 /**
@@ -67,9 +75,10 @@ function createHarness(options = {}) {
         || job.status !== expected.status
         || (job.leased_by ?? null) !== (expected.leased_by ?? null)
         || (job.leased_at ?? null) !== (expected.leased_at ?? null)) return null;
+      const sameHolder = job.status === 'leased' && job.leased_by === workerId;
       job.status = 'leased';
       job.leased_by = workerId;
-      job.leased_at = leasedAt;
+      if (!sameHolder) job.leased_at = leasedAt;
       return { ...job };
     },
     async markJobCompleted(ctx, id, completedAt, lease = {}, callOptions = {}) {
@@ -254,7 +263,7 @@ function createHarness(options = {}) {
       });
     },
     seedJob(id, overrides = {}) {
-      state.jobs.set(id, {
+      const job = {
         id,
         tenant_id: TENANT,
         test_run_id: 'run_1',
@@ -269,7 +278,15 @@ function createHarness(options = {}) {
         constraints: CONSTRAINTS,
         completed_at: null,
         ...overrides,
-      });
+      };
+      // Modern fresh-result fixtures model the persisted, one-shot pre-dispatch grant.
+      // Historical reconciliation below is intentionally also tested without a grant.
+      if (job.status === 'leased' && job.leased_at === NOW && !Object.hasOwn(overrides, 'worker_metadata')) {
+        const grant = executionReservation(job, job.leased_by, job.leased_at, `reservation_${id}`, new Date(NOW));
+        assert.equal(grant.error, undefined);
+        job.worker_metadata = { execution_reservation: grant.reservation };
+      }
+      state.jobs.set(id, job);
     },
     seedDurableProbeEvent(overrides = {}) {
       const event = {
@@ -687,7 +704,7 @@ describe('postgres probe result ingest — transaction and historical repair', (
 });
 
 describe('postgres probe result ingest — reclaimed leases', () => {
-  it('accepts a result from the new holder after the lease expired', async () => {
+  it('rejects fresh positive evidence from a new holder after an expired execution lease', async () => {
     const ttlMs = probeJobLeaseTtlSeconds(CONSTRAINTS) * 1000;
     const past = new Date(Date.parse(NOW) - ttlMs - 60_000).toISOString();
 
@@ -697,10 +714,14 @@ describe('postgres probe result ingest — reclaimed leases', () => {
     h.seedJob('pjob_1', { status: 'leased', leased_by: WORKER, leased_at: past });
 
     const out = await h.svc.ingestProbeResult(OTHER_WORKER_CTX, 'pjob_1', VALID_BODY);
-    assert.equal(out.error, undefined, 'reclaimed job must accept the new holder result');
-    assert.equal(out.run_id, 'run_1');
-    assert.equal(h.job().status, 'completed');
-    assert.equal(h.run().status, 'collecting');
+    assert.deepEqual(out, { error: 'probe_execution_not_reserved', status: 409 });
+    assert.equal(h.job().status, 'leased');
+    assert.equal(h.job().leased_by, WORKER);
+    assert.equal(h.job().leased_at, past);
+    assert.equal(h.run().status, 'running');
+    assert.equal(h.probeEvents().length, 0);
+    assert.equal(h.state.evidence.length, 0);
+    assert.equal(h.state.audit.length, 0);
   });
 
   it('does not let another worker steal a job whose lease is still live', async () => {

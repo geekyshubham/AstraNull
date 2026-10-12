@@ -4,10 +4,8 @@
  * resourceExhaustionTaxonomy.mjs, capabilityProbes.mjs, or probe-worker.mjs.
  *
  * Tiering discipline (per shared brief):
- *  - E3: a single bounded semantic probe reveals posture. HTTP/2 frame vectors reuse the
- *        existing http2_frame_probe check; HTTP/3/QPACK vectors map only to E2 because the
- *        compatibility http3_control_probe observes Alt-Svc metadata and no frame semantics. Declared-size /
- *        declared-encoding acceptance is read by the new (safe) l7_resource_posture_probe.
+ *  - E2: bounded SETTINGS/frame/Alt-Svc and small URI observations do not validate
+ *        flood, parser-limit or decompression mechanisms. Body delivery is unsupported.
  *  - E4: fundamentally a flood or needs a real bomb / crafted exhaustion payload. Mapped to a
  *        governed scenario family (see src/contracts/governedScenarios.mjs) with a reason.
  *        governed_scenario_family is null where no flood analog exists (bomb/exploit/parser
@@ -35,9 +33,8 @@ export const PROPOSED_PROBE_KINDS = Object.freeze([
     kind: 'l7_resource_posture_probe',
     max_requests: 3,
     rationale:
-      'Reads declared-size / declared-encoding acceptance posture with <=3 bounded requests, '
-      + 'each carrying a single tiny inert benign marker. Declares an oversize/compressed shape '
-      + 'via headers only; never sends a decompression bomb, hash-collision set, or flood.',
+      'Observes one actual small inert URI sample. Compressed body delivery is unsupported; '
+      + 'no declared header size is treated as a performed mechanism or mitigation evidence.',
   },
 ]);
 
@@ -56,9 +53,8 @@ export const PROPOSED_CHECKS = Object.freeze([
     name: 'Compressed Request Decompression Acceptance Posture (Safe)',
     vector_family: 'l7',
     description:
-      'One or two bounded requests declare a compressed body (Content-Encoding gzip/br) with a '
-      + 'declared-decompressed-size header and a tiny inert benign body — no decompression bomb is '
-      + 'sent. Reads whether the origin rejects the declared shape (413/415/400) before doing work.',
+      'Compressed-body delivery is unsupported without an approved business-safe endpoint. No POST, '
+      + 'compressed payload or substitute GET is emitted; decompression enforcement remains unknown.',
     safety_class: 'safe',
     risk_class: 'safe',
     prerequisites: [],
@@ -67,8 +63,7 @@ export const PROPOSED_CHECKS = Object.freeze([
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic:
-      'Origin that rejects a declared oversize compressed request (413/415/431/400) is protected; '
-      + 'one that accepts it for processing raises a decompression-acceptance readiness finding.',
+      'Not-run/inconclusive. Unsupported body delivery cannot validate decompression limits or earn readiness credit.',
     probe_profile: buildL7ResourcePostureProfile({ marker_class: 'declared_content_encoding', max_requests: 2 }),
     safety_constraints: { max_events: 2, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -82,8 +77,8 @@ export const PROPOSED_CHECKS = Object.freeze([
     name: 'Request URI / Parameter Size Limit Posture (Safe)',
     vector_family: 'l7',
     description:
-      'One bounded request carries a benign 1KB URI marker plus a declared-URI-length header. Reads '
-      + 'whether the origin enforces a URI / query size limit (414/431/400) before parsing.',
+      'One bounded GET carries an actual benign 1KB query marker on the declared path. Records only the response '
+      + 'to that small sample, not enforcement of an advertised 64KB parser or header limit.',
     safety_class: 'safe',
     risk_class: 'safe',
     prerequisites: [],
@@ -92,8 +87,7 @@ export const PROPOSED_CHECKS = Object.freeze([
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic:
-      'Origin that rejects an oversize declared URI/query (414/431/400) is protected; one that accepts '
-      + 'it for parsing raises a parser-size readiness finding.',
+      'External observation only. No observed status establishes parser protection or weakness; no readiness credit.',
     probe_profile: buildL7ResourcePostureProfile({ marker_class: 'declared_oversize_uri', max_requests: 1 }),
     safety_constraints: { max_events: 1, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -106,21 +100,21 @@ export const PROPOSED_CHECKS = Object.freeze([
 // E3 / E2 / E1 mappings. Frame vectors reuse existing checks BY REFERENCE; posture vectors use the
 // two new checks above; cost/wallet vectors reuse ops.autoscaling_cost.readiness (E1).
 export const PROPOSED_REGISTRY_MAPPING = Object.freeze([
-  // HTTP/2 frame-level vectors -> existing http2_frame_probe check (E3).
-  { registry_id: 'APP-080', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-081', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-082', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-083', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-084', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-085', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-090', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
-  { registry_id: 'APP-091', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E3' },
+  // HTTP/2 frame-level vectors -> existing http2_frame_probe check (E2).
+  { registry_id: 'APP-080', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-081', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-082', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-083', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-084', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-085', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-090', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
+  { registry_id: 'APP-091', add_check_ids: ['l7.http2_continuation.readiness'], target_tier: 'E2' },
   // HTTP/3 frame / QPACK vectors -> Alt-Svc observation only (E2), not semantic frame evidence.
   { registry_id: 'APP-196', add_check_ids: ['protocol.http3_control_stream.readiness'], target_tier: 'E2' },
   { registry_id: 'APP-197', add_check_ids: ['protocol.http3_control_stream.readiness'], target_tier: 'E2' },
-  // Declared-encoding / declared-size acceptance posture -> new l7_resource_posture_probe (E3).
-  { registry_id: 'APP-033', add_check_ids: ['l7.compressed_request_decompression.posture'], target_tier: 'E3' },
-  { registry_id: 'APP-025', add_check_ids: ['l7.request_parser_size.posture'], target_tier: 'E3' },
+  // Declared-encoding / declared-size acceptance posture -> new l7_resource_posture_probe (E2).
+  { registry_id: 'APP-033', add_check_ids: ['l7.compressed_request_decompression.posture'], target_tier: 'E2' },
+  { registry_id: 'APP-025', add_check_ids: ['l7.request_parser_size.posture'], target_tier: 'E2' },
   // Denial-of-wallet / cost exhaustion -> existing declared cost-guardrail posture (E1).
   { registry_id: 'APP-135', add_check_ids: ['ops.autoscaling_cost.readiness'], target_tier: 'E1' },
   { registry_id: 'APP-137', add_check_ids: ['ops.autoscaling_cost.readiness'], target_tier: 'E1' },

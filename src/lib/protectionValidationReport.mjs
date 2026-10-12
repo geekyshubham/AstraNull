@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { firewallBaselineFor, firewallComparisonProofGap, firewallRequiredReferences } from './firewallComparisonProof.mjs';
 import {
   DEFAULT_FRESHNESS_WINDOW_SECONDS,
   PROTECTION_LAYERS,
@@ -6,10 +7,14 @@ import {
   PROTECTION_VALIDATION_LIMITATIONS,
   REQUIRED_LIMITATIONS,
   assessFreshness,
+  classifyPathValidationItem,
   emptyProtectionMatrixRow,
   normalizeLimitations,
   sha256Digest,
 } from '../contracts/protectionValidation.mjs';
+import { observationAssuranceGap, versionGapFor } from './protectionCoverage.mjs';
+import { currentAssuranceGap, ASSURANCE_SCOPE_VERSION } from './assuranceScope.mjs';
+import { checkMatchesScenario, deriveAttemptObservation } from './entryPathComparison.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS, evidenceTierForProbeKind } from './probeEvidenceTiers.mjs';
 import {
   FIREWALL_UNRESOLVED_STATUSES,
@@ -20,7 +25,7 @@ import {
   verifyProtectionEvaluation,
 } from './protectionValidationFindings.mjs';
 
-export const PROTECTION_REPORT_SEMANTICS_VERSION = 'protection-validation-report-v1';
+export const PROTECTION_REPORT_SEMANTICS_VERSION = 'protection-validation-report-v2';
 export const MAX_REPORT_CONCLUSIONS = 500;
 export const MAX_REPORT_LISTED_IDS = 200;
 
@@ -69,19 +74,170 @@ export function evidenceReadinessClass(ref, catalogById) {
   const kind = check?.probe_profile?.kind;
   if (typeof kind !== 'string') return { eligible: false, reason: 'check_not_in_catalog', tier: null };
   if (kind === 'metadata_marker' || kind === 'ops_readiness') return { eligible: false, reason: 'declaration_only_check', tier: evidenceTierForProbeKind(kind) };
-  if (OBSERVATION_ONLY.has(kind)) return { eligible: false, reason: 'observation_only_check', tier: evidenceTierForProbeKind(kind) };
+  if (OBSERVATION_ONLY.has(kind) || check.evidence_tier === 'E2' || check.observation_only === true || check.readiness_conclusion === false || check.probe_profile?.observation_only === true || check.probe_profile?.readiness_conclusion === false) return { eligible: false, reason: 'observation_only_check', tier: evidenceTierForProbeKind(kind) };
   return { eligible: true, reason: null, tier: evidenceTierForProbeKind(kind) };
 }
 
-function newestObservedAt(refs) {
-  return list(refs).map((ref) => ref.observed_at).filter(Boolean).sort().at(-1) ?? null;
+function itemFreshness(refs, windowSeconds, now) {
+  const required = list(refs);
+  const times = required.map((ref) => Date.parse(ref?.observed_at ?? ''));
+  if (!required.length || times.some((time) => !Number.isFinite(time))) return { state: 'no_evidence', observed_at: null, age_seconds: null, expires_at: null };
+  const oldest = new Date(Math.min(...times)).toISOString();
+  if (times.some((time) => time > new Date(now).getTime())) return { state: 'future_evidence', observed_at: oldest, age_seconds: null, expires_at: null };
+  const fresh = assessFreshness(oldest, windowSeconds, now);
+  return { state: fresh.fresh ? 'fresh' : 'stale', observed_at: oldest, age_seconds: fresh.age_seconds, expires_at: fresh.expires_at, policy: 'oldest_required_observation' };
 }
 
-function itemFreshness(refs, windowSeconds, now) {
-  const newest = newestObservedAt(refs);
-  if (!newest) return { state: 'no_evidence', observed_at: null, age_seconds: null, expires_at: null };
-  const fresh = assessFreshness(newest, windowSeconds, now);
-  return { state: fresh.fresh ? 'fresh' : 'stale', observed_at: newest, age_seconds: fresh.age_seconds, expires_at: fresh.expires_at };
+function firewallItemFreshness(item, evaluation, evidenceInputs, refs, reportWindowSeconds, now) {
+  const entry = firewallBaselineFor(evaluation, evidenceInputs)?.entries
+    ?.find((row) => row.expectation_id === item.expectation_id);
+  const windowSeconds = Number.isSafeInteger(entry?.freshness_window_seconds) && entry.freshness_window_seconds > 0
+    ? Math.min(reportWindowSeconds, entry.freshness_window_seconds) : reportWindowSeconds;
+  // A side reference records its latest event, but every required actual sample must
+  // still be fresh. Presentation must not extend the oldest sample's validity.
+  const oldestRefs = refs.map((ref) => {
+    const eventTimes = list(ref.evidence_ids).map((id) => {
+      const vault = list(evidenceInputs?.evidenceItems).find((row) => row.id === id
+        && row.tenant_id === evaluation.tenant_id && row.test_run_id === ref.test_run_id);
+      const event = list(evidenceInputs?.events).find((row) => row.id === (vault?.related_event_id ?? id)
+        && row.tenant_id === evaluation.tenant_id && row.test_run_id === ref.test_run_id);
+      return Date.parse(event?.timestamp ?? '');
+    }).filter(Number.isFinite);
+    const declared = Date.parse(ref.observed_at ?? '');
+    return { ...ref, observed_at: Number.isFinite(declared) && eventTimes.length
+      ? new Date(Math.min(declared, ...eventTimes)).toISOString() : ref.observed_at };
+  });
+  return { ...itemFreshness(oldestRefs, windowSeconds, now), window_seconds: windowSeconds,
+    report_window_seconds: reportWindowSeconds, baseline_window_seconds: entry?.freshness_window_seconds ?? null };
+}
+
+const timeOf = (value) => value == null ? NaN : new Date(value).getTime();
+const availableAt = (row, cutoff, fallback) => [row?.created_at, row?.ingested_at].filter((value) => value != null).concat(fallback == null ? [] : [fallback]).every((value) => Number.isFinite(timeOf(value)) && timeOf(value) <= cutoff);
+
+/** References are custody pointers, not trusted observations by themselves. */
+function referenceProofGap(ref, { tenantId, targets, catalogById, evidenceInputs, now, observationPermitted = false, observations = [] }) {
+  if (evidenceInputs?.input_complete !== true) return 'complete_evidence_inputs_unavailable';
+  const cutoff = timeOf(now);
+  const run = list(evidenceInputs.runs).find((row) => row.id === ref.test_run_id && row.tenant_id === tenantId);
+  const target = targets.find((row) => row?.id === ref.target_id && row.tenant_id === tenantId);
+  const check = catalogById.get(ref.check_id);
+  if (!run || !target || !['signed_probe', 'live_external'].includes(run.producer_kind) || !Number.isFinite(timeOf(run.created_at)) || !Number.isFinite(timeOf(run.completed_at)) || run.target_id !== ref.target_id || run.check_id !== ref.check_id || !['verdicted', 'closed', 'completed', 'finalized'].includes(run.status) || !availableAt(run, cutoff, run.completed_at)) return 'referenced_run_unverified';
+  if (run.check_version !== ref.check_version || run.scenario_version !== ref.scenario_version) return 'reference_run_version_mismatch';
+  const recorded = run.safety_constraints?.assurance_scope ?? run.provenance_json?.assurance_scope;
+  if (!recorded?.target?.definition_digest) return 'recorded_target_scope_missing';
+  if (recorded.version !== ASSURANCE_SCOPE_VERSION) return 'assurance_scope_version_mismatch';
+  const currentRecord = (rows, id) => list(rows).find((row) => row.id === id && row.tenant_id === tenantId
+    && !row.deleted_at && !row.archived_at && Number.isFinite(timeOf(row.created_at)) && availableAt(row, cutoff));
+  const scopeGap = currentAssuranceGap({ run, target,
+    policy: recorded.policy?.id ? currentRecord(evidenceInputs.policies, recorded.policy.id) : null,
+    targetGroup: recorded.target_group?.id ? currentRecord(evidenceInputs.groups, recorded.target_group.id) : null });
+  if (scopeGap) return scopeGap;
+  const events = list(evidenceInputs.events);
+  const resultEvents = list(ref.evidence_ids).map((id) => {
+    const direct = events.find((row) => row.id === id);
+    if (direct) return direct;
+    const vault = list(evidenceInputs.evidenceItems).find((row) => row.id === id && row.tenant_id === tenantId && row.test_run_id === run.id && availableAt(row, cutoff));
+    return events.find((row) => row.id === vault?.related_event_id);
+  });
+  const nonce = run.correlation?.nonce_hash ?? run.correlation_json?.nonce_hash;
+  if (typeof nonce !== 'string' || !nonce || !resultEvents.length || resultEvents.some((event) => !event || event.nonce_hash !== nonce || event.tenant_id !== tenantId || event.test_run_id !== run.id || event.producer_kind !== 'signed_probe' || event.signal_type !== 'probe_result' || !Number.isFinite(timeOf(event.ingested_at)) || !availableAt(event, cutoff, event.timestamp))) return 'referenced_signed_evidence_unverified';
+  const referenceTime = (observationPermitted ? Math.max : Math.min)(...resultEvents.map((event) => timeOf(event.timestamp)));
+  if (referenceTime !== timeOf(ref.observed_at)) return 'reference_observation_time_mismatch';
+  for (const event of resultEvents) {
+    const metadata = event.metadata ?? event.metadata_json ?? {};
+    const finiteObservation = observationPermitted && metadata.observation_complete === true
+      && ['tcp_connect', 'udp_probe', 'port_scan_bounded', 'host_sni_bypass', 'tls_audit'].includes(check?.probe_profile?.kind);
+    if (!finiteObservation && ![metadata.complete, metadata.evidence_complete, metadata.capture_complete, metadata.comparison_complete].some((value) => value === true)) return 'complete_observation_proof_missing';
+    if (!metadata.source_perspective || metadata.source_perspective !== ref.source_perspective) return 'reference_source_mismatch';
+    const gap = observationAssuranceGap({ probe_metadata: metadata }, null, check);
+    if (gap && !(observationPermitted && gap === 'observation_only_result')) return gap;
+    if ((metadata.profile_kind ?? metadata.probe_kind ?? check?.probe_profile?.kind) !== check?.probe_profile?.kind) return 'actual_probe_kind_mismatch';
+    observations.push({ ref, run, check, derived: deriveAttemptObservation({
+      probe_kind: check?.probe_profile?.kind, external_result: run.probe_external_result ?? metadata.external_result,
+      probe_metadata: metadata,
+    }) });
+  }
+  return check ? versionGapFor(check, run, null) : 'check_not_in_catalog';
+}
+
+/** Reclassify performed observations, not retained result strings or completeness labels. */
+function performedClassificationGap({ item, relation, expectation, evaluation, proofs, proofContext }) {
+  if (item?.expectation_id) return firewallComparisonProofGap({ item, evaluation, expectation,
+    proofContext, verifyReference: referenceProofGap, resolveSourcePerspective: proofContext.resolveSourcePerspective });
+  if (!relation || !expectation || expectation.scenario !== item.scenario) return 'actual_expectation_binding_missing';
+  if (!proofs.length || proofs.some(({ ref, check }) => ref.target_id !== relation.entry_target_id
+    || !checkMatchesScenario(check, item.scenario))) return 'actual_scenario_binding_mismatch';
+  let primary = null;
+  if (relation.relation_kind !== 'primary_route' && !['intentionally_public', 'must_not_be_reachable'].includes(relation.expected_behavior)) {
+    const primaryItem = list(evaluation?.items).find((row) => row.entry_path_id === evaluation?.primary_entry_path_id && row.scenario === item.scenario);
+    const set = evaluation?.primary_evidence_set ?? (evaluation?.anchor_target_id === relation.anchor_target_id && primaryItem ? {
+      tenant_id: evaluation.tenant_id, anchor_target_id: evaluation.anchor_target_id, target_id: evaluation.anchor_target_id,
+      expectation_id: expectation.id, expectation_digest: expectation.digest, expectation_version: expectation.expectation_version,
+      references: primaryItem.evidence_refs,
+    } : null);
+    if (!set || set.tenant_id !== proofContext.tenantId || set.anchor_target_id !== relation.anchor_target_id
+      || set.target_id !== relation.anchor_target_id || set.expectation_id !== expectation.id
+      || set.expectation_digest !== expectation.digest || set.expectation_version !== expectation.expectation_version
+      || !list(set.references).length) return 'actual_primary_comparison_missing';
+    const primaryProofs = [];
+    for (const ref of set.references) {
+      if (ref.target_id !== relation.anchor_target_id || ref.finalized !== true
+        || !assessFreshness(ref.observed_at, DEFAULT_FRESHNESS_WINDOW_SECONDS, proofContext.now).fresh
+        || proofs.some((proof) => proof.ref.source_perspective !== ref.source_perspective)) return 'actual_primary_comparison_mismatch';
+      const gap = referenceProofGap(ref, { ...proofContext, observations: primaryProofs });
+      if (gap) return gap;
+    }
+    if (primaryProofs.some(({ check, derived }) => !checkMatchesScenario(check, item.scenario)
+      || derived.baseline_health !== 'healthy' || derived.enforcement !== 'enforced')) return 'actual_primary_comparison_unverified';
+    primary = primaryProofs[0]?.derived;
+  }
+  for (const { derived } of proofs) {
+    const classified = classifyPathValidationItem({ relation,
+      primaryBaselineHealth: (primary ?? derived).baseline_health,
+      primaryEnforcement: (primary ?? derived).enforcement,
+      observation: derived.observation, enforcement: derived.enforcement });
+    if (classified.outcome !== item.outcome) return 'actual_outcome_mismatch';
+  }
+  return null;
+}
+
+/** Read-time qualification only; immutable evaluation outcomes and hashes are retained. */
+function itemAssurance({ tenantId, item, evaluation, relation = null, expectation = null, targets = [], catalogById, evidenceInputs, freshness, now, resolveSourcePerspective }) {
+  const reasons = new Set();
+  const refs = item?.expectation_id ? firewallRequiredReferences(item, evaluation, evidenceInputs) : list(item?.evidence_refs);
+  if (!refs.length || refs.some((ref) => ref?.finalized !== true || !list(ref.evidence_ids).length)) reasons.add('required_finalized_evidence_missing');
+  if (freshness.state !== 'fresh') reasons.add(freshness.state);
+  const proofs = [];
+  const proofContext = { tenantId, targets, catalogById, evidenceInputs, now, resolveSourcePerspective };
+  for (const ref of refs) {
+    const check = catalogById.get(ref.check_id);
+    const eligibility = evidenceReadinessClass(ref, catalogById);
+    if (!eligibility.eligible && !(item?.expectation_id && eligibility.reason === 'observation_only_check')) reasons.add(eligibility.reason);
+    if (check) { const gap = versionGapFor(check, ref, null); if (gap) reasons.add(gap); }
+    const proofGap = referenceProofGap(ref, { ...proofContext, observationPermitted: Boolean(item?.expectation_id), observations: proofs });
+    if (proofGap) reasons.add(proofGap);
+  }
+  const classificationGap = performedClassificationGap({ item, relation, expectation, evaluation, proofs, proofContext });
+  if (classificationGap) reasons.add(classificationGap);
+  const observed = Date.parse(freshness.observed_at ?? '');
+  const cutoff = new Date(now).getTime();
+  if (Date.parse(evaluation?.evaluated_at ?? '') > cutoff || Date.parse(evaluation?.created_at ?? '') > cutoff) reasons.add('evaluation_unavailable_at_cutoff');
+  for (const [record, reason] of [[relation, 'entry_path_changed'], [expectation, 'expectation_changed'], ...targets.map((target) => [target, 'target_definition_changed'])]) {
+    if (!record) continue;
+    if ([record.created_at, record.ingested_at].filter((value) => value != null).some((value) => !Number.isFinite(timeOf(value)) || timeOf(value) > cutoff)) reasons.add('definition_unavailable_at_cutoff');
+    const changed = Date.parse(record.assurance_invalidated_at ?? record.material_updated_at ?? record.definition_updated_at ?? record.updated_at ?? record.created_at ?? '');
+    if (Number.isFinite(changed) && changed > observed && changed <= cutoff) reasons.add(reason);
+  }
+  const pins = evaluation?.provenance?.assurance_scope ?? evaluation?.assurance_scope;
+  const pinnedPath = pins?.entry_paths?.[relation?.id];
+  if (pinnedPath && pinnedPath.declaration_digest !== relation?.declaration_digest) reasons.add('entry_path_changed');
+  if (pins?.expectation_digest && pins.expectation_digest !== (expectation?.digest ?? expectation?.expectation_digest)) reasons.add('expectation_changed');
+  for (const ref of refs) {
+    const target = targets.find((row) => row?.id === ref.target_id);
+    const pinned = pins?.targets?.[ref.target_id];
+    if (pinned && (pinned.kind !== target?.kind || pinned.value !== target?.value)) reasons.add('target_definition_changed');
+  }
+  return { version: 'protection-report-assurance.v2', status: reasons.size ? 'not_established' : item?.expectation_id ? 'sampled_ingress_only' : 'tested_path_scenario_only', retest_required: refs.length > 0 && reasons.size > 0, reasons: [...reasons].sort(), establishes_layer_attribution: false, establishes_capacity: false };
 }
 
 function verifiedEvaluations(evaluations, kind, tenantId, exclusions) {
@@ -202,8 +358,10 @@ export function projectProtectionMatrixRows({
   entryPaths = [],
   pathEvaluations = [],
   pathExpectations = [],
+  targets = [],
   detections = [],
   checkCatalog = [],
+  evidenceInputs = null,
   now = new Date(),
   freshnessWindowSeconds = DEFAULT_FRESHNESS_WINDOW_SECONDS,
 } = {}) {
@@ -219,6 +377,8 @@ export function projectProtectionMatrixRows({
       .sort((a, b) => a.item.scenario.localeCompare(b.item.scenario));
     row.scenarios = current.map((entry) => {
       const freshness = itemFreshness(entry.item.evidence_refs, freshnessWindowSeconds, now);
+      const expectation = expectationById.get(entry.evaluation.expectation_id ?? entry.evaluation.provenance?.expectation_id) ?? [...expectationById.values()].filter((exp) => exp.scenario === entry.item.scenario && exp.anchor_target_id === relation.anchor_target_id).sort((a, b) => (b.expectation_version ?? 0) - (a.expectation_version ?? 0))[0] ?? null;
+      const currentAssurance = itemAssurance({ tenantId, evidenceInputs, item: entry.item, evaluation: entry.evaluation, relation, expectation, targets: targets.filter((target) => list(entry.item.evidence_refs).some((ref) => ref.target_id === target.id) || target.id === relation.anchor_target_id || target.id === relation.entry_target_id), catalogById, freshness, now });
       return {
         scenario: entry.item.scenario,
         outcome: entry.item.outcome,
@@ -231,6 +391,7 @@ export function projectProtectionMatrixRows({
         evidence_refs: list(entry.item.evidence_refs),
         limitations: [...list(entry.item.limitations)],
         freshness,
+        current_assurance: currentAssurance,
       };
     });
     row.outcome = rollupPathOutcome(row.scenarios.map((scenario) => scenario.outcome));
@@ -239,6 +400,8 @@ export function projectProtectionMatrixRows({
     row.latest_comparison_id = row.scenarios.map((scenario) => ({ id: scenario.evaluation_id, at: scenario.evaluated_at }))
       .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0]?.id ?? null;
     row.freshness = driving ? driving.freshness : null;
+    row.current_assurance = driving?.current_assurance ?? { status: 'not_established', retest_required: false, reasons: ['no_evidence'] };
+    row.path_observed_enforcement = driving && driving.current_assurance.status !== 'not_established' ? layerObservedEnforcement(row.outcome, relation, driving.reasons) : 'inconclusive';
     row.limitations = normalizeLimitations([...REQUIRED_LIMITATIONS.path_validation, ...row.scenarios.flatMap((scenario) => scenario.limitations)]);
     const drivingEvaluation = driving ? current.find((entry) => entry.evaluation.id === driving.evaluation_id)?.evaluation : null;
     const pinnedExpectationId = drivingEvaluation?.expectation_id ?? drivingEvaluation?.provenance?.expectation_id;
@@ -263,11 +426,16 @@ export function projectProtectionMatrixRows({
         return next;
       }
       const observed = layerObservedEnforcement(row.outcome, relation, driving.reasons);
-      const hasRefs = driving.evidence_refs.some((ref) => ref?.finalized !== false);
-      next.observed_enforcement = hasRefs || ['inconclusive', 'not_tested'].includes(observed) ? observed : 'inconclusive';
-      next.application_identity = row.outcome === 'scoped_application_bypass' ? 'confirmed' : (row.outcome === 'suspected_alternate_application_route' ? 'not_established' : 'not_tested');
-      next.suspected_bypass = ['scoped_application_bypass', 'suspected_alternate_application_route'].includes(row.outcome) ? 'suspected' : (row.outcome === 'consistent_enforcement' ? 'not_suspected' : 'unknown');
-      next.confirmed_scoped_bypass = row.outcome === 'scoped_application_bypass' ? 'confirmed' : (['consistent_enforcement', 'suspected_alternate_application_route', 'weaker_observed_enforcement'].includes(row.outcome) ? 'not_confirmed' : 'unknown');
+      const hasRefs = driving.evidence_refs.length > 0 && driving.evidence_refs.every((ref) => ref?.finalized === true && list(ref.evidence_ids).length > 0);
+      // External path behavior does not identify which stacked control produced it.
+      const currentQualified = driving.current_assurance.status !== 'not_established';
+      next.retained_path_observed_enforcement = observed;
+      next.path_observed_enforcement = currentQualified ? observed : 'inconclusive';
+      next.observed_enforcement = 'not_tested';
+      next.current_assurance = driving.current_assurance;
+      next.application_identity = currentQualified && row.outcome === 'scoped_application_bypass' ? 'confirmed' : 'not_established';
+      next.suspected_bypass = currentQualified && ['scoped_application_bypass', 'suspected_alternate_application_route'].includes(row.outcome) ? 'suspected' : 'unknown';
+      next.confirmed_scoped_bypass = currentQualified && row.outcome === 'scoped_application_bypass' ? 'confirmed' : 'unknown';
       next.attribution = 'unattributed';
       next.evidence_refs = hasRefs ? driving.evidence_refs : [];
       next.freshness = driving.freshness;
@@ -295,8 +463,11 @@ function conclusionId(parts) {
 
 function pathRowStatus(row, catalogById) {
   if (row.status !== 'active') return 'excluded';
-  if (PATH_GAP_OUTCOMES.includes(row.outcome)) return 'gap';
   if (row.outcome === 'not_tested' || row.outcome === 'skipped') return row.outcome;
+  if (PATH_GAP_OUTCOMES.includes(row.outcome)) {
+    if (row.current_assurance.status === 'not_established') return row.freshness?.state === 'stale' ? 'stale' : 'unknown';
+    return 'gap';
+  }
   if (row.outcome === 'inconclusive') return 'unknown';
   if (PATH_PASSING_OUTCOMES.includes(row.outcome)) {
     if (row.scenarios.some((scenario) => isUnavailableEvidenceItem('path_validation', scenario))) return 'unknown';
@@ -304,6 +475,7 @@ function pathRowStatus(row, catalogById) {
     const support = row.scenarios.map((scenario) => readinessSupport(scenario.evidence_refs, catalogById));
     if (support.some((entry) => entry.reason === 'observation_only_check')) return 'observation_only';
     if (support.some((entry) => !entry.eligible)) return 'unclassified_check';
+    if (row.scenarios.some((scenario) => scenario.current_assurance.status === 'not_established')) return 'unknown';
     if (row.required_layers.some((name) => row.layers.find((layer) => layer.layer === name)?.observed_enforcement !== 'enforced')) return 'unknown';
     return 'validated';
   }
@@ -334,6 +506,8 @@ export function buildProtectionValidationReport({
   firewallEvaluations = [],
   detections = [],
   checkCatalog = [],
+  evidenceInputs = null,
+  resolveSourcePerspective = undefined,
   freshnessWindowSeconds = DEFAULT_FRESHNESS_WINDOW_SECONDS,
   scope = {},
 } = {}) {
@@ -370,8 +544,10 @@ export function buildProtectionValidationReport({
     entryPaths: scopedPaths,
     pathEvaluations,
     pathExpectations,
+    targets,
     detections,
     checkCatalog,
+    evidenceInputs,
     now,
     freshnessWindowSeconds,
   });
@@ -396,11 +572,12 @@ export function buildProtectionValidationReport({
   }
   const applicationStatus = [...applications.entries()].map(([anchorId, appRows]) => {
     const statuses = appRows.map((row) => rowStatuses.get(row.entry_path_id));
+    const hasPrimary = appRows.some((row) => row.relation_kind === 'primary_route');
     const status = statuses.includes('gap') ? 'gap'
-      : statuses.every((value) => value === 'validated') ? 'validated'
+      : hasPrimary && statuses.every((value) => value === 'validated') ? 'validated'
         : statuses.every((value) => value === 'not_tested' || value === 'skipped') ? 'not_tested'
           : 'incomplete';
-    return { anchor_target_id: anchorId, status, has_primary_route: appRows.some((row) => row.relation_kind === 'primary_route') };
+    return { anchor_target_id: anchorId, status, has_primary_route: hasPrimary };
   });
 
   const hosts = new Map();
@@ -451,10 +628,13 @@ export function buildProtectionValidationReport({
   const firewallRows = scopedExpectations.map((expectation) => {
     const current = firewallSelection.selected.get(expectation.id) ?? null;
     const item = current?.item ?? null;
-    const freshness = item ? itemFreshness(item.evidence_refs, freshnessWindowSeconds, now) : { state: 'no_evidence', observed_at: null, age_seconds: null, expires_at: null };
+    const requiredRefs = item ? firewallRequiredReferences(item, current?.evaluation, evidenceInputs) : [];
+    const freshness = item ? firewallItemFreshness(item, current.evaluation, evidenceInputs, requiredRefs, freshnessWindowSeconds, now) : { state: 'no_evidence', observed_at: null, age_seconds: null, expires_at: null };
     let status = firewallItemStatus(item);
     if (status === 'accepted' && freshness.state !== 'fresh') status = 'stale';
-    return { expectation, current, item, status, freshness };
+    const assurance = itemAssurance({ tenantId, evidenceInputs, item, evaluation: current?.evaluation, expectation, targets: [...new Set(requiredRefs.map((ref) => ref.target_id))].map((id) => targetById.get(id)).filter(Boolean), catalogById, freshness, now, resolveSourcePerspective });
+    if (['accepted', 'gap'].includes(status) && assurance.status === 'not_established') status = freshness.state === 'stale' ? 'stale' : 'not_comparable';
+    return { expectation, current, item, status, freshness, current_assurance: assurance };
   });
 
   const pairs = new Map();
@@ -516,6 +696,7 @@ export function buildProtectionValidationReport({
         subject: { anchor_target_id: row.anchor_target_id, entry_path_id: row.entry_path_id, entry_target_id: row.entry_target_id, relation_kind: row.relation_kind },
         scenario: scenario.scenario,
         result: scenario.outcome,
+        result_role: 'retained_immutable_comparison',
         reasons: scenario.reasons,
         compatibility_reasons: scenario.compatibility_reasons,
         evaluation_id: scenario.evaluation_id,
@@ -523,8 +704,9 @@ export function buildProtectionValidationReport({
         item_index: scenario.item_index,
         evidence_refs: scenario.evidence_refs,
         freshness: scenario.freshness,
-        readiness_eligible: support.eligible,
-        readiness_exclusion_reason: support.reason,
+        readiness_eligible: support.eligible && scenario.current_assurance.status !== 'not_established',
+        readiness_exclusion_reason: support.reason ?? scenario.current_assurance.reasons[0] ?? null,
+        current_assurance: scenario.current_assurance,
         ignored_for_findings: isUnavailableEvidenceItem('path_validation', scenario),
         attribution: 'unattributed',
         limitations: scenario.limitations,
@@ -541,6 +723,7 @@ export function buildProtectionValidationReport({
       subject: { expectation_id: row.expectation.id, destination_target_id: row.expectation.destination_target_id, change_id: row.expectation.change_id },
       scenario: null,
       result: row.item.status,
+      result_role: 'retained_immutable_comparison',
       gap_kind: row.item.gap_kind ?? null,
       expectation_met: row.item.expectation_met ?? null,
       reasons: [...list(row.item.reasons)],
@@ -552,8 +735,9 @@ export function buildProtectionValidationReport({
       item_index: row.current.item_index,
       evidence_refs: list(row.item.evidence_refs),
       freshness: row.freshness,
-      readiness_eligible: support.eligible,
-      readiness_exclusion_reason: support.reason,
+      readiness_eligible: support.eligible && row.current_assurance.status !== 'not_established',
+      readiness_exclusion_reason: support.reason ?? row.current_assurance.reasons[0] ?? null,
+      current_assurance: row.current_assurance,
       ignored_for_findings: isUnavailableEvidenceItem('firewall_change', row.item),
       attribution: 'unattributed',
       limitations: [...list(row.item.limitations)],
@@ -646,6 +830,7 @@ export function buildProtectionValidationReport({
       },
       target_check_pairs: {
         unit: 'target_check_pair',
+        eligibility_role: 'catalog_applicability_not_current_assurance',
         denominator: pairList.length,
         readiness_eligible: pairList.filter((pair) => pair.eligible).length,
         observation_only: pairList.filter((pair) => pair.reason === 'observation_only_check').length,
@@ -655,7 +840,7 @@ export function buildProtectionValidationReport({
         unit: 'firewall_expectation',
         denominator: firewallRows.length,
         by_status: countBy(firewallRows.map((row) => row.status), ['accepted', 'gap', 'inconclusive', 'not_tested', 'stale', 'not_comparable']),
-        gaps: countBy(firewallRows.filter((row) => row.item?.gap_kind).map((row) => row.item.gap_kind), ['forbidden_service_newly_reachable', 'required_service_newly_unavailable']),
+        gaps: countBy(firewallRows.filter((row) => row.status === 'gap' && row.item?.gap_kind).map((row) => row.item.gap_kind), ['forbidden_service_newly_reachable', 'required_service_newly_unavailable']),
       },
     },
     detection: {

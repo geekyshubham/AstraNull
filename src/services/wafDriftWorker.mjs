@@ -1,3 +1,4 @@
+import { detectPostureDrifts } from '../lib/wafPostureAssurance.mjs';
 import { audit } from '../audit.mjs';
 import { loadRuntimeConfig } from '../config.mjs';
 import {
@@ -99,73 +100,6 @@ function postureSnapshotsForAsset(ctx, assetId) {
 function latestPosturePair(snapshots) {
   if (snapshots.length < 2) return { current: snapshots[0] ?? null, previous: snapshots[1] ?? null };
   return { current: snapshots[0], previous: snapshots[1] };
-}
-
-function postureSummaryFromSnapshot(snapshot) {
-  if (!snapshot) return {};
-  return {
-    status: snapshot.status,
-    reason_codes: snapshot.reason_codes ?? [],
-    ...(snapshot.detected_vendor ? { detected_vendor: snapshot.detected_vendor } : {}),
-    ...(snapshot.detected_product ? { detected_product: snapshot.detected_product } : {}),
-  };
-}
-
-function detectPostureDrifts(previous, current) {
-  if (!previous || !current) return [];
-  const drifts = [];
-  const before = postureSummaryFromSnapshot(previous);
-  const after = postureSummaryFromSnapshot(current);
-
-  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'unprotected') {
-    const driftType = after.detected_vendor || after.detected_product ? 'mode_downgrade' : 'fingerprint_loss';
-    drifts.push({
-      drift_type: driftType,
-      severity: 'critical',
-      before_summary_json: before,
-      after_summary_json: after,
-      reason_codes: current.reason_codes ?? [],
-    });
-  }
-
-  if (
-    previous.detected_vendor
-    && !current.detected_vendor
-    && current.status !== 'protected'
-    && !drifts.some((drift) => drift.drift_type === 'fingerprint_loss')
-  ) {
-    drifts.push({
-      drift_type: 'fingerprint_loss',
-      severity: 'high',
-      before_summary_json: before,
-      after_summary_json: after,
-      reason_codes: current.reason_codes ?? [],
-    });
-  }
-
-  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'underprotected') {
-    const codes = new Set(current.reason_codes ?? []);
-    if (codes.has('origin_bypass_confirmed')) {
-      drifts.push({
-        drift_type: 'origin_bypass_new',
-        severity: 'critical',
-        before_summary_json: before,
-        after_summary_json: after,
-        reason_codes: current.reason_codes ?? [],
-      });
-    }
-    if (codes.has('monitor_only_behavior') || codes.has('rule_mode_changed')) {
-      drifts.push({
-        drift_type: 'mode_downgrade',
-        severity: 'critical',
-        before_summary_json: before,
-        after_summary_json: after,
-        reason_codes: current.reason_codes ?? [],
-      });
-    }
-  }
-
-  return drifts;
 }
 
 function findOpenWafDriftEvent(ctx, wafAssetId, driftType) {
@@ -320,7 +254,7 @@ export function detectAssetDrift(ctx, assetId) {
 
   const postureSnapshots = postureSnapshotsForAsset(ctx, asset.id);
   const { current: currentPosture, previous: previousPosture } = latestPosturePair(postureSnapshots);
-  const postureDrifts = detectPostureDrifts(previousPosture, currentPosture);
+  const postureDrifts = detectPostureDrifts(previousPosture, currentPosture, { asOf: ctx.now ?? new Date() });
   for (const spec of postureDrifts) {
     const event = upsertDriftEvent(ctx, asset, spec);
     drifts.push(event);

@@ -22,6 +22,8 @@ import {
 } from './edgeFingerprint.mjs';
 import { assessWafEffectiveness } from './edgeDetectionProjection.mjs';
 import {
+  CANARY_NONCE_REQUEST_HEADER,
+  CANARY_ECHO_RESPONSE_HEADER,
   baselineHealth,
   classifyDirectOriginObservation,
   directOriginStatusFor,
@@ -43,20 +45,8 @@ const CLASS_MARKER_FAMILIES = Object.freeze({
   path_traversal: 'path_traversal_marker',
 });
 
-export const BENIGN_CLASS_MARKERS = Object.freeze({
-  xss: '<astranull-xss-probe/>',
-  sqli: "astranull' OR '1'='0",
-  path_traversal: '../../astranull-probe',
-});
-
-/** Safe evasion-class variants — single-request probes, not reusable attack tooling. */
-export const EVASION_VARIANT_MARKERS = Object.freeze({
-  sqli_encoded: encodeURIComponent(encodeURIComponent(BENIGN_CLASS_MARKERS.sqli)),
-  sqli_case: "AsTrAnUlL' oR '1'='0",
-  sqli_comment: "astranull' O/**/R '1'='0",
-  xss_encoded: encodeURIComponent(BENIGN_CLASS_MARKERS.xss),
-  path_encoded: encodeURIComponent(BENIGN_CLASS_MARKERS.path_traversal),
-});
+import { BENIGN_CLASS_MARKERS, EVASION_VARIANT_MARKERS } from './inertWafMarkers.mjs';
+export { BENIGN_CLASS_MARKERS, EVASION_VARIANT_MARKERS } from './inertWafMarkers.mjs';
 
 export const OUTSIDE_IN_SCAN_PHASES = Object.freeze([
   'baseline',
@@ -284,6 +274,9 @@ export function wafw00fGenericDetection({ baseline, noUserAgent, xss, pathTraver
   return { found: false, reason_code: null, reason: null };
 }
 
+const BODY_READ_COMPLETE = new WeakMap();
+export function signatureBodyComplete(res) { return BODY_READ_COMPLETE.get(res) === true; }
+
 function responseSnapshot(res, bodyText = '', declaredBlockSignature = null) {
   if (!res) {
     return {
@@ -308,11 +301,13 @@ function responseSnapshot(res, bodyText = '', declaredBlockSignature = null) {
       headers: res,
       bodyText,
       declared: declaredBlockSignature,
+      bodyComplete: signatureBodyComplete(res),
     }),
     status_code_class: status >= 500 ? '5xx' : status >= 400 ? '4xx' : status >= 300 ? '3xx' : '2xx',
     header_names: headerNamesFromResponse(res),
     cookie_names: cookieNamesFromResponse(res),
     server_header: headerValue(res, 'server'),
+    canary_echo: headerValue(res, CANARY_ECHO_RESPONSE_HEADER),
     block_page_signature_id: blockPageSignatureId,
     block_page_fingerprint_hash: blockPageSignatureId ? hashBodySnippet(bodyText) : null,
     connection_dropped: false,
@@ -324,13 +319,15 @@ function headersWithGet(res) {
   const headers = res?.headers;
   if (!headers || typeof headers.get === 'function') return res;
   const lower = Object.fromEntries(Object.entries(headers).map(([name, value]) => [String(name).toLowerCase(), value]));
-  return {
+  const wrapped = {
     ...res,
     headers: {
       get: (name) => (lower[String(name).toLowerCase()] ?? null),
       forEach: (fn) => Object.entries(lower).forEach(([name, value]) => fn(value, name)),
     },
   };
+  BODY_READ_COMPLETE.set(wrapped, signatureBodyComplete(res));
+  return wrapped;
 }
 
 /** Marker-grading snapshot with control-specific signatures from headers and a bounded body prefix. */
@@ -339,11 +336,15 @@ export function markerResponseSnapshot(res, bodyText = '', declaredBlockSignatur
 }
 
 /** Bounded body prefix for signature matching; HEAD responses and readers that fail yield ''. */
-export async function readSignatureBody(res, method = 'GET') {
+export async function readSignatureBody(res, method = 'GET', options = {}) {
   if (!res || String(method).toUpperCase() === 'HEAD') return '';
   try {
-    if (res.body?.getReader) return await readBoundedResponseBody(res, MAX_BODY_READ_BYTES);
-    if (typeof res.text === 'function') return String(await res.text()).slice(0, MAX_BODY_READ_BYTES);
+    if (res.body?.getReader) return await readBoundedResponseBody(res, MAX_BODY_READ_BYTES, options);
+    // A text()-only transport cannot guarantee a bounded read. Do not consume it.
+    if (typeof res.bodyText === 'string') {
+      BODY_READ_COMPLETE.set(res, Buffer.byteLength(res.bodyText) <= MAX_BODY_READ_BYTES && res.body_complete !== false);
+      return Buffer.from(res.bodyText).subarray(0, MAX_BODY_READ_BYTES).toString('utf8');
+    }
   } catch {
     return '';
   }
@@ -558,7 +559,7 @@ export function buildOutsideInPostureReport({
     (family) => markerResults.find((row) => row.family === family && row.variant === 'plain'),
   );
   const classCoverageComplete = classMarkerResults.every(Boolean);
-  const probeValidationPassed = classCoverageComplete
+  const probeValidationPassed = coverageComplete === true && classCoverageComplete
     && classMarkerResults.every((marker) => marker.blocked === true)
     && !anyMarkerAllowed
     && !probeInconclusive;
@@ -675,17 +676,6 @@ export function buildOutsideInPostureReport({
   };
 }
 
-function buildMultipartConfusionBody(marker, boundary = 'astranullBoundary7f3a') {
-  const fieldName = randomParamName();
-  return [
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="${fieldName}"`,
-    '',
-    marker,
-    `--${boundary}--`,
-    '',
-  ].join('\r\n');
-}
 
 function buildUrl(baseUrl, { pathSuffix = '', params = {}, rawParams = {} } = {}) {
   const url = new URL(baseUrl);
@@ -932,18 +922,30 @@ async function runBaselineGet(
   };
 }
 
-export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTES) {
+export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTES, { timeoutMs = 1000, signal } = {}) {
   const reader = res?.body?.getReader?.();
   if (!reader) return '';
 
   const chunks = [];
   let total = 0;
   let complete = false;
+  let stopped = false;
+  let resolveStopped;
+  const stopping = new Promise((resolve) => { resolveStopped = resolve; });
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    resolveStopped({ done: true });
+    Promise.resolve(reader.cancel('response_body_deadline_or_cancel')).catch(() => {});
+  };
+  const timer = setTimeout(stop, Math.max(1, Math.min(5000, Number(timeoutMs) || 1000)));
+  signal?.addEventListener('abort', stop, { once: true });
+  if (signal?.aborted) stop();
   try {
     while (total < maxBytes) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), stopping]);
       if (done) {
-        complete = true;
+        complete = !stopped;
         break;
       }
       if (!(value instanceof Uint8Array) || value.byteLength === 0) continue;
@@ -954,14 +956,11 @@ export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTE
       if (value.byteLength > remaining) break;
     }
   } finally {
-    if (!complete) {
-      try {
-        await reader.cancel('response_body_limit_reached');
-      } catch {
-        // The transport may already be closed; the copied evidence remains bounded.
-      }
-    }
-    reader.releaseLock?.();
+    BODY_READ_COMPLETE.set(res, complete && !stopped && res.body_complete !== false);
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+    if (!complete || stopped) Promise.resolve(reader.cancel('response_body_limit_reached')).catch(() => {});
+    try { reader.releaseLock?.(); } catch { /* A canceled pending read owns the lock until settled. */ }
   }
 
   const body = new Uint8Array(total);
@@ -977,21 +976,30 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null, 
   const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, deps));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = deps.jobDeadlineSignal;
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  let rejectCanceled;
+  const canceled = new Promise((_, reject) => { rejectCanceled = reject; });
+  const rejectOnAbort = () => rejectCanceled(Object.assign(new Error('probe canceled or deadline exceeded'),
+    { name: 'AbortError', ...(signal?.aborted ? { code: 'probe_job_deadline_exceeded' } : {}) }));
+  controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
   try {
-    const res = await fetchFn(url, {
+    if (signal?.aborted) { controller.abort(); await canceled; }
+    const res = await Promise.race([canceled, fetchFn(url, {
       method,
       headers,
       body,
       redirect: 'manual',
       signal: controller.signal,
       activity_phase,
-    });
+    })]);
     if (!res || !Number.isInteger(res.status)) {
       const error = new Error('invalid HTTP response from probe transport');
       error.code = 'invalid_probe_response';
       return { res: null, bodyText: '', error };
     }
-    const bodyText = await readBoundedResponseBody(res, FINGERPRINT_BODY_READ_BYTES);
+    const bodyText = await readBoundedResponseBody(res, FINGERPRINT_BODY_READ_BYTES, { timeoutMs, signal: controller.signal });
     return { res, bodyText, error: null };
   } catch (err) {
     if (
@@ -1003,6 +1011,8 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null, 
     return { res: null, bodyText: '', error: err };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+    controller.signal.removeEventListener('abort', rejectOnAbort);
   }
 }
 
@@ -1017,7 +1027,7 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
     ['multipart_confusion', 'POST'],
     ['origin_bypass', 'HEAD'],
   ]);
-  const availablePhases = OUTSIDE_IN_SCAN_PHASES.filter((phase) => hasDirectIp || phase !== 'origin_bypass');
+  const availablePhases = OUTSIDE_IN_SCAN_PHASES.filter((phase) => !['content_type_confusion', 'multipart_confusion'].includes(phase) && (hasDirectIp || phase !== 'origin_bypass'));
   const boundedBudget = Number.isInteger(budget) && budget > 0 ? budget : 0;
   const retained = new Set(
     OUTSIDE_IN_PHASE_RETENTION_PRIORITY
@@ -1070,6 +1080,7 @@ export async function runOutsideInWafScan(options = {}) {
     resolve6: options.resolve6,
     tlsConnect: options.tlsConnect,
     tlsHost: options.tlsHost,
+    jobDeadlineSignal: options.jobDeadlineSignal,
   };
   const started = Date.now();
   let requestsSent = 0;
@@ -1091,10 +1102,11 @@ export async function runOutsideInWafScan(options = {}) {
   const hostname = options.hostname ?? (() => {
     try { return new URL(url).hostname; } catch { return null; }
   })();
-  const plan = buildOutsideInScanPlan(budget, { hasDirectIp: Boolean(directIp && hostname) });
+  const originDeliveryAvailable = Boolean(directIp && hostname && typeof options.originBypassFn === 'function');
+  const plan = buildOutsideInScanPlan(budget, { hasDirectIp: originDeliveryAvailable });
   const plannedPhases = new Set(plan.map((entry) => entry.phase));
   const phasesPlanned = (options.fingerprintOnly === true ? ['baseline'] : OUTSIDE_IN_SCAN_PHASES).filter(
-    (phase) => Boolean(directIp && hostname) || phase !== 'origin_bypass',
+    (phase) => !['content_type_confusion', 'multipart_confusion'].includes(phase) && (originDeliveryAvailable || phase !== 'origin_bypass'),
   );
   const phasesDropped = phasesPlanned.filter((phase) => !plannedPhases.has(phase));
 
@@ -1151,7 +1163,9 @@ export async function runOutsideInWafScan(options = {}) {
     if (requestsSent >= budget) {
       return { error_class: 'request_budget_exhausted', requests_sent: requestsSent, phases: phaseLog };
     }
-    const baselineResult = await runBaselineGet(url, { ...DEFAULT_BROWSER_HEADERS }, {
+    const baselineResult = await runBaselineGet(url, { ...DEFAULT_BROWSER_HEADERS,
+      ...(options.canaryNonce ? { [CANARY_NONCE_REQUEST_HEADER]: options.canaryNonce } : {}),
+    }, {
       followRedirects,
       timeoutMs,
       requestBudget: budget - requestsSent,
@@ -1159,7 +1173,10 @@ export async function runOutsideInWafScan(options = {}) {
       declaredBlockSignature,
     });
     requestsSent += baselineResult.requests_sent;
-    baseline = baselineResult.snapshot;
+    baseline = { ...baselineResult.snapshot, observed_at: new Date().toISOString(),
+      scope: baselineResult.redirect_hops === 0 ? options.originScope ?? null : null,
+      application_identity: { confirmed: baselineResult.snapshot.canary_echo === options.canaryNonce && Boolean(options.canaryNonce), method: 'nonce_canary' },
+    };
     recordTransportError(baseline);
     redirectHops = baselineResult.redirect_hops;
     finalUrlHostname = baselineResult.final_url_hostname;
@@ -1325,73 +1342,13 @@ export async function runOutsideInWafScan(options = {}) {
     noUserAgent = await runGetPhase('no_user_agent', url, noUaHeaders);
   }
 
-  if (plannedPhases.has('content_type_confusion') && requestsSent < budget) {
-    requestsSent += 1;
-    const formBody = `${randomParamName()}=${encodeURIComponent(BENIGN_CLASS_MARKERS.sqli)}`;
-    const { res, bodyText, error } = await boundedRequest(url, {
-      method: 'POST',
-      activity_phase: 'content_type_confusion',
-      headers: {
-        ...DEFAULT_BROWSER_HEADERS,
-        'Content-Type': 'application/json',
-        'Content-Length': String(formBody.length),
-      },
-      body: formBody,
-    }, timeoutMs, deps);
-    const snapshot = error
-      ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-      : responseSnapshot(res, bodyText, declaredBlockSignature);
-    recordTransportError(snapshot);
-    recordPhase({
-      phase: 'content_type_confusion',
-      status_code: snapshot.status_code,
-      ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
-    });
-    const contentTypeEval = isBlockedOrChallenged(snapshot, baseline);
-    recordMarkerResult(markerResults, {
-      family: 'content_type_confusion',
-      variant: 'json_header_form_body',
-      ...contentTypeEval,
-      status_code: snapshot.status_code,
-    });
-  }
-
-  if (plannedPhases.has('multipart_confusion') && requestsSent < budget) {
-    requestsSent += 1;
-    const boundary = 'astranullBoundary7f3a';
-    const multipartBody = buildMultipartConfusionBody(BENIGN_CLASS_MARKERS.sqli, boundary);
-    const { res, bodyText, error } = await boundedRequest(url, {
-      method: 'POST',
-      headers: {
-        ...DEFAULT_BROWSER_HEADERS,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': String(multipartBody.length),
-      },
-      body: multipartBody,
-      activity_phase: 'multipart_confusion',
-    }, timeoutMs, deps);
-    const snapshot = error
-      ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
-      : responseSnapshot(res, bodyText, declaredBlockSignature);
-    recordTransportError(snapshot);
-    recordPhase({
-      phase: 'multipart_confusion',
-      status_code: snapshot.status_code,
-      ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
-    });
-    const multipartEval = isBlockedOrChallenged(snapshot, baseline);
-    recordMarkerResult(markerResults, {
-      family: 'multipart_confusion',
-      variant: 'multipart_form_field',
-      ...multipartEval,
-      status_code: snapshot.status_code,
-    });
-  }
+  // Body/parser phases have no approved business-safe delivery contract. They are not executable.
 
   let originBypassAttempted = false;
   let originResponse = null;
   let originError = null;
   let originBodyText = null;
+  let originBodyComplete = false;
   const canaryNonce = typeof options.canaryNonce === 'string' && options.canaryNonce.trim()
     ? options.canaryNonce.trim()
     : null;
@@ -1399,9 +1356,16 @@ export async function runOutsideInWafScan(options = {}) {
     && requestsSent < budget && typeof options.originBypassFn === 'function') {
     requestsSent += 1;
     originBypassAttempted = true;
-    ({ res: originResponse, error: originError, bodyText: originBodyText = null } = await options.originBypassFn({
+    ({ res: originResponse, error: originError, bodyText: originBodyText = null, bodyComplete: originBodyComplete = false } = await options.originBypassFn({
       directIp, hostname, timeoutMs, deps, canaryNonce,
     }));
+    if (!originError && originResponse && originBodyText == null) {
+      originBodyText = await readSignatureBody(originResponse, { timeoutMs, signal: deps.jobDeadlineSignal });
+      originBodyComplete = signatureBodyComplete(originResponse);
+    } else if (typeof originBodyText === 'string') {
+      originBodyComplete = originBodyComplete === true && Buffer.byteLength(originBodyText) <= MAX_BODY_READ_BYTES;
+      originBodyText = Buffer.from(originBodyText).subarray(0, MAX_BODY_READ_BYTES).toString('utf8');
+    }
   }
   // Origin-leg failures stay out of transportErrorClasses: they are origin evidence, not edge-marker coverage gaps.
   const originObservation = classifyDirectOriginObservation({
@@ -1409,11 +1373,12 @@ export async function runOutsideInWafScan(options = {}) {
     response: originResponse,
     error: originError,
     bodyText: typeof originBodyText === 'string' ? originBodyText : null,
+    bodyComplete: originBodyComplete,
     baseline,
     expectedNonce: canaryNonce,
     declaredLockdown: options.declaredOriginLockdown ?? null,
     directAddress: directIp,
-    scope: { host: hostname, path: '/', port: null },
+    scope: options.originScope ?? { host: hostname, path: '/', port: null },
     observedAt: originBypassAttempted ? new Date().toISOString() : null,
   });
   const originBypassStatus = originBypassAttempted ? (originObservation.status_code ?? 0) : null;
@@ -1491,6 +1456,10 @@ export async function runOutsideInWafScan(options = {}) {
   const coverageComplete = phasesDropped.length === 0
     && transportErrorClasses.length === 0
     && plan.every((entry) => phasesExecuted.includes(entry.phase));
+  const plannedMarkerLegs = phasesPlanned.filter((phase) => !['baseline', 'no_user_agent', 'origin_bypass'].includes(phase)).length;
+  const completedMarkerLegs = markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length;
+  const comparisonComplete = coverageComplete && baselineHealth(baseline) === 'healthy'
+    && plannedMarkerLegs > 0 && plannedMarkerLegs === completedMarkerLegs;
   const originLockdownConfirmed = originObservation.origin_lockdown_confirmed;
   const posture = buildOutsideInPostureReport({
     wafDetected,
@@ -1549,7 +1518,21 @@ export async function runOutsideInWafScan(options = {}) {
     phases_planned: phasesPlanned,
     phases_executed: phasesExecuted,
     phases_dropped: phasesDropped,
+    classifier_version: 'marker-comparison-v4',
+    unsupported_phases: ['content_type_confusion', 'multipart_confusion', ...(!originDeliveryAvailable && directIp ? ['origin_bypass'] : [])],
     coverage_complete: coverageComplete,
+    comparison_complete: comparisonComplete,
+    planned_marker_legs: plannedMarkerLegs,
+    completed_marker_legs: completedMarkerLegs,
+    observation_only: !comparisonComplete,
+    readiness_conclusion: comparisonComplete,
+    assurance_scope: 'completed_supported_inert_marker_rules_only',
+    permitted_baseline_health: baselineHealth(baseline),
+    permitted_baseline: baseline ? {
+      health: baselineHealth(baseline), status_code: baseline.status_code,
+      denial_signature: baseline.denial_signature, observed_at: baseline.observed_at,
+      scope: baseline.scope, application_identity: baseline.application_identity,
+    } : null,
     baseline_status_code: baseline?.status_code ?? 0,
     header_names: signalSource?.header_names ?? baseline?.header_names ?? [],
     cookie_names: signalSource?.cookie_names ?? baseline?.cookie_names ?? [],

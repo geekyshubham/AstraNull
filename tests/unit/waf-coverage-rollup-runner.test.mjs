@@ -16,6 +16,7 @@ import {
 } from '../../scripts/waf-coverage-rollup-runner.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { assuredPosture } from '../helpers/assurance-fixtures.mjs';
 
 const tempDirs = [];
 const envSnapshot = { ...process.env };
@@ -124,15 +125,8 @@ describe('waf coverage rollup runner', () => {
     Object.assign(process.env, wafEnabledEnv());
     freshStore();
     const store = ensureWafStore();
-    seedWafAsset();
-    store.wafPostureSnapshots.push({
-      id: 'snap_1',
-      tenant_id: 'ten_demo',
-      waf_asset_id: 'waf_asset_1',
-      status: 'edge_protected',
-      is_current: true,
-      created_at: '2026-07-01T12:00:00.000Z',
-    });
+    const asset = seedWafAsset();
+    store.wafPostureSnapshots.push({ ...assuredPosture(asset, 'edge_protected', '2026-07-01T12:00:00.000Z'), is_current: true });
 
     const outPath = path.join(tempDir(), 'rollup-run.json');
     const { summary, exitCode } = await runWafCoverageRollupRunner(

@@ -110,7 +110,7 @@ test.describe('portal dynamic provenance', () => {
     }
   });
 
-  test('FT-PROV-dyn-03 target-group ladder and verification chips update after DNS mutation', async ({ page }) => {
+  test('FT-PROV-dyn-03 direct-target ownership counts and verification chips update after DNS mutation', async ({ page }) => {
     await startPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderBaseline });
     const baseUrl = getPortalPlaywrightBaseUrl();
     const initialLadder = await fetchPortalVerificationLadder(undefined, baseUrl);
@@ -119,11 +119,12 @@ test.describe('portal dynamic provenance', () => {
     expect(initialDns?.total).toBe(PROVENANCE_DNS_LADDER.total);
 
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'target-group-detail', baseUrl);
+    await gotoPortalRoute(page, 'targets', baseUrl);
 
-    const ladderMeta = page.locator('.verify-ladder .vl-meta');
+    const verifiedSummary = page.getByLabel('Target inventory summary').locator('.targets-summary-cell').filter({ hasText: 'Ownership verified' });
     const promotedTargetRow = page.locator('tr').filter({ hasText: PROVENANCE_DNS_LADDER.promotedTargetValue });
-    await expect(ladderMeta.filter({ hasText: `${PROVENANCE_DNS_LADDER.baselineDnsVerified} of ${PROVENANCE_DNS_LADDER.total}` })).toBeVisible();
+    await expect(verifiedSummary.locator('strong')).toHaveText(String(PROVENANCE_DNS_LADDER.baselineDnsVerified));
+    await expect(page.locator('.targets-table-wrap tbody tr')).toHaveCount(PROVENANCE_DNS_LADDER.total);
     // ADR-0008: pending targets read "Verification in progress" (no agent "observed from inside").
     await expect(promotedTargetRow).toContainText('Verification in progress');
 
@@ -133,8 +134,8 @@ test.describe('portal dynamic provenance', () => {
     const mutatedDns = mutatedLadder.steps.find((step) => step.id === 'dns_verified');
     expect(mutatedDns?.count).toBe(PROVENANCE_DNS_LADDER.mutatedDnsVerified);
 
-    await page.goto(`${mutatedBaseUrl}/app#target-group-detail?id=${encodeURIComponent(PORTAL_BASELINE_IDS.targetGroupId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(ladderMeta.filter({ hasText: `${PROVENANCE_DNS_LADDER.mutatedDnsVerified} of ${PROVENANCE_DNS_LADDER.total}` })).toBeVisible();
+    await page.goto(`${mutatedBaseUrl}/app#targets`, { waitUntil: 'networkidle', timeout: 60_000 });
+    await expect(verifiedSummary.locator('strong')).toHaveText(String(PROVENANCE_DNS_LADDER.mutatedDnsVerified));
     await expect(promotedTargetRow).toContainText('Domain ownership verified');
   });
 

@@ -12,7 +12,8 @@ function useRestoreDialogFocus(open: boolean) {
     return () => {
       const opener = openerRef.current;
       window.requestAnimationFrame(() => {
-        if (opener?.isConnected && !document.querySelector('dialog[open]')) opener.focus();
+        const remaining = [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].at(-1);
+        if (opener?.isConnected && (!remaining || remaining.contains(opener))) opener.focus();
       });
     };
   }, [open]);
@@ -87,6 +88,7 @@ export function ConfirmModal({
     if (!dialog) return;
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
+    return () => { if (dialog.open) dialog.close(); };
   }, [open]);
 
   useEffect(() => {
@@ -101,6 +103,7 @@ export function ConfirmModal({
   return (
     <dialog ref={dialogRef} className="modal-confirm" aria-labelledby={titleId} onCancel={(event) => {
       event.preventDefault();
+      event.stopPropagation();
       onCancel();
     }}>
       <form
@@ -168,6 +171,7 @@ export function FormModal({
     if (!dialog) return;
     if (open && !dialog.open) dialog.showModal();
     if (!open && dialog.open) dialog.close();
+    return () => { if (dialog.open) dialog.close(); };
   }, [open]);
 
   if (!open) return null;

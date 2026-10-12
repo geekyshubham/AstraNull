@@ -1,14 +1,9 @@
+import { buildFindingRemediationPlan, remediationDisposition, REMEDIATION_STATES as ALLOWED_REMEDIATION_STATES } from '../lib/remediationPlan.mjs';
 import { audit } from '../audit.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 
-const REMEDIATION_STATES = new Set([
-  'open',
-  'in_progress',
-  'delivered',
-  'accepted_risk',
-  'resolved',
-]);
+const REMEDIATION_STATES = new Set(ALLOWED_REMEDIATION_STATES);
 
 function ensureRemediationStore() {
   const store = getStore();
@@ -28,33 +23,20 @@ function findRemediationById(ctx, remediationId) {
   ) ?? null;
 }
 
-function defaultRemediationFromPayload(findingId, payload = {}) {
-  const steps = Array.isArray(payload.steps)
-    ? payload.steps.map((step) => String(step))
-    : typeof payload.steps === 'string'
-      ? payload.steps.split('|').map((step) => step.trim()).filter(Boolean)
-      : ['Review finding evidence', 'Apply recommended control change', 'Re-run validation'];
-  return {
-    action_slug: String(payload.action_slug ?? payload.action ?? 'origin_restrict'),
-    owner_group: String(payload.owner_group ?? payload.owner ?? 'edge-sre'),
-    description: String(payload.description ?? 'Remediation plan for linked finding.'),
-    steps,
-    sla_hours: payload.sla_hours ?? null,
-  };
-}
-
 /**
  * @param {import('../context.mjs').TenantScope} ctx
  * @param {string} findingId
  * @param {Record<string, unknown>} remediation
  */
 export function attachToFinding(ctx, findingId, remediation = {}) {
+  const finding = ensureRemediationStore().findings.find((row) => row.id === findingId && row.tenant_id === ctx.tenantId);
+  if (!finding) return { error: 'not_found', status: 404 };
   const existing = findRemediationByFinding(ctx, findingId);
   if (existing) {
     return { remediation: existing };
   }
 
-  const defaults = defaultRemediationFromPayload(findingId, remediation);
+  const defaults = buildFindingRemediationPlan(finding, remediation);
   const now = new Date().toISOString();
   const recordId = newId('rem');
   const auditEntry = audit({
@@ -71,6 +53,7 @@ export function attachToFinding(ctx, findingId, remediation = {}) {
     id: recordId,
     tenant_id: ctx.tenantId,
     finding_id: findingId,
+    ...defaults,
     action_slug: defaults.action_slug,
     owner_group: defaults.owner_group,
     state: 'open',
@@ -107,8 +90,7 @@ export function markFindingRemediationDelivered(ctx, input) {
   if (!record) {
     const attached = attachToFinding(ctx, input.findingId, {
       action_slug: 'waf_action_delivery',
-      owner_group: 'edge-sre',
-      description: 'Auto-attached remediation for WAF action-item delivery.',
+      description: 'Action-item delivery is an administrative workflow step, not a verified control change or mitigation.',
     });
     record = attached.remediation;
   }
@@ -182,6 +164,7 @@ export function updateState(ctx, remediationId, state) {
   const previous = record.state;
   record.state = nextState;
   record.updated_at = new Date().toISOString();
+  record.resolution = remediationDisposition(record);
   if (nextState === 'delivered' && !record.delivered_at) {
     record.delivered_at = record.updated_at;
     record.delivered_via = record.delivered_via ?? 'manual';
@@ -194,7 +177,7 @@ export function updateState(ctx, remediationId, state) {
     action: 'finding.remediation.updated',
     resource_type: 'finding_remediation',
     resource_id: remediationId,
-    metadata: { previous_state: previous, state: nextState },
+    metadata: { previous_state: previous, state: nextState, disposition: remediationDisposition(record) },
   });
   persistStore();
   return { remediation: record, audit_entry_id: auditEntry.id };

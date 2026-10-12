@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { ReadinessPostureDonut } from '../components/charts/readiness-posture-donut';
 import { WafSummaryPanel } from '../components/dashboard/waf-summary-panel';
+import { ProtectionValidationReportPanel } from '../components/targets/entry-paths/protection-matrix';
 import { ScoreTrend } from '../components/charts/score-trend';
 import { VectorHeatmap } from '../components/charts/vector-heatmap';
 import { ResourceMatrix } from '../components/charts/resource-matrix';
@@ -1286,6 +1287,7 @@ export function ReportsPage({
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       {message && !error ? <Toast message={message} tone="success" duration={5000} /> : null}
       {created ? <ReportSnapshotPreview report={created} formats={formatOptions} exporter={exporter} /> : null}
+      {sessionHasPermission(session, 'report:read') ? <ProtectionValidationReportPanel config={config} session={session} /> : null}
       {canCreateReport ? (
         <Card>
           <PanelCardHeader title="New report" description="Choose the audience, period, and exact scope, review, then generate. Export happens afterwards, only when you choose a format." />
@@ -1794,13 +1796,8 @@ export function SettingsPage({
       <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections"
             getTabId={(id) => `settings-sections-tab-${id}`}
             getPanelId={(id) => `settings-sections-panel-${id}`} />
-      {(message || error) && (
-        <Toast
-          message={error || message}
-          tone={error ? 'error' : 'success'}
-          duration={5000}
-        />
-      )}
+      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+      {message && !error ? <Toast message={message} tone="success" duration={5000} /> : null}
       {oneTimeSecret && (
         <Card className="secret-card" role="region" aria-label={oneTimeSecret.label}>
           <PanelCardHeader

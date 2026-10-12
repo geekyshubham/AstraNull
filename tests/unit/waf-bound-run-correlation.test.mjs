@@ -4,11 +4,16 @@ import { classifyDirectOriginObservation } from '../../src/lib/externalObservati
 import { deriveWafSignalsFromBoundEvents } from '../../src/lib/wafBoundRunCorrelation.mjs';
 
 const HEALTHY_BASELINE = { status_code: 200, server_header: 'edge' };
+const ORIGIN_SCOPE = { host: 'shop.example.test', path: '/', method: 'HEAD', port: 443,
+  scenario_version: 'origin-comparison-v4', source_perspective: 'external_fixture', worker_id: 'worker_fixture' };
+const ORIGIN_AT = '2026-10-04T12:00:00.000Z';
+const comparableBaseline = (nonce) => ({ ...HEALTHY_BASELINE, scope: ORIGIN_SCOPE, observed_at: ORIGIN_AT,
+  application_identity: { confirmed: true, method: 'nonce_canary' }, canary_echo: nonce });
 const responseWith = (status, headers = {}) => ({ status, headers: { get: (name) => headers[String(name).toLowerCase()] ?? null } });
 const deniedOriginObservation = () => classifyDirectOriginObservation({
   response: responseWith(403, { 'x-origin-lockdown': 'cdn-only' }),
-  baseline: HEALTHY_BASELINE,
-  scope: { host: 'shop.example.test', path: '/' },
+  baseline: comparableBaseline('denial_nonce'), expectedNonce: 'denial_nonce',
+  scope: ORIGIN_SCOPE, observedAt: ORIGIN_AT,
   declaredLockdown: { status_code: 403, header: { name: 'x-origin-lockdown', value: 'cdn-only' } },
 });
 
@@ -88,7 +93,7 @@ describe('waf bound run correlation (outside-in, external-only)', () => {
   it('marks origin bypass confirmed only when the origin echoed the nonce-bound canary over a healthy baseline', () => {
     const observation = classifyDirectOriginObservation({
       response: responseWith(200, { 'x-astranull-canary-echo': 'nonce-1' }),
-      baseline: HEALTHY_BASELINE,
+      baseline: comparableBaseline('nonce-1'), scope: ORIGIN_SCOPE, observedAt: ORIGIN_AT,
       expectedNonce: 'nonce-1',
     });
     const derived = deriveWafSignalsFromBoundEvents({
@@ -178,7 +183,7 @@ describe('waf bound run correlation (outside-in, external-only)', () => {
   it('confirms a direct-origin bypass only from application identity without failing edge markers', () => {
     const canary = classifyDirectOriginObservation({
       response: responseWith(200, { 'x-astranull-canary-echo': 'nonce-2' }),
-      baseline: HEALTHY_BASELINE,
+      baseline: comparableBaseline('nonce-2'), scope: ORIGIN_SCOPE, observedAt: ORIGIN_AT,
       expectedNonce: 'nonce-2',
     });
     const derived = deriveWafSignalsFromBoundEvents({

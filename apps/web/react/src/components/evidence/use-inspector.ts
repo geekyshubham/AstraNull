@@ -4,10 +4,32 @@ import {
   inspectorRefKey,
   openEvidenceInspector,
   parseInspectorRef,
+  replaceEvidenceInspector,
   type EvidenceInspectorRef,
 } from '../../lib/evidence-inspector.mjs';
 import { loadNavState, navScopeKey, saveNavState, type NavListState } from '../../lib/nav-state.mjs';
-import type { Session } from '../../lib/types';
+import { sessionIdentity } from '../../lib/api';
+import { createActivityReaderKey } from '../../lib/recorded-activity.mjs';
+import type { PortalConfig, Session } from '../../lib/types';
+
+/** Same-principal credential rotation invalidates reads without exposing tokens in keys/URLs. */
+export function useInspectorScopeKey(config: PortalConfig, session: Session) {
+  const keyFor = useRef(createActivityReaderKey());
+  return keyFor.current({ identity: sessionIdentity(session), authMode: config.authMode, session, id: 'inspector' });
+}
+
+/** The sanitized address, not mount-local state, owns the assessment's display selection. */
+export function useScanDisplaySelection(reference: EvidenceInspectorRef) {
+  const follow = reference.display_mode !== 'pinned';
+  const select = useCallback((runId?: string) => {
+    // Ignore a stale control if navigation selected a different execution in the meantime.
+    const current = parseInspectorRef(window.location.hash);
+    if (current?.entry !== 'validation_scan' || current.scan_id !== reference.scan_id || current.target_id !== reference.target_id) return;
+    replaceEvidenceInspector({ entry: 'validation_scan', scan_id: current.scan_id, target_id: current.target_id,
+      display_mode: runId ? 'pinned' : 'follow', ...(runId ? { pinned_run_id: runId } : {}) });
+  }, [reference.scan_id, reference.target_id]);
+  return { follow, pinnedChild: reference.pinned_run_id || '', select };
+}
 
 /** The ref currently open in the shared inspector, kept in sync with the address. */
 export function useInspectorRef(): EvidenceInspectorRef | null {

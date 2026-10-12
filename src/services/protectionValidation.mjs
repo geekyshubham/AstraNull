@@ -1395,6 +1395,28 @@ export function createDevProtectionValidationBackend({ audit = appendDevAudit } 
         && (!filter.destination_target_id || row.destination_target_id === filter.destination_target_id)
         && (!filter.anchor_target_id || row.anchor_target_id === filter.anchor_target_id));
     },
+    async loadComparisonEvidence(ctx, { runIds = [], asOf = new Date() } = {}) {
+      const cutoff = new Date(asOf).getTime();
+      if (!Number.isFinite(cutoff)) throw new TypeError('Invalid comparison evidence cutoff.');
+      const wanted = new Set(runIds);
+      const available = (row, fallback) => [row.created_at, row.ingested_at, fallback].filter((value) => value != null).every((value) => Number.isFinite(new Date(value).getTime()) && new Date(value).getTime() <= cutoff);
+      const owned = (row) => row.tenant_id === ctx.tenantId && wanted.has(row.test_run_id);
+      const state = getStore();
+      const runs = (state.testRuns ?? []).filter((row) => row.tenant_id === ctx.tenantId && wanted.has(row.id) && row.created_at != null && available(row));
+      const scopes = runs.map((row) => row.safety_constraints?.assurance_scope ?? row.provenance_json?.assurance_scope);
+      const groupIds = new Set(scopes.map((scope) => scope?.target_group?.id).filter(Boolean));
+      const policyIds = new Set(scopes.map((scope) => scope?.policy?.id).filter(Boolean));
+      const current = (rows, ids) => (rows ?? []).filter((row) => row.tenant_id === ctx.tenantId && ids.has(row.id)
+        && !row.deleted_at && !row.archived_at && row.created_at != null && available(row)).map(clone);
+      return {
+        groups: current(state.targetGroups, groupIds), policies: current(state.testPolicies, policyIds),
+        runs: runs.map(clone),
+        jobs: (state.probeJobs ?? []).filter((row) => owned(row) && row.created_at != null && available(row)).map(clone),
+        events: (state.events ?? []).filter((row) => owned(row) && row.signal_type === 'probe_result' && row.timestamp != null && row.ingested_at != null && available(row, row.timestamp)).map(clone),
+        evidenceItems: (state.evidenceVault ?? []).filter((row) => owned(row) && row.created_at != null && available(row)).map(clone),
+        input_complete: true,
+      };
+    },
     async loadRunEvidence(ctx, runIds) {
       return devRunEvidence(getStore(), ctx.tenantId, runIds);
     },

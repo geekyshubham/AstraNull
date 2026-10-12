@@ -1,4 +1,6 @@
 import { newId } from '../../lib/ids.mjs';
+import { executionReservation, probeExecutionReceipt, probeExecutionEvidenceReceipt, normalizeStopAcknowledgment } from '../../lib/probeExecution.mjs';
+import { probeSourceResolverFromEnv } from '../../lib/probeSourcePerspective.mjs';
 import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
@@ -32,6 +34,8 @@ export const POSTGRES_PROBE_JOB_SERVICE_METHODS = Object.freeze([
   'listPendingProbeJobsForWorker',
   'ingestProbeResult',
   'ingestProbeActivity',
+  'reserveProbeExecution',
+  'acknowledgeProbeStop',
 ]);
 
 /**
@@ -554,6 +558,7 @@ async function findDuplicateProbeEvent(
 export function createPostgresProbeJobServices(repositories, options = {}) {
   assertProbeJobRepositories(repositories);
   const ownershipVerification = options.ownershipVerification;
+  const resolveSourcePerspective = options.resolveSourcePerspective ?? probeSourceResolverFromEnv(options.env);
   const probeJobs = repositories.probeJobs;
   const validationEvidence = repositories.validationEvidence;
   const audit = repositories.audit;
@@ -575,10 +580,73 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
       return probeJobs.leasePendingJobsForWorker(ctx, workerId);
     },
 
+    async reserveProbeExecution(ctx, jobId, body) {
+      if (!ctx.workerId) return { error: 'unauthorized', status: 401 };
+      if (!body || Object.keys(body).some((key) => key !== 'leased_at')) return { error: 'invalid_probe_execution', status: 400 };
+      if (typeof probeJobs.reserveExecution !== 'function') return { error: 'probe_execution_unavailable', status: 503 };
+      const initial = await probeJobs.getJobById(ctx, jobId);
+      if (!initial || initial.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+      if (Object.hasOwn(initial.constraints ?? {}, 'reviewed_operation_binding')) {
+        return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
+      return audit.withTenantAuditLock(ctx.tenantId, async ({ client }) => {
+        const mutation = await validationEvidence.withRunMutationLock(ctx, initial.test_run_id, async () => {
+          const job = await probeJobs.getJobById(ctx, jobId, { client });
+          const run = await validationEvidence.getTestRun(ctx, initial.test_run_id, { client });
+          if (!job || !run || !probeJobMatchesRun(job, run)) return { error: 'job_not_found', status: 404 };
+          if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
+            return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+          }
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`kill_switch_state:${ctx.tenantId}`]);
+          if (await killSwitchActiveForProbeTenant(killSwitch, ctx, { client }) || !['running', 'collecting'].includes(run.status)) {
+            return { error: 'job_not_open', status: 409 };
+          }
+          const parsed = executionReservation(job, ctx.workerId, body.leased_at, newIdFn('reservation'), nowFn());
+          if (parsed.error) return parsed;
+          if (!await probeJobs.reserveExecution(ctx, job, parsed.reservation, { client })) return { error: 'probe_execution_not_authorized', status: 409 };
+          await audit.appendAuditEvent({ tenant_id: ctx.tenantId, actor_user_id: ctx.workerId, actor_role: 'probe_worker',
+            action: 'probe_job.execution_reserved', resource_type: 'probe_job', resource_id: job.id,
+            metadata: { test_run_id: run.id, reservation_id: parsed.reservation.id,
+              max_total_operations: parsed.reservation.max_total_operations, not_after: parsed.reservation.not_after } }, { client });
+          return { authorized: true, reservation_id: parsed.reservation.id, not_after: parsed.reservation.not_after };
+        }, { client, wait: true });
+        return mutation.result;
+      });
+    },
+
+    async consumeReviewedExecution(ctx, jobId, body) {
+      return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+    },
+
+    async acknowledgeProbeStop(ctx, jobId, body) {
+      if (!ctx.workerId) return { error: 'unauthorized', status: 401 };
+      if (typeof probeJobs.recordJobTelemetry !== 'function') return { error: 'probe_stop_unavailable', status: 503 };
+      const initial = await probeJobs.getJobById(ctx, jobId);
+      if (!initial || initial.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+      return audit.withTenantAuditLock(ctx.tenantId, async ({ client }) => {
+        const mutation = await validationEvidence.withRunMutationLock(ctx, initial.test_run_id, async () => {
+          const job = await probeJobs.getJobById(ctx, jobId, { client });
+          if (!job) return { error: 'job_not_found', status: 404 };
+          const parsed = normalizeStopAcknowledgment(body, job, ctx.workerId, nowFn());
+          if (parsed.error) return parsed;
+          const updated = await probeJobs.recordJobTelemetry(ctx, job, parsed, { client });
+          if (!updated) return { error: 'probe_stop_lease_mismatch', status: 409 };
+          if (!job.worker_metadata?.stop_acknowledgment) await audit.appendAuditEvent({ tenant_id: ctx.tenantId,
+            actor_user_id: ctx.workerId, actor_role: 'probe_worker', action: 'probe_job.stop_acknowledged',
+            resource_type: 'probe_job', resource_id: job.id, metadata: { test_run_id: job.test_run_id, reason: parsed.acknowledgment.reason } }, { client });
+          return { acknowledged: true, acknowledged_at: updated.worker_metadata.stop_acknowledgment.acknowledged_at };
+        }, { client, wait: true });
+        return mutation.result;
+      });
+    },
+
     async ingestProbeActivity(ctx, jobId, body) {
       if (!ctx.workerId) return { error: 'unauthorized', status: 401 };
       const initialJob = await probeJobs.getJobById(ctx, jobId);
       if (!initialJob || initialJob.ownership_verification_id) return { error: 'job_not_found', status: 404 };
+      if (Object.hasOwn(initialJob.constraints ?? {}, 'reviewed_operation_binding')) {
+        return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
       const mutation = await validationEvidence.withRunMutationLock(ctx, initialJob.test_run_id, async (client) => {
         if (await killSwitchActiveForProbeTenant(killSwitch, ctx, { client })) return { error: 'tenant_kill_switch_active', status: 409 };
         const job = await probeJobs.getJobById(ctx, jobId, { client });
@@ -600,6 +668,10 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
           if (byId.has(record.event_id)) continue;
           await validationEvidence.appendEvent(ctx, record, { client }); accepted += 1;
         }
+        if (parsed.capture) {
+          if (typeof probeJobs.recordJobTelemetry !== 'function') return { error: 'probe_capture_unavailable', status: 503 };
+          await probeJobs.recordJobTelemetry(ctx, job, { capture: parsed.capture }, { client });
+        }
         return { accepted, continue: true };
       }, { wait: true });
       return mutation.result ?? { error: 'probe_activity_busy', status: 409 };
@@ -615,6 +687,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
       }
       const initialJob = await probeJobs.getJobById(ctx, jobId);
       if (!initialJob) return { error: 'job_not_found', status: 404 };
+      if (Object.hasOwn(initialJob.constraints ?? {}, 'reviewed_operation_binding')) {
+        return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
 
       if (initialJob.ownership_verification_id) {
         if (typeof ownershipVerification?.recordOwnershipSignal !== 'function') {
@@ -633,6 +708,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
                 }
                 const job = await probeJobs.getJobById(ctx, jobId, { client });
                 if (!job) return { error: 'job_not_found', status: 404 };
+                if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
+                  return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+                }
                 if (
                   job.tenant_id !== initialJob.tenant_id
                   || job.id !== initialJob.id
@@ -775,6 +853,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
             }
             const job = await probeJobs.getJobById(ctx, jobId, { client });
             if (!job) return { error: 'job_not_found', status: 404 };
+            if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
+              return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+            }
             const evidenceCtx = {
               tenantId: ctx.tenantId,
               userId: 'probe_worker',
@@ -904,6 +985,8 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
               };
             }
             const { externalResult, safetyAttestation, workerMetadata } = validated;
+            const receipt = probeExecutionReceipt(job, workerId, safetyAttestation, externalResult);
+            if (receipt.error) return receipt;
 
             const leasedJob = await probeJobs.claimJobForResult(
               ctx,
@@ -929,6 +1012,8 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
                 probe_job_id: job.id,
                 profile_kind: job.probe_profile?.kind ?? null,
                 probe_worker_id: workerId,
+                source_perspective: resolveSourcePerspective(workerId),
+                execution_receipt: probeExecutionEvidenceReceipt(leasedJob, workerId, safetyAttestation, externalResult),
                 safety_attestation: safetyAttestation,
               },
               job.check_id,

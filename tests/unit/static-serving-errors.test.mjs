@@ -19,6 +19,7 @@
  * test of the function alone would not have observed either bug.
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +29,7 @@ import { request } from '../helpers/http.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** Lives under the real static root, since WEB_ROOT is resolved relative to the source. */
-const UNREADABLE_REL = '/__static_error_probe.html';
+const UNREADABLE_REL = `/__static_error_probe_${randomUUID()}.html`;
 const unreadablePath = path.join(repoRoot, 'apps/web', UNREADABLE_REL.slice(1));
 
 /** root bypasses the permission bits, so the EACCES case cannot be staged there. */
@@ -40,7 +41,7 @@ let server;
 before(async () => {
   process.env.ASTRANULL_NO_PERSIST = '1';
   if (canStageUnreadableFile) {
-    writeFileSync(unreadablePath, '<!doctype html><title>probe</title>');
+    writeFileSync(unreadablePath, '<!doctype html><title>probe</title>', { flag: 'wx' });
     chmodSync(unreadablePath, 0o000);
   }
   server = createServer();

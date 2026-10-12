@@ -27,6 +27,7 @@ import {
   isProviderVerifiedDnsEvidence,
 } from '../lib/connectorProviders/domainInventory.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
+import { allocateOwnershipTransitionAt } from '../lib/ownershipTransitions.mjs';
 import {
   ownershipProofFromStates,
   ownershipSummaryFromTargetStates,
@@ -535,6 +536,8 @@ export function createTargetGroup(ctx, body = {}) {
 function recordDemoAutoVerification(ctx, target) {
   if (!isDemoAutoVerifyTenant(ctx.tenantId)) return;
   const store = getStore();
+  if (effectiveTargetVerifications(store, ctx.tenantId, [target.id]).get(target.id)?.source_kind === 'ownership_ambiguous') return;
+  const transitionedAt = allocateOwnershipTransitionAt(store, ctx.tenantId, target.id);
   if (!store.targetVerifications) store.targetVerifications = [];
   const auditEntry = audit(demoAutoVerifyAuditEntry(ctx, { targetId: target.id, targetGroupId: target.target_group_id }));
   store.targetVerifications.push({
@@ -544,7 +547,7 @@ function recordDemoAutoVerification(ctx, target) {
     state: DEMO_AUTO_VERIFY_STATE,
     source_kind: DEMO_AUTO_VERIFY_SOURCE_KIND,
     source_ref: demoAutoVerifySourceRef(),
-    transitioned_at: new Date().toISOString(),
+    transitioned_at: transitionedAt,
     transitioned_by: ctx.userId ?? 'system',
     audit_entry_id: auditEntry.id,
   });
@@ -559,9 +562,11 @@ export function backfillDemoAutoVerifications(ctx) {
       .filter((tv) => tv.tenant_id === ctx.tenantId && ['dns_verified', 'provider_verified', 'user_confirmed'].includes(tv.state))
       .map((tv) => tv.target_id),
   );
+  const latest = effectiveTargetVerifications(store, ctx.tenantId);
   const pending = store.targets.filter((target) => target.tenant_id === ctx.tenantId
     && !isArchivedTarget(target)
-    && !storedVerifiedIds.has(target.id));
+    && !storedVerifiedIds.has(target.id)
+    && latest.get(target.id)?.source_kind !== 'ownership_ambiguous');
   for (const target of pending) recordDemoAutoVerification(ctx, target);
   if (pending.length) persistStore();
   return { verified_count: pending.length, target_ids: pending.map((target) => target.id) };
@@ -1152,6 +1157,7 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       metadata,
       created_at: new Date().toISOString(),
     };
+    const transitionedAt = allocateOwnershipTransitionAt(store, ctx.tenantId, target.id);
     store.targets.push(target);
     queueInitialEdgeDetection(store, target);
     if (!store.targetVerifications) store.targetVerifications = [];
@@ -1193,7 +1199,7 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
             poll_generation: itemEvidence.poll_generation,
           }
         : connector ? { connector_id: connector.id } : { declared_source: source },
-      transitioned_at: target.created_at,
+      transitioned_at: transitionedAt,
       transitioned_by: ctx.userId ?? 'system',
       audit_entry_id: auditEntry.id,
     });

@@ -39,23 +39,25 @@ describe('portal demo seed fixture', () => {
     );
   });
 
-  it('binds readiness evidence to the remapped durable portal-demo run', () => {
+  it('binds complete marker readiness fixtures to exact remapped durable runs', () => {
     const store = buildPortalDemoStore();
-    const run = store.testRuns.find((entry) => (
-      entry.id === PORTAL_DEMO_IDS.runId && entry.check_id === 'origin.leak_scan.safe'
-    ));
-    assert.ok(run);
-
-    for (const record of [
-      store.events.find((entry) => entry.id === 'evt_portal_baseline_boost'),
-      store.verdicts.find((entry) => entry.id === 'vrd_portal_baseline_boost'),
-    ]) {
-      assert.ok(record);
-      assert.equal(record.tenant_id, PORTAL_DEMO_IDS.tenantId);
-      assert.equal(record.test_run_id, run.id);
-      assert.equal(record.target_group_id, run.target_group_id);
-      assert.equal(record.target_id, run.target_id);
-      assert.equal(record.check_id, run.check_id);
+    const runs = store.testRuns.filter((entry) => entry.id.startsWith('run_portal_assurance_'));
+    assert.ok(runs.length > 1, 'readiness uses a broad explicit fixture cohort, not a legacy fingerprint');
+    for (const run of runs) {
+      const event = store.events.find((entry) => entry.test_run_id === run.id);
+      const verdict = store.verdicts.find((entry) => entry.test_run_id === run.id);
+      assert.ok(event); assert.ok(verdict);
+      for (const record of [event, verdict]) {
+        assert.equal(record.tenant_id, PORTAL_DEMO_IDS.tenantId);
+        assert.equal(record.test_run_id, run.id);
+      }
+      assert.equal(run.producer_kind, 'signed_probe');
+      assert.equal(event.metadata.classifier_version, 'marker-comparison-v4');
+      assert.equal(event.metadata.comparison_complete, true);
+      assert.equal(event.metadata.permitted_baseline_health, 'healthy');
+      assert.deepEqual(verdict.evidence_ids, [event.id]);
+      assert.ok(run.check_version);
+      assert.ok(run.safety_constraints.assurance_scope);
     }
   });
 

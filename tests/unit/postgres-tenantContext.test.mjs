@@ -58,6 +58,47 @@ describe('postgres tenant context', () => {
     assert.equal(pool.client.released, true);
   });
 
+  it('shares one transaction across same-pool same-tenant repository callbacks', async () => {
+    const pool = createFakePool();
+    await withTenantContext(pool, 'ten_demo', async (outer) => {
+      await withTenantContext(pool, 'ten_demo', async (inner) => {
+        assert.equal(inner, outer);
+        assert.equal(inner.released, false);
+        await inner.query('INSERT fixture');
+      });
+      assert.equal(outer.released, false);
+    });
+    assert.equal(pool.client.queries.filter((q) => q.text === 'BEGIN').length, 1);
+    assert.equal(pool.client.queries.filter((q) => q.text === 'COMMIT').length, 1);
+  });
+
+  it('rolls back nested writes when admission fails after a repository callback', async () => {
+    const pool = createFakePool();
+    await assert.rejects(() => withTenantContext(pool, 'ten_demo', async () => {
+      await withTenantContext(pool, 'ten_demo', (client) => client.query('INSERT fixture'));
+      throw new Error('admission lost authority');
+    }), /lost authority/);
+    assert.equal(pool.client.queries.filter((q) => q.text === 'COMMIT').length, 0);
+    assert.equal(pool.client.queries.filter((q) => q.text === 'ROLLBACK').length, 1);
+  });
+
+  it('does not reuse a transaction for a different tenant', async () => {
+    const pool = createFakePool();
+    await assert.rejects(() => withTenantContext(pool, 'ten_demo', () =>
+      withTenantContext(pool, 'ten_other', async () => {})), /tenant context mismatch/);
+    assert.equal(pool.client.queries.filter((q) => q.text === 'BEGIN').length, 1);
+  });
+
+  it('cannot commit a transaction after a caught nested failure', async () => {
+    const pool = createFakePool();
+    await assert.rejects(() => withTenantContext(pool, 'ten_demo', async () => {
+      try {
+        await withTenantContext(pool, 'ten_demo', async () => { throw new Error('nested failed'); });
+      } catch { /* A caught callback failure still invalidates the transaction. */ }
+    }), /nested failed/);
+    assert.equal(pool.client.queries.filter((q) => q.text === 'COMMIT').length, 0);
+  });
+
   it('rejects empty tenant id', async () => {
     const pool = createFakePool();
     await assert.rejects(() => withTenantContext(pool, '  ', async () => {}), /non-empty/);

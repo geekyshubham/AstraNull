@@ -509,6 +509,22 @@ export function targetDescriptor(target) {
   return out;
 }
 
+export const PROBE_AUTHORITY_VERSION = 'probe-authority-v2';
+export const MAX_PROBE_AUTHORITY_MS = 120_000;
+
+export function probeAuthority(job, now = Date.now()) {
+  const expires = Date.parse(job?.constraints?.not_after);
+  const issued = Date.parse(job?.constraints?.issued_at);
+  const at = now instanceof Date ? now.getTime() : Number(now);
+  if (job?.constraints?.authority_version !== PROBE_AUTHORITY_VERSION
+    || !Number.isFinite(expires) || !Number.isFinite(issued) || expires <= issued
+    || expires - issued > MAX_PROBE_AUTHORITY_MS || issued > at + 1000) {
+    return { ok: false, reason: 'probe_authority_invalid', remaining_ms: 0 };
+  }
+  if (!Number.isFinite(at) || at >= expires) return { ok: false, reason: 'probe_authority_expired', remaining_ms: 0 };
+  return { ok: true, not_after: new Date(expires).toISOString(), remaining_ms: expires - at };
+}
+
 function canonicalJobSigningPayload(job) {
   return stableStringify({
     check_id: job.check_id,
@@ -583,6 +599,9 @@ export function buildSignedProbeJobRecord({
   now,
   newId,
 }) {
+  if (Object.hasOwn(run?.safety_constraints ?? {}, 'reviewed_operation_binding')) {
+    throw new Error('reviewed_operation_execution_unavailable');
+  }
   // Fail closed FIRST: a bound record without a validated approved scope snapshot cannot
   // dispatch, and no target metadata (e.g. protected_host) may stand in for the scope.
   const boundByOriginBinding = typeof run?.origin_binding_id === 'string' && run.origin_binding_id.trim() !== '';
@@ -612,8 +631,16 @@ export function buildSignedProbeJobRecord({
     resolvedProbeProfile,
     signedTarget,
   );
+  const issuedAt = run.created_at == null ? now.getTime() : Date.parse(run.created_at);
+  if (!Number.isFinite(issuedAt)) throw new Error('probe_authority_invalid');
+  const deadlines = [issuedAt + MAX_PROBE_AUTHORITY_MS, Date.parse(run.collection_deadline_at),
+    Date.parse(run.safety_constraints?.safe_window_not_after)].filter(Number.isFinite);
   const constraints = {
     ...baseConstraints,
+    authority_version: PROBE_AUTHORITY_VERSION,
+    issued_at: new Date(issuedAt).toISOString(),
+    not_after: new Date(Math.min(...deadlines)).toISOString(),
+    execution_attempts: 1,
     ...(ownershipBinding && typeof ownershipBinding === 'object'
       ? { ownership_binding: structuredClone(ownershipBinding) }
       : {}),

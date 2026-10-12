@@ -66,7 +66,17 @@ export function rotateEncryptedSecret(ctx, id, body, key) {
   }
   const store = getStore();
   const record = store.encryptedSecrets.find((s) => s.id === id && s.tenant_id === ctx.tenantId);
-  if (!record) return null;
+  if (!record) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'secret.rotate_not_found',
+      resource_type: 'encrypted_secret',
+      resource_id: id,
+    });
+    return null;
+  }
 
   const plaintext = body.plaintext;
   if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {

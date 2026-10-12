@@ -177,17 +177,16 @@ describe('postgres collection-window sweeper (expired collecting runs)', () => {
 
       // A verdict was written without any client call.
       assert.equal(state.verdicts.length, 1);
-      // External probe evidence only (ADR-0008): connected against must_block_before_origin is edge_exposed.
-      assert.equal(state.verdicts[0].verdict, 'edge_exposed');
+      // Connected liveness is retained but cannot establish protection or exposure.
+      assert.equal(state.verdicts[0].verdict, 'inconclusive');
 
       // No agent, so no agent_no_observation evidence is written.
       assert.equal(state.noObservationEvents.length, 0);
 
-      // Exactly one verdict audit event, matching the stored verdict. edge_exposed carries a
-      // finding, so it publishes as verdict.published (ADR-0008: external probe evidence only).
+      // Exactly one durable finalization audit matches the stored inconclusive verdict.
       assert.equal(state.verdictAudits.length, 1);
-      assert.equal(state.verdictAudits[0].action, 'verdict.published');
-      assert.equal(state.verdictAudits[0].metadata_json.verdict, 'edge_exposed');
+      assert.equal(state.verdictAudits[0].action, 'verdict.finalized_no_observation');
+      assert.equal(state.verdictAudits[0].metadata_json.verdict, 'inconclusive');
 
       // The run left the active statuses, so the slot is free.
       assert.equal(state.run.status, 'verdicted');
