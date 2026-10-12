@@ -1809,7 +1809,8 @@ describe('probe worker poll integration', () => {
     const run = getStore().testRuns.find((r) => r.id === started.run.id);
     assert.equal(run.probe_external_result, 'connected');
     assert.equal(run.awaiting_external_probe, false);
-    assert.equal(run.status, 'collecting');
+    // A probe-only check publishes as soon as its trusted result is accepted.
+    assert.equal(run.status, 'verdicted');
 
     const probeEvent = getStore().events.find(
       (e) => e.test_run_id === run.id && e.signal_type === 'probe_result',

@@ -20,7 +20,7 @@ import { recordEvidence } from './evidence.mjs';
 import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, probeEventHasProbeIo } from './correlation.mjs';
+import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, probeEventHasProbeIo, probeResultCompletesEvidence } from './correlation.mjs';
 import { authorizeFindingWrite, upsertFindingFromVerdict } from './findings.mjs';
 import {
   bindingRecordsFromStore,
@@ -956,9 +956,11 @@ function finalizeVerdictIfReady(run, options = {}) {
       e.nonce_hash === run.correlation.nonce_hash,
   );
 
+  // A probe-only check's verdict cannot change after its trusted result; publish without waiting.
   if (
     !options.finalizedWithoutObservation
     && !isCollectionWindowExpired(run)
+    && !(probeEvent && probeResultCompletesEvidence(getCheckById(run.check_id)))
   ) {
     return null;
   }

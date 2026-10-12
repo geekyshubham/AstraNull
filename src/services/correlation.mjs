@@ -6,6 +6,7 @@ import {
 export { OBSERVATION_ONLY_PROBE_KINDS, verdictSupportsReadiness };
 import { inconclusiveReason } from '../lib/inconclusiveReasons.mjs';
 import { originObservationOf } from '../lib/externalObservationOutcomes.mjs';
+import { providerDisplayName } from '../lib/edgeDetectionPresenter.mjs';
 
 /**
  * Correlation truth table — evidence-backed verdicts (metadata-only developer validation).
@@ -22,14 +23,67 @@ export function probeEventHasProbeIo(probeEvent) {
   return Number.isSafeInteger(probeRequestsSent) && probeRequestsSent > 0;
 }
 
-function correlateObservationOnlyVerdict(probeKind) {
+/** True when a check's verdict depends on nothing but its signed probe result. */
+export function probeResultCompletesEvidence(check) {
+  const required = check?.evidence_required;
+  return Array.isArray(required) && required.length === 1 && required[0] === 'probe_result';
+}
+
+const EDGE_SOURCE_LABELS = Object.freeze({
+  asn_lookup: 'address range',
+  address_range: 'address range',
+  cname: 'DNS CNAME',
+  cname_suffix: 'DNS CNAME',
+  response_header: 'response headers',
+  response_fingerprint: 'response fingerprint',
+  corroborated_generic_behavior: 'response behavior',
+});
+
+function edgeLayerPhrase(layer) {
+  const name = String(providerDisplayName(layer) ?? '').slice(0, 64);
+  const family = String(layer?.family ?? '').toUpperCase().slice(0, 16);
+  if (!name || !family) return null;
+  const sources = [...new Set((Array.isArray(layer.sources) ? layer.sources : [])
+    .map((source) => EDGE_SOURCE_LABELS[source] ?? null).filter(Boolean))];
+  const from = sources.length > 1 ? `${sources.slice(0, -1).join(', ')} and ${sources.at(-1)}` : sources[0];
+  return `${name} (${family}${from ? `, from ${from}` : ''})`;
+}
+
+function fingerprintObservationExplanation(externalResult, metadata = {}) {
+  const edge = metadata?.edge_signature ?? {};
+  const layers = (Array.isArray(edge.layers) ? edge.layers : []).slice(0, 6);
+  const observed = layers.map(edgeLayerPhrase).filter(Boolean);
+  const httpCompleted = Number.isInteger(metadata?.baseline_status_code) && metadata.baseline_status_code > 0;
+  if (['timeout', 'error', 'not_run'].includes(externalResult) || !httpCompleted) {
+    const failure = externalResult === 'timeout' ? 'timed out' : 'did not complete';
+    const errorClass = String(metadata?.error_class ?? '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64);
+    const reason = errorClass && errorClass !== 'Error' ? ` (${errorClass})` : '';
+    return `The ordinary GET ${failure}${reason}, so HTTP fingerprints were not evaluated. `
+      + (observed.length
+        ? `DNS and address signals show ${observed.join(', ')}. `
+        : 'DNS and address signals matched no CDN or WAF provider. ')
+      + (edge.waf_present === true ? 'Blocking remains unverified.' : 'WAF presence and blocking remain unverified.');
+  }
+  const status = ` on an HTTP ${metadata.baseline_status_code} response`;
+  const providerText = observed.length
+    ? `Observed ${observed.join(', ')}${status}.`
+    : `No CDN or WAF provider was identified from HTTP, DNS or address signals${status}.`;
+  const wafText = edge.waf_present === true
+    ? ' Provider detection does not establish that requests are blocked; run the WAF marker check to test enforcement.'
+    : ' No WAF was identified: one ordinary GET cannot establish WAF presence or blocking; run the WAF marker check to test enforcement.';
+  return `${providerText}${wafText}`;
+}
+
+function correlateObservationOnlyVerdict(probeKind, probeMetadata, externalResult) {
   const noIo = probeKind === 'metadata_marker';
   return {
     verdict: 'inconclusive',
     confidence: 'external_only',
     explanation: noIo
       ? 'Metadata-only check performed no network I/O and cannot establish readiness or exposure.'
-      : `${probeKind} recorded transport or liveness metadata only; it did not establish this check's verdict logic.`,
+      : probeKind === 'waf_fingerprint_observation'
+        ? fingerprintObservationExplanation(externalResult, probeMetadata)
+        : `${probeKind} recorded transport or liveness metadata only; it did not establish this check's verdict logic.`,
     createsFinding: false,
   };
 }
@@ -213,7 +267,7 @@ export function correlateExternalOnlyVerdict({
   if (evidenceGap) return evidenceGap;
 
   if (isObservationOnlyProbeKind(probeKind)) {
-    return correlateObservationOnlyVerdict(probeKind);
+    return correlateObservationOnlyVerdict(probeKind, probeMetadata, externalResult);
   }
 
   const probeFailure = correlateProbeFailure(externalResult, probeKind, probeMetadata);

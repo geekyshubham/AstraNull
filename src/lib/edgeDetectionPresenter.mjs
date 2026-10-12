@@ -266,10 +266,11 @@ function networkFirewallPresentation(raw) {
   };
 }
 
-function providerDisplayName(layer) {
-  return PROVIDER_DISPLAY_NAMES[layer.provider.toLowerCase()]
-    || layer.display_name
-    || layer.provider.split(/[_-]+/).map((part) => (
+export function providerDisplayName(layer) {
+  const provider = String(layer?.provider ?? '');
+  return PROVIDER_DISPLAY_NAMES[provider.toLowerCase()]
+    || layer?.display_name
+    || provider.split(/[_-]+/).map((part) => (
       part ? `${part[0].toUpperCase()}${part.slice(1)}` : ''
     )).join(' ');
 }

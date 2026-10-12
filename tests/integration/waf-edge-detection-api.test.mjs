@@ -459,10 +459,10 @@ describe('WAF edge detection signed-worker safety path', () => {
     });
     assert.equal(ingested.status, 201);
 
-    // Probe ingestion precedes asynchronous run finalization. Edge evidence is projected only
-    // after the shared finalizer makes the run successfully terminal.
-    assert.equal(run.status, 'collecting');
-    run.status = 'verdicted';
+    // A probe-only fingerprint publishes on ingest; edge evidence is projected only after the
+    // shared finalizer has made the run successfully terminal.
+    assert.equal(run.status, 'verdicted');
+    assert.equal(getStore().verdicts.filter((v) => v.test_run_id === run.id).length, 1);
 
     const detected = await request(
       baseUrl,

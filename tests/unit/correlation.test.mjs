@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   correlateExternalOnlyVerdict,
   correlateOpsReadinessVerdict,
+  probeResultCompletesEvidence,
 } from '../../src/services/correlation.mjs';
 
 // ADR-0008: agents are removed. Verdicts come from external probe evidence only, so the
@@ -131,5 +132,64 @@ describe('correlateOpsReadinessVerdict', () => {
     const r = correlateOpsReadinessVerdict({ externalResult: 'connected', opsValidationOk: false });
     assert.equal(r.verdict, 'inconclusive');
     assert.equal(r.createsFinding, false);
+  });
+});
+
+describe('WAF/CDN fingerprint observation explanation', () => {
+  const akamaiCdnOnly = {
+    baseline_status_code: 302,
+    edge_signature: {
+      waf_present: null,
+      layers: [{ family: 'cdn', provider: 'akamai', display_name: 'Akamai', sources: ['asn_lookup'] }],
+    },
+  };
+
+  it('names the observed provider and source while staying inconclusive without a finding', () => {
+    const result = correlateExternalOnlyVerdict({ externalResult: 'connected', probeKind: 'waf_fingerprint_observation', probeIoObserved: true, probeMetadata: akamaiCdnOnly });
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.createsFinding, false);
+    assert.match(result.explanation, /^Observed Akamai \(CDN, from address range\) on an HTTP 302 response\./);
+    assert.match(result.explanation, /No WAF was identified: one ordinary GET cannot establish WAF presence or blocking/);
+  });
+
+  it('reports a detected WAF without claiming enforcement', () => {
+    const result = correlateExternalOnlyVerdict({ externalResult: 'connected', probeKind: 'waf_fingerprint_observation', probeIoObserved: true, probeMetadata: {
+      baseline_status_code: 200,
+      edge_signature: { waf_present: true, layers: [{ family: 'waf', display_name: 'Cloudflare', sources: ['response_header'] }, { family: 'cdn', display_name: 'Cloudflare', sources: ['address_range', 'response_header'] }] },
+    } });
+    assert.equal(result.verdict, 'inconclusive');
+    assert.match(result.explanation, /^Observed Cloudflare \(WAF, from response headers\), Cloudflare \(CDN, from address range and response headers\) on an HTTP 200 response\./);
+    assert.match(result.explanation, /does not establish that requests are blocked/);
+  });
+
+  it('names layers whose stored display name is empty instead of dropping them', () => {
+    const result = correlateExternalOnlyVerdict({ externalResult: 'connected', probeKind: 'waf_fingerprint_observation', probeIoObserved: true, probeMetadata: {
+      baseline_status_code: 301,
+      edge_signature: { waf_present: false, layers: [{ family: 'cdn', provider: 'cloudfront', display_name: '', sources: ['response_header', 'address_range'] }, { family: 'cloud', provider: 'aws', display_name: 'AWS', sources: ['address_range', 'asn_lookup'] }] },
+    } });
+    assert.match(result.explanation, /^Observed Amazon CloudFront \(CDN, from response headers and address range\), AWS \(CLOUD, from address range\) on an HTTP 301 response\./);
+  });
+
+  it('does not claim HTTP signals were evaluated when the ordinary GET timed out', () => {
+    const result = correlateExternalOnlyVerdict({ externalResult: 'timeout', probeKind: 'waf_fingerprint_observation', probeIoObserved: true, probeMetadata: {
+      error_class: 'probe_job_deadline_exceeded',
+      edge_signature: { waf_present: null, layers: [{ family: 'cdn', provider: 'akamai', display_name: 'Akamai', sources: ['cname_suffix', 'asn_lookup'] }] },
+    } });
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.explanation, 'The ordinary GET timed out (probe_job_deadline_exceeded), so HTTP fingerprints were not evaluated. DNS and address signals show Akamai (CDN, from DNS CNAME and address range). WAF presence and blocking remain unverified.');
+  });
+
+  it('says nothing was identified when no provider signal matched', () => {
+    const result = correlateExternalOnlyVerdict({ externalResult: 'connected', probeKind: 'waf_fingerprint_observation', probeIoObserved: true, probeMetadata: { baseline_status_code: 200, edge_signature: { waf_present: false, layers: [] } } });
+    assert.match(result.explanation, /^No CDN or WAF provider was identified from HTTP, DNS or address signals on an HTTP 200 response\./);
+  });
+});
+
+describe('probeResultCompletesEvidence', () => {
+  it('is true only when the probe result is the sole required evidence', () => {
+    assert.equal(probeResultCompletesEvidence({ evidence_required: ['probe_result'] }), true);
+    assert.equal(probeResultCompletesEvidence({ evidence_required: ['probe_result', 'health_signal'] }), false);
+    assert.equal(probeResultCompletesEvidence({ evidence_required: ['customer_declaration'] }), false);
+    assert.equal(probeResultCompletesEvidence(null), false);
   });
 });

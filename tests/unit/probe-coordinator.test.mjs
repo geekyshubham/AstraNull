@@ -385,8 +385,8 @@ describe('signed probe coordinator', () => {
     const run = getStore().testRuns.find((r) => r.id === started.run.id);
     assert.equal(run.probe_external_result, 'blocked');
     assert.equal(run.awaiting_external_probe, false);
-    assert.equal(run.status, 'collecting');
-    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), false);
+    assert.equal(run.status, 'verdicted');
+    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), true);
     const probeEvent = getStore().events.find(
       (e) => e.test_run_id === run.id && e.signal_type === 'probe_result',
     );
@@ -661,7 +661,7 @@ describe('signed probe coordinator', () => {
     assert.equal(dup.error, 'probe_already_ingested');
   });
 
-  it('finalizes external_only runs immediately after valid probe evidence with tenant scoping', () => {
+  it('finalizes probe-only external_only runs immediately after valid probe evidence with tenant scoping', () => {
     freshStore();
     seedAgent();
     const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
@@ -690,23 +690,56 @@ describe('signed probe coordinator', () => {
       maybeFinalizeRunAfterProbeIngest({ ...ctx, tenantId: 'ten_other' }, out.run_id),
       null,
     );
-    assert.equal(run.status, 'collecting');
 
-    // ADR-0008: verdicts derive from external probe evidence only; the run finalizes when the
-    // collection window elapses or on force. It never waits for an agent observation.
-    // Correct-tenant ingest hook clears awaiting_external_probe but the future window keeps it collecting.
-    assert.equal(maybeFinalizeRunAfterProbeIngest(ctx, out.run_id), null);
-    assert.equal(run.awaiting_external_probe, false);
-    const finalized = finalizeTestRun(ctx, run.id, { force: true });
-    assert.equal(finalized.error, undefined);
-    const verdict = finalized.verdict;
-    assert.ok(verdict);
-    assert.equal(verdict.confidence, 'external_only');
+    // ADR-0008: a probe-only check's verdict depends solely on its trusted probe result, so it
+    // publishes without waiting for the remaining collection window or any agent observation.
+    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), false);
+    const published = maybeFinalizeRunAfterProbeIngest(ctx, out.run_id);
     assert.equal(run.status, 'verdicted');
+    assert.equal(run.awaiting_external_probe, false);
+    const verdicts = getStore().verdicts.filter((v) => v.test_run_id === run.id);
+    assert.equal(verdicts.length, 1);
+    assert.equal(verdicts[0].confidence, 'external_only');
+    assert.equal(published.id, verdicts[0].id);
+    assert.equal(maybeFinalizeRunAfterProbeIngest(ctx, out.run_id).id, verdicts[0].id);
+    assert.equal(getStore().verdicts.filter((v) => v.test_run_id === run.id).length, 1);
     assert.equal(
       getStore().events.some((e) => e.test_run_id === run.id && e.signal_type === 'agent_no_observation'),
       false,
     );
+  });
+
+  it('keeps a check that also requires a health signal collecting until its window or force', () => {
+    freshStore();
+    seedAgent();
+    const store = getStore();
+    const target = store.targets.find((row) => row.id === 'tgt_1');
+    target.kind = 'fqdn';
+    target.value = 'owned.example';
+    target.metadata = {};
+    const started = startTestRun(
+      ctx,
+      { check_id: 'tls.idle_connection_timeout.safe', target_group_id: 'tg_1', target_id: 'tgt_1' },
+      runtimeSignedWorker(),
+    );
+    assert.equal(started.error, undefined);
+    const run = store.testRuns.find((r) => r.id === started.run.id);
+    run.collection_deadline_at = new Date(Date.now() + 60_000).toISOString();
+    const job = store.probeJobs.find((row) => row.test_run_id === started.run.id);
+    authorizeExecution(job);
+    const out = ingestProbeResult(
+      { tenantId: 'ten_demo', workerId: 'worker-a' },
+      job.id,
+      probeResultBody(job, 'connected'),
+      runtimeSignedWorker(),
+    );
+    assert.equal(out.error, undefined);
+    assert.equal(maybeFinalizeRunAfterProbeIngest(ctx, out.run_id), null);
+    assert.equal(run.status, 'collecting');
+    assert.equal(store.verdicts.some((v) => v.test_run_id === run.id), false);
+    const finalized = finalizeTestRun(ctx, run.id, { force: true });
+    assert.equal(finalized.error, undefined);
+    assert.equal(finalized.run.status, 'verdicted');
   });
 
   it('keeps healthy DNS liveness inconclusive with no finding or readiness credit', () => {
@@ -746,8 +779,7 @@ describe('signed probe coordinator', () => {
     assert.equal(probeEvent.metadata.profile_kind, 'dns_wire_query');
     assert.equal(probeEvent.metadata.probe_kind, undefined);
     maybeFinalizeRunAfterProbeIngest(ctx, ingested.run_id);
-    const finalized = finalizeTestRun(ctx, started.run.id, { force: true });
-    const verdict = finalized.verdict;
+    const verdict = store.verdicts.find((row) => row.test_run_id === started.run.id);
 
     assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(store.findings.some((finding) => finding.test_run_id === started.run.id), false);
@@ -760,10 +792,14 @@ describe('signed probe coordinator', () => {
   it('force finalization after probe evidence still publishes no-observation verdict', () => {
     freshStore();
     seedAgent();
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    target.kind = 'fqdn';
+    target.value = 'owned.example';
+    target.metadata = {};
     const started = startTestRun(
       ctx,
       {
-        check_id: 'origin.direct_bypass.safe',
+        check_id: 'tls.idle_connection_timeout.safe',
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
       },
@@ -774,7 +810,7 @@ describe('signed probe coordinator', () => {
     const out = ingestProbeResult(
       { workerId: 'worker-a' },
       job.id,
-      probeResultBody(job, 'blocked'),
+      probeResultBody(job, 'connected'),
       runtimeSignedWorker(),
     );
     maybeFinalizeRunAfterProbeIngest(out.run_id);
@@ -818,9 +854,9 @@ describe('signed probe coordinator', () => {
     maybeFinalizeRunAfterProbeIngest(out.run_id);
     const run = getStore().testRuns.find((r) => r.id === started.run.id);
     assert.equal(run.probe_external_result, 'connected');
-    assert.equal(run.status, 'collecting');
+    assert.equal(run.status, 'verdicted');
     assert.ok(getStore().events.some((e) => e.signal_type === 'probe_result'));
-    assert.equal(getStore().verdicts.some((v) => v.test_run_id === run.id), false);
+    assert.equal(getStore().verdicts.filter((v) => v.test_run_id === run.id).length, 1);
   });
 
   it('rejects probe result without safety attestation and leaves job and run open', () => {

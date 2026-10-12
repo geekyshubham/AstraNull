@@ -40,6 +40,7 @@ import {
   correlateExternalOnlyVerdict,
   correlateOpsReadinessVerdict,
   probeEventHasProbeIo,
+  probeResultCompletesEvidence,
 } from '../../services/correlation.mjs';
 import {
   buildOpsReadinessData,
@@ -1024,9 +1025,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
     const probeEvent = findProbeEvent(run, events);
 
+    // A probe-only check's verdict cannot change after its trusted result; publish without waiting.
     if (
       !options.finalizedWithoutObservation
       && !isCollectionWindowExpired(run, nowFn().getTime())
+      && !(probeEvent && probeResultCompletesEvidence(check))
     ) {
       return null;
     }

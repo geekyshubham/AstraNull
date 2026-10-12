@@ -82,3 +82,22 @@ only this scoped fix: the working tree also contains unrelated direct-target and
 After deployment, run Detect WAF and CDN again through the normal owned-target UI. Do not rewrite
 the old run or manufacture provider evidence in the database. The expected fresh observation is
 Akamai CDN via ASN ownership with WAF effectiveness untested.
+
+## Follow-up: outcome wording and publication delay (2026-10-12)
+
+Run on `tgt_c041d56e5f3b4517` (barclays.com) after deploy `dfdb6d4c` recorded the worker result at 14:45:13 IST but published its outcome at 14:47:16. Its explanation read "recorded transport or liveness metadata only".
+
+- **Delay:** every run waited out its full collection window (`max_duration_seconds`, default 120 s) plus a sweeper tick, even when its only required evidence was the already-accepted probe result. Checks whose `evidence_required` is exactly `['probe_result']` (212 of 251) now publish as soon as the trusted, nonce-bound worker result is accepted, in both dev and PostgreSQL paths. Checks that also need health signals, audits, telemetry or approvals keep the window. Signed budgets, deadlines and correlation logic are unchanged.
+- **Wording:** the fingerprint verdict remains `inconclusive` by contract, but its explanation now names the observed providers and their evidence sources, states the HTTP status, and says when the GET timed out or failed so HTTP fingerprints were not evaluated. Layers with an empty stored display name use the presenter's provider labels instead of being dropped.
+- **WAF result for Barclays:** unchanged and correct. The only response is a header-less 302 to `home.barclays`; the address is Akamai (AS16625). That is CDN evidence, not WAF evidence, and Kona enablement cannot be inferred from it. Use the WAF marker check to test enforcement.
+
+Shipped fingerprint probe through the worker entry point, from an operator workstation (metadata only):
+
+| Host | Result | Explanation (new) |
+|---|---|---|
+| barclays.com | 302 | Akamai CDN from address range; no WAF identified |
+| www.barclays.com | 302 | Akamai CDN from DNS CNAME and address range; no WAF identified |
+| qantas.com / www.qantas.com | 5 s timeout | GET timed out; DNS/address show Akamai CDN; WAF unverified |
+| westpac.com.au | 301 | Amazon CloudFront CDN, AWS cloud; no WAF identified |
+| www.westpac.com.au | 200 | Amazon CloudFront and Fastly CDN, AWS cloud; no WAF identified |
+| jagex.com / www.jagex.com | TLS refused | Not valid here: the workstation network's Sophos TLS inspection re-signs these certificates, and the probe correctly rejects them. Re-check from the production worker (2026-10-08: www.jagex.com Cloudflare, HTTP 200). |
