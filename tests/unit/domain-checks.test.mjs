@@ -6,6 +6,9 @@ import { MAX_SCAN_CHECKS, MAX_SCAN_STEPS, planScanSteps } from '../../src/contra
 import {
   CHECK_CATEGORIES,
   EDGE_DETECTION_CHECK_ID,
+  ROW_STATUS_META,
+  recommendedStarterRow,
+  wafCheckBlocking,
   assessEdgeEfficacy,
   buildCheckRows,
   declarationOnlyChecks,
@@ -306,4 +309,95 @@ it('category guidance confines claims to bounded outside-in observations', () =>
   assert.match(CHECK_CATEGORIES.reflection.how, /Silence does not establish/);
   assert.match(CHECK_CATEGORIES.amplification.how, /does not establish amplification or flood capacity/);
   assert.match(CHECK_CATEGORIES.path.how, /does not confirm arrival or protection inside/);
+});
+
+describe('readiness-capable rows and the recommended first check', () => {
+  const rows = buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) });
+  const row = (overrides) => ({ checkId: 'x.safe', status: 'not_run', probeKind: 'http_probe', readinessCapable: true, category: CHECK_CATEGORIES.waf, finishedAt: '', startedAt: '', ...overrides });
+
+  it('marks only graded E3 checks that are not observation-only as verdict-capable', () => {
+    const base = { check_id: 'demo.safe', name: 'Demo', evidence_tier: 'E3', probe_profile: { kind: 'waf_class_marker_probe', max_requests: 2 } };
+    const capable = (check) => buildCheckRows({ checks: [check] })[0].readinessCapable;
+    assert.equal(capable(base), true);
+    assert.equal(capable({ ...base, evidence_tier: 'E2' }), false);
+    assert.equal(capable({ ...base, observation_only: true }), false);
+    assert.equal(capable({ ...base, probe_profile: { ...base.probe_profile, observation_only: true } }), false);
+    assert.equal(capable({ ...base, probe_profile: { ...base.probe_profile, readiness_conclusion: false } }), false);
+    assert.ok(rows.some((entry) => entry.readinessCapable), 'the live catalog has verdict-capable checks');
+    assert.ok(rows.some((entry) => !entry.readinessCapable), 'the live catalog has observation checks');
+    assert.equal(rows.filter((entry) => entry.readinessCapable && /rate_limit/.test(entry.probeKind)).length, 0);
+  });
+
+  it('recommends a not-run verdict-capable marker check and never a rate-limit or observation check', () => {
+    const starter = recommendedStarterRow(rows);
+    assert.ok(starter);
+    assert.equal(starter.readinessCapable, true);
+    assert.equal(starter.status, 'not_run');
+    assert.equal(starter.probeKind, 'waf_class_marker_probe');
+    assert.equal(recommendedStarterRow([row({ checkId: 'a.safe' }), row({ checkId: 'b.safe', probeKind: 'waf_class_marker_probe' })]).checkId, 'b.safe');
+    assert.equal(recommendedStarterRow([row({ checkId: 'a.safe' })]).checkId, 'a.safe');
+    assert.equal(recommendedStarterRow([row({ readinessCapable: false }), row({ probeKind: 'http_rate_limit_probe', checkId: 'r.safe' })]), null);
+    assert.equal(recommendedStarterRow([]), null);
+  });
+
+  it('stops recommending once any row has a recorded verdict', () => {
+    for (const status of ['passed', 'failed', 'inconclusive']) {
+      assert.equal(recommendedStarterRow([row({ checkId: 'a.safe' }), row({ checkId: 'b.safe', status })]), null, status);
+    }
+    assert.equal(recommendedStarterRow([row({ checkId: 'a.safe' }), row({ checkId: 'b.safe', status: 'observed' })]).checkId, 'a.safe');
+  });
+});
+
+describe('WAF marker check blocking summary', () => {
+  const marker = (checkId, status, extra = {}) => ({ checkId, status, readinessCapable: true, category: CHECK_CATEGORIES.waf, finishedAt: '', startedAt: '', ...extra });
+
+  it('returns null when no benign marker check has a recorded result', () => {
+    assert.equal(wafCheckBlocking([]), null);
+    assert.equal(wafCheckBlocking([marker('waf.crlf_injection_marker.safe', 'not_run'), marker('waf.evasion_base64_wrap.safe', 'running')]), null);
+    assert.equal(wafCheckBlocking(buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) })), null);
+  });
+
+  it('counts stopped, allowed, inconclusive and not-run marker checks with the latest result time', () => {
+    const summary = wafCheckBlocking([
+      marker('waf.crlf_injection_marker.safe', 'passed', { finishedAt: '2030-01-01T00:10:00.000Z' }),
+      marker('waf.http_method_policy_marker.safe', 'passed', { finishedAt: '2030-01-01T00:20:00.000Z' }),
+      marker('waf.sqli_marker.safe', 'failed', { finishedAt: '2030-01-01T00:05:00.000Z' }),
+      marker('waf.evasion_base64_wrap.safe', 'inconclusive'),
+      marker('waf.xss_marker.safe', 'not_run'),
+    ]);
+    assert.deepEqual(summary, { stopped: 2, allowed: 1, inconclusive: 1, notRun: 1, applicable: 5, lastAt: '2030-01-01T00:20:00.000Z' });
+  });
+
+  it('excludes fingerprint, rate-limit, enforcement, exploit and observation rows', () => {
+    const summary = wafCheckBlocking([
+      marker('waf.crlf_injection_marker.safe', 'passed'),
+      marker(EDGE_DETECTION_CHECK_ID, 'passed'),
+      marker('waf.low_rate_limit.safe', 'failed'),
+      marker('waf.enforcement.safe', 'failed'),
+      marker('waf.log4shell_marker.safe', 'failed', { category: CHECK_CATEGORIES.exploit }),
+      marker('waf.observed_marker.safe', 'failed', { readinessCapable: false }),
+      marker('l7.cors_posture.safe', 'failed'),
+    ]);
+    assert.deepEqual(summary, { stopped: 1, allowed: 0, inconclusive: 0, notRun: 0, applicable: 1, lastAt: '' });
+  });
+
+  it('every live WAF marker check is verdict-capable, so the summary can cover all of them', () => {
+    const rows = buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) });
+    const markers = rows.filter((entry) => /^waf\.(.+_marker|evasion_.+)\.safe$/.test(entry.checkId));
+    assert.ok(markers.length > 0);
+    const graded = rows.map((entry) => markers.includes(entry) ? { ...entry, status: 'passed' } : entry);
+    assert.equal(wafCheckBlocking(graded).stopped, markers.filter((entry) => entry.readinessCapable && entry.category.id === 'waf').length);
+  });
+});
+
+describe('check row vocabulary', () => {
+  it('uses the shared verdict words for protected and gap rows', () => {
+    assert.equal(ROW_STATUS_META.passed.label, 'Protected');
+    assert.equal(ROW_STATUS_META.failed.label, 'Gap found');
+  });
+
+  it('never tells customers they can start or schedule high-scale scenarios', () => {
+    assert.match(CHECK_CATEGORIES.high_scale.how, /customers cannot start or schedule them/);
+    assert.doesNotMatch(CHECK_CATEGORIES.high_scale.how, /Customers request them/);
+  });
 });

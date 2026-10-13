@@ -5,7 +5,7 @@ export type FindingIssueSource = 'verdict' | 'title' | 'vector' | 'none';
 
 export interface FindingSlaState {
   state: FindingSlaStateKey;
-  /** Epoch ms, null when the finding is not open or has no created_at. */
+  /** Epoch ms, null when the finding is not open or in progress, or has no opening date. */
   dueAt: number | null;
   /** Rounded hours until due; negative once breached. */
   hoursLeft: number | null;
@@ -105,7 +105,12 @@ export interface FindingGroup {
   earliestOpenedAt: string | null;
   /** Latest member opening (recently-opened semantics). */
   latestOpenedAt: string | null;
+  /** Latest recorded last_observed_at among members; null when no member recorded one. */
   lastObservedAt: string | null;
+  /** Earliest member opening, the first time the issue was observed. */
+  firstObservedAt: string | null;
+  /** Members whose SLA clock runs (open or in progress). */
+  slaActiveCount: number;
   /** Earliest SLA due time among open members. */
   nearestSlaDueAt: string | null;
   slaBreachCount: number;
@@ -175,7 +180,7 @@ export function groupFindings(findings: unknown[] | null | undefined, context?: 
 export function assetHasLifecycle(asset: Pick<FindingGroupAsset, 'statusCounts'> | null | undefined, lifecycle: FindingStatusBucket | 'all' | string): boolean;
 export function assetMembersInLifecycle(asset: Pick<FindingGroupAsset, 'members'> | null | undefined, lifecycle: FindingStatusBucket | 'all' | string): FindingGroupAssetMember[];
 export function groupSlaSummary(
-  group: Pick<FindingGroup, 'openCount' | 'slaBreachCount' | 'nearestSlaDueAt' | 'openDatedCount' | 'openUndatedCount'>,
+  group: Pick<FindingGroup, 'openCount' | 'slaBreachCount' | 'nearestSlaDueAt' | 'openDatedCount' | 'openUndatedCount'> & { slaActiveCount?: number },
   now?: number
 ): FindingGroupSlaSummary;
 export function sortFindingGroups(groups: FindingGroup[], sort: FindingGroupSortKey | string): FindingGroup[];
@@ -185,3 +190,26 @@ export function matchesFindingFilters(
   filters: FindingFilters,
   options?: { searchText?: (finding: Record<string, unknown>) => string }
 ): boolean;
+
+export interface FindingNoteSection {
+  id: 'recorded' | 'triage';
+  label: 'Recorded explanation' | 'Triage notes';
+  text: string;
+}
+export function findingNoteSections(finding: unknown): FindingNoteSection[];
+
+export type BulkFindingAction =
+  | { kind: 'assign'; assignee: string }
+  | { kind: 'accept_risk' }
+  | { kind: 'close'; status: string };
+export function bulkSelectionMembers(
+  assets: ReadonlyArray<Pick<FindingGroupAsset, 'key' | 'members'>> | null | undefined,
+  selectedKeys: Iterable<string> | null | undefined,
+  lifecycle: FindingStatusBucket | 'all' | string
+): FindingGroupAssetMember[];
+export function planBulkFindingAction<T extends Pick<FindingGroupAssetMember, 'findingId' | 'status' | 'owner'>>(
+  members: T[],
+  action: BulkFindingAction
+): { apply: T[]; skip: T[] };
+export function bulkFindingResultSummary(counts: { updated: number; skipped: number; failed: number }): string;
+export function findingDecisionNote(notes: unknown, label: string, reason: string): string;

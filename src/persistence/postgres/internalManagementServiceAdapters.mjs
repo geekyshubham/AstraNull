@@ -15,7 +15,7 @@ import {
 
 export const INTERNAL_MANAGEMENT_REPOSITORY_METHODS = Object.freeze([
   'createSignupRequest',
-  'findActiveSignupByDomainOrOrg',
+  'findActiveSignupByContactOrDomain',
   'getSignupRequest',
   'listSignupRequests',
   'updateSignupRequest',
@@ -98,7 +98,6 @@ function sanitizeSignupForPublic(record) {
     created_at: record.created_at,
     updated_at: record.updated_at,
     customer_notice: record.customer_notice ?? null,
-    provisioned_tenant_id: record.state === 'customer_invited' ? record.provisioned_tenant_id : null,
   };
 }
 
@@ -153,11 +152,11 @@ export function createPostgresInternalManagementServices(repositories) {
     async createSignupRequest(body) {
       const validated = validateSignupRequestInput(body);
       if (!validated.ok) return { error: 'validation_failed', fields: validated.errors };
-      const duplicate = await repo.findActiveSignupByDomainOrOrg(
+      const duplicate = await repo.findActiveSignupByContactOrDomain(
+        validated.value.contact_email,
         validated.value.email_domain,
-        validated.value.organization_name,
       );
-      if (duplicate) return { error: 'duplicate_request', existing_id: duplicate.id };
+      if (duplicate) return { error: 'duplicate_request' };
       const now = new Date().toISOString();
       const record = await repo.createSignupRequest({
         id: newId('signup'),

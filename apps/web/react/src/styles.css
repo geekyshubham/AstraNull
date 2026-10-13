@@ -561,7 +561,7 @@ th {
   padding: 12px 16px;
   color: var(--fg-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   letter-spacing: 0.02em;
 }
 
@@ -586,7 +586,7 @@ th {
 }
 
 .sidebar-foot .field.sidebar-role > span {
-  font-size: 9.5px;
+  font-size: var(--text-xs);
   color: var(--meta);
 }
 
@@ -1056,15 +1056,6 @@ th {
   text-overflow: ellipsis;
 }
 
-.badge-sans,
-.badge.badge-sans {
-  font-family: var(--font-body);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
 .badge svg {
   width: 12px;
   height: 12px;
@@ -1206,7 +1197,7 @@ select.select:focus,
 .kpi-cell .kpi-delta {
   margin-top: 3px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--fg-2);
   overflow-wrap: anywhere;
 }
@@ -1348,6 +1339,11 @@ select.select:focus,
 .select-copy small {
   color: var(--muted);
   font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.select-copy.select-placeholder strong {
+  color: var(--muted);
   font-weight: 400;
 }
 
@@ -1499,6 +1495,7 @@ select.select:focus,
 
 /* The dark dashboard row and badge tints compound; lift only this small danger
    label toward the existing foreground token while preserving its semantic hue. */
+:root:not([data-theme="light"]) .dashboard-link-meta > .badge-danger.badge,
 :root:not([data-theme="light"]) .dashboard-link-meta > .badge-danger.badge.badge-sans {
   color: color-mix(in oklab, var(--danger), var(--fg) 5%);
 }
@@ -1773,6 +1770,10 @@ select.select:focus,
 
 .gauge-fill-danger {
   stroke: var(--danger);
+}
+
+.gauge-fill-neutral {
+  stroke: var(--muted);
 }
 
 .gauge-score {
@@ -3955,10 +3956,14 @@ td .row-actions {
   background: var(--proof-active-row);
 }
 .truth-outcome { font-weight: 600; text-transform: capitalize; }
-.truth-outcome--protected { color: var(--success); }
-.truth-outcome--bypassable,
-.truth-outcome--penetrated { color: var(--danger); }
-.truth-outcome--misplaced { color: var(--warn); }
+.truth-row--active .truth-outcome--protected,
+.truth-row--active .truth-outcome--edge_protected,
+.truth-row--active .truth-outcome--allowed_as_expected { color: var(--success); }
+.truth-row--active .truth-outcome--edge_exposed,
+.truth-row--active .truth-outcome--exposed,
+.truth-row--active .truth-outcome--bypassable,
+.truth-row--active .truth-outcome--penetrated { color: var(--danger); }
+.truth-row--active .truth-outcome--misplaced { color: var(--warn); }
 
 .run-timeline-viz {
   margin-bottom: var(--space-3);
@@ -7497,8 +7502,7 @@ body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:
   font-weight: 700;
 }
 
-.evidence-guide-list code,
-.truth-key {
+.evidence-guide-list code {
   color: var(--fg-2);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -7550,11 +7554,6 @@ body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:
 
 .target-history.technical-disclosure > .target-history-head {
   margin-top: var(--space-3);
-}
-
-.truth-key {
-  display: inline-block;
-  margin-left: var(--space-2);
 }
 
 @media (max-width: 1240px) {
@@ -7802,6 +7801,17 @@ body .tg-detail-view .rule-search:focus-within,
   box-shadow: var(--elev-popover);
 }
 
+/* Fallback for the fixed-position menu (select.tsx): unclip and lift the card while a menu is open. */
+.card:has(.select-shell.open) {
+  overflow: visible;
+  z-index: 50;
+}
+
+/* Zero specificity so a card that is already sticky or absolutely positioned keeps that position. */
+:where(.card:has(.select-shell.open)) {
+  position: relative;
+}
+
 .table-wrap .data-table tbody tr[role='link'],
 .table-wrap .data-table tbody tr[tabindex] {
   cursor: pointer;
@@ -7870,7 +7880,7 @@ a.card:focus-visible,
 }
 
 .sidebar-foot {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .sidebar-foot-actions a:not(.btn) {
@@ -8896,12 +8906,6 @@ body .audit-filter-fields .field > span:first-child {
 @media (max-width: 1000px) {
   .page-head .row-actions {
     margin-left: 0;
-  }
-}
-
-@media (max-width: 480px) {
-  .truth-key {
-    display: block;
   }
 }
 

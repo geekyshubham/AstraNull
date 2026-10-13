@@ -223,10 +223,11 @@ test.describe('current release: evidence inspector and target workspace', () => 
     const calls = trackApi(page);
     await open(page, `target-detail?id=${ids.targetId}&tab=validate`);
     await page.locator('details.td-cat > summary').filter({ hasText: 'Origin exposure' }).click();
-    await page.getByRole('radio', { name: /Select Origin Leak Scan/ }).check();
+    const originLeakRow = page.locator('.td-check-summary').filter({ hasText: 'origin.leak_scan.safe' });
+    await originLeakRow.click();
     await expect(page).toHaveURL(/check=origin\.leak_scan\.safe/);
     await page.reload({ waitUntil: 'networkidle' });
-    await expect(page.getByRole('radio', { name: /Select Origin Leak Scan/ })).toBeChecked();
+    await expect(originLeakRow).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByRole('tab', { name: /Validate/ })).toHaveAttribute('aria-selected', 'true');
 
     await page.getByRole('button', { name: 'Review and start' }).click();
@@ -602,7 +603,7 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
       if (url.pathname === '/v1/findings' && url.searchParams.has('target_id')) findingReads.push(url.searchParams.get('target_id'));
     });
     await open(page, `findings?target=${ids.targetId}`);
-    await expect(page.getByRole('button', { name: 'Domain', exact: true })).toContainText('checkout.acme.com');
+    await expect(page.getByRole('button', { name: 'Target', exact: true })).toContainText('checkout.acme.com');
     // A linked domain predicate is exact: every status, no remembered search, and every read carries it.
     await expect(page.getByRole('group', { name: 'Finding status filters' }).getByRole('button', { name: /^All/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.rf-result-count').first()).toContainText(/matching findings?\./);
@@ -964,6 +965,11 @@ test.describe('current release: target history, origin relations and retest line
     const starts = [];
     await captureRunStarts(page, starts);
     await open(page, 'finding-detail?id=fnd_checkout_1');
+    const affected = page.locator('.finding-affected-targets');
+    const checkoutRow = affected.getByRole('row').filter({ hasText: 'checkout.acme.com' });
+    await expect(checkoutRow.locator('.verify-chip')).toContainText('Domain ownership verified');
+    await expect(affected).not.toContainText('Ownership not verified');
+    await expect(affected).not.toContainText('No result yet');
     const lineage = page.getByRole('region', { name: 'Original evidence and later results' });
     const retests = lineage.locator('.finding-lineage-item').filter({ hasText: 'Retests of this finding' });
     await expect(retests.getByRole('button', { name: 'View result of retest run run_checkout_retest' })).toBeVisible();

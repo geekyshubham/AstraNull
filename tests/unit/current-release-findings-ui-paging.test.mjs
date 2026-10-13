@@ -25,7 +25,7 @@ function between(source, start, end) {
 
 const pageComponents = read('pages/page-components.tsx');
 const detail = read('pages/detail-pages.tsx');
-const reportLive = between(detail, 'function ReportLiveOpenFindings(', 'export function ReportDetailPage(');
+const reportLive = between(detail, 'function ReportLiveFindingStatus(', 'function ReportComparisonCard(');
 const findingsPage = read('pages/refined/findings-refined.tsx');
 const dashboard = read('pages/dashboard-page.tsx');
 const hooks = read('components/findings/use-server-findings.ts');
@@ -138,10 +138,18 @@ describe('findings page: a linked predicate is exact', () => {
 });
 
 describe('report and dashboard: live counts come from server predicates', () => {
-  it('reads open findings per captured run with an exact test_run_id predicate', () => {
-    assert.match(reportLive, /status: 'open', test_run_id: id/);
-    assert.match(reportLive, /useFindingPages\(/);
+  it('reads the current status of each finding the report captured, by exact ID and bounded', () => {
+    assert.match(reportLive, /requestJson\(config, session, `\/v1\/findings\/\$\{encodeURIComponent\(id\)\}`\)/);
+    assert.match(detail, /const LIVE_FINDING_READ_LIMIT = 100;/);
+    assert.match(detail, /const LIVE_FINDING_CONCURRENCY = 4;/);
+    assert.match(reportLive, /\.slice\(0, LIVE_FINDING_READ_LIMIT\)/);
+    assert.match(reportLive, /captured findings are still open; \$\{formatNumber\(changed\)\} changed since generation/);
+    assert.match(reportLive, /Not available/);
+    assert.match(reportLive, /This report captured no findings\./);
+    assert.match(reportLive, /Not recorded \(legacy report\)\./);
     assert.doesNotMatch(reportLive, /data\.findings/);
+    assert.doesNotMatch(reportLive, /test_run_id: id/);
+    assert.doesNotMatch(detail, /function ReportLiveOpenFindings\(/);
     assert.doesNotMatch(detail, /liveOpenLinked/);
   });
 

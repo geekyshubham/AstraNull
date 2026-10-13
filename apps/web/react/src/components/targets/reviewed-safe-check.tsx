@@ -149,7 +149,7 @@ export function ReviewedSafeCheck({ config, session, target, blocked = false, on
       setConfirm(false);
       const accepted = acceptedReviewedSafeExecution(response, String(target.id));
       if (!accepted) { setError('Start returned no exact target/check/run identity. No historical run was substituted; refresh recorded activity.'); return; }
-      onStarted('Reviewed fixed GET comparison accepted. The Inspector follows this exact run and its recorded evidence.', accepted);
+      onStarted('Reviewed fixed GET comparison started. Follow its progress and evidence in the Inspector.', accepted);
     });
   }
 

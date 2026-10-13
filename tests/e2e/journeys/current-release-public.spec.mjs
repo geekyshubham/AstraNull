@@ -77,6 +77,20 @@ async function storageText(page) {
   return page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
 }
 
+async function chooseOption(page, label, option) {
+  await page.getByRole('button', { name: label, exact: true }).click();
+  await page.getByRole('listbox', { name: label, exact: true }).getByRole('option', { name: option, exact: true }).click();
+}
+
+const SOC_STAFF_SESSION = {
+  mode: 'dev-headers',
+  principal: 'staff',
+  staff_id: 'staff_soc',
+  staff_role: 'soc_analyst',
+  role: 'soc_analyst',
+};
+const QUEUE_INTENT = '#queue-detail?id=hsr_fixture&tenant=ten_demo';
+
 test.describe('landing', () => {
   test('leads with a labeled synthetic workflow, not a schema, and makes no deferred claims', async ({ page }) => {
     await page.goto(`${baseUrl}/`);
@@ -135,8 +149,11 @@ test.describe('sign-in', () => {
     expect(headingBox.y).toBeLessThan(formBox.y);
     await page.getByRole('button', { name: 'Continue to portal', exact: true }).click();
     await expect(page.locator('#login-user-id')).toBeFocused();
-    await expect(page.locator('#login-user-id-error')).toHaveText('Enter a user ID or work email.');
-    await expect(page.locator('#login-user-id')).toHaveAttribute('aria-describedby', 'login-user-id-error');
+    await expect(page.locator('#login-user-id-error')).toHaveText('Enter a user ID, like usr_admin.');
+    await expect(page.locator('#login-user-id')).toHaveAttribute('aria-describedby', 'login-user-id-help login-user-id-error');
+    await expect(page.locator('#login-user-id-help')).toHaveText('Any identifier, for example usr_admin.');
+    await expect(page.getByLabel('Demo workspace')).toHaveValue('ten_demo');
+    await expect(page.getByRole('button', { name: 'Skip: open as demo admin' })).toBeVisible();
     await noPageOverflow(page);
     await context.close();
   });
@@ -153,7 +170,7 @@ test.describe('sign-in', () => {
     await page.locator('#login-password').fill(SYNTHETIC_PASSWORD);
     await page.getByRole('button', { name: 'Continue to portal', exact: true }).click();
     const alert = page.locator('.public-form-error[role="alert"]');
-    await expect(alert).toContainText('Email or password is incorrect.');
+    await expect(alert).toContainText('Email or password is incorrect. Invited? Use the link in your invitation email to set a password.');
     await expect(alert.getByRole('link', { name: 'Reset your password' })).toBeVisible();
     await expect(page.locator('#login-user-id')).toHaveValue('analyst@company.test');
     await expect(page.locator('#login-password')).toHaveValue('');
@@ -241,6 +258,58 @@ test.describe('sign-in', () => {
   });
 });
 
+test.describe('staff sign-in return', () => {
+  test('an expired SOC session returns the analyst to the queue item after signing in again', async ({ page }) => {
+    await page.addInitScript((value) => {
+      if (sessionStorage.getItem('astranull.test.staff-seeded')) return;
+      sessionStorage.setItem('astranull.test.staff-seeded', '1');
+      sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify(value));
+    }, SOC_STAFF_SESSION);
+    const expire = (route) => {
+      const request = route.request();
+      const { pathname } = new URL(request.url());
+      const discovery = pathname === '/ready' || pathname === '/v1/public/site-config';
+      if (!['fetch', 'xhr'].includes(request.resourceType()) || discovery) return route.fallback();
+      return route.fulfill({ status: 401, json: { error: 'unauthorized' } });
+    };
+    await page.route('**/*', expire);
+    await page.goto(`${baseUrl}/internal/soc${QUEUE_INTENT}`);
+    await page.waitForURL((url) => url.searchParams.get('reason') === 'session_expired');
+    const loginUrl = new URL(page.url());
+    expect(loginUrl.pathname).toBe('/internal/admin/login');
+    expect(loginUrl.searchParams.get('next')).toBe(QUEUE_INTENT);
+    await expect(page.getByText('Your session ended. Log in again to continue.')).toBeVisible();
+    await expect(page.getByText('After you log in, you return to Queue detail.')).toBeVisible();
+    await page.unroute('**/*', expire);
+
+    await page.getByLabel('Staff ID').fill('staff_soc');
+    await chooseOption(page, 'Staff role', 'SOC analyst');
+    await page.getByRole('button', { name: 'Continue to SOC console' }).click();
+    await page.waitForURL((url) => url.pathname === '/internal/soc' && url.hash === QUEUE_INTENT);
+  });
+
+  test('a staff role that cannot open the requested route lands on its home instead', async ({ page }) => {
+    await page.goto(`${baseUrl}/internal/admin/login?${new URLSearchParams({ next: QUEUE_INTENT, reason: 'session_expired' })}`);
+    await expect(page.getByText('After you log in, you return to Queue detail.')).toBeVisible();
+    await page.getByLabel('Staff ID').fill('staff_admin');
+    await page.getByRole('button', { name: 'Continue to internal admin' }).click();
+    await page.waitForURL((url) => url.pathname === '/internal/admin');
+    expect(new URL(page.url()).hash).toBe('');
+  });
+
+  test('customer routes and tokens never survive into a staff return', async ({ page }) => {
+    for (const unsafe of ['#findings', '#queue-detail?id=pwi_live-token', 'https://evil.example/#admin']) {
+      await page.goto(`${baseUrl}/internal/admin/login?${new URLSearchParams({ next: unsafe })}`);
+      await expect(page.getByRole('heading', { level: 1, name: 'Staff sign-in' })).toBeVisible();
+      if (unsafe.startsWith('#queue-detail')) {
+        await expect(page.getByText('Log in to open Queue detail.')).toBeVisible();
+      } else {
+        await expect(page.getByText(/you return to|Log in to open/)).toHaveCount(0);
+      }
+    }
+  });
+});
+
 test.describe('invitation password setup', () => {
   test('strips the invitation token, gives live requirements and ties confirm errors to the field', async ({ page }) => {
     await usePasswordLane(page);
@@ -293,23 +362,55 @@ test.describe('invitation password setup', () => {
 
     await page.getByRole('button', { name: 'Set password' }).click();
     await expect(page.getByText('This invitation has expired.')).toBeVisible();
-    await expect(page.getByText('No account was activated.', { exact: false })).toBeVisible();
+    await expect(page.getByText('No account was activated. Reply to the email that sent your invitation to request a new one.')).toBeVisible();
     await expect(page.locator('#set-password-new')).toHaveCount(0);
   });
 
-  test('a successful activation names the account and hands off to sign-in', async ({ page }) => {
+  test('an expired invitation points to the published support contact when there is one', async ({ page }) => {
+    await usePasswordLane(page, { support_email: 'support@astranull.test' });
+    await page.route('**/v1/auth/set-password', (route) => route.fulfill({ status: 410, json: { error: 'invite_expired' } }));
+    await page.goto(`${baseUrl}/set-password?token=${SYNTHETIC_INVITE}`);
+    await page.locator('#set-password-new').fill(SYNTHETIC_PASSWORD);
+    await page.locator('#set-password-confirm').fill(SYNTHETIC_PASSWORD);
+    await page.getByRole('button', { name: 'Set password' }).click();
+    await expect(page.getByText('No account was activated. Contact support@astranull.test for a new invitation.')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'support@astranull.test' })).toHaveAttribute('href', 'mailto:support@astranull.test');
+  });
+
+  test('a deployment without password sign-in explains that no password is needed', async ({ page }) => {
+    await usePasswordLane(page, { password_login_enabled: false });
+    await page.goto(`${baseUrl}/set-password?token=${SYNTHETIC_INVITE}`);
+    await expect(page.getByText('This organization signs in through its identity provider.')).toBeVisible();
+    await expect(page.getByText('Password setup is not used on this deployment. No password is needed.')).toBeVisible();
+    await expect(page.locator('#set-password-new')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('a successful activation names the account and hands off to sign-in', async ({ browser }) => {
+    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+    const page = await context.newPage();
     await usePasswordLane(page);
-    await page.route('**/v1/auth/set-password', (route) => route.fulfill({ status: 200, json: { status: 'password_set', email: 'analyst@company.test' } }));
+    await page.route('**/v1/auth/set-password', (route) => route.fulfill({
+      status: 200,
+      json: { status: 'password_set', email: 'analyst@company.test', tenant_id: 'ten_synthetic' },
+    }));
     await page.goto(`${baseUrl}/set-password?token=${SYNTHETIC_INVITE}`);
     await page.locator('#set-password-new').fill(SYNTHETIC_PASSWORD);
     await page.locator('#set-password-confirm').fill(SYNTHETIC_PASSWORD);
     await page.getByRole('button', { name: 'Set password' }).click();
     await expect(page.getByText('Your account is active.')).toBeVisible();
     await expect(page.getByText('analyst@company.test')).toBeVisible();
+    await expect(page.locator('.public-reference-label')).toHaveText('Workspace ID');
+    await expect(page.locator('.public-reference-value')).toHaveText('ten_synthetic');
+    await page.getByRole('button', { name: 'Copy ID' }).click();
+    await expect(page.locator('.public-copy-status')).toHaveText('Workspace ID copied.');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('ten_synthetic');
     await expect(page.getByRole('link', { name: 'Log in' }).last()).toHaveAttribute('href', '/login');
+    await context.close();
   });
 
   test('without a link the manual code field is a fallback, masked from screenshots', async ({ page }) => {
+    await usePasswordLane(page);
     await page.goto(`${baseUrl}/set-password`);
     await expect(page.locator('#set-password-token')).toHaveAttribute('type', 'password');
     await page.getByRole('button', { name: 'Set password' }).click();
@@ -329,6 +430,27 @@ test.describe('request access and status', () => {
     await expect(page.locator('#signup-contact')).toHaveValue('Rowan Achebe');
   });
 
+  test('plan and region start unchosen and a blank choice focuses the plan trigger', async ({ page }) => {
+    const posts = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/v1/signup-requests') posts.push(request);
+    });
+    await page.goto(`${baseUrl}/signup`);
+    const plan = page.getByRole('button', { name: 'Requested plan', exact: true });
+    const region = page.getByRole('button', { name: 'Data region', exact: true });
+    await expect(plan).toContainText('Choose a plan');
+    await expect(region).toContainText('Choose a data region');
+    await page.locator('#signup-organization').fill('Northwind Ferries');
+    await page.locator('#signup-contact').fill('Rowan Achebe');
+    await page.locator('#signup-email').fill('rowan@ferries.test');
+    await page.locator('#signup-intended-use').fill('Validate our public booking site and API from outside.');
+    await page.getByRole('button', { name: 'Submit request' }).click();
+    await expect(page.getByText('Choose a plan.', { exact: true })).toBeVisible();
+    await expect(page.getByText('Choose a region.', { exact: true })).toBeVisible();
+    await expect(plan).toBeFocused();
+    expect(posts).toHaveLength(0);
+  });
+
   test('a recorded request keeps its ID through confirmation, copy, reload and status', async ({ browser }) => {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
     const page = await context.newPage();
@@ -337,10 +459,13 @@ test.describe('request access and status', () => {
     await page.locator('#signup-organization').fill(`Northwind Ferries ${suffix}`);
     await page.locator('#signup-contact').fill('Rowan Achebe');
     await page.locator('#signup-email').fill(`rowan@ferries-${suffix}.test`);
+    await chooseOption(page, 'Requested plan', 'Professional');
+    await chooseOption(page, 'Data region', 'European Union');
     await page.locator('#signup-intended-use').fill('Validate our public booking site and API from outside.');
     await page.getByRole('button', { name: 'Submit request' }).click();
 
     await expect(page.getByText('Request received.')).toBeVisible();
+    await expect(page.getByText('Your request is recorded. Every request is reviewed before a workspace is created.')).toBeVisible();
     await expect(page.getByText('No account exists yet.', { exact: false })).toBeVisible();
     const id = (await page.locator('.public-reference-value').textContent()).trim();
     expect(id).toMatch(/^sgn_/);
@@ -363,9 +488,11 @@ test.describe('request access and status', () => {
     await page.locator('#signup-organization').fill(`Northwind Ferries ${suffix}`);
     await page.locator('#signup-contact').fill('Rowan Achebe');
     await page.locator('#signup-email').fill(`ops@ferries-${suffix}.test`);
+    await chooseOption(page, 'Requested plan', 'Professional');
+    await chooseOption(page, 'Data region', 'European Union');
     await page.locator('#signup-intended-use').fill('Validate our public booking site and API from outside.');
     await page.getByRole('button', { name: 'Submit request' }).click();
-    await expect(page.locator('.public-form-error')).toContainText('already open');
+    await expect(page.locator('.public-form-error')).toContainText('already being reviewed, so nothing new was submitted');
     await expect(page.locator('#signup-email')).toHaveValue(`ops@ferries-${suffix}.test`);
     await expect(page.locator('.public-form-error')).not.toContainText(id);
     await context.close();
@@ -383,9 +510,10 @@ test.describe('request access and status', () => {
   });
 
   test('status distinguishes not found, service failure and each recorded stage', async ({ page }) => {
-    await page.goto(`${baseUrl}/signup-status?id=${encodeURIComponent('  sgn_doesnotexist  ')}`);
+    await page.goto(`${baseUrl}/signup-status?id=${encodeURIComponent('  sgn_does notexist\n ')}`);
     await expect(page.locator('#signup-status-request-id-error')).toContainText('No request matches this ID');
     await expect(page.locator('#signup-status-request-id')).toHaveValue('sgn_doesnotexist');
+    await expect(page.getByText('Lost your request ID? It cannot be looked up by email.', { exact: false })).toBeVisible();
 
     await page.route('**/v1/signup-requests/sgn_flaky', (route) => route.fulfill({ status: 500, json: { error: 'internal_error' } }));
     await page.goto(`${baseUrl}/signup-status?id=sgn_flaky`);
@@ -421,6 +549,9 @@ test.describe('request access and status', () => {
       await expect(page.getByText(headline)).toBeVisible();
       const loginAction = page.locator('.public-status-result').getByRole('link', { name: 'Log in' });
       await expect(loginAction).toHaveCount(canSignIn ? 1 : 0);
+      const setPasswordAction = page.locator('.public-status-result').getByRole('link', { name: 'Set password' });
+      await expect(setPasswordAction).toHaveCount(state === 'customer_invited' ? 1 : 0);
+      if (state === 'customer_invited') await expect(setPasswordAction).toHaveAttribute('href', '/set-password');
       if (state === 'rejected') {
         await expect(page.getByText('We could not verify the organization domain.')).toBeVisible();
         await expect(page.locator('.public-lifecycle')).toHaveCount(0);

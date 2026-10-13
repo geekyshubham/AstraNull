@@ -27,7 +27,8 @@ import {
 
 const KILL_SWITCH_REASON = 'Provider escalation in progress; validation paused.';
 const KILL_SWITCH_UPDATED_AT = '2026-08-02T11:30:00.000Z';
-const KILL_SWITCH_HEADLINE = 'SOC kill switch is armed';
+const KILL_SWITCH_HEADLINE = 'AstraNull SOC has paused testing for this workspace';
+const KILL_SWITCH_EFFECT = 'New validation runs and scans are blocked, and runs in progress were cancelled. Contact support for status.';
 const SCALE_OPEN_FINDINGS = Math.ceil(PORTAL_SCALE_PROFILE.findings / 3);
 
 /** Baseline store plus an armed SOC kill switch (shape matches src/store.mjs socKillSwitch). */
@@ -39,6 +40,16 @@ function applyArmedKillSwitch(store) {
     reason: KILL_SWITCH_REASON,
     updated_at: KILL_SWITCH_UPDATED_AT,
   };
+}
+
+/** The score text a factor row shows: scored factors as points of their weight, penalties as deducted points, context as not scored. */
+function expectedFactorScoreText(factor) {
+  const weight = factor.weight;
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight > 0) {
+    return `${factor.score}/${typeof weight === 'number' && weight > 0 ? weight : 100}`;
+  }
+  if (factor.score < 0) return `\u2212${Math.abs(factor.score)} pts`;
+  return 'Not scored';
 }
 
 function applyPortalScaleCounts(store) {
@@ -108,7 +119,8 @@ test.describe('portal dashboard overview panels', () => {
     await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
     const baseUrl = getPortalPlaywrightBaseUrl();
     const state = await fetchPortalState(baseUrl);
-    const factors = Array.isArray(state?.readiness?.factors) ? state.readiness.factors : [];
+    const factors = (Array.isArray(state?.readiness?.factors) ? state.readiness.factors : [])
+      .filter((factor) => typeof factor.score === 'number' && Number.isFinite(factor.score));
     expect(factors.length, 'seeded /v1/state must publish readiness factors').toBeGreaterThan(0);
 
     await injectPortalDevHeadersSession(page);
@@ -118,12 +130,24 @@ test.describe('portal dashboard overview panels', () => {
     const rows = page.getByTestId('readiness-factors').getByTestId('readiness-factor-row');
     await expect(rows).toHaveCount(factors.length);
 
+    await expect(page.getByText('Scored factors add points and penalties subtract them; context factors are shown for transparency and do not change the score.')).toBeVisible();
     for (const factor of factors) {
       const row = rows.filter({ hasText: factor.label });
       await expect(row, `one row for factor ${factor.key}`).toHaveCount(1);
-      // Score renders as `${score}/${scale}` in the compact factor row.
-      await expect(row.locator('.factor-score')).toContainText(String(factor.score));
+      const scoreText = expectedFactorScoreText(factor);
+      await expect(row.locator('.factor-score')).toHaveText(scoreText);
+      // Only scored factors draw a bar; a penalty or context factor is never shown as a share of 100.
+      await expect(row.locator('.factor-track')).toHaveCount(scoreText.includes('/') ? 1 : 0);
+      if (factor.score < 0) {
+        await expect(row.getByRole('img', { name: `${plainInlineText(factor.label)}: penalty of ${Math.abs(factor.score)} points` })).toHaveCount(1);
+      }
       await expect(row).toContainText(plainInlineText(factor.detail));
+      if (factor.key === 'soc_readiness') expect(factor.detail).not.toMatch(/\bhs_[a-z0-9_]+/i);
+    }
+    const contextFactors = factors.filter((factor) => expectedFactorScoreText(factor) === 'Not scored');
+    if (contextFactors.length > 0) await expect(page.getByRole('heading', { name: 'Context (not part of the score)' })).toBeVisible();
+    if (typeof state.readiness.score === 'number') {
+      await expect(page.getByTestId('readiness-published-score')).toContainText(`Published score${state.readiness.score}/100`);
     }
   });
 
@@ -140,7 +164,7 @@ test.describe('portal dashboard overview panels', () => {
     await expect(page.getByText(KILL_SWITCH_HEADLINE)).toHaveCount(0);
   });
 
-  test('FT-DASH-03 armed kill switch raises a dashboard alert with reason and timestamp', async ({ page }) => {
+  test('FT-DASH-03 active kill switch raises a paused-testing alert with effect, reason and timestamp', async ({ page }) => {
     await restartPortalPlaywrightServer({ mutate: applyArmedKillSwitch });
     const baseUrl = getPortalPlaywrightBaseUrl();
     const state = await fetchPortalState(baseUrl);
@@ -152,9 +176,34 @@ test.describe('portal dashboard overview panels', () => {
 
     const alert = page.getByRole('alert').filter({ hasText: KILL_SWITCH_HEADLINE });
     await expect(alert).toHaveCount(1);
-    await expect(alert).toContainText(KILL_SWITCH_REASON);
+    await expect(alert).toContainText(KILL_SWITCH_EFFECT);
+    await expect(alert).toContainText(`Reason: ${KILL_SWITCH_REASON}`);
+    await expect(alert).toContainText('Paused');
     await expect(alert.getByTitle(/kill_switch\.updated_at/)).toBeVisible();
   });
+  test('FT-DASH-05 at 375px the recorded verdict, verdict and time stay on screen with no page overflow', async ({ page }) => {
+    await restartPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
+    const baseUrl = getPortalPlaywrightBaseUrl();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'dashboard', baseUrl);
+
+    const posture = page.locator('.dash-area-targets');
+    const activity = page.locator('.dash-area-activity');
+    await expect(posture.locator('td[data-label="Recorded verdict"]').first()).toBeVisible();
+    for (const [card, label] of [[posture, 'Recorded verdict'], [activity, 'Verdict'], [activity, 'When']]) {
+      const cell = card.locator(`td[data-label="${label}"]`).first();
+      await cell.scrollIntoViewIfNeeded();
+      await expect(cell, `${label} cell is visible at 375px`).toBeVisible();
+      const box = await cell.boundingBox();
+      expect(box, `${label} cell has a layout box`).not.toBeNull();
+      expect(box.x, `${label} starts on screen`).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, `${label} ends on screen`).toBeLessThanOrEqual(375 + 1);
+    }
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow, 'no horizontal page scroll at 375px').toBeLessThanOrEqual(0);
+  });
+
   test('FT-DASH-04 served bundle counts the scale estate from server totals and links each count to its exact list', async ({ page }) => {
     test.skip(!isPortalScaleEnabled(), 'Set ASTRANULL_PORTAL_SCALE=1 for the full served-DOM scale assertion.');
     test.setTimeout(300_000);

@@ -75,7 +75,7 @@ export function ExecutionInspector({ config, session, reference, checks, onEvide
     setBusy(true); setError('');
     try {
       await requestJson(config, session, `/v1/${kind === 'scan' ? 'validation-scans' : 'test-runs'}/${encodeURIComponent(id)}/cancel`, {
-        method: 'POST', body: { reason: kind === 'scan' ? 'Stopped assessment from live Inspector' : 'Stopped exact check from live Inspector' },
+        method: 'POST', body: { reason: kind === 'scan' ? 'Stopped scan from live Inspector' : 'Stopped exact check from live Inspector' },
       });
       setRequested({ id, label: 'Stop requested · worker acknowledgment pending. Cancellation is not measured Stop proof.' });
       setConfirm(null);
@@ -87,23 +87,23 @@ export function ExecutionInspector({ config, session, reference, checks, onEvide
   return <section className="ei-execution" aria-label="Live execution workspace">
     {isScan ? <>
       <dl className="ei-kv">
-        <div><dt>Exact assessment</dt><dd className="mono">{reference.scan_id}</dd></div>
-        <div><dt>Recorded state</dt><dd>{str(scan?.status).replaceAll('_', ' ') || 'Waiting for recorded assessment state'}</dd></div>
-        <div><dt>Display selection</dt><dd>{follow ? 'Following the active child of this exact assessment' : 'Pinned child · does not switch when another check starts'}</dd></div>
-        <div><dt>Last assessment update</dt><dd>{scanActivity.lastUpdated ? <time dateTime={scanActivity.lastUpdated}>{new Date(scanActivity.lastUpdated).toLocaleTimeString()}</time> : 'No successful update yet'}</dd></div>
+        <div><dt>Scan</dt><dd className="mono">{reference.scan_id}</dd></div>
+        <div><dt>Status</dt><dd>{str(scan?.status).replaceAll('_', ' ') || 'Waiting for scan status'}</dd></div>
+        <div><dt>Showing</dt><dd>{follow ? 'The check that is running now' : 'This check only · stays here when the next check starts'}</dd></div>
+        <div><dt>Last scan update</dt><dd>{scanActivity.lastUpdated ? <time dateTime={scanActivity.lastUpdated}>{new Date(scanActivity.lastUpdated).toLocaleTimeString()}</time> : 'No successful update yet'}</dd></div>
       </dl>
-      {scanActivity.snapshot ? <ul className="ei-note" aria-label="Assessment capture limitations">{captureWarnings(scanActivity.snapshot).map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+      {scanActivity.snapshot ? <ul className="ei-note" aria-label="Scan capture limitations">{captureWarnings(scanActivity.snapshot).map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       <div className="ei-actions">
-        {!childId ? <Button size="sm" variant="secondary" onClick={() => setPaused((value) => !value)}>{paused ? 'Resume assessment updates' : 'Pause assessment updates'}</Button> : null}
-        <Button size="sm" variant="secondary" disabled={follow && !childId} onClick={() => select(follow ? childId : undefined)}>{follow ? 'Pin this check' : 'Follow active check'}</Button>
-        {stopAllowed && scanLive && !stopStateLabel(scanActivity.snapshot?.stop) && requested?.id !== reference.scan_id ? <Button size="sm" variant="danger" onClick={() => reference.scan_id && setConfirm({ kind: 'scan', id: reference.scan_id, scopeKey })}><Square size={14} aria-hidden="true" />Stop assessment</Button> : null}
+        {!childId ? <Button size="sm" variant="secondary" onClick={() => setPaused((value) => !value)}>{paused ? 'Resume scan updates' : 'Pause scan updates'}</Button> : null}
+        <Button size="sm" variant="secondary" disabled={follow && !childId} onClick={() => select(follow ? childId : undefined)}>{follow ? 'Keep showing this check' : 'Follow active check'}</Button>
+        {stopAllowed && scanLive && !stopStateLabel(scanActivity.snapshot?.stop) && requested?.id !== reference.scan_id ? <Button size="sm" variant="danger" onClick={() => reference.scan_id && setConfirm({ kind: 'scan', id: reference.scan_id, scopeKey })}><Square size={14} aria-hidden="true" />Stop scan</Button> : null}
       </div>
-      {steps.length ? <label className="ei-child-select">Inspect a recorded child<select value={childId} onChange={(event) => select(event.target.value)}>{!childId ? <option value="" disabled>{follow ? 'Waiting for an authorized child' : 'Pinned child unavailable'}</option> : null}{steps.map((step) => <option key={str(step.id) || str(step.test_run_id)} value={str(step.test_run_id)}>{str(step.check_id)} · {str(step.test_run_id)}</option>)}</select></label> : null}
-      {scanActivity.error ? <p className="ei-partial" role="alert">Assessment refresh failed; the recorded view may be stale. <Button size="sm" variant="secondary" disabled={paused} onClick={scanActivity.refresh}>Reconnect assessment</Button></p> : null}
+      {steps.length ? <label className="ei-child-select">Show another check from this scan<select value={childId} onChange={(event) => select(event.target.value)}>{!childId ? <option value="" disabled>{follow ? 'Waiting for the first check to start' : 'Selected check unavailable'}</option> : null}{steps.map((step) => <option key={str(step.id) || str(step.test_run_id)} value={str(step.test_run_id)}>{str(step.check_id)} · {str(step.test_run_id)}</option>)}</select></label> : null}
+      {scanActivity.error ? <p className="ei-partial" role="alert">Scan refresh failed; the recorded view may be stale. <Button size="sm" variant="secondary" disabled={paused} onClick={scanActivity.refresh}>Reconnect scan</Button></p> : null}
       {stopStateLabel(scanActivity.snapshot?.stop) ? <p className="ei-note" role="status">{stopStateLabel(scanActivity.snapshot?.stop)}. Finished child results are retained.</p> : null}
-      {selection.state === 'loading' ? <p className="ei-note">Loading this exact assessment before reading its selected child.</p> : null}
-      {selection.state === 'unavailable' || (!follow && (activityDenied || !bound)) ? <p className="ei-partial" role="alert">{follow ? 'Assessment selection unavailable' : 'Pinned child unavailable'}{pinnedChild ? ` · ${pinnedChild}` : ''}. The exact assessment/target relationship or access could not be confirmed. No other child was substituted.</p> : null}
-      {selection.state === 'empty' ? <p className="ei-note">No child run has been dispatched for this target. Planned checks are not shown as requests sent.</p> : null}
+      {selection.state === 'loading' ? <p className="ei-note">Loading this scan…</p> : null}
+      {selection.state === 'unavailable' || (!follow && (activityDenied || !bound)) ? <p className="ei-partial" role="alert">{follow ? 'Scan selection unavailable' : 'Selected check unavailable'}{pinnedChild ? ` · ${pinnedChild}` : ''}. We could not confirm this scan belongs to this target or that you can view it. No other check is shown in its place.</p> : null}
+      {selection.state === 'empty' ? <p className="ei-note">No check from this scan has started on this target yet. Planned checks are not shown as requests sent.</p> : null}
     </> : <p className="ei-note">Pinned to the exact accepted or selected run. Newer runs never replace this inspection.</p>}
     {requested && (requested.id === childId || requested.id === reference.scan_id) && !stopStateLabel(requested.id === reference.scan_id ? scanActivity.snapshot?.stop : snapshot?.stop) ? <p className="ei-note" role="status">{requested.label}</p> : null}
     {error ? <p className="probe-activity-error" role="alert">{error}</p> : null}
@@ -115,9 +115,9 @@ export function ExecutionInspector({ config, session, reference, checks, onEvide
       onFollowActive={isScan && !follow ? () => select() : undefined}
     /> : null}
     {isScan && childId && snapshot && bound && !activityDenied ? <ChildEvidence config={config} session={session} targetId={targetId} checkId={checkId} runId={childId} revision={runActivity.revision} paused={paused} accessDenied={activityDenied} /> : null}
-    <ConfirmModal open={confirm !== null} title={confirm?.kind === 'scan' ? 'Stop this assessment?' : 'Stop this exact check?'}
-      description={confirm?.kind === 'scan' ? 'Request cancellation of this assessment and its active child. Queued children cannot start. Completed evidence is kept; worker Stop requires acknowledgment.' : isScan ? 'Only this child is cancelled. Other checks in the assessment may continue. A bounded in-flight request can finish before the worker acknowledges Stop.' : 'Only this exact run is cancelled. A bounded in-flight request can finish before the worker acknowledges Stop.'}
-      confirmLabel={confirm?.kind === 'scan' ? 'Stop assessment' : 'Stop check'} confirmTone="danger" busy={busy}
+    <ConfirmModal open={confirm !== null} title={confirm?.kind === 'scan' ? 'Stop this scan?' : 'Stop this exact check?'}
+      description={confirm?.kind === 'scan' ? 'Request cancellation of this scan and its running check. Queued checks cannot start. Completed evidence is kept; worker Stop requires acknowledgment.' : isScan ? 'Only this check is cancelled. Other checks in the scan may continue. A bounded in-flight request can finish before the worker acknowledges Stop.' : 'Only this exact run is cancelled. A bounded in-flight request can finish before the worker acknowledges Stop.'}
+      confirmLabel={confirm?.kind === 'scan' ? 'Stop scan' : 'Stop check'} confirmTone="danger" busy={busy}
       onCancel={() => setConfirm(null)} onConfirm={() => void stop()} />
   </section>;
 }

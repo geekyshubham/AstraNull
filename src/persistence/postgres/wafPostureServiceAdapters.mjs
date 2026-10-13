@@ -14,6 +14,7 @@ import {
   WAF_EXPECTED_ACTIONS,
   WAF_SCENARIO_FAMILIES,
   WAF_SCENARIO_INTAKE_STAGES,
+  buildWafPostureFindingSummary,
 } from '../../contracts/wafPosture.mjs';
 import {
   listWafProductCatalogEntries,
@@ -739,17 +740,6 @@ function buildWafFindingTitle(postureStatus, canonicalUrl) {
     ? canonicalUrl.trim()
     : 'WAF asset';
   return `WAF posture ${postureStatus}: ${label}`;
-}
-
-function buildWafFindingNotes({ reasonCodes, validationRunId, wafAssetId }) {
-  const codes = Array.isArray(reasonCodes) ? reasonCodes.join(', ') : 'none';
-  return [
-    'WAF posture finding.',
-    `reason_codes: ${codes}`,
-    `waf_validation_run_id: ${validationRunId}`,
-    `waf_asset_id: ${wafAssetId}`,
-    'Retest with a safe WAF validation after remediation.',
-  ].join(' ');
 }
 
 function postureStatusNeedsFinding(status) {
@@ -1689,10 +1679,12 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
               originBypassConfirmed,
             }),
             status: 'open',
-            notes: buildWafFindingNotes({
+            notes: null,
+            system_summary: buildWafPostureFindingSummary({
+              postureStatus: classification.status,
               reasonCodes: classification.reason_codes,
-              validationRunId: run.id,
               wafAssetId: asset.id,
+              wafValidationRunId: run.id,
             }),
             remediation_template: WAF_POSTURE_FINDING_REMEDIATION,
             evidence_ids: evidenceIds,

@@ -89,6 +89,11 @@ test.describe('portal executive clarity', () => {
     await expect(page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'What to fix first', exact: true }) })).toBeVisible();
     const activity = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Recent validation activity', exact: true }) });
     await expect(activity).toContainText(PORTAL_BASELINE_IDS.readinessRunId);
+    // Each run names its check and target in plain language; the run ID stays as a small reference line.
+    const readinessRun = activity.getByRole('row').filter({ hasText: PORTAL_BASELINE_IDS.readinessRunId });
+    await expect(readinessRun).toContainText('checkout.acme.com');
+    await expect(readinessRun.getByRole('button', { name: /^View evidence for .+ on checkout\.acme\.com$/ })).toBeVisible();
+    await expect(activity).not.toContainText('Target not reported');
 
     // The old Internet → Edge/CDN → WAF → Origin path inferred stages the server never observed.
     await expect(page.locator('.defense-path, .defense-stage')).toHaveCount(0);
@@ -188,8 +193,8 @@ test.describe('portal executive clarity', () => {
 
     await page.getByRole('tab', { name: /^Validate/ }).click();
     const checks = page.getByRole('region', { name: 'Checks for this target' });
-    await expect(checks).toContainText(/\d+ bounded external checks can be assessed on this target, including observation checks\./);
-    await expect(checks.getByRole('button', { name: /^Review all \d+$/ })).toBeVisible();
+    await expect(checks).toContainText(/\d+ checks in the catalog\. \d+ are runnable on this target, including observation checks\./);
+    await expect(checks.getByRole('button', { name: /^Review (?:and run )?all \d+$/ })).toBeVisible();
 
     // A recorded run of a declaration-only (E1) check never reads as live traffic.
     await page.getByRole('tab', { name: /^Changes/ }).click();

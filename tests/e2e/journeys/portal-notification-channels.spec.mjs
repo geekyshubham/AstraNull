@@ -50,7 +50,7 @@ function tiles(panel) {
 /** @param {import('@playwright/test').Locator} panel */
 async function expectNoChannelsConnected(panel) {
   await expect(panel.locator('.nc-loading')).toHaveCount(0);
-  await expect(tiles(panel).getByText('Not configured')).toHaveCount(4);
+  await expect(tiles(panel).getByText('Not configured')).toHaveCount(5);
   await expect(panel.locator('table')).toHaveCount(0);
 }
 
@@ -100,6 +100,25 @@ test.describe('notification channels panel', () => {
     await stopPortalPlaywrightServer();
   });
 
+  test('Notifications counts a channel connected on Integrations without a page reload', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'notifications', getPortalPlaywrightBaseUrl());
+    const summary = () => page.getByRole('group', { name: 'Delivery summary for loaded events' });
+    await expect(summary()).toContainText('0 of 0');
+    await page.evaluate(() => { window.__astranullNoReload = 'kept'; });
+
+    await page.evaluate(() => { window.location.hash = '#integrations'; });
+    const panel = channelsPanel(page);
+    await panel.scrollIntoViewIfNeeded();
+    await expect(panel).toBeVisible();
+    await connectSlackThroughDialog(page, panel);
+    await expect(panel.getByRole('status').filter({ hasText: 'Slack connected (' })).toBeVisible();
+
+    await page.evaluate(() => { window.location.hash = '#notifications'; });
+    await expect(summary()).toContainText('1 of 1');
+    expect(await page.evaluate(() => window.__astranullNoReload)).toBe('kept');
+  });
+
   for (const viewport of VIEWPORTS) {
     for (const theme of THEMES) {
       test(`connect, turn off/on and remove a Slack channel (${viewport.name}, ${theme})`, async ({ page }) => {
@@ -116,7 +135,7 @@ test.describe('notification channels panel', () => {
         await connectSlackThroughDialog(page, panel);
         await expect(panel.getByRole('status').filter({ hasText: 'Slack connected (' })).toBeVisible();
         await expect(panel.getByRole('button', { name: 'Add another Slack channel' })).toBeVisible();
-        await expect(tiles(panel).getByText('Not configured')).toHaveCount(3);
+        await expect(tiles(panel).getByText('Not configured')).toHaveCount(4);
         // Only the redacted preview reaches the browser.
         await expect(panel).not.toContainText('testtoken000000');
 
@@ -285,7 +304,7 @@ test.describe('notification channels panel', () => {
       releaseHeld?.();
       await page.waitForTimeout(400);
       await expect(panel.getByRole('button', { name: 'Add another Slack channel' })).toBeVisible();
-      await expect(tiles(panel).getByText('Not configured')).toHaveCount(3);
+      await expect(tiles(panel).getByText('Not configured')).toHaveCount(4);
       await expect(panel.locator('.table-load-error')).toHaveCount(0);
       await expect(panel.getByRole('button', { name: 'Refresh notification channels' })).toBeEnabled();
     });

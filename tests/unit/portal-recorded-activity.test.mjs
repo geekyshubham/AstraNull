@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { activityIsLive, activityPath, captureWarnings, createActivityReaderKey, createRecordedActivityReader, mergeActivityItems, stopStateLabel } from '../../apps/web/react/src/lib/recorded-activity.mjs';
 import { buildEvidenceInspectorHref, evidenceContextPath, normalizeEvidenceContext, normalizeInspectorRef, parseInspectorRef } from '../../apps/web/react/src/lib/evidence-inspector.mjs';
+import { activityRequestLimitLabel, activityRequestsSentLabel, activityValueLabel } from '../../apps/web/react/src/lib/activity-labels.mjs';
+import { generateCheckProbeLogs } from '../../apps/web/react/src/lib/live-probe-logs.mjs';
 
 const event = (id, sequence = 1) => ({ id, sequence, at: `2026-10-08T10:00:0${sequence}.000Z`, stage: 'request_started', source: 'signed_worker', method: 'GET' });
 const envelope = (items, extra = {}) => ({ run_id: 'r1', target_id: 't1', check_id: 'c1', status: 'collecting', items, ...extra });
@@ -305,4 +307,41 @@ test('dedicated accepted-start responses cannot commit after navigation, revocat
     assert.match(source, /return \(\) => \{ startGeneration\.current \+= 1; startScopeRef\.current = '';/);
     assert.match(source, /if \(!current\(\)\) return;/);
   }
+});
+
+test('activity values keep dotted identifiers verbatim and humanise only plain snake_case codes', () => {
+  assert.deepEqual(activityValueLabel('l7.waf_marker_rule.safe'), { text: 'l7.waf_marker_rule.safe', code: true });
+  assert.deepEqual(activityValueLabel('waf.fingerprint.safe'), { text: 'waf.fingerprint.safe', code: true });
+  const plain = activityValueLabel('outside_request_budget');
+  assert.equal(plain.code, false);
+  assert.doesNotMatch(plain.text, /_/);
+  assert.match(plain.text, /request budget/i);
+  assert.deepEqual(activityValueLabel(''), { text: '', code: false });
+  assert.deepEqual(activityValueLabel(null), { text: '', code: false });
+  const source = readFileSync(new URL('../../apps/web/react/src/components/targets/probe-activity.tsx', import.meta.url), 'utf8');
+  assert.match(source, /label\.code \? <span className="mono">\{label\.text\}<\/span>/);
+  assert.doesNotMatch(source, /String\(value\)\.replaceAll\('_', ' '\)/, 'dotted IDs are never half-humanised');
+});
+
+test('request counts state what was recorded and keep the authorized limit separate', () => {
+  assert.equal(activityRequestsSentLabel(3), '3 requests sent (recorded)');
+  assert.equal(activityRequestsSentLabel(0), '0 requests sent (recorded)');
+  for (const missing of [null, undefined, '', 'n/a']) assert.equal(activityRequestsSentLabel(missing), 'Requests sent: not recorded');
+  assert.equal(activityRequestLimitLabel(16), 'Limit: up to 16 requests');
+  assert.equal(activityRequestLimitLabel(null), '');
+  const source = readFileSync(new URL('../../apps/web/react/src/components/targets/probe-activity.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /attested operations|Planned probe maximum/);
+  assert.doesNotMatch(source, /of \$\{?maxRequests\}? sent/, 'sent and limit are never merged into "0 of n sent"');
+});
+
+test('a received probe result is never presented as a verdict while correlation is pending', () => {
+  const source = readFileSync(new URL('../../apps/web/react/src/components/targets/probe-activity.tsx', import.meta.url), 'utf8');
+  assert.match(source, /result_received: 'Probe result received'/);
+  assert.doesNotMatch(source, /'Result recorded'/);
+  assert.match(source, /item\.stage === 'result_received' && running \? <><span>Probe response: /);
+  assert.match(source, /<small>Not a verdict · correlating<\/small>/);
+  const row = { runId: 'run_1', checkId: 'waf.fingerprint.safe', name: 'WAF check', status: 'running', requestsSent: 1, maxRequests: 4 };
+  const logs = generateCheckProbeLogs(row, 'owned.test', [{ id: 'evt_result', test_run_id: 'run_1', check_id: row.checkId, producer_kind: 'signed_probe', signal_type: 'probe_result', timestamp: '2026-10-08T10:00:00.000Z', metadata: { external_result: 'blocked', status_code: 403 } }]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0].message, /\(probe observation, not a verdict\)$/);
 });

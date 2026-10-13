@@ -18,7 +18,8 @@ const VERDICT_EXPORT_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id,
   evidence_ids, placement_confidence_json, created_at`;
 
 const FINDING_EXPORT_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
-  status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee, created_at, updated_at`;
+  status, evidence_ids, notes, system_summary, remediation_template, verdict_id, last_verdict_id, assignee,
+  created_at, updated_at`;
 
 function toIso(value) {
   if (value == null) return value;
@@ -115,6 +116,7 @@ function mapReportFindingRow(row) {
     status: row.status,
     evidence_ids: asStringArray(row.evidence_ids),
     notes: row.notes ?? undefined,
+    system_summary: row.system_summary ?? undefined,
     remediation_template: row.remediation_template ?? undefined,
     verdict_id: row.verdict_id ?? undefined,
     last_verdict_id: row.last_verdict_id ?? undefined,
@@ -355,17 +357,19 @@ export function createReportRepository(pool) {
         const findingWindowParams = [...findingScope.params, periodStart, periodEnd];
         const findingStart = findingScope.params.length + 1;
         const findingEnd = findingScope.params.length + 2;
-        const findingWindow = `${findingScope.where}
-           AND ($${findingStart}::timestamptz IS NULL OR created_at >= $${findingStart}::timestamptz)
+        const findingPeriod = `($${findingStart}::timestamptz IS NULL OR created_at >= $${findingStart}::timestamptz)
            AND ($${findingEnd}::timestamptz IS NULL OR created_at <= $${findingEnd}::timestamptz)`;
+        const findingWindow = `${findingScope.where} AND (status = 'open' OR (${findingPeriod}))`;
         const findingCount = await client.query(
           `SELECT COUNT(*)::int AS total,
-                  COUNT(*) FILTER (WHERE status = 'open')::int AS open_total
+                  COUNT(*) FILTER (WHERE status = 'open' AND ${findingPeriod})::int AS opened_in_period_total
            FROM findings WHERE ${findingWindow}`,
           findingWindowParams,
         );
         const findingUnwindowed = await client.query(
-          `SELECT COUNT(*)::int AS total FROM findings WHERE ${findingScope.where}`,
+          `SELECT COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE status = 'open')::int AS open_total
+           FROM findings WHERE ${findingScope.where}`,
           findingScope.params,
         );
         const findingRows = await client.query(
@@ -373,7 +377,7 @@ export function createReportRepository(pool) {
                   evidence_ids, created_at, updated_at
            FROM findings
            WHERE ${findingWindow}
-           ORDER BY created_at DESC, id DESC
+           ORDER BY (status = 'open') DESC, created_at DESC, id DESC
            LIMIT $${findingEnd + 1}`,
           [...findingWindowParams, findingLimit],
         );
@@ -420,7 +424,8 @@ export function createReportRepository(pool) {
           findings: findingRows.rows.map(mapScopeFinding),
           finding_total: findingCount.rows[0].total,
           finding_total_unwindowed: findingUnwindowed.rows[0].total,
-          open_finding_total: findingCount.rows[0].open_total,
+          open_finding_total: findingUnwindowed.rows[0].open_total,
+          opened_in_period_total: findingCount.rows[0].opened_in_period_total,
           verdicts,
           evidence,
           evidence_total: evidenceTotal,

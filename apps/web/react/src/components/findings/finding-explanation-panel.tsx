@@ -3,6 +3,8 @@ import { Button } from '../ui/button';
 import { ExplanationField, VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
 import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
+import { findingForEvidenceParsers } from '../../lib/findings-helpers';
+import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 import './finding-explanation-panel.css';
 
@@ -20,6 +22,16 @@ function isDataItem(value: unknown): value is DataItem {
 }
 
 const SKELETON_FIELD_COUNT = 4;
+
+/** ExplanationField layout with the value as a link, for identifiers that have their own page. */
+function LinkedExplanationField({ label, value, href }: { label: string; value: string; href: string }) {
+  return (
+    <div className="verdict-explanation-item">
+      <span className="verdict-explanation-label">{label}</span>
+      <a className="verdict-explanation-value mono detail-entity-link" href={href}>{value}</a>
+    </div>
+  );
+}
 
 type LinkedRunEvidenceState = {
   runId: string;
@@ -82,6 +94,9 @@ export function FindingExplanationPanel({
   const [fetchGeneration, setFetchGeneration] = useState(0);
 
   const testRunId = getString(finding, ['test_run_id'], '');
+  // Parsers see only the machine-recorded summary; human triage notes are never read as evidence.
+  const evidenceFinding = useMemo(() => (finding ? findingForEvidenceParsers(finding) : null), [finding]);
+  const recordedSummary = getString(finding, ['system_summary'], '');
   const visibleRunEvidence = runEvidence.runId === testRunId
     ? runEvidence
     : {
@@ -164,8 +179,8 @@ export function FindingExplanationPanel({
   }, [testRunId, config, session, fetchGeneration]);
 
   const explanationDetail = useMemo(
-    () => buildFindingRunDetail(finding, visibleRunEvidence.detail),
-    [finding, visibleRunEvidence.detail]
+    () => buildFindingRunDetail(evidenceFinding, visibleRunEvidence.detail),
+    [evidenceFinding, visibleRunEvidence.detail]
   );
 
   if (!finding) {
@@ -178,16 +193,16 @@ export function FindingExplanationPanel({
         <section className="verdict-explanation verdict-explanation--pending">
           <h3>Linked evidence unavailable</h3>
           <p className="muted">This finding does not identify an originating test run, so external probe evidence cannot be attributed.</p>
-          {getString(finding, ['notes'], '') ? (
+          {recordedSummary ? (
             <div className="verdict-explanation-grid">
-              <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} fullWidth />
+              <ExplanationField label="Recorded explanation (not linked run evidence)" value={recordedSummary} fullWidth />
             </div>
           ) : null}
           {getString(finding, ['remediation_template'], '') ? (
             <div className="verdict-explanation-grid">
               <ExplanationField
                 label="Recorded remediation"
-                value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
+                value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding: evidenceFinding ?? finding })}
                 fullWidth
               />
             </div>
@@ -209,9 +224,9 @@ export function FindingExplanationPanel({
           </div>
         </div>
         <div className="verdict-explanation-grid" aria-label="Unverified finding provenance">
-          <ExplanationField label="Originating run requested by finding" value={testRunId} />
-          {getString(finding, ['notes'], '') ? (
-            <ExplanationField label="Finding note (not linked run evidence)" value={getString(finding, ['notes'])} />
+          <LinkedExplanationField label="Originating run requested by finding" value={testRunId} href={buildDetailHref('run-detail', testRunId)} />
+          {recordedSummary ? (
+            <ExplanationField label="Recorded explanation (not linked run evidence)" value={recordedSummary} />
           ) : null}
         </div>
       </div>
@@ -237,7 +252,11 @@ export function FindingExplanationPanel({
         <h3>Evidence provenance</h3>
         <div className="verdict-explanation-grid">
           <ExplanationField label="Finding record" value={findingId || 'Not recorded on finding'} mono={Boolean(findingId)} />
-          <ExplanationField label="Originating run" value={linkedRunId} mono={Boolean(linkedRunId)} />
+          {linkedRunId ? (
+            <LinkedExplanationField label="Originating run" value={linkedRunId} href={buildDetailHref('run-detail', linkedRunId)} />
+          ) : (
+            <ExplanationField label="Originating run" value="Not recorded on finding" />
+          )}
           <ExplanationField label="Run check" value={runCheckId || 'Not recorded on linked run'} mono={Boolean(runCheckId)} />
           <ExplanationField label="Run event records" value={`${eventCount} loaded from linked run`} />
         </div>
@@ -250,7 +269,7 @@ export function FindingExplanationPanel({
       <VerdictExplanationPanel
         detail={explanationDetail}
         events={visibleRunEvidence.events}
-        finding={finding}
+        finding={evidenceFinding}
         heading="Why this finding?"
       />
     </div>

@@ -255,6 +255,7 @@ At minimum, findings + notifications + targets need bulk actions:
 - Sticky action bar at the panel-foot when ≥1 row is selected.
 - Bulk actions: assign owner, change state (findings); pause / resume / delete (notifications); import (provider inventory picker — already handled); delete + verify (targets).
 - Every bulk action confirms with a count summary and streams progress row-by-row.
+- Findings: bulk triage is implemented on finding-group detail (`pages/refined/finding-group-detail.tsx`). Selected members of one grouped issue can be assigned an owner, closed with a reason, or have risk accepted; each runs as its own audited `PATCH /v1/findings/:id` (`finding.updated`), members already in the target state are skipped (`planBulkFindingAction`), and a per-row updated/skipped/failed summary is shown. Accept risk is offered only with `finding:accept_risk` and requires a reason and review date. The findings list itself stays read-and-navigate.
 
 ### 8.4 Undo toasts
 

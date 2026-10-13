@@ -16,6 +16,9 @@ export type EvidenceModePresentation = {
 
 export const EVIDENCE_TIERS: readonly EvidenceTierInfo[];
 export function plainVerdictLabel(value: unknown): string;
+export function plainVerdictShortLabel(value: unknown): string;
+export const EXPECTED_VERDICT_LABELS: Readonly<Record<'pass' | 'warn' | 'fail' | 'manual_review', string>>;
+export function plainExpectedVerdictLabel(value: unknown): string;
 export function plainCodeLabel(value: unknown, fallback?: string): string;
 export function plainEmptyReason(value: unknown): string;
 export function plainInlineText(value: unknown): string;
@@ -31,4 +34,5 @@ export function dashboardReadinessMessage(input?: {
   highPriorityFindings?: number;
   coveragePercent?: number | null;
   dataUnavailable?: boolean;
-}): { headline: string; detail: string; tone: 'success' | 'warn' | 'danger' };
+  hasEvidence?: boolean;
+}): { headline: string; detail: string; tone: 'success' | 'warn' | 'danger' | 'muted' };

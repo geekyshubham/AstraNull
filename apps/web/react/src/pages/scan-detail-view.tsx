@@ -6,7 +6,9 @@ import { createPayloadCommitGate } from '../lib/payload-commit-generation.mjs';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { buildDetailHref, getRouteEntityId } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, PortalDataset, Session } from '../lib/types';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatTargetKind } from '../lib/utils';
+// @ts-ignore Plain ESM keeps verdict labels directly testable with node:test.
+import { plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
 import {
   SCAN_POLL_BASE_MS,
   SCAN_POLL_SCHEDULED_MS,
@@ -39,6 +41,8 @@ import { Progress } from '../components/ui/progress';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
+import { DetailBackLink } from '../components/layout/detail-back-link';
+import { useEntityDocumentTitle } from '../components/layout/app-shell';
 import { PageContextSummary, PageHeader } from './page-components';
 import './scan-detail-view.css';
 
@@ -57,6 +61,33 @@ function asItem(value: unknown): DataItem | null {
 
 function itemArray(value: unknown) {
   return Array.isArray(value) ? value as DataItem[] : [];
+}
+
+function scanTargetIds(scan: DataItem | null) {
+  if (!scan) return [];
+  if (Array.isArray(scan.target_ids)) return scan.target_ids.map(String).filter(Boolean);
+  const single = getString(scan, ['target_id']);
+  return single ? [single] : [];
+}
+
+function scanTargetLink(scan: DataItem | null) {
+  const ids = scanTargetIds(scan);
+  if (ids.length !== 1) return undefined;
+  const [id] = ids;
+  const targets = itemArray(scan?.targets);
+  const label = getString(asItem(scan?.target), ['value']) || getString(targets[0], ['value']) || id;
+  return { label, href: `${buildDetailHref('target-detail', id)}&tab=validate` };
+}
+
+const ROLE_LABELS: Record<string, string> = { owner: 'Owner', admin: 'Admin', engineer: 'Engineer' };
+
+function scanCreatorLabel(scan: DataItem) {
+  const named = getString(scan, ['created_by_name', 'created_by_email']);
+  if (named) return `created by ${named}`;
+  const role = getString(scan, ['created_by_role']).toLowerCase();
+  if (!role) return 'creator not recorded';
+  const label = ROLE_LABELS[role] ?? role.replace(/_/g, ' ');
+  return `created by ${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label}`;
 }
 
 function numberOf(item: DataItem | null, key: string) {
@@ -195,9 +226,11 @@ function VerdictCell({ step }: { step: DataItem }) {
     );
   }
   const confidence = getString(verdict, ['confidence']);
+  const verdictValue = getString(verdict, ['verdict'], 'unknown');
   return (
     <span className="scan-cell-stack">
-      <strong>{humanizeReason(getString(verdict, ['verdict'], 'unknown'))}</strong>
+      <strong>{plainVerdictShortLabel(verdictValue)}</strong>
+      <small className="muted">{plainVerdictLabel(verdictValue)}</small>
       {confidence ? <small className="muted">Confidence {humanizeReason(confidence).toLowerCase()}</small> : null}
       {getString(verdict, ['severity']) ? <small className="muted">Severity {getString(verdict, ['severity'])}</small> : null}
       <StepRunLink step={step} />
@@ -290,6 +323,8 @@ export function ScanDetailView({
   const scheduled = isScanScheduled(scan);
   const terminal = isScanTerminal(scan);
   const canManage = canStartRun(session.role);
+  const targetLink = scanTargetLink(scan);
+  useEntityDocumentTitle(scan ? scanDisplayName(scan) : undefined);
 
   const liveText = !scan
     ? ''
@@ -312,18 +347,28 @@ export function ScanDetailView({
         </span>
       )
     },
+    { key: 'verdict', label: 'Verdict', render: (step) => <VerdictCell step={step} /> },
+    { key: 'status', label: 'Status', render: (step) => <StepStatusCell step={step} /> },
     {
       key: 'target',
       label: 'Target',
-      render: (step) => (
-        <span className="scan-cell-stack">
-          <span className="scan-step-target">{getString(step, ['target_value', 'target_id'])}</span>
-          <small className="muted">{getString(step, ['target_kind'], 'kind not recorded')}</small>
-        </span>
-      )
+      render: (step) => {
+        const targetId = getString(step, ['target_id']);
+        const checkId = getString(step, ['check_id']);
+        const targetValue = getString(step, ['target_value', 'target_id']);
+        const href = targetId
+          ? `${buildDetailHref('target-detail', targetId)}&tab=validate${checkId ? `&check=${encodeURIComponent(checkId)}` : ''}`
+          : '';
+        return (
+          <span className="scan-cell-stack">
+            {href
+              ? <a className="detail-entity-link scan-step-target" href={href} title={targetId}>{targetValue}</a>
+              : <span className="scan-step-target">{targetValue}</span>}
+            <small className="muted">{formatTargetKind(getString(step, ['target_kind']), getString(step, ['target_value']))}</small>
+          </span>
+        );
+      }
     },
-    { key: 'status', label: 'Status', render: (step) => <StepStatusCell step={step} /> },
-    { key: 'verdict', label: 'Verdict', render: (step) => <VerdictCell step={step} /> },
     { key: 'request', label: 'Probe request', render: (step) => <span className="small scan-step-request">{formatStepRequest(step.request)}</span> },
     {
       key: 'response',
@@ -350,8 +395,9 @@ export function ScanDetailView({
   if (!scanId) {
     return (
       <div className="content">
-        <PageHeader route="scan-detail" title="Validation scan" description="Open a scan from the runs page or a target to follow its steps." />
-        <EmptyState icon={ScanSearch} title="No scan selected" body="Choose a validation scan from the runs page or a target detail page." actionHref="#runs" actionLabel="Open test runs" />
+        <DetailBackLink route="scan-detail" />
+        <PageHeader route="scan-detail" title="Validation scan" description="Open a scan from a target to follow its steps." />
+        <EmptyState icon={ScanSearch} title="No scan selected" body="Open a scan from a target to follow its steps." actionHref="#targets" actionLabel="Back to targets" />
       </div>
     );
   }
@@ -359,24 +405,26 @@ export function ScanDetailView({
   if (polling.status === 'missing') {
     return (
       <div className="content">
+        <DetailBackLink route="scan-detail" />
         <PageHeader route="scan-detail" title="Validation scan" description={scanId} />
-        <EmptyState icon={ScanSearch} title="Scan not found" body="This validation scan does not exist in the current tenant or has been removed." actionHref="#runs" actionLabel="Open test runs" />
+        <EmptyState icon={ScanSearch} title="Scan not found" body="This validation scan does not exist in the current tenant or has been removed. Open a scan from a target to follow its steps." actionHref="#targets" actionLabel="Back to targets" />
       </div>
     );
   }
 
   return (
     <div className="content scan-detail-view" aria-busy={polling.status === 'loading' || undefined}>
+      <DetailBackLink route="scan-detail" link={targetLink} />
       <PageHeader
         route="scan-detail"
         title={scan ? scanDisplayName(scan) : scanId}
         description={scan ? scopeLabel(scan) : 'Loading scan'}
         actions={(
           <>
-            <AnchorButton size="sm" variant="secondary" href="#runs">Test runs</AnchorButton>
+            {targetLink ? <AnchorButton size="sm" variant="secondary" href={targetLink.href}>Open target</AnchorButton> : null}
             <Button size="sm" variant="ghost" onClick={polling.refresh}>Refresh</Button>
             {canManage && scan && isScanCancellable(scan) ? (
-              <Button size="sm" variant="danger" aria-label={`Stop scan ${scanDisplayName(scan)}`} onClick={() => setCancelOpen(true)}>Stop</Button>
+              <Button size="sm" variant="danger" aria-label={`Stop scan ${scanDisplayName(scan)}`} onClick={() => setCancelOpen(true)}>Stop scan</Button>
             ) : null}
           </>
         )}
@@ -384,7 +432,7 @@ export function ScanDetailView({
       {scan ? (
         <PageContextSummary>
           <Badge tone={scanStatusTone(status)}>{scanStatusLabel(status)}</Badge> ·{' '}
-          <code>{scanId}</code> · created by {getString(scan, ['created_by'], 'unknown')} ({getString(scan, ['created_by_role'], 'role not recorded')}) · {formatDate(scan.created_at)}
+          <code>{scanId}</code> · <span title={getString(scan, ['created_by']) || undefined}>{scanCreatorLabel(scan)}</span> · {formatDate(scan.created_at)}
         </PageContextSummary>
       ) : null}
       <div className={terminal ? 'scan-live-region sr-only' : 'scan-live-region'} role="status" aria-live="polite">{liveText}</div>

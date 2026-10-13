@@ -201,3 +201,40 @@
 .vector-filter-chevron[data-open] {
   transform: rotate(180deg);
 }
+
+/* Vector name opens the detail dialog: a text link affordance, not a second button. */
+body .vector-library-table .vector-name-link {
+  display: inline;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition: text-decoration-color var(--motion-fast) var(--ease-standard);
+}
+body .vector-library-table .vector-name-link:hover { text-decoration-color: currentColor; }
+body .vector-library-table .vector-name-link:focus-visible { outline: none; border-radius: var(--radius-sm); box-shadow: var(--focus-ring); }
+
+@media (pointer: coarse) {
+  body .vector-library-table .vector-name-link { display: inline-flex; align-items: center; min-height: var(--touch-target); }
+}
+
+/* Fit and launch lead the dialog; the explanation follows below a hairline. */
+.vector-detail > .vector-detail-rail { padding-bottom: var(--space-5); border-bottom: 1px solid var(--border-soft); }
+.vector-mapped-checks .vector-mapped-run { flex-basis: 100%; color: var(--fg-2); }
+.vector-mapped-checks .vector-mapped-run .muted { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  body .vector-library-table .vector-name-link { transition: none; }
+}

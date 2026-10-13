@@ -5,7 +5,12 @@ import {
   FINDING_GROUP_SLA_HOURS,
   assetHasLifecycle,
   assetMembersInLifecycle,
+  bulkFindingResultSummary,
+  bulkSelectionMembers,
   createFindingGroupIndex,
+  findingDecisionNote,
+  findingNoteSections,
+  planBulkFindingAction,
   findGroupByKey,
   findingGroupHref,
   findingGroupKey,
@@ -183,11 +188,18 @@ describe('finding SLA and filters', () => {
     assert.equal(findingSlaState({ status: 'closed', created_at: '2026-01-01T00:00:00Z' }, NOW).state, 'inactive');
   });
 
-  it('buckets lifecycle aliases like the classic status tabs', () => {
+  it('buckets every lifecycle status into exactly one filter', () => {
     assert.equal(findingStatusBucket({}), 'open');
-    assert.equal(findingStatusBucket({ state: 'resolved' }), 'closed');
+    assert.equal(findingStatusBucket({ status: 'in_progress' }), 'open');
+    assert.equal(findingStatusBucket({ status: 'remediation_pending' }), 'open');
+    assert.equal(findingStatusBucket({ status: 'reopened' }), 'open');
     assert.equal(findingStatusBucket({ status: 'accepted_risk' }), 'accepted');
-    assert.equal(findingStatusBucket({ status: 'remediation_pending' }), 'other');
+    assert.equal(findingStatusBucket({ status: 'accepted' }), 'accepted');
+    assert.equal(findingStatusBucket({ state: 'resolved' }), 'closed');
+    assert.equal(findingStatusBucket({ status: 'closed' }), 'closed');
+    assert.equal(findingStatusBucket({ status: 'false_positive' }), 'closed');
+    assert.equal(findingStatusBucket({ status: 'unknown' }), 'other');
+    assert.equal(findingStatusBucket({ status: 'something_new' }), 'other');
   });
 
   it('applies status, severity, owner, group and search filters', () => {
@@ -253,9 +265,11 @@ describe('asset members keep their own lifecycle (F06)', () => {
       generated('c1', 'bypassable', 'tgt_b', 'b.example.test', { status: 'closed', severity: 'critical' }),
       generated('c2', 'bypassable', 'tgt_b', 'b.example.test', { status: 'remediation_pending', severity: 'critical' }),
     ], { targets, checks, targetGroups, now: NOW });
-    assert.equal(onlyClosedLead.assets[0].statusCounts.other, 1);
+    assert.equal(onlyClosedLead.assets[0].statusCounts.open, 1);
+    assert.equal(onlyClosedLead.assets[0].statusCounts.other, 0);
     assert.equal(assetHasLifecycle(onlyClosedLead.assets[0], 'closed'), true);
-    assert.equal(onlyClosedLead.openAssetCount, 0);
+    assert.equal(assetHasLifecycle(onlyClosedLead.assets[0], 'open'), true);
+    assert.equal(onlyClosedLead.openAssetCount, 1);
   });
 
   it('wires the detail page to per-member links and lifecycle filtering', () => {
@@ -375,5 +389,118 @@ describe('design variant', () => {
   it('stores each page under its own key', () => {
     assert.equal(designVariantStorageKey('runs'), 'astranull.design-variant.runs');
     assert.equal(designVariantStorageKey('test-policies'), 'astranull.design-variant.test-policies');
+  });
+});
+
+describe('SLA clock runs for open and in-progress members', () => {
+  it('breaches an overdue in-progress High member and counts it as active', () => {
+    const [group] = groupFindings([
+      generated('ip1', 'bypassable', 'tgt_a', 'a.example.test', { status: 'in_progress', severity: 'high', created_at: '2026-01-01T00:00:00Z' }),
+    ], { targets, checks, now: NOW });
+    assert.equal(findingSlaState({ status: 'in_progress', severity: 'high', created_at: '2026-01-01T00:00:00Z' }, NOW).state, 'breached');
+    assert.equal(group.slaActiveCount, 1);
+    assert.equal(group.slaBreachCount, 1);
+    assert.equal(groupSlaSummary(group, NOW).state, 'breached');
+  });
+
+  it('keeps accepted-risk and closed members inactive', () => {
+    for (const status of ['accepted_risk', 'accepted', 'closed', 'resolved', 'false_positive']) {
+      assert.equal(findingSlaState({ status, severity: 'critical', created_at: '2026-01-01T00:00:00Z' }, NOW).state, 'inactive', status);
+    }
+  });
+
+  it('dates an opened_at-only finding and breaches it once past due', () => {
+    const due = findingSlaState({ status: 'open', severity: 'high', opened_at: '2026-01-01T00:00:00Z' }, NOW);
+    assert.equal(due.state, 'breached');
+    assert.equal(due.dueAt, Date.parse('2026-01-03T00:00:00Z'));
+    assert.equal(findingSlaState({ status: 'open', severity: 'low', opened_at: '2026-01-09T00:00:00Z' }, NOW).state, 'on_track');
+  });
+});
+
+describe('observation time is never the edit time', () => {
+  it('ignores updated_at and reports first observation when nothing was re-observed', () => {
+    const [group] = groupFindings([
+      generated('o1', 'bypassable', 'tgt_a', 'a.example.test', { created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-09T00:00:00Z' }),
+      generated('o2', 'bypassable', 'tgt_b', 'b.example.test', { opened_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-09T12:00:00Z' }),
+    ], { targets, checks, now: NOW });
+    assert.equal(group.lastObservedAt, null);
+    assert.equal(group.firstObservedAt, '2026-01-01T00:00:00.000Z');
+  });
+
+  it('uses the latest recorded last_observed_at, unmoved by a later note edit', () => {
+    const [group] = groupFindings([
+      generated('o1', 'bypassable', 'tgt_a', 'a.example.test', { created_at: '2026-01-02T00:00:00Z', last_observed_at: '2026-01-05T00:00:00Z', updated_at: '2026-01-09T00:00:00Z' }),
+      generated('o2', 'bypassable', 'tgt_b', 'b.example.test', { created_at: '2026-01-03T00:00:00Z', last_observed_at: '2026-01-04T00:00:00Z' }),
+    ], { targets, checks, now: NOW });
+    assert.equal(group.lastObservedAt, '2026-01-05T00:00:00.000Z');
+    assert.equal(group.firstObservedAt, '2026-01-02T00:00:00.000Z');
+  });
+});
+
+describe('group lifecycle buckets cover every status', () => {
+  it('puts the Origin-exposed members in Active 3 / Closed 1', () => {
+    const [group] = groupFindings([
+      generated('x1', 'edge_exposed', 'tgt_a', 'a.example.test', { status: 'open' }),
+      generated('x2', 'edge_exposed', 'tgt_b', 'b.example.test', { status: 'in_progress' }),
+      generated('x3', 'edge_exposed', 'tgt_a', 'a.example.test', { status: 'remediation_pending' }),
+      generated('x4', 'edge_exposed', 'tgt_b', 'b.example.test', { status: 'false_positive' }),
+    ], { targets, checks, now: NOW });
+    assert.deepEqual(group.statusCounts, { open: 3, accepted: 0, closed: 1, other: 0 });
+    assert.equal(group.openCount, 3);
+  });
+});
+
+describe('labelled notes for the group page', () => {
+  it('separates the recorded explanation from human triage notes', () => {
+    assert.deepEqual(findingNoteSections({ system_summary: 'Verdict edge_exposed.', notes: 'Owner asked CDN team.' }), [
+      { id: 'recorded', label: 'Recorded explanation', text: 'Verdict edge_exposed.' },
+      { id: 'triage', label: 'Triage notes', text: 'Owner asked CDN team.' },
+    ]);
+    assert.deepEqual(findingNoteSections({ system_summary: 'Verdict edge_exposed.' }).map((section) => section.label), ['Recorded explanation']);
+    assert.deepEqual(findingNoteSections({ notes: '  ' }), []);
+  });
+
+  it('appends a labelled decision reason to existing notes', () => {
+    assert.equal(findingDecisionNote('', 'Resolved', ' Patched origin ACL. '), 'Resolved: Patched origin ACL.');
+    assert.equal(findingDecisionNote('Earlier note', 'Reopened', 'Seen again'), 'Earlier note\n\nReopened: Seen again');
+  });
+});
+
+describe('bulk triage selection', () => {
+  const [group] = groupFindings([
+    generated('b_open', 'bypassable', 'tgt_a', 'a.example.test', { status: 'open', assignee: 'net' }),
+    generated('b_closed', 'bypassable', 'tgt_a', 'a.example.test', { status: 'closed' }),
+    generated('b_accept', 'bypassable', 'tgt_b', 'b.example.test', { status: 'accepted_risk' }),
+    generated('b_ip', 'bypassable', 'tgt_b', 'b.example.test', { status: 'in_progress' }),
+  ], { targets, checks, now: NOW });
+  const keys = group.assets.map((asset) => asset.key);
+
+  it('selects each selected asset\'s members in the active lifecycle filter only', () => {
+    assert.deepEqual(bulkSelectionMembers(group.assets, keys, 'open').map((member) => member.findingId).sort(), ['b_ip', 'b_open']);
+    assert.deepEqual(bulkSelectionMembers(group.assets, keys, 'all').map((member) => member.findingId).sort(), ['b_accept', 'b_closed', 'b_ip', 'b_open']);
+    assert.deepEqual(bulkSelectionMembers(group.assets, [keys[0]], 'closed').map((member) => member.findingId), ['b_closed']);
+    assert.deepEqual(bulkSelectionMembers(group.assets, [], 'all'), []);
+    assert.deepEqual(bulkSelectionMembers(null, keys, 'all'), []);
+  });
+
+  it('skips members already in the target state', () => {
+    const members = bulkSelectionMembers(group.assets, keys, 'all');
+    const assign = planBulkFindingAction(members, { kind: 'assign', assignee: 'net' });
+    assert.deepEqual(assign.skip.map((member) => member.findingId), ['b_open']);
+    assert.equal(assign.apply.length, 3);
+    const accept = planBulkFindingAction(members, { kind: 'accept_risk' });
+    assert.deepEqual(accept.skip.map((member) => member.findingId), ['b_accept']);
+    const close = planBulkFindingAction(members, { kind: 'close', status: 'closed' });
+    assert.deepEqual(close.skip.map((member) => member.findingId), ['b_closed']);
+    assert.equal(bulkFindingResultSummary({ updated: 2, skipped: 1, failed: 0 }), 'Updated 2, skipped 1, failed 0');
+  });
+
+  it('wires bulk triage behind finding:write with one PATCH per member', () => {
+    const source = readFileSync(new URL('../../apps/web/react/src/pages/refined/finding-group-detail.tsx', import.meta.url), 'utf8');
+    assert.match(source, /sessionHasPermission\(session, 'finding:write'\)/);
+    assert.match(source, /sessionHasPermission\(session, 'finding:accept_risk'\)/);
+    assert.match(source, /for \(const member of apply\)/);
+    assert.match(source, /method: 'PATCH'/);
+    assert.match(source, /Each keeps its own evidence and audit record\./);
   });
 });

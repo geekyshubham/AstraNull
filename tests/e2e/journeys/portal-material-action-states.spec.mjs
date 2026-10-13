@@ -12,12 +12,12 @@ const expectedFailures = new WeakMap();
 const confirm = (page) => page.locator('dialog.modal-confirm:not(.form-modal)[open]');
 const record = (testInfo, query, route, state, assertions) => assertSourcePortalAction(testInfo, inventory, query, state, assertions, { route });
 async function open(page, route) { await injectPortalDevHeadersSession(page); await gotoPortalRoute(page, route, getPortalPlaywrightBaseUrl()); }
-async function failFirstPost(page, path, payload = (request) => request.postDataJSON()) {
+async function failFirstPost(page, path, payload = (request) => request.postDataJSON(), method = 'POST') {
   const writes = [];
   let release;
   const held = new Promise((resolve) => { release = resolve; });
   await page.route(`**${path}`, async (route) => {
-    if (route.request().method() !== 'POST') return route.continue();
+    if (route.request().method() !== method) return route.continue();
     writes.push(payload(route.request()));
     if (writes.length === 1) { expectedFailures.get(page)?.set(route.request().url(), 1); await held; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary_unavailable' }) }); }
     return route.continue();
@@ -31,7 +31,7 @@ test.describe('actual remaining material transactions: declared scope, snapshots
   test.beforeEach(async ({ page }) => {
     const allowed = new Map(); expectedFailures.set(page, allowed);
     const failures = await collectPortalBrowserFailures(page, getPortalPlaywrightBaseUrl(), { allowResponse(response) {
-      if (response.status() !== 503 || response.request().method() !== 'POST' || allowed.get(response.url()) !== 1) return false;
+      if (response.status() !== 503 || !['POST', 'PATCH'].includes(response.request().method()) || allowed.get(response.url()) !== 1) return false;
       allowed.set(response.url(), 0); return true;
     } });
     browserDiagnostics.set(page, failures);
@@ -211,54 +211,69 @@ test.describe('actual remaining material transactions: declared scope, snapshots
     });
   });
 
-  test('notification event validation, local cancel, delayed failure and retry create in-app rule with no outbound sends', async ({ page }, testInfo) => {
-    const failure = await failFirstPost(page, '/v1/notifications');
+  test('notification events: an in-app channel from Integrations, then validation, local cancel, delayed failure and retry add events with no outbound sends', async ({ page }, testInfo) => {
+    await open(page, 'integrations');
+    await page.getByRole('button', { name: 'Connect In-app', exact: true }).click();
+    const inAppDialog = page.locator('dialog.form-modal[open]');
+    for (const field of await inAppDialog.locator('input[name="triggers"]').all()) await field.uncheck();
+    await inAppDialog.locator('input[value="finding.high_severity"]').check();
+    const created = page.waitForResponse((response) => response.url().endsWith('/v1/notifications') && response.request().method() === 'POST' && response.status() === 201);
+    await inAppDialog.getByRole('button', { name: 'Turn on in-app feed', exact: true }).click();
+    const channel = await (await created).json();
+    expect(channel.channel).toBe('in_app');
+    expect(channel.triggers).toEqual(['finding.high_severity']);
+
+    const failure = await failFirstPost(page, `/v1/notifications/${channel.id}`, (request) => request.postDataJSON(), 'PATCH');
     await open(page, 'notifications');
-    await page.locator('button[aria-expanded="false"]').filter({ hasText: /^Route events$/ }).click();
+    await page.locator('button[aria-expanded="false"]').filter({ hasText: /^Choose events$/ }).click();
     const form = page.locator('form').filter({ has: page.locator('input[name="triggers"]') });
-    const query = { owner: 'NotificationsPage', kind: 'form-keyboard', handler: 'handleCreateRule' };
+    await expect(form.getByText('High-scale state change', { exact: true })).toBeVisible();
+    const query = { owner: 'NotificationsPage', kind: 'form-keyboard', handler: 'handleAddEvents' };
+    await form.getByRole('button', { name: 'Channel', exact: true }).click();
+    await page.getByRole('option', { name: /^In-app/ }).click();
     for (const field of await form.locator('input[name="triggers"]').all()) await field.uncheck();
-    await form.getByRole('button', { name: 'Save rule', exact: true }).click();
+    await form.getByRole('button', { name: 'Add events', exact: true }).click();
     await record(testInfo, query, 'notifications', 'invalid', async () => {
       await expect(page.getByRole('alert')).toContainText('Choose at least one event to route'); expect(failure.writes).toEqual([]);
       return ['No-event routing form rejects before any API write'];
     });
     await form.locator('input[value="report.ready"]').check();
-    await form.getByRole('button', { name: 'Channel type', exact: true }).click();
-    await form.getByRole('option', { name: 'In-app', exact: true }).click();
+    await form.locator('input[value="high_scale.state_change"]').check();
     await form.getByRole('button', { name: 'Cancel', exact: true }).click();
     await record(testInfo, { owner: 'NotificationsPage', label: 'Cancel' }, 'notifications', 'cancel', async () => {
       expect(failure.writes).toEqual([]); await expect(form).toHaveCount(0);
-      return ['Cancel closes local rule draft with zero API writes'];
+      return ['Cancel closes the local events draft with zero API writes'];
     });
-    await page.locator('button[aria-expanded="false"]').filter({ hasText: /^Route events$/ }).click();
+    await page.locator('button[aria-expanded="false"]').filter({ hasText: /^Choose events$/ }).click();
     await expect(form.locator('input[value="report.ready"]')).toBeChecked();
-    await expect(form.getByRole('button', { name: 'Channel type', exact: true })).toContainText('In-app');
+    await expect(form.locator('input[value="high_scale.state_change"]')).toBeChecked();
+    await expect(form.getByRole('button', { name: 'Channel', exact: true })).toContainText('In-app');
     const beforeAttempts = getStore().notificationDeliveryAttempts?.length ?? 0;
-    await form.getByRole('button', { name: 'Save rule', exact: true }).click();
+    await form.getByRole('button', { name: 'Add events', exact: true }).click();
     try {
       await record(testInfo, query, 'notifications', 'busy', async () => {
-        await expect.poll(() => failure.writes.length).toBe(1); await expect(form.getByRole('button', { name: /Save rule|Working/ })).toBeDisabled();
+        await expect.poll(() => failure.writes.length).toBe(1); await expect(form.getByRole('button', { name: /Add events|Working/ })).toBeDisabled();
         await expect(form.locator('input[value="report.ready"]')).toBeDisabled();
-        return ['Held in-app rule save disables submit/event controls and keeps chosen routing scope'];
+        return ['Held events update disables submit/event controls and keeps the chosen events'];
       });
     } finally { failure.release(); }
     await expect(page.getByRole('alert')).toContainText('Service is temporarily unavailable');
-    const accepted = page.waitForResponse((response) => response.url().endsWith('/v1/notifications') && response.request().method() === 'POST' && response.status() === 201);
-    await form.getByRole('button', { name: 'Save rule', exact: true }).click();
+    const accepted = page.waitForResponse((response) => response.url().endsWith(`/v1/notifications/${channel.id}`) && response.request().method() === 'PATCH' && response.status() === 200);
+    await form.getByRole('button', { name: 'Add events', exact: true }).click();
     const rule = await (await accepted).json();
     await record(testInfo, query, 'notifications', 'error-retry', async () => {
       expect(failure.writes).toHaveLength(2); expect(failure.writes[1]).toEqual(failure.writes[0]);
-      expect(rule.channel).toBe('in_app'); expect(rule.triggers).toEqual(['report.ready']);
+      expect(rule.channel).toBe('in_app');
+      expect([...rule.triggers].sort()).toEqual(['finding.high_severity', 'high_scale.state_change', 'report.ready']);
       expect(getStore().notificationDeliveryAttempts?.length ?? 0).toBe(beforeAttempts);
       await expect(form).toHaveCount(0);
-      return ['Explicit identical retry creates only an in-app event rule; saving causes no notification delivery/outbound send'];
+      return ['Explicit identical retry adds events to the existing in-app channel; saving causes no notification delivery/outbound send'];
     });
     await page.reload({ waitUntil: 'networkidle' });
     await record(testInfo, query, 'notifications', 'reload', async () => {
-      expect(getStore().notificationRules.filter((item) => item.id === rule.id)).toHaveLength(1); expect(failure.writes).toHaveLength(2);
+      expect(getStore().notificationRules.filter((item) => item.id === rule.id && !item.deleted_at)).toHaveLength(1); expect(failure.writes).toHaveLength(2);
       await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible();
-      return ['Reload keeps one accepted routing rule and does not resend create'];
+      return ['Reload keeps one channel with the added events and does not resend the update'];
     });
   });
 

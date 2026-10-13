@@ -22,3 +22,6 @@ export function searchAndFilterVectors(vectors: DataItem[], options?: {
   target?: DataItem | null;
 }): DataItem[];
 export function preferredRunnableCheck(vector: DataItem, availability: VectorAvailability): DataItem | null;
+export function sortVectorsByTargetFit(vectors: DataItem[], checks: DataItem[], target: DataItem | null): DataItem[];
+export function countCompatibleSafeChecks(pairs: DataItem[], checks: DataItem[]): number;
+export function latestRunForCheckOnTarget(runs: DataItem[], checkId: string, targetId: string): DataItem | null;

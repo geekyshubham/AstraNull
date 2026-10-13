@@ -204,21 +204,21 @@
   min-width: 0;
 }
 
-/* Long run IDs stay on a single line and keep table columns cleanly aligned. */
-.refined.rf-runs .rf-cell-run {
-  min-width: 170px;
-  white-space: nowrap;
+/* Check name leads; the tail-truncated run ID is a quiet mono line beneath it. */
+.refined.rf-runs .rf-cell-run strong {
+  color: var(--fg);
+  font-weight: 500;
 }
 
-.refined.rf-runs .rf-cell-run code {
+body .refined.rf-runs .rf-cell-run code {
   display: block;
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--fg);
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .refined.rf-runs .rf-duration {
@@ -271,6 +271,18 @@
   .refined.rf-runs .rf-cell-started,
   .refined.rf-runs .rf-duration {
     white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .refined.rf-runs .rf-stack-table .rf-cell-run {
+    min-width: 0;
+    white-space: normal;
+  }
+
+  body .refined.rf-runs .rf-stack-table .rf-cell-run code {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 

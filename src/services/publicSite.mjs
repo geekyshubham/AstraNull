@@ -10,6 +10,8 @@ export function getPublicSiteConfig(runtimeConfig) {
     login_url: loginUrl,
     signup_enabled: signupEnabled,
     signup_path: '/signup',
+    support_email: runtimeConfig.publicSite?.supportEmail ?? null,
+    support_url: runtimeConfig.publicSite?.supportUrl ?? null,
     customer_portal_path: '/app',
     auth_mode: runtimeConfig.authMode ?? 'dev-headers',
     // The UI capability that renders the staging role picker / "Staging role bypass" disclosure.

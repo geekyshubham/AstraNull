@@ -9,86 +9,66 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+type PostureKey = ReadinessPostureSegment['key'];
+
 function classifyRunVerdict(verdict: string): 'pass' | 'review' | 'gap' | null {
   const key = verdict.trim().toLowerCase();
-  if (!key || key === 'pending' || key === 'planned' || key === 'running') return null;
   if (['pass', 'passed', 'protected', 'success', 'ok'].includes(key)) return 'pass';
-  if (['review', 'warn', 'warning', 'info', 'unknown', 'underprotected', 'edge_protected'].includes(key)) return 'review';
-  if (['gap', 'fail', 'failed', 'danger', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return 'gap';
-  return 'review';
+  if (['review', 'warn', 'warning', 'inconclusive', 'underprotected', 'edge_protected', 'stale', 'partial'].includes(key)) return 'review';
+  if (['gap', 'fail', 'failed', 'danger', 'penetrated', 'bypassable', 'unprotected', 'exposed', 'edge_exposed'].includes(key)) return 'gap';
+  return null;
+}
+
+function finiteCount(value: unknown): number | null {
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? count : null;
 }
 
 export function resolveReadinessPostureSegments(
   state: StatePayload | null,
   runs: DataItem[],
-  checks: DataItem[]
+  _checks: DataItem[]
 ): { segments: ReadinessPostureSegment[]; total: number; score: number | null; delta: number | null } {
-  const posture = state?.readiness?.posture;
+  const posture = state?.readiness?.posture as (Record<string, unknown> | undefined);
   const score = typeof state?.readiness?.score === 'number' ? state.readiness.score : null;
   const delta = typeof state?.readiness?.delta === 'number' ? state.readiness.delta : null;
 
   if (posture && typeof posture === 'object') {
-    const pass = Number(posture.pass ?? 0);
-    const review = Number(posture.review ?? 0);
-    const gap = Number(posture.gap ?? 0);
-    const total = Number(posture.total ?? pass + review + gap);
+    const pass = finiteCount(posture.pass) ?? 0;
+    const review = finiteCount(posture.review) ?? 0;
+    const gap = finiteCount(posture.gap) ?? 0;
+    const total = finiteCount(posture.total) ?? pass + review + gap;
+    const notRun = finiteCount(posture.not_run) ?? Math.max(0, total - pass - review - gap);
     if (total > 0) {
-      return {
-        score,
-        delta,
-        total,
-        segments: buildSegments(pass, review, gap, total)
-      };
+      return { score, delta, total, segments: buildSegments(pass, review, gap, notRun, total) };
     }
   }
 
-  const latestByCheck = new Map<string, string>();
+  const latestByCheck = new Map<string, { verdict: string; at: string }>();
   for (const run of runs) {
     const checkId = getString(run, ['check_id'], '');
     if (!checkId) continue;
     const status = getString(run, ['status'], '');
     if (!['completed', 'verdicted'].includes(status)) continue;
-    const verdict = getString(run, ['verdict', 'verdict'], getNestedVerdict(run));
+    const verdict = getString(run, ['verdict'], getNestedVerdict(run));
     if (!verdict) continue;
-    const existingAt = String(run.updated_at ?? run.completed_at ?? run.created_at ?? '');
+    const at = String(run.updated_at ?? run.completed_at ?? run.created_at ?? '');
     const prev = latestByCheck.get(checkId);
-    const prevRun = runs.find((item) => getString(item, ['check_id']) === checkId && getString(item, ['verdict', 'verdict'], getNestedVerdict(item)) === prev);
-    const prevAt = prevRun ? String(prevRun.updated_at ?? prevRun.completed_at ?? prevRun.created_at ?? '') : '';
-    if (!prev || existingAt.localeCompare(prevAt) >= 0) {
-      latestByCheck.set(checkId, verdict);
-    }
+    if (!prev || at.localeCompare(prev.at) >= 0) latestByCheck.set(checkId, { verdict, at });
   }
 
   let pass = 0;
   let review = 0;
   let gap = 0;
-  for (const verdict of latestByCheck.values()) {
+  for (const { verdict } of latestByCheck.values()) {
     const bucket = classifyRunVerdict(verdict);
     if (bucket === 'pass') pass += 1;
     else if (bucket === 'review') review += 1;
     else if (bucket === 'gap') gap += 1;
   }
 
-  const total = pass + review + gap > 0 ? pass + review + gap : checks.length;
-  if (pass + review + gap === 0 && checks.length > 0) {
-    return {
-      score,
-      delta,
-      total: checks.length,
-      segments: [
-        { key: 'pass', label: 'Pass', count: 0, pct: 0 },
-        { key: 'review', label: 'Review', count: 0, pct: 0 },
-        { key: 'gap', label: 'Gap', count: 0, pct: 0 }
-      ]
-    };
-  }
-
-  return {
-    score,
-    delta,
-    total,
-    segments: buildSegments(pass, review, gap, total)
-  };
+  const total = pass + review + gap;
+  return { score, delta, total, segments: buildSegments(pass, review, gap, null, total) };
 }
 
 function getNestedVerdict(run: DataItem) {
@@ -97,28 +77,30 @@ function getNestedVerdict(run: DataItem) {
   return getString(verdict as DataItem, ['verdict', 'status'], '');
 }
 
-function buildSegments(pass: number, review: number, gap: number, total: number): ReadinessPostureSegment[] {
+function buildSegments(pass: number, review: number, gap: number, notRun: number | null, total: number): ReadinessPostureSegment[] {
   const safeTotal = total > 0 ? total : 1;
-  return [
-    { key: 'pass', label: 'Pass', count: pass, pct: Math.round((pass / safeTotal) * 100) },
-    { key: 'review', label: 'Review', count: review, pct: Math.round((review / safeTotal) * 100) },
-    { key: 'gap', label: 'Gap', count: gap, pct: Math.round((gap / safeTotal) * 100) }
-  ];
+  const segment = (key: PostureKey, label: string, count: number): ReadinessPostureSegment => ({ key, label, count, pct: Math.round((count / safeTotal) * 100) });
+  const results = [segment('pass', 'Pass', pass), segment('review', 'Review', review), segment('gap', 'Gap', gap)];
+  return notRun === null ? results : [...results, segment('not_run', 'Not run', notRun)];
 }
 
 const SEGMENT_SEPARATOR_PCT = 0.6;
 
+export const NOT_RUN_SEGMENT_COLOR = 'color-mix(in oklab, var(--bg), var(--fg) 22%)';
+
+export const POSTURE_SEGMENT_COLORS: Record<PostureKey, string> = {
+  pass: 'var(--success)',
+  review: 'var(--warn)',
+  gap: 'var(--danger)',
+  not_run: NOT_RUN_SEGMENT_COLOR
+};
+
 /**
- * Ring arcs are proportional to the real pass/review/gap counts and painted with the
- * matching semantic tokens (docs/ux/14 §7.4). The readiness score stays in the hole and
- * never recolors the ring, so the ring is never a single flat non-data color.
+ * Ring arcs are proportional to the real pass/review/gap/not-run counts (docs/ux/14 §7.4).
+ * Not-run scenarios are a muted neutral, never amber: an unexecuted check is not a review result.
  */
 export function buildConicGradient(segments: ReadinessPostureSegment[]) {
-  const colorByKey: Record<string, string> = {
-    pass: 'var(--success)',
-    review: 'var(--warn)',
-    gap: 'var(--danger)'
-  };
+  const colorByKey = POSTURE_SEGMENT_COLORS;
   const track = 'color-mix(in oklab, var(--bg), var(--fg) 6%)';
 
   const present = segments.filter((segment) => segment.count > 0);

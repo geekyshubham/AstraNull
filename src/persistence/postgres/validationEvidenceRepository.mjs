@@ -27,7 +27,8 @@ const VERDICT_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, verdic
 
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
-  created_at, updated_at, closed_at, source, dedupe_key, finding_class, priority, protection_validation_json`;
+  created_at, updated_at, closed_at, source, dedupe_key, finding_class, priority, protection_validation_json,
+  system_summary, risk_acceptance`;
 
 const HISTORY_TIME_SKIPS = new Set([
   'before_declaration', 'future_timestamp', 'declaration_time_unknown', 'invalid_timestamp',
@@ -247,6 +248,25 @@ function placementConfidenceJson(record) {
   return JSON.stringify(asObject(record.placement_confidence));
 }
 
+function mapRiskAcceptance(value) {
+  const record = typeof value === 'string' ? safeJsonObject(value) : value;
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  return {
+    reason: typeof record.reason === 'string' ? record.reason : '',
+    review_at: record.review_at ?? null,
+    accepted_by: record.accepted_by ?? null,
+    accepted_at: record.accepted_at ?? null,
+  };
+}
+
+function safeJsonObject(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 function mapFindingRow(row) {
   if (!row) return null;
   return {
@@ -261,6 +281,8 @@ function mapFindingRow(row) {
     status: row.status,
     evidence_ids: asStringArray(row.evidence_ids),
     notes: row.notes ?? undefined,
+    system_summary: row.system_summary ?? null,
+    risk_acceptance: mapRiskAcceptance(row.risk_acceptance),
     remediation_template: row.remediation_template ?? undefined,
     verdict_id: row.verdict_id ?? undefined,
     last_verdict_id: row.last_verdict_id ?? undefined,
@@ -1595,11 +1617,11 @@ export function createValidationEvidenceRepository(pool) {
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
              status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
-             assignee, created_at, updated_at
+             assignee, created_at, updated_at, system_summary
            )
            VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16::timestamptz, $17::timestamptz
+             $16::timestamptz, $17::timestamptz, $18
            )
            RETURNING ${FINDING_COLUMNS}`,
           [
@@ -1620,6 +1642,7 @@ export function createValidationEvidenceRepository(pool) {
             record.assignee ?? null,
             record.created_at,
             record.updated_at ?? null,
+            record.system_summary ?? null,
           ],
         );
         return mapFindingRow(rows[0]);
@@ -1643,11 +1666,11 @@ export function createValidationEvidenceRepository(pool) {
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
              status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
-             assignee, created_at, updated_at
+             assignee, created_at, updated_at, system_summary
            )
            SELECT
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16::timestamptz, $17::timestamptz
+             $16::timestamptz, $17::timestamptz, $18
            FROM verdicts incoming
            WHERE incoming.tenant_id = $2
              AND incoming.id = $14
@@ -1680,7 +1703,7 @@ export function createValidationEvidenceRepository(pool) {
              title = EXCLUDED.title,
              severity = EXCLUDED.severity,
              evidence_ids = EXCLUDED.evidence_ids,
-             notes = EXCLUDED.notes,
+             system_summary = EXCLUDED.system_summary,
              remediation_template = EXCLUDED.remediation_template,
              last_verdict_id = EXCLUDED.last_verdict_id,
              updated_at = EXCLUDED.updated_at
@@ -1720,6 +1743,7 @@ export function createValidationEvidenceRepository(pool) {
             record.assignee ?? null,
             record.created_at,
             updatedAt,
+            record.system_summary ?? null,
           ],
         );
         return mapFindingRow(rows[0] ?? null);
@@ -1745,6 +1769,11 @@ export function createValidationEvidenceRepository(pool) {
         if (patch.notes !== undefined) {
           sets.push(`notes = $${paramIndex}`);
           params.push(patch.notes);
+          paramIndex += 1;
+        }
+        if (patch.risk_acceptance !== undefined) {
+          sets.push(`risk_acceptance = $${paramIndex}::jsonb`);
+          params.push(patch.risk_acceptance === null ? null : JSON.stringify(patch.risk_acceptance));
           paramIndex += 1;
         }
         if (patch.last_verdict_id !== undefined) {

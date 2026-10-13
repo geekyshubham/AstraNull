@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Cloud,
   CloudSun,
   Globe2,
+  Play,
   Plus,
   Route,
   Search,
@@ -15,7 +16,7 @@ import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
-import { formatDate, formatNumber } from '../lib/utils';
+import { formatDate, formatNumber, formatTargetKind } from '../lib/utils';
 import { resolveTargetVerificationProvenance, VerifyChip } from '../lib/verify-chip';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
@@ -28,6 +29,9 @@ import { canonicalCohortFilters, COHORT_FILTER_KEYS, inventoryUnits } from '../l
 import { TargetCsvImportButton } from '../components/targets/target-csv-import';
 import { TargetCohortList } from '../components/targets/target-cohort';
 import { useListReturnState, useRestoreListPosition } from '../components/evidence/use-inspector';
+import { EVIDENCE_STATUS_TONE, latestEvidenceRunByTarget, latestRunVerdict } from '../lib/dashboard-metrics';
+// @ts-ignore Plain ESM keeps run-start role parity testable with node:test.
+import { canStartRun } from '../lib/run-permissions.mjs';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
@@ -37,8 +41,12 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .target-unknown { color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-summary-cell strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-xl); font-variant-numeric: tabular-nums; }
 .targets-page .targets-intake { border-color: color-mix(in oklab, var(--accent), transparent 70%); }
-.targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }
+.targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1.15fr) minmax(200px, 1fr); gap: var(--space-4) var(--space-3); align-items: start; }
 .targets-page .targets-intake-form label { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); color: var(--fg); font-size: var(--text-sm); font-weight: 500; }
+.targets-page .targets-intake-field { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); }
+.targets-page .targets-intake-field small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
+.targets-page .targets-intake-form > .btn { justify-self: start; }
+.targets-page .target-validation { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 .targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }
 .targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(3, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }
 .targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
@@ -91,13 +99,23 @@ const TARGETS_PAGE_STYLES = `
 type Tone = NonNullable<BadgeProps['tone']>;
 
 /** ADR-0008 target kinds accepted by POST /v1/targets (src/contracts/targetManagement.mjs). */
-const TARGET_KIND_OPTIONS: { value: string; label: string }[] = [
-  { value: 'fqdn', label: 'FQDN / hostname' },
-  { value: 'ip', label: 'IP address' },
-  { value: 'url', label: 'URL' },
-  { value: 'tcp', label: 'TCP host:port' },
-  { value: 'dns_zone', label: 'DNS zone' },
-  { value: 'canary', label: 'Canary endpoint' }
+const TARGET_KIND_OPTIONS: { value: string; label: string; hint: string; placeholder: string }[] = [
+  { value: 'fqdn', label: 'FQDN / hostname', hint: 'Website or API hostname; ownership proven by DNS TXT record', placeholder: 'api.example.com' },
+  { value: 'ip', label: 'IP address', hint: 'Single public IP, e.g. an origin behind a verified hostname', placeholder: '203.0.113.10' },
+  { value: 'url', label: 'URL', hint: 'Specific path on a hostname', placeholder: 'https://api.example.com/health' },
+  { value: 'tcp', label: 'TCP host:port', hint: 'Non-HTTP service, checked as the origin of a verified hostname', placeholder: '203.0.113.10:443' },
+  { value: 'dns_zone', label: 'DNS zone', hint: 'Authoritative zone', placeholder: 'example.com' },
+  { value: 'canary', label: 'Canary endpoint', hint: 'Endpoint you expect to stay reachable', placeholder: 'https://status.example.com' }
+];
+
+const UNDECIDED_BEHAVIOR = 'undecided';
+
+/** What the declared edge should do with abusive traffic; recorded as a declaration, never as a verdict. */
+const EXPECTED_BEHAVIOR_OPTIONS: { value: string; label: string; hint: string }[] = [
+  { value: 'block_at_edge', label: 'Block at edge', hint: 'Block at edge \u2014 your CDN/WAF should stop abusive traffic before it reaches origin' },
+  { value: 'absorb_at_origin', label: 'Absorb at origin', hint: 'Absorb at origin \u2014 origin is sized to take the load' },
+  { value: 'rate_shape', label: 'Rate shape', hint: 'Rate shape \u2014 traffic is throttled, not blocked' },
+  { value: UNDECIDED_BEHAVIOR, label: 'Not sure \u2014 decide later', hint: 'No expectation is recorded with this target. Each check still applies its own expected result.' }
 ];
 
 const MAX_TARGET_TAGS = 16;
@@ -186,15 +204,6 @@ function TableDate({ value }: { value: unknown }) {
   return <span className="mono small target-date" title={formatDate(value)}><span>{day}</span> <span>{time}</span></span>;
 }
 
-function targetKindLabel(item: DataItem) {
-  const kind = getString(item, ['kind'], 'unknown').toLowerCase();
-  const value = getString(item, ['value'], '');
-  if (kind === 'fqdn' || kind === 'hostname' || kind === 'domain') return 'Hostname';
-  if (kind === 'ip') return value.includes(':') ? 'IPv6' : 'IPv4';
-  if (kind === 'cidr') return 'CIDR';
-  return kind.replace(/_/g, ' ');
-}
-
 function providerKey(value: string) {
   const key = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (key.includes('cloudflare')) return 'cloudflare';
@@ -236,12 +245,25 @@ export function TargetsPage({
   onRefresh: () => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
+  const canWriteTargets = sessionHasPermission(session, 'target_group:write');
+  const canWriteTargetsRef = useRef(canWriteTargets);
+  canWriteTargetsRef.current = canWriteTargets;
   const { initial, save } = useListReturnState(session, 'targets');
   const urlVerification = getRouteParam('verification');
   const savedFilters: Record<string, string> = { ...(initial.filters ?? {}), ...(urlVerification ? { verification: urlVerification } : {}) };
   const [cohort, setCohort] = useState<Record<string, string> | null>(readCohortFromAddress);
+  function consumeAddParam() {
+    const requested = getRouteParam('add');
+    if (!requested) return;
+    if (requested === '1' && canWriteTargetsRef.current) setShowAdd(true);
+    replaceRouteParams({ add: null });
+  }
   useEffect(() => {
-    const sync = () => setCohort(readCohortFromAddress());
+    const sync = () => {
+      setCohort(readCohortFromAddress());
+      consumeAddParam();
+    };
+    consumeAddParam();
     window.addEventListener('hashchange', sync);
     window.addEventListener('popstate', sync);
     return () => {
@@ -253,15 +275,18 @@ export function TargetsPage({
   const [verificationFilter, setVerificationFilter] = useState(savedFilters.verification ?? 'all');
   const [kindFilter, setKindFilter] = useState(savedFilters.kind ?? 'all');
   const [tagFilter, setTagFilter] = useState(savedFilters.tag ?? 'all');
-  const [showAdd, setShowAdd] = useState(false);
+  const [showAdd, setShowAdd] = useState(() => canWriteTargets && getRouteParam('add') === '1');
   const [addKind, setAddKind] = useState('fqdn');
+  const [addBehavior, setAddBehavior] = useState('block_at_edge');
+  const kindSelectRef = useRef<HTMLSelectElement>(null);
+  const addOpenerRef = useRef<HTMLElement | null>(null);
   const [addTags, setAddTags] = useState('');
   const [editTargetId, setEditTargetId] = useState('');
   const [editTags, setEditTags] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const canWriteTargets = sessionHasPermission(session, 'target_group:write');
+  const canRunChecks = canStartRun(session.role);
   const targets = Array.isArray(data.targets) ? data.targets : [];
   const addTagsResult = parseTagInput(addTags);
   const editTagsResult = parseTagInput(editTags);
@@ -287,6 +312,27 @@ export function TargetsPage({
       ].some((value) => value.toLowerCase().includes(needle));
     });
   }, [targets, query, verificationFilter, kindFilter, tagFilter]);
+
+  useEffect(() => {
+    if (showAdd) kindSelectRef.current?.focus();
+  }, [showAdd]);
+
+  function openAddForm(opener: HTMLElement | null) {
+    addOpenerRef.current = opener;
+    setShowAdd(true);
+  }
+
+  function closeAddForm() {
+    setShowAdd(false);
+    const opener = addOpenerRef.current;
+    addOpenerRef.current = null;
+    window.requestAnimationFrame(() => opener?.focus());
+  }
+
+  const latestRuns = useMemo(() => latestEvidenceRunByTarget(Array.isArray(data.runs) ? data.runs : []), [data.runs]);
+  const runsUnavailable = Boolean(data.loadErrors.runs);
+  const addKindOption = TARGET_KIND_OPTIONS.find((option) => option.value === addKind) ?? TARGET_KIND_OPTIONS[0];
+  const addBehaviorOption = EXPECTED_BEHAVIOR_OPTIONS.find((option) => option.value === addBehavior) ?? EXPECTED_BEHAVIOR_OPTIONS[0];
 
   const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
   const unverifiedCount = targets.length - verifiedCount;
@@ -320,7 +366,6 @@ export function TargetsPage({
     if (!canWriteTargets) return;
     const form = new FormData(event.currentTarget);
     const value = String(form.get('value') ?? '').trim();
-    const expectedBehavior = String(form.get('expected_behavior') ?? 'block_at_edge');
     if (!value) {
       setError('Target value is required.');
       return;
@@ -337,7 +382,7 @@ export function TargetsPage({
       const body: Record<string, unknown> = {
         kind: addKind,
         value,
-        expected_behavior: expectedBehavior,
+        ...(addBehavior === UNDECIDED_BEHAVIOR ? {} : { expected_behavior: addBehavior }),
         tags
       };
       const created = await requestJson(config, session, '/v1/targets', { method: 'POST', body }) as DataItem;
@@ -355,6 +400,7 @@ export function TargetsPage({
       setShowAdd(false);
       setAddTags('');
       setAddKind('fqdn');
+      setAddBehavior('block_at_edge');
       await onRefresh();
       if (createdId) window.location.hash = `target-detail?id=${encodeURIComponent(createdId)}`;
     } catch (err) {
@@ -439,7 +485,7 @@ export function TargetsPage({
               onClick={() => rememberRow(id, `target-name-${id}`)}
             >
               <strong title={value}>{value}</strong>
-              <span>{targetKindLabel(item)}</span>
+              <span>{formatTargetKind(getString(item, ['kind'], ''), getString(item, ['value'], ''))}</span>
             </a>
           </span>
         );
@@ -457,11 +503,24 @@ export function TargetsPage({
       key: 'validated',
       label: 'Last validation',
       render: (item) => {
-        if (!Object.hasOwn(item, 'last_validation_at') && !Object.hasOwn(item, 'last_validated_at')) {
-          return <span className="target-unknown">Not available in inventory</span>;
+        const run = latestRuns.get(getString(item, ['id'], '')) ?? null;
+        const result = latestRunVerdict(run);
+        const recorded = item.last_validation_at ?? item.last_validated_at ?? (result?.completedAt || null);
+        if (!recorded) {
+          return <span className="target-unknown">{runsUnavailable ? 'Unavailable' : 'No result yet'}</span>;
         }
-        const value = item.last_validation_at ?? item.last_validated_at;
-        return value ? <TableDate value={value} /> : <span className="target-unknown">Not checked</span>;
+        return (
+          <span className="target-validation">
+            <TableDate value={recorded} />
+            {runsUnavailable ? (
+              <Badge tone={EVIDENCE_STATUS_TONE.none} title="Validation runs did not load, so the latest verdict is unknown">Unavailable</Badge>
+            ) : (
+              <Badge tone={EVIDENCE_STATUS_TONE[result?.status ?? 'none']} title={result?.verdict ? `Latest evidence-backed verdict: ${result.verdict}` : 'No evidence-backed verdict recorded for this target'}>
+                {result ? result.label : 'Not recorded'}
+              </Badge>
+            )}
+          </span>
+        );
       }
     },
     {
@@ -493,17 +552,30 @@ export function TargetsPage({
         const id = getString(item, ['id'], '');
         const value = getString(item, ['value'], id);
         const verified = isVerified(verificationState(item));
+        const promptVerify = !verified && canWriteTargets;
         return (
           <span className="target-row-actions">
+            {verified && canRunChecks ? (
+              <AnchorButton
+                size="sm"
+                variant="default"
+                href={`${buildDetailHref('target-detail', id)}&tab=validate`}
+                data-focus-key={`target-validate-${id}`}
+                onClick={() => rememberRow(id, `target-validate-${id}`)}
+                aria-label={`Validate ${value}`}
+              >
+                <Play size={13} aria-hidden="true" /> Validate
+              </AnchorButton>
+            ) : null}
             <AnchorButton
               size="sm"
-              variant={verified ? 'secondary' : 'default'}
+              variant={promptVerify ? 'default' : 'secondary'}
               href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
               data-focus-key={`target-${id}`}
               onClick={() => rememberRow(id)}
-              aria-label={verified ? `Open target ${value}` : `Verify ownership of ${value}`}
+              aria-label={promptVerify ? `Verify ownership of ${value}` : `Open target ${value}`}
             >
-              {verified ? 'Open' : 'Verify'}
+              {promptVerify ? 'Verify' : 'Open'}
             </AnchorButton>
             {!canWriteTargets ? <span className="target-unknown">No changes for your role</span> : null}
             {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openTagEditor(item)} aria-label={`Edit tags for ${getString(item, ['value'], id)}`}>Edit tags</Button> : null}
@@ -520,12 +592,12 @@ export function TargetsPage({
       <div className="page-head">
         <div>
           <h1>Targets</h1>
-          <p>Declared hostnames, IPs and CIDRs. Each must prove ownership before any bounded check runs.</p>
+          <p>Declared hostnames, IPs and endpoints. Each must prove ownership before any bounded check runs.</p>
         </div>
         <div className="row-actions">
           <TargetCsvImportButton config={config} session={session} onImported={onRefresh} />
-          <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Review unverified</Button>
-          {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
+          {unverifiedCount > 0 ? <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Show unverified</Button> : null}
+          {canWriteTargets ? <Button onClick={(event) => (showAdd ? closeAddForm() : openAddForm(event.currentTarget))} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
         </div>
       </div>
 
@@ -544,9 +616,9 @@ export function TargetsPage({
       ) : null}
 
       {!cohort ? (<>
-      <div className="targets-summary" aria-label="Target inventory summary">
-        <div className="targets-summary-cell"><span>Declared target records</span><strong>{formatNumber(units.records)}</strong><small>Every hostname, IP, CIDR or endpoint you declared</small></div>
-        <div className="targets-summary-cell"><span>Distinct hostnames</span><strong>{formatNumber(units.distinctHosts)}</strong><small>{units.nonHostRecords ? `${formatNumber(units.nonHostRecords)} IP, CIDR or endpoint records not counted` : 'Normalized host identity'}</small></div>
+      <div className="targets-summary" role="group" aria-label="Target inventory summary">
+        <div className="targets-summary-cell"><span>Declared target records</span><strong>{formatNumber(units.records)}</strong><small>Every hostname, IP or endpoint you declared</small></div>
+        <div className="targets-summary-cell"><span>Distinct hostnames</span><strong>{formatNumber(units.distinctHosts)}</strong><small>{units.nonHostRecords ? `${formatNumber(units.nonHostRecords)} IP or endpoint records not counted` : 'Normalized host identity'}</small></div>
         <div className="targets-summary-cell"><span>Ownership verified</span><strong>{formatNumber(verifiedCount)}</strong><small>Can be checked after per-check gates</small></div>
         <div className="targets-summary-cell"><span>Ownership pending</span><strong>{formatNumber(unverifiedCount)}</strong><small>Locked: no external check can run</small></div>
       </div>
@@ -555,19 +627,30 @@ export function TargetsPage({
       {canWriteTargets && showAdd ? (
         <Card className="targets-intake">
           <CardHeader>
-            <div><CardTitle>Add a target</CardTitle><CardDescription>Declare one target manually. Exact-target DNS verification is required before any external probe can run.</CardDescription></div>
-            <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Close</Button>
+            <div><CardTitle>Add a target</CardTitle><CardDescription>Declare one target manually. Hostnames and URLs prove ownership with a DNS TXT record; IPs and TCP services are checked as origins of a verified hostname.</CardDescription></div>
+            <Button size="sm" variant="ghost" onClick={closeAddForm}>Close</Button>
           </CardHeader>
           <CardContent>
             <form id="target-declare-form" className="targets-intake-form" onSubmit={(event) => void addTarget(event)}>
-              <label>
-                <span>Kind</span>
-                <select name="kind" value={addKind} onChange={(event) => setAddKind(event.target.value)}>
+              <div className="targets-intake-field">
+                <label htmlFor="add-target-kind">Kind</label>
+                <select id="add-target-kind" ref={kindSelectRef} name="kind" value={addKind} onChange={(event) => setAddKind(event.target.value)} aria-describedby="add-kind-hint">
                   {TARGET_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
-              </label>
-              <label><span>Value</span><input name="value" className="mono" placeholder="api.example.com" required /></label>
-              <label><span>Expected behavior</span><select name="expected_behavior" defaultValue="block_at_edge"><option value="block_at_edge">Block at edge</option><option value="absorb_at_origin">Absorb at origin</option><option value="rate_shape">Rate shape</option></select></label>
+                <small id="add-kind-hint" className="muted">{addKindOption.hint}</small>
+              </div>
+              <div className="targets-intake-field">
+                <label htmlFor="add-target-value">Value</label>
+                <input id="add-target-value" name="value" className="mono" placeholder={addKindOption.placeholder} required aria-describedby="add-value-hint" />
+                <small id="add-value-hint" className="muted">Ranges (CIDR) are not supported; declare each IP you own.</small>
+              </div>
+              <div className="targets-intake-field">
+                <label htmlFor="add-target-behavior">Expected behavior</label>
+                <select id="add-target-behavior" name="expected_behavior" value={addBehavior} onChange={(event) => setAddBehavior(event.target.value)} aria-describedby="add-behavior-hint">
+                  {EXPECTED_BEHAVIOR_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <small id="add-behavior-hint" className="muted">{addBehaviorOption.hint}</small>
+              </div>
               <label className="targets-intake-tags">
                 <span>Tags</span>
                 <input
@@ -598,7 +681,7 @@ export function TargetsPage({
           <div className="targets-toolbar">
             <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, tag, provider" /></label>
             <label className="targets-filter"><span>Verification</span><select value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)}><option value="all">All states</option><option value="verified">Verified</option><option value="unverified">Not verified</option></select></label>
-            <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
+            <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{formatTargetKind(kind)}</option>)}</select></label>
             <label className="targets-filter"><span>Tag</span><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           </div>
           <p className="targets-result-count" aria-live="polite">
@@ -612,7 +695,20 @@ export function TargetsPage({
             getRowId={(item, index) => getString(item, ['id'], String(index))}
             loadError={data.loadErrors.targets}
             onRetry={() => void onRefresh()}
-            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets declared yet'} body={targets.length ? 'The declared inventory is unchanged; only the current filters hide it.' : 'Declare a domain or endpoint here.'} actionLabel={targets.length ? 'Clear filters' : canWriteTargets ? 'Add target' : undefined} onAction={targets.length ? clearFilters : canWriteTargets ? () => setShowAdd(true) : undefined} />}
+            empty={
+              <EmptyState
+                icon={Target}
+                title={targets.length ? 'No targets match these filters' : 'No targets declared yet'}
+                body={targets.length ? 'The declared inventory is unchanged; only the current filters hide it.' : 'Declare your first hostname, IP or URL. You will get a DNS TXT record to prove ownership; no probe is sent until it is verified.'}
+                actionLabel={targets.length ? 'Clear filters' : undefined}
+                onAction={targets.length ? clearFilters : undefined}
+                actions={!targets.length && canWriteTargets ? (
+                  <Button type="button" onClick={(event) => openAddForm(event.currentTarget)} aria-expanded={showAdd} aria-controls="target-declare-form">
+                    <Plus size={15} aria-hidden="true" /> Add target
+                  </Button>
+                ) : undefined}
+              />
+            }
           />
         </CardContent>
       </Card>

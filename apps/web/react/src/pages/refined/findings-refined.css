@@ -297,19 +297,89 @@
   }
 }
 
+/* Filters toggle exists for phones only; wider layouts always show the filter grid. */
+body .refined .rf-filters-toggle {
+  display: none;
+}
+
 @media (max-width: 640px) {
-  .refined .rf-status-group {
-    flex-wrap: wrap;
-    flex-basis: 100%;
+  /* Status chips stay one row that scrolls inside itself; group names remain for screen readers. */
+  body .refined .rf-status-groups {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-bottom: var(--space-1);
   }
 
-  .refined .rf-status-group-label {
-    flex-basis: 100%;
+  body .refined .rf-status-groups::-webkit-scrollbar {
+    display: none;
+  }
+
+  body .refined .rf-status-group {
+    flex: none;
+    flex-wrap: nowrap;
+  }
+
+  body .refined .rf-status-group-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  body .refined .rf-status-chip {
+    flex: none;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  body .refined .rf-findings-filters {
+    position: relative;
+  }
+
+  body .refined .rf-filters-toggle {
+    display: inline-flex;
+    justify-self: start;
+    min-height: 44px;
+  }
+
+  body .refined .rf-filter-grid[data-open='false'] {
+    display: none;
   }
 
   .refined .rf-filter-grid > *,
   .refined .rf-filter-grid > .rf-search {
     flex-basis: 100%;
+  }
+
+  /* Phones keep the three decision tiles: open, SLA breached and affected targets. */
+  body .refined .rf-findings-summary .rf-stat--wide-only {
+    display: none;
+  }
+
+  body .refined .rf-findings-summary .rf-stat {
+    border-left: 0;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  body .refined .rf-findings-summary .rf-stat--open {
+    border-top: 0;
+  }
+
+  body .refined .rf-findings-summary .rf-stat--sla {
+    border-top: 0;
+    border-left: 1px solid var(--border-soft);
+  }
+
+  body .refined .rf-findings-summary .rf-stat--targets {
+    grid-column: 1 / -1;
   }
 
   .refined .rf-status-tabs {

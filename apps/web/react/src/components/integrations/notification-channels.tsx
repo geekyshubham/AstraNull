@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type FormEvent, type ReactNode } from 'react';
 import type { HTMLAttributes } from 'react';
-import { CircleCheck, CircleDashed, ExternalLink, Info, Pencil, Power, RefreshCw, Trash2 } from 'lucide-react';
+import { Bell, CircleCheck, CircleDashed, ExternalLink, Info, Pencil, Power, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { RoleRestrictedCard } from '../ui/role-restricted';
 import { DataTable, type TableColumn } from '../ui/table';
 import { ConfirmModal, FormModal } from '../../lib/crud-ui';
+import { requestJson } from '../../lib/api';
 import { canReadDataset, sessionHasPermission } from '../../lib/dataset-access.mjs';
 import { apiErrorMessage } from '../../lib/error-messages';
 import {
@@ -46,8 +47,23 @@ import { NOTIFICATION_CHANNELS_STYLES } from './notification-channels-styles';
 
 type LoadState = 'loading' | 'ready' | 'error';
 
+const IN_APP_CHANNEL = {
+  id: 'in_app',
+  label: 'In-app',
+  kind: 'Portal feed',
+  description: 'Record chosen events in this workspace’s in-app feed. No destination or secret is needed.'
+} as const;
+
 const DELIVERY_MODE_NOTE =
   'Outbound delivery is opt-in on the server. Until an operator enables it for a channel, AstraNull records each event in the delivery ledger and does not send it.';
+
+function InAppLogo({ size = 'md' }: { size?: 'sm' | 'md' }) {
+  return (
+    <span aria-hidden="true" className={`integration-logo-well channel-logo${size === 'sm' ? ' integration-logo-well-sm' : ''}`} data-channel={IN_APP_CHANNEL.id}>
+      <Bell className="channel-glyph" strokeWidth={1.75} aria-hidden="true" focusable="false" />
+    </span>
+  );
+}
 
 function DocsLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -299,6 +315,108 @@ function ConnectChannelDialog({
   );
 }
 
+function ConnectInAppDialog({
+  config,
+  session,
+  onClose,
+  onConnected
+}: {
+  config: PortalConfig;
+  session: Session;
+  onClose: () => void;
+  onConnected: () => void;
+}) {
+  const fieldId = useId();
+  const triggerErrorId = `${fieldId}-trigger-error`;
+  const [triggers, setTriggers] = useState<string[]>([...DEFAULT_NOTIFICATION_TRIGGERS]);
+  const [triggerError, setTriggerError] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const triggerFieldsetRef = useRef<HTMLFieldSetElement>(null);
+
+  function toggleTrigger(id: string) {
+    setTriggerError('');
+    setTriggers((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitError('');
+    const triggerCheck = normalizeSelectedTriggers(triggers);
+    if (!triggerCheck.ok) {
+      setTriggerError(triggerCheck.error);
+      triggerFieldsetRef.current?.focus();
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await requestJson(config, session, '/v1/notifications', {
+        method: 'POST',
+        body: { channel: IN_APP_CHANNEL.id, destination: '', triggers: triggerCheck.triggers, enabled }
+      });
+      onConnected();
+    } catch (err) {
+      setSubmitError(apiErrorMessage(err, 'Could not turn on the in-app feed. Try again.'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <FormModal
+      open
+      title="Turn on the in-app feed"
+      description={IN_APP_CHANNEL.description}
+      onClose={() => {
+        if (!submitting) onClose();
+      }}
+    >
+      <form className="product-form nc-form" onSubmit={handleSubmit} noValidate aria-busy={submitting || undefined}>
+        <fieldset
+          ref={triggerFieldsetRef}
+          className="full"
+          aria-invalid={triggerError ? true : undefined}
+          aria-describedby={triggerError ? triggerErrorId : undefined}
+          tabIndex={-1}
+          disabled={submitting}
+        >
+          <legend>Notify on</legend>
+          {NOTIFICATION_TRIGGER_OPTIONS.map((option) => (
+            <label key={option.id} className="check-row">
+              <input
+                type="checkbox"
+                name="triggers"
+                value={option.id}
+                checked={triggers.includes(option.id)}
+                onChange={() => toggleTrigger(option.id)}
+              />
+              <span>
+                {option.label}
+                <span className="sr-only">: </span>
+                <span className="nc-field-hint" style={{ display: 'block' }}>{option.detail}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {triggerError ? <p id={triggerErrorId} className="nc-field-error full" role="alert">{triggerError}</p> : null}
+
+        <label className="check-row full">
+          <input type="checkbox" name="enabled" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={submitting} />
+          <span>Turn this channel on now</span>
+        </label>
+
+        {submitError ? <p className="form-banner error full" role="alert">{submitError}</p> : null}
+
+        <div className="form-actions full">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button type="submit" loading={submitting}>Turn on in-app feed</Button>
+        </div>
+      </form>
+    </FormModal>
+  );
+}
+
 function EditChannelDialog({
   rule,
   config,
@@ -450,7 +568,7 @@ export type NotificationChannelsPanelProps = {
 };
 
 /**
- * Notification connectors (Slack, Microsoft Teams, Email, Webhook).
+ * Notification connectors (Slack, Microsoft Teams, Email, Webhook, In-app).
  *
  * Reads GET /v1/notifications and creates rules with POST /v1/notifications. Only the redacted
  * `destination_preview` is ever rendered; full URLs and addresses stay server-side.
@@ -468,6 +586,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
   const [eventsWindow, setEventsWindow] = useState<NotificationEventsWindow | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [activeChannel, setActiveChannel] = useState<NotificationChannelId | null>(null);
+  const [inAppOpen, setInAppOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<NotificationRule | null>(null);
   const [removingRule, setRemovingRule] = useState<NotificationRule | null>(null);
   const [busyRuleId, setBusyRuleId] = useState('');
@@ -533,7 +652,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
     };
   }, [canRead, load]);
 
-  const connectorRules = useMemo(() => rules.filter((rule) => findNotificationChannel(rule.channel)), [rules]);
+  const connectorRules = useMemo(() => rules.filter((rule) => findNotificationChannel(rule.channel) || rule.channel === IN_APP_CHANNEL.id), [rules]);
   const focusRule = focusRuleId ? rules.find((rule) => rule.id === focusRuleId) ?? null : null;
 
   useEffect(() => {
@@ -564,6 +683,13 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
     setActiveChannel(null);
     const note = rule.delivery_note ? ` ${rule.delivery_note}` : '';
     setMessage(`${notificationChannelLabel(rule.channel)} connected (${rule.destination_preview || 'destination hidden'}).${note}`);
+    await load();
+    await onChanged?.();
+  }
+
+  async function handleInAppConnected() {
+    setInAppOpen(false);
+    setMessage('In-app feed turned on. Chosen events are recorded in this workspace’s feed.');
     await load();
     await onChanged?.();
   }
@@ -619,7 +745,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
       label: 'Channel',
       render: (rule) => (
         <span className="nc-channel-cell">
-          <ChannelLogo channel={rule.channel} size="sm" />
+          {rule.channel === IN_APP_CHANNEL.id ? <InAppLogo size="sm" /> : <ChannelLogo channel={rule.channel} size="sm" />}
           {notificationChannelLabel(rule.channel)}
         </span>
       )
@@ -730,7 +856,7 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
       <div className="nc-heading">
         <div>
           <h2 id={headingId} className="card-title" tabIndex={-1}>Notification channels</h2>
-          <p>Destinations for readiness alerts. A configured channel is not proof of delivery: check its last attempt. Routing rules and failed deliveries are managed on <a href="#notifications">Notifications</a>.</p>
+          <p>Destinations for readiness alerts. A configured channel is not proof of delivery: check its last attempt. Event routing for existing channels and failed deliveries are on <a href="#notifications">Notifications</a>.</p>
         </div>
         <Button
           size="sm"
@@ -804,6 +930,46 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
             </li>
           );
         })}
+        {(() => {
+          const counts = summary[IN_APP_CHANNEL.id] ?? { total: 0, enabled: 0 };
+          const connected = counts.total > 0;
+          return (
+            <li key={IN_APP_CHANNEL.id} className="integration-tile" data-connected={connected || undefined}>
+              <div className="integration-tile-head">
+                <div className="integration-identity">
+                  <InAppLogo />
+                  <div className="integration-tile-name">
+                    <strong>{IN_APP_CHANNEL.label}</strong>
+                    <span>{IN_APP_CHANNEL.kind}</span>
+                  </div>
+                </div>
+                {connected ? <Badge tone="muted">{`${formatNumber(counts.total)} configured`}</Badge> : null}
+              </div>
+              <p className="integration-tile-desc">{IN_APP_CHANNEL.description}</p>
+              <div className="integration-tile-footer">
+                <span className="integration-chip" data-tone={connected && counts.enabled > 0 ? 'positive' : 'neutral'}>
+                  {connected ? <CircleCheck size={13} aria-hidden="true" /> : <CircleDashed size={13} aria-hidden="true" />}
+                  {connected ? `${formatNumber(counts.enabled)} of ${formatNumber(counts.total)} enabled` : 'Not configured'}
+                </span>
+                <div className="integration-tile-actions">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setMessage('');
+                      setInAppOpen(true);
+                    }}
+                    disabled={!canWrite}
+                    title={writeDisabledReason || undefined}
+                    aria-label={connected ? 'Add another In-app channel' : 'Connect In-app'}
+                  >
+                    {connected ? 'Add' : 'Connect'}
+                  </Button>
+                </div>
+              </div>
+            </li>
+          );
+        })()}
       </ul>
       {!canWrite ? <p className="nc-footnote">{writeDisabledReason}</p> : null}
 
@@ -836,6 +1002,15 @@ export function NotificationChannelsPanel({ config, session, onChanged, headingI
           session={session}
           onClose={() => setActiveChannel(null)}
           onConnected={(rule) => void handleConnected(rule)}
+        />
+      ) : null}
+
+      {inAppOpen && canWrite ? (
+        <ConnectInAppDialog
+          config={config}
+          session={session}
+          onClose={() => setInAppOpen(false)}
+          onConnected={() => void handleInAppConnected()}
         />
       ) : null}
 

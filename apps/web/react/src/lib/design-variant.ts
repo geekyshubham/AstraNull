@@ -82,36 +82,44 @@ function syncHashVariant(page: VariantPage, variant: DesignVariant) {
   }
 }
 
-function resolveVariant(page: VariantPage): DesignVariant {
+export type DesignVariantOptions = {
+  /** false: honour only the `#<page>?variant=` hash override; never read or write localStorage. */
+  persist?: boolean;
+};
+
+export function resolveDesignVariant(page: VariantPage, persist = true): DesignVariant {
   if (typeof window === 'undefined') return 'classic';
   const fromHash = readHashDesignVariant(page);
   if (fromHash) {
-    writeStoredVariant(page, fromHash);
+    if (persist) writeStoredVariant(page, fromHash);
     return fromHash;
   }
-  return readStoredVariant(page) ?? 'classic';
+  return (persist ? readStoredVariant(page) : null) ?? 'classic';
 }
 
-export function useDesignVariant(page: VariantPage): [DesignVariant, (v: DesignVariant) => void] {
-  const [variant, setVariantState] = useState<DesignVariant>(() => resolveVariant(page));
+export function useDesignVariant(
+  page: VariantPage,
+  { persist = true }: DesignVariantOptions = {}
+): [DesignVariant, (v: DesignVariant) => void] {
+  const [variant, setVariantState] = useState<DesignVariant>(() => resolveDesignVariant(page, persist));
 
   useEffect(() => {
-    setVariantState(resolveVariant(page));
+    setVariantState(resolveDesignVariant(page, persist));
     function onHashChange() {
       const fromHash = readHashDesignVariant(page);
       if (!fromHash) return;
-      writeStoredVariant(page, fromHash);
+      if (persist) writeStoredVariant(page, fromHash);
       setVariantState(fromHash);
     }
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, [page]);
+  }, [page, persist]);
 
   const setVariant = useCallback((next: DesignVariant) => {
     setVariantState(next);
-    writeStoredVariant(page, next);
+    if (persist) writeStoredVariant(page, next);
     syncHashVariant(page, next);
-  }, [page]);
+  }, [page, persist]);
 
   return [variant, setVariant];
 }

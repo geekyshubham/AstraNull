@@ -1,6 +1,8 @@
 import { withPlatformScope } from './internalManagementRepository.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
+const MAX_LOGIN_TENANT_CANDIDATES = 20;
+
 function toIso(value) {
   if (value == null) return value;
   return value instanceof Date ? value.toISOString() : String(value);
@@ -37,6 +39,7 @@ function mapUserWithCredential(row) {
     name: row.name ?? null,
     role: row.role,
     status: row.status ?? 'active',
+    tenant_name: row.tenant_name ?? null,
     credential: mapCredential(row),
   };
 }
@@ -141,12 +144,14 @@ export function createPasswordAuthRepository(pool) {
         async (client) => {
           const { rows } = await client.query(
             `SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.status,
+                    t.name AS tenant_name,
                     c.password_hash, c.password_updated_at, c.must_change,
                     c.failed_attempts, c.locked_until, c.last_login_at,
                     c.session_generation, c.mfa_secret_envelope, c.mfa_enrollment_id,
                     c.mfa_enrolled_at, c.mfa_last_step, c.mfa_pending_at, c.mfa_disabled_at,
                     c.created_at AS credential_created_at
              FROM users u
+             LEFT JOIN tenants t ON t.id = u.tenant_id
              LEFT JOIN user_credentials c
                ON c.tenant_id = u.tenant_id AND c.user_id = u.id
              WHERE u.tenant_id = $1 AND lower(u.email) = $2
@@ -160,21 +165,23 @@ export function createPasswordAuthRepository(pool) {
 
       if (tenantId) return findForTenant(tenantId);
 
-      const candidates = await withPlatformScope(pool, async (client) => {
-        // tenant-query-audit: allow — necessary pre-auth email-to-tenant lookup. It reads only
-        // users, is capped at two, and credential access occurs later in ordinary tenant scope.
+      const candidateTenantIds = await withPlatformScope(pool, async (client) => {
+        // tenant-query-audit: allow — pre-auth email-to-tenant lookup; reads only tenant IDs and credentials load in tenant scope.
         const { rows } = await client.query(
-          `SELECT id, tenant_id, email, name, role, status
+          `SELECT DISTINCT tenant_id
            FROM users
            WHERE lower(email) = $1
-           ORDER BY tenant_id, created_at, id
-           LIMIT 2`,
-          [email],
+           ORDER BY tenant_id
+           LIMIT $2`,
+          [email, MAX_LOGIN_TENANT_CANDIDATES],
         );
-        return rows;
+        return rows.map((row) => row.tenant_id);
       });
-      if (candidates.length !== 1) return candidates.map(mapUserWithCredential);
-      return findForTenant(candidates[0].tenant_id);
+      const users = [];
+      for (const candidateTenantId of candidateTenantIds) {
+        users.push(...await findForTenant(candidateTenantId));
+      }
+      return users;
     },
 
     async recordLoginFailure(tenantId, userId, {

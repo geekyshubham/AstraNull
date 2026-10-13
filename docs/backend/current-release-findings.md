@@ -43,6 +43,12 @@ Invalid queries return `{ error, message, field, status: 400 }` and do not run t
 
 Postgres computes the count and the page in one SQL statement, so both read the same READ COMMITTED statement snapshot even when a concurrent writer commits in between. That single statement binds the tenant id (`$1`) in an explicit `WHERE f.tenant_id = $1` predicate and every filter as numbered parameters; it left-joins a bounded page (`LIMIT`/`OFFSET`) against the full match count so an out-of-range or empty page still reports the real total. The list does not derive a verdict.
 
+## Explanation and risk acceptance fields
+
+A finding keeps two text fields with different owners. `system_summary` is the server-written verdict explanation: publication sets it from the verdict, migration `0080_finding_system_summary_and_risk_acceptance.sql` backfills it from the linked verdict explanation (or, for findings without a verdict, from `notes` only where they exactly match a server-written WAF or protection summary), and a `PATCH` that names it is `400 system_summary_immutable`. `notes` is the human field that customers edit; the backfill clears `notes` only where it held a copy of the verdict text.
+
+`risk_acceptance` is `null` unless the status is `accepted_risk`. Setting that status needs the `finding:accept_risk` permission (owner and admin; an API key also needs that scope), otherwise `403 forbidden`. The body must carry `risk_acceptance: { reason, review_at }` with a 20–2000 character reason and a future ISO review date at most 365 days ahead, otherwise `400 risk_acceptance_required` with the failing `field`. The server adds `accepted_by` and `accepted_at`; the client cannot supply them. Any other status clears the record. The audit action stays `finding.updated`, and its metadata carries the new status so the audit view can read it as "Risk accepted".
+
 ## Tests
 
 `tests/unit/current-release-findings-pagination.test.mjs` covers the dev predicate, a page larger than the limit, page 2, group and status parity, canonical severity alias classes plus unknown rows and legacy `state`/missing-lifecycle effective status, search that ignores notes, unknown ids, and invalid queries, and the SQL shape (explicit tenant predicate, trimmed status comparison, canonical severity CASE, no raw `f.severity =`).

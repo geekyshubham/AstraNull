@@ -21,3 +21,13 @@ export function findingStatus(finding) {
 export function isFindingOpen(finding) {
   return findingStatus(finding) === 'open';
 }
+
+/** Statuses whose severity SLA clock keeps running: work has not finished on them. */
+export const SLA_ACTIVE_STATUSES = Object.freeze(['open', 'in_progress']);
+
+/**
+ * @param {Record<string, unknown> | null | undefined} finding
+ */
+export function isFindingSlaActive(finding) {
+  return SLA_ACTIVE_STATUSES.includes(findingStatus(finding));
+}

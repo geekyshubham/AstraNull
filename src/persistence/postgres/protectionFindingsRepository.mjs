@@ -103,15 +103,15 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null,
             const inserted = await client.query(
               `INSERT INTO findings (
                  id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity, status,
-                 evidence_ids, notes, verdict_id, assignee, created_at, updated_at,
+                 evidence_ids, notes, system_summary, verdict_id, assignee, created_at, updated_at,
                  source, dedupe_key, finding_class, priority, protection_validation_json
-               ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'open', $8::text[], $9, $10, NULL,
+               ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'open', $8::text[], NULL, $9, $10, NULL,
                  $11::timestamptz, $11::timestamptz, 'protection_validation', $12, $13, $14, $15::jsonb)
                ON CONFLICT DO NOTHING
                RETURNING id`,
               [
                 row.id, ctx.tenantId, row.target_id ?? null, row.test_run_id ?? null, row.check_id ?? null,
-                row.title, row.severity, row.evidence_ids ?? [], row.notes ?? null, row.verdict_id ?? null,
+                row.title, row.severity, row.evidence_ids ?? [], row.system_summary ?? null, row.verdict_id ?? null,
                 at, row.dedupe_key, row.finding_class, row.priority, JSON.stringify(row.protection_validation),
               ],
             );

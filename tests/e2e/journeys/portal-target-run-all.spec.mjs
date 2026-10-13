@@ -212,7 +212,9 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
       for (const width of [375, 1440]) {
         await page.setViewportSize({ width, height: 950 });
         const coverage = page.locator('.td-coverage');
-        await expect(coverage).toContainText('35 transport or liveness checks are observations only');
+        await expect(coverage).toContainText('35 runnable checks are observations only; they run under Validate but are not scored for readiness.');
+        await expect(coverage).toContainText(/Catalog \d+ · Runnable on this target \d+ · Scored for readiness \d+/);
+        await expect(coverage.locator('.td-coverage-figure')).toHaveCount(0);
         await expect(coverage).toContainText('40 · Blocking comparison unavailable');
         await expect(coverage).toContainText('configure a rule that blocks that harmless marker');
         await expectNoBlockingAxeViolations(page, '.td-coverage');
@@ -232,7 +234,8 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
 
     const observations = page.locator('.td-observations');
-    await expect(observations).toContainText('Initial WAF/CDN detection is queued when this domain is added. It starts after ownership and execution requirements are met.');
+    await expect(observations).not.toContainText('Initial WAF/CDN detection is queued when this domain is added');
+    await expect(page.locator('.td-last-check')).toHaveText(/^(Last check .+|No checks recorded yet)$/);
     await page.waitForTimeout(800);
     expect(edgePosts, 'opening a target never starts a probe').toEqual([]);
 
@@ -254,25 +257,156 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(edgePosts[0]).toEqual({ target_id: VERIFIED_FRESH_TARGET });
     await expect(page.getByRole('tab', { name: /^Validate/ })).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('.probe-activity')).toBeVisible();
-    await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).toBeChecked();
+    await expect(page.locator('.td-check[data-selected="true"][data-focus-key="check-waf.fingerprint.safe"]')).toHaveCount(1);
+    await expect(page.locator('input[name=target-run-check][value="waf.fingerprint.safe"]')).not.toBeChecked();
     await expect(page.locator('.td-checks')).toContainText('WAF and CDN Fingerprint (Safe)');
     await expect(page.getByText(/The linked check.*is not compatible/)).toHaveCount(0);
   });
 
-  test('an unverified domain is also allowed to run checks and detection', async ({ page }) => {
+  test('an unverified domain stays locked: no check, scan or detection can start until ownership is proven', async ({ page }) => {
     const posts = [];
     page.on('request', (request) => {
       if (request.method() === 'POST' && /\/v1\/(waf\/edge-detection|validation-scans|test-runs)/.test(request.url())) posts.push(request.url());
     });
+    await page.setViewportSize({ width: 390, height: 844 });
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': UNVERIFIED_TARGET } });
 
-    // The ownership step is shown on overview
+    const header = page.locator('.td-page-head');
+    await expect(header).toContainText('Ownership pending · checks locked');
+    await expect(header).not.toContainText('Validation unlocked');
     await expect(page.locator('.td-next[data-kind="ownership"]')).toContainText('Prove ownership to unlock validation');
+    await expect(page.locator('.td-observations').getByRole('button', { name: 'Detect WAF and CDN' })).toHaveCount(0);
+
+    await header.getByRole('button', { name: 'Prove ownership', exact: true }).click();
+    const ownershipAction = page.locator('#td-ownership-panel').getByRole('button', { name: /^(Check now|Issue DNS TXT record|Issue a new record)$/ });
+    await expect(ownershipAction).toBeFocused();
+    await expect(ownershipAction).toBeInViewport();
+    await page.setViewportSize({ width: 1440, height: 950 });
 
     await page.getByRole('tab', { name: /Validate/ }).click();
-    await expect(page.locator('.td-checks')).not.toContainText('Prove ownership first');
-    await expect(page.locator('.td-checks').getByRole('button', { name: /^Review all/ })).toBeEnabled();
+    const reviewAll = page.locator('.td-checks').getByRole('button', { name: /^Review all/ });
+    await expect(reviewAll).toBeDisabled();
+    await expect(page.locator('#td-run-all-reason')).toHaveText('Prove ownership first.');
+    await expect(reviewAll).toHaveAttribute('aria-describedby', 'td-run-all-reason');
+    const startBar = page.locator('.td-start-bar');
+    await expect(startBar.getByRole('button', { name: /^Review and start/ })).toBeDisabled();
+    await expect(startBar).toContainText('Prove ownership first. External checks stay blocked until this target is verified.');
+    await startBar.getByRole('button', { name: 'Go to ownership step' }).click();
+    await expect(page.locator('#td-validate-ownership').getByRole('button', { name: /^(Check now|Issue DNS TXT record|Issue a new record)$/ })).toBeFocused();
+    await page.waitForTimeout(500);
+    expect(posts, 'an unverified target never starts a probe').toEqual([]);
+  });
+
+  test('Review all waits while a single check holds the execution slot', async ({ page }) => {
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [], count: 0, meta: {} } }));
+    await page.route('**/v1/test-runs?*', async (route) => {
+      if (new URL(route.request().url()).searchParams.get('target_id') !== VERIFIED_FRESH_TARGET) return route.fallback();
+      await route.fulfill({ json: { items: [{ id: 'run_fx_slot', target_id: VERIFIED_FRESH_TARGET, check_id: GRADED_PASS_CHECK, status: 'running', created_at: '2030-01-01T00:00:00.000Z' }], count: 1, meta: {} } });
+    });
+    await page.route('**/v1/test-runs/run_fx_slot/activity?*', (route) => route.fulfill({ json: { run_id: 'run_fx_slot', target_id: VERIFIED_FRESH_TARGET, check_id: GRADED_PASS_CHECK, status: 'running', items: [], count: 0 } }));
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const reviewAll = page.locator('.td-checks').getByRole('button', { name: /^Review all/ });
+    await expect(reviewAll).toBeDisabled();
+    await expect(page.locator('#td-run-all-reason')).toContainText('is running on this target. Wait for it to finish or stop it before starting all checks.');
+    await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
+  });
+
+  test('a completed scan leaves no stale console, and a later single check does not reopen it', async ({ page }) => {
+    let runs = [];
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [completedScan(VERIFIED_FRESH_TARGET)], count: 1, meta: {} } }));
+    await page.route('**/v1/test-runs?*', async (route) => {
+      if (new URL(route.request().url()).searchParams.get('target_id') !== VERIFIED_FRESH_TARGET) return route.fallback();
+      await route.fulfill({ json: { items: runs, count: runs.length, meta: {} } });
+    });
+    await page.route('**/v1/test-runs', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      runs = [{ id: 'run_fx_single', target_id: VERIFIED_FRESH_TARGET, check_id: 'l7.cors_posture.safe', status: 'running', created_at: '2030-01-02T00:00:00.000Z' }];
+      await route.fulfill({ status: 201, json: { run: runs[0], jobs_dispatched: 0 } });
+    });
+    await page.route('**/v1/test-runs/run_fx_single/activity?*', (route) => route.fulfill({ json: { run_id: 'run_fx_single', target_id: VERIFIED_FRESH_TARGET, check_id: 'l7.cors_posture.safe', status: 'running', items: [], count: 0 } }));
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const panel = page.locator('.td-checks');
+    await expect(panel.locator('.td-live-text')).toContainText('Last scan completed');
+    await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
+    await expect(page.locator('.td-validate .probe-activity')).toHaveCount(0);
+    await expect(page.locator('.td-start-bar')).toContainText('No check selected');
+
+    await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${VERIFIED_FRESH_TARGET}&tab=validate&check=l7.cors_posture.safe`);
+    await page.locator('.td-start-bar').getByRole('button', { name: 'Review and start', exact: true }).click();
+    const dialog = page.locator('dialog.modal-confirm[open]');
+    await expect(dialog).toContainText('Result type');
+    await expect(dialog).toContainText('What your team will see');
+    await expect(dialog).toContainText('Source addresses');
+    await dialog.getByRole('button', { name: 'Start check', exact: true }).click();
+    await expect(page).toHaveURL(/ev_run=run_fx_single/);
+    await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
+  });
+
+  test('a filtered selection starts exactly the selected checks, and category select-all stays in its category', async ({ page }) => {
+    const scanBodies = [];
+    await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [completedScan(VERIFIED_FRESH_TARGET)], count: 1, meta: {} } }));
+    await page.route('**/v1/validation-scans', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      scanBodies.push(route.request().postDataJSON());
+      await route.fulfill({ status: 201, json: { id: 'scan_fx_selected', target_id: VERIFIED_FRESH_TARGET, status: 'running', steps: [] } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    await page.getByRole('tab', { name: /Validate/ }).click();
+    const panel = page.locator('.td-checks');
+
+    const category = panel.locator('.td-cat-shell').filter({ has: page.getByRole('checkbox', { name: 'Select all in DNS' }) });
+    await category.getByRole('checkbox', { name: 'Select all in DNS' }).check();
+    const categoryIds = await category.locator('input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
+    expect(categoryIds.length).toBeGreaterThan(0);
+    const checkedIds = await panel.locator('input[name=target-run-check]:checked').evaluateAll((inputs) => inputs.map((input) => input.value));
+    expect(checkedIds.sort()).toEqual([...categoryIds].sort());
+    await expect(page.locator('.td-start-bar')).toContainText(categoryIds.length > 1 ? `${categoryIds.length} checks selected` : '1 check selected');
+    await page.locator('.td-start-bar').getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(panel.locator('input[name=target-run-check]:checked')).toHaveCount(0);
+
+    await panel.getByRole('button', { name: /^Not run/ }).click();
+    const notRunIds = await panel.locator('.td-check[data-status="not_run"] input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
+    expect(notRunIds.length).toBeGreaterThan(1);
+    await panel.getByRole('button', { name: `Select not run (${notRunIds.length})`, exact: true }).click();
+    await page.locator('.td-start-bar').getByRole('button', { name: `Review and start ${notRunIds.length}`, exact: true }).click();
+    const dialog = page.locator('dialog.modal-confirm[open]');
+    await expect(dialog).toContainText(`Start ${notRunIds.length} selected checks on`);
+    await expect(dialog).toContainText('one at a time inside your safe-run limits');
+    await expect(dialog).toContainText('What your team will see');
+    expect(scanBodies).toEqual([]);
+    await dialog.getByRole('button', { name: `Start ${notRunIds.length} checks`, exact: true }).click();
+    await expect.poll(() => scanBodies.length).toBe(1);
+    expect(scanBodies[0].target_id).toBe(VERIFIED_FRESH_TARGET);
+    expect([...scanBodies[0].check_ids].sort()).toEqual([...notRunIds].sort());
+    expect(scanBodies[0].name).toMatch(/^Selected checks · /);
+  });
+
+  test('the header shows when this target was last checked', async ({ page }) => {
+    await page.route(`**/v1/targets/${VERIFIED_FRESH_TARGET}`, async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const target = { ...payload.target, last_validation_at: null, last_validated_at: null };
+      await route.fulfill({ response, json: { ...payload, target } });
+    });
+    await page.route('**/v1/test-runs?*', async (route) => {
+      if (new URL(route.request().url()).searchParams.get('target_id') !== VERIFIED_FRESH_TARGET) return route.fallback();
+      await route.fulfill({ json: { items: [
+        { id: 'run_fx_old', target_id: VERIFIED_FRESH_TARGET, check_id: GRADED_PASS_CHECK, status: 'completed', started_at: '2030-01-01T00:00:00.000Z' },
+        { id: 'run_fx_new', target_id: VERIFIED_FRESH_TARGET, check_id: GRADED_GAP_CHECK, status: 'completed', created_at: '2031-06-01T00:00:00.000Z' },
+      ], count: 2, meta: {} } });
+    });
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': VERIFIED_FRESH_TARGET } });
+    const lastCheck = page.locator('.td-page-head .td-last-check');
+    await expect(lastCheck).toContainText('Last check');
+    await expect(lastCheck.locator('time')).toHaveAttribute('datetime', '2031-06-01T00:00:00.000Z');
+    await expect(page.getByRole('link', { name: 'Back to targets' })).toHaveAttribute('href', '#targets');
   });
 
   test('review all confirms the plan, starts one scan for the exact domain, and shows live progress', async ({ page }) => {
@@ -291,7 +425,9 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
     const catalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
-    await expect(panel).toContainText(`${catalog.items.length} checks in the full catalog`);
+    await expect(panel).toContainText(`${catalog.items.length} checks in the catalog.`);
+    await expect(panel).toContainText('runnable on this target, including observation checks');
+    await expect(panel.locator('.td-catalog-requirements summary')).toContainText('catalog checks not runnable on this target · requirements');
     await panel.locator('.td-catalog-requirements summary').click();
     await expect(panel.locator('.td-catalog-requirements')).toContainText('origin.direct_bypass.safe');
     await expect(panel.locator('.td-catalog-requirements')).toContainText('Requires SOC approval');
@@ -304,12 +440,14 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(dialog).toContainText(/Start \d+ checks on checkout\.acme\.com\?/);
     await expect(dialog).toContainText('one at a time inside your safe-run limits');
     await expect(dialog).toContainText('The server re-checks ownership');
+    await expect(dialog).toContainText("holds this target's execution slot");
+    await expect(dialog).toContainText('What your team will see');
     const acceptedResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/validation-scans');
     await dialog.getByRole('button', { name: 'Start all checks' }).click();
     const accepted = await (await acceptedResponse).json();
     await expect(page).toHaveURL(new RegExp(`ev_scan=${accepted.id}`));
     await expect(page.locator('.inspector-panel')).toContainText(accepted.id);
-    await page.locator('.inspector-panel').getByRole('button', { name: 'Close Assessment execution' }).click();
+    await page.locator('.inspector-panel').getByRole('button', { name: /^Close / }).first().click();
 
     await expect.poll(() => scanBodies.length).toBe(1);
     const body = scanBodies[0];
@@ -328,13 +466,14 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     expect(new Set(accepted.steps.map((step) => step.target_id))).toEqual(new Set([PORTAL_BASELINE_IDS.targetId]));
 
     await expect(panel.locator('.td-live-text')).toContainText(/Running 1 of \d+: WAF and CDN Fingerprint/);
-    await expect(panel.getByRole('button', { name: 'Stop run' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Stop scan' })).toBeVisible();
+    await expect(page.locator('.td-scan-terminal')).toHaveCount(1);
     await expect(panel.locator('.td-check[data-status="running"]')).toHaveCount(1);
 
-    await panel.getByRole('button', { name: 'Stop run' }).click();
+    await panel.getByRole('button', { name: 'Stop scan' }).click();
     const stop = page.locator('dialog.modal-confirm[open]');
     await stop.getByRole('button', { name: /Stop/ }).last().click();
-    await expect(page.getByText('Assessment Stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.')).toBeVisible();
+    await expect(page.getByText('Scan stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.')).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Review all/ })).toBeVisible();
   });
 });

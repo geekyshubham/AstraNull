@@ -5,9 +5,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { DataTable, type TableColumn } from '../ui/table';
 import {
   GOVERNED_HIGH_SCALE_SCENARIOS,
-  providerApprovalRequired
+  authorizationArtifactTypesForRequest,
+  governedLimitDisplay,
+  providerApprovalRequired,
+  requestDomainDisplay
 } from '../../lib/high-scale';
 import { requestJson } from '../../lib/api';
+import { apiErrorMessage } from '../../lib/error-messages';
+import { sessionHasPermission } from '../../lib/dataset-access.mjs';
 // @ts-ignore Plain ESM keeps status labels directly testable with node:test.
 import { plainCodeLabel } from '../../lib/plain-language.mjs';
 import { buildDetailHref } from '../../lib/route-params';
@@ -18,6 +23,8 @@ import { highScaleStateTone } from '../../lib/status-tone';
 // Customer-safe boundary invariants:
 // buildDetailHref('queue-detail'
 // /v1/high-scale-requests
+
+const PACK_ACTION_STATES = new Set(['submitted', 'under_review', 'soc_review']);
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -38,26 +45,17 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
   return fallback;
 }
 
-function governedLimitDisplay(item: DataItem) {
+function requestScenarioDisplay(item: DataItem) {
+  if (getString(item, ['policy_id'], '')) return 'Scheduled policy';
   const familyId = Array.isArray(item.requested_scenario_families)
     ? String(item.requested_scenario_families[0] ?? '')
     : '';
-  const scenario = GOVERNED_HIGH_SCALE_SCENARIOS.find((entry) => entry.id === familyId);
-  const limits = item.requested_limits && typeof item.requested_limits === 'object' && !Array.isArray(item.requested_limits)
-    ? item.requested_limits as DataItem
-    : {};
-  const rate = scenario && typeof limits[scenario.limit.field] === 'number'
-    ? `${limits[scenario.limit.field]} ${scenario.limit.unit}`
-    : '';
-  const duration = typeof limits.max_duration_minutes === 'number'
-    ? `${limits.max_duration_minutes} minutes`
-    : '';
-  return [rate, duration].filter(Boolean).join(' · ') || '—';
+  return GOVERNED_HIGH_SCALE_SCENARIOS.find((entry) => entry.id === familyId)?.label ?? '—';
 }
 
-function requestDomainDisplay(data: PortalData, item: DataItem) {
-  const ids = Array.isArray(item.target_ids) ? item.target_ids.map(String) : item.target_id ? [String(item.target_id)] : [];
-  return ids.length ? ids.map((id) => getString(data.targets.find((target) => getString(target, ['id'], '') === id), ['value'], 'Domain not recorded')).join(', ') : 'Domain scope not recorded';
+function errorStatus(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : 0;
 }
 
 function packBadgeTone(overall: string): 'success' | 'warn' | 'danger' | 'muted' {
@@ -73,8 +71,11 @@ function authorizationPackProgress(item: DataItem) {
   const overall = getString(status, ['overall'], 'missing');
   const requirements = Array.isArray(status.requirements) ? status.requirements as DataItem[] : [];
   const accepted = requirements.filter((requirement) => getString(requirement, ['status'], '').toLowerCase() === 'accepted').length;
+  const total = requirements.length || authorizationArtifactTypesForRequest(item).length;
   return {
     overall,
+    accepted,
+    total,
     label: requirements.length > 0 && overall.toLowerCase() !== 'accepted'
       ? `${formatNumber(accepted)}/${formatNumber(requirements.length)} accepted`
       : overall.replace(/_/g, ' '),
@@ -118,8 +119,6 @@ export type RunsSocGateProps = {
   onError: (error: string) => void;
   busy: string;
   setBusy: (value: string) => void;
-  requestFormOpen?: boolean;
-  onRequestFormOpenChange?: (open: boolean) => void;
 };
 
 export function RunsSocGatePanel({
@@ -128,7 +127,11 @@ export function RunsSocGatePanel({
   session
 }: RunsSocGateProps): ReactNode {
   const [queue, setQueue] = useState<DataItem[] | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [forbidden, setForbidden] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const isStaffPrincipal = session.principal === 'staff';
+  const canWritePack = sessionHasPermission(session, 'high_scale:write');
 
   useEffect(() => {
     let cancelled = false;
@@ -139,16 +142,24 @@ export function RunsSocGatePanel({
           ? (payload as { items: DataItem[] }).items
           : Array.isArray(payload) ? payload as DataItem[] : [];
         setQueue(items);
+        setLoadError('');
+        setForbidden(false);
       })
-      .catch(() => {
-        if (!cancelled) setQueue(null);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        if (errorStatus(error) === 403) {
+          setForbidden(true);
+          setLoadError('');
+          return;
+        }
+        setLoadError(apiErrorMessage(error, 'Validation requests could not be loaded.'));
       });
     return () => { cancelled = true; };
-  }, [config, session, data.highScale?.length]);
+  }, [config, session, data.highScale?.length, reloadKey]);
 
-  if (!queue || queue.length === 0) {
-    return null;
-  }
+  const items = queue ?? [];
+  if (forbidden) return null;
+  if (!loadError && items.length === 0) return null;
 
   const columns: TableColumn<DataItem>[] = [
     {
@@ -157,22 +168,30 @@ export function RunsSocGatePanel({
       render: (item) => {
         const requestId = getString(item, ['id'], '');
         const requestLabel = getString(item, ['objective', 'reason', 'name'], 'High-scale validation request');
-        if (!isStaffPrincipal) {
-          return <span title={requestId || undefined}>{requestLabel}</span>;
-        }
+        if (!requestId) return <span>{requestLabel}</span>;
         return (
-          <AnchorButton
-            variant="ghost"
+          <a
+            className="detail-entity-link"
             href={buildDetailHref('queue-detail', requestId)}
-            aria-label={`Open SOC workspace for request ${requestId}`}
+            title={requestId}
+            aria-label={isStaffPrincipal
+              ? `Open SOC workspace for request ${requestId}`
+              : `Open authorization pack for request ${requestLabel}`}
           >
             {requestLabel}
-          </AnchorButton>
+          </a>
         );
       }
     },
-    { key: 'policy', label: 'Policy', render: (item) => { const policy = getString(item, ['policy_id'], ''); const scenario = getString(item, ['requested_scenario_families'], 'soc_gated'); return <span title={policy || undefined}>{policy ? 'Scheduled policy' : plainCodeLabel(scenario)}</span>; } },
-    { key: 'domains', label: 'Domains', render: (item) => requestDomainDisplay(data, item) },
+    {
+      key: 'scenario',
+      label: 'Scenario',
+      render: (item) => {
+        const policy = getString(item, ['policy_id'], '');
+        return <span title={policy || undefined}>{requestScenarioDisplay(item)}</span>;
+      }
+    },
+    { key: 'domains', label: 'Domains', render: (item) => requestDomainDisplay(data, item).join(', ') },
     { key: 'limits', label: 'Governed limits', render: (item) => governedLimitDisplay(item) },
     {
       key: 'pack',
@@ -207,6 +226,36 @@ export function RunsSocGatePanel({
         const value = scheduled && scheduled !== '—' ? scheduled : start;
         return value && value !== '—' ? formatDate(value) : 'unscheduled';
       }
+    },
+    {
+      key: 'action',
+      label: 'Action',
+      render: (item) => {
+        const requestId = getString(item, ['id'], '');
+        const state = getString(item, ['state'], '').toLowerCase();
+        const pack = authorizationPackProgress(item);
+        if (isStaffPrincipal || !requestId || pack.overall.toLowerCase() === 'accepted' || !PACK_ACTION_STATES.has(state)) {
+          return <span className="muted">—</span>;
+        }
+        const progress = `${formatNumber(pack.accepted)}/${formatNumber(pack.total)}`;
+        return (
+          <span className="stack-tight runs-soc-gate-action">
+            <AnchorButton
+              size="sm"
+              variant="secondary"
+              href={buildDetailHref('queue-detail', requestId)}
+              aria-label={canWritePack
+                ? `Complete authorization pack (${progress} accepted) for request ${requestId}`
+                : `View authorization pack for request ${requestId}`}
+            >
+              {canWritePack ? `Complete pack (${progress})` : 'View pack'}
+            </AnchorButton>
+            <small className="muted">
+              {`SOC cannot approve until all ${formatNumber(pack.total)} authorization artifacts are accepted (${formatNumber(pack.accepted)} accepted).`}
+            </small>
+          </span>
+        );
+      }
     }
   ];
 
@@ -215,11 +264,18 @@ export function RunsSocGatePanel({
       <CardHeader>
         <div>
           <CardTitle>Validation requests</CardTitle>
-          <CardDescription>Submitted high-scale evaluation requests.</CardDescription>
+          <CardDescription>High-scale validation requests for your tenant. Only SOC can approve, schedule, and run them, after the authorization pack is accepted.</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="stack-tight">
-        <DataTable columns={columns} items={queue} empty={<p className="muted">No requests recorded.</p>} />
+        <DataTable
+          columns={columns}
+          items={items}
+          getRowId={(item, index) => getString(item, ['id'], String(index))}
+          loadError={loadError}
+          onRetry={() => setReloadKey((value) => value + 1)}
+          empty={<p className="muted">No requests recorded.</p>}
+        />
       </CardContent>
     </Card>
   );
@@ -227,7 +283,6 @@ export function RunsSocGatePanel({
 
 export function RunsPageHeadActions({
   onRefresh: _onRefresh,
-  onRequestSoc: _onRequestSoc,
   onStartSafeRun,
   onStartScan,
   refreshBusy: _refreshBusy,
@@ -235,7 +290,6 @@ export function RunsPageHeadActions({
   safeRunDisabled
 }: {
   onRefresh: () => void;
-  onRequestSoc?: () => void;
   onStartSafeRun: () => void;
   onStartScan?: () => void;
   refreshBusy?: boolean;
@@ -243,7 +297,7 @@ export function RunsPageHeadActions({
   safeRunDisabled?: boolean;
 }) {
   const safeRunDisabledReason = safeRunDisabled
-    ? 'Vector library launch is unavailable until a declared domain and customer-runnable bounded check are ready.'
+    ? 'Check library launch is unavailable until a declared domain and customer-runnable bounded check are ready.'
     : '';
   return (
     <>
@@ -256,7 +310,7 @@ export function RunsPageHeadActions({
         title={safeRunDisabledReason || undefined}
         aria-describedby={safeRunDisabledReason ? 'safe-run-disabled-reason' : undefined}
         onClick={onStartSafeRun}
-      >Open vector library</Button>
+      >Open check library</Button>
       {safeRunDisabledReason ? <span className="sr-only" id="safe-run-disabled-reason">{safeRunDisabledReason}</span> : null}
     </>
   );

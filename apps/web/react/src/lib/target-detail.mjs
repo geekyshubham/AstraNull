@@ -33,9 +33,12 @@ function stableValue(value) {
   return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stableValue(record[key])]));
 }
 
-/** Test eligibility is allowed for all domains. */
-export function isTargetRunEligible(_eligibility, _verificationState) {
-  return true;
+/**
+ * Fail closed: only proven ownership unlocks external checks. The reported eligibility string is
+ * not trusted, and legacy `agent_verified` stays locked (ADR-0008).
+ */
+export function isTargetRunEligible(_eligibility, verificationState) {
+  return RUN_VERIFICATION_STATES.has(normalize(verificationState));
 }
 
 /** Mirrors the current LOA service contract: DNS verification alone is not enough for signed scope. */
@@ -227,18 +230,18 @@ export function removeTargetTag(existing, value) {
  * Plain-language status for the ownership step, derived only from the target verification state
  * and any recorded DNS challenge. Never invents a state the API did not report.
  */
-export function ownershipStepStatus(verificationState, challenge) {
+export function ownershipStepStatus(verificationState, challenge, now = Date.now()) {
   const state = normalize(verificationState);
   const verified = RUN_VERIFICATION_STATES.has(state);
   if (verified) {
     return { tone: 'success', label: 'Ownership proven', done: true };
   }
   const challengeState = normalize(asRecord(challenge)?.state);
+  if (challengeState === 'expired' || (challengeState === 'pending' && !isActiveDnsChallenge(challenge, now))) {
+    return { tone: 'warn', label: 'Challenge expired — issue a new one', done: false };
+  }
   if (challengeState === 'pending') {
     return { tone: 'info', label: 'Waiting on DNS record', done: false };
-  }
-  if (challengeState === 'expired') {
-    return { tone: 'warn', label: 'Challenge expired — issue a new one', done: false };
   }
   return { tone: 'warn', label: 'Not proven yet', done: false };
 }

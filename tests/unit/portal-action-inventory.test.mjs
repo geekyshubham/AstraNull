@@ -7,7 +7,8 @@ import { buildPortalActionInventory } from '../helpers/portal-action-inventory.m
 import { NAV_ROUTE_IDS, AUDITOR_NAV_ROUTE_IDS, STAFF_NAV_ROUTE_IDS, DETAIL_ROUTE_IDS, PORTAL_DETAIL_ENTITY_IDS } from '../helpers/portal-routes.mjs';
 import { buildPortalRouteHash } from '../helpers/portal-playwright-session.mjs';
 import { ACTION_STATES, CUSTOMER_ACTION_ROLES, STAFF_ACTION_ROLES, actionStateApplicability } from '../fixtures/portal-action-coverage.mjs';
-import { buildPortalActionCoverage, reconcilePortalActionCoverage, assertAllApplicablePortalActionCells, ACTION_RECEIPT_SCHEMA, actionPermissionDecision, portalDatasetReadDimensions } from '../helpers/portal-action-coverage.mjs';
+import { buildPortalActionCoverage, reconcilePortalActionCoverage, assertAllApplicablePortalActionCells, ACTION_RECEIPT_SCHEMA, actionPermissionDecision, portalDatasetReadDimensions, unmappedPortalDatasets, API_ONLY_DATASETS } from '../helpers/portal-action-coverage.mjs';
+import { PORTAL_ROUTE_DATASETS } from '../../apps/web/react/src/lib/types.ts';
 
 let inventory;
 const getInventory = () => inventory ??= buildPortalActionInventory();
@@ -175,12 +176,14 @@ test('role, route, dataset and mutation permission dimensions are separate and u
   assert.equal(engineer.datasets.find((dataset) => dataset.dataset === 'secrets').readable, false);
   assert.equal(actionPermissionDecision({ principal: 'customer', session: {} }, 'secret:write'), true);
   assert.equal(actionPermissionDecision({ principal: 'staff', session: { principal: 'staff', staff_role: 'internal_admin' } }, 'secret:write'), false);
-  const releaseOwner = portalDatasetReadDimensions().find((dimension) => dimension.datasetId === 'releaseEvidence' && dimension.role === 'owner');
-  assert.equal(releaseOwner.readable, true);
-  assert.equal(releaseOwner.routeAllowed, false);
-  assert.equal(releaseOwner.hydrationAllowed, false);
-  const releaseAuditor = portalDatasetReadDimensions().find((dimension) => dimension.datasetId === 'releaseEvidence' && dimension.role === 'auditor');
-  assert.equal(releaseAuditor.hydrationAllowed, true);
+  assert.deepEqual([...API_ONLY_DATASETS], ['releaseEvidence', 'releaseAttestation']);
+  assert.equal(portalDatasetReadDimensions().some((dimension) => API_ONLY_DATASETS.includes(dimension.datasetId)), false);
+  assert.equal(Object.values(PORTAL_ROUTE_DATASETS).some((datasets) => datasets.some((dataset) => API_ONLY_DATASETS.includes(dataset))), false);
+  assert.deepEqual(unmappedPortalDatasets(), []);
+  assert.deepEqual(unmappedPortalDatasets([{ audit: 'audit:read', futureDataset: 'future:read' }]), ['futureDataset']);
+  assert.ok(portalDatasetReadDimensions().every((dimension) => typeof dimension.route === 'string' && dimension.route.length > 0));
+  const auditOwner = portalDatasetReadDimensions().find((dimension) => dimension.datasetId === 'audit' && dimension.role === 'owner');
+  assert.equal(auditOwner.hydrationAllowed, true);
   assert.deepEqual(new Set(coverage.cells.map((cell) => cell.state)), new Set(ACTION_STATES));
 });
 

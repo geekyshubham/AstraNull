@@ -25,7 +25,6 @@ SELECT
 FROM targets t
 WHERE (
   t.tenant_id = 'ten_demo'
-  OR t.tenant_id = 'Astra-D1TrtI4HMTSrwKRW-9'
   OR t.tenant_id LIKE 'Astra-%'
   OR t.tenant_id ILIKE '%demo%'
 )
@@ -42,7 +41,6 @@ UPDATE target_groups tg
 SET ownership_status = 'user_confirmed'
 WHERE (
   tg.tenant_id = 'ten_demo'
-  OR tg.tenant_id = 'Astra-D1TrtI4HMTSrwKRW-9'
   OR tg.tenant_id LIKE 'Astra-%'
   OR tg.tenant_id ILIKE '%demo%'
 )

@@ -115,12 +115,15 @@ describe('one customer presentation', () => {
     const router = read('apps/web/react/src/pages/router.tsx');
     assert.match(router, /route === 'findings'[\s\S]*<FindingsPage/);
     for (const path of [
-      'apps/web/react/src/pages/refined/findings-refined.tsx',
       'apps/web/react/src/pages/refined/finding-group-detail.tsx',
       'apps/web/react/src/pages/target-detail-view.tsx',
     ]) {
       assert.doesNotMatch(read(path), /VariantSwitch|DesignVariantSwitch|useDesignVariant/, path);
     }
+    const refined = read('apps/web/react/src/pages/refined/findings-refined.tsx');
+    assert.doesNotMatch(refined, /useDesignVariant|DesignVariantSwitch/);
+    assert.match(refined, /props\.showVariantSwitch && props\.variant && props\.onVariantChange \? <VariantSwitch/);
+    assert.match(refined, /showVariantSwitch=\{false\}/);
   });
 
   it('mounts the inspector host only inside the authenticated shell', () => {
@@ -134,7 +137,8 @@ describe('one customer presentation', () => {
     assert.doesNotMatch(group, /Open lead finding for full evidence/);
     assert.match(group, /entry: 'group_member'/);
     const detail = read('apps/web/react/src/pages/finding-detail-view.tsx');
-    assert.doesNotMatch(detail, /buildDetailHref\('run-detail'/);
+    assert.doesNotMatch(detail, /window\.location\.hash = .*run-detail/);
+    assert.match(detail, /className="detail-entity-link mono" href=\{buildDetailHref\('run-detail', originalRunId\)\}/);
     assert.doesNotMatch(detail, /evidenceIds\[0\]/);
     assert.match(detail, /Review this retest/);
   });

@@ -62,7 +62,7 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     const emptyTitle = 'No targets declared yet';
     const emptyState = page.getByRole('region', { name: emptyTitle });
     await expect(emptyState.getByRole('heading', { name: emptyTitle })).toBeVisible();
-    await expect(emptyState).toContainText('Declare a domain or endpoint here.');
+    await expect(emptyState).toContainText('Declare your first hostname, IP or URL.');
     await expect(page.getByRole('link', { name: 'Target groups', exact: true })).toHaveCount(0);
   });
 

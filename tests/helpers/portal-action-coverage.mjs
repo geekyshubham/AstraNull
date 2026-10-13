@@ -33,12 +33,20 @@ export function portalRoleDimensions(inventory = buildPortalActionInventory()) {
   })));
 }
 
-export const DATASET_ACTION_ROUTES = Object.freeze({ audit: 'audit', releaseEvidence: 'release-evidence', releaseAttestation: 'release-evidence', notifications: 'notifications', connectors: 'integrations', secrets: 'settings', serviceAccounts: 'settings', internalOverview: 'admin', internalSignupRequests: 'admin', internalTenants: 'admin', internalApprovalRequests: 'admin', internalAudit: 'admin' });
+export const DATASET_ACTION_ROUTES = Object.freeze({ audit: 'audit', notifications: 'notifications', connectors: 'integrations', secrets: 'settings', serviceAccounts: 'settings', internalOverview: 'admin', internalSignupRequests: 'admin', internalTenants: 'admin', internalApprovalRequests: 'admin', internalAudit: 'admin' });
+// Readable over the API but with no portal caller route (docs/ux/14 §3.1); listed explicitly so new datasets cannot be skipped silently.
+export const API_ONLY_DATASETS = Object.freeze(['releaseEvidence', 'releaseAttestation']);
+export function unmappedPortalDatasets(permissionMaps = [CUSTOMER_DATASET_PERMISSIONS, STAFF_DATASET_PERMISSIONS]) {
+  return [...new Set(permissionMaps.flatMap((permissions) => Object.keys(permissions)))]
+    .filter((datasetId) => !DATASET_ACTION_ROUTES[datasetId] && !API_ONLY_DATASETS.includes(datasetId));
+}
 export function portalDatasetReadDimensions() {
+  const unmapped = unmappedPortalDatasets();
+  if (unmapped.length) throw new Error(`Dataset permissions without a DATASET_ACTION_ROUTES caller route or API_ONLY_DATASETS entry: ${unmapped.join(', ')}`);
   return [
     ...CUSTOMER_ACTION_ROLES.map((role) => ({ principal: 'customer', role, session: { role }, permissions: CUSTOMER_DATASET_PERMISSIONS })),
     ...STAFF_ACTION_ROLES.map((role) => ({ principal: 'staff', role, session: { principal: 'staff', staff_role: role }, permissions: STAFF_DATASET_PERMISSIONS }))
-  ].flatMap((identity) => Object.entries(identity.permissions).map(([datasetId, permission]) => {
+  ].flatMap((identity) => Object.entries(identity.permissions).filter(([datasetId]) => !API_ONLY_DATASETS.includes(datasetId)).map(([datasetId, permission]) => {
     const route = DATASET_ACTION_ROUTES[datasetId];
     const readable = canReadDataset(identity.session, datasetId);
     const routeAllowed = canAccessRoute(identity.principal === 'customer' ? identity.role : undefined, route, { principal: identity.principal, staffRole: identity.principal === 'staff' ? identity.role : undefined });

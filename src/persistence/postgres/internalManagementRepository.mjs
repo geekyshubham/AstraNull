@@ -367,14 +367,17 @@ export function createInternalManagementRepository(pool) {
       return mapSignup(rows[0]);
     },
 
-    async findActiveSignupByDomainOrOrg(emailDomain, organizationName) {
+    async findActiveSignupByContactOrDomain(contactEmail, emailDomain) {
       const { rows } = await pool.query(
         `SELECT * FROM signup_requests
          WHERE state <> 'rejected'
-           AND (email_domain = $1 OR lower(organization_name) = lower($2))
+           AND (
+             lower(contact_email) = lower($1)
+             OR (email_domain = lower($2) AND state IN ('submitted', 'under_review'))
+           )
          ORDER BY created_at DESC
          LIMIT 1`,
-        [emailDomain, organizationName],
+        [contactEmail, emailDomain],
       );
       return mapSignup(rows[0] ?? null);
     },

@@ -79,8 +79,8 @@ test.describe('current release: dashboard beside the docked inspector', () => {
         await page.keyboard.press('Enter');
         const docked = page.locator('aside.inspector-panel[data-mode="docked"]');
         await expect(docked).toBeVisible();
-        // The baseline finding cites no evidence reference; that stays visible as "not recorded".
-        await expect(docked).toContainText('Supporting evidence not recorded for this result');
+        // The baseline finding cites no evidence reference; its run's artifact is listed but never presented as cited proof.
+        await expect(docked).toContainText('Supporting evidence not cited by this finding');
 
         const beside = await measure(page);
         const dockBox = await docked.boundingBox();

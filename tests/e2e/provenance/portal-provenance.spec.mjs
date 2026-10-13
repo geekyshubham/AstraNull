@@ -282,4 +282,36 @@ test.describe('portal dynamic provenance', () => {
     await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.baselineRequestId}"]`)).toBeVisible();
     await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.addedRequestId}"]`)).toBeVisible();
   });
+
+  test('FT-PROV-dyn-08 customer owner opens their own high-scale request from runs and reaches the authorization pack', async ({ page }) => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceSocQueueExpanded });
+    const baseUrl = getPortalPlaywrightBaseUrl();
+    const socCalls = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/internal/soc')) socCalls.push(request.url());
+    });
+
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'runs', baseUrl);
+
+    const queueTable = page.locator('.runs-soc-gate table');
+    const row = queueTable.locator('tbody tr').filter({ hasText: PROVENANCE_SOC_QUEUE.addedObjective });
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    await expect(row).toContainText(/Complete pack \(0\/\d+\)/);
+    await expect(row).toContainText(/SOC cannot approve until all \d+ authorization artifacts are accepted \(0 accepted\)\./);
+    await expect(queueTable.locator('thead th')).toContainText(['Request', 'Scenario', 'Domains']);
+    await expect(queueTable).not.toContainText('soc_gated');
+
+    await row.getByRole('link', { name: `Open authorization pack for request ${PROVENANCE_SOC_QUEUE.addedObjective}`, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`#queue-detail\\?id=${PROVENANCE_SOC_QUEUE.addedRequestId}`));
+    await expect(page.getByRole('button', { name: 'Complete authorization pack', exact: true })).toBeVisible({ timeout: 20_000 });
+
+    await gotoPortalRoute(page, 'runs', baseUrl);
+    const scheduledRow = queueTable.locator('tbody tr').filter({ has: page.locator(`[title="${PROVENANCE_SOC_QUEUE.baselineRequestId}"]`) });
+    await expect(scheduledRow.getByRole('link', { name: /^Open authorization pack for request / })).toHaveAttribute(
+      'href',
+      new RegExp(`#queue-detail\\?id=${PROVENANCE_SOC_QUEUE.baselineRequestId}$`),
+    );
+    expect(socCalls).toEqual([]);
+  });
 });

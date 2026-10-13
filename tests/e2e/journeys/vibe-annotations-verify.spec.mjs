@@ -23,6 +23,11 @@ test.describe('Vibe annotations verification', () => {
   test('1. password reveal toggle is centered inside input right edge', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await clearPortalSession(page);
+    // Password setup renders only where password login is enabled; the dev server signs in by headers.
+    await page.route('**/v1/public/site-config', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), password_login_enabled: true } });
+    });
     await gotoPublicPortalRoute(page, '/set-password', baseUrl);
 
     const toggle = page.locator('.auth-password-toggle').first();
@@ -103,8 +108,9 @@ test.describe('Vibe annotations verification', () => {
       const crumbs = page.locator('#portal-main').getByRole('navigation', { name: 'Breadcrumb' });
       await expect(crumbs).toHaveText('Scope›Target detail');
       await expect(crumbs.locator('[aria-current="page"]')).toHaveText('Target detail');
-      await expect(page.locator('#portal-main a.td-back')).toHaveAttribute('href', '#targets');
-      await expect(page.locator('#portal-main a.td-back')).toHaveText('Targets');
+      const back = page.locator('#portal-main').getByRole('link', { name: 'Back to targets', exact: true });
+      await expect(back).toHaveAttribute('href', '#targets');
+      await expect(page.locator('#portal-main a.td-back')).toHaveCount(0);
       const cluster = page.locator('.td-title-cluster');
       await expect(cluster.getByRole('heading', { level: 1, name: 'checkout.acme.com' })).toBeVisible();
       await expect(cluster).toContainText('Validation unlocked');

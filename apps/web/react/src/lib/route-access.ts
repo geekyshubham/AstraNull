@@ -24,12 +24,10 @@ const ROUTE_PERMISSION: Partial<Record<RouteId, string>> = {
   'release-evidence': 'release_evidence:read',
 };
 
-/**
- * Routes narrowed below their backend permission (docs/ux/14 §3.1 deleted the
- * customer-facing release-evidence surface; auditor keeps the landing page).
- */
+/** Routes narrowed below their backend permission; an empty list closes the route to every customer role. */
 const ROUTE_CUSTOMER_ROLES: Partial<Record<RouteId, readonly string[]>> = {
-  'release-evidence': ['auditor'],
+  // Customer surface deleted (docs/ux/14 §3.1); auditor read is API-only via release_evidence:read.
+  'release-evidence': [],
 };
 
 const STAFF_ONLY_ROUTES = new Set<RouteId>(['admin', 'tenant-detail']);

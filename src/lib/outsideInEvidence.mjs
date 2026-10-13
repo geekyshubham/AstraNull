@@ -118,10 +118,10 @@ export function scrubVerdictForCustomer(verdict) {
 }
 
 /**
- * Scrub a finding record projected into a customer-facing GET/list/export payload. `notes` and
- * `remediation_template` are the only free-text prose fields that can carry pre-ADR-0008
- * agent/placement wording (findings seed `notes` from a verdict explanation). Returns a shallow
- * copy; the stored record is untouched. Enum/identifier fields (severity, status, check_id, …)
+ * Scrub a finding record projected into a customer-facing GET/list/export payload. `notes`,
+ * `system_summary` and `remediation_template` are the free-text prose fields that can carry
+ * pre-ADR-0008 agent/placement wording (`system_summary` and legacy `notes` hold verdict text).
+ * Returns a shallow copy; the stored record is untouched. Enum/identifier fields (severity, status, check_id, …)
  * are API contracts and are preserved verbatim.
  *
  * @template {Record<string, unknown>} T
@@ -133,6 +133,9 @@ export function scrubFindingForCustomer(finding) {
   const out = { ...finding };
   if (typeof out.notes === 'string') {
     out.notes = scrubAgentPlacementText(out.notes);
+  }
+  if (typeof out.system_summary === 'string') {
+    out.system_summary = scrubAgentPlacementText(out.system_summary);
   }
   if (typeof out.remediation_template === 'string') {
     out.remediation_template = scrubAgentPlacementText(out.remediation_template);

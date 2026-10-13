@@ -59,7 +59,7 @@ Important: implementation agents must verify exact provider API endpoints and pe
 |---|---|
 | `provider` | cloudflare, akamai, aws, azure, gcp, etc. |
 | `snapshot_kind` | waf_policy, cdn_property, dns_zone, cloud_asset, vulnerability. |
-| `resource_ref_hash` | Hash of provider resource id. |
+| `resource_ref_hash` | Hash of provider resource id. Optional on manual snapshots: when omitted the server derives it from the provider and `display_ref`. |
 | `display_ref` | Safe display name. |
 | `hostnames` | Approved/safe hostnames only. |
 | `policy_mode` | block/prevention, monitor/detect/count, disabled, unknown. |
@@ -68,7 +68,7 @@ Important: implementation agents must verify exact provider API endpoints and pe
 | `last_rule_update_at` | Timestamp if available. |
 | `rate_limit_summary` | Threshold summary, redacted. |
 | `origin_protection_summary` | mTLS/authenticated pull/private origin/ACL summary. |
-| `config_hash` | Hash of normalized summary. |
+| `config_hash` | Hash of normalized summary. Optional on manual snapshots: when omitted the server computes it from the normalized summary, so a client never has to hash anything itself. |
 | `tags` | Safe owner/business tags. |
 
 ## Connector health

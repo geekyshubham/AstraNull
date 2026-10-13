@@ -6,6 +6,7 @@ type ReadinessGaugeProps = {
   score: number;
   label?: string;
   showBand?: boolean;
+  muted?: boolean;
 };
 
 const GAUGE_TRACK_STROKE = 'color-mix(in oklab, var(--fg), transparent 91%)';
@@ -18,14 +19,14 @@ const GAUGE_FILL_STROKE = {
 
 const GAUGE_RADIUS = 52;
 
-export function ReadinessGauge({ score, label = 'Readiness', showBand = true }: ReadinessGaugeProps) {
+export function ReadinessGauge({ score, label = 'Readiness', showBand = true, muted = false }: ReadinessGaugeProps) {
   const normalized = clamp(score);
   // One tween drives both the arc sweep and the numeral, so they can never
   // disagree mid-flight.
   const { dash, offset, value: swept } = useAnimatedArc({ percent: normalized, radius: GAUGE_RADIUS });
   const rounded = Math.round(normalized);
   const tone = scoreTone(normalized);
-  const gaugeLabel = `${label} score ${rounded} out of 100`;
+  const gaugeLabel = `${label} score ${rounded} out of 100${muted ? ', basis not recorded' : ''}`;
 
   return (
     <div className="readiness-gauge">
@@ -33,11 +34,11 @@ export function ReadinessGauge({ score, label = 'Readiness', showBand = true }: 
         <title>{gaugeLabel}</title>
         <circle className="gauge-track" cx="70" cy="70" r={GAUGE_RADIUS} stroke={GAUGE_TRACK_STROKE} />
         <circle
-          className={`gauge-fill gauge-fill-animate gauge-fill-${tone}`}
+          className={`gauge-fill gauge-fill-animate gauge-fill-${muted ? 'neutral' : tone}`}
           cx="70"
           cy="70"
           r={GAUGE_RADIUS}
-          stroke={GAUGE_FILL_STROKE[tone]}
+          stroke={muted ? 'var(--muted)' : GAUGE_FILL_STROKE[tone]}
           strokeDasharray={dash}
           strokeDashoffset={offset}
         />
@@ -49,7 +50,7 @@ export function ReadinessGauge({ score, label = 'Readiness', showBand = true }: 
           {label}
         </text>
       </svg>
-      {showBand ? <Badge tone={tone}>{normalized >= 80 ? 'Ready' : normalized >= 55 ? 'Needs work' : 'At risk'}</Badge> : null}
+      {showBand && !muted ? <Badge tone={tone}>{normalized >= 80 ? 'Ready' : normalized >= 55 ? 'Needs work' : 'At risk'}</Badge> : null}
     </div>
   );
 }

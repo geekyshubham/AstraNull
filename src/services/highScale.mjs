@@ -319,10 +319,13 @@ export function reviewArtifact(ctx, requestId, artifactId, body) {
   if (!req) return null;
   const art = (req.artifacts ?? []).find((a) => a.id === artifactId);
   if (!art) return { error: 'not_found', status: 404 };
-  art.status = body.status === 'accepted' ? 'accepted' : 'rejected';
+  const status = body?.status === 'accepted' ? 'accepted' : 'rejected';
+  const notes = typeof body?.notes === 'string' ? redactString(body.notes.trim()) : '';
+  if (status === 'rejected' && !notes) return { error: 'review_notes_required', status: 400 };
+  art.status = status;
   art.reviewed_at = new Date().toISOString();
   art.reviewed_by = ctx.userId;
-  art.review_notes = body.notes ?? null;
+  art.review_notes = notes || null;
   if (art.type === 'provider_approval') {
     syncChecklistFromProviderArtifactReview(req, art);
   }
@@ -334,7 +337,7 @@ export function reviewArtifact(ctx, requestId, artifactId, body) {
     action: 'high_scale.artifact_reviewed',
     resource_type: 'high_scale_artifact',
     resource_id: artifactId,
-    metadata: { status: art.status, request_id: requestId },
+    metadata: { status: art.status, request_id: requestId, notes: art.review_notes },
   });
   persistStore();
   return art;

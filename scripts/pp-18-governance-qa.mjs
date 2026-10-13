@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PAGE QA PP-18 — /notifications, /audit, /release-evidence (governance-pages)
+ * PAGE QA PP-18 — /notifications, /audit (governance-pages); release evidence is API-only for auditors
  * L1 data fidelity, L2 backend actions + RBAC, L3 browser matrix + nav gates.
  */
 import { canAccessRoute } from '../apps/web/react/src/lib/route-access.mjs';
@@ -175,8 +175,8 @@ async function runL2(fixture) {
   else fail('l2', 'nav: viewer should not access audit route');
   if (!canAccessRoute('auditor', 'audit')) fail('l2', 'nav: auditor should access audit');
   else note('l2', 'nav: auditor allowed audit');
-  if (!canAccessRoute('auditor', 'release-evidence')) fail('l2', 'nav: auditor should access release-evidence');
-  else note('l2', 'nav: auditor allowed release-evidence');
+  if (canAccessRoute('auditor', 'release-evidence')) fail('l2', 'nav: release-evidence must not be a customer route (API-only auditor read)');
+  else note('l2', 'nav: release-evidence closed to every customer role; auditor read stays API-only');
 
   const created = await api('POST', '/v1/notifications', {
     channel: 'webhook',
@@ -332,20 +332,8 @@ async function runL3() {
         fail('l1', `${viewport.name}: audit table missing action ${sampleAction}`);
       }
 
-      await page.goto(`${BASE_URL}/app#release-evidence`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForTimeout(1500);
-      bodyText = await page.locator('body').innerText();
-      for (const snippet of ['Gap ledger', 'Release evidence inventory', 'Attestation snapshot', 'Production ready']) {
-        if (!bodyIncludesSnippet(bodyText, snippet)) {
-          fail('l3', `${viewport.name} /release-evidence: missing "${snippet}"`);
-        }
-      }
-      if (fixture.attestationBody?.signoff_status && !bodyText.includes(fixture.attestationBody.signoff_status)) {
-        fail('l1', `${viewport.name}: attestation signoff_status missing (${fixture.attestationBody.signoff_status})`);
-      }
-
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
-      if (overflow) fail('l3', `${viewport.name}: horizontal overflow on release-evidence`);
+      if (overflow) fail('l3', `${viewport.name}: horizontal overflow on audit`);
 
       if (consoleErrors.filter((e) => !/favicon/i.test(e)).length) {
         fail('l3', `${viewport.name}: console errors ${consoleErrors.join('; ')}`);

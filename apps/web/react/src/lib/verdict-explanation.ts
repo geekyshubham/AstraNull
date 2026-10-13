@@ -1,7 +1,7 @@
 import { originObservation, originObservationLabel } from './origin-observation.mjs';
 import type { DataItem } from './types';
 // @ts-ignore Plain ESM keeps terminology directly testable with node:test.
-import { plainVerdictLabel } from './plain-language.mjs';
+import { plainVerdictDescription, plainVerdictLabel } from './plain-language.mjs';
 
 export type VerdictExplanationField = { label: string; value: string };
 
@@ -178,8 +178,24 @@ export function trafficHopState(hop: string, verdict?: string) {
   return 'warn';
 }
 
-export const TRUTH_TABLE_ROWS: Array<{ key: string; description: string }> = [
-  { key: 'protected', description: 'Blocked before origin by external probe evidence.' },
-  { key: 'bypassable', description: 'Edge did not stop traffic; the external probe reached the origin.' },
-  { key: 'penetrated', description: 'Protection failed; unwanted reach confirmed by external probe evidence.' },
+export type TruthTableRow = { key: string; description: string; recorded?: boolean };
+
+/** The verdicts the external-only correlation engine (src/services/correlation.mjs) emits. */
+export const TRUTH_TABLE_ROWS: ReadonlyArray<TruthTableRow> = [
+  { key: 'edge_protected', description: 'The direct-origin request received the customer-declared lockdown response while the permitted path was healthy.' },
+  { key: 'protected', description: 'The external probe observed the expected control response, such as a block or a sound TLS profile, for the tested host and path.' },
+  { key: 'allowed_as_expected', description: 'The external probe observed only the declared, expected service, such as web ports 80 and 443.' },
+  { key: 'edge_exposed', description: 'An external probe reached the origin service directly, bypassing the declared edge.' },
+  { key: 'exposed', description: 'The external probe observed a gap, such as a reachable service or a weak profile, that the check expects to be closed.' },
+  { key: 'inconclusive', description: 'The external probe evidence was missing, ambiguous, or not attributable to a control, so no outcome is claimed.' },
 ];
+
+/** Truth-table rows plus a row for a recorded verdict the table does not list. */
+export function truthTableRows(current: string): TruthTableRow[] {
+  const key = current.trim().toLowerCase();
+  const rows = [...TRUTH_TABLE_ROWS];
+  if (key && !rows.some((row) => row.key === key)) {
+    rows.push({ key, description: plainVerdictDescription(key) || 'Recorded verdict', recorded: true });
+  }
+  return rows;
+}

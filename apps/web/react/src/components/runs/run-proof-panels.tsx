@@ -3,21 +3,13 @@ import {
   buildVerdictExplanationFields,
   isSignedProbeEvidenceEvent,
   normalizeVerdictKey,
-  TRUTH_TABLE_ROWS,
+  truthTableRows,
 } from '../../lib/verdict-explanation';
 // @ts-ignore Plain ESM keeps terminology directly testable with node:test.
-import { plainCodeLabel, plainVerdictLabel } from '../../lib/plain-language.mjs';
+import { plainCodeLabel, plainVerdictLabel, plainVerdictShortLabel } from '../../lib/plain-language.mjs';
 import { formatDate } from '../../lib/utils';
 import { useScrollEdges } from '../../lib/scroll-edges';
 import './runs-components.css';
-
-const VERDICT_TRUTH_ROWS = [
-  ...TRUTH_TABLE_ROWS,
-  {
-    key: 'inconclusive',
-    description: 'Missing or partial correlation cannot establish Protected or a confirmed reach verdict.',
-  },
-];
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -158,14 +150,14 @@ export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
               </tr>
             </thead>
             <tbody>
-              {VERDICT_TRUTH_ROWS.map((row) => {
+              {truthTableRows(current).map((row) => {
                 const isCurrent = current === row.key;
                 return (
                   <tr key={row.key} className={isCurrent ? 'truth-row truth-row--active' : 'truth-row'} aria-current={isCurrent ? 'true' : undefined}>
                     <td>
-                      <span className={`truth-outcome truth-outcome--${row.key}`}>{plainVerdictLabel(row.key)}</span>
-                      <code className="truth-key">{row.key}</code>
-                      {isCurrent ? <span className="muted text-xs"> · current</span> : null}
+                      <span className={`truth-outcome truth-outcome--${row.key}`} title={`Recorded verdict code: ${row.key}`}>{plainVerdictShortLabel(row.key)}</span>
+                      <span className="muted text-xs"> · {plainVerdictLabel(row.key)}</span>
+                      {isCurrent ? <span className="muted text-xs"> · {row.recorded ? 'recorded for this run' : 'current'}</span> : null}
                     </td>
                     <td>{row.description}</td>
                   </tr>

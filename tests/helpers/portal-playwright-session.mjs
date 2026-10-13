@@ -11,7 +11,7 @@ export const PORTAL_SESSION = Object.freeze({
   role: 'owner',
 });
 
-/** Release evidence is narrowed to the auditor role in `route-access.ts`. */
+/** Customer auditor session. */
 export const PORTAL_AUDITOR_SESSION = Object.freeze({
   mode: 'dev-headers',
   principal: 'customer',

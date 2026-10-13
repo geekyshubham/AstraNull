@@ -142,6 +142,51 @@ export function searchAndFilterVectors(vectors, options = {}) {
   });
 }
 
+const TARGET_FIT_ORDER = Object.freeze(['safe_runnable', 'additional_input', 'target_not_supported', 'monitor_only', 'soc_gated']);
+
+export function sortVectorsByTargetFit(vectors, checks, target) {
+  const rows = Array.isArray(vectors) ? [...vectors] : [];
+  if (!target) return rows;
+  const catalog = Array.isArray(checks) ? checks : [];
+  const rank = (vector) => {
+    const index = TARGET_FIT_ORDER.indexOf(vectorTargetAvailability(vector, catalog, target).id);
+    return index < 0 ? TARGET_FIT_ORDER.length : index;
+  };
+  return rows
+    .map((vector, index) => ({ vector, index, rank: rank(vector) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.vector);
+}
+
+export function countCompatibleSafeChecks(pairs, checks) {
+  const catalog = new Map((Array.isArray(checks) ? checks : []).map((check) => [text(check?.check_id), check]));
+  const safeIds = new Set();
+  for (const pair of Array.isArray(pairs) ? pairs : []) {
+    const checkId = text(pair?.check_id);
+    if (!checkId) continue;
+    const safetyClass = text(pair?.catalog?.safety_class) || text(catalog.get(checkId)?.safety_class);
+    if (safetyClass === 'safe') safeIds.add(checkId);
+  }
+  return safeIds.size;
+}
+
+export function latestRunForCheckOnTarget(runs, checkId, targetId) {
+  const wantedCheck = text(checkId);
+  const wantedTarget = text(targetId);
+  if (!wantedCheck || !wantedTarget) return null;
+  let latest = null;
+  let latestAt = -Infinity;
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (text(run?.check_id) !== wantedCheck || text(run?.target_id) !== wantedTarget) continue;
+    const at = Date.parse(text(run.started_at ?? run.created_at)) || 0;
+    if (!latest || at > latestAt) {
+      latest = run;
+      latestAt = at;
+    }
+  }
+  return latest;
+}
+
 export function preferredRunnableCheck(vector, availability) {
   const semanticIds = new Set(values(vector?.semantic_safe_check_ids));
   return availability?.runnableChecks?.find((check) => semanticIds.has(text(check.check_id))) ?? null;

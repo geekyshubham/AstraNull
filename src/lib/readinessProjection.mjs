@@ -48,29 +48,60 @@ export function verifiedVerdicts({ tenantId, runs = [], verdicts = [], events = 
   return byRun;
 }
 
+const MAX_GATE_LABEL_LENGTH = 80;
+
+function requestLabel(request) {
+  const text = String(request?.objective ?? request?.reason ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > MAX_GATE_LABEL_LENGTH ? `${text.slice(0, MAX_GATE_LABEL_LENGTH - 1).trimEnd()}…` : text;
+}
+
+function namedRequest(label) {
+  return label ? `High-scale request "${label}"` : 'A high-scale request';
+}
+
+function pendingGateSummary(pending) {
+  if (!pending.length) return '';
+  const artifactCount = pending.reduce((sum, gate) => sum + gate.missing_artifacts.length, 0);
+  const artifactText = `${artifactCount} missing accepted ${plural(artifactCount, 'artifact')}`;
+  if (pending.length === 1) {
+    const [gate] = pending;
+    const parts = [gate.missing_artifacts.length ? artifactText : gate.pack_complete ? '' : 'authorization artifact validity or scope incomplete', `SOC approvals ${gate.approvals}/2`].filter(Boolean);
+    return `Pending gates remain on ${gate.named ? `high-scale request "${gate.label}"` : '1 high-scale request'}: ${parts.join(', ')}.`;
+  }
+  const awaitingApproval = pending.filter((gate) => gate.approvals < 2).length;
+  const incompletePacks = pending.filter((gate) => !gate.pack_complete).length;
+  const parts = [artifactCount ? artifactText : '', incompletePacks && !artifactCount ? `${incompletePacks} authorization ${plural(incompletePacks, 'pack')} incomplete` : '', awaitingApproval ? `${awaitingApproval} awaiting SOC approvals (2 required)` : ''].filter(Boolean);
+  return `Pending gates remain on ${pending.length} high-scale requests: ${parts.join(', ')}.`;
+}
+
 export function governancePosture({ tenantId, requests = [], killSwitch = null, auditEntries = [], nowMs = Date.now() }) {
   const scoped = rows(requests).filter((row) => sameTenant(row, tenantId) && (row.created_at == null || available(row, nowMs)));
-  const pending = [];
+  const gates = [];
   const evidence = [];
   const killAt = ts(killSwitch?.updated_at);
   if (killSwitch?.tenant_id === tenantId && killAt != null && killAt <= nowMs || rows(auditEntries).some((entry) => sameTenant(entry, tenantId) && ['soc.kill_switch.activated', 'soc.kill_switch.cleared'].includes(entry.action) && available(entry, nowMs, entry.timestamp))) evidence.push('Kill switch state recorded for tenant.');
   for (const request of scoped) {
     const approvals = distinctSocApprovalCount(request);
     const complete = authorizationPackComplete(request, nowMs);
-    if (complete && approvals >= 2) evidence.push(`Request ${request.id}: authorization pack accepted with ${approvals} SOC approvers.`);
-    if (['scheduled', 'running', 'stopped', 'closed'].includes(request.state) && rows(request.audit_trail).length) evidence.push(`Request ${request.id}: governed lifecycle recorded.`);
+    const label = requestLabel(request);
+    if (complete && approvals >= 2) evidence.push(`${namedRequest(label)}: authorization pack accepted with ${approvals} SOC approvers.`);
+    if (['scheduled', 'running', 'stopped', 'closed'].includes(request.state) && rows(request.audit_trail).length) evidence.push(`${namedRequest(label)}: governed lifecycle recorded.`);
     if (!['closed', 'rejected'].includes(request.state)) {
       const missing = [];
+      let missingArtifacts = [];
       if (!complete) {
         const accepted = new Set(rows(request.artifacts).filter((a) => a.status === 'accepted').map((a) => a.type));
-        const types = REQUIRED_ARTIFACT_TYPES.filter((type) => !accepted.has(type));
-        missing.push(types.length ? `missing accepted artifacts: ${types.join(', ')}` : 'authorization artifact validity or scope incomplete');
+        missingArtifacts = REQUIRED_ARTIFACT_TYPES.filter((type) => !accepted.has(type));
+        missing.push(missingArtifacts.length ? `${missingArtifacts.length} missing accepted ${plural(missingArtifacts.length, 'artifact')}` : 'authorization artifact validity or scope incomplete');
       }
       if (approvals < 2) missing.push(`SOC approvals ${approvals}/2`);
-      if (missing.length) pending.push({ requestId: request.id, state: request.state, missing });
+      if (missing.length) gates.push({ requestId: request.id, state: request.state, label: label || 'High-scale request', named: Boolean(label), pack_complete: complete, missing, missing_artifacts: missingArtifacts, approvals });
     }
   }
-  return { status: evidence.length ? 'recorded' : 'not_recorded', protection_credit: 0, detail: `${evidence.join(' ') || 'No high-scale governance evidence recorded yet.'}${pending.length ? ` Pending gates remain: ${pending.map((gate) => `${gate.requestId}: ${gate.missing.join('; ')}`).join(' | ')}.` : ''}`, pending_gates: pending };
+  const pending = gates.map(({ named: _named, ...gate }) => gate);
+  const summary = pendingGateSummary(gates);
+  return { status: evidence.length ? 'recorded' : 'not_recorded', protection_credit: 0, detail: `${evidence.join(' ') || 'No high-scale governance evidence recorded yet.'}${summary ? ` ${summary}` : ''}`, pending_gates: pending };
 }
 
 function active(row) {
@@ -157,7 +188,7 @@ export function projectReadiness(input = {}) {
       { key: 'evidence_freshness', label: 'Immutable evidence freshness', weight: 0, score: 0, detail: `${COVERAGE_FRESHNESS_POLICY.max_age_ms / 86400000}-day observation expiry; ${coverage.stale_count} stale ${plural(coverage.stale_count, 'pair')}. Metadata refresh never renews evidence.` },
       { key: 'soc_readiness', label: 'SOC governance (separate)', weight: 0, score: 0, detail: governance.detail },
     ],
-    posture: { pass: passed, gap: coverage.gap_count, review: coverage.applicable_count - passed - coverage.gap_count, total: coverage.applicable_count },
+    posture: { pass: passed, gap: coverage.gap_count, not_run: coverage.not_run_count, review: coverage.applicable_count - passed - coverage.gap_count - coverage.not_run_count, total: coverage.applicable_count },
     coverage: { ...coverage, observation_only_count: pairs.reduce((count, pair) => count + (pair.exclusion_reason === 'observation_only' ? weightOf(pair) : 0), 0), unit: 'target_check_pair', target_count: targets.length, observed_target_count: new Set(pairs.filter((pair) => pair.state === 'conclusive').map((pair) => pair.target_id)).size, shared_mechanism_count: new Set(pairs.filter((pair) => pair.state !== 'excluded').map((pair) => pair.mechanism)).size, mechanism_coverage_claim: 'reused_profiles_not_independent_defenses', freshness_policy: COVERAGE_FRESHNESS_POLICY },
     findings: { unresolved_count: unresolvedCount, severity_counts: severityCounts, severity_penalty: severityPenalty },
     governance,

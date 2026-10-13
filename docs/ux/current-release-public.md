@@ -50,6 +50,7 @@ Dials: landing 5/4/4 (variance/motion/density), access tasks 3/3/5.
   `parseFindingGroupReturnKey` accepts exactly the canonical `findingGroupKey` shape: two URI-encoded parts joined by `|`. Each part must decode and re-encode to itself. Parts are capped at 240 decoded characters and the whole key at 640, with no control characters. The check part must be a safe id. The issue part keeps the `v:`/`t:`/`f:`/`none` form and is refused if it looks like a credential (`pwi_`/`pwr_`, `bearer `, JWT-like).
 
   Everything else is dropped: free text, list filters, tokens, raw payloads, external URLs, `#admin` and unknown routes. Reasons `session_expired` and `signed_out` show a notice, plus "After you log in, you return to {label}" when a destination survives. After sign-in the portal's own route guard decides access, and a denied destination falls back through the existing notice.
+- **Staff return to intent (separate rule):** a staff session that expires on a staff route (`#admin`, `#internal-soc`, `#tenant-detail`, `#queue-detail`) goes to the staff login with `next` and `reason` built by `buildStaffLoginReturnUrl`, which uses `sanitizeStaffReturnHash`. That sanitizer accepts only routes in the `staff` navigation group and keeps only a safe `id` and `tenant` on staff detail routes. The customer sanitizer `sanitizeReturnHash` still rejects every staff route, so a customer login can never be sent to a staff surface and a staff login can never be sent to a customer one.
 - **Recovery request:** stays enumeration-safe. The existing copy "This response confirms neither condition." is kept.
 - **Recovery reset:**
   - The token is read once and stripped from the URL.
@@ -74,6 +75,7 @@ Dials: landing 5/4/4 (variance/motion/density), access tasks 3/3/5.
 - **Form:**
   - The high-scale interest checkbox is removed, which is deferred intake. The backend defaults it to false.
   - The plan carries "A request, not an entitlement" help, and the region carries data-location help.
+  - Plan and region start unselected ("Choose a plan", "Choose a data region" placeholders), so the request records a deliberate choice rather than a silent default.
   - Inline validation follows the backend's `validateSignupRequestInput` rules, and a unit test checks they agree.
   - Server `fields[]` are mapped back onto the matching fields. Answers are kept on every failure.
   - `duplicate_request` never shows the other request's `existing_id`.
@@ -93,6 +95,7 @@ Dials: landing 5/4/4 (variance/motion/density), access tasks 3/3/5.
 - **Next step:** every state answers whether you can sign in. Only `customer_invited` offers Log in. `rejected` shows the reviewer's `customer_notice` as "Message from AstraNull" with no timeline. Unknown states show "Recorded as {state}".
 - **Dates and timing:** only `created_at` and `updated_at` are shown. There is no ETA or progress percentage.
 - **Lost ID:** the help line shows `support_email`, `support_contact_email`, `contact_email`, `support_url` or `contact_url` from site config when one is published. Otherwise it truthfully says none is published.
+- **Support contact configuration:** operators publish the contact with `ASTRANULL_PUBLIC_SUPPORT_EMAIL` (one email address) and `ASTRANULL_PUBLIC_SUPPORT_URL` (an `https://` URL or a same-origin path starting with `/`). `GET /v1/public/site-config` returns them as `support_email` and `support_url`, or `null` when unset; an invalid value fails startup with a clear configuration error.
 
 ### Unavailable routes (`PortalUnavailablePage`)
 
@@ -112,7 +115,7 @@ Actions are a primary home or parent link, plus Go back when history exists. Ide
 2. **`App.tsx` (access denial):** currently it swaps to the fallback route with an 8-second notice. A persistent `kind="access-denied"` page, with `requestedLabel` and `role`, would keep 403 distinct from a healthy dashboard.
 3. **`App.tsx` (sign-in redirects):** in `goToLogin`, the boot redirect and the expiry redirect, build the destination with `buildLoginReturnUrl(loginUrl, { hash: window.location.hash, reason: 'session_expired' })`. Until then the login page's return-to-intent support is dormant but safe.
 4. **`App.tsx` (status page):** pass `config` to `<SignupStatusPage config={config} />`. Without it the page fetches `/v1/public/site-config` itself.
-5. **Backend (optional):** add a published support contact field to `getPublicSiteConfig` (for example `support_email` or `support_url`) if the deployment wants lost-ID recovery to name a channel.
+5. **Backend:** resolved. `getPublicSiteConfig` publishes `support_email` and `support_url` from the support contact environment variables above.
 6. **Build:** `apps/web/react-app.js` and `react-app.css` are tracked build output and were not rebuilt. The in-process Playwright server serves that bundle, so run `npm run web:build` before running the journey spec without `ASTRANULL_PUBLIC_UI_BASE_URL`.
 
 ## Verification

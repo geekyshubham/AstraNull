@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { describe, it } from 'node:test';
+import path from 'node:path';
+import { after, before, describe, it } from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer as createViteServer } from 'vite';
 import {
   addTargetTag,
   apiErrorCode,
@@ -27,16 +31,25 @@ const DETAIL_SOURCE = readFileSync(
   new URL('../../apps/web/react/src/pages/target-detail-view.tsx', import.meta.url),
   'utf8',
 );
+const OWNERSHIP_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/components/targets/ownership-proof.tsx', import.meta.url),
+  'utf8',
+);
+const QUEUE_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/components/targets/domain-protection.tsx', import.meta.url),
+  'utf8',
+);
 
 describe('target-detail truthfulness helpers', () => {
-  it('allows run eligibility for all domains', () => {
-    assert.equal(isTargetRunEligible('eligible', 'dns_verified'), true);
-    assert.equal(isTargetRunEligible('eligible', 'provider_verified'), true);
-    assert.equal(isTargetRunEligible('eligible', 'agent_verified'), true);
-    assert.equal(isTargetRunEligible('eligible', 'pending'), true);
-    assert.equal(isTargetRunEligible('unknown', 'dns_verified'), true);
-    assert.equal(isTargetRunEligible('not_eligible', 'dns_verified'), true);
-    assert.equal(isTargetRunEligible('', ''), true);
+  it('fails closed: only proven ownership unlocks checks, whatever the reported eligibility string says', () => {
+    for (const state of ['dns_verified', 'provider_verified', 'user_confirmed', 'verified', ' DNS_VERIFIED ']) {
+      for (const eligibility of ['eligible', 'unknown', 'not_eligible', '']) {
+        assert.equal(isTargetRunEligible(eligibility, state), true, `${eligibility}/${state}`);
+      }
+    }
+    for (const state of ['pending', 'agent_verified', 'unverified', '', null, undefined]) {
+      assert.equal(isTargetRunEligible('eligible', state), false, `eligible/${state}`);
+    }
   });
 
   it('keeps LOA signed and scope states explicit', () => {
@@ -147,25 +160,38 @@ describe('target-detail tag + ownership-step helpers', () => {
     assert.deepEqual(ownershipStepStatus('provider_verified', null), { tone: 'success', label: 'Ownership proven', done: true });
     // ADR-0008: a legacy `agent_verified` state is not proof of control and stays unproven.
     assert.deepEqual(ownershipStepStatus('agent_verified', null), { tone: 'warn', label: 'Not proven yet', done: false });
-    assert.equal(ownershipStepStatus('unverified', { state: 'pending' }).label, 'Waiting on DNS record');
-    assert.equal(ownershipStepStatus('unverified', { state: 'expired' }).done, false);
     assert.equal(ownershipStepStatus('unverified', null).label, 'Not proven yet');
+  });
+
+  it('separates a live DNS challenge from one that silently expired', () => {
+    const now = Date.parse('2026-08-30T00:00:00.000Z');
+    const live = { state: 'pending', expires_at: '2026-08-30T00:10:00.000Z' };
+    const lapsed = { state: 'pending', expires_at: '2026-08-29T23:59:00.000Z' };
+    const expired = { tone: 'warn', label: 'Challenge expired — issue a new one', done: false };
+    assert.deepEqual(ownershipStepStatus('unverified', live, now), { tone: 'info', label: 'Waiting on DNS record', done: false });
+    assert.deepEqual(ownershipStepStatus('unverified', lapsed, now), expired);
+    assert.deepEqual(ownershipStepStatus('unverified', { state: 'pending' }, now), expired, 'a missing expiry fails closed');
+    assert.deepEqual(ownershipStepStatus('unverified', { state: 'expired', expires_at: '2026-08-30T00:10:00.000Z' }, now), expired);
+    assert.equal(ownershipStepStatus('dns_verified', lapsed, now).done, true);
   });
 });
 
 describe('target-detail React contract', () => {
   it('leads with a stateful validation path and explicit check selection', () => {
-    const queue = readFileSync(new URL('../../apps/web/react/src/components/targets/domain-protection.tsx', import.meta.url), 'utf8');
     assert.match(DETAIL_SOURCE, /Validate this target/);
-    assert.match(DETAIL_SOURCE, /review\.checkId !== effectiveSelectedCheckId/);
+    assert.match(DETAIL_SOURCE, /review\.checkId !== startCheckId/);
     assert.match(DETAIL_SOURCE, /const reviewedCheckId = review\.checkId/);
     assert.match(DETAIL_SOURCE, /body: \{ target_id: entityId, check_id: reviewedCheckId \}/);
     assert.match(DETAIL_SOURCE, /const created = asDataItem\(accepted\.run\) \?\? accepted/);
     assert.match(DETAIL_SOURCE, /test_run_id: runId/);
     assert.match(DETAIL_SOURCE, /record: created/);
-    // Selection is one explicit radio per check in the shared check queue; starting needs a review.
-    assert.match(queue, /type="radio"/);
-    assert.match(DETAIL_SOURCE, /setReview\(\{ mode: 'single', checkId: effectiveSelectedCheckId \}\)/);
+    // Expanding a row inspects it; a separate checkbox includes it in a run. Starting needs a review.
+    assert.match(QUEUE_SOURCE, /type="checkbox"/);
+    assert.match(QUEUE_SOURCE, /aria-label=\{`Include \$\{row\.name\} in run`\}/);
+    assert.doesNotMatch(QUEUE_SOURCE, /type="radio"/);
+    assert.match(DETAIL_SOURCE, /\{ mode: 'selected', checkIds: selectedRunIds \} : \{ mode: 'single', checkId: startCheckId \}/);
+    assert.match(DETAIL_SOURCE, /body: \{ target_id: entityId, check_ids: checkIds, name: name\.slice\(0, 120\) \}/);
+    assert.match(DETAIL_SOURCE, /\.slice\(0, MAX_SCAN_CHECKS\)/);
     assert.doesNotMatch(DETAIL_SOURCE, /checks_applied\?\.\[0\]|checks_applied\[0\]/);
     assert.doesNotMatch(DETAIL_SOURCE, /shouldAutoDetectEdge/, 'opening a target never starts a probe');
   });
@@ -176,17 +202,56 @@ describe('target-detail React contract', () => {
   });
 
   it('surfaces the exact DNS TXT ownership record with copy and check-now actions', () => {
-    assert.match(DETAIL_SOURCE, /record_name/);
-    assert.match(DETAIL_SOURCE, /record_value/);
-    assert.match(DETAIL_SOURCE, /Check now/);
-    assert.match(DETAIL_SOURCE, /CopyButton/);
+    assert.match(OWNERSHIP_SOURCE, /record_name/);
+    assert.match(OWNERSHIP_SOURCE, /record_value/);
+    assert.match(OWNERSHIP_SOURCE, /Check now/);
+    assert.match(OWNERSHIP_SOURCE, /CopyButton/);
+    assert.match(OWNERSHIP_SOURCE, /Copy instructions/);
+    assert.match(DETAIL_SOURCE, /<OwnershipProof/);
     assert.match(DETAIL_SOURCE, /issueOwnershipChallenge|issueOwnership/);
+  });
+
+  it('keeps ownership errors persistent in the panel and re-checks only a live challenge', () => {
+    assert.match(DETAIL_SOURCE, /setOwnershipError\(apiErrorMessage\(err, 'Could not issue a DNS TXT record\.'\)\)/);
+    assert.match(DETAIL_SOURCE, /setOwnershipError\(apiErrorMessage\(err, 'Could not check the DNS record\.'\)\)/);
+    assert.doesNotMatch(DETAIL_SOURCE, /Could not issue an ownership challenge/);
+    assert.match(DETAIL_SOURCE, /apiErrorCode\(err\) === 'challenge_expired'/);
+    assert.match(DETAIL_SOURCE, /!isActiveDnsChallenge\(challenge, Date\.now\(\)\)\) return undefined/);
+    assert.match(OWNERSHIP_SOURCE, /<div className="form-banner" role="alert">\{error\}<\/div>/);
+    assert.match(OWNERSHIP_SOURCE, /Stopped re-checking\. Choose Check now after your DNS change is live\./);
   });
 
   it('keeps run eligibility fail-closed and the run action disabled until ownership passes', () => {
     assert.match(DETAIL_SOURCE, /isTargetRunEligible\(eligibility, verificationState\)/);
-    assert.match(DETAIL_SOURCE, /disabled=\{!targetEligible \|\| !effectiveSelectedCheckId/);
+    assert.match(DETAIL_SOURCE, /disabled=\{!targetEligible \|\| \(!multiSelected && !startCheckId\)/);
+    assert.match(DETAIL_SOURCE, /if \(!targetEligible\) \{ setReview\(null\); return; \}/);
+    assert.match(DETAIL_SOURCE, /confirmDisabled=\{review !== null && review\.mode !== 'detect' && \(!ownershipDone \|\| Boolean\(reviewSlotReason\)\)\}/);
+    assert.match(DETAIL_SOURCE, /Prove ownership first\. External checks stay blocked until this target is verified\./);
+    assert.match(DETAIL_SOURCE, /canStartBoundedRun && !targetEligible \? 'Prove ownership first\.'/);
+    assert.match(QUEUE_SOURCE, /disabled=\{runAllCount === 0 \|\| Boolean\(runAllReason\)\}/);
     assert.match(DETAIL_SOURCE, /className="content target-detail-view"/);
+  });
+
+  it('badges the header from the fail-closed eligibility, never a blanket unlock', () => {
+    assert.match(DETAIL_SOURCE, /<Badge tone=\{targetEligible \? 'success' : 'warn'\}/);
+    assert.match(DETAIL_SOURCE, /\{targetEligible \? 'Validation unlocked' : 'Ownership pending · checks locked'\}/);
+    assert.match(DETAIL_SOURCE, /const proveOwnershipFirst = canStartBoundedRun && !ownershipDone && !scanActive && !activeStandalone/);
+    assert.match(DETAIL_SOURCE, /variant=\{proveOwnershipFirst \? 'secondary' : 'default'\}/);
+  });
+
+  it('blocks Review all while a standalone check holds the execution slot', () => {
+    assert.match(DETAIL_SOURCE, /is running on this target\. Wait for it to finish or stop it before starting all checks\./);
+    assert.match(DETAIL_SOURCE, /if \(scanActive \|\| activeStandalone\) \{ setReview\(null\); return; \}/);
+    assert.match(QUEUE_SOURCE, /aria-describedby=\{runAllReason \? 'td-run-all-reason' : undefined\}/);
+  });
+
+  it('blocks a single or recommended check while another check holds the execution slot', () => {
+    assert.match(DETAIL_SOURCE, /is running on this target\. Wait for it to finish or stop it before starting another check\./);
+    assert.match(DETAIL_SOURCE, /: !startCheckId\s*\? 'Select a check in the list first\.'\s*: reviewSlotReason;/);
+    assert.match(DETAIL_SOURCE, /if \(!ownershipDone\) \{ setReview\(null\); return; \}\s*if \(scanActive \|\| activeStandalone\) \{ setReview\(null\); return; \}\s*if \(review\.mode === 'single'\)/);
+    assert.match(DETAIL_SOURCE, /recommendedRow=\{activeStandalone \? null : recommendedRow\}/);
+    assert.match(DETAIL_SOURCE, /reviewSlotReason \? <p className="td-form-error" role="alert">\{reviewSlotReason\}<\/p>/);
+    assert.match(QUEUE_SOURCE, /canRun && !scanActive && !runAllBlockedReason \? \(/);
   });
 
   it('backs recent-run verdicts with API evidence ids and groups posture under tabs', () => {
@@ -200,5 +265,94 @@ describe('target-detail React contract', () => {
     assert.match(DETAIL_SOURCE, /targetTabFromParam\(getRouteParam\('tab'\)\)/);
     assert.match(DETAIL_SOURCE, /edgeDetectionReasonExplanation/);
     assert.doesNotMatch(DETAIL_SOURCE, /buildDetailHref\('run-detail'|buildDetailHref\('scan-detail'/, 'results open in place, not a run page');
+  });
+});
+
+describe('ownership proof rendering', () => {
+  let vite;
+  let OwnershipProof;
+  const NOW = Date.parse('2026-08-30T00:00:00.000Z');
+  const base = { hostname: 'shop.example', now: NOW, panelId: 'td-ownership-panel', canWrite: true, busy: '', error: '', watching: false, watchStopped: false, onIssue() {}, onCheck() {} };
+  const challenge = (expiresAt, state = 'pending') => ({ id: 'och_1', state, record_name: '_astranull-challenge.shop.example', record_value: 'astranull-verify=stale-token-123', expires_at: expiresAt, last_checked_at: null });
+  const render = (props) => renderToStaticMarkup(createElement(OwnershipProof, { ...base, ...props }));
+
+  before(async () => {
+    vite = await createViteServer({ configFile: path.resolve('vite.config.ts'), server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
+    ({ OwnershipProof } = await vite.ssrLoadModule('/src/components/targets/ownership-proof.tsx'));
+  });
+  after(async () => { await vite?.close(); });
+
+  it('never offers DNS TXT proof for an IP target and points to origin relations instead', () => {
+    const html = render({ kind: 'ip', challenge: null });
+    assert.doesNotMatch(html, /Issue DNS TXT record/);
+    assert.doesNotMatch(html, /We only check the declared hostname/);
+    assert.match(html, /DNS TXT proof applies to hostnames and URLs/);
+    assert.match(html, /declare this address under Origin relations/);
+    assert.match(html, /href="#targets"/);
+    assert.match(html, /prove you control this target\./);
+  });
+
+  it('explains that zone and canary targets have no DNS TXT proof yet', () => {
+    for (const kind of ['dns_zone', 'canary']) {
+      const html = render({ kind, challenge: null });
+      assert.doesNotMatch(html, /Issue DNS TXT record/);
+      assert.match(html, /DNS TXT ownership proof is not available for this target kind yet\./);
+    }
+  });
+
+  it('keeps the TXT flow for hostnames and URLs', () => {
+    for (const kind of ['fqdn', 'url']) {
+      const html = render({ kind, challenge: null });
+      assert.match(html, /Issue DNS TXT record/);
+      assert.match(html, /We only check the declared hostname/);
+    }
+  });
+
+  it('shows a live challenge with its expiry and hides Reissue until it expires', () => {
+    const html = render({ kind: 'fqdn', challenge: challenge('2026-08-30T00:12:00.000Z') });
+    assert.match(html, /astranull-verify=stale-token-123/);
+    assert.match(html, /Check now/);
+    assert.match(html, /Valid for 15 minutes · expires/);
+    assert.match(html, /\(in 12 min\)/);
+    assert.match(html, /Copy instructions/);
+    assert.match(html, /You can issue a new value after it expires\./);
+    assert.match(html, /Checks run only while this page is open\./);
+    assert.doesNotMatch(html, /Reissue/);
+    assert.doesNotMatch(html, /Issue a new record/);
+  });
+
+  it('withholds an expired value, hides Check now and offers a new record as the primary action', () => {
+    for (const record of [challenge('2026-08-29T23:50:00.000Z'), challenge('2026-08-29T23:50:00.000Z', 'expired')]) {
+      const html = render({ kind: 'fqdn', challenge: record });
+      assert.doesNotMatch(html, /stale-token-123/);
+      assert.doesNotMatch(html, /Check now/);
+      assert.doesNotMatch(html, /Copy instructions/);
+      assert.doesNotMatch(html, /aria-label="Copy DNS record value"/);
+      assert.match(html, /Expired /);
+      assert.match(html, /This record expired and can no longer prove ownership\. Issue a new record and publish its value\./);
+      assert.match(html, /Issue a new record/);
+      assert.match(html, /data-expired="true"/);
+    }
+  });
+
+  it('never prints an expiry date for an expired challenge that has none recorded', () => {
+    for (const expiresAt of [undefined, '', 'not-a-date']) {
+      const html = render({ kind: 'fqdn', challenge: challenge(expiresAt) });
+      assert.match(html, /Expired · no expiry recorded/);
+      assert.doesNotMatch(html, /Expired Not recorded|Expired not-a-date|Expired Invalid/);
+      assert.doesNotMatch(html, /stale-token-123/);
+      assert.match(html, /Issue a new record/);
+    }
+    assert.doesNotMatch(render({ kind: 'fqdn', challenge: challenge('2026-08-29T23:50:00.000Z') }), /no expiry recorded/);
+  });
+
+  it('renders ownership errors as a persistent alert inside the panel', () => {
+    const html = render({ kind: 'fqdn', challenge: null, error: 'This DNS TXT value expired.' });
+    assert.match(html, /<div class="form-banner" role="alert">This DNS TXT value expired\.<\/div>/);
+  });
+
+  it('says when automatic re-checks stopped at the cap', () => {
+    const html = render({ kind: 'fqdn', challenge: challenge('2026-08-30T00:12:00.000Z'), watchStopped: true });
+    assert.match(html, /Stopped re-checking\. Choose Check now after your DNS change is live\./);
   });
 });

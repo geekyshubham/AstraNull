@@ -134,7 +134,10 @@ describe('EVIDENCE-01 customer projection scrubbing (dev-json)', () => {
 
   it('scrubs the PATCH finding response while persisting the mutation', () => {
     seedRunAndFinding();
-    const patched = devPatchFinding(CTX, 'find_1', { status: 'accepted_risk' });
+    const patched = devPatchFinding(CTX, 'find_1', {
+      status: 'accepted_risk',
+      risk_acceptance: { reason: 'Compensating control documented by the edge team.', review_at: new Date(Date.now() + 30 * 86400000).toISOString() },
+    });
     assert.equal(patched.status, 'accepted_risk');
     assert.ok(!containsAgentPlacementVocabulary(patched.notes), 'dev patch response notes leak');
     assert.equal(getStore().findings.find((f) => f.id === 'find_1').status, 'accepted_risk');

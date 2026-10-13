@@ -51,9 +51,11 @@ import { Toast } from '../components/ui/toast';
 import { AnimatedNumber } from '../components/ui/motion';
 import { reportStatusTone, runStatusTone as runStatusBadgeTone, subscriptionStatusTone, tenantLifecycleTone, type StatusTone } from '../lib/status-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
-import { buildApiHeaders, requestJson } from '../lib/api';
+import { EXPECTED_VERDICT_LABELS, dashboardReadinessMessage, plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { buildApiHeaders, loadSession, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
+// @ts-ignore Shared server role contract; the portal reads it the same way lib/route-access.mjs does.
+import { PERMISSIONS as ROLE_PERMISSIONS, SERVICE_ACCOUNT_ROLES as SERVICE_ACCOUNT_ROLE_IDS } from '../../../../../src/contracts/roles.mjs';
 import { canReadDataset, sessionHasPermission, staffSessionHasPermission } from '../lib/dataset-access.mjs';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
@@ -61,9 +63,10 @@ import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdic
 import { buildDetailHref, replaceRouteParams } from '../lib/route-params';
 import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
-import { isValidTimezone, PoliciesRefined, type PoliciesRefinedProps } from './refined/policies-refined';
+import { isObservationOnlyCheck, isValidTimezone, PoliciesRefined, type PoliciesRefinedProps } from './refined/policies-refined';
 import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
-import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
+import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, formatTimestamp, pluralize, scoreTone } from '../lib/utils';
+import { prefersReducedMotion } from '../lib/motion';
 
 function getString(item: DataItem, keys: string[], fallback = '—') {
   for (const key of keys) {
@@ -158,12 +161,9 @@ const POLICY_CADENCE_OPTIONS: SelectOption[] = [
   { value: 'monthly', label: 'Monthly' }
 ];
 
-const POLICY_VERDICT_OPTIONS: SelectOption[] = [
-  { value: 'pass', label: 'Pass' },
-  { value: 'warn', label: 'Warn' },
-  { value: 'fail', label: 'Fail' },
-  { value: 'manual_review', label: 'Manual review' }
-];
+const POLICY_VERDICT_OPTIONS: SelectOption[] = Object.entries(EXPECTED_VERDICT_LABELS as Record<string, string>)
+  .map(([value, label]) => ({ value, label, description: value }));
+const OBSERVATION_ONLY_VERDICT = 'manual_review';
 
 type PolicyTargetBinding = {
   targets: DataItem[];
@@ -172,7 +172,7 @@ type PolicyTargetBinding = {
   error: string;
 };
 
-function formatPolicyVerdictLabel(verdict: string) {
+export function formatPolicyVerdictLabel(verdict: string) {
   return POLICY_VERDICT_OPTIONS.find((option) => option.value === verdict)?.label ?? verdict.replace(/_/g, ' ');
 }
 
@@ -222,18 +222,39 @@ export function RecordedKvRow({ label, value, missing = 'Not recorded', mono }: 
   );
 }
 
-function configuredSupportUri(siteConfig: Record<string, unknown>) {
-  for (const key of ['support_uri', 'support_url']) {
-    const candidate = typeof siteConfig[key] === 'string' ? siteConfig[key].trim() : '';
+export type SupportContact = { href: string; label: string };
+
+const SUPPORT_URL_KEYS = ['support_uri', 'support_url', 'contact_url'] as const;
+const SUPPORT_EMAIL_KEYS = ['support_email', 'support_contact_email', 'contact_email'] as const;
+const SUPPORT_EMAIL_PATTERN = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[^\s@<>()[\]\\,;:"]+$/;
+
+/** Published support channel for this deployment: an https URL or an email address, never a vendor default. */
+export function configuredSupportUri(siteConfig: Record<string, unknown> | null | undefined): SupportContact | null {
+  const config = siteConfig ?? {};
+  const text = (key: string) => (typeof config[key] === 'string' ? (config[key] as string).trim() : '');
+  for (const key of SUPPORT_URL_KEYS) {
+    const candidate = text(key);
     if (!candidate) continue;
     try {
       const parsed = new URL(candidate);
-      if (parsed.protocol === 'mailto:' || parsed.protocol === 'https:') return candidate;
+      if (parsed.protocol === 'https:') return { href: parsed.href, label: `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}` };
+      if (parsed.protocol === 'mailto:') {
+        const address = decodeURIComponent(parsed.pathname);
+        if (SUPPORT_EMAIL_PATTERN.test(address)) return { href: `mailto:${address}`, label: address };
+      }
     } catch {
-      // Invalid deployment configuration is treated as unconfigured.
+      continue;
     }
   }
-  return '';
+  for (const key of SUPPORT_EMAIL_KEYS) {
+    const candidate = text(key).replace(/^mailto:/i, '');
+    if (candidate && SUPPORT_EMAIL_PATTERN.test(candidate)) return { href: `mailto:${candidate}`, label: candidate };
+  }
+  return null;
+}
+
+function isWorkspaceOwnerRole(role: string | undefined) {
+  return role === 'owner' || role === 'admin';
 }
 
 function featureEnabled(data: PortalData, key: 'waf_posture' | 'external_discovery' | 'connectors') {
@@ -363,6 +384,14 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
   .page-head .row-actions > .report-export-menu, .page-head .row-actions > .report-export-menu > .btn { width: 100%; }
 }
 .settings-page .settings-related-links { margin: 0; text-align: left; }
+.settings-page .sa-scope-groups { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-page .sa-scope-groups legend { margin-bottom: var(--space-1); padding: 0; color: var(--fg); font-weight: 600; }
+.settings-page .sa-scope-groups > p { margin: 0 0 var(--space-3); }
+.settings-page .sa-scope-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: var(--space-3) var(--space-4); }
+.settings-page .sa-scope-group { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); }
+.settings-page .sa-scope-group h4 { margin: 0; color: var(--fg-2); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.reports-page .report-preview-anchor:focus { outline: none; }
+.reports-page .report-preview-anchor:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; border-radius: var(--radius-md); }
 .report-kind-group .report-period-select > span:first-child { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .report-kind-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: var(--space-2); }
 .report-kind-option {
@@ -395,6 +424,7 @@ details.detail-technical[open] > summary { margin-bottom: var(--space-4); }
 .support-event-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); padding: var(--space-2) 0; border-top: 1px solid var(--border-soft); }
 .support-event-row:first-child { border-top: 0; }
 .support-event-row .check-row { min-width: 0; flex: 1 1 280px; }
+.support-probe-facts { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding-left: var(--space-5); color: var(--fg); font-size: var(--text-sm); line-height: 1.5; max-width: 80ch; }
 .support-summary-preview { max-height: 280px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .release-evidence-page .audit-search-pill, .audit-page .audit-search-pill { flex: 0 1 auto; width: min(100%, 520px); }
 .release-ledger { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
@@ -790,10 +820,17 @@ const REPORT_AUDIENCE_KINDS: Record<string, string> = {
   executive: 'Leadership summary of readiness and open gaps.',
   board: 'Risk and resilience summary for a board or risk committee.',
   technical: 'Engineering detail: recorded runs, verdicts, and findings.',
-  audit: 'Evidence references and custody metadata for reviewers.',
-  internal_audit: 'Internal audit view of controls and evidence references.'
+  audit: 'Evidence pack for internal or external auditors: run and test IDs, timestamps, approval artifacts, and custody hashes.'
 };
-const REPORT_FRAMEWORK_KINDS = new Set(['soc2', 'iso27001', 'dora', 'nis2']);
+const REPORT_FRAMEWORK_DESCRIPTIONS: Record<string, string> = {
+  soc2: 'Maps evidence to SOC 2 Trust Services Criteria.',
+  iso27001: 'Maps evidence to ISO/IEC 27001 Annex A controls.',
+  dora: 'Maps evidence to DORA ICT risk and resilience articles.',
+  nis2: 'Maps evidence to NIS2 Article 21 security measures.',
+  internal_audit: 'Maps evidence to an internal-audit control set (access, incident response, availability, logging, data protection).'
+};
+const REPORT_FRAMEWORK_KINDS = new Set(Object.keys(REPORT_FRAMEWORK_DESCRIPTIONS));
+const REPORT_CAPTURE_SUMMARY = 'Declared targets in scope, every finding open at generation, closed findings and recorded runs inside the period.';
 const REPORT_DEFERRED_KINDS = new Set(['soc']);
 
 function humanizeOptionValue(value: string) {
@@ -1023,7 +1060,7 @@ export function ReportExportResult({ exporter }: { exporter: ReturnType<typeof u
     <Card className="card--dense report-export-result" aria-live="polite">
       <PanelCardHeader
         title="Last export"
-        description={`${record.format === 'markdown' ? 'Markdown' : record.format.toUpperCase()} downloaded ${formatDate(record.exportedAt)}. Exporting again creates a new file from the same snapshot.`}
+        description={`${record.format === 'markdown' ? 'Markdown' : record.format.toUpperCase()} downloaded ${formatTimestamp(record.exportedAt)}. Exporting again creates a new file from the same snapshot.`}
       />
       <CardContent className="stack-tight">
         {record.format === 'json' ? (
@@ -1037,8 +1074,8 @@ export function ReportExportResult({ exporter }: { exporter: ReturnType<typeof u
                 <strong>
                   {verification.status === 'not_requested' ? 'Not verified yet'
                     : verification.status === 'verifying' ? 'Verifying…'
-                      : verification.status === 'verified' ? `Verified by the server${verification.at ? ` ${formatDate(verification.at)}` : ''}`
-                        : verification.status === 'failed' ? `Failed${verification.at ? ` ${formatDate(verification.at)}` : ''}`
+                      : verification.status === 'verified' ? `Verified by the server${verification.at ? ` ${formatTimestamp(verification.at)}` : ''}`
+                        : verification.status === 'failed' ? `Failed${verification.at ? ` ${formatTimestamp(verification.at)}` : ''}`
                           : 'Verification unavailable'}
                 </strong>
               </div>
@@ -1113,7 +1150,7 @@ export function ReportSnapshotPreview({ report, formats, exporter }: { report: D
     <Card className="card--dense report-generated-preview" aria-live="polite">
       <PanelCardHeader
         title={`Generated: ${title}`}
-        description={`Snapshot frozen ${getString(summary ?? {}, ['as_of'], '') ? formatDate(getString(summary ?? {}, ['as_of'], '')) : 'at an unrecorded time'}. Nothing is exported until you choose a format.`}
+        description={`Snapshot frozen ${getString(summary ?? {}, ['as_of'], '') ? formatTimestamp(getString(summary ?? {}, ['as_of'], '')) : 'at an unrecorded time'}. Nothing is exported until you choose a format.`}
         trailing={(
           <div className="row-actions">
             <AnchorButton size="sm" variant="secondary" href={buildDetailHref('report-detail', id)}>Open report</AnchorButton>
@@ -1125,7 +1162,8 @@ export function ReportSnapshotPreview({ report, formats, exporter }: { report: D
         <div><span>Scope</span><strong>{mode === 'tenant' || !mode ? 'Whole workspace' : mode === 'target_groups' ? 'Historical domain scope' : mode === 'targets' ? `${formatNumber(Array.isArray(scope?.target_ids) ? (scope!.target_ids as unknown[]).length : 0)} target(s)` : mode.replaceAll('_', ' ')}</strong></div>
         <div><span>Declared targets captured</span><strong>{count(members)}</strong></div>
         <div><span>Runs captured</span><strong>{count(runCapture)}{getString(runCapture ?? {}, ['limit'], '') ? ` (most recent, limit ${getString(runCapture ?? {}, ['limit'], '')})` : ''}</strong></div>
-        <div><span>Findings captured</span><strong>{count(findingsSnapshot)}</strong></div>
+        <div><span>Findings in this snapshot</span><strong>{count(findingsSnapshot)}</strong></div>
+        <div><span>Open at generation (any opened date)</span><strong>{getOptionalNumber(findingsSnapshot, ['open_total']) !== null ? formatNumber(getOptionalNumber(findingsSnapshot, ['open_total']) ?? 0) : 'Not recorded'}</strong></div>
         <div><span>Readiness score</span><strong>{score !== null ? `${formatNumber(score)} / 100 (workspace formula)` : readinessText ?? 'Not recorded'}</strong></div>
       </CardContent>
       <CardContent><ReportExportResult exporter={exporter} /></CardContent>
@@ -1158,6 +1196,7 @@ export function ReportsPage({
   const [targetList, setTargetList] = useState<ScopeList>({ status: 'idle', items: [], error: '' });
   const [scopeReload, setScopeReload] = useState(0);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const exporter = useReportExport(config, session, onRefresh);
   const reports = data.reports;
   const canCreateReport = sessionHasPermission(session, 'report:create');
@@ -1202,6 +1241,15 @@ export function ReportsPage({
   useEffect(() => {
     if (reviewing) reviewHeadingRef.current?.focus();
   }, [reviewing]);
+
+  const createdId = getString(created ?? {}, ['id'], '');
+  useEffect(() => {
+    if (!createdId) return;
+    const preview = previewRef.current;
+    if (!preview) return;
+    preview.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    preview.focus({ preventScroll: true });
+  }, [createdId]);
 
   const activeList = targetList;
   const selectedIds = selectedTargetIds;
@@ -1269,7 +1317,7 @@ export function ReportsPage({
         return [legacyScope ? 'Historical domain scope' : '', targets ? `${formatNumber(targets)} target${targets === 1 ? '' : 's'}` : '', mode === 'runs' ? `${getString(runs ?? {}, ['included'], '?')} ${pluralize(Number(getString(runs ?? {}, ['included'], '0')), 'run')}` : ''].filter(Boolean).join(' · ') || mode.replaceAll('_', ' ');
       }
     },
-    { key: 'generated', label: 'Generated', render: (item) => <span className="mono">{formatDate(getNestedItem(item, ['summary'])?.as_of ?? item.created_at ?? item.generated_at)}</span> },
+    { key: 'generated', label: 'Generated', render: (item) => <span className="mono">{formatTimestamp(getNestedItem(item, ['summary'])?.as_of ?? item.created_at ?? item.generated_at)}</span> },
     { key: 'status', label: 'Status', render: (item) => <Badge tone={reportStatusTone(getString(item, ['status'], ''))}>{getString(item, ['status'], 'Not recorded').replaceAll('_', ' ')}</Badge> }
   ];
 
@@ -1289,7 +1337,7 @@ export function ReportsPage({
       }
       setCreated(result);
       setReviewing(false);
-      setMessage(`Generated "${getString(result, ['title'], reportTitle)}". Review the snapshot below, then export if you need a file.`);
+      setMessage(`Generated "${getString(result, ['title'], reportTitle)}". Review the snapshot at the top of this page, then export if you need a file.`);
       await onRefresh().catch(() => undefined);
     } catch (err) {
       const payload = (err as { payload?: unknown })?.payload as DataItem | undefined;
@@ -1314,8 +1362,29 @@ export function ReportsPage({
       />
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       {message && !error ? <Toast message={message} tone="success" duration={5000} /> : null}
-      {created ? <ReportSnapshotPreview report={created} formats={formatOptions} exporter={exporter} /> : null}
-      {sessionHasPermission(session, 'report:read') ? <ProtectionValidationReportPanel config={config} session={session} /> : null}
+      {created ? (
+        <div ref={previewRef} tabIndex={-1} className="report-preview-anchor" aria-label="Generated report snapshot">
+          <ReportSnapshotPreview report={created} formats={formatOptions} exporter={exporter} />
+        </div>
+      ) : null}
+      <Card className="card--dense">
+        <PanelCardHeader title="Generated reports" description="Newest first. Open a report to read its snapshot and export it." />
+        <CardContent>
+          <DataTable
+            columns={reportColumns}
+            items={reports}
+            loadError={data.loadErrors.reports}
+            onRetry={() => void onRefresh()}
+            getRowId={(item) => getString(item, ['id'], '')}
+            selectedId={getString(created ?? {}, ['id'], '') || null}
+            getRowProps={(item) => {
+              const id = getString(item, ['id'], '');
+              return id ? detailRowProps('report-detail', id, `Open report ${getString(item, ['title'], id)}`) : {};
+            }}
+            empty={<EmptyState icon={FileText} title="No reports generated yet." body={canCreateReport ? 'Choose an audience below to generate the first snapshot.' : 'Ask an owner or admin to generate one.'} />}
+          />
+        </CardContent>
+      </Card>
       {canCreateReport ? (
         <Card>
           <PanelCardHeader title="New report" description="Choose the audience, period, and exact scope, review, then generate. Export happens afterwards, only when you choose a format." />
@@ -1339,7 +1408,7 @@ export function ReportsPage({
                   {frameworkOptions.map((option) => (
                     <label key={option.value} className="report-kind-option">
                       <input type="radio" name="report_kind" value={option.value} checked={selectedReportKind === option.value} onChange={() => { setReportKind(option.value); setReviewing(false); }} />
-                      <span><strong>{option.label}</strong><small>Control mapping</small></span>
+                      <span><strong>{option.label}</strong><small>{REPORT_FRAMEWORK_DESCRIPTIONS[option.value] ?? 'Maps recorded evidence to framework controls.'}</small></span>
                     </label>
                   ))}
                 </div>
@@ -1348,7 +1417,7 @@ export function ReportsPage({
             <fieldset className="report-kind-group" disabled={busy !== ''}>
               <legend>2. Period</legend>
               <div className="product-form">
-                <Select className="report-period-select" label="Report period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={(value) => { setReportPeriod(value); setReviewing(false); }} hint="Runs and findings are captured inside this window, ending at generation." />
+                <Select className="report-period-select" label="Report period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={(value) => { setReportPeriod(value); setReviewing(false); }} hint={REPORT_CAPTURE_SUMMARY} />
               </div>
             </fieldset>
             <fieldset className="report-kind-group" disabled={busy !== ''}>
@@ -1428,7 +1497,7 @@ export function ReportsPage({
                   <div><dt>{reportKindIsFramework(selectedReportKind) ? 'Framework mapping' : 'Audience'}</dt><dd>{kindLabel}</dd></div>
                   <div><dt>Period</dt><dd>{periodLabel}, ending at generation</dd></div>
                   <div><dt>Scope</dt><dd>{scopeMode === 'tenant' ? 'Whole workspace' : selectedNames.map((entry) => entry.label).join(', ')}</dd></div>
-                  <div><dt>Captured at generation</dt><dd>Declared targets in scope, findings and recorded runs inside the period ({runCaptureLimit !== null ? `up to the ${formatNumber(runCaptureLimit)} most recent runs` : 'most recent runs, bounded by the server'}), verdicts, and evidence references</dd></div>
+                  <div><dt>Captured at generation</dt><dd>{REPORT_CAPTURE_SUMMARY} Runs: {runCaptureLimit !== null ? `up to the ${formatNumber(runCaptureLimit)} most recent` : 'the most recent, bounded by the server'}, with their verdicts and evidence references.</dd></div>
                   <div><dt>Readiness score</dt><dd>{scopeMode === 'tenant' ? 'Included: the published workspace formula' : 'Not included: the published formula covers the whole workspace'}</dd></div>
                   <div><dt>Not included</dt><dd>Protection profiles, and anything that changes after generation</dd></div>
                 </dl>
@@ -1442,26 +1511,31 @@ export function ReportsPage({
           </CardContent>
         </Card>
       ) : <RoleRestrictedCard title="Report generation is not available for your role." />}
-      <Card className="card--dense">
-        <PanelCardHeader title="Generated reports" description="Newest first. Open a report to read its snapshot and export it." />
-        <CardContent>
-          <DataTable
-            columns={reportColumns}
-            items={reports}
-            loadError={data.loadErrors.reports}
-            onRetry={() => void onRefresh()}
-            getRowId={(item) => getString(item, ['id'], '')}
-            selectedId={getString(created ?? {}, ['id'], '') || null}
-            getRowProps={(item) => {
-              const id = getString(item, ['id'], '');
-              return id ? detailRowProps('report-detail', id, `Open report ${getString(item, ['title'], id)}`) : {};
-            }}
-            empty={<EmptyState icon={FileText} title="No reports generated yet." body={canCreateReport ? 'Choose an audience above to generate the first snapshot.' : 'Ask an owner or admin to generate one.'} />}
-          />
-        </CardContent>
-      </Card>
+      {sessionHasPermission(session, 'report:read') ? <ProtectionValidationReportPanel config={config} session={session} /> : null}
     </div>
   );
+}
+
+const PERMISSION_ROLES = ROLE_PERMISSIONS as Readonly<Record<string, readonly string[]>>;
+const SERVICE_ACCOUNT_ROLES = SERVICE_ACCOUNT_ROLE_IDS as readonly string[];
+const DEFAULT_SERVICE_ACCOUNT_SCOPES = ['tenant:read', 'evidence:read'];
+const EXCLUDED_SCOPE_PREFIXES = ['target_group:', 'environment:'];
+
+/** Permissions a service-account role holds, minus retired resources and wildcards. */
+export function scopesForRole(role: string) {
+  return Object.keys(PERMISSION_ROLES)
+    .filter((key) => key !== '*' && !key.includes('*') && !EXCLUDED_SCOPE_PREFIXES.some((prefix) => key.startsWith(prefix)))
+    .filter((key) => PERMISSION_ROLES[key]?.includes(role))
+    .sort();
+}
+
+function groupScopesByResource(scopes: readonly string[]) {
+  const groups = new Map<string, string[]>();
+  for (const scope of scopes) {
+    const resource = scope.slice(0, scope.indexOf(':'));
+    groups.set(resource, [...(groups.get(resource) ?? []), scope]);
+  }
+  return [...groups.entries()];
 }
 
 function expiresAtFromForm(value: string) {
@@ -1482,6 +1556,20 @@ const SETTINGS_TAB_OPTIONS: { id: SettingsTab; label: string }[] = [
   { id: 'privacy', label: 'Privacy' }
 ];
 
+function signInMethodLabel(authMode: string) {
+  if (authMode === 'oidc-jwt') return 'Single sign-on (OIDC)';
+  if (authMode === 'dev-headers') return 'Developer validation (non-production)';
+  return 'Managed by your deployment administrator';
+}
+
+function issuerHost(issuer: string) {
+  try {
+    return new URL(issuer).host || issuer;
+  } catch {
+    return issuer;
+  }
+}
+
 function readOidcPosture(config: PortalConfig) {
   const siteConfig = config.siteConfig;
   const issuer = getNestedString(siteConfig, ['oidc', 'issuer'], '')
@@ -1490,7 +1578,8 @@ function readOidcPosture(config: PortalConfig) {
     || getString(siteConfig, ['oidc_audience'], '');
   return {
     authMode: config.authMode,
-    issuer: issuer && issuer !== '—' ? issuer : null,
+    signInMethod: signInMethodLabel(String(config.authMode ?? '')),
+    issuerHost: issuer && issuer !== '—' ? issuerHost(issuer) : null,
     audience: audience && audience !== '—' ? audience : null,
     bundledStagingLogin: config.bundledLoginEnabled
   };
@@ -1531,6 +1620,9 @@ export function SettingsPage({
     };
   } | null>(null);
   const [retentionError, setRetentionError] = useState('');
+  const [serviceAccountRole, setServiceAccountRole] = useState('viewer');
+  const [serviceAccountScopes, setServiceAccountScopes] = useState<string[]>(() => [...DEFAULT_SERVICE_ACCOUNT_SCOPES]);
+  const [serviceAccountScopeError, setServiceAccountScopeError] = useState('');
   const tenant = data.tenant;
   const privacy = getNestedItem(tenant, ['privacy_settings']) ?? {};
   const evidenceRetention = getNestedItem(privacy, ['evidence_retention']) ?? {};
@@ -1555,6 +1647,8 @@ export function SettingsPage({
     setOneTimeSecret({ label, value });
   }
   const oidcPosture = readOidcPosture(config);
+  const settingsSupportContact = configuredSupportUri(config.siteConfig);
+  const showSignInInternals = config.authMode === 'dev-headers' || Boolean(config.bundledLoginEnabled) || session.principal === 'staff';
   const routeAccessContext = {
     principal: session.principal,
     staffRole: session.staff_role,
@@ -1618,28 +1712,53 @@ export function SettingsPage({
     if (!canCreateServiceAccount) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const requestedScopes = String(form.get('scopes') ?? '')
-      .split(',')
-      .map((scope) => scope.trim())
-      .filter(Boolean);
-    if (requestedScopes.some((scope) => !/^[a-z_]+:[a-z_]+$/.test(scope))) {
-      setError('Scopes must look like resource:action, separated by commas, for example evidence:read.');
+    const allowedScopes = scopesForRole(serviceAccountRole);
+    const scopes = serviceAccountScopes.filter((scope) => allowedScopes.includes(scope));
+    if (scopes.length === 0) {
+      setServiceAccountScopeError('Select at least one scope.');
       return;
     }
-    const scopes = requestedScopes.length ? requestedScopes : ['tenant:read'];
+    setServiceAccountScopeError('');
+    const name = String(form.get('name') ?? '').trim() || 'Automation account';
+    const expiresAt = expiresAtFromForm(String(form.get('expiry') ?? ''));
+    if (serviceAccountRole === 'admin' || !expiresAt) {
+      const risks = [
+        serviceAccountRole === 'admin' ? 'the admin role' : '',
+        !expiresAt ? 'no expiry, so its secret works until someone revokes it' : ''
+      ].filter(Boolean).join(' and ');
+      if (!await confirm({
+        title: 'Create high-privilege service account?',
+        description: `"${name}" will have ${risks}. Scopes: ${scopes.join(', ')}. Prefer a narrower role and an expiry unless this automation truly needs them.`,
+        confirmLabel: 'Create service account'
+      })) return;
+    }
     const result = await runSettingsAction('create-service-account', () => requestJson(config, session, '/v1/service-accounts', {
       method: 'POST',
       body: {
-        name: String(form.get('name') ?? '').trim() || 'Automation account',
-        role: String(form.get('role') ?? 'viewer'),
+        name,
+        role: serviceAccountRole,
         scopes,
-        ...(expiresAtFromForm(String(form.get('expiry') ?? '')) ? { expires_at: expiresAtFromForm(String(form.get('expiry') ?? '')) } : {})
+        ...(expiresAt ? { expires_at: expiresAt } : {})
       }
     }), 'Service account created. Copy its secret now; it is shown once.');
     if (result && typeof result === 'object' && 'secret' in result && typeof (result as { secret?: unknown }).secret === 'string') {
       showOneTimeSecret('New service account secret', String((result as { secret: string }).secret));
       formElement.reset();
+      setServiceAccountRole('viewer');
+      setServiceAccountScopes([...DEFAULT_SERVICE_ACCOUNT_SCOPES]);
     }
+  }
+
+  function changeServiceAccountRole(next: string) {
+    const allowed = scopesForRole(next);
+    setServiceAccountRole(next);
+    setServiceAccountScopes((current) => current.filter((scope) => allowed.includes(scope)));
+    setServiceAccountScopeError('');
+  }
+
+  function toggleServiceAccountScope(scope: string) {
+    setServiceAccountScopeError('');
+    setServiceAccountScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope]);
   }
 
   async function revokeServiceAccount(account: DataItem) {
@@ -1723,12 +1842,12 @@ export function SettingsPage({
   }
 
   const retentionChanges = pendingRetention ? [
-    { label: 'Metadata (events, vault metadata, notification history)', before: recordedMetadataRetentionDays, after: pendingRetention.metadata_retention_days },
-    { label: 'Generated reports', before: recordedReportDays, after: pendingRetention.evidence_retention.report_days },
-    { label: 'Audit log', before: recordedAuditDays, after: pendingRetention.evidence_retention.audit_log_days },
-    { label: 'High-scale authorization artifacts', before: recordedHighScaleDays, after: pendingRetention.evidence_retention.high_scale_artifact_days }
+    { label: 'Metadata (events, evidence vault entries, notification history, connector poll data)', before: recordedMetadataRetentionDays, after: pendingRetention.metadata_retention_days, purges: true },
+    { label: 'Generated reports', before: recordedReportDays, after: pendingRetention.evidence_retention.report_days, purges: true },
+    { label: 'Audit log', before: recordedAuditDays, after: pendingRetention.evidence_retention.audit_log_days, purges: false },
+    { label: 'High-scale authorization artifacts', before: recordedHighScaleDays, after: pendingRetention.evidence_retention.high_scale_artifact_days, purges: false }
   ] : [];
-  const retentionReductions = retentionChanges.filter((change) => change.before !== null && change.after < change.before);
+  const retentionReductions = retentionChanges.filter((change) => change.purges && change.before !== null && change.after < change.before);
 
   async function confirmSaveRetention() {
     if (!canWriteTenant) return;
@@ -1910,15 +2029,20 @@ export function SettingsPage({
         <Card>
           <CardHeader>
             <CardTitle>Users and sign-in</CardTitle>
-            <CardDescription>Inviting users, changing roles, and SSO mapping are not self-service in this portal. Ask your deployment administrator.</CardDescription>
+            <CardDescription>Inviting users, changing roles, and SSO mapping are handled by your AstraNull account team.</CardDescription>
           </CardHeader>
+          {settingsSupportContact ? (
+            <CardContent className="row-actions">
+              <AnchorButton href={settingsSupportContact.href} variant="secondary" size="sm">Contact support</AnchorButton>
+            </CardContent>
+          ) : null}
           <details className="detail-technical settings-session">
           <summary><ChevronRight className="detail-technical-chevron" size={16} aria-hidden="true" />Your session details</summary>
           <CardContent className="kv-list">
             <div><span>User ID</span><strong>{session.user_id ?? '—'}</strong></div>
             <div><span>Role</span><strong>{session.role ?? '—'}</strong></div>
             <div><span>Tenant</span><strong>{session.tenant_id ?? data.state?.tenant_id ?? '—'}</strong></div>
-            <div><span>Auth mode</span><strong>{config.authMode}</strong></div>
+            <div><span>Sign-in method</span><strong>{oidcPosture.signInMethod}</strong></div>
           </CardContent>
           </details>
           {session.principal === 'staff' ? (
@@ -1931,7 +2055,7 @@ export function SettingsPage({
           <Card>
             <PanelCardHeader
               title="Tenant audit log"
-              description="Immutable security-relevant history lives on the Audit page — Settings does not duplicate that log."
+              description="Append-only, hash-chained security history lives on the Audit page — Settings does not duplicate that log."
               trailing={<AnchorButton href="#audit" variant="secondary" size="sm">Open audit log</AnchorButton>}
             />
             <CardContent>
@@ -1964,18 +2088,31 @@ export function SettingsPage({
                   </label>
                   <label>
                     <span>Role</span>
-                    <select name="role" defaultValue="viewer">
-                      <option value="viewer">Viewer</option>
-                      <option value="auditor">Auditor</option>
-                      <option value="engineer">Engineer</option>
-                      <option value="admin">Admin</option>
+                    <select name="role" value={serviceAccountRole} onChange={(event) => changeServiceAccountRole(event.target.value)}>
+                      {[...SERVICE_ACCOUNT_ROLES].reverse().map((role) => <option key={role} value={role}>{plainCodeLabel(role)}</option>)}
                     </select>
                   </label>
-                  <label className="full">
-                    <span>Scopes</span>
-                    <input name="scopes" defaultValue="tenant:read,evidence:read" spellCheck={false} aria-describedby="sa-scopes-help" />
-                    <span className="muted small" id="sa-scopes-help">Comma-separated resource:action permissions. The server rejects scopes the chosen role does not hold.</span>
-                  </label>
+                  <fieldset className="full sa-scope-groups" aria-describedby={serviceAccountScopeError ? 'sa-scopes-help sa-scopes-error' : 'sa-scopes-help'} aria-invalid={serviceAccountScopeError ? true : undefined}>
+                    <legend>Scopes</legend>
+                    <p className="muted small" id="sa-scopes-help">Only permissions the selected role holds are listed. Grant the fewest needed.</p>
+                    <div className="sa-scope-grid">
+                      {groupScopesByResource(scopesForRole(serviceAccountRole)).map(([resource, scopes]) => (
+                        <div key={resource} className="sa-scope-group" role="group" aria-labelledby={`sa-scope-resource-${resource}`}>
+                          <h4 id={`sa-scope-resource-${resource}`}>{plainCodeLabel(resource)}</h4>
+                          {scopes.map((scope) => (
+                            <label key={scope} className="check-row">
+                              <input type="checkbox" name="scopes" value={scope} checked={serviceAccountScopes.includes(scope)} onChange={() => toggleServiceAccountScope(scope)} />
+                              <span className="cp-stack">
+                                <span>{plainCodeLabel(scope.slice(scope.indexOf(':') + 1))}</span>
+                                <span className="muted small mono">{scope}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    {serviceAccountScopeError ? <p className="field-error" id="sa-scopes-error" role="alert">{serviceAccountScopeError}</p> : null}
+                  </fieldset>
                   <label>
                     <span>Expiry</span>
                     <select name="expiry" defaultValue="30d">
@@ -2019,18 +2156,18 @@ export function SettingsPage({
           <Card>
             <CardHeader>
               <CardTitle>Enterprise SSO posture</CardTitle>
-              <CardDescription>Read-only sign-in configuration for this deployment. Secrets and JWKS URLs are never exposed.</CardDescription>
+              <CardDescription>Read-only sign-in configuration for this workspace. Secrets and signing keys are never exposed.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Auth mode</span><strong>{oidcPosture.authMode}</strong></div>
-              <div><span>OIDC issuer</span><strong>{oidcPosture.issuer ?? 'Not exposed on public readiness endpoints'}</strong></div>
-              <div><span>OIDC audience</span><strong>{oidcPosture.audience ?? 'Not exposed on public readiness endpoints'}</strong></div>
-              <div><span>Bundled staging login</span><strong>{oidcPosture.bundledStagingLogin ? 'Enabled' : 'Disabled'}</strong></div>
-              <div><span>Login URL</span><strong>{config.loginUrl}</strong></div>
+              <div><span>Sign-in method</span><strong>{oidcPosture.signInMethod}</strong></div>
+              {oidcPosture.issuerHost ? <div><span>Identity provider</span><strong>{oidcPosture.issuerHost}</strong></div> : null}
+              {oidcPosture.audience ? <div><span>Audience</span><strong>{oidcPosture.audience}</strong></div> : null}
+              {showSignInInternals ? <div><span>Bundled staging login</span><strong>{oidcPosture.bundledStagingLogin ? 'Enabled' : 'Disabled'}</strong></div> : null}
+              {showSignInInternals ? <div><span>Login URL</span><strong>{config.loginUrl}</strong></div> : null}
             </CardContent>
             <CardContent className="settings-list">
-              <SettingsNote icon={ShieldCheck}>Production human auth defaults to `oidc-jwt` with JWKS verification; developer validation may use `dev-headers` or bundled staging login.</SettingsNote>
-              <SettingsNote icon={KeyRound}>Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload.</SettingsNote>
+              <SettingsNote icon={ShieldCheck}>Sign-in uses your organization's identity provider; tokens are verified server-side.</SettingsNote>
+              <SettingsNote icon={KeyRound}>Identity provider settings (issuer, audience, signing keys) are managed by your deployment administrator and are never shown in the portal.</SettingsNote>
             </CardContent>
           </Card>
           {canWriteSecrets || (canRotateSecrets && canReadSecrets) ? (
@@ -2136,7 +2273,7 @@ export function SettingsPage({
                 min={1}
                 max={3650}
                 defaultValue={metadataRetentionDays}
-                hint={`${recordedMetadataRetentionDays === null ? 'Not recorded; prefilled with the 90-day recommendation. ' : ''}1 to 3650 days. Events, vault metadata, and notification history.`}
+                hint={`${recordedMetadataRetentionDays === null ? 'Not recorded; prefilled with the 90-day recommendation. ' : ''}1 to 3650 days. Deletes events, evidence vault entries, notification history, and connector poll data older than this.`}
               />
               <FormNumberField
                 label="Report archive (days)"
@@ -2144,7 +2281,7 @@ export function SettingsPage({
                 min={30}
                 max={3650}
                 defaultValue={getNumber(evidenceRetention, ['report_days'], 365)}
-                hint={`${recordedReportDays === null ? 'Not recorded; prefilled with 365. ' : ''}30 to 3650 days. Generated report snapshots.`}
+                hint={`${recordedReportDays === null ? 'Not recorded; prefilled with 365. ' : ''}30 to 3650 days. Generated report snapshots are kept for this period or the metadata period, whichever is longer.`}
               />
               <FormNumberField
                 label="Audit log retention (days)"
@@ -2152,7 +2289,7 @@ export function SettingsPage({
                 min={365}
                 max={3650}
                 defaultValue={getNumber(evidenceRetention, ['audit_log_days'], 2555)}
-                hint={`${recordedAuditDays === null ? 'Not recorded; prefilled with 2555. ' : ''}365 to 3650 days (2555 is about 7 years). Security audit trail.`}
+                hint={`${recordedAuditDays === null ? 'Not recorded; prefilled with 2555. ' : ''}365 to 3650 days. Recorded as your retention policy. Audit logs are never purged automatically.`}
               />
               <FormNumberField
                 label="High-scale artifact retention (days)"
@@ -2160,7 +2297,7 @@ export function SettingsPage({
                 min={365}
                 max={3650}
                 defaultValue={getNumber(evidenceRetention, ['high_scale_artifact_days'], 2555)}
-                hint={`${recordedHighScaleDays === null ? 'Not recorded; prefilled with 2555. ' : ''}365 to 3650 days. SOC authorization packs.`}
+                hint={`${recordedHighScaleDays === null ? 'Not recorded; prefilled with 2555. ' : ''}365 to 3650 days. Recorded as your retention policy. SOC authorization packs are never purged automatically.`}
               />
               <label className="check-row full">
                 <input name="legal_hold" type="checkbox" defaultChecked={Boolean(evidenceRetention.legal_hold)} />
@@ -2174,8 +2311,7 @@ export function SettingsPage({
             ) : <RoleRestrictedCard title="Retention settings are read-only for your role." />}
           </CardContent>
           <CardContent className="settings-list">
-            <SettingsNote icon={FileCheck2}>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</SettingsNote>
-            <SettingsNote icon={ShieldCheck}>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the operations guide.</SettingsNote>
+            <SettingsNote icon={ShieldCheck}>Only metadata and reports are purged by these settings. Audit logs, findings, test runs, and SOC authorization artifacts are always kept.</SettingsNote>
           </CardContent>
         </Card></div>
       )}
@@ -2190,14 +2326,15 @@ export function SettingsPage({
                 <li key={change.label}>
                   <strong>{change.label}:</strong>{' '}
                   {change.before === null ? `Not recorded → ${countLabel(change.after, 'day')}` : change.before === change.after ? `${countLabel(change.after, 'day')} (unchanged)` : `${change.before} → ${countLabel(change.after, 'day')}${change.after < change.before ? ' (shorter)' : ''}`}
+                  {change.purges ? null : <span className="muted"> · recorded as policy only; never purged automatically</span>}
                 </li>
               ))}
               <li><strong>Legal hold:</strong> {pendingRetention?.evidence_retention.legal_hold ? 'on, deletions are blocked while it stays on' : 'off'}</li>
             </ul>
             {retentionReductions.length ? (
-              <p>Records older than the new period{retentionReductions.length > 1 ? 's' : ''} become eligible for deletion. Metadata purge runs as soon as you save{pendingRetention?.evidence_retention.legal_hold ? ', except while legal hold is on' : ''}. Deleted records cannot be recovered.</p>
-            ) : <p>No period gets shorter, so nothing becomes newly eligible for deletion.</p>}
-            <p className="muted small">Shorter windows can immediately purge stored metadata.</p>
+              <p>{retentionReductions.map((change) => change.label.replace(/ \(.*\)$/, '')).join(' and ')}: records older than the new period{retentionReductions.length > 1 ? 's' : ''} become eligible for deletion. The purge runs as soon as you save{pendingRetention?.evidence_retention.legal_hold ? ', except while legal hold is on' : ''}. Deleted records cannot be recovered.</p>
+            ) : <p>No purging period gets shorter, so nothing becomes newly eligible for deletion.</p>}
+            <p className="muted small">Only metadata and reports are purged by these settings. Audit logs, findings, test runs, and SOC authorization artifacts are always kept.</p>
           </div>
         )}
         confirmLabel={retentionReductions.length ? 'Shorten retention' : 'Save retention policy'}
@@ -2248,6 +2385,10 @@ export function PolicyPage({
   const selectedPolicyCheck = safeChecks.find(
     (check) => getString(check, ['check_id', 'id'], '') === policyCheckId
   ) ?? null;
+  const policyCheckObservationOnly = isObservationOnlyCheck(selectedPolicyCheck);
+  const policyVerdictOptions = policyCheckObservationOnly
+    ? POLICY_VERDICT_OPTIONS.filter((option) => option.value === OBSERVATION_ONLY_VERDICT)
+    : POLICY_VERDICT_OPTIONS;
   const activePolicyTargets = data.targets.filter((target) => !target.archived_at && !target.deleted_at);
   const policySelectionReady = policyTargetIds.length > 0 && policyTargetIds.every((id) => {
     const target = activePolicyTargets.find((candidate) => getString(candidate, ['id'], '') === id);
@@ -2266,7 +2407,15 @@ export function PolicyPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canWritePolicies, callerPrefill.checkId, safeChecks.length, activePolicyTargets.length]);
 
-  function handlePolicyCheckChange(nextCheckId: string) { setPolicyCheckId(nextCheckId); }
+  useEffect(() => {
+    if (policyCheckObservationOnly && policyExpectedVerdict !== OBSERVATION_ONLY_VERDICT) setPolicyExpectedVerdict(OBSERVATION_ONLY_VERDICT);
+  }, [policyCheckObservationOnly, policyExpectedVerdict]);
+
+  function handlePolicyCheckChange(nextCheckId: string) {
+    const nextCheck = safeChecks.find((check) => getString(check, ['check_id', 'id'], '') === nextCheckId) ?? null;
+    if (policyCheckObservationOnly && !isObservationOnlyCheck(nextCheck)) setPolicyExpectedVerdict('pass');
+    setPolicyCheckId(nextCheckId);
+  }
 
   async function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2313,7 +2462,7 @@ export function PolicyPage({
       check_id: checkId,
       cadence,
       timezone,
-      expected_verdict: String(form.get('expected_verdict') ?? 'pass'),
+      expected_verdict: policyCheckObservationOnly ? OBSERVATION_ONLY_VERDICT : String(form.get('expected_verdict') ?? 'pass'),
       safe_windows
     };
     setBusy('create-test-policy');
@@ -2353,7 +2502,7 @@ export function PolicyPage({
           .map((failure) => `${targetDisplayName(data, failure.targetId)}: ${failure.message}`)
           .join(' ');
         setError(
-          `Created ${successes.length} of ${policyTargetIds.length} policies. `
+          `Created ${successes.length} of ${policyTargetIds.length} schedules. `
           + `Failed ${failures.length}: ${failedResults} `
           + 'Successful writes were retained; only failed exact target bindings remain selected for retry.'
           + (refreshFailure ? ` ${refreshFailure}` : '')
@@ -2415,7 +2564,7 @@ export function PolicyPage({
       cadenceOptions: POLICY_CADENCE_OPTIONS,
       onCadenceChange: setPolicyCadence,
       expectedVerdict: policyExpectedVerdict,
-      verdictOptions: POLICY_VERDICT_OPTIONS,
+      verdictOptions: policyVerdictOptions,
       onExpectedVerdictChange: setPolicyExpectedVerdict,
       timezone: policyTimezone,
       onTimezoneChange: setPolicyTimezone,
@@ -2428,7 +2577,7 @@ export function PolicyPage({
 
 export function SupportPage({ data, session, config }: { data: PortalData; session: Session; config: PortalConfig }) {
   const summary = data.subscriptionSummary;
-  const supportUri = configuredSupportUri(config.siteConfig);
+  const supportContact = configuredSupportUri(config.siteConfig);
   const support = getNestedItem(summary, ['support']);
   const usage = getNestedItem(summary, ['usage']);
   const account = getNestedItem(summary, ['account']);
@@ -2446,7 +2595,19 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
   const [draftNote, setDraftNote] = useState('');
   const [includedRefs, setIncludedRefs] = useState<Record<string, boolean>>({});
   const [copyState, setCopyState] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
-  const contactLabel = supportUri.startsWith('mailto:') ? supportUri.slice('mailto:'.length).split('?')[0] : supportUri;
+  const ownerView = isWorkspaceOwnerRole(role);
+  const [probeCopyState, setProbeCopyState] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  const probeSourceRanges = Array.isArray(config.siteConfig?.probe_source_ranges)
+    ? (config.siteConfig.probe_source_ranges as unknown[]).filter((value): value is string => typeof value === 'string' && value.trim() !== '').map((value) => value.trim())
+    : [];
+  const probeTrafficFacts = [
+    'Requests come from AstraNull signed public probe workers.',
+    'Most requests carry a User-Agent containing "AstraNull", but some check phases vary or omit headers, so do not rely on the User-Agent alone.',
+    "Traffic is bounded by each check's request limit and starts only when a check is confirmed.",
+    probeSourceRanges.length
+      ? `Source addresses: ${probeSourceRanges.join(', ')}.`
+      : 'Source addresses are not published in this portal; ask your AstraNull operator for the current probe source ranges.'
+  ];
   const tenantId = session.tenant_id ?? getString(account ?? {}, ['tenant_id'], '');
 
   const references = recentAudit.slice(0, 10).map((entry) => ({
@@ -2495,7 +2656,7 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
         route="support"
         title="Support"
         description="Prepare a reference-only summary for your support contact and open the exact events behind it. AstraNull does not send anything from this page."
-        actions={supportUri ? <AnchorButton href={supportUri} variant="default" size="sm">Contact support</AnchorButton> : undefined}
+        actions={supportContact ? <AnchorButton href={supportContact.href} variant="default" size="sm">Contact support</AnchorButton> : undefined}
       />
       {supportLoadError ? (
         <div className="form-banner error row-actions" role="alert">
@@ -2507,8 +2668,12 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
         <Card>
           <PanelCardHeader title="Who to contact" description="Only configured channels are shown. No response time is promised here." />
           <CardContent className="stack-tight">
-            {supportUri ? (
-              <p className="cp-note">Support channel configured for this deployment: <a className="cp-link" href={supportUri}>{contactLabel}</a>. Opening it uses your own mail client or browser; nothing is sent automatically.</p>
+            {supportContact ? (
+              <p className="cp-note">Support channel published for this deployment: <a className="cp-link" href={supportContact.href}>{supportContact.label}</a>. Opening it uses your own mail client or browser; nothing is sent automatically.</p>
+            ) : ownerView ? (
+              <div className="form-banner neutral" role="status">
+                No support channel is published for this deployment. Ask the team that operates this AstraNull deployment to publish a support contact{supportOwner ? ` (recorded support owner: ${supportOwner})` : ''}, then share the summary below.
+              </div>
             ) : (
               <div className="form-banner neutral" role="status">
                 No support channel is configured for this deployment. Contact your workspace administrator{supportOwner ? ` or the recorded support owner (${supportOwner})` : ''} and share the summary below.
@@ -2534,6 +2699,31 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
           </CardContent>
         </Card>
       </div>
+      <Card>
+        <PanelCardHeader
+          title="Probe traffic"
+          description="What your SOC or WAF team will see from AstraNull checks. Read-only; share it so they can recognise the traffic."
+          trailing={(
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                void navigator.clipboard.writeText(['AstraNull probe traffic', ...probeTrafficFacts.map((fact) => `- ${fact}`)].join('\n'))
+                  .then(() => setProbeCopyState({ tone: 'ok', text: 'Probe traffic facts copied.' }))
+                  .catch(() => setProbeCopyState({ tone: 'error', text: 'Clipboard unavailable. Select the text and copy it manually.' }));
+              }}
+            >
+              Copy probe traffic facts
+            </Button>
+          )}
+        />
+        <CardContent className="stack-tight">
+          <ul className="support-probe-facts" aria-label="Probe traffic facts">
+            {probeTrafficFacts.map((fact) => <li key={fact}>{fact}</li>)}
+          </ul>
+          {probeCopyState ? <span className={probeCopyState.tone === 'error' ? 'field-error' : 'muted small'} role={probeCopyState.tone === 'error' ? 'alert' : 'status'}>{probeCopyState.text}</span> : null}
+        </CardContent>
+      </Card>
       <Card>
         <PanelCardHeader title="Recent events" description={canReadAuditEvents ? 'Select events to include in the summary. View opens that exact event in the audit log.' : 'Event references can be included. Opening the audit log needs an owner, admin, SOC, or auditor role.'} />
         <CardContent>
@@ -2589,7 +2779,7 @@ export function SupportPage({ data, session, config }: { data: PortalData; sessi
 
 const ENTITLEMENT_FEATURES = ['waf_posture', 'external_discovery', 'connectors', 'high_scale_program'] as const;
 
-const ENTITLEMENT_FEATURE_LABELS: Record<(typeof ENTITLEMENT_FEATURES)[number], string> = {
+export const ENTITLEMENT_FEATURE_LABELS: Record<(typeof ENTITLEMENT_FEATURES)[number], string> = {
   waf_posture: 'WAF posture',
   external_discovery: 'External discovery',
   connectors: 'Provider connectors',
@@ -2836,7 +3026,7 @@ function SubscriptionEntitlementIndicator({
   );
 }
 
-export function SubscriptionPage({ data, config }: { data: PortalData; config?: PortalConfig }) {
+export function SubscriptionPage({ data, config, session }: { data: PortalData; config?: PortalConfig; session?: Session }) {
   const [portalLoadedAt] = useState(() => new Date().toISOString());
   const summary = data.subscriptionSummary;
   const subscriptionLoadError = data.loadErrors.subscriptionSummary;
@@ -2859,7 +3049,8 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
   const usersLimit = getNestedNumber(subscription, ['limits', 'users'], -1);
   const usersUsed = readUsage('users');
   const openFindings = readUsage('open_findings');
-  const supportUri = config ? configuredSupportUri(config.siteConfig) : '';
+  const supportContact = config ? configuredSupportUri(config.siteConfig) : null;
+  const ownerView = isWorkspaceOwnerRole((session ?? loadSession())?.role);
   const subscriptionStatus = getString(subscription ?? {}, ['status'], 'unrecorded');
   const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], 'unassigned');
   const sourceTimestamp = subscriptionRecordedTimestamp(
@@ -2976,13 +3167,23 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
           title="Plan & usage"
           actions={<Button type="button" variant="secondary" size="sm" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>}
         />
-        <EmptyState
-          icon={LifeBuoy}
-          title="No subscription configured for this tenant."
-          body="No subscription record is available. Limits and feature access are unknown, not unlimited. Ask your workspace administrator or support contact to provision one."
-          actionLabel="Open support"
-          actionHref="#support"
-        />
+        {ownerView ? (
+          <EmptyState
+            icon={LifeBuoy}
+            title="No subscription configured for this tenant."
+            body="No subscription record exists for this workspace. Limits and feature access are unknown, not unlimited. Plans are provisioned by the AstraNull operator for this deployment, not from this portal."
+            actionLabel={supportContact ? 'Contact support' : undefined}
+            actionHref={supportContact ? supportContact.href : undefined}
+          />
+        ) : (
+          <EmptyState
+            icon={LifeBuoy}
+            title="No subscription configured for this tenant."
+            body="No subscription record is available. Limits and feature access are unknown, not unlimited. Ask your workspace administrator or support contact to provision one."
+            actionLabel={supportContact ? 'Contact support' : 'Open support'}
+            actionHref={supportContact ? supportContact.href : '#support'}
+          />
+        )}
       </div>
     );
   }
@@ -3126,13 +3327,24 @@ export function SubscriptionPage({ data, config }: { data: PortalData; config?: 
       <Card className="card--dense">
         <PanelCardHeader title="Change your plan or limits" description="Plan changes are handled outside the portal." />
         <CardContent className="row-actions">
-          {supportUri
-            ? <AnchorButton href={supportUri} variant="secondary" size="sm">Contact support</AnchorButton>
-            : <span className="muted small">No support channel is configured. Ask your workspace administrator{getString(account ?? {}, ['contract_reference'], '') ? ` and quote contract reference ${getString(account ?? {}, ['contract_reference'], '')}` : ''}.</span>}
+          {supportContact
+            ? <AnchorButton href={supportContact.href} variant="secondary" size="sm">Contact support</AnchorButton>
+            : <span className="muted small">Contact your AstraNull account team{supportOwner && supportOwner !== 'unassigned' ? ` (support owner: ${supportOwner})` : ''}{getString(account ?? {}, ['contract_reference'], '') ? ` and quote contract reference ${getString(account ?? {}, ['contract_reference'], '')}` : ''}.</span>}
           <AnchorButton href="#support" variant="ghost" size="sm">Prepare a support summary</AnchorButton>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function TenantNameCell({ tenantId, name }: { tenantId: string; name: string }) {
+  if (!tenantId) return <span className="muted">Not recorded</span>;
+  const showName = name && name !== tenantId;
+  return (
+    <span className="cp-stack">
+      <span>{showName ? name : tenantId}</span>
+      {showName ? <span className="mono muted small">{tenantId}</span> : null}
+    </span>
   );
 }
 
@@ -3149,7 +3361,7 @@ export function StaffSurfacePage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
-  const { confirm } = useConfirmModal();
+  const { confirm, confirmWithReason } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -3175,7 +3387,32 @@ export function StaffSurfacePage({
     { value: 'false', label: 'Revoke / disable' }
   ];
   const isStaff = session.principal === 'staff';
-  const [adminTab, setAdminTab] = useState('overview');
+  const [adminTab, setAdminTab] = useState(() => getHashQueryParam('tab') || 'overview');
+
+  function selectAdminTab(next: string) {
+    setAdminTab(next);
+    replaceRouteParams({ tab: next === 'overview' ? null : next });
+  }
+
+  useEffect(() => {
+    function onHashChange() {
+      if (!window.location.hash.startsWith('#admin')) return;
+      setAdminTab(getHashQueryParam('tab') || 'overview');
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  function tenantNameFor(tenantId: string) {
+    const tenant = data.internalTenants.find((entry) => getString(entry, ['tenant_id', 'id'], '') === tenantId);
+    const name = tenant ? getString(tenant, ['name'], '') : '';
+    return name && name !== tenantId ? name : tenantId || 'Unknown tenant';
+  }
+
+  function tenantLabelFor(tenantId: string) {
+    const name = tenantNameFor(tenantId);
+    return name === tenantId ? tenantId : `${name} (${tenantId})`;
+  }
   const canReadSignups = canReadDataset(session, 'internalSignupRequests');
   const canReadTenants = canReadDataset(session, 'internalTenants');
   const canReadApprovals = canReadDataset(session, 'internalApprovalRequests');
@@ -3217,30 +3454,66 @@ export function StaffSurfacePage({
     }
   }
 
-  async function approveSignup(id: string) {
-    if (!await confirm({ title: 'Approve signup request', description: 'Approve this signup request? A tenant account will be provisioned.', confirmLabel: 'Approve request', confirmTone: 'default' })) return;
-    await runStaffAction(`approve-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${id}/approve`, {
+  async function approveSignup(item: DataItem) {
+    const id = getString(item, ['id'], '');
+    if (!id) return;
+    const organization = getString(item, ['organization_name'], id);
+    const plan = plainCodeLabel(getString(item, ['requested_plan'], ''), 'not recorded');
+    const reason = await confirmWithReason({
+      title: `Approve signup for ${organization}`,
+      description: `Approve signup for ${organization} (requested plan: ${plan})? A tenant account will be provisioned.`,
+      confirmLabel: 'Approve signup',
+      confirmTone: 'default',
+      reason: { label: 'Reason (recorded in the staff audit log)', required: true }
+    });
+    if (reason === null) return;
+    await runStaffAction(`approve-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      body: { reason: 'Approved from React staff console.' }
-    }), 'Signup request approved and tenant provisioned.');
+      body: { reason }
+    }), `Signup for ${organization} approved and tenant provisioned.`);
   }
 
-  async function rejectSignup(id: string) {
-    if (!await confirm({ title: 'Reject signup request', description: 'Reject this signup request? No tenant will be provisioned for this applicant.', confirmLabel: 'Reject request' })) return;
-    await runStaffAction(`reject-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${id}/reject`, {
+  async function rejectSignup(item: DataItem) {
+    const id = getString(item, ['id'], '');
+    if (!id) return;
+    const organization = getString(item, ['organization_name'], id);
+    const reason = await confirmWithReason({
+      title: `Reject signup for ${organization}?`,
+      description: `Reject signup for ${organization}? No tenant will be provisioned, and the applicant sees the reason below.`,
+      confirmLabel: 'Reject signup',
+      reason: { label: 'Reason (shown to the applicant)', required: true }
+    });
+    if (reason === null) return;
+    await runStaffAction(`reject-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      body: { reason: 'Rejected from React staff console.' }
-    }), 'Signup request rejected.');
+      body: { reason }
+    }), `Signup for ${organization} rejected.`);
   }
 
-  async function decideApproval(id: string, decision: 'approve' | 'reject') {
-    if (decision === 'approve') {
-      if (!await confirm({ title: 'Approve internal request', description: 'Approve this internal approval request? The requested action will proceed.', confirmLabel: 'Approve request', confirmTone: 'default' })) return;
-    } else if (!await confirm({ title: 'Reject internal request', description: 'Reject this internal approval request? The requested action will not proceed.', confirmLabel: 'Reject request' })) return;
-    await runStaffAction(`approval-${id}-${decision}`, () => requestJson(config, session, `/internal/admin/approval-requests/${id}/decision`, {
+  async function decideApproval(item: DataItem, decision: 'approve' | 'reject') {
+    const id = getString(item, ['id'], '');
+    if (!id) return;
+    const kind = plainCodeLabel(getString(item, ['kind'], ''), 'internal');
+    const tenant = tenantLabelFor(getString(item, ['tenant_id'], ''));
+    const reason = await confirmWithReason(decision === 'approve'
+      ? {
+        title: `Approve ${kind} request for tenant ${tenant}?`,
+        description: `Approve ${kind} request for tenant ${tenant}? The requested action will proceed.`,
+        confirmLabel: 'Approve request',
+        confirmTone: 'default',
+        reason: { label: 'Reason (recorded in the staff audit log)', required: true }
+      }
+      : {
+        title: `Reject ${kind} request for tenant ${tenant}?`,
+        description: `Reject ${kind} request for tenant ${tenant}? The requested action will not proceed.`,
+        confirmLabel: 'Reject request',
+        reason: { label: 'Reason (recorded in the staff audit log)', required: true }
+      });
+    if (reason === null) return;
+    await runStaffAction(`approval-${id}-${decision}`, () => requestJson(config, session, `/internal/admin/approval-requests/${encodeURIComponent(id)}/decision`, {
       method: 'POST',
-      body: { decision, reason: `${decision} from React staff console.` }
-    }), `Approval request ${decision}d.`);
+      body: { decision, reason }
+    }), `${kind} request for ${tenant} ${decision === 'approve' ? 'approved' : 'rejected'}.`);
   }
 
   async function grantEntitlement(event: FormEvent<HTMLFormElement>) {
@@ -3253,14 +3526,19 @@ export function StaffSurfacePage({
       setError('Select a tenant and feature before granting entitlements.');
       return;
     }
+    if (!reason) {
+      setError('Enter a reason before changing an entitlement.');
+      return;
+    }
     const featureLabel = ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature;
+    const tenantName = tenantNameFor(entitlementTenantId);
     if (enabled) {
-      if (!await confirm({ title: 'Grant tenant entitlement', description: `Grant the ${featureLabel} entitlement for this tenant?`, confirmLabel: 'Grant entitlement', confirmTone: 'default' })) return;
-    } else if (!await confirm({ title: 'Revoke tenant entitlement', description: `Revoke the ${featureLabel} entitlement? The feature will be disabled for this tenant.`, confirmLabel: 'Revoke entitlement' })) return;
+      if (!await confirm({ title: `Grant ${featureLabel} to ${tenantName}?`, description: `${tenantName} (${entitlementTenantId}) gets this access immediately. Reason: ${reason}`, confirmLabel: 'Grant entitlement', confirmTone: 'default' })) return;
+    } else if (!await confirm({ title: `Revoke ${featureLabel} from ${tenantName}?`, description: `${tenantName} (${entitlementTenantId}) loses this access immediately. Reason: ${reason}`, confirmLabel: 'Revoke entitlement' })) return;
     await runStaffAction(`entitlement-${entitlementTenantId}-${feature}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}/entitlements`, {
       method: 'POST',
-      body: { feature, enabled, reason: reason || `Entitlement ${enabled ? 'granted' : 'revoked'} from React staff console.` }
-    }), `${feature} entitlement ${enabled ? 'granted' : 'revoked'} for ${entitlementTenantId}.`);
+      body: { feature, enabled, reason }
+    }), `${featureLabel} ${enabled ? 'granted to' : 'revoked from'} ${tenantName}.`);
   }
 
   const selectedEntitlementTenant = data.internalTenants.find(
@@ -3270,8 +3548,8 @@ export function StaffSurfacePage({
 
   const signupColumns: TableColumn<DataItem>[] = [
     { key: 'org', label: 'Organization', render: (item) => getString(item, ['organization_name', 'id']) },
-    { key: 'state', label: 'State', render: (item) => <Badge tone={['submitted', 'under_review'].includes(getString(item, ['state'])) ? 'warn' : 'info'}>{getString(item, ['state'])}</Badge> },
-    { key: 'plan', label: 'Plan', render: (item) => getString(item, ['requested_plan']) },
+    { key: 'state', label: 'State', render: (item) => <Badge tone={['submitted', 'under_review'].includes(getString(item, ['state'])) ? 'warn' : 'info'} title={getString(item, ['state'], '')}>{plainCodeLabel(getString(item, ['state'], ''), 'Not recorded')}</Badge> },
+    { key: 'plan', label: 'Plan', render: (item) => <span title={getString(item, ['requested_plan'], '')}>{plainCodeLabel(getString(item, ['requested_plan'], ''), 'Not recorded')}</span> },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
     {
       key: 'actions',
@@ -3284,17 +3562,17 @@ export function StaffSurfacePage({
         const rowBlocked = busy !== '' && !rowBusy;
         return (
           <div className="row-actions" aria-busy={rowBusy || undefined}>
-            <Button size="sm" variant="secondary" loading={busy === `approve-signup-${id}`} disabled={rowBlocked} onClick={() => void approveSignup(id)}>Approve</Button>
-            <Button size="sm" variant="danger" loading={busy === `reject-signup-${id}`} disabled={rowBlocked} onClick={() => void rejectSignup(id)}>Reject</Button>
+            <Button size="sm" variant="secondary" loading={busy === `approve-signup-${id}`} disabled={rowBlocked} onClick={() => void approveSignup(item)}>Approve</Button>
+            <Button size="sm" variant="danger" loading={busy === `reject-signup-${id}`} disabled={rowBlocked} onClick={() => void rejectSignup(item)}>Reject</Button>
           </div>
         );
       }
     }
   ];
   const tenantColumns: TableColumn<DataItem>[] = [
-    { key: 'tenant', label: 'Tenant', render: (item) => getString(item, ['name', 'tenant_id']) },
-    { key: 'state', label: 'Lifecycle', render: (item) => <Badge tone={getString(item, ['lifecycle_state']) === 'active' ? 'success' : 'warn'}>{getString(item, ['lifecycle_state'])}</Badge> },
-    { key: 'plan', label: 'Plan', render: (item) => getString(item, ['plan_id']) },
+    { key: 'tenant', label: 'Tenant', render: (item) => <TenantNameCell tenantId={getString(item, ['tenant_id', 'id'], '')} name={getString(item, ['name'], '')} /> },
+    { key: 'state', label: 'Lifecycle', render: (item) => <Badge tone={getString(item, ['lifecycle_state']) === 'active' ? 'success' : 'warn'} title={getString(item, ['lifecycle_state'], '')}>{plainCodeLabel(getString(item, ['lifecycle_state'], ''), 'Not recorded')}</Badge> },
+    { key: 'plan', label: 'Plan', render: (item) => <span title={getString(item, ['plan_id'], '')}>{plainCodeLabel(getString(item, ['plan_id'], ''), 'Not recorded')}</span> },
     { key: 'owner', label: 'Support owner', render: (item) => getString(item, ['support_owner'], 'unassigned') },
     {
       key: 'actions',
@@ -3308,9 +3586,9 @@ export function StaffSurfacePage({
     }
   ];
   const approvalColumns: TableColumn<DataItem>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind']) },
-    { key: 'state', label: 'State', render: (item) => <Badge tone={['submitted', 'under_review'].includes(getString(item, ['state'])) ? 'warn' : 'success'}>{getString(item, ['state'])}</Badge> },
-    { key: 'tenant', label: 'Tenant', render: (item) => getString(item, ['tenant_id']) },
+    { key: 'kind', label: 'Kind', render: (item) => <span title={getString(item, ['kind'], '')}>{plainCodeLabel(getString(item, ['kind'], ''), 'Not recorded')}</span> },
+    { key: 'state', label: 'State', render: (item) => <Badge tone={['submitted', 'under_review'].includes(getString(item, ['state'])) ? 'warn' : 'success'} title={getString(item, ['state'], '')}>{plainCodeLabel(getString(item, ['state'], ''), 'Not recorded')}</Badge> },
+    { key: 'tenant', label: 'Tenant', render: (item) => <TenantNameCell tenantId={getString(item, ['tenant_id'], '')} name={tenantNameFor(getString(item, ['tenant_id'], ''))} /> },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
     {
       key: 'actions',
@@ -3323,17 +3601,17 @@ export function StaffSurfacePage({
         const rowBlocked = busy !== '' && !rowBusy;
         return (
           <div className="row-actions" aria-busy={rowBusy || undefined}>
-            <Button size="sm" variant="secondary" loading={busy === `approval-${id}-approve`} disabled={rowBlocked} onClick={() => void decideApproval(id, 'approve')}>Approve</Button>
-            <Button size="sm" variant="danger" loading={busy === `approval-${id}-reject`} disabled={rowBlocked} onClick={() => void decideApproval(id, 'reject')}>Reject</Button>
+            <Button size="sm" variant="secondary" loading={busy === `approval-${id}-approve`} disabled={rowBlocked} onClick={() => void decideApproval(item, 'approve')}>Approve</Button>
+            <Button size="sm" variant="danger" loading={busy === `approval-${id}-reject`} disabled={rowBlocked} onClick={() => void decideApproval(item, 'reject')}>Reject</Button>
           </div>
         );
       }
     }
   ];
   const auditColumns: TableColumn<DataItem>[] = [
-    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
+    { key: 'action', label: 'Action', render: (item) => <span title={getString(item, ['action'], '')}>{formatAuditAction(getString(item, ['action'], ''), 'Unknown action', item.metadata)}</span> },
     { key: 'staff', label: 'Staff', render: (item) => getString(item, ['staff_id']) },
-    { key: 'tenant', label: 'Tenant', render: (item) => getString(item, ['tenant_id']) },
+    { key: 'tenant', label: 'Tenant', render: (item) => { const tenantId = getString(item, ['tenant_id'], ''); return tenantId ? <TenantNameCell tenantId={tenantId} name={tenantNameFor(tenantId)} /> : '—'; } },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
   ];
   return (
@@ -3349,11 +3627,13 @@ export function StaffSurfacePage({
           duration={5000}
         />
       )}
-      <PageContextSummary>
-        Review queue <span className="tabular-nums">{queueDepth === null ? '—' : formatNumber(queueDepth)}</span> ·{' '}
-        <span className="tabular-nums">{tenantCount === null ? '—' : formatNumber(tenantCount)}</span> tenants ·{' '}
-        <span className="tabular-nums">{highScaleReviews === null ? '—' : formatNumber(highScaleReviews)}</span> SOC reviews pending
-      </PageContextSummary>
+      {isStaff && activeAdminTab !== 'overview' ? (
+        <PageContextSummary>
+          Review queue <span className="tabular-nums">{queueDepth === null ? '—' : formatNumber(queueDepth)}</span> ·{' '}
+          <span className="tabular-nums">{tenantCount === null ? '—' : formatNumber(tenantCount)}</span> tenants ·{' '}
+          <span className="tabular-nums">{highScaleReviews === null ? '—' : formatNumber(highScaleReviews)}</span> SOC reviews pending
+        </PageContextSummary>
+      ) : null}
       {!isStaff ? (
         <Card>
           <CardHeader>
@@ -3367,7 +3647,7 @@ export function StaffSurfacePage({
       ) : (
         <>
           <CalloutNote icon={ShieldCheck} tone="info">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
-          <Tabs value={activeAdminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections"
+          <Tabs value={activeAdminTab} options={adminTabOptions} onChange={selectAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections"
             getTabId={(id) => `staff-administration-sections-tab-${id}`}
             getPanelId={(id) => `staff-administration-sections-panel-${id}`} />
           {activeAdminTab === 'overview' ? (
@@ -3409,39 +3689,52 @@ export function StaffSurfacePage({
                 <DataTable columns={tenantColumns} items={data.internalTenants} empty={renderFriendlyEmptyState({ icon: Target, title: 'No managed tenants.', body: 'Provisioned tenants appear here after staff approval creates account records.' })} loadError={data.loadErrors.internalTenants} onRetry={() => void onRefresh()} />
               </CardContent>
             </Card>
+          {canWriteTenants || canWriteEntitlements ? (
+            <div className="staff-selected-tenant">
+              <Select
+                label="Selected tenant"
+                name="selected_tenant_id"
+                value={entitlementTenantId}
+                options={internalTenantOptions}
+                onChange={setEntitlementTenantId}
+                hint="Support owner and entitlement changes below apply to this tenant."
+              />
+            </div>
+          ) : null}
           {canWriteTenants ? (
           <Card>
             <CardHeader>
               <CardTitle>Support owner assignment</CardTitle>
-              <CardDescription>Assign the AstraNull support owner for the selected tenant.</CardDescription>
+              <CardDescription>Assign the AstraNull support owner for {entitlementTenantId ? tenantLabelFor(entitlementTenantId) : 'the selected tenant'}.</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="product-form" onSubmit={async (event) => {
                 event.preventDefault();
-                const owner = String(new FormData(event.currentTarget).get('support_owner') ?? '').trim();
+                const form = new FormData(event.currentTarget);
+                const owner = String(form.get('support_owner') ?? '').trim();
+                const reason = String(form.get('support_owner_reason') ?? '').trim();
                 if (!entitlementTenantId || !owner) {
-                  setError('Select a tenant before assigning a support owner.');
+                  setError('Select a tenant and enter a support owner.');
                   return;
                 }
+                if (!reason) {
+                  setError('Enter a reason before assigning a support owner.');
+                  return;
+                }
+                const tenant = tenantLabelFor(entitlementTenantId);
                 if (!await confirm({
-                  title: 'Assign support owner',
-                  description: `Assign support owner "${owner}" for tenant ${entitlementTenantId}?`,
+                  title: `Assign support owner for ${tenantNameFor(entitlementTenantId)}`,
+                  description: `Assign support owner "${owner}" for ${tenant}? Reason: ${reason}`,
                   confirmLabel: 'Assign owner',
                   confirmTone: 'default'
                 })) return;
                 await runStaffAction(`support-owner-${entitlementTenantId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}`, {
                   method: 'PATCH',
-                  body: { support_owner: owner, reason: 'Support owner updated from React staff console.' }
-                }), `Support owner updated for ${entitlementTenantId}.`);
+                  body: { support_owner: owner, reason }
+                }), `Support owner updated for ${tenant}.`);
               }}>
-                <Select
-                  label="Tenant"
-                  name="tenant_id"
-                  value={entitlementTenantId}
-                  options={internalTenantOptions}
-                  onChange={setEntitlementTenantId}
-                />
                 <label className="full"><span>Support owner</span><input name="support_owner" placeholder="owner@customer.example" required /></label>
+                <label className="full"><span>Reason</span><input name="support_owner_reason" placeholder="Account team change" required /></label>
                 <div className="form-actions full"><Button type="submit" loading={busy.startsWith('support-owner-')} disabled={!entitlementTenantId}>Assign support owner</Button></div>
               </form>
             </CardContent>
@@ -3451,15 +3744,9 @@ export function StaffSurfacePage({
           <Card>
             <CardHeader>
               <CardTitle>Entitlement grants</CardTitle>
-              <CardDescription>Grant or revoke plan feature entitlements for the selected tenant.</CardDescription>
+              <CardDescription>Grant or revoke plan feature entitlements for {entitlementTenantId ? tenantLabelFor(entitlementTenantId) : 'the selected tenant'}.</CardDescription>
             </CardHeader>
             <CardContent className="product-form">
-              <Select
-                label="Tenant"
-                value={entitlementTenantId}
-                options={internalTenantOptions}
-                onChange={setEntitlementTenantId}
-              />
               {effectiveEntitlements ? (
                 <div className="kv-list">
                   {entitlementFeatures.map((feature) => (

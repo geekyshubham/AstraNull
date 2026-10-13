@@ -42,7 +42,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'targets',
     label: 'Targets',
     group: 'scope',
-    description: 'Declared hostnames, IPs, and CIDRs with ownership proof, tags, and the next validation step.',
+    description: 'Declared hostnames, IPs, and endpoints with ownership proof, tags, and the next validation step.',
     icon: Crosshair
   },
   {
@@ -77,7 +77,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'integrations',
     label: 'Integrations',
     group: 'governance',
-    description: 'Notification, ticketing, SIEM, SOAR, and optional read-only provider connectors.',
+    description: 'Optional read-only DNS/WAF provider connectors, manual metadata records, and alert channels.',
     icon: PlugZap
   },
   {
@@ -93,13 +93,6 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'governance',
     description: 'Tenant actions, security-relevant changes, and custody chain records.',
     icon: ClipboardList
-  },
-  {
-    id: 'release-evidence',
-    label: 'Release evidence',
-    group: 'governance',
-    description: 'Production release evidence coverage, gap ledger, and staging attestation.',
-    icon: FileText
   },
   {
     id: 'settings',
@@ -133,7 +126,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'internal-soc',
     label: 'SOC console',
     group: 'staff',
-    description: 'Dedicated staff SOC execution plane with kill switch, Go/No-Go checklist, provider contacts, and timeline.',
+    description: 'Governed high-scale request review, authorization packs, and tenant kill switch.',
     icon: Gauge
   }
 ];
@@ -158,7 +151,7 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     id: 'policy-detail',
     label: 'Schedule detail',
     group: 'validation',
-    description: 'Cadence, target bindings, expected verdicts, safe windows, and high-scale gating for one policy.',
+    description: 'Cadence, target bindings, expected verdicts, safe windows, and high-scale gating for one schedule.',
     icon: ClipboardList
   },
   {
@@ -225,6 +218,16 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     icon: ShieldCheck
   }
 ];
+
+export type RouteCrumb = { group: SurfaceKind; label: string };
+
+/** Customers never see a Staff group: their SOC console reads as Governance and a queue item as a high-scale request. */
+export function routeCrumb(item: { id: string; group: SurfaceKind; label: string }, principal?: string): RouteCrumb {
+  if (String(principal ?? '').trim().toLowerCase() === 'staff') return { group: item.group, label: item.label };
+  if (item.id === 'queue-detail') return { group: 'validation', label: 'High-scale request' };
+  if (item.id === 'internal-soc') return { group: 'governance', label: item.label };
+  return { group: item.group, label: item.label };
+}
 
 export const ROUTE_BY_ID = new Map<RouteId, NavItem>(
   [...NAV_ITEMS, ...DETAIL_ROUTE_ITEMS].map((item) => [item.id, item])

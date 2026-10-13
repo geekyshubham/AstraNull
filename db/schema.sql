@@ -4934,3 +4934,15 @@ END;
 $$;
 CREATE TRIGGER reviewed_execution_grant_issuances_history_guard BEFORE INSERT OR UPDATE OR DELETE ON reviewed_execution_grant_issuances
   FOR EACH ROW EXECUTE FUNCTION guard_reviewed_execution_grant_history();
+
+-- Additive sync of db/migrations/0080_finding_system_summary_and_risk_acceptance.sql.
+ALTER TABLE findings ADD COLUMN system_summary TEXT;
+ALTER TABLE findings ADD COLUMN risk_acceptance JSONB;
+ALTER TABLE findings ADD CONSTRAINT findings_risk_acceptance_shape_check CHECK (
+  risk_acceptance IS NULL OR (
+    jsonb_typeof(risk_acceptance) = 'object'
+    AND risk_acceptance ?& ARRAY['reason', 'review_at', 'accepted_by', 'accepted_at']
+    AND jsonb_typeof(risk_acceptance->'reason') = 'string'
+    AND char_length(risk_acceptance->>'reason') BETWEEN 20 AND 2000
+  )
+);

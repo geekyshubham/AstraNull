@@ -214,23 +214,31 @@ export function ProtectionValidationReportPanel({ config, session }: { config: P
       if (result.state !== 'ready') setStored({ key, state: 'failed', failure: result });
       else if (result.value.tenant_id !== session.tenant_id) setStored({ key, state: 'failed', failure: { state: 'unavailable', code: 'scope_mismatch', status: 400, message: 'The report did not match this workspace. No other report was substituted.' } });
       else setStored({ key, state: 'ready', value: result.value });
-    }).catch(() => { if (current) setStored({ key, state: 'failed', failure: { state: 'transport_error', message: 'Current protection validation could not load. No check was started.' } }); });
+    }).catch(() => { if (current) setStored({ key, state: 'failed', failure: { state: 'transport_error', message: 'Protection coverage could not load. No check was started.' } }); });
     return () => { current = false; controller.abort(); };
   }, [config, session, key, reload]);
   const report = state.state === 'ready' ? state.value : null;
+  const noDeclaredScope = report ? report.incomplete_reasons.includes('no_declared_scope') : false;
+  const otherIncompleteReasons = report ? report.incomplete_reasons.filter((value) => value !== 'no_declared_scope') : [];
+  const hasNotTested = report ? [report.not_tested_paths, report.untested_firewall_expectations].some((coverage) => coverage.ids.length > 0 || Boolean(coverage.total)) : false;
   return (
     <Card className="protection-validation-report" role="region" aria-label="Current protection validation report">
-      <CardHeader><div><CardTitle>Current protection validation</CardTitle><CardDescription>Passive current coverage, not a generated or sealed report snapshot. Reading and refreshing send no probe traffic and create no findings.</CardDescription></div>
+      <CardHeader><div><CardTitle>Protection coverage from recorded comparisons</CardTitle><CardDescription>Built from retained comparison results, not a sealed report or proof of current protection. Reading and refreshing send no probe traffic and create no findings.</CardDescription></div>
         <Button size="sm" variant="secondary" disabled={state.state === 'loading'} onClick={() => setReload((value) => value + 1)}>Refresh current coverage</Button>
       </CardHeader>
       <CardContent className="pv-section">
-        {state.state === 'loading' ? <p role="status">Loading current protection validation…</p> : null}
-        {state.state === 'failed' ? <FailureNotice failure={state.failure} subject="current protection validation" onRetry={() => setReload((value) => value + 1)} /> : null}
+        {state.state === 'loading' ? <p role="status">Loading protection coverage…</p> : null}
+        {state.state === 'failed' ? <FailureNotice failure={state.failure} subject="protection coverage" onRetry={() => setReload((value) => value + 1)} /> : null}
         {report ? <>
-          <p className="muted small">Read at {formatDate(report.generated_at)}. Results below are retained immutable comparisons; they are not a claim of current protection.</p>
+          <p className="muted small">Read at {formatDate(report.generated_at)}.</p>
           {report.source_records_complete !== true || report.conclusions_truncated ? <p className="pv-notice" data-tone="warn">Partial view: source records or conclusion listings are incomplete. Missing rows are not validated coverage.</p> : null}
           <p>{report.unknown_statement || 'Unknown and not-tested coverage remains visible. Missing evidence does not create findings or count as validated.'}</p>
-          {report.incomplete_reasons.length ? <p className="pv-notice pv-break" data-tone="warn">Incomplete coverage: {report.incomplete_reasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
+          {noDeclaredScope ? (
+            <p className="pv-notice pv-break" data-tone="warn">
+              No entry paths or firewall expectations are declared yet, so there is nothing to compare. <a href="#targets">Declare an entry path on a target</a>
+            </p>
+          ) : null}
+          {otherIncompleteReasons.length ? <p className="pv-notice pv-break" data-tone="warn">Incomplete coverage: {otherIncompleteReasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
           {Object.keys(report.unknown_reasons).length ? <ul aria-label="Unknown coverage reasons">{Object.entries(report.unknown_reasons).map(([reason, count]) => <li key={reason}>{labelFrom({}, reason)}: {count}</li>)}</ul> : null}
           {[['Not-tested entry paths', report.not_tested_paths], ['Not-tested firewall expectations', report.untested_firewall_expectations]].map(([label, raw]) => {
             const coverage = raw as ProtectionReport['not_tested_paths'];
@@ -252,7 +260,7 @@ export function ProtectionValidationReportPanel({ config, session }: { config: P
                 </tr>;
               })}</tbody>
             </table>
-          </div> : <p>No comparison conclusions are recorded. Unknown and not-tested declarations above are not hidden.</p>}
+          </div> : <p>No comparison conclusions are recorded yet.{hasNotTested ? ' Unknown and not-tested declarations above are not hidden.' : ''}</p>}
           {report.conclusions_truncated ? <p className="muted small">Showing {report.conclusions.length} of {report.conclusions_total ?? 'an unknown number of'} conclusions.</p> : null}
         </> : null}
       </CardContent>

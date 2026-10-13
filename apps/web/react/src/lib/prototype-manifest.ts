@@ -329,7 +329,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'governance',
     source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Notification, ticketing, SIEM/SOAR, and optional read-only connectors.'
+    summary: 'Optional read-only DNS/WAF connectors, manual metadata, and alert channels.'
   },
   {
     id: 'notifications',
@@ -352,17 +352,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     source: 'pages/governance-pages.tsx',
     status: 'React implemented',
     summary: 'Tenant audit records, filters, custody activity, and security-relevant changes.'
-  },
-  {
-    id: 'release-evidence',
-    label: 'Release Evidence',
-    route: '/app#release-evidence',
-    routeId: 'release-evidence',
-    audience: 'Customer',
-    group: 'governance',
-    source: 'pages/governance-pages.tsx',
-    status: 'React implemented',
-    summary: 'Production release evidence inventory and staging attestation for authorized auditors.'
   },
   {
     id: 'settings',

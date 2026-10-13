@@ -32,6 +32,10 @@ import { formatDate } from '../../lib/utils';
 import { plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { formatStepRequest, formatStepResponse, humanizeReason } from '../../lib/validation-scan.mjs';
 import {
+  MAX_SCAN_CHECKS,
+} from '../../lib/validation-scan.mjs';
+import {
+  ROW_STATUS_META,
   groupRowsByCategory,
   rowProgress,
   type CategoryIcon,
@@ -39,6 +43,7 @@ import {
   type MarkerEffectiveness,
   type ProviderFamilyRow,
   type RowStatus,
+  type WafCheckBlocking,
 } from '../../lib/domain-checks.mjs';
 import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-logs';
 import { Badge } from '../ui/badge';
@@ -81,10 +86,13 @@ const TIER_COPY: Record<string, string> = {
   E3: 'Behavior observed',
 };
 
-const FILTERS: Array<{ id: 'all' | RowStatus; label: string }> = [
+type QueueFilter = 'all' | 'verdict' | RowStatus;
+
+const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'all', label: 'All' },
-  { id: 'failed', label: 'Gap found' },
-  { id: 'passed', label: 'Passed' },
+  { id: 'verdict', label: 'Produces a verdict' },
+  { id: 'failed', label: ROW_STATUS_META.failed.label },
+  { id: 'passed', label: ROW_STATUS_META.passed.label },
   { id: 'inconclusive', label: 'Inconclusive' },
   { id: 'observed', label: 'Observed' },
   { id: 'running', label: 'Running' },
@@ -118,10 +126,13 @@ export type ProviderObservationsProps = {
   note?: ReactNode;
   action?: ReactNode;
   onInspect: (row: ProviderFamilyRow) => void;
+  /** Recorded outcomes of this target's benign WAF marker checks; null when none has a result. */
+  checkBlocking?: WafCheckBlocking | null;
+  onOpenChecks?: () => void;
 };
 
 /** Flat, ruled list: one row per family, each from its own recorded source only. */
-export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect }: ProviderObservationsProps) {
+export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect, checkBlocking = null, onOpenChecks }: ProviderObservationsProps) {
   const edgeProxyRow = rows.find(
     (r) => (r.family === 'cdn' || r.family === 'waf') && r.status === 'detected'
   );
@@ -226,18 +237,31 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
       </ul>
       <div className="td-effectiveness">
         <span className="td-label">Benign marker blocking</span>
+        {checkBlocking ? (
+          <div className="td-effectiveness-line">
+            <p>
+              From WAF marker checks: <strong className="tabular-nums">{checkBlocking.stopped}</strong> stopped the test traffic ·{' '}
+              <strong className="tabular-nums">{checkBlocking.allowed}</strong> allowed ·{' '}
+              <span className="tabular-nums">{checkBlocking.inconclusive}</span> inconclusive ·{' '}
+              <span className="tabular-nums">{checkBlocking.notRun}</span> not run (of <span className="tabular-nums">{checkBlocking.applicable}</span>)
+              {checkBlocking.lastAt ? <span className="td-muted"> · last result {formatDate(checkBlocking.lastAt)}</span> : null}
+            </p>
+            {onOpenChecks ? <Button size="sm" variant="ghost" onClick={onOpenChecks}>Review WAF checks</Button> : null}
+          </div>
+        ) : null}
         {effectiveness ? (
           <p>
-            <strong className="tabular-nums">{effectiveness.blocked}</strong> blocked ·{' '}
+            During the fingerprint scan: <strong className="tabular-nums">{effectiveness.blocked}</strong> blocked ·{' '}
             <strong className="tabular-nums">{effectiveness.allowed}</strong> allowed ·{' '}
             <span className="tabular-nums">{effectiveness.inconclusive}</span> inconclusive
             {effectiveness.percentage !== null
               ? <> · <span className="tabular-nums">{effectiveness.percentage}%</span> of definitive markers</>
               : <> · no definitive markers, so no percentage</>}
           </p>
-        ) : (
+        ) : null}
+        {!checkBlocking && !effectiveness ? (
           <p className="td-muted">Not measured. Detection alone does not show whether anything is blocked.</p>
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -271,8 +295,10 @@ function rowResultLine(row: CheckRow) {
 function CheckQueueRow({
   row,
   selected,
-  canSelect,
   onSelect,
+  included,
+  canInclude,
+  onToggleInclude,
   onInspect,
   onStopCheck,
   onActivity,
@@ -282,8 +308,10 @@ function CheckQueueRow({
 }: {
   row: CheckRow;
   selected: boolean;
-  canSelect: boolean;
   onSelect: (checkId: string) => void;
+  included: boolean;
+  canInclude: boolean;
+  onToggleInclude?: (checkId: string) => void;
   onInspect: (row: CheckRow) => void;
   onStopCheck?: (row: CheckRow) => void;
   onActivity?: (row: CheckRow) => void;
@@ -294,20 +322,23 @@ function CheckQueueRow({
 }) {
   const StatusIcon = STATUS_ICONS[row.status] ?? CircleDashed;
   const sent = rowSentLine(row);
+  const resultType = row.readinessCapable ? 'Produces a verdict' : 'Observation only — no verdict';
   return (
-    <li className="td-check" data-status={row.status} data-selected={selected || undefined} data-focus-key={`check-${row.checkId}`}>
+    <li className="td-check" data-status={row.status} data-selected={selected || undefined} data-included={included || undefined} data-focus-key={`check-${row.checkId}`}>
       <div className="td-check-row">
-        <label className="td-check-choice">
-          <input
-            type="radio"
-            name="target-run-check"
-            value={row.checkId}
-            checked={selected}
-            disabled={!canSelect}
-            onChange={() => onSelect(row.checkId)}
-            aria-label={`Select ${row.name}`}
-          />
-        </label>
+        {onToggleInclude ? (
+          <label className="td-check-choice">
+            <input
+              type="checkbox"
+              name="target-run-check"
+              value={row.checkId}
+              checked={included}
+              disabled={!canInclude}
+              onChange={() => onToggleInclude(row.checkId)}
+              aria-label={`Include ${row.name} in run`}
+            />
+          </label>
+        ) : <span className="td-check-choice" aria-hidden="true" />}
         <button type="button" className="td-check-summary" aria-expanded={selected} onClick={() => onSelect(row.checkId)}>
           <span className="td-check-icon" data-tone={row.tone}>
             <StatusIcon size={16} className={row.status === 'running' ? 'td-spin' : undefined} aria-hidden="true" />
@@ -316,7 +347,7 @@ function CheckQueueRow({
             <strong>{row.name}</strong>
             <code>{row.checkId}</code>
           </span>
-          {TIER_COPY[row.tier] ? <span className="td-check-tier">{TIER_COPY[row.tier]}</span> : null}
+          <span className="td-check-tier">{TIER_COPY[row.tier] ? `${TIER_COPY[row.tier]} · ` : ''}{resultType}</span>
           <Badge tone={liveNote ? 'muted' : row.tone}>{row.label}</Badge>
           {liveNote ? <Badge tone="warn" title={liveNote}>Not live evidence</Badge> : null}
           <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
@@ -327,6 +358,7 @@ function CheckQueueRow({
           <dl className="td-check-detail">
             <div><dt>How it works</dt><dd>{row.description || row.category.how}</dd></div>
             {row.verdictLogic ? <div><dt>How it decides</dt><dd>{row.verdictLogic}</dd></div> : null}
+            <div><dt>Result type</dt><dd>{row.readinessCapable ? 'Produces a readiness verdict' : 'Observation only — no readiness credit'}</dd></div>
             <div><dt>Upper bound</dt><dd>{rowRequestLine(row)}</dd></div>
             {sent ? <div><dt>Requests sent</dt><dd className="tabular-nums">{sent}</dd></div> : null}
             {row.response ? <div><dt>Response</dt><dd>{formatStepResponse(row.response)}</dd></div> : null}
@@ -374,6 +406,24 @@ function CheckQueueRow({
   );
 }
 
+function CategorySelect({ label, ids, selection, disabled, onChange }: { label: string; ids: string[]; selection: Set<string>; disabled: boolean; onChange: (ids: string[], include: boolean) => void }) {
+  const includedCount = ids.filter((id) => selection.has(id)).length;
+  const all = ids.length > 0 && includedCount === ids.length;
+  const some = includedCount > 0 && !all;
+  return (
+    <label className="td-cat-select">
+      <input
+        type="checkbox"
+        checked={all}
+        disabled={disabled || ids.length === 0}
+        ref={(element) => { if (element) element.indeterminate = some; }}
+        onChange={() => onChange(ids, !all)}
+        aria-label={`Select all in ${label}`}
+      />
+    </label>
+  );
+}
+
 export type CheckQueueProps = {
   rows: CheckRow[];
   runAllCount?: number;
@@ -395,6 +445,14 @@ export type CheckQueueProps = {
   scanActivity?: DataItem[];
   selectedRunEvents?: DataItem[];
   targetValue?: string;
+  /** Run-all is unavailable for this target (for example ownership is not proven). */
+  runAllDisabledReason?: string;
+  /** Run-all is temporarily blocked (for example another check holds the execution slot). */
+  runAllBlockedReason?: string;
+  recommendedRow?: CheckRow | null;
+  onStartRecommended?: (row: CheckRow) => void;
+  runSelection?: string[];
+  onRunSelectionChange?: (next: string[]) => void;
 };
 
 /** Every compatible check for this target, grouped by category, selectable in place. */
@@ -419,15 +477,27 @@ export function CheckQueue({
   scanActivity = [],
   selectedRunEvents = [],
   targetValue = 'target',
+  runAllDisabledReason = '',
+  runAllBlockedReason = '',
+  recommendedRow = null,
+  onStartRecommended,
+  runSelection = [],
+  onRunSelectionChange,
 }: CheckQueueProps) {
-  const [filter, setFilter] = useState<'all' | RowStatus>('all');
+  const [filter, setFilter] = useState<QueueFilter>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
+  const selection = useMemo(() => new Set(runSelection), [runSelection]);
   const counts = useMemo(() => {
-    const result: Record<string, number> = { all: rows.length };
-    for (const row of rows) result[row.status] = (result[row.status] ?? 0) + 1;
+    const result: Record<string, number> = { all: rows.length, verdict: 0 };
+    for (const row of rows) {
+      result[row.status] = (result[row.status] ?? 0) + 1;
+      if (row.readinessCapable) result.verdict += 1;
+    }
     return result;
   }, [rows]);
-  const visibleRows = filter === 'all' ? rows : rows.filter((row) => row.status === filter || row.checkId === selectedCheckId);
+  const matchesFilter = (row: CheckRow) => filter === 'all' || (filter === 'verdict' ? row.readinessCapable : row.status === filter);
+  const visibleRows = filter === 'all' ? rows : rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId);
+  const filteredIds = filter === 'all' ? [] : rows.filter(matchesFilter).map((row) => row.checkId);
   const rankedGroups = useMemo(() => groupRowsByCategory(visibleRows), [visibleRows]);
   // While a run is live, results arrive row by row. Keep the order captured when it started so a
   // row never moves under the pointer or keyboard focus; the status-first order returns after.
@@ -449,10 +519,24 @@ export function CheckQueue({
   const current = rows.find((row) => row.status === 'running');
   const waiting = rows.find((row) => row.status === 'waiting');
   const scanStatus = typeof scan?.status === 'string' ? scan.status : '';
+  const runAllReason = runAllDisabledReason || runAllBlockedReason;
+  const canInclude = canSelect && canRun && Boolean(onRunSelectionChange);
 
   const scanLogEntries = useMemo(() => {
-    return buildScanLiveLogs(scan, rows, scanActivity, targetValue);
-  }, [scan, rows, scanActivity, targetValue]);
+    return scanActive ? buildScanLiveLogs(scan, rows, scanActivity, targetValue) : [];
+  }, [scanActive, scan, rows, scanActivity, targetValue]);
+
+  function changeSelection(ids: string[], include: boolean) {
+    if (!onRunSelectionChange) return;
+    const runnable = new Set(rows.map((row) => row.checkId));
+    const next = new Set(runSelection.filter((id) => runnable.has(id)));
+    for (const id of ids) {
+      if (!runnable.has(id)) continue;
+      if (include) next.add(id);
+      else next.delete(id);
+    }
+    onRunSelectionChange([...next].slice(0, MAX_SCAN_CHECKS));
+  }
 
   let liveText = '';
   if (scanActive) {
@@ -462,27 +546,42 @@ export function CheckQueue({
         ? `Paused by a safe-run limit${waiting.eligibleAt ? ` until ${formatDate(waiting.eligibleAt)}` : ''}. It resumes on its own.`
         : `${progress.done} of ${progress.total} checks complete.`;
   } else if (scan) {
-    liveText = `Last multi-check run ${humanizeReason(scanStatus).toLowerCase()}${typeof scan.completed_at === 'string' ? ` ${formatDate(scan.completed_at)}` : ''}: ${progress.done} of ${progress.total} checks finished.`;
+    liveText = `Last scan ${humanizeReason(scanStatus).toLowerCase()}${typeof scan.completed_at === 'string' ? ` ${formatDate(scan.completed_at)}` : ''}: ${progress.done} of ${progress.total} checks finished.`;
   }
+  const filterLabel = FILTERS.find((entry) => entry.id === filter)?.label ?? '';
 
   return (
     <section className="td-checks" id="td-all-checks" aria-labelledby="td-checks-title">
       <header className="td-section-head">
         <div>
           <h2 id="td-checks-title">Checks for this target</h2>
-          <p>{catalogCount != null ? `${catalogCount} checks in the full catalog. ` : ''}{rows.length} bounded external checks can be assessed on this target, including observation checks. Select one to see what it sends, its last result and its evidence.</p>
+          <p>
+            {catalogCount != null
+              ? `${catalogCount} checks in the catalog. ${rows.length} are runnable on this target, including observation checks.`
+              : `${rows.length} checks are runnable on this target, including observation checks.`}
+            {' '}Tick checks to run them together, or open one to see what it sends, its last result and its evidence.
+          </p>
         </div>
         {canRun ? (
           scanActive ? (
-            <Button variant="secondary" onClick={onStop}><Square size={14} aria-hidden="true" />Stop run</Button>
+            <Button variant="secondary" onClick={onStop}><Square size={14} aria-hidden="true" />Stop scan</Button>
           ) : (
-            <Button variant="secondary" onClick={onRunAll} loading={busy} disabled={runAllCount === 0}>
-              <Play size={15} aria-hidden="true" />Review all {runAllCount}
-            </Button>
+            <div className="td-run-all">
+              <Button
+                variant="secondary"
+                onClick={onRunAll}
+                loading={busy}
+                disabled={runAllCount === 0 || Boolean(runAllReason)}
+                aria-describedby={runAllReason ? 'td-run-all-reason' : undefined}
+              >
+                <Play size={15} aria-hidden="true" />Review all {runAllCount}
+              </Button>
+              {runAllReason ? <span id="td-run-all-reason" className="td-muted td-run-all-reason">{runAllReason}</span> : null}
+            </div>
           )
         ) : null}
       </header>
-      {scan || current || (selectedCheckId && rows.some((r) => r.checkId === selectedCheckId && r.status === 'running')) ? (
+      {scan ? (
         <div className="td-live-console-wrapper">
           <div className="td-run-progress">
             <div className="td-run-progress-head">
@@ -492,17 +591,39 @@ export function CheckQueue({
             </div>
             <Progress value={progress.percent} label="Checks complete" tone={scanActive ? 'warn' : (counts.failed ?? 0) > 0 ? 'danger' : 'success'} />
           </div>
-          <LiveProbeTerminal
-            entries={scanLogEntries}
-            active={scanActive || current?.status === 'running'}
-            title={scanActive ? 'Live Run Activity Stream' : 'Run Execution Logs'}
-            subtitle="Outside-in probe dispatch, TLS negotiation, benign marker evaluation, and edge response taxonomy"
-            activeCheckLabel={current?.checkId || (selectedCheckId && rows.some((r) => r.checkId === selectedCheckId) ? selectedCheckId : undefined)}
-            requestsSent={current?.requestsSent}
-            maxRequests={current?.maxRequests}
-            className="td-scan-terminal"
-            defaultExpanded={Boolean(scanActive)}
-          />
+          {scanActive ? (
+            <LiveProbeTerminal
+              entries={scanLogEntries}
+              active
+              title="Live scan activity"
+              subtitle="Outside-in probe dispatch, TLS negotiation, benign marker evaluation, and edge response taxonomy"
+              activeCheckLabel={current?.checkId || (selectedCheckId && rows.some((r) => r.checkId === selectedCheckId) ? selectedCheckId : undefined)}
+              requestsSent={current?.requestsSent}
+              maxRequests={current?.maxRequests}
+              className="td-scan-terminal"
+              defaultExpanded
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {recommendedRow && onStartRecommended && canRun && !scanActive && !runAllBlockedReason ? (
+        <div className="td-recommended" role="group" aria-labelledby="td-recommended-title">
+          <div className="td-recommended-copy">
+            <span className="td-label" id="td-recommended-title">Recommended first check</span>
+            <strong>{recommendedRow.name}</strong>
+            <span className="td-muted">
+              Produces a readiness verdict{recommendedRow.maxRequests !== null ? ` · at most ${recommendedRow.maxRequests} request${recommendedRow.maxRequests === 1 ? '' : 's'}` : ''}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            aria-label={`Review and start ${recommendedRow.name}`}
+            disabled={Boolean(runAllDisabledReason)}
+            aria-describedby={runAllDisabledReason ? 'td-run-all-reason' : undefined}
+            onClick={() => onStartRecommended(recommendedRow)}
+          >
+            <Play size={14} aria-hidden="true" />Review and start
+          </Button>
         </div>
       ) : null}
       <div className="td-filters" role="group" aria-label="Filter checks by result">
@@ -518,6 +639,11 @@ export function CheckQueue({
             {entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
           </button>
         ))}
+        {canInclude && filter !== 'all' && filteredIds.length ? (
+          <Button size="sm" variant="ghost" className="td-filter-select" onClick={() => changeSelection(filteredIds, true)}>
+            Select {filterLabel.toLowerCase()} ({filteredIds.length})
+          </Button>
+        ) : null}
       </div>
       {groups.map((group) => {
         const Icon = CATEGORY_ICONS[group.category.icon] ?? Shield;
@@ -527,8 +653,11 @@ export function CheckQueue({
         const defaultOpen = defaultsRef.current[group.category.id];
         const open = openCategories[group.category.id] ?? defaultOpen;
         return (
+          <div key={group.category.id} className="td-cat-shell" data-selectable={canInclude || undefined}>
+          {canInclude ? (
+            <CategorySelect label={group.category.label} ids={group.rows.map((row) => row.checkId)} selection={selection} disabled={!canInclude} onChange={changeSelection} />
+          ) : null}
           <details
-            key={group.category.id}
             className="td-cat"
             open={open}
             onToggle={(event) => {
@@ -544,7 +673,9 @@ export function CheckQueue({
               </span>
               <span className="td-cat-tally">
                 {group.counts.failed ? <Badge tone="danger">{`${group.counts.failed} gap${group.counts.failed === 1 ? '' : 's'}`}</Badge> : null}
-                {group.counts.passed ? <Badge tone="success">{`${group.counts.passed} passed`}</Badge> : null}
+                {group.counts.passed ? <Badge tone="success">{`${group.counts.passed} protected`}</Badge> : null}
+                {group.counts.inconclusive ? <Badge tone="muted">{`${group.counts.inconclusive} inconclusive`}</Badge> : null}
+                {group.counts.not_run ? <Badge tone="muted">{`${group.counts.not_run} not run`}</Badge> : null}
                 {group.counts.running ? <Badge tone="warn">Running</Badge> : null}
               </span>
               <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
@@ -555,8 +686,10 @@ export function CheckQueue({
                   key={row.checkId}
                   row={row}
                   selected={row.checkId === selectedCheckId}
-                  canSelect={canSelect}
                   onSelect={onSelect}
+                  included={selection.has(row.checkId)}
+                  canInclude={canInclude}
+                  onToggleInclude={canInclude ? (checkId) => changeSelection([checkId], !selection.has(checkId)) : undefined}
                   onInspect={onInspect}
                   onStopCheck={onStopCheck}
                   onActivity={onActivity}
@@ -567,6 +700,7 @@ export function CheckQueue({
               ))}
             </ul>
           </details>
+          </div>
         );
       })}
       {!groups.length ? (

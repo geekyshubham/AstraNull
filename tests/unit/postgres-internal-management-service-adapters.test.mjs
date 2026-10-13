@@ -14,10 +14,13 @@ function createRepo() {
       this.signups.push(record);
       return record;
     },
-    async findActiveSignupByDomainOrOrg(domain, org) {
+    async findActiveSignupByContactOrDomain(contactEmail, domain) {
       return this.signups.find((r) =>
         r.state !== 'rejected'
-        && (r.email_domain === domain || r.organization_name.toLowerCase() === org.toLowerCase()),
+        && (
+          r.contact_email.toLowerCase() === contactEmail.toLowerCase()
+          || (r.email_domain === domain && ['submitted', 'under_review'].includes(r.state))
+        ),
       ) ?? null;
     },
     async getSignupRequest(id) {
@@ -121,7 +124,32 @@ describe('Postgres internal management service adapter', () => {
     assert.equal(repo.audits.at(-1).action, 'signup.request_submitted');
 
     const duplicate = await svc.createSignupRequest(signupPayload);
-    assert.equal(duplicate.error, 'duplicate_request');
+    assert.deepEqual(duplicate, { error: 'duplicate_request' });
+
+    const sameDomain = await svc.createSignupRequest({ ...signupPayload, contact_email: 'ops@northwind.example' });
+    assert.deepEqual(sameDomain, { error: 'duplicate_request' });
+
+    const sameOrgOtherDomain = await svc.createSignupRequest({
+      ...signupPayload,
+      contact_email: 'security@unrelated.example',
+    });
+    assert.equal(sameOrgOtherDomain.request.state, 'submitted');
+    assert.equal(sameOrgOtherDomain.request.organization_name, signupPayload.organization_name);
+    assert.equal(Object.hasOwn(sameOrgOtherDomain.request, 'provisioned_tenant_id'), false);
+  });
+
+  it('allows a new colleague request once the domain request has left review', async () => {
+    const repo = createRepo();
+    const svc = createPostgresInternalManagementServices({ internalManagement: repo });
+    const created = await svc.createSignupRequest(signupPayload);
+    repo.signups[0].state = 'customer_invited';
+
+    const sameEmail = await svc.createSignupRequest(signupPayload);
+    assert.deepEqual(sameEmail, { error: 'duplicate_request' });
+
+    const colleague = await svc.createSignupRequest({ ...signupPayload, contact_email: 'ops@northwind.example' });
+    assert.equal(colleague.request.state, 'submitted');
+    assert.notEqual(colleague.request.id, created.request.id);
   });
 
   it('approves, provisions tenant defaults, and records internal audit', async () => {

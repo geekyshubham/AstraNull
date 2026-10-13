@@ -45,7 +45,7 @@ function applyCustomerPagesFixture(store) {
     check_id: PORTAL_BASELINE_IDS.checkId,
     cadence: 'weekly',
     timezone: 'Europe/London',
-    expected_verdict: 'pass',
+    expected_verdict: 'manual_review',
     state: 'active',
     enabled: true,
     safe_windows: [{ day: 'Mon', start: '09:00', end: '11:00', timezone: 'Europe/London' }],
@@ -257,6 +257,8 @@ test.describe('current-release customer pages', () => {
     await expect(legacy).toContainText('Next run unavailable');
     await expect(legacy).toContainText('does not dispatch');
     await expect(legacy.getByRole('button', { name: /^Pause schedule/ })).toHaveCount(0);
+    await expect(legacy.getByRole('button', { name: /^Edit schedule/ })).toHaveCount(0);
+    await expect(legacy.getByRole('link', { name: /^Create replacement for schedule / })).toHaveAttribute('href', /#test-policies\?check=/);
 
     await bound.getByRole('link', { name: /Origin Leak Scan/i }).click();
     await expect(page).toHaveURL(new RegExp(`#check-detail\\?id=${PORTAL_BASELINE_IDS.checkId.replaceAll('.', '\\.')}&policy=${BOUND_POLICY_ID}`));
@@ -396,10 +398,11 @@ test.describe('current-release customer pages', () => {
     await expect(page.getByRole('heading', { name: /At generation/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Current status/ })).toBeVisible();
     const snapshot = page.getByRole('region', { name: /At generation/ });
-    await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Open findings at generation' })).toContainText('1');
-    await expect(snapshot.getByText('Opened after the report snapshot')).toHaveCount(0);
+    await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Open at generation (any opened date)' })).toContainText('1');
+    await expect(snapshot.getByText('Captured findings: status now')).toHaveCount(0);
     const live = page.getByRole('region', { name: /Current status/ });
-    await expect(live.getByText('Opened after the report snapshot')).toBeVisible();
+    await expect(live.getByText('Captured findings: status now')).toBeVisible();
+    await expect(live.getByText('Not recorded (legacy report).', { exact: true })).toBeVisible();
     await expect(snapshot.locator('table tbody tr')).toHaveCount(1);
     await expect(snapshot.locator('table tbody tr')).toContainText('run_checkout_1');
     await expect(page.getByRole('button', { name: /^Export/ })).toHaveCount(1);
@@ -419,7 +422,7 @@ test.describe('current-release customer pages', () => {
     const snapshot = page.getByRole('region', { name: /At generation/ });
     await expect(snapshot.locator('.kv-list > div').filter({ hasText: /^Scope/ })).toContainText('Historical domain scope');
     await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Runs captured' })).toContainText('2 of 2');
-    await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Open findings at generation' })).toContainText('1');
+    await expect(snapshot.locator('.kv-list > div').filter({ hasText: 'Open at generation (any opened date)' })).toContainText('1');
     await expect(snapshot).toContainText('Not included: the published readiness formula covers the whole workspace');
     await expect(snapshot.locator('.readiness-gauge, [aria-label*="Readiness score"]')).toHaveCount(0);
 
@@ -566,7 +569,7 @@ test.describe('current-release customer pages', () => {
     await page.getByRole('row', { name: /Inspect failed delivery for Safe test completed/ }).click();
     const orphan = page.getByRole('region', { name: 'Selected delivery attempt' });
     await expect(orphan).toContainText('smtp_mailbox_unavailable');
-    await expect(orphan).toContainText('Rule removed or not recorded');
+    await expect(orphan).toContainText('Channel removed or not recorded');
     await expect(orphan.getByRole('link', { name: 'Fix channel configuration' })).toHaveCount(0);
 
     await page.reload({ waitUntil: 'networkidle' });
@@ -634,7 +637,7 @@ test.describe('current-release customer pages', () => {
     await panel.getByLabel('Metadata retention (days)').fill('30');
     await panel.getByRole('button', { name: 'Save retention policy' }).click();
     const confirm = page.locator('dialog.modal-confirm[open]');
-    await expect(confirm).toContainText('Metadata (events, vault metadata, notification history)');
+    await expect(confirm).toContainText('Metadata (events, evidence vault entries, notification history, connector poll data)');
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     await panel.getByLabel('Metadata retention (days)').fill('0');
     await panel.getByRole('button', { name: 'Save retention policy' }).click();
@@ -649,27 +652,41 @@ test.describe('current-release customer pages', () => {
     await expect(page.getByText('High-scale requests')).toHaveCount(0);
   });
 
-  test('release evidence: accepted-but-invalid is a failure with its reason; full missing list', async ({ page }) => {
+  test('release evidence: not a customer surface, even for the auditor role', async ({ page }) => {
     await injectPortalDevHeadersSession(page, PORTAL_AUDITOR_SESSION);
     await gotoPortalRoute(page, 'release-evidence', sourceBaseUrl);
-    const row = page.getByRole('row', { name: /Inspect Vector safety policy record/i });
-    await expect(row).toContainText('Accepted but invalid');
-    await row.click();
-    await expect(page.getByRole('region', { name: /record detail/ })).toContainText('evidence_uri, reviewed_at');
-    await expect(page.getByText(/^…and \d+ more kinds/)).toHaveCount(0);
+    await expect(page.locator('a[href="#release-evidence"]')).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1, name: /Release evidence/i })).toHaveCount(0);
+    await expect(page.getByRole('row', { name: /Inspect Vector safety policy record/i })).toHaveCount(0);
+    await expect(page.getByText('evidence_uri, reviewed_at')).toHaveCount(0);
+  });
+
+  test('legacy report detail: score basis is named as missing and factors show an empty state', async ({ page }) => {
+    const writes = recordWrites(page);
+    await injectPortalDevHeadersSession(page);
+    await page.goto(`${sourceBaseUrl}/app#report-detail?id=rpt_checkout_baseline`, { waitUntil: 'networkidle' });
+    await expect(page.getByText('Score basis not recorded in this snapshot').first()).toBeVisible({ timeout: 20_000 });
+    const factors = page.locator('.card').filter({ has: page.getByText('Score factors in this snapshot', { exact: true }) });
+    await expect(factors).toBeVisible();
+    await expect(factors.locator('.table-empty').getByText('No score factors recorded.', { exact: true })).toBeVisible();
+    await expect(factors).toContainText('No score factors were recorded in this snapshot.');
+    await expect(factors.locator('tbody tr')).toHaveCount(0);
+    expect(writes).toEqual([]);
   });
 
   test('check library: target-first deep link, separate counts, no design switch', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     const fit = page.waitForResponse((response) => new URL(response.url()).pathname === `/v1/targets/${PORTAL_BASELINE_IDS.targetId}/compatible-checks`);
     await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}`, { waitUntil: 'networkidle' });
-    const serverChecks = ((await (await fit).json()).checks ?? []).filter((check) => check.safety_class === 'safe');
+    const serverChecks = ((await (await fit).json()).checks ?? []).filter((check) => (check.catalog?.safety_class ?? check.safety_class) === 'safe');
+    expect(serverChecks.length).toBeGreaterThan(0);
+    const distinctServerChecks = new Set(serverChecks.map((check) => check.check_id)).size;
     await expect(page.locator('.design-variant-switch')).toHaveCount(0);
     const facts = page.getByLabel('Catalog and check counts');
     await expect(facts).toContainText('Catalog vectors');
     await expect(facts).toContainText('Runnable checks');
     await expect(facts).toContainText('Fit this target');
-    await expect(facts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(String(serverChecks.length));
+    await expect(facts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(String(distinctServerChecks));
     await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com');
   });
 
@@ -717,11 +734,13 @@ test.describe('current-release customer pages', () => {
     expect(writes).toEqual([]);
   });
 
-  test('artifact detail: returns to findings, recorded hash stays unverified', async ({ page }) => {
+  test('artifact detail: returns to the finding or run it supports, recorded hash stays unverified', async ({ page }) => {
     const writes = recordWrites(page);
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'evidence-detail', sourceBaseUrl);
-    await expect(page.getByRole('link', { name: /Back to Findings/ })).toHaveAttribute('href', '#findings');
+    const back = page.getByRole('link', { name: /^Back to (finding|run|findings)$/ });
+    await expect(back).toHaveCount(1);
+    await expect(back).toHaveAttribute('href', /#(finding-detail\?id=|run-detail\?id=|findings$)/);
     await expect(page.getByText('Server verification')).toBeVisible();
     await expect(page.getByText(/^Not verified \((recorded hash only|no hash or verification recorded)\)$/)).toBeVisible();
     expect(writes).toEqual([]);
@@ -746,7 +765,6 @@ test.describe('current-release customer pages', () => {
         ['settings?tab=privacy', PORTAL_SESSION],
         ['support', PORTAL_SESSION],
         ['subscription', PORTAL_SESSION],
-        ['release-evidence', PORTAL_AUDITOR_SESSION],
       ];
       const failures = [];
       for (const [hash, session] of routes) {

@@ -3,7 +3,7 @@ import { Check, Copy, ExternalLink, Eye, ShieldAlert } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { formatDate, formatSeverityLabel } from '../../lib/utils';
+import { formatSeverityLabel, formatTimestamp } from '../../lib/utils';
 import { buildDetailHref } from '../../lib/route-params';
 import { requestJson } from '../../lib/api';
 import { findingRuleKey, parseFindingTimestamp } from '../../lib/findings-helpers';
@@ -162,14 +162,14 @@ export function FindingDetectionHistory({
           <div className="finding-history-metric">
             <dt>First detected</dt>
             <dd>
-              <strong>{formatDate(oldest.opened_at ?? oldest.created_at)}</strong>
+              <strong>{formatTimestamp(oldest.opened_at ?? oldest.created_at)}</strong>
               <small>Initial observation</small>
             </dd>
           </div>
           <div className="finding-history-metric">
             <dt>Latest detected</dt>
             <dd>
-              <strong>{formatDate(newest.opened_at ?? newest.created_at)}</strong>
+              <strong>{formatTimestamp(newest.opened_at ?? newest.created_at)}</strong>
               <small>Most recent confirmation</small>
             </dd>
           </div>
@@ -210,7 +210,7 @@ export function FindingDetectionHistory({
                   <div className="finding-history-entry-content">
                     <div className="finding-history-entry-head">
                       <div className="finding-history-entry-chips">
-                        <span className="finding-history-timestamp">{formatDate(openedDate)}</span>
+                        <span className="finding-history-timestamp">{formatTimestamp(openedDate)}</span>
                         {isLatest ? (
                           <Badge tone="default">Latest detection</Badge>
                         ) : isInitial ? (

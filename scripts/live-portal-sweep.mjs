@@ -13,7 +13,7 @@ const DEFAULT_ROLES = ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer']
 const EXPECTED_ROUTE_IDS = [
   'dashboard', 'targets', 'target-groups', 'checks',
   'test-policies', 'runs', 'findings', 'reports', 'integrations', 'notifications',
-  'audit', 'release-evidence', 'settings', 'support', 'subscription', 'admin',
+  'audit', 'settings', 'support', 'subscription', 'admin',
   'internal-soc', 'check-detail', 'policy-detail',
   'target-group-detail', 'target-detail', 'run-detail',
   'scan-detail', 'finding-detail', 'finding-group-detail', 'evidence-detail', 'report-detail',
@@ -26,7 +26,7 @@ const PRODUCTION_HOST = 'astranull.site';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const LOADING_SELECTOR = '#portal-main [aria-busy="true"], #portal-main .skeleton, #portal-main [class*="skeleton"]';
 const MACHINE_TOKEN_RE = /\b[a-z]+(?:_[a-z0-9]+)+\b/g;
-const MACHINE_ID_PREFIX_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_/;
+const MACHINE_ID_PREFIX_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns|hsr)_/;
 const JARGON_PATTERNS = [
   ['api', /\bAPI\b/g],
   ['hydrator', /\bhydrator\b/gi],
@@ -289,7 +289,7 @@ function caseName(route, entity) {
 function routeCases(fixtures) {
   const basic = [
     'dashboard', 'targets', 'target-groups', 'checks', 'test-policies',
-    'runs', 'findings', 'reports', 'integrations', 'notifications', 'audit', 'release-evidence',
+    'runs', 'findings', 'reports', 'integrations', 'notifications', 'audit',
     'settings', 'support', 'subscription', 'admin', 'internal-soc',
     // Keyless visit renders the grouped-issue empty state; keys are derived client-side.
     'finding-group-detail',
@@ -387,7 +387,7 @@ export function inspectVisibleLanguage(value, viewport = 'unknown') {
   for (const match of text.matchAll(new RegExp(MACHINE_TOKEN_RE.source, 'g'))) {
     const token = match[0];
     const index = Number(match.index ?? 0);
-    if (MACHINE_ID_PREFIX_RE.test(token) || dottedIdentifierAt(text, index, token.length) || seenTokens.has(token)) continue;
+    if (MACHINE_ID_PREFIX_RE.test(token) || text[index - 1] === '…' || dottedIdentifierAt(text, index, token.length) || seenTokens.has(token)) continue;
     seenTokens.add(token);
     machineTokens.push({ token, viewport, snippet: diagnosticSnippet(text, index, token.length) });
   }

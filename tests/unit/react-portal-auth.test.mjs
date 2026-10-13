@@ -395,14 +395,12 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole: 'soc_analyst' }), true);
   });
 
-  it('narrows release-evidence to the auditor role (docs/ux/14 §3.1)', () => {
-    assert.equal(canAccessRoute('viewer', 'release-evidence'), false);
-    assert.equal(canAccessRoute('engineer', 'release-evidence'), false);
-    assert.equal(canAccessRoute('auditor', 'release-evidence'), true);
-    // release_evidence:read still covers owner/admin/soc, but the customer surface is auditor-only.
-    assert.equal(canAccessRoute('admin', 'release-evidence'), false);
-    assert.equal(canAccessRoute('owner', 'release-evidence'), false);
-    assert.equal(canAccessRoute('soc', 'release-evidence'), false);
+  it('release-evidence is not reachable by any customer role', () => {
+    // docs/ux/14 §3.1: the customer surface is deleted; auditor read of release_evidence:read is API-only.
+    for (const role of ['owner', 'admin', 'engineer', 'viewer', 'auditor', 'soc']) {
+      assert.equal(canAccessRoute(role, 'release-evidence'), false, role);
+    }
+    assert.equal(canAccessRoute('auditor', 'release-evidence', { principal: 'staff', staffRole: 'soc_lead' }), false);
   });
 
   it('enforces client session expiry before rendering the protected shell (RBAC-02)', () => {
@@ -458,8 +456,19 @@ describe('react portal route access', () => {
     const helper = APP_SOURCE.slice(APP_SOURCE.indexOf('function loginDestinationWithIntent('), APP_SOURCE.indexOf('export default function App()'));
     assert.match(helper, /resolveLoginDestination\(candidate, window\.location\.pathname\)/);
     assert.match(helper, /if \(!dest\.startsWith\('\/'\) \|\| dest\.startsWith\('\/\/'\)\) return dest;/, 'external identity providers own their own return flow');
-    assert.match(helper, /portalSurface\(window\.location\.pathname\) === 'staff'\) return dest;/, 'staff routes never become a customer return target');
-    assert.match(helper, /buildLoginReturnUrl\(dest, \{ hash: window\.location\.hash, reason \}\)/);
+    assert.match(
+      helper,
+      /portalSurface\(window\.location\.pathname\) === 'staff'\)[\s\S]{0,200}?buildStaffLoginReturnUrl\(dest,/,
+      'staff expiry carries next and reason through the staff-only sanitizer',
+    );
+    assert.doesNotMatch(helper, /=== 'staff'\) return dest;/, 'staff expiry no longer drops its return intent');
+    assert.match(helper, /buildLoginReturnUrl\(dest, \{ hash: window\.location\.hash, reason \}\)/, 'customer intent still uses the customer sanitizer');
+    const publicPages = readFileSync(new URL('../../apps/web/react/src/pages/public-pages.tsx', import.meta.url), 'utf8');
+    const customerSanitizer = publicPages.slice(
+      publicPages.indexOf('export function sanitizeReturnHash('),
+      publicPages.indexOf('export function returnHashParam('),
+    );
+    assert.match(customerSanitizer, /if \(!item \|\| item\.group === 'staff'\) return null;/, 'staff routes never become a customer return target');
     assert.doesNotMatch(helper, /encodeURIComponent\(window\.location\.hash\)|\+ window\.location\.hash/, 'the raw hash is never appended');
     const bootStart = APP_SOURCE.indexOf('async function boot()');
     const boot = APP_SOURCE.slice(bootStart, APP_SOURCE.indexOf('boot().catch', bootStart));

@@ -25,11 +25,12 @@ import {
   saveSession,
   sessionFromLoginResponse
 } from '../lib/api';
-import { staffHomePath } from '../lib/portal-auth-policy.mjs';
+import { isStaffSocRole, staffHomePath } from '../lib/portal-auth-policy.mjs';
+import { canAccessRoute } from '../lib/route-access';
 import { publicApiErrorCode, publicApiErrorMessage } from '../lib/error-messages';
 import { DETAIL_ROUTE_ITEMS, ROUTE_BY_ID } from '../lib/navigation';
 import { buildEvidenceInspectorHref, isSafeInspectorId, parseInspectorRef } from '../lib/evidence-inspector.mjs';
-import type { PortalConfig, RouteId } from '../lib/types';
+import type { PortalConfig, RouteId, Session } from '../lib/types';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -38,6 +39,7 @@ import { Select } from '../components/ui/select';
 import { BrandMark } from '../components/layout/brand';
 import { useScrollEdges } from '../lib/scroll-edges';
 import './public-landing.css';
+import './public-auth.css';
 
 type BadgeTone = NonNullable<BadgeProps['tone']>;
 
@@ -169,6 +171,61 @@ export function returnDestinationLabel(next: string | null | undefined): string 
   return ROUTE_BY_ID.get(routeId)?.label ?? null;
 }
 
+/* Staff routes take the same contract with their own allow-list: only routes whose group is
+   'staff', detail routes keep a safe id and tenant, and the staff role decides the landing page. */
+
+const safeStaffReturnId: ReturnParamRule = (value) => (safeReturnId(value) && !CREDENTIAL_SHAPE.test(value) ? value : null);
+
+/** Normalize a requested staff hash route into `#route` or `#detail?id=&tenant=`, or null when unsafe. */
+export function sanitizeStaffReturnHash(next: string | null | undefined): string | null {
+  const raw = String(next ?? '').trim();
+  if (!raw || raw.length > RETURN_HASH_MAX) return null;
+  const hash = raw.startsWith('#') ? raw.slice(1) : raw;
+  const queryIndex = hash.indexOf('?');
+  const routePart = queryIndex >= 0 ? hash.slice(0, queryIndex) : hash;
+  if (!RETURN_ROUTE_ID.test(routePart)) return null;
+  if (ROUTE_BY_ID.get(routePart as RouteId)?.group !== 'staff') return null;
+  if (!DETAIL_RETURN_ROUTES.has(routePart)) return `#${routePart}`;
+
+  const params = new URLSearchParams(queryIndex >= 0 ? hash.slice(queryIndex + 1) : '');
+  const kept = new URLSearchParams();
+  const id = safeStaffReturnId(params.get('id') ?? '');
+  if (id) kept.set('id', id);
+  const tenant = safeStaffReturnId(params.get('tenant') ?? params.get('tenant_id') ?? '');
+  if (tenant) kept.set('tenant', tenant);
+  const query = kept.toString();
+  return `#${routePart}${query ? `?${query}` : ''}`;
+}
+
+export function staffReturnDestinationLabel(next: string | null | undefined): string | null {
+  const hash = sanitizeStaffReturnHash(next);
+  if (!hash) return null;
+  return ROUTE_BY_ID.get(hash.slice(1).split('?')[0] as RouteId)?.label ?? null;
+}
+
+/** Where a signed-in staff session lands: the requested staff route when its role may open it, else staff home. */
+export function resolveStaffReturnPath(session: Pick<Session, 'staff_role'>, next: string | null | undefined): string {
+  const home = staffHomePath(session);
+  const hash = sanitizeStaffReturnHash(next);
+  if (!hash) return home;
+  const routeId = hash.slice(1).split('?')[0] as RouteId;
+  const allowed = canAccessRoute(undefined, routeId, { principal: 'staff', staffRole: String(session.staff_role ?? '') });
+  return allowed ? `${home}${hash}` : home;
+}
+
+function appendLoginReturnParams(loginUrl: string, hash: string | null, reasonInput: LoginReturnReason | null | undefined) {
+  const target = String(loginUrl ?? '').trim() || '/login';
+  if (!target.startsWith('/') || target.startsWith('//')) return target;
+  const [pathAndQuery, fragment] = target.split('#', 2);
+  const [pathname, search = ''] = pathAndQuery.split('?', 2);
+  const params = new URLSearchParams(search);
+  if (hash) params.set('next', hash);
+  const reason = parseLoginReturnReason(reasonInput);
+  if (reason) params.set('reason', reason);
+  const query = params.toString();
+  return `${pathname}${query ? `?${query}` : ''}${fragment ? `#${fragment}` : ''}`;
+}
+
 /**
  * Build the sign-in URL the portal should send an expired or signed-out user to.
  * External identity-provider URLs are returned untouched; they own their own return flow.
@@ -177,17 +234,15 @@ export function buildLoginReturnUrl(
   loginUrl: string,
   options: { hash?: string | null; reason?: LoginReturnReason | null } = {}
 ): string {
-  const target = String(loginUrl ?? '').trim() || '/login';
-  if (!target.startsWith('/') || target.startsWith('//')) return target;
-  const [pathAndQuery, fragment] = target.split('#', 2);
-  const [pathname, search = ''] = pathAndQuery.split('?', 2);
-  const params = new URLSearchParams(search);
-  const hash = sanitizeReturnHash(options.hash);
-  if (hash) params.set('next', hash);
-  const reason = parseLoginReturnReason(options.reason);
-  if (reason) params.set('reason', reason);
-  const query = params.toString();
-  return `${pathname}${query ? `?${query}` : ''}${fragment ? `#${fragment}` : ''}`;
+  return appendLoginReturnParams(loginUrl, sanitizeReturnHash(options.hash), options.reason);
+}
+
+/** Staff counterpart of buildLoginReturnUrl: keeps only staff routes, never customer ones. */
+export function buildStaffLoginReturnUrl(
+  loginPath: string,
+  options: { hash?: string | null; reason?: LoginReturnReason | null } = {}
+): string {
+  return appendLoginReturnParams(loginPath, sanitizeStaffReturnHash(options.hash), options.reason);
 }
 
 function readLoginContext(portalPath: string) {
@@ -198,6 +253,17 @@ function readLoginContext(portalPath: string) {
     next,
     destination: resolveSafeReturnPath(next, portalPath),
     label: returnDestinationLabel(next),
+    reason: parseLoginReturnReason(params.get('reason'))
+  };
+}
+
+function readStaffLoginContext() {
+  if (typeof window === 'undefined') return { next: null, label: null, reason: null };
+  const params = new URLSearchParams(window.location.search);
+  const next = sanitizeStaffReturnHash(params.get('next'));
+  return {
+    next,
+    label: staffReturnDestinationLabel(next),
     reason: parseLoginReturnReason(params.get('reason'))
   };
 }
@@ -257,7 +323,7 @@ function signupStateTone(state: unknown): BadgeTone {
   const normalized = normalizeSignupState(state);
   if (normalized === 'customer_invited') return 'success';
   if (normalized === 'rejected') return 'danger';
-  if (['under_review', 'approved', 'provisioned'].includes(normalized)) return 'warn';
+  if (normalized === 'under_review') return 'warn';
   if (normalized === 'submitted') return 'info';
   return 'muted';
 }
@@ -593,7 +659,15 @@ function AuthRedirectPanel({ lead, help, href }: { lead: string; help?: string; 
   );
 }
 
-function CopyValueButton({ value, label }: { value: string; label: string }) {
+function CopyValueButton({
+  value,
+  label,
+  copiedMessage = 'Request ID copied.'
+}: {
+  value: string;
+  label: string;
+  copiedMessage?: string;
+}) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<number | null>(null);
 
@@ -620,20 +694,34 @@ function CopyValueButton({ value, label }: { value: string; label: string }) {
         {state === 'copied' ? 'Copied' : label}
       </Button>
       <span className="public-copy-status" role="status" aria-live="polite">
-        {state === 'copied' ? 'Request ID copied.' : state === 'failed' ? 'Copy failed. Select the ID and copy it manually.' : ''}
+        {state === 'copied' ? copiedMessage : state === 'failed' ? 'Copy failed. Select the ID and copy it manually.' : ''}
       </span>
     </span>
   );
 }
 
-function RequestReference({ id }: { id: string }) {
+function ReferenceValue({
+  labelId,
+  label,
+  value,
+  copiedMessage
+}: {
+  labelId: string;
+  label: string;
+  value: string;
+  copiedMessage: string;
+}) {
   return (
     <div className="public-reference">
-      <span className="public-reference-label" id="request-reference-label">Request ID</span>
-      <code className="public-reference-value" aria-labelledby="request-reference-label">{id}</code>
-      <CopyValueButton value={id} label="Copy ID" />
+      <span className="public-reference-label" id={labelId}>{label}</span>
+      <code className="public-reference-value" aria-labelledby={labelId}>{value}</code>
+      <CopyValueButton value={value} label="Copy ID" copiedMessage={copiedMessage} />
     </div>
   );
+}
+
+function RequestReference({ id }: { id: string }) {
+  return <ReferenceValue labelId="request-reference-label" label="Request ID" value={id} copiedMessage="Request ID copied." />;
 }
 
 const STAGE_STATUS_TEXT: Record<LifecycleStageStatus, string> = {
@@ -687,9 +775,9 @@ function LostReferenceHelp({ contact }: { contact: PublicContact | null | undefi
   return (
     <p className="public-help-line">
       {contact ? (
-        <>Lost your request ID? Contact <a href={contact.href}>{contact.label}</a>. Status lookup never shows contact details.</>
+        <>Lost the ID? Contact <a href={contact.href}>{contact.label}</a>.</>
       ) : (
-        <>Lost your request ID? This deployment has not published a support contact. Ask the person who arranged your AstraNull access.</>
+        <>Lost your request ID? It cannot be looked up by email. AstraNull follows up with the work email on the request, so you do not need to submit again.</>
       )}
     </p>
   );
@@ -823,11 +911,11 @@ const LANDING_FLOW: readonly LandingFlowStep[] = [
 
 type VerdictRecordField = { field: string; description?: string; vocabulary?: readonly string[] };
 
-/* Field names mirror the verdict record the API returns; values list the allowed vocabulary. */
+/* Field names mirror the verdict record the API returns; a vocabulary is listed only where it is closed. */
 const VERDICT_RECORD_FIELDS: readonly VerdictRecordField[] = [
   { field: 'target_id', description: 'The declared hostname, DNS zone or TCP service' },
   { field: 'confidence', vocabulary: ['external_only'] },
-  { field: 'verdict', vocabulary: ['protected', 'exposed', 'bypassable', 'inconclusive'] },
+  { field: 'verdict', description: 'The correlated outcome for one check, such as protected, edge_exposed, bypassable or inconclusive' },
   { field: 'evidence_ids', description: 'References to the probe evidence behind the verdict' },
   { field: 'reason_codes', description: 'Why correlation reached this verdict' }
 ];
@@ -1043,18 +1131,20 @@ export function PublicLandingPage({ config }: PublicPageProps) {
 /**
  * Human copy for the credential lane's documented failures (see docs/api.md).
  *
- * `invalid_credentials` stays deliberately vague: the server returns the same
- * response for an unknown email and a wrong password so the form cannot be used
- * to enumerate accounts, and saying more here would undo that.
+ * The server checks the password before revealing anything about the account: an unknown
+ * email, a wrong password, an invited account without a password, a disabled account and a
+ * multi-workspace email all return the same `invalid_credentials` body. Account-state codes
+ * (`password_setup_required`, `account_disabled`, `tenant_required` with its workspace list)
+ * only follow a correct password, so this copy must stay equally vague for the 401.
  */
 function passwordLoginErrorMessage(response: Response, code: string, json: Record<string, unknown>) {
   switch (code) {
     case 'invalid_credentials':
-      return 'Email or password is incorrect.';
+      return 'Email or password is incorrect. Invited? Use the link in your invitation email to set a password.';
     case 'validation_failed':
       return 'Enter a valid work email and your account password.';
     case 'tenant_required':
-      return 'This email belongs to more than one workspace. Enter the workspace ID to continue.';
+      return 'That workspace could not be opened with these details. Choose a workspace and try again.';
     case 'password_setup_required':
       return 'This account has no password yet. Use the invitation link from your administrator to set one.';
     case 'password_change_required':
@@ -1104,6 +1194,27 @@ function customerStagingRoleLabel(slug: string) {
   return CUSTOMER_STAGING_ROLE_LABELS[slug as (typeof CUSTOMER_STAGING_ROLES)[number]] ?? slug.replace(/_/g, ' ');
 }
 
+type LoginWorkspace = { tenant_id: string; name: string };
+
+const LOGIN_WORKSPACE_LIMIT = 50;
+
+/** Workspaces from a tenant_required response, kept only when each has a safe id. */
+export function loginWorkspaceOptions(value: unknown): LoginWorkspace[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const options: LoginWorkspace[] = [];
+  for (const entry of value.slice(0, LOGIN_WORKSPACE_LIMIT)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as Record<string, unknown>;
+    const tenantId = String(record.tenant_id ?? '').trim();
+    if (!isSafeInspectorId(tenantId) || seen.has(tenantId)) continue;
+    seen.add(tenantId);
+    const name = String(record.name ?? '').trim().slice(0, 120);
+    options.push({ tenant_id: tenantId, name: name || tenantId });
+  }
+  return options;
+}
+
 function LoginReturnNotice({ reason, label }: { reason: LoginReturnReason | null; label: string | null }) {
   if (!reason && !label) return null;
   const title = reason === 'session_expired'
@@ -1131,6 +1242,8 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [tenantId, setTenantId] = useState('');
   const [tenantRequired, setTenantRequired] = useState(false);
+  const [workspaces, setWorkspaces] = useState<LoginWorkspace[]>([]);
+  const [stepNotice, setStepNotice] = useState('');
   const [role, setRole] = useState('admin');
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState('');
@@ -1173,6 +1286,11 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   useEffect(() => {
     if (error) errorRef.current?.focus();
   }, [error]);
+
+  useEffect(() => {
+    if (mfaRequired) totpRef.current?.focus();
+    else if (tenantRequired) tenantRef.current?.focus();
+  }, [mfaRequired, tenantRequired]);
 
   const lead = isDevHeaders
     ? 'Pick an identity and role to preview the customer portal.'
@@ -1217,8 +1335,11 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     navigateSpa(destination);
   }
 
-  /** Submit real credentials to the password lane. Role/tenant come from the server. */
-  async function submitPasswordLogin() {
+  /**
+   * Submit real credentials to the password lane. Role/tenant come from the server.
+   * Returns 'step' when the server asks for an expected next step (code or workspace).
+   */
+  async function submitPasswordLogin(): Promise<'step' | 'done'> {
     const body: Record<string, unknown> = { email: userId.trim(), password };
     const scopedTenant = tenantId.trim();
     if (scopedTenant) body.tenant_id = scopedTenant;
@@ -1234,14 +1355,23 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     if (!response.ok) {
       const code = publicApiErrorCode(response.status, json);
       setErrorCode(code);
-      if (code === 'tenant_required') setTenantRequired(true);
       if (code === 'mfa_required' || code === 'mfa_invalid') {
         setMfaRequired(true);
         setTotp('');
-        throw new Error(code === 'mfa_required'
-          ? 'Enter the 6-digit code from your authenticator app to continue.'
-          : 'That authenticator code could not be verified. Enter the current 6-digit code.');
+        if (code === 'mfa_invalid') {
+          throw new Error('That authenticator code could not be verified. Enter the current 6-digit code.');
+        }
+        setStepNotice('Password accepted. Enter the 6-digit code from your authenticator app.');
+        return 'step';
       }
+      if (code === 'tenant_required' && !scopedTenant) {
+        setWorkspaces(loginWorkspaceOptions(json.workspaces));
+        setTenantId('');
+        setTenantRequired(true);
+        setStepNotice('Choose which workspace to open.');
+        return 'step';
+      }
+      if (code === 'tenant_required') setTenantRequired(true);
       if (code === 'invalid_credentials') setPassword('');
       throw new Error(passwordLoginErrorMessage(response, code, json));
     }
@@ -1249,8 +1379,10 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     setPassword('');
     setTotp('');
     setMfaRequired(false);
+    setStepNotice('');
     saveSession(sessionFromLoginResponse(json));
     navigateSpa(destination);
+    return 'done';
   }
 
   function clearMfaChallenge() {
@@ -1259,15 +1391,32 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     setTotp('');
     setError('');
     setErrorCode('');
+    setStepNotice('');
+  }
+
+  /** The workspace list is derived from these credentials, so changing them discards it. */
+  function clearWorkspaceChoice() {
+    if (!tenantRequired) return;
+    setTenantRequired(false);
+    setWorkspaces([]);
+    setTenantId('');
+    setStepNotice('');
+    setFieldErrors((current) => ({ ...current, tenant: undefined }));
   }
 
   function validate() {
     const next: { email?: string; password?: string; tenant?: string; totp?: string } = {};
     const email = userId.trim();
-    if (!email) next.email = usePasswordLane ? 'Enter your work email.' : 'Enter a user ID or work email.';
+    if (!email) {
+      next.email = usePasswordLane
+        ? 'Enter your work email.'
+        : isDevHeaders ? 'Enter a user ID, like usr_admin.' : 'Enter a user ID or work email.';
+    }
     else if (usePasswordLane && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a full work email, like name@company.com.';
     if (usePasswordLane && !password) next.password = 'Enter your password.';
-    if (usePasswordLane && tenantRequired && !tenantId.trim()) next.tenant = 'Enter the workspace ID you want to open.';
+    if (usePasswordLane && tenantRequired && !tenantId.trim()) {
+      next.tenant = workspaces.length ? 'Choose the workspace you want to open.' : 'Enter the workspace ID you want to open.';
+    }
     if (usePasswordLane && mfaRequired && !/^\d{6}$/.test(totp.trim())) next.totp = 'Enter the 6-digit code from your authenticator app.';
     setFieldErrors(next);
     if (next.email) emailRef.current?.focus();
@@ -1282,12 +1431,13 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     if (loginDisabled || loading) return;
     setError('');
     setErrorCode('');
+    setStepNotice('');
     if (!validate()) return;
     setLoading(true);
 
     try {
       if (usePasswordLane) {
-        await submitPasswordLogin();
+        if (await submitPasswordLogin() === 'step') setLoading(false);
       } else {
         await submitStagingBypass();
       }
@@ -1335,7 +1485,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     body = (
       <form className="auth-form" onSubmit={submit} aria-busy={loading} noValidate>
         <label htmlFor="login-user-id">
-          <span>{usePasswordLane || isDevHeaders || config.bundledLoginEnabled ? 'Work email' : 'User ID'}</span>
+          <span>{isDevHeaders && !usePasswordLane ? 'User ID' : usePasswordLane || config.bundledLoginEnabled ? 'Work email' : 'User ID'}</span>
           <input
             id="login-user-id"
             ref={emailRef}
@@ -1345,14 +1495,16 @@ function CredentialLoginPage({ config }: PublicPageProps) {
               setUserId(event.target.value);
               if (fieldErrors.email) setFieldErrors((current) => ({ ...current, email: undefined }));
               clearMfaChallenge();
+              clearWorkspaceChoice();
             }}
             autoComplete="username"
             autoCapitalize="none"
             spellCheck={false}
             required
             aria-invalid={fieldErrors.email ? true : undefined}
-            aria-describedby={describedBy(fieldErrors.email && 'login-user-id-error')}
+            aria-describedby={describedBy(isDevHeaders && 'login-user-id-help', fieldErrors.email && 'login-user-id-error')}
           />
+          {isDevHeaders ? <span className="auth-field-help" id="login-user-id-help">Any identifier, for example usr_admin.</span> : null}
           <FieldError id="login-user-id-error" message={fieldErrors.email} />
         </label>
         {usePasswordLane ? (
@@ -1369,6 +1521,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                     setPassword(event.target.value);
                     if (fieldErrors.password) setFieldErrors((current) => ({ ...current, password: undefined }));
                     clearMfaChallenge();
+                    clearWorkspaceChoice();
                   }}
                   autoComplete="current-password"
                   required
@@ -1390,7 +1543,36 @@ function CredentialLoginPage({ config }: PublicPageProps) {
               </span>
               <FieldError id="login-password-error" message={fieldErrors.password} />
             </label>
-            {tenantRequired ? (
+            {tenantRequired && workspaces.length ? (
+              <fieldset
+                className="auth-workspace-choice"
+                aria-describedby={describedBy(fieldErrors.tenant && 'login-workspace-error')}
+              >
+                <legend>Choose a workspace</legend>
+                {workspaces.map((workspace, index) => (
+                  <label key={workspace.tenant_id} className="auth-workspace-option" htmlFor={`login-workspace-${index}`}>
+                    <input
+                      id={`login-workspace-${index}`}
+                      ref={index === 0 ? tenantRef : undefined}
+                      type="radio"
+                      name="login-workspace"
+                      value={workspace.tenant_id}
+                      checked={tenantId === workspace.tenant_id}
+                      onChange={() => {
+                        setTenantId(workspace.tenant_id);
+                        if (fieldErrors.tenant) setFieldErrors((current) => ({ ...current, tenant: undefined }));
+                        clearMfaChallenge();
+                      }}
+                    />
+                    <span className="auth-workspace-copy">
+                      <span className="auth-workspace-name">{workspace.name}</span>
+                      {workspace.name !== workspace.tenant_id ? <span className="auth-workspace-id mono">{workspace.tenant_id}</span> : null}
+                    </span>
+                  </label>
+                ))}
+                <FieldError id="login-workspace-error" message={fieldErrors.tenant} />
+              </fieldset>
+            ) : tenantRequired ? (
               <label htmlFor="login-tenant-scope">
                 <span>Workspace ID</span>
                 <input
@@ -1409,7 +1591,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                   aria-describedby={describedBy(fieldErrors.tenant && 'login-tenant-scope-error', 'login-tenant-scope-help')}
                 />
                 <span className="auth-field-help" id="login-tenant-scope-help">
-                  This email belongs to more than one workspace. Enter the workspace ID you want to open.
+                  Your workspace administrator can tell you this ID.
                 </span>
                 <FieldError id="login-tenant-scope-error" message={fieldErrors.tenant} />
               </label>
@@ -1432,7 +1614,6 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                   minLength={6}
                   maxLength={6}
                   required
-                  autoFocus
                   aria-invalid={fieldErrors.totp ? true : undefined}
                   aria-describedby={describedBy(fieldErrors.totp && 'login-totp-error', 'login-totp-help')}
                 />
@@ -1446,7 +1627,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
         ) : null}
         {isDevHeaders ? (
           <label htmlFor="login-tenant-id">
-            <span>Workspace</span>
+            <span>Demo workspace</span>
             <input id="login-tenant-id" className="mono" value="ten_demo" readOnly aria-readonly="true" />
           </label>
         ) : null}
@@ -1466,6 +1647,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
             ) : null}
           </div>
         ) : null}
+        {stepNotice && !error ? <p className="auth-field-help" role="status" aria-live="polite">{stepNotice}</p> : null}
         {error ? (
           <div className="form-error public-form-error" role="alert" tabIndex={-1} ref={errorRef}>
             <p>{error}</p>
@@ -1483,7 +1665,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
           </Button>
           {isDevHeaders ? (
             <Button type="button" variant="secondary" onClick={() => enterDemoPortal(config.portalPath)}>
-              Try demo
+              Skip: open as demo admin
             </Button>
           ) : null}
         </div>
@@ -1798,7 +1980,7 @@ function useTransientUrlToken() {
   return { token, setToken, fromLink };
 }
 
-type TerminalTokenState = { title: string; body: string } | null;
+type TerminalTokenState = { title: string; body: React.ReactNode } | null;
 
 /**
  * Consume a one-time password recovery token.
@@ -1814,20 +1996,27 @@ function ResetPasswordPage({ config }: PublicPageProps) {
   const pair = usePasswordPair();
   const [totp, setTotp] = useState('');
   const [mfaRequired, setMfaRequired] = useState(false);
+  const [stepNotice, setStepNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [terminal, setTerminal] = useState<TerminalTokenState>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const totpRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
   }, [error]);
 
+  useEffect(() => {
+    if (mfaRequired) totpRef.current?.focus();
+  }, [mfaRequired]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (loading) return;
     setError('');
+    setStepNotice('');
     pair.setServerFailures([]);
     if (!token.trim()) {
       setError('Enter the recovery code from your recovery message.');
@@ -1858,9 +2047,11 @@ function ResetPasswordPage({ config }: PublicPageProps) {
         if (code === 'mfa_required' || code === 'mfa_invalid') {
           setMfaRequired(true);
           setTotp('');
-          throw new Error(code === 'mfa_required'
-            ? 'Enter the 6-digit code from your authenticator app to complete recovery.'
-            : 'That authenticator code could not be verified. Enter the current 6-digit code.');
+          if (code === 'mfa_invalid') {
+            throw new Error('That authenticator code could not be verified. Enter the current 6-digit code.');
+          }
+          setStepNotice('Enter the 6-digit code from your authenticator app to complete recovery.');
+          return;
         }
         if (code === 'invalid_reset_token' || code === 'reset_token_expired') {
           setToken('');
@@ -1886,6 +2077,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
       setTotp('');
       setToken('');
       setMfaRequired(false);
+      setStepNotice('');
       setDone(true);
     } catch (err) {
       setError(isNetworkFailure(err)
@@ -1938,6 +2130,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
                 setToken(event.target.value);
                 setMfaRequired(false);
                 setTotp('');
+                setStepNotice('');
               }}
               className="mono"
               autoComplete="off"
@@ -1973,6 +2166,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
             <span>Authenticator code</span>
             <input
               id="reset-password-totp"
+              ref={totpRef}
               value={totp}
               onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
               className="mono"
@@ -1982,7 +2176,6 @@ function ResetPasswordPage({ config }: PublicPageProps) {
               minLength={6}
               maxLength={6}
               required
-              autoFocus
               aria-describedby="reset-password-totp-help"
             />
             <span className="auth-field-help" id="reset-password-totp-help">
@@ -1990,6 +2183,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
             </span>
           </label>
         ) : null}
+        {stepNotice && !error ? <p className="auth-field-help" role="status" aria-live="polite">{stepNotice}</p> : null}
         {error ? <div className="form-error public-form-error" role="alert" tabIndex={-1} ref={errorRef}><p>{error}</p></div> : null}
         <div className="auth-form-actions">
           <Button type="submit" loading={loading} loadingText="Changing password…">
@@ -2042,6 +2236,8 @@ export function SetPasswordPage({ config }: PublicPageProps) {
   const [done, setDone] = useState<Record<string, unknown> | null>(null);
   const [terminal, setTerminal] = useState<TerminalTokenState>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const supportContact = publicSupportContact(config.siteConfig);
+  const passwordSetupUnused = config.authMode !== 'unknown' && config.siteConfig.password_login_enabled === false;
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
@@ -2080,7 +2276,12 @@ export function SetPasswordPage({ config }: PublicPageProps) {
           setToken('');
           pair.clear();
           setTerminal(code === 'invite_expired'
-            ? { title: 'This invitation has expired.', body: 'No account was activated. Ask your AstraNull administrator to send a new invitation.' }
+            ? {
+              title: 'This invitation has expired.',
+              body: supportContact
+                ? <>No account was activated. Contact <a href={supportContact.href}>{supportContact.label}</a> for a new invitation.</>
+                : 'No account was activated. Reply to the email that sent your invitation to request a new one.'
+            }
             : { title: 'This invitation cannot be used.', body: 'It may have been used already or replaced. No account was activated by this attempt. If you already set a password, log in.' });
           return;
         }
@@ -2109,6 +2310,7 @@ export function SetPasswordPage({ config }: PublicPageProps) {
   }
 
   const activatedEmail = done ? String(done.email ?? '').trim() : '';
+  const activatedTenant = done ? String(done.tenant_id ?? '').trim() : '';
 
   let body: React.ReactNode;
   if (done) {
@@ -2122,6 +2324,17 @@ export function SetPasswordPage({ config }: PublicPageProps) {
             {' '}The invitation is now closed.
           </p>
         </PublicNotice>
+        {isSafeInspectorId(activatedTenant) ? (
+          <>
+            <ReferenceValue
+              labelId="set-password-workspace-label"
+              label="Workspace ID"
+              value={activatedTenant}
+              copiedMessage="Workspace ID copied."
+            />
+            <p className="auth-field-help">If this email opens more than one workspace, sign-in asks you to choose; this ID identifies the one you just activated.</p>
+          </>
+        ) : null}
         <div className="auth-form-actions">
           <AnchorButton href={config.loginUrl}>Log in</AnchorButton>
         </div>
@@ -2136,6 +2349,17 @@ export function SetPasswordPage({ config }: PublicPageProps) {
         actions={<AnchorButton href={config.loginUrl} variant="secondary">Go to log in</AnchorButton>}
       >
         <p>{terminal.body}</p>
+      </PublicNotice>
+    );
+  } else if (passwordSetupUnused) {
+    body = (
+      <PublicNotice
+        tone="info"
+        role="note"
+        title="This organization signs in through its identity provider."
+        actions={<AnchorButton href={config.loginUrl}>Log in</AnchorButton>}
+      >
+        <p>Password setup is not used on this deployment. No password is needed.</p>
       </PublicNotice>
     );
   } else {
@@ -2197,7 +2421,7 @@ export function SetPasswordPage({ config }: PublicPageProps) {
     <PublicShell showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthTaskLayout
         title={done ? 'Password set' : 'Set your password'}
-        lead={done ? undefined : 'Your invitation lets you set a password once. Your role and workspace come from the invitation, not this form.'}
+        lead={done || passwordSetupUnused ? undefined : 'Your invitation lets you set a password once. Your role and workspace come from the invitation, not this form.'}
         links={<a href={config.loginUrl}>Back to log in</a>}
       >
         <Card className="auth-card public-auth-card">
@@ -2336,7 +2560,7 @@ function signupSubmitErrorMessage(status: number, json: Record<string, unknown>)
     return 'Too many requests from this network. Wait a few minutes, then submit again. Your answers are still here.';
   }
   if (code === 'duplicate_request') {
-    return 'A request for this organization or email domain is already open. Use the request ID from your first confirmation to check its status.';
+    return 'A request from this email or organization domain is already being reviewed, so nothing new was submitted. If you submitted it, use the request ID from your confirmation to check its status. Otherwise, AstraNull will follow up with the work email on that request.';
   }
   if (status === 403 || code === 'signup_disabled') {
     return 'Access requests are closed on this deployment right now. Nothing was submitted.';
@@ -2357,8 +2581,8 @@ const EMPTY_SIGNUP_DRAFT: Record<SignupField, string> = {
   contact_name: '',
   contact_email: '',
   intended_use: '',
-  requested_plan: 'professional',
-  region: 'us'
+  requested_plan: '',
+  region: ''
 };
 
 export function SignupPage({ config }: PublicPageProps) {
@@ -2379,8 +2603,8 @@ export function SignupPage({ config }: PublicPageProps) {
   const contact = publicSupportContact(config.siteConfig);
 
   useEffect(() => {
-    if (planOptions.length > 0 && !planOptions.some((option) => option.value === values.requested_plan)) {
-      setValues((current) => ({ ...current, requested_plan: planOptions[0].value }));
+    if (values.requested_plan && planOptions.length > 0 && !planOptions.some((option) => option.value === values.requested_plan)) {
+      setValues((current) => ({ ...current, requested_plan: '' }));
     }
   }, [planOptions, values.requested_plan]);
 
@@ -2428,7 +2652,7 @@ export function SignupPage({ config }: PublicPageProps) {
     const first = SIGNUP_FIELD_ORDER.find((field) => errors[field]);
     if (!first) return false;
     const node = fieldRefs.current[first];
-    (node?.querySelector?.('button, input, textarea') as HTMLElement | null ?? node)?.focus();
+    (node?.querySelector?.('.select-display, input, textarea, button') as HTMLElement | null ?? node)?.focus();
     return true;
   }
 
@@ -2601,6 +2825,7 @@ export function SignupPage({ config }: PublicPageProps) {
               name="requested_plan"
               value={values.requested_plan}
               options={planOptions}
+              placeholder="Choose a plan"
               onChange={(value) => update('requested_plan', value)}
               disabled={loading}
               hint="A request, not an entitlement. The plan is confirmed during review."
@@ -2613,6 +2838,7 @@ export function SignupPage({ config }: PublicPageProps) {
               name="region"
               value={values.region}
               options={Object.entries(SIGNUP_REGION_LABELS).map(([value, label]) => ({ value, label }))}
+              placeholder="Choose a data region"
               onChange={(value) => update('region', value)}
               disabled={loading}
               hint="Where you would like workspace data to be kept."
@@ -2655,7 +2881,11 @@ export function SignupPage({ config }: PublicPageProps) {
         aside={(
           <>
             <h1 className="auth-title">Request access to AstraNull.</h1>
-            <p className="auth-lead">Tell us who you are and what you want to validate. Every request is reviewed before a workspace is created.</p>
+            <p className="auth-lead">
+              {submitted
+                ? 'Your request is recorded. Every request is reviewed before a workspace is created.'
+                : 'Tell us who you are and what you want to validate. Every request is reviewed before a workspace is created.'}
+            </p>
             <ul className="auth-points">
               <li><ShieldCheck size={16} aria-hidden="true" />No cloud credentials, agents or IP discovery are needed.</li>
               <li><LockKeyhole size={16} aria-hidden="true" />Submitting does not create an account or grant a plan.</li>
@@ -2724,7 +2954,7 @@ export function SignupStatusPage({ config }: Partial<PublicPageProps> = {}) {
   const contact = siteConfig === null ? undefined : publicSupportContact(siteConfig);
 
   async function lookupSignupRequest(id: string) {
-    const trimmed = id.trim();
+    const trimmed = id.replace(/\s+/g, '');
     if (!trimmed) {
       setLookupError({ kind: 'empty', message: 'Enter a request ID to check status.' });
       inputRef.current?.focus();
@@ -2821,7 +3051,7 @@ export function SignupStatusPage({ config }: Partial<PublicPageProps> = {}) {
                   aria-invalid={fieldError ? true : undefined}
                   aria-describedby={describedBy('signup-status-request-id-help', fieldError && 'signup-status-request-id-error')}
                 />
-                <span className="auth-field-help" id="signup-status-request-id-help">Starts with <code>sgn_</code>. Letters are case-sensitive; spaces are ignored.</span>
+                <span className="auth-field-help" id="signup-status-request-id-help">Starts with <code>sgn_</code>. Letters are case-sensitive; spaces and line breaks are ignored.</span>
                 <FieldError id="signup-status-request-id-error" message={fieldError} />
               </label>
               {lookupError && !fieldError ? (
@@ -2853,7 +3083,12 @@ export function SignupStatusPage({ config }: Partial<PublicPageProps> = {}) {
                   tone={normalizeSignupState(state) === 'rejected' ? 'warn' : next.canSignIn ? 'success' : 'info'}
                   role="status"
                   title={next.headline}
-                  actions={next.canSignIn ? <AnchorButton href={loginUrl}>Log in</AnchorButton> : undefined}
+                  actions={normalizeSignupState(state) === 'customer_invited' ? (
+                    <>
+                      <AnchorButton href="/set-password">Set password</AnchorButton>
+                      <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
+                    </>
+                  ) : next.canSignIn ? <AnchorButton href={loginUrl}>Log in</AnchorButton> : undefined}
                 >
                   <p>{next.body}</p>
                 </PublicNotice>
@@ -2983,35 +3218,17 @@ const STAFF_STAGING_ROLES = [
   'soc_lead'
 ] as const;
 
-function AuthCardHeader({
-  badge,
-  title,
-  description
-}: {
-  badge: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <CardHeader className="auth-card-header">
-      <div className="auth-card-heading">
-        <div className="auth-card-title-row">
-          <CardTitle>{title}</CardTitle>
-          {badge}
-        </div>
-        <CardDescription>{description}</CardDescription>
-      </div>
-    </CardHeader>
-  );
-}
-
 export function StaffLoginPage({ config }: PublicPageProps) {
   usePageMeta({ title: 'Staff sign-in · AstraNull Internal', robots: 'noindex, nofollow' });
 
+  const context = useMemo(() => readStaffLoginContext(), []);
   const [staffId, setStaffId] = useState('');
   const [staffRole, setStaffRole] = useState('internal_admin');
+  const [staffIdError, setStaffIdError] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const staffIdRef = useRef<HTMLInputElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
 
   const isDevHeaders = config.authMode === 'dev-headers';
   const authUnknown = config.authMode === 'unknown';
@@ -3024,32 +3241,28 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   useEffect(() => {
     const existing = loadSession();
     if (existing?.access_token && existing.principal === 'staff') {
-      navigateSpa(staffHomePath(existing));
+      navigateSpa(resolveStaffReturnPath(existing, context.next));
     }
-  }, []);
+  }, [context.next]);
 
   useEffect(() => {
     if (idpRedirect) window.location.replace(idpRedirect);
   }, [idpRedirect]);
 
   useEffect(() => {
-    if (loginDisabled) setError('Staff SSO is required for this deployment.');
-  }, [loginDisabled]);
-
-  const cardDescription = authUnknown
-    ? 'Staff sign-in configuration is unavailable right now.'
-    : isDevHeaders
-      ? 'Continue with a staff identity and role for local validation.'
-      : config.bundledLoginEnabled
-        ? 'Bundled staging login mints a short-lived staff bearer session for this environment.'
-        : idpRedirect
-          ? 'Redirecting to your organization staff sign-in provider.'
-          : 'Staff sign-in is managed by your organization identity provider.';
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (loginDisabled || authUnknown) return;
+    if (loginDisabled || authUnknown || loading) return;
     setError('');
+    if (!staffId.trim()) {
+      setStaffIdError('Enter your staff ID.');
+      staffIdRef.current?.focus();
+      return;
+    }
+    setStaffIdError('');
     setLoading(true);
 
     if (isDevHeaders) {
@@ -3061,7 +3274,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         staff_login_path: staffLoginPath
       };
       saveSession(devSession);
-      navigateSpa(staffHomePath(devSession));
+      navigateSpa(resolveStaffReturnPath(devSession, context.next));
       return;
     }
 
@@ -3080,7 +3293,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         throw new Error(publicApiErrorMessage(
           response.status,
           json,
-          'Staff login failed. Check the selected staging identity and try again.'
+          'Staff sign-in failed. Check the selected staging identity and try again.'
         ));
       }
       const staffSession = {
@@ -3088,101 +3301,111 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         staff_login_path: staffLoginPath
       };
       saveSession(staffSession);
-      navigateSpa(staffHomePath(staffSession));
+      navigateSpa(resolveStaffReturnPath(staffSession, context.next));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Staff login failed.');
+      setError(isNetworkFailure(err) ? NETWORK_ERROR_MESSAGE : err instanceof Error ? err.message : 'Staff sign-in failed.');
       setLoading(false);
     }
   }
 
+  let body: React.ReactNode;
+  if (authUnknown) {
+    body = (
+      <PublicNotice
+        tone="warn"
+        role="alert"
+        title="We could not confirm how this deployment signs staff in."
+        actions={<Button type="button" variant="secondary" onClick={() => window.location.reload()}>Try again</Button>}
+      >
+        <p>The sign-in service did not return its configuration. Nothing was submitted. Try again in a moment.</p>
+      </PublicNotice>
+    );
+  } else if (idpRedirect) {
+    body = (
+      <AuthRedirectPanel
+        lead="Redirecting to your staff identity provider…"
+        help="You are being sent to your organization's staff sign-in page. If nothing happens, use the button below."
+        href={idpRedirect}
+      />
+    );
+  } else if (loginDisabled) {
+    body = (
+      <PublicNotice tone="info" role="note" title="Staff sign-in uses your organization identity provider.">
+        <p>This deployment has no staff sign-in link configured, so there is nothing to submit here. Contact your AstraNull administrator for the correct sign-in address.</p>
+      </PublicNotice>
+    );
+  } else {
+    body = (
+      <form className="auth-form" onSubmit={submit} aria-busy={loading} noValidate>
+        <label htmlFor="staff-login-id">
+          <span>Staff ID</span>
+          <input
+            id="staff-login-id"
+            ref={staffIdRef}
+            className="mono"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={staffId}
+            onChange={(event) => {
+              setStaffId(event.target.value);
+              if (staffIdError) setStaffIdError('');
+            }}
+            autoComplete="username"
+            required
+            aria-invalid={staffIdError ? true : undefined}
+            aria-describedby={describedBy(staffIdError && 'staff-login-id-error')}
+          />
+          <FieldError id="staff-login-id-error" message={staffIdError} />
+        </label>
+        {showStagingStaffRolePicker ? (
+          <div className="auth-field-group">
+            <Select
+              label={isDevHeaders ? 'Staff role' : 'Staging staff role'}
+              value={staffRole}
+              options={STAFF_STAGING_ROLES.map((item) => ({
+                value: item,
+                label: staffRoleLabel(item)
+              }))}
+              onChange={setStaffRole}
+            />
+            {!isDevHeaders && config.bundledLoginEnabled ? (
+              <span className="auth-field-help">Staging only: no password is checked. Production staff sign-in uses your identity provider.</span>
+            ) : null}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="form-error public-form-error" role="alert" tabIndex={-1} ref={errorRef}>
+            <p>{error}</p>
+          </div>
+        ) : null}
+        <div className="auth-form-actions">
+          <Button type="submit" loading={loading}>
+            {isStaffSocRole({ staff_role: staffRole }) ? 'Continue to SOC console' : 'Continue to internal admin'}
+          </Button>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <PublicShell eyebrow="Internal staff access" showAccountNav={false}>
-      <AuthPageLayout
-        aside={(
-          <>
-            <h1 className="auth-title">Staff sign-in.</h1>
-            <p className="auth-lead">
-              {isDevHeaders
-                ? 'Pick a staff identity and role to preview the internal control plane.'
-                : 'Review signup intake, tenant lifecycle, entitlement grants, approval queues, and internal audit from the staff-only control plane.'}
-            </p>
-            <p className="auth-aside-note" role="note">
-              Customer accounts do not grant access to this surface. Provisioning and approval actions are written to the internal audit log.
-            </p>
-          </>
-        )}
-        footer={<p><a href="/">Back to public site</a></p>}
+      <AuthTaskLayout
+        title="Staff sign-in"
+        lead={isDevHeaders
+          ? 'Pick a staff identity and role to preview the internal control plane.'
+          : 'Staff only. Customer accounts do not grant access here.'}
+        links={<a href="/">Back to public site</a>}
       >
+        <LoginReturnNotice reason={context.reason} label={context.label} />
         {isDevHeaders && !authUnknown ? (
           <PublicNotice tone="warn" role="note" title="Developer mode: no password is checked.">
             <p>Staff identity and role come from this form. Production deployments never show it.</p>
           </PublicNotice>
         ) : null}
-        <Card className="auth-card">
-          <AuthCardHeader
-            badge={<Badge tone="muted">Staff plane</Badge>}
-            title="Sign in with a staff identity"
-            description={cardDescription}
-          />
-          <CardContent>
-            {authUnknown ? (
-              <PublicNotice
-                tone="warn"
-                role="alert"
-                title="We could not confirm how this deployment signs staff in."
-                actions={<Button type="button" variant="secondary" onClick={() => window.location.reload()}>Try again</Button>}
-              >
-                <p>The sign-in service did not return its configuration. Nothing was submitted. Try again in a moment.</p>
-              </PublicNotice>
-            ) : idpRedirect ? (
-              <AuthRedirectPanel
-                lead="Redirecting to your staff identity provider…"
-                help="You will be sent to your organization&apos;s staff sign-in page. If nothing happens, contact your administrator."
-              />
-            ) : (
-              <form className="auth-form" onSubmit={submit} aria-busy={loading}>
-                <label htmlFor="staff-login-id">
-                  <span>Staff ID</span>
-                  <input
-                    id="staff-login-id"
-                    className="mono"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={staffId}
-                    onChange={(event) => setStaffId(event.target.value)}
-                    autoComplete="username"
-                    required={!loginDisabled}
-                    disabled={loginDisabled}
-                  />
-                </label>
-                {showStagingStaffRolePicker ? (
-                  <div className="auth-field-group">
-                    <Select
-                      label={isDevHeaders ? 'Staff role' : 'Staging staff role'}
-                      value={staffRole}
-                      options={STAFF_STAGING_ROLES.map((item) => ({
-                        value: item,
-                        label: staffRoleLabel(item)
-                      }))}
-                      onChange={setStaffRole}
-                      disabled={loginDisabled}
-                    />
-                    {!isDevHeaders && config.bundledLoginEnabled ? (
-                      <span className="auth-field-help">Staging only. Production staff sign-in derives role from your identity provider.</span>
-                    ) : null}
-                  </div>
-                ) : null}
-                {error ? <p className="form-error" role="alert">{error}</p> : null}
-                <div className="auth-form-actions">
-                  <Button type="submit" loading={loading} disabled={loginDisabled}>
-                    Continue to internal admin
-                  </Button>
-                </div>
-              </form>
-            )}
-          </CardContent>
+        <Card className="auth-card public-auth-card">
+          <CardContent>{body}</CardContent>
         </Card>
-      </AuthPageLayout>
+      </AuthTaskLayout>
     </PublicShell>
   );
 }

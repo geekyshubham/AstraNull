@@ -8,7 +8,7 @@
  */
 import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
-import { plainCheckName } from './plain-language.mjs';
+import { plainCheckName, plainVerdictShortLabel } from './plain-language.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS } from '../../../../../src/lib/probeEvidenceTiers.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
@@ -29,7 +29,7 @@ export const CHECK_CATEGORIES = Object.freeze({
   pattern: { id: 'pattern', label: 'Delivery patterns', layer: 'cdn', icon: 'activity', how: 'Records declared readiness for multi-vector and pulse delivery patterns. No live traffic is sent.' },
   operations: { id: 'operations', label: 'Operational readiness', layer: 'ops', icon: 'bell', how: 'Alerting, runbook, and kill-switch readiness self-checks. No traffic reaches your target.' },
   path: { id: 'path', label: 'Protected path', layer: 'cdn', icon: 'globe', how: 'Records a bounded external canary response on the declared path. Without internal receipt evidence it does not confirm arrival or protection inside the application.' },
-  high_scale: { id: 'high_scale', label: 'High-scale readiness', layer: 'cdn', icon: 'activity', how: 'SOC-governed high-scale scenarios. Customers request them; only the SOC can run them.' },
+  high_scale: { id: 'high_scale', label: 'High-scale readiness', layer: 'cdn', icon: 'activity', how: 'SOC-governed high-scale scenarios. These are arranged with AstraNull SOC; customers cannot start or schedule them.' },
 });
 const OTHER_CATEGORY = Object.freeze({ id: 'other', label: 'Other', layer: 'other', icon: 'shield', how: 'Bounded external check.' });
 const CATEGORY_ORDER = ['waf', 'origin', 'l7', 'path', 'protocol', 'tls', 'l3_l4', 'dns', 'reflection', 'amplification', 'operations', 'exploit', 'pattern', 'high_scale'];
@@ -40,8 +40,8 @@ const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 
 const STEP_STATUS = Object.freeze({ pending: 'queued', deferred: 'waiting', starting: 'running', running: 'running', collecting: 'running', denied: 'blocked', skipped: 'skipped', cancelled: 'cancelled' });
 
 export const ROW_STATUS_META = Object.freeze({
-  passed: { label: 'Passed this check', tone: 'success' },
-  failed: { label: 'Gap found', tone: 'danger' },
+  passed: { label: plainVerdictShortLabel('protected'), tone: 'success' },
+  failed: { label: plainVerdictShortLabel('gap'), tone: 'danger' },
   inconclusive: { label: 'Inconclusive', tone: 'warn' },
   observed: { label: 'Observed', tone: 'muted' },
   running: { label: 'Running', tone: 'info' },
@@ -83,6 +83,14 @@ export function categoryForCheck(check) {
 
 function tierOf(check) {
   return text(check?.evidence_tier).toUpperCase();
+}
+
+/** Only graded E3 checks that are not observation-only can produce a readiness verdict. */
+function isReadinessCapable(check) {
+  return check?.observation_only !== true
+    && check?.probe_profile?.observation_only !== true
+    && check?.probe_profile?.readiness_conclusion !== false
+    && tierOf(check) === 'E3';
 }
 
 /** E1 checks perform no network I/O and always verdict inconclusive, so they are not "run". */
@@ -275,6 +283,7 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
       verdictLogic: text(check.verdict_logic),
       expectedBehavior: text(check.default_expected_behavior ?? base.expectedBehavior),
       tier: tierOf(check),
+      readinessCapable: isReadinessCapable(check),
       probeKind: text(check.probe_profile?.kind),
       maxRequests: Number.isFinite(Number(check.probe_profile?.max_requests)) ? Number(check.probe_profile.max_requests) : null,
       timeoutMs: Number.isFinite(Number(check.probe_profile?.timeout_ms)) ? Number(check.probe_profile.timeout_ms) : null,
@@ -283,6 +292,54 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
       tone: meta.tone,
     };
   });
+}
+
+const RECORDED_RESULT_STATUSES = new Set(['passed', 'failed', 'inconclusive']);
+const STARTER_PROBE_KIND = 'waf_class_marker_probe';
+
+/**
+ * First verdict-capable check to suggest before anything has a recorded result. Rate-limit and
+ * observation checks are never suggested because they cannot produce a readiness verdict.
+ */
+export function recommendedStarterRow(rows) {
+  const all = list(rows);
+  if (all.some((row) => RECORDED_RESULT_STATUSES.has(row?.status))) return null;
+  const candidates = all.filter((row) => row?.readinessCapable === true
+    && row.status === 'not_run'
+    && !/rate_limit/.test(text(row.probeKind)));
+  return candidates.find((row) => row.probeKind === STARTER_PROBE_KIND) ?? candidates[0] ?? null;
+}
+
+const WAF_MARKER_CHECK = /^waf\.(.+_marker|evasion_.+)\.safe$/;
+const WAF_MARKER_EXCLUDED = new Set([EDGE_DETECTION_CHECK_ID, 'waf.low_rate_limit.safe', 'waf.enforcement.safe']);
+
+/**
+ * Recorded outcomes of the benign WAF marker checks on this target, counted only from graded rows.
+ * Returns null when none has a recorded result, so nothing is claimed from detection alone.
+ */
+export function wafCheckBlocking(rows) {
+  const markers = list(rows).filter((row) => row?.readinessCapable === true
+    && row.category?.id === 'waf'
+    && WAF_MARKER_CHECK.test(text(row.checkId))
+    && !WAF_MARKER_EXCLUDED.has(text(row.checkId)));
+  const stopped = markers.filter((row) => row.status === 'passed').length;
+  const allowed = markers.filter((row) => row.status === 'failed').length;
+  const inconclusive = markers.filter((row) => row.status === 'inconclusive').length;
+  if (stopped + allowed + inconclusive === 0) return null;
+  const lastAt = markers
+    .filter((row) => RECORDED_RESULT_STATUSES.has(row.status))
+    .map((row) => text(row.finishedAt || row.startedAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? '';
+  return {
+    stopped,
+    allowed,
+    inconclusive,
+    notRun: markers.length - stopped - allowed - inconclusive,
+    applicable: markers.length,
+    lastAt,
+  };
 }
 
 export function countRowStatuses(rows) {

@@ -1,0 +1,68 @@
+/* Sign-in workspace chooser: shown only after a correct password matches several workspaces. */
+.public-app .auth-form .auth-workspace-choice {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.public-app .auth-form .auth-workspace-choice > legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.public-app .auth-form label.auth-workspace-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--surface);
+  cursor: pointer;
+}
+
+.public-app .auth-form label.auth-workspace-option:has(input:checked) {
+  border-color: var(--accent);
+}
+
+.public-app .auth-form .auth-workspace-option input[type="radio"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  border: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.public-app .auth-form .auth-workspace-option input[type="radio"]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-color);
+  outline-offset: 2px;
+}
+
+.public-app .auth-form .auth-workspace-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.public-app .auth-form .auth-workspace-name {
+  color: var(--fg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.public-app .auth-form .auth-workspace-id {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}

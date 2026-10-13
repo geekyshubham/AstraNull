@@ -1034,9 +1034,33 @@ export function createActionItem(fields = {}) {
   return item;
 }
 
-function parseReasonCodesFromNotes(notes) {
-  if (typeof notes !== 'string' || !notes.trim()) return [];
-  const match = notes.match(/Reason codes:\s*([^.]+)/i);
+export function buildWafPostureFindingSummary({
+  postureStatus,
+  reasonCodes,
+  wafAssetId,
+  wafValidationRunId,
+  lastWafValidationRunId = wafValidationRunId,
+}) {
+  const codes = (Array.isArray(reasonCodes) ? reasonCodes : []).filter(Boolean).join(', ') || 'none';
+  return [
+    `Posture status: ${postureStatus}.`,
+    `Reason codes: ${codes}.`,
+    `WAF asset id: ${wafAssetId}.`,
+    `WAF validation run id: ${wafValidationRunId}.`,
+    `Last WAF validation run id: ${lastWafValidationRunId}.`,
+    'Retest: run a safe marker validation after WAF rule or edge changes.',
+  ].join(' ');
+}
+
+function findingRecordedSummary(finding) {
+  const summary = finding?.system_summary;
+  if (summary !== undefined && summary !== null) return String(summary);
+  return typeof finding?.notes === 'string' ? finding.notes : '';
+}
+
+function parseReasonCodesFromSummary(summary) {
+  if (typeof summary !== 'string' || !summary.trim()) return [];
+  const match = summary.match(/Reason codes:\s*([^.]+)/i);
   if (!match) return [];
   return match[1]
     .split(',')
@@ -1052,7 +1076,7 @@ export function extractFindingRemediationContext(finding) {
       : null;
   const reason_codes = Array.isArray(finding?.reason_codes) && finding.reason_codes.length > 0
     ? finding.reason_codes.map((c) => String(c).trim()).filter(Boolean)
-    : parseReasonCodesFromNotes(finding?.notes);
+    : parseReasonCodesFromSummary(findingRecordedSummary(finding));
   const primary_reason = reason_codes[0] ?? 'unknown';
   const owner = typeof finding?.owner === 'string' && finding.owner.trim()
     ? finding.owner.trim()

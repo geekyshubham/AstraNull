@@ -304,6 +304,24 @@ test.describe('protection validation in the target workspace (PV-07)', () => {
     expect(writes).toEqual([]);
   });
 
+  test('protection coverage without declared scope says why and links to declaring an entry path', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    await page.route('**/v1/reports/protection-validation', (route) => route.fulfill({ json: {
+      report_kind: 'protection_validation', tenant_id: PORTAL_SESSION.tenant_id, generated_at: iso(0),
+      passive: true, executes_checks: false, sends_notifications: false, scope: { source_records_complete: true },
+      incomplete_scope: { reasons: ['no_declared_scope'], not_tested_paths: { ids: [], total: 0, truncated: false }, untested_firewall_expectations: { ids: [], total: 0, truncated: false } },
+      conclusions: [],
+    } }));
+    await gotoPortalRoute(page, 'reports', getPortalPlaywrightBaseUrl());
+    const panel = page.getByRole('region', { name: 'Current protection validation report' });
+    await expect(panel).toContainText('Protection coverage from recorded comparisons');
+    await expect(panel).toContainText('No entry paths or firewall expectations are declared yet, so there is nothing to compare.');
+    await expect(panel.getByRole('link', { name: 'Declare an entry path on a target' })).toHaveAttribute('href', '#targets');
+    await expect(panel).toContainText('No comparison conclusions are recorded yet.');
+    await expect(panel).not.toContainText('not hidden');
+    await expect(panel).not.toContainText('Incomplete coverage');
+  });
+
   test('passive report revocation clears previously read conclusions and exposes the permission state', async ({ page }) => {
     await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role: 'viewer', user_id: 'usr_viewer' });
     let denied = false;

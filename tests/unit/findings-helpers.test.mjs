@@ -27,7 +27,12 @@ import {
   resolveFindingRetestAction,
   normalizeSeverity,
   findingSlaHours,
-  dedupeFindingsForTarget
+  dedupeFindingsForTarget,
+  findingForEvidenceParsers,
+  findingObservationLabel,
+  findingOpenedAt,
+  findingRecordedSummary,
+  findingSlaDueAt
 } from '../../apps/web/react/src/lib/findings-helpers.ts';
 import { findingGroupSlaHours } from '../../apps/web/react/src/lib/finding-groups.mjs';
 
@@ -185,7 +190,8 @@ describe('findings-helpers', () => {
       assert.deepEqual(origin.checkIds, ['origin.leak_scan.safe', 'dns.authoritative_response.safe']);
       assert.deepEqual(origin.targetGroupIds.sort(), ['tg_a', 'tg_b']);
       assert.equal(origin.representativeId, 'f_web');
-      assert.equal(origin.lastObservedAt, Date.parse('2026-07-04T00:00:00.000Z'));
+      // No member recorded last_observed_at; an edit time (updated_at) is never an observation.
+      assert.equal(origin.lastObservedAt, null);
       assert.equal(origin.firstOpenedAt, Date.parse('2026-07-01T00:00:00.000Z'));
       assert.equal(origin.lastOpenedAt, Date.parse('2026-07-03T00:00:00.000Z'));
       // Earliest SLA among open members only: high 48h from 07-01 beats critical 24h from 07-03.
@@ -233,8 +239,11 @@ describe('findings-helpers', () => {
       assert.equal(findingRuleKey({ verdict: 'exposed' }), findingRuleKey({ title: 'Finding: edge_exposed on a.example.com' }));
     });
 
-    it('prefers last_observed_at for observation time and sorts recent by latest opening', () => {
+    it('reads observation time from last_observed_at only and sorts recent by latest opening', () => {
       assert.equal(findingObservedAt({ last_observed_at: '2026-07-05T00:00:00.000Z', updated_at: '2026-07-01T00:00:00.000Z' }), Date.parse('2026-07-05T00:00:00.000Z'));
+      assert.equal(findingObservedAt({ updated_at: '2026-07-09T00:00:00.000Z', created_at: '2026-07-01T00:00:00.000Z' }), null);
+      assert.equal(findingObservationLabel({ last_observed_at: '2026-07-05T00:00:00.000Z' }), 'Last observed');
+      assert.equal(findingObservationLabel({ created_at: '2026-07-01T00:00:00.000Z' }), 'First observed');
       const groups = groupFindingsByRule(findings, { targets });
       assert.equal(sortFindingRuleGroups(groups, 'recent')[0].checkId, 'origin.leak_scan.safe');
     });
@@ -477,5 +486,39 @@ describe('findings-helpers', () => {
       const deduped = dedupeFindingsForTarget(rawFindings, target);
       assert.equal(deduped.length, 2);
     });
+  });
+});
+
+describe('finding SLA clock (open and in progress)', () => {
+  const now = Date.parse('2026-07-10T00:00:00.000Z');
+
+  it('breaches an overdue in-progress High finding', () => {
+    const finding = { id: 'ip', status: 'in_progress', severity: 'high', created_at: '2026-07-01T00:00:00.000Z' };
+    assert.equal(isFindingSlaBreach(finding, now), true);
+    assert.equal(computeFindingKpis([finding], now).slaBreachCount, 1);
+  });
+
+  it('keeps accepted-risk and closed findings off the SLA clock', () => {
+    for (const status of ['accepted_risk', 'accepted', 'closed', 'resolved', 'false_positive']) {
+      assert.equal(isFindingSlaBreach({ status, severity: 'critical', created_at: '2026-06-01T00:00:00.000Z' }, now), false, status);
+    }
+  });
+
+  it('dates the SLA from opened_at when created_at is missing', () => {
+    const finding = { status: 'open', severity: 'high', opened_at: '2026-07-01T00:00:00.000Z' };
+    assert.equal(findingOpenedAt(finding), Date.parse('2026-07-01T00:00:00.000Z'));
+    assert.equal(findingSlaDueAt(finding), Date.parse('2026-07-03T00:00:00.000Z'));
+    assert.equal(isFindingSlaBreach(finding, now), true);
+    assert.equal(isFindingSlaBreach({ ...finding, opened_at: '2026-07-09T12:00:00.000Z' }, now), false);
+  });
+});
+
+describe('recorded summary versus triage notes', () => {
+  it('reads system_summary for parsers and falls back to notes only for legacy rows', () => {
+    assert.equal(findingRecordedSummary({ system_summary: 'Reason codes: waf_missing.', notes: 'Reason codes: other.' }), 'Reason codes: waf_missing.');
+    assert.equal(findingRecordedSummary({ system_summary: '', notes: 'Human note.' }), '');
+    assert.equal(findingRecordedSummary({ notes: 'Legacy verdict text.' }), 'Legacy verdict text.');
+    assert.equal(findingRecordedSummary(null), '');
+    assert.deepEqual(findingForEvidenceParsers({ id: 'f', system_summary: 'Machine.', notes: 'Human.' }), { id: 'f', system_summary: 'Machine.', notes: 'Machine.' });
   });
 });

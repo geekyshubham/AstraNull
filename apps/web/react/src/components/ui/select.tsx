@@ -1,6 +1,6 @@
 import { Check, ChevronDown } from 'lucide-react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import './primitives.css';
 
@@ -31,21 +31,96 @@ type SelectProps = {
   hint?: string;
   /** Validation message under the field; marks the trigger aria-invalid. */
   error?: string;
+  /** Muted trigger text shown while `value` matches no option; without it the first option is shown. */
+  placeholder?: string;
 };
 
-function SelectOptionCopy({ label: optionLabel, description, id }: { label: string; description?: string; id?: string }) {
+type MenuPosition = {
+  left: number;
+  width: number;
+  top?: number;
+  bottom?: number;
+};
+
+const FIXED_CONTAINING_BLOCK_CONTAIN = /\b(paint|layout|strict|content)\b/;
+const FIXED_CONTAINING_BLOCK_WILL_CHANGE = /\b(transform|perspective|filter|backdrop-filter|contain)\b/;
+
+// The open menu is fixed so card overflow cannot clip it; a transformed or contained ancestor replaces the viewport as its containing block.
+function fixedContainingBlock(element: HTMLElement | null) {
+  let node = element?.parentElement ?? null;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const style = window.getComputedStyle(node);
+    const backdrop = style.backdropFilter || style.getPropertyValue('-webkit-backdrop-filter');
+    if (
+      (style.transform && style.transform !== 'none') ||
+      (style.filter && style.filter !== 'none') ||
+      (style.perspective && style.perspective !== 'none') ||
+      (backdrop && backdrop !== 'none') ||
+      FIXED_CONTAINING_BLOCK_CONTAIN.test(style.contain || '') ||
+      FIXED_CONTAINING_BLOCK_WILL_CHANGE.test(style.willChange || '') ||
+      (style.containerType && style.containerType !== 'normal')
+    ) {
+      const rect = node.getBoundingClientRect();
+      return {
+        top: rect.top + node.clientTop,
+        left: rect.left + node.clientLeft,
+        height: node.clientHeight,
+      };
+    }
+    node = node.parentElement;
+  }
+  return { top: 0, left: 0, height: document.documentElement.clientHeight || window.innerHeight };
+}
+
+function menuStyle(maxHeight: number, position: MenuPosition | null): CSSProperties {
+  const style = { '--select-menu-max-height': `${maxHeight}px` } as CSSProperties;
+  if (!position) return style;
+  return {
+    ...style,
+    position: 'fixed',
+    left: position.left,
+    right: 'auto',
+    width: position.width,
+    top: position.top ?? 'auto',
+    bottom: position.bottom ?? 'auto',
+  };
+}
+
+function SelectOptionCopy({
+  label: optionLabel,
+  description,
+  id,
+  className,
+}: {
+  label: string;
+  description?: string;
+  id?: string;
+  className?: string;
+}) {
   return (
-    <span className="select-copy" id={id}>
+    <span className={cn('select-copy', className)} id={id}>
       <strong>{optionLabel}</strong>
       {description ? <small>{description}</small> : null}
     </span>
   );
 }
 
-export function Select({ label, name, value, options, onChange, className, disabled = false, hint, error }: SelectProps) {
+export function Select({
+  label,
+  name,
+  value,
+  options,
+  onChange,
+  className,
+  disabled = false,
+  hint,
+  error,
+  placeholder,
+}: SelectProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<'down' | 'up'>('down');
   const [menuMaxHeight, setMenuMaxHeight] = useState(SELECT_MENU_MAX_HEIGHT);
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const shellRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLSpanElement>(null);
@@ -58,7 +133,10 @@ export function Select({ label, name, value, options, onChange, className, disab
   const hintText = hint?.trim() ?? '';
   const describedBy = [errorText ? errorId : null, hintText ? hintId : null].filter(Boolean).join(' ') || undefined;
   const triggerDescribedBy = [valueId, describedBy].filter(Boolean).join(' ');
-  const selected = options.find((option) => option.value === value) ?? options[0];
+  const placeholderText = placeholder?.trim() ?? '';
+  const matched = options.find((option) => option.value === value);
+  const showPlaceholder = !matched && placeholderText !== '';
+  const selected = matched ?? (showPlaceholder ? undefined : options[0]);
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === selected?.value));
 
   useEffect(() => {
@@ -71,7 +149,8 @@ export function Select({ label, name, value, options, onChange, className, disab
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
-      if (!shellRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!shellRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     }
     document.addEventListener('pointerdown', onPointerDown);
     return () => {
@@ -87,7 +166,7 @@ export function Select({ label, name, value, options, onChange, className, disab
   }
 
   function optionButtons() {
-    return Array.from(shellRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
+    return Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []);
   }
 
   function focusOption(index: number) {
@@ -125,18 +204,37 @@ export function Select({ label, name, value, options, onChange, className, disab
     );
     const nextPlacement = below < desiredHeight && above > below ? 'up' : 'down';
     const available = nextPlacement === 'up' ? above : below;
+    const containingBlock = fixedContainingBlock(menuRef.current);
     setPlacement(nextPlacement);
     setMenuMaxHeight(Math.max(0, Math.min(SELECT_MENU_MAX_HEIGHT, Math.floor(available))));
+    setMenuPosition({
+      left: rect.left - containingBlock.left,
+      width: rect.width,
+      ...(nextPlacement === 'up'
+        ? { bottom: containingBlock.height - (rect.top - containingBlock.top) + SELECT_MENU_GAP }
+        : { top: rect.bottom - containingBlock.top + SELECT_MENU_GAP }),
+    });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return undefined;
     const modalBody = triggerRef.current?.closest<HTMLElement>('.form-modal-body');
+    function onAncestorScroll(event: Event) {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      updatePlacement();
+    }
     updatePlacement();
     window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', onAncestorScroll, { capture: true, passive: true });
+    // An ancestor's enter animation can end while the menu is open, which changes its fixed containing block.
+    window.addEventListener('animationend', updatePlacement, { capture: true, passive: true });
+    window.addEventListener('transitionend', updatePlacement, { capture: true, passive: true });
     modalBody?.addEventListener('scroll', updatePlacement, { passive: true });
     return () => {
       window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', onAncestorScroll, { capture: true });
+      window.removeEventListener('animationend', updatePlacement, { capture: true });
+      window.removeEventListener('transitionend', updatePlacement, { capture: true });
       modalBody?.removeEventListener('scroll', updatePlacement);
     };
   }, [open, options.length, updatePlacement]);
@@ -184,6 +282,8 @@ export function Select({ label, name, value, options, onChange, className, disab
     }
   }
 
+  const menuOpen = open && !disabled;
+
   function toggleOpen() {
     if (disabled) return;
     setOpen((current) => {
@@ -222,6 +322,7 @@ export function Select({ label, name, value, options, onChange, className, disab
           tabIndex={-1}
           aria-hidden="true"
         >
+          {placeholderText ? <option value="">{placeholderText}</option> : null}
           {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -233,8 +334,8 @@ export function Select({ label, name, value, options, onChange, className, disab
           type="button"
           className="select-display"
           aria-labelledby={labelId}
-          aria-controls={listId}
-          aria-expanded={open}
+          aria-controls={menuOpen ? listId : undefined}
+          aria-expanded={menuOpen}
           aria-haspopup="listbox"
           aria-describedby={triggerDescribedBy}
           aria-invalid={errorText ? true : undefined}
@@ -242,7 +343,11 @@ export function Select({ label, name, value, options, onChange, className, disab
           onClick={toggleOpen}
           onKeyDown={onTriggerKeyDown}
         >
-          <SelectOptionCopy id={valueId} label={selected?.label ?? ''} description={selected?.description} />
+          {showPlaceholder ? (
+            <SelectOptionCopy id={valueId} className="select-placeholder" label={placeholderText} />
+          ) : (
+            <SelectOptionCopy id={valueId} label={selected?.label ?? ''} description={selected?.description} />
+          )}
           <ChevronDown className="select-chevron" size={16} aria-hidden="true" />
         </button>
         <span
@@ -252,7 +357,7 @@ export function Select({ label, name, value, options, onChange, className, disab
           role="listbox"
           aria-labelledby={labelId}
           hidden={!open || disabled}
-          style={{ '--select-menu-max-height': `${menuMaxHeight}px` } as CSSProperties}
+          style={menuStyle(menuMaxHeight, menuOpen ? menuPosition : null)}
         >
           {options.map((option, index) => (
             <button

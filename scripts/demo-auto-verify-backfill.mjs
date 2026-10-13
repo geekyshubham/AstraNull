@@ -74,7 +74,7 @@ async function backfillDevStore(tenantId) {
 }
 
 export async function runDemoAutoVerifyBackfill(argv = process.argv.slice(2), env = process.env) {
-  const tenantId = parseTenantId(argv) || 'Astra-D1TrtI4HMTSrwKRW-9';
+  const tenantId = parseTenantId(argv) || 'ten_demo';
   if (!isDemoAutoVerifyTenant(tenantId, env)) {
     throw new Error(`Tenant ${tenantId} is not an authorized demo tenant.`);
   }

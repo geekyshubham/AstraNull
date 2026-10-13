@@ -15,6 +15,42 @@ export const FINDING_STATUS_LABELS = Object.freeze({
   false_positive: 'False positive',
 });
 
+/** One-line definitions shown wherever a status can be chosen or filtered. */
+export const FINDING_STATUS_DESCRIPTIONS = Object.freeze({
+  open: 'Detected and not yet worked on',
+  in_progress: 'Remediation underway',
+  accepted_risk: 'Risk formally accepted by the customer',
+  accepted: 'Accepted (older status set through the API)',
+  resolved: 'Fixed and confirmed by a later probe',
+  closed: 'Closed without a fix',
+  false_positive: 'Evidence did not hold',
+});
+
+/** Statuses that end active work on a finding; reopening moves it back to open. */
+export const FINDING_CLOSURE_STATUSES = Object.freeze(['accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive']);
+
+const START_WORK = Object.freeze({ status: 'in_progress', label: 'Start work' });
+const REOPEN = Object.freeze({ status: 'open', label: 'Reopen' });
+const CLOSURE_ACTIONS = Object.freeze([
+  Object.freeze({ status: 'resolved', label: 'Mark resolved' }),
+  Object.freeze({ status: 'false_positive', label: 'Mark false positive' }),
+  Object.freeze({ status: 'accepted_risk', label: 'Accept risk' }),
+  Object.freeze({ status: 'closed', label: 'Close' }),
+]);
+
+/**
+ * Status changes a person can make from the current status. The current status and the
+ * older `accepted` value are never offered.
+ * @param {unknown} current
+ */
+export function findingStatusTransitions(current) {
+  const status = text(current).toLowerCase() || 'open';
+  if (FINDING_CLOSURE_STATUSES.includes(status)) return [REOPEN, START_WORK];
+  if (status === 'in_progress') return [REOPEN, ...CLOSURE_ACTIONS];
+  if (status === 'open') return [START_WORK, ...CLOSURE_ACTIONS];
+  return [REOPEN, START_WORK, ...CLOSURE_ACTIONS];
+}
+
 /** Display groups only. Every count and list underneath is one exact server status. */
 export const FINDING_STATUS_GROUPS = Object.freeze([
   Object.freeze({ id: 'active', label: 'Active', statuses: Object.freeze(['open', 'in_progress']) }),

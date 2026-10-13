@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { EmptyState } from '../components/ui/empty-state';
 import { Button } from '../components/ui/button';
@@ -51,6 +51,26 @@ export function formatMutationSuccessMessage(success: string, payload: unknown) 
   return auditId ? `${success} Audit entry: ${auditId}.` : success;
 }
 
+export type ConfirmReason = {
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  minLength?: number;
+};
+
+function reasonSatisfied(reason: ConfirmReason | undefined, text: string) {
+  if (!reason) return true;
+  const length = text.trim().length;
+  if (reason.required && length === 0) return false;
+  if (reason.minLength && length > 0 && length < reason.minLength) return false;
+  return true;
+}
+
+function reasonHint(reason: ConfirmReason) {
+  if (reason.minLength) return `${reason.required ? 'Required. ' : ''}At least ${reason.minLength} characters.`;
+  return reason.required ? 'Required.' : '';
+}
+
 type ConfirmModalProps = {
   open: boolean;
   title: string;
@@ -60,9 +80,11 @@ type ConfirmModalProps = {
   confirmTone?: 'danger' | 'default';
   requireTypedId?: string;
   typedPlaceholder?: string;
+  reason?: ConfirmReason;
+  confirmDisabled?: boolean;
   busy?: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (reason?: string) => void;
 };
 
 export function ConfirmModal({
@@ -74,12 +96,17 @@ export function ConfirmModal({
   confirmTone = 'danger',
   requireTypedId,
   typedPlaceholder,
+  reason,
+  confirmDisabled = false,
   busy = false,
   onCancel,
   onConfirm
 }: ConfirmModalProps) {
   const titleId = useId();
+  const reasonId = useId();
+  const reasonHintId = useId();
   const [typed, setTyped] = useState('');
+  const [reasonText, setReasonText] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
   useRestoreDialogFocus(open);
 
@@ -92,11 +119,16 @@ export function ConfirmModal({
   }, [open]);
 
   useEffect(() => {
-    if (!open) setTyped('');
+    if (open) return;
+    setTyped('');
+    setReasonText('');
   }, [open]);
 
   const needsTyped = Boolean(requireTypedId?.trim());
   const typedOk = !needsTyped || typed.trim() === requireTypedId?.trim();
+  const reasonOk = reasonSatisfied(reason, reasonText);
+  const canConfirm = typedOk && reasonOk && !confirmDisabled;
+  const hint = reason ? reasonHint(reason) : '';
 
   if (!open) return null;
 
@@ -111,8 +143,9 @@ export function ConfirmModal({
         className="modal-confirm-body"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
-          if (!typedOk || busy) return;
-          onConfirm();
+          if (!canConfirm || busy) return;
+          if (reason) onConfirm(reasonText.trim());
+          else onConfirm();
         }}
       >
         <h3 id={titleId}>{title}</h3>
@@ -129,9 +162,26 @@ export function ConfirmModal({
             />
           </label>
         ) : null}
+        {reason ? (
+          <label className="field full" htmlFor={reasonId}>
+            <span>{reason.label}</span>
+            <textarea
+              id={reasonId}
+              value={reasonText}
+              onChange={(event) => setReasonText(event.target.value)}
+              placeholder={reason.placeholder}
+              required={reason.required || undefined}
+              aria-required={reason.required || undefined}
+              aria-describedby={hint ? reasonHintId : undefined}
+              rows={3}
+              disabled={busy}
+            />
+            {hint ? <span id={reasonHintId} className="muted small">{hint}</span> : null}
+          </label>
+        ) : null}
         <div className="modal-confirm-actions">
           <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>{dismissLabel}</Button>
-          <Button type="submit" variant={confirmTone === 'danger' ? 'danger' : 'default'} loading={busy} disabled={!typedOk || busy}>
+          <Button type="submit" variant={confirmTone === 'danger' ? 'danger' : 'default'} loading={busy} disabled={!canConfirm || busy}>
             {confirmLabel}
           </Button>
         </div>
@@ -209,37 +259,59 @@ export type ConfirmRequest = {
   dismissLabel?: string;
   confirmTone?: 'danger' | 'default';
   requireTypedId?: string;
+  reason?: ConfirmReason;
+  confirmDisabled?: boolean;
 };
 
 type ConfirmContextValue = {
   confirm: (request: ConfirmRequest) => Promise<boolean>;
+  confirmWithReason: (request: ConfirmRequest) => Promise<string | null>;
 };
+
+type ConfirmOutcome = { accepted: boolean; reason: string };
+
+const DEFAULT_CONFIRM_REASON: ConfirmReason = { label: 'Reason', required: true };
 
 const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 
 export function ConfirmModalProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<ConfirmRequest | null>(null);
-  const resolverRef = useRef<((accepted: boolean) => void) | null>(null);
+  const resolverRef = useRef<((outcome: ConfirmOutcome) => void) | null>(null);
 
-  const settle = useCallback((accepted: boolean) => {
+  const settle = useCallback((accepted: boolean, reason = '') => {
     const resolve = resolverRef.current;
     resolverRef.current = null;
     setRequest(null);
-    resolve?.(accepted);
+    resolve?.({ accepted, reason });
   }, []);
 
-  const confirm = useCallback((next: ConfirmRequest) => {
-    resolverRef.current?.(false);
-    return new Promise<boolean>((resolve) => {
+  const open = useCallback((next: ConfirmRequest) => {
+    resolverRef.current?.({ accepted: false, reason: '' });
+    return new Promise<ConfirmOutcome>((resolve) => {
       resolverRef.current = resolve;
       setRequest(next);
     });
   }, []);
 
-  useEffect(() => () => resolverRef.current?.(false), []);
+  const confirm = useCallback(
+    (next: ConfirmRequest) => open(next).then((outcome) => outcome.accepted),
+    [open],
+  );
+
+  const confirmWithReason = useCallback(
+    (next: ConfirmRequest) =>
+      open({ ...next, reason: next.reason ?? DEFAULT_CONFIRM_REASON }).then((outcome) =>
+        outcome.accepted ? outcome.reason.trim() : null,
+      ),
+    [open],
+  );
+
+  useEffect(() => () => resolverRef.current?.({ accepted: false, reason: '' }), []);
+
+  const contextValue = useMemo(() => ({ confirm, confirmWithReason }), [confirm, confirmWithReason]);
 
   return (
-    <ConfirmContext.Provider value={{ confirm }}>
+    <ConfirmContext.Provider value={contextValue}>
       {children}
       <ConfirmModal
         open={Boolean(request)}
@@ -249,8 +321,10 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
         dismissLabel={request?.dismissLabel ?? 'Cancel'}
         confirmTone={request?.confirmTone ?? 'danger'}
         requireTypedId={request?.requireTypedId}
+        reason={request?.reason}
+        confirmDisabled={request?.confirmDisabled}
         onCancel={() => settle(false)}
-        onConfirm={() => settle(true)}
+        onConfirm={(reason) => settle(true, reason ?? '')}
       />
     </ConfirmContext.Provider>
   );

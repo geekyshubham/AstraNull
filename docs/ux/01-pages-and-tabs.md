@@ -24,7 +24,7 @@ This is the master page map for AstraNull.
 | Reports | Executives, auditors, engineers | Generate reports and evidence packs. |
 | Integrations | Admins | Webhooks, Slack, Teams, SIEM, ticketing, optional future connectors. |
 | Settings | Admins | Users, roles, API keys, SSO, retention, audit logs, compact release evidence summary. |
-| Release Evidence | Owner, admin, SOC, auditor | Metadata-only production release evidence ledger visibility (not production-ready signoff). |
+| Release Evidence | None (no portal page) | Release evidence removed from portal; auditor read access via API only (docs/ux/14 §3.1). |
 | Internal Management | AstraNull staff only | Manage sign-up requests, tenants, subscriptions, entitlements, support actions, and internal approvals. |
 | SOC Console | AstraNull internal SOC | Operate high-scale workflow and test monitoring. |
 

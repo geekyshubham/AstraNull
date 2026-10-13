@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { loadRuntimeConfig } from '../../src/config.mjs';
 import { createServer } from '../../src/server.mjs';
-import { resetStoreForTests } from '../../src/store.mjs';
+import { hashPassword } from '../../src/lib/password.mjs';
+import { createPasswordAuthService, resetPasswordAuthRateLimitsForTests } from '../../src/services/passwordAuth.mjs';
+import { createDevPasswordAuthRepository } from '../../src/services/passwordAuthRepository.mjs';
+import { getStore, resetStoreForTests } from '../../src/store.mjs';
 import { closeServer, request } from '../helpers/http.mjs';
 
 const SESSION_SECRET = 'password-api-test-session-secret-32-chars';
@@ -183,5 +186,63 @@ describe('password auth API', () => {
     });
     assert.equal(unavailableSetup.status, 503);
     assert.equal(unavailableSetup.json.error, 'password_login_unavailable');
+  });
+
+  it('returns one identical 401 body for every failed sign-in shape and lists only matching workspaces', async () => {
+    const password = 'N7!vR2#qL9@z';
+    const passwordHash = await hashPassword(password);
+    const otherHash = await hashPassword('Other!Pass7#Kq');
+    resetPasswordAuthRateLimitsForTests();
+    const baseUrl = await listen(createPasswordAuthService(createDevPasswordAuthRepository()));
+    const store = getStore();
+    store.tenants = ['ten_a', 'ten_b', 'ten_c'].map((id) => ({ id, name: `Workspace ${id.slice(-1).toUpperCase()}` }));
+    const account = (id, tenantId, email, status, hash) => {
+      store.users.push({ id, tenant_id: tenantId, email, role: 'engineer', status });
+      if (hash) {
+        store.userCredentials = store.userCredentials ?? [];
+        store.userCredentials.push({
+          user_id: id,
+          tenant_id: tenantId,
+          password_hash: hash,
+          must_change: false,
+          failed_attempts: 0,
+          locked_until: null,
+        });
+      }
+    };
+    account('usr_active', 'ten_a', 'active@example.com', 'active', passwordHash);
+    account('usr_invited', 'ten_a', 'invited@example.com', 'invited', null);
+    account('usr_disabled', 'ten_a', 'disabled@example.com', 'disabled', passwordHash);
+    account('usr_shared_a', 'ten_a', 'shared@example.com', 'active', passwordHash);
+    account('usr_shared_b', 'ten_b', 'shared@example.com', 'active', otherHash);
+    account('usr_shared_c', 'ten_c', 'shared@example.com', 'active', passwordHash);
+    account('usr_solo_a', 'ten_a', 'solo@example.com', 'active', otherHash);
+    account('usr_solo_b', 'ten_b', 'solo@example.com', 'active', passwordHash);
+
+    const login = (email, secret) => request(baseUrl, 'POST', '/v1/auth/login', { body: { email, password: secret } });
+    const failures = [
+      await login('active@example.com', 'WrongPass9!Zz'),
+      await login('nobody@example.com', password),
+      await login('invited@example.com', password),
+      await login('disabled@example.com', 'WrongPass9!Zz'),
+      await login('shared@example.com', 'WrongPass9!Zz'),
+    ];
+    for (const failure of failures) {
+      assert.equal(failure.status, 401);
+      assert.deepEqual(failure.json, failures[0].json);
+    }
+    assert.equal(failures[0].json.error, 'invalid_credentials');
+
+    const ambiguous = await login('shared@example.com', password);
+    assert.equal(ambiguous.status, 400);
+    assert.equal(ambiguous.json.error, 'tenant_required');
+    assert.deepEqual(ambiguous.json.workspaces, [
+      { tenant_id: 'ten_a', name: 'Workspace A' },
+      { tenant_id: 'ten_c', name: 'Workspace C' },
+    ]);
+
+    const direct = await login('solo@example.com', password);
+    assert.equal(direct.status, 200);
+    assert.equal(direct.json.tenant_id, 'ten_b');
   });
 });

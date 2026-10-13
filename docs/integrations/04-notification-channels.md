@@ -5,6 +5,8 @@ Notification channels send readiness alerts out of AstraNull. A channel only rec
 - UI: `NotificationChannelsPanel` (`apps/web/react/src/components/integrations/notification-channels.tsx`)
 - Pure helpers: `apps/web/react/src/lib/notification-channels.mjs`
 - API client: `apps/web/react/src/lib/notification-channels-api.ts`
+
+**Where channels are created:** Integrations is the only surface that connects (creates) a channel. The Notifications page routes events to channels that already exist; it does not create channels and links to Integrations for setup. After a channel is connected the portal refreshes the connectors, secrets, and notifications datasets together, so Notifications lists the new channel without a manual reload.
 - Backend: `src/lib/notifications.mjs` (rules) and `src/lib/notificationDelivery.mjs` (delivery adapters)
 
 ## Who can do what

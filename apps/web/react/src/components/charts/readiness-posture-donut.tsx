@@ -1,15 +1,12 @@
-import { buildConicGradient, resolveReadinessPostureSegments } from '../../lib/readiness-posture';
+import { buildConicGradient, POSTURE_SEGMENT_COLORS, resolveReadinessPostureSegments } from '../../lib/readiness-posture';
 import type { DataItem, ReadinessPostureSegment, StatePayload } from '../../lib/types';
 import { countLabel } from '../../lib/utils';
 import { EmptyState } from '../ui/empty-state';
 import { Activity } from 'lucide-react';
 import './readiness-posture-donut.css';
 
-const SEGMENT_COLORS: Record<string, string> = {
-  pass: 'var(--success)',
-  review: 'var(--warn)',
-  gap: 'var(--danger)',
-};
+const SEGMENT_COLORS = POSTURE_SEGMENT_COLORS;
+const RESULT_KEYS = new Set(['pass', 'review', 'gap']);
 
 function PostureLegendRow({ segment, total }: { segment: ReadinessPostureSegment; total: number }) {
   const swatch = SEGMENT_COLORS[segment.key];
@@ -37,34 +34,31 @@ export function ReadinessPostureDonut({
   runs: DataItem[];
   checks: DataItem[];
 }) {
-  const { segments, total, score } = resolveReadinessPostureSegments(state, runs, checks);
-  const correlatedCount = segments.reduce((sum, segment) => sum + segment.count, 0);
+  const { segments, total } = resolveReadinessPostureSegments(state, runs, checks);
+  const correlatedCount = segments.filter((segment) => RESULT_KEYS.has(segment.key)).reduce((sum, segment) => sum + segment.count, 0);
   const gradient = buildConicGradient(segments);
   const paintedSegments = segments.filter((segment) => segment.count > 0);
   const segmentSummary = paintedSegments
     .map((segment) => `${segment.label} ${countLabel(segment.count, 'check')} ${segment.pct} percent`)
     .join('. ');
   const passCount = segments.find((segment) => segment.key === 'pass')?.count ?? 0;
-  const showPass = total > 0;
-  const scoreSummary = showPass
-    ? `${passCount} of ${countLabel(total, 'check')} passed`
-    : score === null ? 'Readiness score unavailable' : `Readiness score ${score} out of 100`;
-  const correlationSummary = correlatedCount === total
-    ? `${countLabel(correlatedCount, 'check')} correlated`
-    : `${correlatedCount} of ${countLabel(total, 'check')} correlated`;
+  const scoreSummary = `${passCount} of ${countLabel(total, 'check')} passed`;
+  const correlationSummary = correlatedCount === 0
+    ? 'No checks have run yet'
+    : `${correlatedCount} of ${total} applicable ${total === 1 ? 'check has' : 'checks have'} a result this cycle`;
   const ariaLabel = [scoreSummary, correlationSummary, segmentSummary].filter(Boolean).join('. ');
   const ringTitle = [
-    showPass ? `${passCount} / ${total} checks passed` : score === null ? null : `${score} / 100 readiness`,
-    `${correlatedCount} / ${total} checks correlated`,
+    `${passCount} / ${total} checks passed`,
+    correlationSummary,
     ...paintedSegments.map((segment) => `${segment.label} · ${segment.count} checks · ${segment.pct}%`),
   ].filter(Boolean).join(' · ');
 
-  if (total <= 0 && score === null) {
+  if (total <= 0) {
     return (
       <EmptyState
         icon={Activity}
-        title="Readiness posture unavailable."
-        body="Posture segments appear after checks are correlated to validation verdicts."
+        title="No checks have run yet."
+        body="Check verdicts appear here after a bounded check on a verified target records a result."
       />
     );
   }
@@ -79,10 +73,10 @@ export function ReadinessPostureDonut({
         style={{ ['--gauge-gradient' as string]: gradient }}
       >
         <div className="gauge-hole" style={{ background: 'var(--surface)' }}>
-          <span className="gauge-score-cap" aria-hidden="true">{showPass ? 'Pass' : 'Readiness'}</span>
+          <span className="gauge-score-cap" aria-hidden="true">Pass</span>
           <div className="gauge-score" aria-hidden="true">
-            <span className="gauge-score-value">{showPass ? passCount : score ?? 'n/a'}</span>
-            {showPass ? <span className="gauge-score-scale">/{total}</span> : score !== null ? <span className="gauge-score-scale">/100</span> : null}
+            <span className="gauge-score-value">{passCount}</span>
+            <span className="gauge-score-scale">/{total}</span>
           </div>
         </div>
       </div>
@@ -92,7 +86,7 @@ export function ReadinessPostureDonut({
             <PostureLegendRow key={segment.key} segment={segment} total={total} />
           ))}
         </div>
-        <p className="gauge-side-note">{correlationSummary} this cycle</p>
+        <p className="gauge-side-note">{correlationSummary}</p>
       </div>
     </div>
   );

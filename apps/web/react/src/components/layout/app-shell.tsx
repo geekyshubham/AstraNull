@@ -1,8 +1,8 @@
 import { ChevronLeft, ChevronRight, Menu, Moon, Sun, X } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSession } from '../../lib/api';
-import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID } from '../../lib/navigation';
+import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID, routeCrumb, type RouteCrumb } from '../../lib/navigation';
 import { canAccessRoute } from '../../lib/route-access';
 import type { NavItem, PortalData, RouteId, Session } from '../../lib/types';
 import { cn } from '../../lib/utils';
@@ -10,6 +10,7 @@ import { AnchorButton, Button } from '../ui/button';
 import { RouteTransition } from '../ui/motion';
 import { Select } from '../ui/select';
 import { Brand } from './brand';
+import { DETAIL_LIST_LINKS } from './detail-back-link';
 
 type AppShellProps = {
   route: RouteId;
@@ -67,6 +68,8 @@ function ShellIconButton({ label, onClick, className, variant = 'ghost', buttonR
 const NAV_PARENT_ROUTE: Partial<Record<string, RouteId>> = {
   'target-detail': 'targets',
   'scan-detail': 'targets',
+  'run-detail': 'targets',
+  runs: 'targets',
   'check-detail': 'checks',
   'policy-detail': 'test-policies',
   'finding-detail': 'findings',
@@ -76,6 +79,31 @@ const NAV_PARENT_ROUTE: Partial<Record<string, RouteId>> = {
   'tenant-detail': 'admin',
   'queue-detail': 'internal-soc'
 };
+
+type EntityTitleState = { route: RouteId; title: string } | null;
+
+const EntityTitleContext = createContext<(title: string | null) => void>(() => {});
+
+/** Names the open record in the document title (e.g. "checkout.acme.com · Targets · AstraNull") while a detail view is mounted. */
+export function useEntityDocumentTitle(title?: string) {
+  const setEntityTitle = useContext(EntityTitleContext);
+  const text = title?.trim() ?? '';
+  useEffect(() => {
+    setEntityTitle(text || null);
+    return () => setEntityTitle(null);
+  }, [setEntityTitle, text]);
+}
+
+function sentenceStart(text: string) {
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text;
+}
+
+function documentTitleFor(route: RouteId, crumb: RouteCrumb, entityTitle: string | null) {
+  const groupLabel = NAV_GROUP_LABELS[crumb.group];
+  if (!entityTitle) return `${crumb.label} · ${groupLabel} · AstraNull`;
+  const listLabel = DETAIL_LIST_LINKS[route]?.label;
+  return `${entityTitle} · ${listLabel ? sentenceStart(listLabel) : groupLabel} · AstraNull`;
+}
 
 function NavLink({
   item,
@@ -151,8 +179,16 @@ export function AppShell({
   const current = route === 'not-found'
     ? { id: 'not-found', label: 'Not found', group: 'overview' as const }
     : ROUTE_BY_ID.get(route) ?? NAV_ITEMS[0];
+  const crumb = routeCrumb(current, session.principal);
   const tenantId = session.tenant_id ?? data.state?.tenant_id ?? 'unknown';
+  const tenantName = typeof data.tenant?.name === 'string' ? data.tenant.name.trim() : '';
   const isStaffPrincipal = session.principal === 'staff';
+  const [entityTitleState, setEntityTitleState] = useState<EntityTitleState>(null);
+  const entityTitle = entityTitleState?.route === route ? entityTitleState.title : null;
+  const setEntityTitle = useCallback(
+    (title: string | null) => setEntityTitleState(title ? { route, title } : null),
+    [route],
+  );
   const activeNavId = NAV_PARENT_ROUTE[route] ?? route;
   const environment = (data.state as { environment?: string } | null)?.environment ?? '';
   const visibleNavItems = useMemo(() => {
@@ -170,10 +206,11 @@ export function AppShell({
 
   const grouped = useMemo(() => {
     return visibleNavItems.reduce<Record<string, NavItem[]>>((acc, item) => {
-      acc[item.group] = [...(acc[item.group] ?? []), item];
+      const { group } = routeCrumb(item, session.principal);
+      acc[group] = [...(acc[group] ?? []), item];
       return acc;
     }, {});
-  }, [visibleNavItems]);
+  }, [visibleNavItems, session.principal]);
 
   // The topbar is sticky: it only earns a separating hairline once page content
   // has actually moved underneath it.
@@ -260,9 +297,10 @@ export function AppShell({
    * multi-page app would: a route-specific title, and focus moved to the content region
    * on arrival so keyboard users do not restart from the top of the navigation.
    */
+  const documentTitle = documentTitleFor(route, crumb, entityTitle);
   useEffect(() => {
-    document.title = `${current.label} · ${NAV_GROUP_LABELS[current.group]} · AstraNull`;
-  }, [current.label, current.group]);
+    document.title = documentTitle;
+  }, [documentTitle]);
 
   // The nav list scrolls once enough routes are visible for a role, and the
   // selected row could sit outside it — leaving only a sliver of the accent fill
@@ -379,7 +417,7 @@ export function AppShell({
           ) : (
             <>
               <span>
-                <b>{tenantId}</b>
+                <b title={tenantId}>{tenantName || tenantId}</b>
                 {environment ? <> · {environment}</> : null}
               </span>
               <span>Outside-in validation</span>
@@ -410,18 +448,18 @@ export function AppShell({
         id="portal-main"
         ref={mainRef}
         tabIndex={-1}
-        aria-label={`${current.label} workspace`}
+        aria-label={`${crumb.label} workspace`}
       >
         <header className={cn('topbar', topbarScrolled && 'is-scrolled')}>
           <ShellIconButton label="Open navigation" className="menu-btn" buttonRef={menuButtonRef} expanded={sidebarOpen} controls="portal-navigation" onClick={() => setSidebarOpen(true)}>
             <Menu size={18} aria-hidden="true" focusable="false" />
           </ShellIconButton>
           <nav className="crumbs" aria-label="Breadcrumb">
-            <span className="crumbs-group">{NAV_GROUP_LABELS[current.group]}</span>
+            <span className="crumbs-group">{NAV_GROUP_LABELS[crumb.group]}</span>
             <span className="sep" aria-hidden="true">
               ›
             </span>
-            <b aria-current="page">{current.label}</b>
+            <b aria-current="page">{crumb.label}</b>
           </nav>
           <div className="topbar-spacer" aria-hidden="true" />
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
@@ -447,7 +485,9 @@ export function AppShell({
             ) : null}
           </div>
         ) : null}
-        <RouteTransition routeKey={route}>{children}</RouteTransition>
+        <EntityTitleContext.Provider value={setEntityTitle}>
+          <RouteTransition routeKey={route}>{children}</RouteTransition>
+        </EntityTitleContext.Provider>
       </main>
     </div>
   );

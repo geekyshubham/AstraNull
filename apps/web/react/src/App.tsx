@@ -26,6 +26,7 @@ import { clearNavState, navScopeKey } from './lib/nav-state.mjs';
 import type { PortalConfig, PortalData, PortalDataset, RouteId, Session } from './lib/types';
 import {
   buildLoginReturnUrl,
+  buildStaffLoginReturnUrl,
   LoginPage,
   PortalUnavailablePage,
   PublicLandingPage,
@@ -74,14 +75,16 @@ function routeAllowedFor(session: Pick<Session, 'principal' | 'role' | 'staff_ro
 }
 
 /**
- * Sign-in address for a customer portal redirect. The intended route survives only through the
- * public sanitizer (`buildLoginReturnUrl`), which keeps route-scoped safe parameters and drops
- * tokens, free text and staff routes. External identity providers own their own return flow.
+ * Sign-in address for a portal redirect. The intended route survives only through the surface's
+ * sanitizer: `buildLoginReturnUrl` keeps customer routes, `buildStaffLoginReturnUrl` keeps staff
+ * routes, and both drop tokens and free text. External identity providers own their own return flow.
  */
 function loginDestinationWithIntent(candidate: string | undefined, reason: 'session_expired' | null) {
   const dest = resolveLoginDestination(candidate, window.location.pathname);
   if (!dest.startsWith('/') || dest.startsWith('//')) return dest;
-  if (portalSurface(window.location.pathname) === 'staff') return dest;
+  if (portalSurface(window.location.pathname) === 'staff') {
+    return buildStaffLoginReturnUrl(dest, { hash: window.location.hash, reason });
+  }
   return buildLoginReturnUrl(dest, { hash: window.location.hash, reason });
 }
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID, routeCrumb } from '../../apps/web/react/src/lib/navigation.ts';
+import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.ts';
 
 const shell = readFileSync(new URL('../../apps/web/react/src/components/layout/app-shell.tsx', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../../apps/web/react/src/styles.css', import.meta.url), 'utf8');
@@ -16,14 +18,32 @@ const explanation = readFileSync(
  */
 describe('portal shell navigation semantics', () => {
   it('gives every authenticated route a distinct document title', () => {
-    assert.match(shell, /document\.title = `\$\{current\.label\} · \$\{NAV_GROUP_LABELS\[current\.group\]\} · AstraNull`/);
-    assert.match(shell, /\}, \[current\.label, current\.group\]\)/);
+    assert.match(shell, /if \(!entityTitle\) return `\$\{crumb\.label\} · \$\{groupLabel\} · AstraNull`;/);
+    assert.match(shell, /const documentTitle = documentTitleFor\(route, crumb, entityTitle\);/);
+    assert.match(shell, /document\.title = documentTitle;/);
+  });
+
+  it('names the open record in detail-view document titles without touching the breadcrumb', () => {
+    assert.match(shell, /export function useEntityDocumentTitle\(title\?: string\)/);
+    assert.match(shell, /return `\$\{entityTitle\} · \$\{listLabel \? sentenceStart\(listLabel\) : groupLabel\} · AstraNull`;/);
+    assert.match(shell, /entityTitleState\?\.route === route \? entityTitleState\.title : null/);
+    assert.match(shell, /<EntityTitleContext\.Provider value=\{setEntityTitle\}>/);
+    assert.match(shell, /<b aria-current="page">\{crumb\.label\}<\/b>/);
+  });
+
+  it('shows the workspace name in the sidebar footer and keeps the tenant id as its tooltip', () => {
+    assert.match(shell, /<b title=\{tenantId\}>\{tenantName \|\| tenantId\}<\/b>/);
+    assert.match(shell, /<span>Staff session<\/span>/);
+  });
+
+  it('highlights Targets while a run or the legacy runs list is open', () => {
+    assert.match(shell, /'run-detail': 'targets',\s*runs: 'targets',/);
   });
 
   it('exposes a skip link that targets the labelled main content region', () => {
     assert.match(shell, /className="skip-link" href="#portal-main"/);
     assert.match(shell, /id="portal-main"/);
-    assert.match(shell, /aria-label=\{`\$\{current\.label\} workspace`\}/);
+    assert.match(shell, /aria-label=\{`\$\{crumb\.label\} workspace`\}/);
     assert.match(shell, /tabIndex=\{-1\}/);
   });
 
@@ -62,5 +82,40 @@ describe('portal shell navigation semantics', () => {
     assert.equal(offsetToken, '--space-2', 'select menu offset token changed');
     assert.equal(spacing, 8);
     assert.equal(gap, spacing, 'SELECT_MENU_GAP must equal the rendered menu offset');
+  });
+});
+
+describe('principal-aware crumbs and nav groups', () => {
+  const crumbText = (routeId, principal) => {
+    const crumb = routeCrumb(ROUTE_BY_ID.get(routeId), principal);
+    return `${NAV_GROUP_LABELS[crumb.group]} › ${crumb.label}`;
+  };
+  const sidebarGroups = (role, principal) =>
+    new Set(
+      NAV_ITEMS.filter((item) => canAccessRoute(role, item.id, { principal }))
+        .map((item) => NAV_GROUP_LABELS[routeCrumb(item, principal).group]),
+    );
+
+  it('never shows a customer soc session a Staff group and files its SOC console under Governance', () => {
+    assert.equal(canAccessRoute('soc', 'internal-soc', { principal: 'customer' }), true);
+    const groups = sidebarGroups('soc', 'customer');
+    assert.equal(groups.has('Staff'), false);
+    assert.equal(groups.has('Governance'), true);
+    assert.equal(crumbText('internal-soc', 'customer'), 'Governance › SOC console');
+    assert.equal(crumbText('internal-soc', undefined), 'Governance › SOC console');
+  });
+
+  it('reads a customer queue detail as a validation high-scale request', () => {
+    assert.equal(crumbText('queue-detail', 'customer'), 'Validation › High-scale request');
+  });
+
+  it('keeps the Staff crumb for staff sessions', () => {
+    assert.equal(crumbText('internal-soc', 'staff'), `Staff › ${ROUTE_BY_ID.get('internal-soc').label}`);
+    assert.equal(crumbText('queue-detail', 'staff'), `Staff › ${ROUTE_BY_ID.get('queue-detail').label}`);
+  });
+
+  it('leaves every other route crumb unchanged for customers', () => {
+    const target = ROUTE_BY_ID.get('targets');
+    assert.deepEqual(routeCrumb(target, 'customer'), { group: target.group, label: target.label });
   });
 });

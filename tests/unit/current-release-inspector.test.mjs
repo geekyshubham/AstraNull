@@ -15,7 +15,9 @@ import {
   inspectorRefKey,
   normalizeEvidenceContext,
   normalizeInspectorRef,
+  ORIGINATING_RUN_ARTIFACT,
   parseInspectorRef,
+  relationshipLabel,
   stripInspectorParams,
 } from '../../apps/web/react/src/lib/evidence-inspector.mjs';
 import {
@@ -754,5 +756,76 @@ describe('history, origin relations and retest lineage (current-release history)
     assert.match(origin, /origin_binding_id: str\(review\.binding, 'id'\)/);
     assert.doesNotMatch(origin, /direct_ip|discovered_endpoint|destination:/);
     assert.match(origin, /not an origin lockdown/);
+  });
+});
+
+describe('in-progress runs and originating-run artifacts (inspector honesty)', () => {
+  const checkRef = { entry: 'check_result', target_id: 'tgt_1', check_id: 'chk_a', test_run_id: 'run_1' };
+  const findingRef = { entry: 'finding', finding_id: 'fnd_1' };
+
+  it('reads a collecting run with no verdict as pending, never as no evidence', () => {
+    for (const runStatus of ['planned', 'running', 'collecting']) {
+      const model = normalizeEvidenceContext({ subject: { target_id: 'tgt_1', check_id: 'chk_a', run_status: runStatus }, answer: null, primary: null }, checkRef);
+      assert.equal(model.state, 'pending', runStatus);
+      assert.notEqual(model.state, 'no_refs');
+    }
+    const declared = normalizeEvidenceContext({ unavailable_reason: 'pending', subject: { run_status: 'collecting' } }, checkRef);
+    assert.equal(declared.state, 'pending');
+    assert.equal(declared.unavailableReason, 'pending');
+  });
+
+  it('keeps no_refs for settled runs, recorded outcomes and non-run entries', () => {
+    assert.equal(normalizeEvidenceContext({ subject: { run_status: 'verdicted' }, answer: null, primary: null }, checkRef).state, 'no_refs');
+    assert.equal(normalizeEvidenceContext({ subject: { run_status: 'collecting' }, answer: { outcome: 'allowed' }, primary: null, unavailable_reason: 'no_refs' }, checkRef).state, 'no_refs');
+    assert.equal(normalizeEvidenceContext({ subject: { run_status: 'collecting' }, answer: null, primary: null }, findingRef).state, 'no_refs');
+  });
+
+  it('marks the exact-record fallback for an active run without a verdict as pending, not partial', () => {
+    const active = fallbackContextFromRecord(checkRef, { id: 'run_1', target_id: 'tgt_1', check_id: 'chk_a', status: 'collecting' });
+    assert.equal(active.payload.unavailable_reason, 'pending');
+    assert.equal(normalizeEvidenceContext(active.payload, checkRef).state, 'pending');
+    const settled = fallbackContextFromRecord(checkRef, { id: 'run_1', target_id: 'tgt_1', check_id: 'chk_a', status: 'failed' });
+    assert.equal(settled.payload.unavailable_reason, 'partial');
+  });
+
+  it('labels and counts artifacts recorded for the originating run that the finding does not cite', () => {
+    const model = normalizeEvidenceContext({
+      subject: { finding_id: 'fnd_1' },
+      answer: null,
+      primary: null,
+      originating: { test_run_id: 'run_open', verdict_id: 'v_open' },
+      alternatives: [
+        { test_run_id: 'run_open', evidence_ids: ['ev_a', 'ev_b'], relationship: ORIGINATING_RUN_ARTIFACT },
+        { test_run_id: 'run_open', evidence_id: 'ev_b', relationship: ORIGINATING_RUN_ARTIFACT },
+        { test_run_id: 'run_other', evidence_ids: ['ev_z'], relationship: 'same_check_other_run' },
+      ],
+      unavailable_reason: 'no_refs',
+    }, findingRef);
+    assert.equal(model.state, 'no_refs');
+    assert.equal(model.runArtifacts, 2, 'distinct artifact ids only');
+    assert.equal(model.alternatives[0].relationship, ORIGINATING_RUN_ARTIFACT);
+    assert.equal(relationshipLabel(ORIGINATING_RUN_ARTIFACT), 'Recorded for the originating run (not cited by this finding)');
+    assert.equal(relationshipLabel('same_check_other_run'), 'Same check other run');
+    assert.equal(normalizeEvidenceContext({ answer: {}, primary: { test_run_id: 'r' } }, findingRef).runArtifacts, 0);
+    assert.equal(normalizeEvidenceContext(null, findingRef).runArtifacts, 0);
+  });
+
+  it('renders pending, run-artifact View and Open full run without any mutating request', () => {
+    const host = read('apps/web/react/src/components/evidence/evidence-inspector.tsx');
+    assert.match(host, /Collecting — verdict not yet correlated/);
+    assert.match(host, /Probe responses below are observations, not a verdict\. Evidence is attached when the verdict is published\./);
+    assert.match(host, /'Verdict pending'/);
+    assert.match(host, /This finding cites no evidence reference\. \$\{runArtifacts === 1 \? .1 artifact was recorded for its originating run and is. : `\$\{runArtifacts\} artifacts were recorded for its originating run and are`\} listed below\./);
+    assert.match(host, /entry: 'artifact'/);
+    assert.match(host, />View<\/Button>/);
+    assert.match(host, /Open full run/);
+    assert.match(host, /validation_scan: 'Validation scan'/);
+    assert.doesNotMatch(host, /Exact assessment|Assessment execution|so no artifact is shown/);
+    assert.doesNotMatch(host, /formatDate\(/, 'inspector times carry a year via formatTimestamp');
+    const execution = read('apps/web/react/src/components/evidence/execution-inspector.tsx');
+    assert.match(execution, /'Keep showing this check'/);
+    assert.match(execution, /Show another check from this scan/);
+    assert.match(execution, /'Stop this scan\?'/);
+    assert.doesNotMatch(execution, /Exact assessment|Recorded state|Display selection|Pin this check|Inspect a recorded child|Stop assessment/);
   });
 });

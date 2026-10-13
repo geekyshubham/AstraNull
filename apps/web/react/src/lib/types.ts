@@ -84,26 +84,26 @@ export const CORE_PORTAL_DATASETS = [
 export const PORTAL_ROUTE_DATASETS = {
   'not-found': [],
   dashboard: ['targets', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
-  targets: ['targets'],
+  targets: ['targets', 'runs', 'findings'],
   'target-detail': ['checks'],
   checks: ['targets', 'checks', 'runs', 'findings', 'evidence'],
   'check-detail': ['targets', 'checks', 'runs'],
   'test-policies': ['targets', 'checks', 'testPolicies'],
   'policy-detail': ['targets', 'checks', 'testPolicies'],
   runs: ['targets', 'checks', 'runs', 'findings', 'evidence', 'highScale', 'validationScans'],
-  'run-detail': ['targets', 'checks', 'runs', 'findings', 'evidence'],
+  'run-detail': ['targets', 'checks', 'testPolicies', 'runs', 'findings', 'evidence'],
   'scan-detail': ['targets', 'checks'],
   findings: ['targets', 'checks', 'runs', 'findings', 'evidence'],
   'finding-detail': ['targets', 'checks', 'findings', 'wafActionItems'],
   // Grouped Refined view: same datasets as the findings list it is derived from.
   'finding-group-detail': ['targets', 'checks', 'runs', 'findings', 'evidence'],
-  'evidence-detail': ['evidence', 'findings'],
+  'evidence-detail': ['evidence', 'findings', 'targets', 'checks'],
   reports: ['reports', 'audit'],
-  'report-detail': ['runs', 'findings', 'reports'],
+  'report-detail': ['targets', 'checks', 'runs', 'findings', 'reports'],
   integrations: ['connectors', 'secrets'],
   notifications: ['notifications'],
   audit: ['audit'],
-  'release-evidence': ['releaseEvidence', 'releaseAttestation'],
+  'release-evidence': [],
   settings: ['evidence', 'secrets', 'serviceAccounts'],
   support: ['subscriptionSummary'],
   subscription: ['subscriptionSummary'],
@@ -137,7 +137,11 @@ export type Session = {
 
 export type PortalConfig = {
   authMode: string;
-  siteConfig: Record<string, unknown>;
+  siteConfig: Record<string, unknown> & {
+    probe_source_ranges?: string[];
+    support_email?: string;
+    support_url?: string;
+  };
   bundledLoginEnabled: boolean;
   /** Server offers the credential lane: POST /v1/auth/login + /v1/auth/set-password. */
   passwordLoginEnabled: boolean;
@@ -156,7 +160,7 @@ export type ReadinessFactor = {
 };
 
 export type ReadinessPostureSegment = {
-  key: 'pass' | 'review' | 'gap';
+  key: 'pass' | 'review' | 'gap' | 'not_run';
   label: string;
   count: number;
   pct: number;
@@ -173,7 +177,18 @@ export type StatePayload = {
       pass?: number;
       review?: number;
       gap?: number;
+      not_run?: number;
       total?: number;
+    };
+    governance?: {
+      pending_gates?: {
+        requestId: string;
+        label?: string;
+        state?: string;
+        missing?: string[];
+        missing_artifacts?: string[];
+        approvals?: number;
+      }[];
     };
   };
   target_groups?: number;

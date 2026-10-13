@@ -268,7 +268,8 @@ test.describe('current-release findings paging against the real API', () => {
     const pageTwo = page.waitForRequest((request) => new URL(request.url()).searchParams.get('page') === '2');
     await page.getByRole('button', { name: /^Read the next \d+ findings$/ }).click();
     await pageTwo;
-    await expect(resultCount).toContainText('Every matching finding is read, so groups and their counts are complete.');
+    await expect(resultCount).toContainText(`from ${expected.all} matching findings`);
+    await expect(resultCount).not.toContainText('partial');
     await expect(page.getByRole('button', { name: /^Read the next/ })).toHaveCount(0);
 
     await bulkRow.getByRole('link', { name: new RegExp(`^Open finding group ${BULK_TITLE}`) }).click();

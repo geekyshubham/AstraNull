@@ -280,6 +280,25 @@ describe('postgres high-scale service adapters', () => {
     assert.equal(empty.error, 'target_group_not_found');
   });
 
+  it('reviewArtifact refuses a blank rejection and audits the trimmed rejection reason', async () => {
+    const { repositories, state } = memoryRepositories();
+    const svc = createPostgresHighScaleServices(repositories);
+    const created = await svc.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
+    const [request] = await svc.listHighScaleRequests(CTX_A);
+    const art = await svc.addArtifact(CTX_ENG, created.id, exactArtifactProofBody(REQUIRED_ARTIFACT_TYPES[0], request));
+    for (const notes of [undefined, null, '', '   ']) {
+      const refused = await svc.reviewArtifact(CTX_A, created.id, art.id, { status: 'rejected', notes });
+      assert.deepEqual(refused, { error: 'review_notes_required', status: 400 });
+    }
+    assert.equal(state.audit.filter((entry) => entry.action === 'high_scale.artifact_reviewed').length, 0);
+    const rejected = await svc.reviewArtifact(CTX_A, created.id, art.id, { status: 'rejected', notes: '  Approver reference missing.  ' });
+    assert.equal(rejected.status, 'rejected');
+    assert.equal(rejected.review_notes, 'Approver reference missing.');
+    const [entry] = state.audit.filter((row) => row.action === 'high_scale.artifact_reviewed');
+    assert.equal(entry.metadata.notes, 'Approver reference missing.');
+    assert.equal(entry.metadata.status, 'rejected');
+  });
+
   it('dual SOC approval sets scope hash from declared targets', async () => {
     const { repositories } = memoryRepositories();
     const svc = createPostgresHighScaleServices(repositories);

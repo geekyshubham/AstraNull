@@ -87,7 +87,20 @@ describe('public landing and internal management APIs', () => {
       body: signupPayload(),
     });
     assert.equal(dup.status, 409);
-    assert.equal(dup.json.error, 'duplicate_request');
+    assert.deepEqual(dup.json, { error: 'duplicate_request' });
+
+    const colleague = await request(baseUrl, 'POST', '/v1/signup-requests', {
+      body: { ...signupPayload(), contact_email: 'soc@northwind.example' },
+    });
+    assert.equal(colleague.status, 409);
+    assert.deepEqual(colleague.json, { error: 'duplicate_request' });
+
+    const sameNameOtherDomain = await request(baseUrl, 'POST', '/v1/signup-requests', {
+      body: { ...signupPayload(), contact_email: 'security@northwind-unrelated.example' },
+    });
+    assert.equal(sameNameOtherDomain.status, 201);
+    assert.notEqual(sameNameOtherDomain.json.request.id, requestId);
+    assert.equal(Object.hasOwn(sameNameOtherDomain.json.request, 'provisioned_tenant_id'), false);
   });
 
   it('denies customer principals on internal admin routes', async () => {

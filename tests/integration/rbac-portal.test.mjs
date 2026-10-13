@@ -32,10 +32,10 @@ const PERMISSION_GATED_ROUTES = Object.freeze({
 
 /**
  * Routes narrowed below their backend permission. docs/ux/14 §3.1 deleted the customer-facing
- * release-evidence surface; the auditor role keeps `release_evidence:read` and the landing page.
+ * release-evidence surface; `release_evidence:read` stays for API-only auditor reads.
  */
 const CUSTOMER_ROLE_NARROWED_ROUTES = Object.freeze({
-  'release-evidence': Object.freeze(['auditor']),
+  'release-evidence': Object.freeze([]),
 });
 
 const CUSTOMER_ROLES = ['owner', 'engineer', 'viewer', 'auditor', 'admin', 'soc'];

@@ -172,6 +172,50 @@ function lockedResponse(lockedUntil, now) {
   };
 }
 
+function isCredentialLocked(credential, now) {
+  return Boolean(credential?.locked_until && new Date(credential.locked_until).getTime() > now.getTime());
+}
+
+function earliestLockExpiry(rows) {
+  return rows
+    .map((row) => row.credential.locked_until)
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
+}
+
+async function recordInvalidCredentials(repository, candidates, now) {
+  const lockedNow = [];
+  let credentialed = 0;
+  for (const user of candidates) {
+    if (!user.credential) {
+      await auditKnownLogin(repository, user, 'auth.password_login.failed', 'invalid_credentials', now);
+      continue;
+    }
+    credentialed += 1;
+    const updated = await repository.recordLoginFailure(user.tenant_id, user.id, {
+      now: now.toISOString(),
+      lockUntil: new Date(now.getTime() + LOCKOUT_MS).toISOString(),
+      maxAttempts: LOCKOUT_ATTEMPTS,
+      ...mutationAuditOptions(repository, {
+        tenant_id: user.tenant_id,
+        actor_user_id: user.id,
+        actor_role: user.role,
+        action: 'auth.password_login.failed',
+        resource_type: 'user',
+        resource_id: user.id,
+        metadata: { reason: 'invalid_credentials' },
+      }, now),
+    });
+    if (isCredentialLocked(updated, now)) {
+      await auditKnownLogin(repository, user, 'auth.password_login.locked', 'failure_threshold', now);
+      lockedNow.push({ credential: updated });
+    }
+  }
+  if (credentialed > 0 && lockedNow.length === credentialed) {
+    return lockedResponse(earliestLockExpiry(lockedNow), now);
+  }
+  return invalidCredentials();
+}
+
 function normalizeSessionGeneration(value) {
   const generation = Number(value ?? 1);
   return Number.isSafeInteger(generation) && generation > 0 ? generation : null;
@@ -257,36 +301,51 @@ export async function loginWithPassword(body, {
 
   const nowDate = resolveNow(now);
   const users = await repository.findUsersByEmail(normalized.email, normalized.tenantId);
-  if (!normalized.tenantId && users.length > 1) {
-    return {
-      error: 'tenant_required',
-      status: 400,
-      message: 'This email belongs to more than one tenant; tenant_id is required.',
-    };
-  }
-  const user = users.length === 1 ? users[0] : null;
-  const credential = user?.credential ?? null;
+  const candidates = normalized.tenantId && users.length !== 1 ? [] : users;
 
-  if (credential?.locked_until && new Date(credential.locked_until).getTime() > nowDate.getTime()) {
-    const result = lockedResponse(credential.locked_until, nowDate);
-    await auditKnownLogin(repository, user, 'auth.password_login.locked', 'existing_lockout', nowDate);
-    return result;
+  const lockedCandidates = candidates.filter((row) => isCredentialLocked(row.credential, nowDate));
+  if (candidates.length && lockedCandidates.length === candidates.length) {
+    for (const row of lockedCandidates) {
+      await auditKnownLogin(repository, row, 'auth.password_login.locked', 'existing_lockout', nowDate);
+    }
+    return lockedResponse(earliestLockExpiry(lockedCandidates), nowDate);
   }
 
   const emailRate = loginEmailLimiter.check(`email:${normalized.email}`);
   if (!emailRate.allowed) {
-    await auditKnownLogin(repository, user, 'auth.password_login.failed', 'rate_limited', nowDate);
+    for (const row of candidates) {
+      await auditKnownLogin(repository, row, 'auth.password_login.failed', 'rate_limited', nowDate);
+    }
     return rateLimited(emailRate.retryAfterSeconds);
   }
 
-  // Always execute one scrypt verification after a structurally valid request unless an existing
-  // lockout explicitly forbids it. Missing users and missing credentials use the same fixed hash.
-  const passwordMatches = await verifyPassword(
-    normalized.password,
-    credential?.password_hash ?? DUMMY_PASSWORD_HASH,
-  );
+  // Every unlocked candidate gets one scrypt check; with none, the fixed hash keeps timing on the same path.
+  const verifiable = candidates.filter((row) => !isCredentialLocked(row.credential, nowDate));
+  const matches = [];
+  for (const row of verifiable.length ? verifiable : [null]) {
+    const passwordMatches = await verifyPassword(
+      normalized.password,
+      row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH,
+    );
+    if (row?.credential && passwordMatches) matches.push(row);
+  }
 
-  if (!user) return invalidCredentials();
+  if (!matches.length) return recordInvalidCredentials(repository, verifiable, nowDate);
+
+  const activeMatches = matches.filter((row) => row.status === 'active');
+  if (activeMatches.length > 1) {
+    return {
+      error: 'tenant_required',
+      status: 400,
+      message: 'This email and password open more than one workspace; choose one.',
+      workspaces: activeMatches.map((row) => ({
+        tenant_id: row.tenant_id,
+        name: row.tenant_name ?? row.tenant_id,
+      })),
+    };
+  }
+  const user = activeMatches[0] ?? matches[0];
+  const credential = user.credential;
 
   if (user.status === 'invited') {
     await auditKnownLogin(repository, user, 'auth.password_login.failed', 'password_setup_required', nowDate);
@@ -303,33 +362,6 @@ export async function loginWithPassword(body, {
       status: 403,
       message: 'This account is disabled.',
     };
-  }
-
-  if (!credential || !passwordMatches) {
-    if (credential) {
-      const updated = await repository.recordLoginFailure(user.tenant_id, user.id, {
-        now: nowDate.toISOString(),
-        lockUntil: new Date(nowDate.getTime() + LOCKOUT_MS).toISOString(),
-        maxAttempts: LOCKOUT_ATTEMPTS,
-        ...mutationAuditOptions(repository, {
-          tenant_id: user.tenant_id,
-          actor_user_id: user.id,
-          actor_role: user.role,
-          action: 'auth.password_login.failed',
-          resource_type: 'user',
-          resource_id: user.id,
-          metadata: { reason: 'invalid_credentials' },
-        }, nowDate),
-      });
-      if (updated?.locked_until && new Date(updated.locked_until).getTime() > nowDate.getTime()) {
-        const result = lockedResponse(updated.locked_until, nowDate);
-        await auditKnownLogin(repository, user, 'auth.password_login.locked', 'failure_threshold', nowDate);
-        return result;
-      }
-    } else {
-      await auditKnownLogin(repository, user, 'auth.password_login.failed', 'invalid_credentials', nowDate);
-    }
-    return invalidCredentials();
   }
 
   if (credential.must_change === true) {

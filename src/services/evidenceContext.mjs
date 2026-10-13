@@ -207,6 +207,11 @@ function bindReads(deps = {}) {
     getRunEvents: (ctx, id, options) => pick(deps.testRuns, 'getRunEvents', testRuns.getRunEvents)(ctx, id, options),
     listTestRuns: (ctx, options) => pick(deps.testRuns, 'listTestRuns', testRuns.listTestRuns)(ctx, options),
     getEvidence: pick(deps.evidence, 'getEvidence', evidence.getEvidence),
+    listEvidenceForRun: async (ctx, runId) => {
+      if (typeof deps.evidence?.listEvidenceForRun === 'function') return deps.evidence.listEvidenceForRun(ctx, runId);
+      if (postgres) return [];
+      return (getStore().evidenceVault ?? []).filter((row) => row?.tenant_id === ctx.tenantId && row.test_run_id === runId);
+    },
     getReport: pick(deps.reports, 'getReport', reports.getReport),
     getTargetDetail: pick(deps.targetDetail, 'getTargetDetail', targetDetail.getTargetDetail),
     getAuditEntry: async (ctx, id) => {
@@ -330,6 +335,18 @@ function classifyRecorded(record, expected, requirePresent) {
   return missing ? 'missing' : 'match';
 }
 
+/** Same-tenant artifacts sealed for the finding's own originating run that no verdict cites. */
+async function loadRunArtifactIds(ctx, reads, runId, citedIds) {
+  if (!runId) return [];
+  const rows = await reads.listEvidenceForRun(ctx, runId);
+  if (!Array.isArray(rows)) return [];
+  const ids = rows
+    .filter((row) => row && row.tenant_id === ctx.tenantId && row.test_run_id === runId)
+    .map((row) => row.id)
+    .filter((id) => typeof id === 'string' && ID_RE.test(id) && !citedIds.has(id));
+  return capIds([...new Set(ids)]).ids;
+}
+
 async function loadSnapshot(ctx, parsed, reads) {
   const base = { entry: parsed.entry, tenantId: ctx.tenantId, ids: parsed.ids };
   if (parsed.entry === 'finding' || parsed.entry === 'group_member') {
@@ -359,6 +376,9 @@ async function loadSnapshot(ctx, parsed, reads) {
     const proofIds = findingIds.length ? findingIds : originIds;
     const alternativeIds = findingIds.length ? originIds.filter((id) => !findingIds.includes(id)) : [];
     const union = capIds([...new Set([...proofIds, ...alternativeIds])]);
+    const runArtifactIds = originRun
+      ? await loadRunArtifactIds(ctx, reads, finding.test_run_id, new Set([...proofIds, ...alternativeIds]))
+      : [];
     const loaded = await loadEvidenceMap(ctx, reads, union.ids);
     const window = await loadEvents(ctx, reads, finding.test_run_id, {
       rows: [...loaded.evidenceById.values()],
@@ -373,6 +393,7 @@ async function loadSnapshot(ctx, parsed, reads) {
       laterRuns: Array.isArray(laterRuns) ? laterRuns : [],
       primaryIds: proofIds.filter((id) => union.ids.includes(id)),
       alternativeIds: alternativeIds.filter((id) => union.ids.includes(id)),
+      runArtifactIds,
       evidenceRefs: {
         source_count: union.source_count,
         returned: union.returned,
@@ -812,7 +833,7 @@ function answerFromVerdict(verdict, finding, run) {
   const expected = expectedFrom(verdict, run);
   return {
     outcome: verdict?.verdict ?? finding?.status ?? finding?.state ?? null,
-    explanation: safeText(verdict?.explanation ?? finding?.notes ?? null),
+    explanation: safeText(verdict?.explanation ?? finding?.system_summary ?? null),
     limitations: [...LIMITATIONS],
     expected_behavior: expected.expected_behavior,
     expected_behavior_source: expected.expected_behavior_source,
@@ -1231,6 +1252,9 @@ function truncationOf(snapshot) {
   return body;
 }
 
+const ENVELOPE_STATES = new Set(['partial', 'no_refs', 'pending']);
+const PENDING_RUN = new Set(['planned', 'running', 'collecting']);
+
 function envelope(snapshot, fields) {
   const missingEvidenceIds = fields.missingEvidenceIds ?? [];
   const reason = Object.hasOwn(fields, 'unavailable_reason')
@@ -1248,7 +1272,7 @@ function envelope(snapshot, fields) {
     response_summary: fields.response_summary ?? { status: 'not_recorded' },
     evaluation: fields.evaluation ?? { status: 'not_recorded' },
     unavailable_reason: reason,
-    state: reason === 'partial' ? 'partial' : reason === 'no_refs' ? 'no_refs' : 'ready',
+    state: ENVELOPE_STATES.has(reason) ? reason : 'ready',
     truncation: truncationOf(snapshot),
   };
   if (snapshot.entry === 'finding' || snapshot.entry === 'group_member') {
@@ -1356,6 +1380,7 @@ export function resolveEvidenceContext(snapshot) {
       latest_same_check: latestSame,
       alternatives: [
         ...(snapshot.alternativeIds ?? []).map((id) => ({ evidence_id: id, relationship: 'originating_verdict_evidence' })),
+        ...(snapshot.runArtifactIds ?? []).map((id) => ({ evidence_id: id, relationship: 'originating_run_artifact' })),
         ...partitioned.alternatives,
         ...operation.alternatives,
       ],
@@ -1386,9 +1411,11 @@ export function resolveEvidenceContext(snapshot) {
       ? proof(run.id, verdict?.id ?? null, primaryIds, verdict?.created_at ?? run.completed_at ?? null, partitioned.accepted)
       : null;
     const partial = partitioned.partial || operation.partial || snapshot.evidenceRefs?.truncated === true;
+    const pending = !verdict && PENDING_RUN.has(run.status);
     return envelope(snapshot, {
-      subject: { target_id: run.target_id, check_id: run.check_id, test_run_id: run.id },
+      subject: { target_id: run.target_id, check_id: run.check_id, test_run_id: run.id, run_status: run.status ?? null },
       answer: answerFromVerdict(verdict, null, run),
+      ...(pending ? { unavailable_reason: 'pending' } : {}),
       primary,
       latest_distinct: null,
       alternatives: [...partitioned.alternatives, ...operation.alternatives],

@@ -26,12 +26,11 @@ import {
   ScheduleStateBadge,
   scheduleTarget
 } from './refined/policies-refined';
-import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
+import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION, sha256HexBytes } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatDate, formatDurationSeconds, formatNumber, formatSeverityLabel, pluralize, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
+import { formatAuditAction, formatDate, formatDurationSeconds, formatNumber, formatResourceTypeLabel, formatSeverityLabel, formatTimestamp, pluralize, scoreTone, sensitiveResourceLabel, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
 import { hasEvidenceBackedVerdict } from '../lib/run-verdict';
 import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
-import { useFindingPages } from '../components/findings/use-server-findings';
 import { ConfirmModal, formatMutationSuccessMessage, useConfirmModal } from '../lib/crud-ui';
 import { RunTimelineViz, TrafficPathPanel, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
 import {
@@ -42,12 +41,23 @@ import {
   authorizationArtifactPurpose,
   authorizationArtifactTitle,
   authorizationArtifactTypesForRequest,
+  authorizationLetterValidWindow,
   bestArtifactForType,
+  killSwitchActiveForTenant,
+  orderedArtifactsForType,
   buildLifecycleTimeline,
   buildMetadataArtifactUploadBody,
+  defaultScheduleWindow,
   explainArtifactReviewStatus,
+  fromDatetimeLocalValue,
+  governedLimitDisplay,
+  governedScenarioLabel,
   packRequirementForType,
-  socDevScheduleWindow
+  requestDomainDisplay,
+  scheduledWindowState,
+  scheduleWindowErrors,
+  summarizeAuthorizationPackProgress,
+  toDatetimeLocalValue
 } from '../lib/high-scale';
 import { routeTabs } from '../lib/prototype-manifest';
 import { ReadinessGauge } from '../components/charts/readiness-gauge';
@@ -55,6 +65,7 @@ import { artifactReviewTone, findingStatusTone, highScaleStateTone, reportStatus
 import { severityTone } from '../lib/severity-tone';
 import {
   CustomerPageStyles,
+  ENTITLEMENT_FEATURE_LABELS,
   KpiCell,
   MetricCard,
   PageContextSummary,
@@ -73,8 +84,10 @@ import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
 import './detail-pages.css';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
-import { plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { plainCheckName, plainCodeLabel, plainExpectedVerdictLabel, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
 import { DetailBackLink, type DetailListLink } from '../components/layout/detail-back-link';
+import { useEntityDocumentTitle } from '../components/layout/app-shell';
+import { diffReports, eligibleBaselines, reportAsOf } from '../lib/report-diff';
 
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
@@ -169,12 +182,9 @@ function targetDisplayLabel(targets: DataItem[], targetId: string) {
   return getString(target ?? {}, ['value', 'hostname', 'label'], targetId);
 }
 
-const STAFF_ENTITLEMENT_LABELS: Record<string, string> = {
-  waf_posture: 'WAF posture',
-  external_discovery: 'External discovery',
-  connectors: 'Connectors',
-  high_scale_program: 'High-scale program'
-};
+function staffEntitlementLabel(feature: string) {
+  return (ENTITLEMENT_FEATURE_LABELS as Record<string, string>)[feature] ?? formatStatusLabel(feature);
+}
 
 const SUPPLY_CHAIN_EXPOSURE_TYPES = [
   { id: 'dangling_cname', label: 'Dangling CNAME' },
@@ -232,7 +242,7 @@ type AuthorizationArtifactDraft = {
   custody_id: string;
 };
 
-function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown }> }) {
+function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown; by?: string }> }) {
   if (items.length === 0) {
     return <EmptyState icon={Activity} title="No timeline milestones recorded." body="Milestones appear here as this record moves through its lifecycle." />;
   }
@@ -243,7 +253,7 @@ function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown }
           <span aria-hidden="true" />
           <div>
             <strong>{item.label}</strong>
-            <p>{formatDate(item.at)}</p>
+            <p>{formatDate(item.at)}{'by' in item ? ` · ${item.by || 'system'}` : ''}</p>
           </div>
         </div>
       ))}
@@ -393,6 +403,7 @@ function DetailEntityHeading({
   context?: string;
   backLink?: DetailListLink;
 }) {
+  useEntityDocumentTitle(title || undefined);
   return (
     <>
       <DetailBackLink route={route} link={backLink} />
@@ -682,19 +693,34 @@ function useListBackedDetail<T extends DataItem>(
   const [loading, setLoading] = useState(enabled && Boolean(entityId));
   const tenantId = options.tenantId;
   const staffSoc = Boolean(options.staffSoc);
+  const [reloadTick, setReloadTick] = useState(0);
+  const reloadWaitersRef = useRef<Array<() => void>>([]);
+  const reload = useCallback(() => new Promise<void>((resolve) => {
+    reloadWaitersRef.current.push(resolve);
+    setReloadTick((n) => n + 1);
+  }), []);
   // See useEntityDetail: `fallback` has a fresh identity every render, so it must not
   // gate the fetch effect — read it through a ref and omit it from the deps below.
   const fallbackRef = useRef(fallback);
   fallbackRef.current = fallback;
+  const loadedKeyRef = useRef('');
 
   useEffect(() => {
+    const settleWaiters = () => {
+      const waiters = reloadWaitersRef.current;
+      reloadWaitersRef.current = [];
+      for (const resolve of waiters) resolve();
+    };
     if (!enabled || !entityId) {
       setDetail(fallbackRef.current);
       setLoading(false);
+      settleWaiters();
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    const key = `${listPath}|${entityId}|${tenantId ?? ''}|${staffSoc}`;
+    const isReload = loadedKeyRef.current === key;
+    if (!isReload) setLoading(true);
     setError('');
     const fetchList = staffSoc
       ? requestSocJson(config, session, listPath, { tenantId })
@@ -706,26 +732,34 @@ function useListBackedDetail<T extends DataItem>(
           ? (payload as { items: T[] }).items
           : [];
         const match = items.find((item) => getString(item, ['id'], '') === entityId) ?? null;
-        setDetail(match ?? fallbackRef.current);
-        if (!match && !fallbackRef.current) {
-          setError('Entity not found in your workspace lists.');
+        loadedKeyRef.current = key;
+        if (match) {
+          setDetail(match);
+        } else if (!isReload) {
+          setDetail(fallbackRef.current);
+          if (!fallbackRef.current) setError('Entity not found in your workspace lists.');
+        } else {
+          setError('This request is no longer in your workspace lists.');
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setDetail(fallbackRef.current);
+          if (!isReload) setDetail(fallbackRef.current);
           setError(apiErrorMessage(err, 'Could not load entity detail.'));
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          settleWaiters();
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [config, session, listPath, enabled, entityId, staffSoc, tenantId]);
+  }, [config, session, listPath, enabled, entityId, staffSoc, tenantId, reloadTick]);
 
-  return { detail, error, loading };
+  return { detail, error, loading, reload };
 }
 
 function formatRunDuration(entity: DataItem) {
@@ -839,11 +873,17 @@ function RunDetailView({
   const runTargetMatch = runTargetId ? data.targets.find((item) => getString(item, ['id'], '') === runTargetId) : undefined;
   const runTargetValue = getString(entity, ['target_value'], '') || getString(runTargetMatch ?? {}, ['value', 'hostname'], '');
   const runCheckId = getString(entity, ['check_id'], '');
+  const runTargetHref = runTargetId
+    ? `${buildDetailHref('target-detail', runTargetId)}${runCheckId ? `&tab=validate&check=${encodeURIComponent(runCheckId)}` : ''}`
+    : '';
+  const runCheckRecord = runCheckId ? data.checks.find((item) => getString(item, ['check_id', 'id'], '') === runCheckId) : undefined;
+  const runFamily = getString(entity, ['vector_family'], '') || getString(runCheckRecord ?? {}, ['vector_family', 'family'], '');
   const explicitRunValidationMode = getString(entity, ['validation_mode'], 'external_only');
   const verdictValue = hasEvidenceBackedVerdict(entity, data.evidence)
     ? getNestedString(entity, ['verdict', 'verdict'], runVerdictValue(entity))
     : '';
-  const verdictDisplay = verdictValue ? plainVerdictLabel(verdictValue) : 'No result yet';
+  const verdictDisplay = verdictValue ? plainVerdictShortLabel(verdictValue) : 'No result yet';
+  const verdictSub = verdictValue ? `${plainVerdictLabel(verdictValue)} · External-only confidence` : 'External-only confidence';
   const primaryFinding = relatedFindings[0] ?? null;
   const runNonceHash = getNestedString(entity, ['correlation', 'nonce_hash'], '');
   const tabOptions = [
@@ -868,6 +908,7 @@ function RunDetailView({
         route="run-detail"
         entityId={entityId}
         title={runTitle}
+        backLink={runTargetId ? { label: runTargetValue || 'target', href: runTargetHref } : undefined}
         actions={(
           <>
             {getString(entity, ['scan_id'], '') ? (
@@ -894,15 +935,23 @@ function RunDetailView({
       {runEventEvidenceUnavailable ? (
         <div className="form-banner error" role="alert">
           <strong>{runEventState.error || 'Run event evidence unavailable.'}</strong>{' '}
-          Probe and correlation evidence cannot be evaluated until the run-events endpoint recovers.
+          Run events could not be loaded. Try again shortly.
         </div>
       ) : null}
       {!loading ? (
         <>
           <div className="metric-grid four run-detail-metrics">
-            <MetricCard label="Target" value={runTargetValue || (runTargetId ? <code>{runTargetId}</code> : 'Not recorded')} sub="Declared endpoint under test" icon={Target} tone="muted" />
-            <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={getString(entity, ['vector_family'], 'Family not recorded')} icon={FileCheck2} tone="muted" />
-            <MetricCard label="Verdict" value={verdictDisplay} sub="External-only confidence" icon={ShieldCheck} tone={verdictValue ? verdictTone(verdictValue) : 'muted'} />
+            <MetricCard
+              label="Target"
+              value={runTargetId
+                ? <a className="detail-entity-link" href={runTargetHref}>{runTargetValue || <code>{runTargetId}</code>}</a>
+                : 'Not recorded'}
+              sub="Declared endpoint under test"
+              icon={Target}
+              tone="muted"
+            />
+            <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={runFamily ? plainCodeLabel(runFamily, 'Family not recorded') : 'Family not recorded'} icon={FileCheck2} tone="muted" />
+            <MetricCard label="Verdict" value={verdictDisplay} sub={verdictSub} icon={ShieldCheck} tone={verdictValue ? verdictTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections"
@@ -943,7 +992,7 @@ function RunDetailView({
                     <div><span>Status</span><StatusBadge value={status} tone={runStatusBadgeTone(status)} fallback="pending" /></div>
                     <div><span>Check</span>{runCheckId ? <DetailEntityLink route="check-detail" id={runCheckId} label={checkDisplayName(data.checks, runCheckId)} /> : <strong>Not recorded</strong>}</div>
                     <div><span>Target</span>{runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={runTargetValue || undefined} /> : <strong>Not recorded</strong>}</div>
-                    <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label={runPolicy ? scheduleDisplayName(runPolicy, data.checks) : 'Open schedule'} /> : <strong>Not scheduled by a recorded policy</strong>}</div>
+                    <div><span>Schedule</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label={runPolicy ? scheduleDisplayName(runPolicy, data.checks) : 'Open schedule'} /> : <strong>Not started by a schedule</strong>}</div>
                     <div><span>Validation mode</span><strong>{explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'Not recorded'}</strong></div>
                     <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
                     <div><span>Started</span><strong>{formatDate(entity.started_at)}</strong></div>
@@ -981,7 +1030,7 @@ function RunDetailView({
               <CardHeader>
                 <CardTitle>Timeline</CardTitle>
                 <CardDescription>
-                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <span title={runPolicyId}> · scheduled policy</span> : null}.
+                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <span title={runPolicyId}> · started by a schedule</span> : null}.
                 </CardDescription>
               </CardHeader>
               <CardContent className="stack-tight">
@@ -1028,19 +1077,26 @@ function RunDetailView({
                 </CardHeader>
                 <CardContent>
                   {relatedEvidence.length === 0 ? (
-                    <EmptyState icon={FileCheck2} title="No linked evidence records." body="No evidence artifact in the loaded vault data identifies this run." actionLabel="Open evidence vault" actionHref="#evidence" />
+                    <EmptyState
+                      icon={FileCheck2}
+                      title="No linked evidence records."
+                      body="No evidence artifact in the loaded vault data identifies this run."
+                      actionLabel={runTargetId ? 'Open target' : undefined}
+                      actionHref={runTargetId ? buildDetailHref('target-detail', runTargetId) : undefined}
+                    />
                   ) : (
                     <div className="kv-list">
                       {relatedEvidence.map((item) => {
                         const evidenceId = getString(item, ['id', 'evidence_id'], '');
-                        const evidenceLabel = getString(item, ['label', 'kind', 'signal_type'], 'evidence');
+                        const evidenceLabel = humanizeSignalType(getString(item, ['label', 'kind', 'signal_type'], ''));
                         const digest = getString(item, ['content_sha256', 'custody_digest'], '');
+                        const shortDigest = digest.length > 16 ? `${digest.slice(0, 12)}…` : digest;
                         return (
                           <div key={evidenceId}>
                             <span>{evidenceLabel}</span>
                             <strong>
                               <DetailEntityLink route="evidence-detail" id={evidenceId} label={evidenceLabel} />
-                              {digest ? <span className="muted small"> · <code className="mono-hash">{digest}</code></span> : null}
+                              {digest ? <span className="muted small"> · <code className="mono-hash" title={digest}>{shortDigest}</code></span> : null}
                             </strong>
                           </div>
                         );
@@ -1052,7 +1108,7 @@ function RunDetailView({
               <Card>
                 <CardHeader>
                   <CardTitle>Linked findings</CardTitle>
-                  <CardDescription>Decisions whose test_run_id exactly matches this run.</CardDescription>
+                  <CardDescription>Findings raised from this run.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {relatedFindings.length === 0 ? (
@@ -1088,12 +1144,12 @@ function RunDetailView({
                 {runEventEvidenceLoading ? (
                   <DetailLoadingPlaceholder label="Loading raw run events…" variant="compact" />
                 ) : runEventEvidenceUnavailable ? (
-                  <p className="muted">Raw events are unavailable because the run-events endpoint failed or returned an invalid envelope.</p>
+                  <p className="muted">Run events could not be loaded. Try again shortly.</p>
                 ) : (
                   <DataTable
                     columns={rawEventColumns}
                     items={runEvents}
-                    empty={<EmptyState icon={ClipboardList} title="No run events recorded." body="The run-events endpoint returned a valid empty items array for this run." />}
+                    empty={<EmptyState icon={ClipboardList} title="No run events recorded." body="No events were recorded for this run." />}
                   />
                 )}
               </CardContent>
@@ -1104,7 +1160,7 @@ function RunDetailView({
       <ConfirmModal
         open={canManageRun && confirmCancelOpen}
         title="Cancel this run in progress?"
-        description={<p>Run {entityId} stops collecting and records no new verdict.</p>}
+        description={<p>Run {entityId} stops collecting and records no verdict.</p>}
         confirmLabel="Cancel run"
         dismissLabel="Keep run"
         busy={busy === `cancel-${entityId}`}
@@ -1114,7 +1170,7 @@ function RunDetailView({
       <ConfirmModal
         open={canManageRun && confirmFinalizeOpen}
         title="Force finalize this run now?"
-        description={<p>This asks the backend to finalize using the evidence available at that time.</p>}
+        description={<p>Publishes a verdict from the signed probe evidence already recorded for this run. The run must have probe evidence and a closed observation window. The published verdict cannot be changed.</p>}
         confirmLabel="Force finalize"
         busy={busy === `finalize-${entityId}`}
         onCancel={() => setConfirmFinalizeOpen(false)}
@@ -1145,7 +1201,7 @@ function TenantDetailView({
   loading: boolean;
   loadError: string;
 }) {
-  const { confirm } = useConfirmModal();
+  const { confirm, confirmWithReason } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -1168,7 +1224,10 @@ function TenantDetailView({
   const relatedApprovals = data.internalApprovalRequests.filter(
     (item) => getString(item, ['tenant_id'], '') === entityId
   );
-  const lifecycleState = getString(account, ['lifecycle_state'], 'active');
+  const lifecycleRecorded = Boolean(getString(account, ['lifecycle_state'], ''));
+  const lifecycleState = lifecycleRecorded ? getString(account, ['lifecycle_state'], '') : 'unrecorded';
+  const lifecycleLabel = lifecycleRecorded ? formatStatusLabel(lifecycleState) : 'Not recorded';
+  const tenantTitle = getString(tenant, ['name'], entityId);
   // MRR sourced from the subscription/account billing payload when present (graceful — no fabricated dollar figure).
   const mrrValue = getString(subscription, ['mrr', 'monthly_recurring_revenue', 'amount'], '')
     || getString(account, ['mrr', 'monthly_recurring_revenue'], '');
@@ -1198,25 +1257,38 @@ function TenantDetailView({
     }
   }
 
-  async function patchLifecycle(nextState: string) {
-    const impact = nextState === 'suspended'
-      ? 'Suspend this tenant? Users will lose access until it is reactivated.'
-      : 'Activate this tenant? Users will regain access to this tenant.';
-    if (!await confirm({ title: 'Update tenant lifecycle', description: impact, confirmLabel: 'Apply lifecycle change' })) return;
+  async function patchLifecycle(nextState: 'active' | 'suspended') {
+    const suspending = nextState === 'suspended';
+    const userCount = users.length;
+    const reason = await confirmWithReason({
+      title: suspending ? `Suspend ${tenantTitle}?` : lifecycleRecorded ? `Reactivate ${tenantTitle}?` : `Record ${tenantTitle} as active?`,
+      description: suspending
+        ? `${formatNumber(userCount)} ${pluralize(userCount, 'user')} will lose access immediately until staff reactivate the tenant.`
+        : lifecycleRecorded
+          ? `${formatNumber(userCount)} ${pluralize(userCount, 'user')} regain access to this tenant immediately.`
+          : 'No lifecycle state is recorded for this tenant. This records it as active; user access does not change.',
+      confirmLabel: suspending ? 'Suspend tenant' : lifecycleRecorded ? 'Reactivate tenant' : 'Record as active',
+      confirmTone: suspending ? 'danger' : 'default',
+      requireTypedId: suspending ? entityId : undefined,
+      reason: { label: 'Reason (recorded in the staff audit log)', required: true }
+    });
+    if (reason === null) return;
     await runStaffAction(`lifecycle-${entityId}-${nextState}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}`, {
       method: 'PATCH',
-      body: { lifecycle_state: nextState, reason: `Lifecycle set to ${nextState} from tenant detail.` }
-    }), `Tenant lifecycle updated to ${nextState}.`);
+      body: { lifecycle_state: nextState, reason }
+    }), suspending ? `${tenantTitle} suspended.` : `${tenantTitle} recorded as active.`);
   }
 
   async function patchSupportOwner(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const owner = String(new FormData(event.currentTarget).get('support_owner') ?? '').trim();
-    if (!owner) return;
+    const form = new FormData(event.currentTarget);
+    const owner = String(form.get('support_owner') ?? '').trim();
+    const reason = String(form.get('reason') ?? '').trim();
+    if (!owner || !reason) return;
     await runStaffAction(`support-owner-${entityId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}`, {
       method: 'PATCH',
-      body: { support_owner: owner, reason: 'Support owner updated from tenant detail.' }
-    }), 'Support owner updated.');
+      body: { support_owner: owner, reason }
+    }), `Support owner for ${tenantTitle} updated.`);
   }
 
   async function grantEntitlement(event: FormEvent<HTMLFormElement>) {
@@ -1225,17 +1297,18 @@ function TenantDetailView({
     const feature = String(form.get('feature') ?? '').trim();
     const enabled = String(form.get('enabled') ?? 'true') === 'true';
     const reason = String(form.get('reason') ?? '').trim();
-    if (!feature) return;
+    if (!feature || !reason) return;
+    const featureLabel = staffEntitlementLabel(feature);
     if (!await confirm({
-      title: `${enabled ? 'Grant' : 'Revoke'} tenant entitlement`,
-      description: `${enabled ? 'Grant' : 'Revoke'} entitlement "${feature}" for this tenant? This changes product access immediately.`,
+      title: `${enabled ? 'Grant' : 'Revoke'} ${featureLabel} for ${tenantTitle}?`,
+      description: `${enabled ? 'Grant' : 'Revoke'} ${featureLabel} for ${tenantTitle}? This changes product access immediately. Reason: ${reason}`,
       confirmLabel: `${enabled ? 'Grant' : 'Revoke'} entitlement`,
       confirmTone: enabled ? 'default' : 'danger'
     })) return;
     await runStaffAction(`entitlement-${entityId}-${feature}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}/entitlements`, {
       method: 'POST',
-      body: { feature, enabled, reason: reason || `Entitlement ${enabled ? 'granted' : 'revoked'} from tenant detail.` }
-    }), `${feature} entitlement ${enabled ? 'granted' : 'revoked'}.`);
+      body: { feature, enabled, reason }
+    }), `${featureLabel} ${enabled ? 'granted to' : 'revoked from'} ${tenantTitle}.`);
   }
 
   async function resendInvite(userId: string) {
@@ -1245,18 +1318,28 @@ function TenantDetailView({
     }), 'Invite resend recorded.');
   }
 
-  async function disableUser(userId: string) {
-    if (!await confirm({ title: 'Disable tenant user', description: 'Disable this user? They will lose access to this tenant until re-enabled by staff.', confirmLabel: 'Disable user' })) return;
+  async function disableUser(user: DataItem) {
+    const userId = getString(user, ['id'], '');
+    if (!userId) return;
+    const email = getString(user, ['email'], userId);
+    const reason = await confirmWithReason({
+      title: `Disable ${email} in ${tenantTitle}?`,
+      description: 'They lose access to this tenant immediately until staff re-enable them.',
+      confirmLabel: 'Disable user',
+      confirmTone: 'danger',
+      reason: { label: 'Reason (recorded in the staff audit log)', required: true }
+    });
+    if (reason === null) return;
     await runStaffAction(`disable-${entityId}-${userId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}/users/${encodeURIComponent(userId)}/disable`, {
       method: 'POST',
-      body: { reason: 'Disabled from tenant detail.' }
-    }), 'User disabled.');
+      body: { reason }
+    }), `${email} disabled.`);
   }
 
   const userColumns: TableColumn<DataItem>[] = [
     { key: 'email', label: 'Email', render: (item) => getString(item, ['email']) },
-    { key: 'role', label: 'Role', render: (item) => <Badge tone="muted">{getString(item, ['role'])}</Badge> },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : 'warn'}>{getString(item, ['status'])}</Badge> },
+    { key: 'role', label: 'Role', render: (item) => <Badge tone="muted" title={getString(item, ['role'], '')}>{plainCodeLabel(getString(item, ['role'], ''), 'Not recorded')}</Badge> },
+    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : 'warn'} title={getString(item, ['status'], '')}>{plainCodeLabel(getString(item, ['status'], ''), 'Not recorded')}</Badge> },
     {
       key: 'actions',
       label: 'Actions',
@@ -1269,7 +1352,7 @@ function TenantDetailView({
         return (
           <div className="row-actions">
             {canResend ? <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void resendInvite(userId)}>Resend invite</Button> : null}
-            <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void disableUser(userId)}>Disable</Button>
+            <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void disableUser(item)}>Disable</Button>
           </div>
         );
       }
@@ -1277,19 +1360,20 @@ function TenantDetailView({
   ];
 
   const approvalColumns: TableColumn<DataItem>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind']) },
-    { key: 'state', label: 'State', render: (item) => <Badge tone="warn">{getString(item, ['state'])}</Badge> },
+    { key: 'kind', label: 'Kind', render: (item) => <span title={getString(item, ['kind'], '')}>{plainCodeLabel(getString(item, ['kind'], ''), 'Not recorded')}</span> },
+    { key: 'state', label: 'State', render: (item) => <Badge tone="warn" title={getString(item, ['state'], '')}>{plainCodeLabel(getString(item, ['state'], ''), 'Not recorded')}</Badge> },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
   ];
 
   const auditColumns: TableColumn<DataItem>[] = [
-    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
+    { key: 'action', label: 'Action', render: (item) => <span title={getString(item, ['action'], '')}>{formatAuditAction(getString(item, ['action'], ''), 'Unknown action', item.metadata)}</span> },
     { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_user_id', 'staff_id'], '—') },
-    { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'], '—')}` },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
+    { key: 'resource', label: 'Resource', render: (item) => {
+      const type = getString(item, ['resource_type'], '');
+      return sensitiveResourceLabel(type) ?? `${formatResourceTypeLabel(type)} · ${getString(item, ['resource_id'], 'ID not recorded')}`;
+    } },
+    { key: 'time', label: 'Time', render: (item) => formatDate(item.timestamp ?? item.created_at) }
   ];
-
-  const tenantTitle = getString(tenant, ['name'], entityId);
 
   return (
     <div className="content">
@@ -1300,27 +1384,27 @@ function TenantDetailView({
         title={tenantTitle}
         actions={(
           <>
-            {lifecycleState !== 'active' ? (
+            {lifecycleState === 'suspended' ? (
               <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchLifecycle('active')}>Activate</Button>
-            ) : (
+            ) : null}
+            {!lifecycleRecorded ? (
+              <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchLifecycle('active')}>Record as active</Button>
+            ) : null}
+            {lifecycleState !== 'suspended' ? (
               <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void patchLifecycle('suspended')}>Suspend</Button>
-            )}
+            ) : null}
           </>
         )}
       />
-      <PageContextSummary>
-        <StatusBadge value={lifecycleState} tone={tenantLifecycleTone(lifecycleState)} /> · {getString(subscription, ['plan_id'], '') ? `plan ${getString(subscription, ['plan_id'], '')}` : 'plan not recorded'} ·{' '}
-        <span className="tabular-nums">{formatNumber(users.length)}</span> {pluralize(users.length, 'user')} ·{' '}
-        <span className="tabular-nums">{formatNumber(recentAudit.length)}</span> recent audit {pluralize(recentAudit.length, 'event')}
-      </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading tenant detail…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message} mode="combined" />
       {!loading ? (
         <>
           <div className="kpi-row" role="group" aria-label="Tenant summary">
-            <KpiCell label="Lifecycle" value={formatStatusLabel(lifecycleState, 'active')} delta="Staff account state" tone={lifecycleState === 'active' ? 'success' : 'warn'} />
+            <KpiCell label="Lifecycle" value={lifecycleLabel} delta={lifecycleRecorded ? 'Staff account state' : 'No account record'} tone={!lifecycleRecorded ? 'muted' : lifecycleState === 'active' ? 'success' : 'warn'} />
             <KpiCell label="Plan" value={getString(subscription, ['plan_id'], '—')} valueClassName={getString(subscription, ['plan_id'], '') ? 'mono' : undefined} delta={formatStatusLabel(getString(subscription, ['status'], 'Not recorded'))} tone="muted" />
             <KpiCell label="Users" value={formatNumber(users.length)} delta="Tenant-scoped identities" tone="muted" />
+            <KpiCell label="Recent audit" value={formatNumber(recentAudit.length)} delta={`${pluralize(recentAudit.length, 'event')} in this response`} tone="muted" />
           </div>
           <Tabs
             value={tab}
@@ -1343,12 +1427,11 @@ function TenantDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Account facts</CardTitle>
-                    <CardDescription>Tenant identity, lifecycle, residency, and support ownership recorded by staff administration.</CardDescription>
+                    <CardDescription>Tenant identity, residency, and support ownership recorded by staff administration.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     <div><span>Name</span><strong>{getString(tenant, ['name'])}</strong></div>
                     <DetailKvMonoField label="Tenant ID" value={entityId} />
-                    <div><span>Lifecycle</span><StatusBadge value={lifecycleState} tone={tenantLifecycleTone(lifecycleState)} /></div>
                     <RecordedKvRow label="Region" value={getString(account, ['region'], '')} />
                     <RecordedKvRow label="Support owner" value={getString(account, ['support_owner'], '')} missing="Unassigned" mono />
                     <RecordedKvRow label="Created" value={tenant?.created_at ? formatDate(tenant.created_at) : ''} />
@@ -1396,6 +1479,7 @@ function TenantDetailView({
                 <CardContent>
                   <form className="product-form" onSubmit={patchSupportOwner}>
                     <label className="full"><span>Support owner</span><input name="support_owner" defaultValue={getString(account, ['support_owner'], '')} placeholder="e.g. owner@customer.example" required /></label>
+                    <label className="full"><span>Reason (recorded in the staff audit log)</span><input name="reason" placeholder="Account handover to the regional support team" required /></label>
                     <div className="form-actions full"><Button type="submit" loading={busy === `support-owner-${entityId}`} disabled={busy !== ''}>Save support owner</Button></div>
                   </form>
                 </CardContent>
@@ -1426,13 +1510,13 @@ function TenantDetailView({
                   <CardContent className="kv-list">
                     {effectiveEntitlements ? STAFF_ENTITLEMENT_FEATURES.map((feature) => (
                       <div key={feature}>
-                        <span>{STAFF_ENTITLEMENT_LABELS[feature] ?? feature}</span>
+                        <span>{staffEntitlementLabel(feature)}</span>
                         <StatusBadge
                           value={effectiveEntitlements[feature] === true ? 'enabled' : 'disabled'}
                           tone={effectiveEntitlements[feature] === true ? 'success' : 'muted'}
                         />
                       </div>
-                    )) : <p className="muted">No effective_entitlements object was returned.</p>}
+                    )) : <p className="muted">No entitlement decisions are recorded for this subscription.</p>}
                   </CardContent>
                 </Card>
               </div>
@@ -1451,7 +1535,7 @@ function TenantDetailView({
                       onChange={setEntitlementFeature}
                       options={STAFF_ENTITLEMENT_FEATURES.map((feature) => ({
                         value: feature,
-                        label: STAFF_ENTITLEMENT_LABELS[feature] ?? feature
+                        label: staffEntitlementLabel(feature)
                       }))}
                     />
                     <Select
@@ -1491,7 +1575,7 @@ function TenantDetailView({
                 <CardDescription>Recent audit entries for this tenant.</CardDescription>
               </CardHeader>
               <CardContent>
-                <DataTable columns={auditColumns} items={recentAudit} empty={<EmptyState icon={FileCheck2} title="No tenant audit entries returned." body="No recent_tenant_audit records were present in this response." />} />
+                <DataTable columns={auditColumns} items={recentAudit} empty={<EmptyState icon={FileCheck2} title="No audit events for this tenant yet." body="Actions taken in this tenant will appear here." />} />
               </CardContent>
             </Card></div>
           ) : null}
@@ -1583,6 +1667,31 @@ function EvidenceDetailView({
       cancelled = true;
     };
   }, [entityId, config, session, evidenceList, reloadTick]);
+
+  const linkedRunId = entity ? getString(entity, ['test_run_id', 'run_id'], '') : '';
+  const [runContext, setRunContext] = useState<{ runId: string; status: 'idle' | 'loading' | 'loaded' | 'denied' | 'unavailable'; run: DataItem | null }>({ runId: '', status: 'idle', run: null });
+  const [runContextReload, setRunContextReload] = useState(0);
+
+  useEffect(() => {
+    if (!linkedRunId) {
+      setRunContext({ runId: '', status: 'idle', run: null });
+      return undefined;
+    }
+    let cancelled = false;
+    setRunContext({ runId: linkedRunId, status: 'loading', run: null });
+    requestJson(config, session, `/v1/test-runs/${encodeURIComponent(linkedRunId)}`)
+      .then((payload) => {
+        if (cancelled) return;
+        const run = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as DataItem : null;
+        setRunContext({ runId: linkedRunId, status: run ? 'loaded' : 'unavailable', run });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const status = Number((err as { status?: unknown })?.status ?? 0);
+        setRunContext({ runId: linkedRunId, status: status === 403 ? 'denied' : 'unavailable', run: null });
+      });
+    return () => { cancelled = true; };
+  }, [linkedRunId, config, session, runContextReload]);
 
   if (!entityId) {
     return (
@@ -1684,7 +1793,7 @@ function EvidenceDetailView({
       : integrityState.status === 'unavailable'
         ? 'Verification status unavailable'
         : integrityState.value === 'verified'
-          ? `Verified by the server${integrityState.verifiedAt ? ` ${formatDate(integrityState.verifiedAt)}` : ''}${integrityState.method ? ` · ${integrityState.method}` : ''}`
+          ? `Verified by the server${integrityState.verifiedAt ? ` ${formatTimestamp(integrityState.verifiedAt)}` : ''}${integrityState.method ? ` · ${integrityState.method}` : ''}`
           : integrityState.value === 'not_verified'
             ? 'Not verified: no authoritative verification succeeded'
             : integrityState.value === 'recorded_digest'
@@ -1695,12 +1804,34 @@ function EvidenceDetailView({
     ['artifact_id', artifactId],
     ['kind', kind],
     ['produced_by', producedBy],
-    ['run', runId],
-    ['finding', findingId],
-    ['size', sizeLabel],
-    ['recorded_at', recordedAtRaw ? formatDate(recordedAtRaw) : ''],
-    ['sealed_at', sealedAtRaw ? formatDate(sealedAtRaw) : ''],
+    ['recorded_at', recordedAtRaw],
+    ['sealed_at', sealedAtRaw],
   ]);
+
+  const runContextCurrent = runContext.runId === runId;
+  const runRecord = runContextCurrent && runContext.status === 'loaded' ? runContext.run : null;
+  const runContextStatus = !runId ? 'idle' : runContextCurrent ? runContext.status : 'loading';
+  const relationFallback = runContextStatus === 'denied'
+    ? 'Not visible to your role'
+    : runContextStatus === 'unavailable'
+      ? 'Unavailable'
+      : runContextStatus === 'loading'
+        ? 'Reading the linked run…'
+        : 'Relationship not recorded';
+  const supportTargetId = getString(runRecord, ['target_id'], '') || getString(entity, ['target_id'], '');
+  const supportCheckId = getString(runRecord, ['check_id'], '') || getString(entity, ['check_id'], '');
+  const supportHost = supportTargetId ? getString(runRecord, ['target_value'], '') || targetDisplayLabel(data.targets, supportTargetId) : '';
+  const supportCheckName = supportCheckId ? checkDisplayName(data.checks, supportCheckId) : '';
+  const supportVerdict = runRecord && hasEvidenceBackedVerdict(runRecord, data.evidence) ? runVerdictValue(runRecord) : '';
+  const supportFinding = findingId ? data.findings.find((finding) => getString(finding, ['id'], '') === findingId) ?? null : null;
+  const evidenceTitle = supportCheckId && supportTargetId
+    ? `${supportCheckName} result on ${supportHost}`
+    : plainCodeLabel(kind, 'Evidence artifact');
+  const evidenceBackLink: DetailListLink | undefined = findingId
+    ? { label: 'finding', href: buildDetailHref('finding-detail', findingId) }
+    : runId
+      ? { label: 'run', href: buildDetailHref('run-detail', runId) }
+      : undefined;
 
   const custodyRecord = evidenceCodeBlock([
     ['sha256', sha256],
@@ -1777,17 +1908,15 @@ function EvidenceDetailView({
       <DetailPageHeader
         route="evidence-detail"
         entityId={artifactId}
-        title={plainCodeLabel(kind, 'Evidence artifact')}
+        title={evidenceTitle}
+        backLink={evidenceBackLink}
         description={<>One recorded artifact. {findingId
           ? 'It is referenced by the finding linked above.'
           : data.findingsMeta && !data.findingsMeta.hasMore
             ? 'No finding references this artifact explicitly.'
-            : `No finding among the ${formatNumber(data.findings.length)} newest loaded findings references this artifact; older findings were not checked.`}{runId ? ` Recorded by run ${runId}.` : ''}</>}
+            : `No finding among the ${formatNumber(data.findings.length)} newest loaded findings references this artifact; older findings were not checked.`}</>}
         actions={(
           <>
-            {findingId ? (
-              <AnchorButton size="sm" variant="secondary" href={buildDetailHref('finding-detail', findingId)}>Back to finding</AnchorButton>
-            ) : null}
             {payloadJson ? <Button size="sm" variant="ghost" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void recomputeDigest()}>Compute local digest</Button> : null}
             <Button size="sm" variant="secondary" loading={busy === 'export'} disabled={busy !== ''} onClick={() => void exportArtifact()}>Export artifact JSON</Button>
           </>
@@ -1804,12 +1933,34 @@ function EvidenceDetailView({
       <DetailStatusBanners loadError="" error={error} message={message} />
       <Card>
         <CardHeader>
+          <CardTitle>What this evidence supports</CardTitle>
+          <CardDescription>Recorded relationships only. Nothing here is inferred from the artifact's contents.</CardDescription>
+        </CardHeader>
+        <CardContent className="stack-tight">
+          {runContextStatus === 'loading' ? <p className="muted small" role="status">Reading the linked run…</p> : null}
+          {runContextStatus === 'unavailable' ? (
+            <div className="form-banner error row-actions" role="alert">
+              <span>The linked run could not be loaded, so its target and check are not shown.</span>
+              <Button size="sm" variant="secondary" onClick={() => setRunContextReload((count) => count + 1)}>Retry</Button>
+            </div>
+          ) : null}
+          <div className="kv-list">
+            <div><span>Target</span>{supportTargetId ? <DetailEntityLink route="target-detail" id={supportTargetId} label={supportHost} /> : <strong className="muted">{relationFallback}</strong>}</div>
+            <div><span>Check</span>{supportCheckId ? <DetailEntityLink route="check-detail" id={supportCheckId} label={supportCheckName} /> : <strong className="muted">{relationFallback}</strong>}</div>
+            <div><span>Run</span>{runId ? <DetailEntityLink route="run-detail" id={runId} /> : <strong className="muted">Relationship not recorded</strong>}</div>
+            {supportVerdict ? <div><span>Recorded verdict</span><VerdictBadge value={supportVerdict} tone={verdictTone(supportVerdict)} /></div> : null}
+            {findingId ? <div><span>Finding</span><DetailEntityLink route="finding-detail" id={findingId} label={supportFinding ? plainFindingTitle(supportFinding, data.targets, data.checks) : findingId} /></div> : null}
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle>Integrity</CardTitle>
           <CardDescription>Each state is separate. A recorded hash alone does not prove custody.</CardDescription>
         </CardHeader>
         <CardContent className="kv-list">
           <div><span>Recorded hash</span><strong className="cp-mono-wrap">{sha256 || 'Not recorded'}</strong></div>
-          <div><span>Locally computed (this page)</span><strong className="cp-mono-wrap">{localDigest ? `${localDigest.value} · ${formatDate(localDigest.at)}, over displayed JSON only` : 'Not computed'}</strong></div>
+          <div><span>Locally computed (this page)</span><strong className="cp-mono-wrap">{localDigest ? `${localDigest.value} · ${formatTimestamp(localDigest.at)}, over displayed JSON only` : 'Not computed'}</strong></div>
           <div>
             <span>Server verification</span>
             <strong>
@@ -1817,7 +1968,7 @@ function EvidenceDetailView({
               {integrityState.status === 'unavailable' ? <> <button type="button" className="rf-link-button" onClick={() => setIntegrityReload((count) => count + 1)}>Retry</button></> : null}
             </strong>
           </div>
-          {sealedAtRaw ? <div><span>Sealed</span><strong>{formatDate(sealedAtRaw)}</strong></div> : null}
+          {sealedAtRaw ? <div><span>Sealed</span><strong>{formatTimestamp(sealedAtRaw)}</strong></div> : null}
         </CardContent>
       </Card>
 
@@ -1828,9 +1979,9 @@ function EvidenceDetailView({
         </CardHeader>
         <CardContent className="kv-list">
           <div><span>Kind</span><strong>{plainCodeLabel(kind, 'Not recorded')}</strong></div>
-          <div><span>Recorded by run</span><strong className="cp-mono-wrap">{runId || 'Not recorded'}</strong></div>
+          <div><span>Recorded by run</span>{runId ? <DetailEntityLink route="run-detail" id={runId} /> : <strong>Not recorded</strong>}</div>
           <div><span>Size</span><strong>{sizeLabel || 'Not recorded'}</strong></div>
-          <div><span>Recorded</span><strong>{recordedAtRaw ? formatDate(recordedAtRaw) : 'Not recorded'}</strong></div>
+          <div><span>Recorded</span><strong>{recordedAtRaw ? formatTimestamp(recordedAtRaw) : 'Not recorded'}</strong></div>
         </CardContent>
       </Card>
 
@@ -1906,6 +2057,7 @@ function HighScaleDetailView({
   const [error, setError] = useState('');
   const [drafts, setDrafts] = useState<Record<string, AuthorizationArtifactDraft>>({});
   const [lastFailedUploadType, setLastFailedUploadType] = useState('');
+  const [fingerprintState, setFingerprintState] = useState<Record<string, { status: 'hashing' | 'error'; message: string }>>({});
   const tabOptions = [
     { id: 'overview', label: 'Overview' },
     { id: 'authorization', label: 'Authorization pack' },
@@ -1939,6 +2091,29 @@ function HighScaleDetailView({
     });
   }
 
+  async function fingerprintFile(type: string, file: File | undefined) {
+    if (!file || !canWriteHighScale) return;
+    setFingerprintState((current) => ({ ...current, [type]: { status: 'hashing', message: '' } }));
+    try {
+      if (typeof crypto === 'undefined' || !crypto.subtle) {
+        throw new Error('This browser cannot fingerprint files here (Web Crypto is unavailable on this connection). Enter the SHA-256 manually.');
+      }
+      const hex = await sha256HexBytes(await file.arrayBuffer());
+      updateDraft(type, 'filename', file.name);
+      updateDraft(type, 'content_sha256', hex);
+      setFingerprintState((current) => {
+        const next = { ...current };
+        delete next[type];
+        return next;
+      });
+    } catch (err) {
+      setFingerprintState((current) => ({
+        ...current,
+        [type]: { status: 'error', message: err instanceof Error ? err.message : 'The file could not be fingerprinted. Enter the SHA-256 manually.' }
+      }));
+    }
+  }
+
   async function uploadAuthorizationArtifact(type: string) {
     if (!canWriteHighScale) return;
     const draft = draftForType(type);
@@ -1955,7 +2130,7 @@ function HighScaleDetailView({
     try {
       const contentSha256 = draft.content_sha256.trim();
       if (!contentSha256) {
-        setError('A SHA-256 digest of the actual artifact bytes is required. This metadata form does not read or hash a local file.');
+        setError('A SHA-256 fingerprint of the artifact file is required. Choose the file to fingerprint it, or enter the digest. Files are fingerprinted in your browser; file contents are never uploaded.');
         return;
       }
       if (!/^[a-f0-9]{64}$/i.test(contentSha256)) {
@@ -1989,6 +2164,8 @@ function HighScaleDetailView({
   const scheduledWindowStart = getNestedString(entity, ['scheduled_window', 'window_start'], '');
   const scheduledWindowEnd = getNestedString(entity, ['scheduled_window', 'window_end'], '');
   const scopeHash = getString(entity, ['scope_hash'], '');
+  const domains = requestDomainDisplay(data, entity);
+  const firstContact = emergencyContactRows(entity)[0] ?? null;
   const socApprovals = Array.isArray(entity.soc_approvals) ? entity.soc_approvals as DataItem[] : [];
   const adapterRecord = getNestedItem(entity, ['adapter']) ?? getNestedItem(entity, ['adapter_json']);
   const requestGates = [
@@ -2004,15 +2181,19 @@ function HighScaleDetailView({
         route="queue-detail"
         entityId={entityId}
         title={title}
-        backLink={{ label: 'Test runs', href: '#runs' }}
+        backLink={{ label: 'test runs', href: '#runs' }}
         actions={packOverall === 'accepted'
-          ? <AnchorButton size="sm" variant="default" href="#runs">Open high-scale requests</AnchorButton>
+          ? <StatusBadge value={['submitted', 'under_review', 'approved'].includes(requestState) ? 'Waiting for SOC scheduling' : requestState} tone={highScaleStateTone(requestState)} fallback="submitted" />
           : <Button size="sm" variant="default" onClick={() => setTab('authorization')}>{canWriteHighScale ? 'Complete authorization pack' : 'View authorization pack'}</Button>}
       />
       <PageContextSummary>
         <StatusBadge value={requestState} tone={highScaleStateTone(requestState)} fallback="submitted" /> · pack{' '}
         <StatusBadge value={packOverall} tone={artifactReviewTone(packOverall)} fallback="missing" />
       </PageContextSummary>
+      <p className="muted small">
+        AstraNull SOC reviews, schedules, starts and stops this test. You cannot start it from the portal. To request an immediate stop, contact your SOC emergency contact or open <a href="#support">Support</a>.
+        {firstContact ? ` Emergency contact on record: ${[firstContact.name, firstContact.detail].filter(Boolean).join(' · ') || 'name not recorded'}.` : ''}
+      </p>
       {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message}>
         {error && lastFailedUploadType && canWriteHighScale ? (
@@ -2026,7 +2207,7 @@ function HighScaleDetailView({
           <div className="metric-grid four">
             <MetricCard label="State" value={formatStatusLabel(requestState)} sub="Governed request lifecycle" icon={ShieldCheck} tone={highScaleStateTone(requestState)} />
             <MetricCard label="Authorization" value={formatStatusLabel(packOverall, 'missing')} sub={`${artifacts.length} artifact records`} icon={FileCheck2} tone={packOverall === 'accepted' ? 'success' : 'warn'} />
-            <MetricCard label="Scope" value={getString(entity, ['target_id'], 'Not recorded')} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone="muted" />
+            <MetricCard label="Scope" value={domains.length === 0 ? 'Domain scope not recorded' : domains.length === 1 ? domains[0] : `${formatNumber(domains.length)} domains`} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone="muted" />
             <MetricCard label="Window" value={requestedWindowStart ? formatDate(requestedWindowStart) : '—'} sub={requestedWindowEnd ? `through ${formatDate(requestedWindowEnd)}` : 'requested window incomplete'} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="High-scale request sections"
@@ -2039,7 +2220,7 @@ function HighScaleDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Request facts</CardTitle>
-                    <CardDescription>Recorded customer request, declared scope, safe window, and source details.</CardDescription>
+                    <CardDescription>Recorded customer request and the governed scope SOC reviews before scheduling.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     <div><span>Request</span><strong title={entityId}>{title}</strong></div>
@@ -2048,9 +2229,7 @@ function HighScaleDetailView({
                     <div><span>Objective</span><strong>{getString(entity, ['objective'], 'Not recorded')}</strong></div>
                     <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'Not recorded')}</strong></div>
                     <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
-                    <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} to ${formatDate(requestedWindowEnd)}` : 'Not fully recorded'}</strong></div>
-                    <div><span>Timezone</span><strong>{requestedTimezone || 'Not recorded'}</strong></div>
-                    <div><span>Scheduled window</span><strong>{scheduledWindowStart && scheduledWindowEnd ? `${formatDate(scheduledWindowStart)} to ${formatDate(scheduledWindowEnd)}` : 'Not scheduled'}</strong></div>
+                    <GovernedScopeRows entity={entity} domains={domains} />
                     {scopeHash ? <div><span>Scope hash</span><strong title={scopeHash}>Recorded</strong></div> : null}
                   </CardContent>
                 </Card>
@@ -2094,14 +2273,16 @@ function HighScaleDetailView({
 
           {tab === 'authorization' ? (
             <div role="tabpanel" id="high-scale-request-sections-panel-authorization" aria-labelledby="high-scale-request-sections-tab-authorization" className="tab-panel"><Card>
-              <CardHeader><CardTitle>Authorization artifacts</CardTitle><CardDescription>Record metadata references for SOC review. This form does not upload or hash local file bytes.</CardDescription></CardHeader>
+              <CardHeader><CardTitle>Authorization artifacts</CardTitle><CardDescription>Record a metadata reference for each artifact for SOC review. Files are fingerprinted in your browser; file contents are never uploaded.</CardDescription></CardHeader>
               <CardContent className="stack-tight">
+                <p className="small" role="status"><strong>{summarizeAuthorizationPackProgress(packStatus, requiredArtifactTypes)}</strong></p>
                 <div className="artifact-upload-grid">
                   {requiredArtifactTypes.map((type) => {
                     const draft = draftForType(type);
                     const bestArtifact = bestArtifactForType(artifacts, type);
                     const requirement = packRequirementForType(packStatus, type);
                     const uploadBusy = busy === `upload-${type}`;
+                    const fingerprint = fingerprintState[type];
                     return (
                       <div key={type} className="artifact-upload-card">
                         <div className="artifact-upload-card__header">
@@ -2112,6 +2293,22 @@ function HighScaleDetailView({
                         </div>
                         <p className="muted small">{explainArtifactReviewStatus(type, requirement, bestArtifact)}</p>
                         <div className="product-form compact">
+                          {canWriteHighScale ? (
+                            <label className="full">
+                              <span>Choose file to fingerprint</span>
+                              <input
+                                type="file"
+                                disabled={fingerprint?.status === 'hashing' || busy !== ''}
+                                aria-describedby={fingerprint?.status === 'error' ? `fingerprint-error-${type}` : undefined}
+                                onChange={(event) => {
+                                  void fingerprintFile(type, event.target.files?.[0]);
+                                  event.target.value = '';
+                                }}
+                              />
+                              {fingerprint?.status === 'hashing' ? <small className="muted" role="status">Fingerprinting in your browser…</small> : null}
+                              {fingerprint?.status === 'error' ? <small className="field-error" id={`fingerprint-error-${type}`} role="alert">{fingerprint.message}</small> : null}
+                            </label>
+                          ) : null}
                           <label className="full">
                             <span>File name</span>
                             <input value={draft.filename} readOnly={!canWriteHighScale} placeholder={`${type}.pdf`} onChange={(event) => updateDraft(type, 'filename', event.target.value)} />
@@ -2160,8 +2357,8 @@ function HighScaleDetailView({
 
           {tab === 'lifecycle' ? (
             <div role="tabpanel" id="high-scale-request-sections-panel-lifecycle" aria-labelledby="high-scale-request-sections-tab-lifecycle" className="tab-panel"><Card>
-              <CardHeader><CardTitle>Lifecycle trail</CardTitle><CardDescription>Ordered transitions recorded for this request.</CardDescription></CardHeader>
-              <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
+              <CardHeader><CardTitle>Lifecycle trail</CardTitle><CardDescription>Ordered request transitions and the actor recorded for each.</CardDescription></CardHeader>
+              <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: formatStatusLabel(event.action), at: event.at, by: event.by }))} /></CardContent>
             </Card></div>
           ) : null}
 
@@ -2193,12 +2390,111 @@ function HighScaleDetailView({
 
 
 function socStartBlockedReason(failing: string[]) {
-  return `Start stays disabled until every Go / No-Go gate passes. Not yet passing: ${failing.join(', ')}.`;
+  return `Start stays disabled until every request gate passes. Not yet passing: ${failing.join(', ')}.`;
+}
+
+const SOC_ADAPTER_POLL_MS = 12_000;
+
+type SocRequestGate = { label: string; pass: boolean; detail: string };
+
+function distinctSocApprovers(entity: DataItem) {
+  const approvals = Array.isArray(entity.soc_approvals) ? entity.soc_approvals as DataItem[] : [];
+  return new Set(approvals.map((approval) => getString(approval, ['user_id'], '')).filter(Boolean)).size;
+}
+
+function summarizeRecordedCriteria(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map((entry) => summarizeRecordedCriteria(entry)).filter(Boolean).join(' · ');
+  if (!value || typeof value !== 'object') return '';
+  return Object.entries(value as DataItem)
+    .filter(([, entry]) => entry !== null && entry !== undefined && entry !== '')
+    .map(([key, entry]) => {
+      const rendered = typeof entry === 'boolean'
+        ? (entry ? 'yes' : 'no')
+        : typeof entry === 'object' ? summarizeRecordedCriteria(entry) : plainCodeLabel(String(entry), String(entry));
+      return `${formatStatusLabel(key)}: ${rendered}`;
+    })
+    .join(' · ');
+}
+
+function emergencyContactRows(entity: DataItem) {
+  const contacts = Array.isArray(entity.emergency_contacts) ? entity.emergency_contacts : [];
+  return contacts
+    .filter((contact): contact is DataItem => Boolean(contact && typeof contact === 'object' && !Array.isArray(contact)))
+    .map((contact) => {
+      const name = getString(contact, ['name', 'contact_name'], '');
+      const role = getString(contact, ['role', 'title'], '');
+      const detail = getString(contact, ['contact', 'email', 'phone'], '');
+      return { name, role, detail };
+    });
+}
+
+function viewerTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+function formatWindowRange(start: string, end: string, requestTimezone?: string) {
+  if (!start || !end) return '';
+  const range = `${formatTimestamp(start)} – ${formatTimestamp(end)}`;
+  const zone = String(requestTimezone ?? '').trim();
+  if (!zone || zone === viewerTimeZone()) return range;
+  return `${range} · customer timezone ${zone}`;
+}
+
+function domainCountLabel(domains: string[]) {
+  if (domains.length === 0) return 'Domain scope not recorded';
+  return domains.length === 1 ? domains[0] : `${formatNumber(domains.length)} domains`;
+}
+
+function GovernedScopeRows({ entity, domains, includeScheduled = true }: { entity: DataItem; domains: string[]; includeScheduled?: boolean }) {
+  const scenarios = Array.isArray(entity.requested_scenario_families) ? (entity.requested_scenario_families as unknown[]).map(String).filter(Boolean) : [];
+  const patterns = Array.isArray(entity.delivery_patterns) ? (entity.delivery_patterns as unknown[]).map(String).filter(Boolean) : [];
+  const limits = governedLimitDisplay(entity);
+  const requestedStart = getNestedString(entity, ['requested_window', 'window_start'], '');
+  const requestedEnd = getNestedString(entity, ['requested_window', 'window_end'], '');
+  const requestedTimezone = getNestedString(entity, ['requested_window', 'timezone'], '');
+  const scheduledStart = getNestedString(entity, ['scheduled_window', 'window_start'], '');
+  const scheduledEnd = getNestedString(entity, ['scheduled_window', 'window_end'], '');
+  const scheduledTimezone = getNestedString(entity, ['scheduled_window', 'timezone'], '') || requestedTimezone;
+  const contacts = emergencyContactRows(entity);
+  const abortSummary = summarizeRecordedCriteria(entity.abort_criteria);
+  return (
+    <>
+      <div>
+        <span>Domains</span>
+        {domains.length ? (
+          <span className="stack-tight">{domains.map((domain) => <code key={domain} className="mono">{domain}</code>)}</span>
+        ) : <span className="muted">Not recorded</span>}
+      </div>
+      <RecordedKvRow label="Scenario families" value={scenarios.map(governedScenarioLabel).join(', ')} />
+      <RecordedKvRow label="Delivery patterns" value={patterns.map((pattern) => formatStatusLabel(pattern)).join(', ')} />
+      <RecordedKvRow label="Governed limits" value={limits === '—' ? '' : limits} />
+      <RecordedKvRow label="Requested window" value={formatWindowRange(requestedStart, requestedEnd, requestedTimezone)} />
+      {includeScheduled ? <RecordedKvRow label="Scheduled window" value={formatWindowRange(scheduledStart, scheduledEnd, scheduledTimezone)} missing="Not scheduled" /> : null}
+      <div>
+        <span>Emergency contacts</span>
+        {contacts.length ? (
+          <span className="stack-tight">
+            <strong>{formatNumber(contacts.length)} {pluralize(contacts.length, 'contact')}</strong>
+            {contacts.map((contact, index) => (
+              <span key={`${contact.name}-${index}`} className="muted small">{[contact.name || 'Name not recorded', contact.role].filter(Boolean).join(' · ')}</span>
+            ))}
+          </span>
+        ) : <span className="muted">Not recorded</span>}
+      </div>
+      <RecordedKvRow label="Abort criteria" value={abortSummary} />
+    </>
+  );
 }
 
 function SocRequestDetailView({
   entity,
   entityId,
+  data,
   config,
   session,
   onRefresh,
@@ -2206,24 +2502,30 @@ function SocRequestDetailView({
 }: {
   entity: DataItem;
   entityId: string;
+  data: PortalData;
   config: PortalConfig;
   session: Session;
   onRefresh: () => Promise<void>;
   /** Cross-tenant staff SOC scope (from Open link query or entity.tenant_id). */
   tenantId?: string;
 }) {
-  const { confirm } = useConfirmModal();
+  const { confirm, confirmWithReason } = useConfirmModal();
   const [tab, setTab] = useState('workspace');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [adapterStatus, setAdapterStatus] = useState<DataItem | null>(null);
+  const [adapterUpdatedAt, setAdapterUpdatedAt] = useState('');
+  const [adapterPollError, setAdapterPollError] = useState('');
   const [socNotes, setSocNotes] = useState<DataItem[]>([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesError, setNotesError] = useState('');
   const [postTestReport, setPostTestReport] = useState<DataItem | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [postTestReportError, setPostTestReportError] = useState('');
+  const [killSwitch, setKillSwitch] = useState<{ status: 'loading' | 'ready' | 'error'; active: boolean }>({ status: 'loading', active: false });
+  const [scopeTargets, setScopeTargets] = useState<DataItem[]>([]);
+  const [scheduleDraft, setScheduleDraft] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const staffSocSurface = session.principal === 'staff' && isStaffSocRole(session);
   const isSoc = staffSocSurface || (session.role === 'soc' && session.principal !== 'staff');
   const actionTenantId =
@@ -2231,6 +2533,7 @@ function SocRequestDetailView({
     || getString(entity, ['tenant_id'], '')
     || session.tenant_id
     || undefined;
+  const state = getString(entity, ['state'], '');
 
   async function socFetch(path: string, options: { method?: string; body?: unknown; tenantId?: string } = {}) {
     if (staffSocSurface) {
@@ -2256,7 +2559,11 @@ function SocRequestDetailView({
       }
     } catch (err) {
       setPostTestReport(null);
-      setPostTestReportError(err instanceof Error ? err.message : 'Post-test report status could not be loaded.');
+      if ((err as { status?: number }).status === 404) {
+        setPostTestReportError('');
+        return;
+      }
+      setPostTestReportError(apiErrorMessage(err, 'Post-test report status could not be loaded.'));
     } finally {
       setReportBusy(false);
     }
@@ -2293,6 +2600,20 @@ function SocRequestDetailView({
   const title = detailEntityTitle('queue-detail', entity, entityId);
   const providerChecklist = Array.isArray(entity.provider_approval_checklist) ? entity.provider_approval_checklist as DataItem[] : [];
   const lifecycleTrail = buildLifecycleTimeline(entity);
+  const domains = requestDomainDisplay({ targets: scopeTargets.length ? scopeTargets : data.targets }, entity);
+  const governedLimits = governedLimitDisplay(entity);
+  const requestedWindowStart = getNestedString(entity, ['requested_window', 'window_start'], '');
+  const requestedWindowEnd = getNestedString(entity, ['requested_window', 'window_end'], '');
+  const requestedTimezone = getNestedString(entity, ['requested_window', 'timezone'], '');
+  const windowStart = getNestedString(entity, ['scheduled_window', 'window_start'], '');
+  const windowEnd = getNestedString(entity, ['scheduled_window', 'window_end'], '');
+  const letterWindow = authorizationLetterValidWindow(entity);
+  const scheduleDefault = defaultScheduleWindow(entity);
+  const scheduleDraftKey = useRef('');
+  const requiredArtifactTypes = authorizationArtifactTypesForRequest(entity);
+  const otherArtifacts = artifacts.filter((artifact) => !(requiredArtifactTypes as readonly string[]).includes(getString(artifact, ['type'], '')));
+  const requiredAccepted = requiredArtifactTypes.filter((type) => getString(packRequirementForType(packStatus, type) ?? {}, ['status'], '') === 'accepted').length;
+  const startedAt = [...lifecycleTrail].reverse().find((event) => event.action === 'start')?.at ?? '';
   const tabOptions = [
     { id: 'workspace', label: 'Workspace' },
     { id: 'artifacts', label: 'Artifacts' },
@@ -2301,40 +2622,171 @@ function SocRequestDetailView({
     { id: 'notes', label: 'Notes' }
   ];
 
+  function scopeSummary(windowLine: ReactNode) {
+    return (
+      <div className="stack-tight">
+        <p><strong>{title}</strong> · tenant {actionTenantId ? <code>{actionTenantId}</code> : 'not recorded'}</p>
+        <p>Domains: {domains.length === 0 ? 'domain scope not recorded' : domains.length <= 3 ? domains.join(', ') : `${formatNumber(domains.length)} domains`}</p>
+        <p>Governed limits: {governedLimits === '—' ? 'not recorded' : governedLimits}</p>
+        <p>{windowLine}</p>
+      </div>
+    );
+  }
+
+  function lifecycleConfirmRequest(action: string, body: Record<string, unknown>) {
+    if (action === 'start') {
+      return {
+        title: 'Start governed traffic',
+        description: (
+          <>
+            {scopeSummary(windowEnd ? `Scheduled window ends ${formatTimestamp(windowEnd)}.` : 'Scheduled window end not recorded.')}
+            <p>Governed adapter traffic will begin against these domains.</p>
+          </>
+        ),
+        confirmLabel: 'Start traffic',
+        confirmTone: 'danger' as const,
+        requireTypedId: entityId
+      };
+    }
+    if (action === 'approve') {
+      return {
+        title: 'Approve governed request',
+        description: (
+          <>
+            {scopeSummary(requestedWindowStart && requestedWindowEnd ? `Customer-requested window ${formatWindowRange(requestedWindowStart, requestedWindowEnd, requestedTimezone)}.` : 'Customer-requested window not recorded.')}
+            <p>All required authorization artifacts and provider approvals are accepted.</p>
+          </>
+        ),
+        confirmLabel: 'Approve',
+        confirmTone: 'default' as const
+      };
+    }
+    if (action === 'schedule') {
+      const start = String(body.window_start ?? '');
+      const end = String(body.window_end ?? '');
+      const zone = viewerTimeZone();
+      return {
+        title: 'Schedule governed request',
+        description: (
+          <>
+            <p>Schedule {title} for {formatTimestamp(start)} – {formatTimestamp(end)}, inside the customer-requested window {formatTimestamp(requestedWindowStart)} – {formatTimestamp(requestedWindowEnd)}?</p>
+            <p className="muted small">Times are shown in your timezone{zone ? ` (${zone})` : ''}{requestedTimezone && requestedTimezone !== zone ? `; the customer requested this window in ${requestedTimezone}` : ''}.</p>
+          </>
+        ),
+        confirmLabel: 'Schedule',
+        confirmTone: 'default' as const
+      };
+    }
+    if (action === 'stop') {
+      return {
+        title: 'Stop governed traffic',
+        description: `Stop governed high-scale traffic for ${title} now? The adapter is told to stop immediately and the request moves to stopped.`,
+        confirmLabel: 'Stop traffic',
+        confirmTone: 'danger' as const
+      };
+    }
+    if (action === 'close') {
+      return {
+        title: 'Close governed request',
+        description: `Close ${title} and finalize the governed test lifecycle? A closed request cannot be restarted.`,
+        confirmLabel: 'Close request',
+        confirmTone: 'danger' as const
+      };
+    }
+    return null;
+  }
+
   async function socAction(action: string, body: Record<string, unknown> = {}) {
-    const lifecycleConfirm: Record<string, string> = {
-      approve: `Approve high-scale request ${entityId} and move it to approved?`,
-      schedule: `Schedule high-scale request ${entityId} for execution?`,
-      start: `Start high-scale execution for ${entityId}? Governed adapter traffic will begin.`,
-      stop: `Stop high-scale execution for ${entityId} immediately?`,
-      close: `Close high-scale request ${entityId} and finalize the test lifecycle?`
-    };
-    const lifecycleMessage = lifecycleConfirm[action];
-    if (lifecycleMessage && !(await confirm({
-      title: `${formatStatusLabel(action)} high-scale request`,
-      description: lifecycleMessage,
-      confirmLabel: formatStatusLabel(action),
-      confirmTone: action === 'approve' || action === 'schedule' || action === 'start' ? 'default' : 'danger'
-    }))) return;
+    const request = lifecycleConfirmRequest(action, body);
+    if (request && !(await confirm(request))) return false;
     setBusy(`${action}-${entityId}`);
     setError('');
     setMessage('');
     try {
       await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/${action}`, { method: 'POST', body });
-      setMessage(`SOC ${action} completed.`);
+      setMessage(action === 'notes' ? 'SOC note added.' : action.startsWith('artifacts/') ? 'Artifact review recorded.' : `SOC ${action} completed.`);
       await onRefresh();
+      return true;
     } catch (err) {
       setError(apiErrorMessage(err, 'SOC action failed.'));
+      return false;
     } finally {
       setBusy('');
     }
   }
 
-  async function reviewArtifact(artifactId: string, status: 'accepted' | 'rejected') {
+  async function reviewArtifact(artifactId: string, type: string, status: 'accepted' | 'rejected') {
     if (status === 'accepted') {
-      if (!await confirm({ title: 'Accept authorization artifact', description: 'Accept this authorization artifact? Acceptance authorizes high-scale execution to proceed.', confirmLabel: 'Accept artifact', confirmTone: 'default' })) return;
-    } else if (!await confirm({ title: 'Reject authorization artifact', description: 'Reject this authorization artifact?', confirmLabel: 'Reject artifact' })) return;
-    await socAction(`artifacts/${artifactId}/review`, { status, notes: `SOC ${status} via request detail` });
+      if (!await confirm({
+        title: 'Accept authorization artifact',
+        description: `Accept ${authorizationArtifactTitle(type)}? Execution still requires every required artifact to be accepted (${requiredAccepted}/${requiredArtifactTypes.length} accepted now).`,
+        confirmLabel: 'Accept artifact',
+        confirmTone: 'default'
+      })) return;
+      await socAction(`artifacts/${artifactId}/review`, { status, notes: null });
+      return;
+    }
+    const reason = await confirmWithReason({
+      title: `Reject ${authorizationArtifactTitle(type)}?`,
+      description: 'The customer sees this reason on their authorization pack and must record corrected metadata before SOC can approve.',
+      confirmLabel: 'Reject artifact',
+      confirmTone: 'danger',
+      reason: { label: 'Reason shown to the customer', required: true }
+    });
+    if (reason === null) return;
+    await socAction(`artifacts/${artifactId}/review`, { status, notes: reason.trim() });
+  }
+
+  function renderArtifactReview(artifact: DataItem, type: string, requirement: DataItem | null, role: 'current' | 'earlier' | 'extra') {
+    const artifactId = getString(artifact, ['id'], '');
+    const artifactStatus = getString(artifact, ['status'], 'pending_review');
+    const reviewBusy = busy === `artifacts/${artifactId}/review-${entityId}`;
+    const validFrom = getNestedString(artifact, ['valid_window', 'window_start'], '') || getNestedString(artifact, ['valid_window', 'valid_from'], '');
+    const validTo = getNestedString(artifact, ['valid_window', 'window_end'], '') || getNestedString(artifact, ['valid_window', 'valid_to'], '');
+    const approvedTargets = Array.isArray(artifact.approved_targets) ? (artifact.approved_targets as unknown[]).length : null;
+    const reviewedBy = getString(artifact, ['reviewed_by'], '');
+    const reviewedAt = getString(artifact, ['reviewed_at'], '');
+    const reviewNotes = getString(artifact, ['review_notes'], '');
+    const lastReview = reviewedBy || reviewedAt
+      ? [reviewedBy, reviewedAt ? formatTimestamp(reviewedAt) : '', reviewNotes].filter(Boolean).join(' · ')
+      : '';
+    const heading = role === 'earlier'
+      ? `${authorizationArtifactTitle(type)} · earlier upload`
+      : type ? authorizationArtifactTitle(type) : 'Untyped artifact';
+    return (
+      <div key={artifactId || `${type}-${role}`} className="kv-stack" data-testid="soc-artifact-review-row">
+        <span>{heading}</span>
+        <div className="stack-tight">
+          <div className="row-actions">
+            <StatusBadge value={artifactStatus} tone={artifactReviewTone(artifactStatus)} />
+            {artifactStatus === 'pending_review' ? (
+              <Button size="sm" variant="secondary" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, type, 'accepted')}>Accept</Button>
+            ) : null}
+            {artifactStatus === 'pending_review' || artifactStatus === 'accepted' ? (
+              <Button size="sm" variant="ghost" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, type, 'rejected')}>{artifactStatus === 'accepted' ? 'Revoke (reject)' : 'Reject'}</Button>
+            ) : null}
+          </div>
+          <div className="kv-list">
+            <RecordedKvRow label="Filename" value={getString(artifact, ['filename_redacted', 'filename'], '')} />
+            <RecordedKvRow label="Uploaded by" value={getString(artifact, ['uploader', 'uploaded_by', 'created_by'], '')} mono />
+            <RecordedKvRow label="Uploaded" value={getString(artifact, ['created_at', 'uploaded_at'], '') ? formatTimestamp(getString(artifact, ['created_at', 'uploaded_at'], '')) : ''} />
+            <RecordedKvRow label="Approver" value={getString(artifact, ['approver'], '')} />
+            <RecordedKvRow label="Approval reference" value={getString(artifact, ['approval_reference'], '')} mono />
+            <RecordedKvRow label="Valid window" value={validFrom && validTo ? `${formatDate(validFrom)} to ${formatDate(validTo)}` : ''} />
+            <RecordedKvRow label="Approved targets" value={approvedTargets === null ? '' : formatNumber(approvedTargets)} />
+            <RecordedKvRow label="Custody ID" value={getString(artifact, ['custody_id'], '')} mono />
+            <RecordedKvRow label="Reference" value={getString(artifact, ['reference_uri_redacted', 'reference_uri'], '')} mono />
+            <RecordedKvRow label="SHA-256" value={getString(artifact, ['content_sha256'], '')} mono />
+            <RecordedKvRow label="Last review" value={lastReview} missing="Not reviewed yet" />
+          </div>
+          {role === 'extra'
+            ? <p className="muted small">Not part of the required authorization pack for this request.</p>
+            : role === 'earlier'
+              ? <p className="muted small">Superseded by the current upload above for pack status; still reviewable.</p>
+              : <p className="muted small">{explainArtifactReviewStatus(type, requirement, artifact)}</p>}
+        </div>
+      </div>
+    );
   }
 
   async function loadAdapterStatus() {
@@ -2343,6 +2795,8 @@ function SocRequestDetailView({
     try {
       const payload = await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/adapter-status`);
       setAdapterStatus(payload as DataItem);
+      setAdapterUpdatedAt(new Date().toISOString());
+      setAdapterPollError('');
     } catch (err) {
       setError(apiErrorMessage(err, 'Adapter status unavailable.'));
       setAdapterStatus(null);
@@ -2356,7 +2810,8 @@ function SocRequestDetailView({
     const form = event.currentTarget;
     const body = String(new FormData(form).get('body') ?? '').trim();
     if (!body) return;
-    await socAction('notes', { body });
+    const saved = await socAction('notes', { body });
+    if (!saved) return;
     form.reset();
     void loadSocNotes();
   }
@@ -2385,17 +2840,87 @@ function SocRequestDetailView({
   useEffect(() => {
     if (!isSoc || !entityId) return;
     void loadSocNotes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId, isSoc]);
 
   useEffect(() => {
-    if (!isSoc || !entityId || getString(entity, ['state'], '') !== 'stopped') {
+    if (!isSoc || !entityId || state !== 'stopped') {
       setPostTestReport(null);
       setPostTestReportError('');
       return;
     }
     void loadPostTestReport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityId, isSoc, entity]);
+  }, [entityId, isSoc, state]);
+
+  useEffect(() => {
+    if (!isSoc) return undefined;
+    let cancelled = false;
+    setKillSwitch((current) => ({ ...current, status: 'loading' }));
+    socFetch('/v1/state')
+      .then((payload) => {
+        if (cancelled) return;
+        const record = getNestedItem(payload as DataItem, ['kill_switch']);
+        setKillSwitch({ status: record ? 'ready' : 'error', active: killSwitchActiveForTenant(record, actionTenantId) });
+      })
+      .catch(() => {
+        if (!cancelled) setKillSwitch({ status: 'error', active: false });
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSoc, actionTenantId, entityId, state]);
+
+  useEffect(() => {
+    if (!isSoc) return undefined;
+    let cancelled = false;
+    socFetch('/v1/targets')
+      .then((payload) => {
+        if (cancelled) return;
+        const items = payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)
+          ? (payload as { items: DataItem[] }).items
+          : [];
+        setScopeTargets(items);
+      })
+      .catch(() => {
+        if (!cancelled) setScopeTargets([]);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSoc, actionTenantId]);
+
+  useEffect(() => {
+    const key = `${entityId}|${state}|${requestedWindowStart}|${requestedWindowEnd}`;
+    if (scheduleDraftKey.current === key) return;
+    scheduleDraftKey.current = key;
+    setScheduleDraft(scheduleDefault
+      ? { start: toDatetimeLocalValue(scheduleDefault.window_start), end: toDatetimeLocalValue(scheduleDefault.window_end) }
+      : { start: '', end: '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId, state, requestedWindowStart, requestedWindowEnd]);
+
+  useEffect(() => {
+    if (!isSoc || !entityId || state !== 'running') return undefined;
+    let cancelled = false;
+    const poll = () => {
+      socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/adapter-status`)
+        .then((payload) => {
+          if (cancelled) return;
+          setAdapterStatus(payload as DataItem);
+          setAdapterUpdatedAt(new Date().toISOString());
+          setAdapterPollError('');
+        })
+        .catch((err) => {
+          if (!cancelled) setAdapterPollError(apiErrorMessage(err, 'Adapter status could not be refreshed.'));
+        });
+    };
+    poll();
+    const timer = window.setInterval(poll, SOC_ADAPTER_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSoc, entityId, state, actionTenantId]);
 
   if (!isSoc) {
     const isStaffPrincipal = session.principal === 'staff';
@@ -2415,26 +2940,57 @@ function SocRequestDetailView({
     );
   }
 
-  const state = getString(entity, ['state'], '');
   const packReady = getNestedString(entity, ['authorization_pack_status', 'overall'], '') === 'accepted';
   const hasPostTestReport = Boolean(postTestReport && getString(postTestReport, ['id'], ''));
-  // Pre-flight gates + KPI strip are derived from real request evidence only.
-  const requestedWindowStart = getNestedString(entity, ['requested_window', 'window_start'], '');
-  const requestedWindowEnd = getNestedString(entity, ['requested_window', 'window_end'], '');
-  const windowStart = getNestedString(entity, ['scheduled_window', 'window_start'], '');
-  const windowEnd = getNestedString(entity, ['scheduled_window', 'window_end'], '');
-  const windowConfirmed = Boolean(windowStart && windowEnd);
+  const windowState = scheduledWindowState(windowStart, windowEnd);
   const scopeRecorded = Boolean(getString(entity, ['scope_hash'], '') || getNestedItem(entity, ['scope_confirmation']));
-  const socApprovalsCount = Array.isArray(entity.soc_approvals) ? (entity.soc_approvals as DataItem[]).length : 0;
+  const approverCount = distinctSocApprovers(entity);
   const stateTone = highScaleStateTone(state);
-  const preflightGates = [
-    { label: 'Authorization pack accepted', pass: packReady },
-    { label: 'Safe window confirmed', pass: windowConfirmed },
-    { label: 'Scope hash recorded', pass: scopeRecorded },
-    { label: 'SOC approval recorded', pass: socApprovalsCount > 0 }
+  const killSwitchGate: SocRequestGate = killSwitch.status === 'ready'
+    ? { label: 'Tenant kill switch clear', pass: !killSwitch.active, detail: killSwitch.active ? 'Kill switch is active for this tenant: execution is blocked.' : 'Kill switch is not active for this tenant.' }
+    : { label: 'Tenant kill switch clear', pass: false, detail: killSwitch.status === 'loading' ? 'Reading tenant kill-switch state…' : 'Kill-switch state could not be read.' };
+  const preflightGates: SocRequestGate[] = [
+    { label: 'Authorization pack accepted', pass: packReady, detail: formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing') },
+    {
+      label: 'Inside scheduled safe window',
+      pass: windowState === 'open',
+      detail: windowState === 'open'
+        ? `Open until ${formatTimestamp(windowEnd)}`
+        : windowState === 'upcoming'
+          ? `Opens ${formatTimestamp(windowStart)}`
+          : windowState === 'expired'
+            ? `Window ended ${formatTimestamp(windowEnd)}: reschedule required`
+            : 'No scheduled window recorded'
+    },
+    { label: 'Scope hash recorded', pass: scopeRecorded, detail: scopeRecorded ? 'Scope binding recorded' : 'Scope binding not returned' },
+    { label: `Two SOC approvals recorded (${Math.min(approverCount, 2)}/2)`, pass: approverCount >= 2, detail: `${formatNumber(approverCount)} distinct ${pluralize(approverCount, 'approver')}` },
+    killSwitchGate
   ];
-  const preflightReady = preflightGates.every((gate) => gate.pass);
+  const passedGates = preflightGates.filter((gate) => gate.pass).length;
+  const preflightReady = passedGates === preflightGates.length;
   const startBlockedReason = preflightReady ? '' : socStartBlockedReason(preflightGates.filter((gate) => !gate.pass).map((gate) => gate.label));
+  const windowKpi = windowState === 'open'
+    ? { value: `Safe window open until ${formatTimestamp(windowEnd)}`, delta: 'Inside the scheduled window', tone: 'success' as const }
+    : windowState === 'upcoming'
+      ? { value: `Opens ${formatTimestamp(windowStart)}`, delta: 'Scheduled, not open yet', tone: 'muted' as const }
+      : windowState === 'expired'
+        ? { value: `Window expired ${formatTimestamp(windowEnd)}`, delta: 'Reschedule required', tone: (state === 'running' ? 'danger' : 'warn') as StatusBadgeTone }
+        : { value: 'Unscheduled', delta: 'Awaiting schedule', tone: 'muted' as const };
+  const scheduleStartIso = fromDatetimeLocalValue(scheduleDraft.start);
+  const scheduleEndIso = fromDatetimeLocalValue(scheduleDraft.end);
+  const scheduleErrors = scheduleWindowErrors(entity, { window_start: scheduleStartIso, window_end: scheduleEndIso });
+  const scheduleStartError = scheduleErrors.filter((entry) => entry.field === 'window_start').map((entry) => entry.message).join(' ');
+  const scheduleEndError = scheduleErrors.filter((entry) => entry.field === 'window_end').map((entry) => entry.message).join(' ');
+  const requestedWindowState = scheduledWindowState(requestedWindowStart, requestedWindowEnd);
+  const scheduleUnavailableReason = !requestedWindowStart || !requestedWindowEnd || requestedWindowState === 'unscheduled'
+    ? 'The customer-requested window is not recorded, so this request cannot be scheduled. Ask the customer to submit a new request with a safe window.'
+    : requestedWindowState === 'expired'
+      ? `The customer-requested window ended ${formatTimestamp(requestedWindowEnd)}. This request cannot be scheduled; ask the customer to submit a new request with a current window.`
+      : !scheduleDefault
+        ? 'No part of the customer-requested window remains inside the authorization letter validity. Ask the customer to refresh the authorization letter.'
+        : '';
+  const viewerTimezone = viewerTimeZone() || 'your local time';
+  const stopBusy = busy === `stop-${entityId}`;
 
   return (
     <div className="content">
@@ -2443,27 +2999,60 @@ function SocRequestDetailView({
         <StatusBadge value={state} tone={highScaleStateTone(state)} fallback="submitted" /> · tenant {actionTenantId ? <code>{actionTenantId}</code> : 'not recorded'}
       </PageContextSummary>
       <DetailStatusBanners error={error} message={message} hideMessageWhenLoadError={false} />
+      {state === 'running' ? (
+        <div className="form-banner error stack-tight" role="status" data-testid="soc-live-banner">
+          <div className="row-actions">
+            <Siren size={16} aria-hidden="true" />
+            <strong>LIVE · Governed high-scale traffic is running</strong>
+          </div>
+          <p className="small">
+            {domainCountLabel(domains)} · {windowEnd ? `Window ends ${formatTimestamp(windowEnd)}` : 'Window end not recorded'}
+            {startedAt ? ` · Started ${formatTimestamp(startedAt)}` : ''}
+          </p>
+          <div className="row-actions">
+            <Button variant="danger" loading={stopBusy} disabled={stopBusy} onClick={() => void socAction('stop')}>Stop now</Button>
+            <AnchorButton variant="secondary" href="#internal-soc">Tenant kill switch</AnchorButton>
+          </div>
+          <p className="muted text-xs" aria-live="off">
+            {adapterUpdatedAt ? `Adapter status updated ${formatTimestamp(adapterUpdatedAt)}` : 'Reading adapter status…'}
+            {adapterPollError ? ` · Last refresh failed: ${adapterPollError}` : ''}
+          </p>
+        </div>
+      ) : null}
       <div className="kpi-row" role="group" aria-label="Request summary">
         <KpiCell label="State" value={formatStatusLabel(state, 'submitted')} delta="Governed lifecycle state" tone={stateTone} />
         <KpiCell label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} delta="Authorization pack review" tone={packReady ? 'success' : 'warn'} />
-        <KpiCell label="Domains" value={Array.isArray(entity.target_ids) ? formatNumber(entity.target_ids.length) : entity.target_id ? '1' : 'Not recorded'} delta="Declared scope under request" tone="muted" />
-        <KpiCell label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} delta={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} tone="muted" />
+        <KpiCell label="Domains" value={domains.length === 0 ? 'Not recorded' : domains.length === 1 ? domains[0] : `${formatNumber(domains.length)} domains`} valueClassName={domains.length === 1 ? 'mono' : undefined} delta="Declared scope under request" tone="muted" />
+        <KpiCell label="Window" value={windowKpi.value} delta={windowKpi.delta} tone={windowKpi.tone} />
       </div>
+      {state === 'running' ? (
+        <p className="muted small">Pre-flight gates: {passedGates}/{preflightGates.length} passed at start.</p>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Request gates</CardTitle>
+            <CardDescription>Pre-flight readiness derived from recorded request evidence. Every gate must pass before governed execution starts; the server rechecks each one.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="placement-gates gates-stacked" aria-label="Request gates">
+              {preflightGates.map((gate) => (
+                <li key={gate.label}>
+                  {gate.pass ? <ShieldCheck size={14} aria-hidden="true" /> : <CircleDashed size={14} aria-hidden="true" />}
+                  <span className="gate-text"><span>{gate.label}</span><span className="muted small">{gate.detail}</span></span>
+                  <Badge tone={gate.pass ? 'success' : 'warn'} aria-label={`${gate.label}: ${gate.pass ? 'pass' : 'pending'}`}>{gate.pass ? 'pass' : 'pending'}</Badge>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
-          <CardTitle>Go / No-Go gates</CardTitle>
-          <CardDescription>Pre-flight readiness derived from real request evidence. Every gate must pass before governed execution starts.</CardDescription>
+          <CardTitle>Governed scope</CardTitle>
+          <CardDescription>What this request authorizes, as recorded. Read it before approving, scheduling or starting.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <ul className="placement-gates" aria-label="Pre-flight execution gates">
-            {preflightGates.map((gate) => (
-              <li key={gate.label}>
-                {gate.pass ? <ShieldCheck size={14} aria-hidden="true" /> : <CircleDashed size={14} aria-hidden="true" />}
-                <span>{gate.label}</span>
-                <Badge tone={gate.pass ? 'success' : 'warn'} aria-label={`${gate.label}: ${gate.pass ? 'pass' : 'pending'}`}>{gate.pass ? 'pass' : 'pending'}</Badge>
-              </li>
-            ))}
-          </ul>
+        <CardContent className="kv-list">
+          <GovernedScopeRows entity={entity} domains={domains} />
         </CardContent>
       </Card>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="SOC queue detail sections"
@@ -2479,17 +3068,80 @@ function SocRequestDetailView({
               <div><span>Pack</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
             </div>
             <div className="row-actions">
-              {['submitted', 'under_review'].includes(state) && packReady ? <Button size="sm" variant="secondary" loading={busy === `approve-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('approve')}>Approve</Button> : null}
-              {state === 'approved' ? <Button size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('schedule', socDevScheduleWindow())}>Schedule</Button> : null}
+              {['submitted', 'under_review'].includes(state) ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={busy === `approve-${entityId}`}
+                  disabled={busy !== '' || !packReady}
+                  title={packReady ? undefined : 'Approval stays disabled until the authorization pack is accepted.'}
+                  aria-describedby={packReady ? undefined : 'soc-approve-disabled-reason'}
+                  onClick={() => void socAction('approve')}
+                >Approve</Button>
+              ) : null}
               {state === 'scheduled' ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== '' || !preflightReady} title={startBlockedReason || undefined} aria-describedby={preflightReady ? undefined : 'soc-start-disabled-reason'} onClick={() => void socAction('start')}>Start</Button> : null}
-              {state === 'running' ? <Button size="sm" variant="danger" loading={busy === `stop-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('stop')}>Stop</Button> : null}
               {state === 'stopped' && hasPostTestReport ? <Button size="sm" variant="secondary" loading={busy === `close-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('close')}>Close</Button> : null}
-              {state === 'stopped' && !hasPostTestReport ? <Button size="sm" variant="secondary" disabled title={postTestReportError || 'Attach a post-test report before closing'}>Close</Button> : null}
-              <AnchorButton size="sm" variant="ghost" href="#internal-soc">Open SOC console</AnchorButton>
+              {state === 'stopped' && !hasPostTestReport ? <Button size="sm" variant="secondary" disabled title={postTestReportError ? 'Post-test report status could not be loaded' : 'Attach a post-test report before closing'}>Close</Button> : null}
             </div>
+            {['submitted', 'under_review'].includes(state) && !packReady ? (
+              <p className="muted text-xs" id="soc-approve-disabled-reason">Approval stays disabled until the authorization pack is accepted (every required artifact and provider approval).</p>
+            ) : null}
+            {state === 'running' ? <p className="muted small">Stop this test from the live banner above.</p> : null}
+            {state === 'approved' ? (
+              scheduleUnavailableReason ? (
+                <div className="form-banner neutral" role="note">{scheduleUnavailableReason}</div>
+              ) : (
+                <form
+                  className="product-form"
+                  aria-label="Schedule governed window"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (scheduleErrors.length || !scheduleStartIso || !scheduleEndIso) return;
+                    void socAction('schedule', { window_start: scheduleStartIso, window_end: scheduleEndIso });
+                  }}
+                >
+                  <div className="kv-list full">
+                    <RecordedKvRow label="Customer-requested window" value={formatWindowRange(requestedWindowStart, requestedWindowEnd, requestedTimezone)} />
+                    {letterWindow ? <RecordedKvRow label="Authorization letter valid" value={formatWindowRange(new Date(letterWindow.start).toISOString(), new Date(letterWindow.end).toISOString())} /> : null}
+                  </div>
+                  <label>
+                    <span>Window start ({viewerTimezone})</span>
+                    <input
+                      type="datetime-local"
+                      value={scheduleDraft.start}
+                      required
+                      aria-invalid={scheduleStartError ? true : undefined}
+                      aria-describedby={scheduleStartError ? 'soc-schedule-start-error' : undefined}
+                      onChange={(event) => setScheduleDraft((current) => ({ ...current, start: event.target.value }))}
+                    />
+                    {scheduleStartError ? <small className="field-error" id="soc-schedule-start-error">{scheduleStartError}</small> : null}
+                  </label>
+                  <label>
+                    <span>Window end ({viewerTimezone})</span>
+                    <input
+                      type="datetime-local"
+                      value={scheduleDraft.end}
+                      required
+                      aria-invalid={scheduleEndError ? true : undefined}
+                      aria-describedby={scheduleEndError ? 'soc-schedule-end-error' : undefined}
+                      onChange={(event) => setScheduleDraft((current) => ({ ...current, end: event.target.value }))}
+                    />
+                    {scheduleEndError ? <small className="field-error" id="soc-schedule-end-error">{scheduleEndError}</small> : null}
+                  </label>
+                  <div className="form-actions full">
+                    <Button type="submit" size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== '' || scheduleErrors.length > 0}>Schedule</Button>
+                  </div>
+                </form>
+              )
+            ) : null}
             {state === 'scheduled' && !preflightReady ? <p className="muted text-xs" id="soc-start-disabled-reason">{startBlockedReason}</p> : null}
             {state === 'stopped' && reportBusy ? <p className="muted small">Checking for an attached post-test report…</p> : null}
-            {state === 'stopped' && !reportBusy && postTestReportError ? <div className="form-banner error" role="alert">{postTestReportError} Closing remains disabled until report status can be confirmed.</div> : null}
+            {state === 'stopped' && !reportBusy && postTestReportError ? (
+              <div className="form-banner error row-actions" role="alert">
+                <span>Post-test report status could not be loaded. Closing remains disabled until report status can be confirmed.</span>
+                <Button size="sm" variant="ghost" loading={reportBusy} onClick={() => void loadPostTestReport()}>Retry</Button>
+              </div>
+            ) : null}
             {state === 'stopped' && !reportBusy && hasPostTestReport ? (
               <p className="muted small">Post-test report attached — this request can be closed. Closing finalizes the governed test lifecycle.</p>
             ) : null}
@@ -2507,50 +3159,55 @@ function SocRequestDetailView({
         </Card>
         <div className="dash-grid">
           <Card>
-            <CardHeader><CardTitle>Request facts</CardTitle><CardDescription>Tenant, scope, purpose, and safe-window fields returned with this queue item.</CardDescription></CardHeader>
+            <CardHeader><CardTitle>Request facts</CardTitle><CardDescription>Tenant, purpose, and requester returned with this queue item.</CardDescription></CardHeader>
             <CardContent className="kv-list">
               <div><span>Request</span><strong title={entityId}>{title}</strong></div>
               <RecordedKvRow label="Tenant" value={actionTenantId ?? ''} mono />
               <RecordedKvRow label="Reason" value={getString(entity, ['reason'], '')} />
               <RecordedKvRow label="Objective" value={getString(entity, ['objective'], '')} />
               <RecordedKvRow label="Requested by" value={getString(entity, ['created_by', 'requested_by'], '')} mono />
-              <RecordedKvRow label="Requested window" value={requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} to ${formatDate(requestedWindowEnd)}` : ''} missing="Not fully recorded" />
-              <RecordedKvRow label="Scheduled window" value={windowConfirmed ? `${formatDate(windowStart)} to ${formatDate(windowEnd)}` : ''} missing="Not scheduled" />
               {getString(entity, ['scope_hash'], '') ? <div><span>Scope hash</span><strong title={getString(entity, ['scope_hash'], '')}>Recorded</strong></div> : null}
             </CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle>Lifecycle</CardTitle><CardDescription>Ordered request transitions recorded by the high-scale workflow.</CardDescription></CardHeader>
-            <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
+            <CardHeader><CardTitle>Lifecycle</CardTitle><CardDescription>Ordered request transitions and the actor recorded for each.</CardDescription></CardHeader>
+            <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: formatStatusLabel(event.action), at: event.at, by: event.by }))} /></CardContent>
           </Card>
         </div>
         </></div>
       ) : null}
       {tab === 'artifacts' ? (
         <div role="tabpanel" id="soc-queue-detail-sections-panel-artifacts" aria-labelledby="soc-queue-detail-sections-tab-artifacts" className="tab-panel"><Card>
-          <CardHeader><CardTitle>Authorization artifacts</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Authorization artifacts</CardTitle>
+            <CardDescription>{summarizeAuthorizationPackProgress(packStatus, requiredArtifactTypes)}. Artifacts are metadata records; no file is stored or downloadable here.</CardDescription>
+          </CardHeader>
           <CardContent>
-            {artifacts.length === 0 ? <EmptyState icon={FileCheck2} title="No artifacts uploaded." body="No authorization artifacts are recorded for this request." /> : (
-              <div className="kv-list">
-                {artifacts.map((artifact) => {
-                  const artifactId = getString(artifact, ['id'], '');
-                  const type = getString(artifact, ['type']);
-                  const reviewBusy = busy === `artifacts/${artifactId}/review-${entityId}`;
+            <div className="kv-list">
+              {requiredArtifactTypes.map((type) => {
+                const uploads = orderedArtifactsForType(artifacts, type);
+                const requirement = packRequirementForType(packStatus, type);
+                if (uploads.length === 0) {
                   return (
-                    <div key={artifactId || type}>
+                    <div key={type}>
                       <span>{authorizationArtifactTitle(type)}</span>
-                      <div className="row-actions">
-                        <StatusBadge value={getString(artifact, ['status'])} tone={artifactReviewTone(getString(artifact, ['status']))} />
-                        <Button size="sm" variant="secondary" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'accepted')}>Accept</Button>
-                        <Button size="sm" variant="ghost" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'rejected')}>Reject</Button>
+                      <div className="stack-tight">
+                        <Badge tone="muted">Not uploaded</Badge>
+                        <p className="muted small">{explainArtifactReviewStatus(type, requirement, null)}</p>
                       </div>
-                      {getString(artifact, ['content_sha256'], '') ? <p className="muted small mono mono-hash">SHA-256 {getString(artifact, ['content_sha256'], '')}</p> : null}
-                      <p className="muted small">{explainArtifactReviewStatus(type, packRequirementForType(packStatus, type), artifact)}</p>
                     </div>
                   );
-                })}
-              </div>
-            )}
+                }
+                return uploads.map((artifact, index) => renderArtifactReview(artifact, type, requirement, index === 0 ? 'current' : 'earlier'));
+              })}
+              {otherArtifacts.length > 0 ? (
+                <div className="kv-stack">
+                  <span>Other uploaded artifacts</span>
+                  <p className="muted small">{formatNumber(otherArtifacts.length)} {pluralize(otherArtifacts.length, 'artifact')} of a type this request does not require. Review them like any other upload; they do not count toward the authorization pack.</p>
+                </div>
+              ) : null}
+              {otherArtifacts.map((artifact) => renderArtifactReview(artifact, getString(artifact, ['type'], ''), null, 'extra'))}
+            </div>
           </CardContent>
         </Card></div>
       ) : null}
@@ -2578,7 +3235,10 @@ function SocRequestDetailView({
       ) : null}
       {tab === 'adapter' ? (
         <div role="tabpanel" id="soc-queue-detail-sections-panel-adapter" aria-labelledby="soc-queue-detail-sections-tab-adapter" className="tab-panel"><Card>
-          <CardHeader><CardTitle>Adapter status</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Adapter status</CardTitle>
+            <CardDescription>{state === 'running' ? `Refreshed automatically every ${SOC_ADAPTER_POLL_MS / 1000} seconds while the test runs.` : 'Read on request. No provider telemetry is inferred.'}</CardDescription>
+          </CardHeader>
           <CardContent>
             <Button size="sm" variant="secondary" loading={busy === `adapter-${entityId}`} disabled={busy !== ''} onClick={() => void loadAdapterStatus()}>Refresh adapter status</Button>
             {adapterStatus ? (
@@ -2586,6 +3246,7 @@ function SocRequestDetailView({
                 <div><span>State</span><strong>{getNestedString(adapterStatus, ['adapter', 'state'], getString(adapterStatus, ['state'], 'Not returned'))}</strong></div>
                 <div><span>Traffic generated</span>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') ? <Badge tone={getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'warn' : 'muted'}>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], '') === 'true' ? 'Yes' : 'No'}</Badge> : <strong>Not returned</strong>}</div>
                 <div><span>Provider reference</span><strong>{getNestedString(adapterStatus, ['adapter', 'provider_reference'], getString(adapterStatus, ['provider_reference'], 'Not returned'))}</strong></div>
+                {adapterUpdatedAt ? <div><span>Updated</span><strong>{formatTimestamp(adapterUpdatedAt)}</strong></div> : null}
               </div>
             ) : <p className="muted">Adapter status has not been requested. No provider telemetry is inferred.</p>}
           </CardContent>
@@ -2593,7 +3254,7 @@ function SocRequestDetailView({
       ) : null}
       {tab === 'notes' ? (
         <div role="tabpanel" id="soc-queue-detail-sections-panel-notes" aria-labelledby="soc-queue-detail-sections-tab-notes" className="tab-panel"><Card>
-          <CardHeader><CardTitle>SOC notes</CardTitle><CardDescription>Thread before adding execution context.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>SOC notes</CardTitle><CardDescription>Timestamped record of execution context, customer coordination and stop rationale for this request. Notes are redacted and included in post-test and tenant report exports.</CardDescription></CardHeader>
           <CardContent>
             {notesLoading ? <DetailLoadingPlaceholder label="Loading SOC notes…" variant="compact" /> : null}
             {notesError ? <div className="form-banner error" role="alert">{notesError} No empty note history is being assumed.</div> : null}
@@ -2601,7 +3262,7 @@ function SocRequestDetailView({
               <div className="kv-list stack-tight">
                 {socNotes.map((note, index) => (
                   <div key={getString(note, ['id'], String(index))}>
-                    <span>{formatDate(note.created_at)}</span>
+                    <span>{formatDate(note.created_at)} · {getString(note, ['author', 'created_by'], 'author not recorded')}</span>
                     <strong>{getString(note, ['body'])}</strong>
                   </div>
                 ))}
@@ -2719,7 +3380,7 @@ const GENERIC_CHECK_VERDICT_LOGIC = 'Verdict when probe external_result aligns w
 
 function executionSpecificCheckCopy(kind: 'remediation' | 'explanation' | 'verdict', execution: CheckExecutionSemantics) {
   if (execution.kind === 'Request only') {
-    if (kind === 'remediation') return 'Review authorization, declared scope, and SOC prerequisites before requesting this scenario.';
+    if (kind === 'remediation') return 'Review authorization, declared scope, and SOC prerequisites, then contact support to arrange this scenario with AstraNull SOC.';
     if (kind === 'explanation') return 'This catalog entry describes a governed request-only scenario. It performs no customer-side execution.';
     return 'A verdict requires evidence recorded by the governed SOC workflow; this catalog entry does not execute for customers.';
   }
@@ -2884,6 +3545,8 @@ function CheckDetailPage({
   const [exactCheck, setExactCheck] = useState<{ id: string; status: 'loading' | 'found' | 'not_found' | 'error'; check: DataItem | null; error: string }>({ id: '', status: 'loading', check: null, error: '' });
   const [exactCheckTick, setExactCheckTick] = useState(0);
   const [compatibility, setCompatibility] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'not_found' | 'error'; checks: DataItem[] }>({ status: 'idle', checks: [] });
+  const [runPickerOpen, setRunPickerOpen] = useState(false);
+  const [runPickerTarget, setRunPickerTarget] = useState('');
 
   useEffect(() => {
     if (!entityId) return undefined;
@@ -3006,6 +3669,14 @@ function CheckDetailPage({
     ? executionSpecificCheckCopy('explanation', execution)
     : recordedExplanation;
   const expectedBehavior = getString(check, ['default_expected_behavior'], '');
+  const evidenceTier = getString(check, ['evidence_tier'], '').toUpperCase();
+  const observationOnly = check.observation_only === true || check.readiness_conclusion === false || ['E1', 'E2'].includes(evidenceTier);
+  const checkSpecificRemediation = Boolean(recordedRemediation) && recordedRemediation !== GENERIC_CHECK_REMEDIATION;
+  const tailoredRemediation = execution.kind === 'Request only' || execution.kind === 'Metadata evaluation' || execution.kind === 'Operations self-check';
+  const recordedObservationExplanation = getString(check, ['explanation_template'], '');
+  const observationExplanation = recordedObservationExplanation && recordedObservationExplanation !== GENERIC_CHECK_EXPLANATION
+    ? recordedObservationExplanation
+    : 'This check records observations only. It never reports a protection gap on its own.';
   const supportedTargets = toList(check.supported_targets);
   const prerequisites = toList(check.prerequisites);
   const customerSetup = toList(check.required_customer_setup);
@@ -3042,6 +3713,16 @@ function CheckDetailPage({
     : null;
   const scheduleHref = `#test-policies?check=${encodeURIComponent(entityId)}${callerTarget && callerCompatible ? `&target=${encodeURIComponent(callerTargetId)}` : ''}`;
   const canSchedule = customerRunnable && sessionHasPermission(session, 'test_policy:write') && (!callerTargetId || callerCompatible === true);
+  const canRunRole = ['owner', 'admin', 'engineer'].includes(String(session.role ?? '')) && sessionHasPermission(session, 'test_run:start');
+  const canOfferRun = customerRunnable && canRunRole;
+  const runOnTargetHref = (targetId: string) => `${buildDetailHref('target-detail', targetId)}&tab=validate&check=${encodeURIComponent(entityId)}`;
+  const runPickerTargets = declaredTargets.filter((item) => getString(item, ['id'], '') && !item.deleted_at && isPolicyTargetCompatible(check, item));
+  const runDisabledReason = callerTargetId && callerCompatible === false
+    ? `This check does not run on ${callerTarget ? targetLabel(callerTargetId) : 'this target'}; it supports ${supportedTargets.map(spaced).join(', ') || 'no declared target kind'}.`
+    : !callerTargetId && runPickerTargets.length === 0
+      ? `No declared target supports this check (${supportedTargets.map(spaced).join(', ') || 'no declared target kind'}).`
+      : '';
+  const dispatchingSchedules = linkedPolicyState.items.filter((item) => ['scheduled', 'due'].includes(describeScheduleDispatch(item, data.checks).bucket)).length;
 
   const policyColumns: TableColumn<DataItem>[] = [
     { key: 'schedule', label: 'Schedule', render: (item) => {
@@ -3061,7 +3742,13 @@ function CheckDetailPage({
       const runTargetId = getString(item, ['target_id'], '');
       return runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} label={targetLabel(runTargetId)} /> : <span className="muted">Not recorded</span>;
     } },
-    { key: 'observed', label: 'Observed', render: (item) => <span className="mono">{formatDate(item.completed_at ?? item.updated_at ?? item.created_at)}</span> },
+    { key: 'observed', label: 'Observed', render: (item) => {
+      const runId = getString(item, ['id'], '');
+      const observed = formatDate(item.completed_at ?? item.updated_at ?? item.created_at);
+      return runId
+        ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', runId)} aria-label={`Open run ${runId}`}>{observed}</a>
+        : <span className="mono">{observed}</span>;
+    } },
     { key: 'outcome', label: 'Outcome', render: (item) => {
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
       return outcome
@@ -3080,15 +3767,40 @@ function CheckDetailPage({
         title={title}
         actions={(
           <>
-            {hasCallerContext ? <AnchorButton size="sm" variant="secondary" href={callerBackHref}>{callerBackLabel}</AnchorButton> : null}
+            {hasCallerContext ? <AnchorButton size="sm" variant="ghost" href={callerBackHref}>{callerBackLabel}</AnchorButton> : null}
+            {canOfferRun ? (
+              callerTargetId && callerCompatible ? (
+                <AnchorButton size="sm" variant="default" href={runOnTargetHref(callerTargetId)}>Run on {targetLabel(callerTargetId)}</AnchorButton>
+              ) : runDisabledReason ? (
+                <Button size="sm" variant="default" disabled title={runDisabledReason} aria-describedby="check-run-disabled-reason">{callerTargetId ? `Run on ${targetLabel(callerTargetId)}` : 'Run on a target'}</Button>
+              ) : !callerTargetId ? (
+                <Button size="sm" variant="default" aria-expanded={runPickerOpen} aria-controls="check-run-picker" onClick={() => setRunPickerOpen((open) => !open)}>Run on a target</Button>
+              ) : null
+            ) : null}
             {canSchedule ? (
-              <AnchorButton size="sm" variant="default" href={scheduleHref}>
+              <AnchorButton size="sm" variant="secondary" href={scheduleHref}>
                 {callerTarget ? `Schedule on ${targetLabel(callerTargetId)}` : 'Schedule this check'}
               </AnchorButton>
             ) : null}
           </>
         )}
       />
+      {canOfferRun && runDisabledReason ? <p className="muted small" id="check-run-disabled-reason">{runDisabledReason}</p> : null}
+      {canOfferRun && !callerTargetId && runPickerOpen && runPickerTargets.length > 0 ? (
+        <div className="form-banner neutral stack-tight" id="check-run-picker" role="group" aria-label="Choose a target to run this check on">
+          <Select
+            label="Compatible target"
+            value={runPickerTarget}
+            placeholder="Choose a target"
+            onChange={setRunPickerTarget}
+            options={runPickerTargets.map((item) => ({ value: getString(item, ['id'], ''), label: getString(item, ['value', 'hostname'], getString(item, ['id'], '')) }))}
+          />
+          <div className="row-actions">
+            <AnchorButton size="sm" variant="default" href={runPickerTarget ? runOnTargetHref(runPickerTarget) : undefined} disabled={!runPickerTarget}>Open validation on this target</AnchorButton>
+            <Button size="sm" variant="ghost" onClick={() => setRunPickerOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : null}
       {callerPolicyId || callerTargetId ? (
         <div className="form-banner neutral check-caller-context" role="note">
           {callerPolicyId ? (
@@ -3111,7 +3823,7 @@ function CheckDetailPage({
       {!customerRunnable ? (
         <div className="form-banner neutral" role="note">
           {safetyClass === 'soc_gated'
-            ? 'This catalog entry is SOC-governed. It cannot be started or scheduled by customers in this release.'
+            ? <>This catalog entry is SOC-governed. High-scale validation is arranged with AstraNull SOC. <a href="#support">Contact support</a> to request one.</>
             : 'This check is not marked customer-runnable, so it cannot be scheduled.'}
         </div>
       ) : null}
@@ -3131,15 +3843,20 @@ function CheckDetailPage({
           <div>
             <p className="check-fact-label">What is observed</p>
             <p className="check-detail-text">
-              {evidenceRequired.length ? humanize(evidenceRequired.map(spaced).join(', ')) : 'Evidence types not recorded in the catalog.'}
+              {evidenceRequired.length === 1 && evidenceRequired[0] === 'probe_result' && probeKind
+                ? `${plainCodeLabel(probeKind)} probe result (transport, response and protocol facts)`
+                : evidenceRequired.length ? humanize(evidenceRequired.map(spaced).join(', ')) : 'Evidence types not recorded in the catalog.'}
             </p>
           </div>
           <div>
             <p className="check-fact-label">How it is evaluated</p>
             <p className="check-detail-text">
               {verdictLogic || explanation || 'Evaluation rule not recorded.'}
-              {expectedBehavior ? <> Expected behavior: <strong title={expectedBehavior}>{plainCodeLabel(expectedBehavior).toLowerCase()}</strong>.</> : null}
+              {expectedBehavior && !observationOnly ? <> Expected behavior: <strong title={expectedBehavior}>{plainCodeLabel(expectedBehavior).toLowerCase()}</strong>.</> : null}
             </p>
+            {expectedBehavior && observationOnly ? (
+              <p className="muted small" title={expectedBehavior}>Reference control, not verified by this check: {plainCodeLabel(expectedBehavior).toLowerCase()}.</p>
+            ) : null}
           </div>
           <p className="muted small full">A bounded check proves one recorded behavior on one target. It does not establish volumetric capacity or protection for other targets.</p>
         </CardContent>
@@ -3214,7 +3931,17 @@ function CheckDetailPage({
         </Card>
       </div>
 
-      {remediation ? (
+      {observationOnly ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>What this result can and cannot tell you</CardTitle>
+            <CardDescription>This check is observation only: it records what the probe saw and cannot establish a protection verdict.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="check-detail-text">{observationExplanation}</p>
+          </CardContent>
+        </Card>
+      ) : remediation && (checkSpecificRemediation || tailoredRemediation) ? (
         <Card>
           <CardHeader>
             <CardTitle>If this check reports a gap</CardTitle>
@@ -3228,8 +3955,12 @@ function CheckDetailPage({
 
       <Card>
         <CardHeader>
-          <CardTitle>Schedules running this check</CardTitle>
-          <CardDescription>Schedules bound to this exact check ID.</CardDescription>
+          <CardTitle>Schedules bound to this check</CardTitle>
+          <CardDescription>
+            {linkedPolicyState.status === 'loaded' && linkedPolicyState.items.length > 0
+              ? `${formatNumber(dispatchingSchedules)} of ${formatNumber(linkedPolicyState.items.length)} dispatch automatically. Bound to this exact check ID.`
+              : 'Schedules bound to this exact check ID.'}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -3456,11 +4187,19 @@ function PolicyDetailPage({
     ['schedule_revision', getString(policy, ['schedule_revision'], '')]
   ]);
   const state = getString(policy, ['state'], '');
-  const gates: Array<{ label: string; status: 'met' | 'blocked' | 'info'; detail: string }> = [
+  const gates: Array<{ label: string; status: 'met' | 'blocked' | 'info'; detail: string; action?: ReactNode }> = [
     {
       label: 'Exact target bound',
       status: target.targetId ? 'met' : 'blocked',
-      detail: target.targetId ? target.targetLabel : 'Legacy schedule without an exact target. Create a new schedule bound to one target.'
+      detail: target.targetId ? target.targetLabel : 'Legacy schedule without an exact target. Create a new schedule bound to one target.',
+      action: !target.targetId && canWrite ? (
+        <AnchorButton
+          size="sm"
+          variant="secondary"
+          href={`#test-policies?check=${encodeURIComponent(check.checkId)}`}
+          aria-label="Create replacement schedule bound to one target"
+        >Create replacement</AnchorButton>
+      ) : undefined
     },
     {
       label: 'Check available and customer-runnable',
@@ -3475,12 +4214,14 @@ function PolicyDetailPage({
     },
     {
       label: 'Active and enabled',
-      status: state === 'active' && policy.enabled !== false ? 'met' : 'blocked',
-      detail: !state
-        ? 'State not recorded.'
-        : state === 'active'
-          ? policy.enabled === false ? 'Active but disabled; the scheduler skips it.' : 'Active.'
-          : `${formatStatusLabel(state)}. ${state === 'paused' ? 'Resume to dispatch again.' : 'This state does not dispatch.'}`
+      status: target.targetId && state === 'active' && policy.enabled !== false ? 'met' : 'blocked',
+      detail: !target.targetId
+        ? 'Cannot be enabled: the schedule has no exact target. Create a replacement bound to one target.'
+        : !state
+          ? 'State not recorded.'
+          : state === 'active'
+            ? policy.enabled === false ? 'Active but disabled; the scheduler skips it.' : 'Active.'
+            : `${formatStatusLabel(state)}. ${state === 'paused' ? 'Resume to dispatch again.' : 'This state does not dispatch.'}`
     },
     {
       label: 'Automatic cadence',
@@ -3499,8 +4240,27 @@ function PolicyDetailPage({
     }
   ];
   const declaredTargetLabels = new Map(data.targets.map((item) => [getString(item, ['id'], ''), getString(item, ['value', 'hostname'], '')]));
+  const historyDispatchMs = runRelationState.items.reduce((latest, run) => {
+    const ms = Math.max(Date.parse(String(run.started_at ?? '')) || 0, Date.parse(String(run.created_at ?? '')) || 0);
+    return Math.max(latest, ms);
+  }, 0);
+  const lastDispatchedDisplay: ReactNode = lastDispatchedAt
+    ? formatDate(lastDispatchedAt)
+    : historyDispatchMs > 0
+      ? <>{formatDate(new Date(historyDispatchMs).toISOString())} <span className="muted">from run history</span></>
+      : runRelationState.status === 'loading' || runRelationState.status === 'idle'
+        ? 'Checking run history…'
+        : runRelationState.status === 'error'
+          ? 'Not recorded'
+          : 'Never dispatched';
   const runColumns: TableColumn<DataItem>[] = [
-    { key: 'recorded', label: 'Dispatched', render: (run) => <span className="mono">{formatDate(run.started_at ?? run.created_at)}</span> },
+    { key: 'recorded', label: 'Dispatched', render: (run) => {
+      const runId = getString(run, ['id'], '');
+      const dispatched = formatDate(run.started_at ?? run.created_at);
+      return runId
+        ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', runId)} aria-label={`Open run ${runId}`}>{dispatched}</a>
+        : <span className="mono">{dispatched}</span>;
+    } },
     { key: 'target', label: 'Target', render: (run) => {
       const runTargetId = getString(run, ['target_id'], '');
       if (!runTargetId) return <span className="muted">Not recorded</span>;
@@ -3545,7 +4305,7 @@ function PolicyDetailPage({
       {feedback.message || feedback.error ? (
         <div className={feedback.error ? 'form-banner error' : 'form-banner neutral'} role={feedback.error ? 'alert' : 'status'}>{feedback.error || feedback.message}</div>
       ) : null}
-      {!canWrite ? <p className="muted small">Read only. Editing, pausing, or archiving requires the test_policy:write permission.</p> : null}
+      {!canWrite ? <p className="muted small">Read only. Ask an owner or admin to change schedules.</p> : null}
       <Card className="schedule-dispatch-card">
         <CardHeader>
           <CardTitle>Will this schedule run?</CardTitle>
@@ -3559,7 +4319,7 @@ function PolicyDetailPage({
           <div className="kv-list schedule-dispatch-facts">
             <div><span>Next run</span><strong>{next ? <>{next.primary} <span className="muted">{next.zone}</span></> : 'No next run recorded'}</strong></div>
             {next?.viewer ? <div><span>In your timezone</span><strong>{next.viewer}</strong></div> : null}
-            <div><span>Last dispatched</span><strong>{lastDispatchedAt ? formatDate(lastDispatchedAt) : 'Never dispatched'}</strong></div>
+            <div><span>Last dispatched</span><strong>{lastDispatchedDisplay}</strong></div>
           </div>
         </CardContent>
       </Card>
@@ -3583,7 +4343,7 @@ function PolicyDetailPage({
             <div><span>Cadence</span><strong>{cadence ? formatStatusLabel(cadence) : 'Not recorded'}</strong></div>
             <div><span>Timezone</span><strong>{timezone || 'Not recorded (scheduler default UTC)'}</strong></div>
             <div><span>Safe windows</span><strong>{windows.length ? formatSafeWindowList(policy) : 'None (any time)'}</strong></div>
-            <div><span>Expected verdict</span><strong>{expected ? `${plainVerdictLabel(expected)} (declared)` : 'Not recorded'}</strong></div>
+            <div><span>Expected verdict</span><strong title={expected || undefined}>{expected ? plainExpectedVerdictLabel(expected) : 'Not recorded'}</strong></div>
             <div><span>Created</span><strong>{formatDate(policy.created_at)}</strong></div>
             <div><span>Updated</span><strong>{formatDate(policy.updated_at)}</strong></div>
           </CardContent>
@@ -3599,7 +4359,7 @@ function PolicyDetailPage({
             {gates.map((gate) => (
               <li key={gate.label}>
                 {gate.status === 'blocked' ? <TriangleAlert size={14} aria-hidden="true" /> : gate.status === 'met' ? <ShieldCheck size={14} aria-hidden="true" /> : <Info size={14} aria-hidden="true" />}
-                <span className="gate-text"><span>{gate.label}</span><span className="muted small">{plainInlineText(gate.detail)}</span></span>
+                <span className="gate-text"><span>{gate.label}</span><span className="muted small">{plainInlineText(gate.detail)}</span>{gate.action ? <span>{gate.action}</span> : null}</span>
                 <Badge tone={gate.status === 'met' ? 'success' : gate.status === 'blocked' ? 'warn' : 'muted'}>
                   {gate.status === 'met' ? 'Met' : gate.status === 'blocked' ? 'Blocks dispatch' : 'Info'}
                 </Badge>
@@ -3698,18 +4458,6 @@ export function DetailRoutePage({
     `/v1/findings/${encodeURIComponent(entityId)}`,
     findingFallback
   );
-  // Mutations on an entity detail page must re-read the entity itself, not just the list
-  // datasets onRefresh reloads; otherwise removed targets, triage changes, etc. stay on screen.
-  const activeEntityReload = route === 'run-detail'
-      ? runDetail.reload
-      : route === 'tenant-detail'
-        ? tenantDetail.reload
-        : route === 'finding-detail'
-          ? findingDetailState.reload
-          : null;
-  const refreshWithEntity = useCallback(async () => {
-    await Promise.all([onRefresh(), activeEntityReload ? activeEntityReload() : Promise.resolve()]);
-  }, [onRefresh, activeEntityReload]);
   const queueTenantId = useMemo(
     () => getRouteTenantId(session.tenant_id ?? '') || undefined,
     [route, entityId, session.tenant_id]
@@ -3726,6 +4474,20 @@ export function DetailRoutePage({
       tenantId: queueTenantId
     }
   );
+  // Mutations on an entity detail page must re-read the entity itself, not just the list
+  // datasets onRefresh reloads; otherwise removed targets, triage changes, etc. stay on screen.
+  const activeEntityReload = route === 'run-detail'
+      ? runDetail.reload
+      : route === 'tenant-detail'
+        ? tenantDetail.reload
+        : route === 'finding-detail'
+          ? findingDetailState.reload
+          : route === 'queue-detail'
+            ? highScaleDetail.reload
+            : null;
+  const refreshWithEntity = useCallback(async () => {
+    await Promise.all([onRefresh(), activeEntityReload ? activeEntityReload() : Promise.resolve()]);
+  }, [onRefresh, activeEntityReload]);
   const detailState =
     route === 'run-detail' ? runDetail
         : { detail: null as DataItem | null, error: '', loading: false };
@@ -3884,9 +4646,9 @@ export function DetailRoutePage({
             title="No high-scale request selected."
             body={staffSocWorkspace
               ? 'Open a queue item from the SOC console with ?id=.'
-              : 'Open a request from Test runs using Complete pack.'}
-            actionLabel={staffSocWorkspace ? 'Open SOC console' : 'Open test runs'}
-            actionHref={staffSocWorkspace ? '#internal-soc' : '#runs'}
+              : 'This address does not name a high-scale request. Open the request link you received, or open a target to see its validation.'}
+            actionLabel={staffSocWorkspace ? 'Open SOC console' : 'Open targets'}
+            actionHref={staffSocWorkspace ? '#internal-soc' : '#targets'}
           />
         </div>
       );
@@ -3908,8 +4670,8 @@ export function DetailRoutePage({
             icon={ShieldCheck}
             title="High-scale request not found."
             body={highScaleDetail.error || 'The requested high-scale item is missing or outside this tenant scope.'}
-            actionLabel={staffSocWorkspace ? 'Open SOC console' : 'Open test runs'}
-            actionHref={staffSocWorkspace ? '#internal-soc' : '#runs'}
+            actionLabel={staffSocWorkspace ? 'Open SOC console' : 'Open targets'}
+            actionHref={staffSocWorkspace ? '#internal-soc' : '#targets'}
           />
         </div>
       );
@@ -3920,9 +4682,10 @@ export function DetailRoutePage({
         <SocRequestDetailView
           entity={queueEntity}
           entityId={entityId}
+          data={data}
           config={config}
           session={session}
-          onRefresh={onRefresh}
+          onRefresh={refreshWithEntity}
           tenantId={queueTenantId || getString(queueEntity, ['tenant_id'], '') || undefined}
         />
       );
@@ -3934,7 +4697,7 @@ export function DetailRoutePage({
         data={data}
         config={config}
         session={session}
-        onRefresh={onRefresh}
+        onRefresh={refreshWithEntity}
         loading={highScaleDetail.loading}
         loadError={highScaleDetail.error}
       />
@@ -3945,9 +4708,9 @@ export function DetailRoutePage({
     const noSelectionByRoute: Partial<Record<RouteId, { title: string; body: string; actionLabel: string; actionHref: string; icon: typeof Target }>> = {
       'run-detail': {
         title: 'No test run selected.',
-        body: 'Open a run from the list with ?id= or use the Detail link on #runs.',
-        actionLabel: 'Open test runs',
-        actionHref: '#runs',
+        body: 'Open a target and select a check to see its runs.',
+        actionLabel: 'Open targets',
+        actionHref: '#targets',
         icon: Activity
       },
       'finding-detail': {
@@ -3998,7 +4761,7 @@ export function DetailRoutePage({
 
   if (!entity) {
     const listHrefByRoute: Partial<Record<RouteId, { actionLabel: string; actionHref: string }>> = {
-      'run-detail': { actionLabel: 'Open test runs', actionHref: '#runs' },
+      'run-detail': { actionLabel: 'Open targets', actionHref: '#targets' },
     };
     const listLink = listHrefByRoute[route];
     return (
@@ -4054,51 +4817,252 @@ type ReportCoverageRow = {
   verdict: string;
 };
 
-const RUN_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
-const LIVE_RUN_FINDINGS_LIMIT = 25;
+const LIVE_FINDING_READ_LIMIT = 100;
+const LIVE_FINDING_CONCURRENCY = 4;
 
-/** Open findings now linked to a report's captured runs: one exact server predicate per run, never the loaded page. */
-function ReportLiveOpenFindings({ data, config, session, runIds, checkedAt }: { data: PortalData; config: PortalConfig; session: Session; runIds: string[]; checkedAt: string }) {
+type LiveFindingRead = { status: 'loading' | 'ready' | 'error'; finding: DataItem | null };
+
+/** Current lifecycle of each finding the report captured: one exact read per captured finding ID, never the loaded page. */
+function ReportLiveFindingStatus({
+  data,
+  config,
+  session,
+  snapshotFindings,
+  hasSnapshot,
+  targets,
+  checkedAt
+}: {
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  snapshotFindings: DataItem[];
+  hasSnapshot: boolean;
+  targets: DataItem[];
+  checkedAt: string;
+}) {
   const readable = canReadDataset(session, 'findings');
-  const validRunIds = useMemo(() => [...new Set(runIds)].filter((id) => RUN_ID_PATTERN.test(id)), [runIds]);
-  const entries = useMemo(() => Object.fromEntries(validRunIds.map((id) => [id, { status: 'open', test_run_id: id }])), [validRunIds]);
-  const live = useFindingPages(config, session, entries, 0, readable && validRunIds.length > 0, LIVE_RUN_FINDINGS_LIMIT);
-  const perRun = validRunIds.map((id) => ({ id, envelope: live.pages[id] ?? null }));
-  const rows = perRun.flatMap(({ envelope }) => envelope?.items ?? []);
-  const unknownTotal = perRun.some(({ envelope }) => envelope && envelope.total === null);
-  const total = perRun.reduce((sum, { envelope }) => sum + (envelope?.total ?? envelope?.items.length ?? 0), 0);
-  const hidden = Math.max(0, total - rows.length);
+  const findingIds = useMemo(
+    () => [...new Set(snapshotFindings.map((item) => getString(item, ['id'], '')).filter(Boolean))].slice(0, LIVE_FINDING_READ_LIMIT),
+    [snapshotFindings]
+  );
+  const idsKey = findingIds.join('|');
+  const [reads, setReads] = useState<Record<string, LiveFindingRead>>({});
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    if (!readable || findingIds.length === 0) {
+      setReads({});
+      return undefined;
+    }
+    let cancelled = false;
+    setReads(Object.fromEntries(findingIds.map((id) => [id, { status: 'loading', finding: null }])));
+    let cursor = 0;
+    const worker = async () => {
+      while (!cancelled && cursor < findingIds.length) {
+        const id = findingIds[cursor];
+        cursor += 1;
+        try {
+          const payload = await requestJson(config, session, `/v1/findings/${encodeURIComponent(id)}`);
+          const finding = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as DataItem : null;
+          if (!cancelled) setReads((current) => ({ ...current, [id]: { status: finding ? 'ready' : 'error', finding } }));
+        } catch {
+          if (!cancelled) setReads((current) => ({ ...current, [id]: { status: 'error', finding: null } }));
+        }
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(LIVE_FINDING_CONCURRENCY, findingIds.length) }, worker));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, session, idsKey, readable, reloadTick]);
+
+  const snapshotById = new Map(snapshotFindings.map((item) => [getString(item, ['id'], ''), item]));
+  const rows = findingIds.map((id) => ({ id, snapshot: snapshotById.get(id) ?? {}, read: reads[id] ?? { status: 'loading', finding: null } as LiveFindingRead }));
+  const settled = rows.filter((row) => row.read.status !== 'loading');
+  const ready = rows.filter((row) => row.read.status === 'ready' && row.read.finding);
+  const failed = rows.filter((row) => row.read.status === 'error').length;
+  const stillOpen = ready.filter((row) => findingStatus(row.read.finding as DataItem) === 'open').length;
+  const changed = ready.filter((row) => findingStatus(row.read.finding as DataItem) !== getString(row.snapshot, ['status'], '')).length;
+  const capped = snapshotFindings.length > LIVE_FINDING_READ_LIMIT;
+
+  const columns: TableColumn<{ id: string; snapshot: DataItem; read: LiveFindingRead }>[] = [
+    { key: 'finding', label: 'Finding', render: (row) => (
+      <span className="cp-stack">
+        <DetailEntityLink route="finding-detail" id={row.id} label={plainFindingTitle(row.read.finding ?? row.snapshot, targets, data.checks)} />
+        <span className="mono muted small">{row.id}</span>
+      </span>
+    ) },
+    { key: 'then', label: 'Status at generation', render: (row) => {
+      const status = getString(row.snapshot, ['status'], '');
+      return status ? <StatusBadge value={status} tone={findingStatusTone(status)} /> : <span className="muted">Not recorded</span>;
+    } },
+    { key: 'now', label: 'Status now', render: (row) => {
+      if (row.read.status === 'loading') return <span className="muted">Reading…</span>;
+      if (row.read.status === 'error' || !row.read.finding) return <span className="muted">Not available</span>;
+      const status = findingStatus(row.read.finding);
+      return <StatusBadge value={status} tone={findingStatusTone(status)} />;
+    } },
+    { key: 'changed', label: 'Changed', render: (row) => {
+      if (row.read.status !== 'ready' || !row.read.finding) return <span className="muted">—</span>;
+      const moved = findingStatus(row.read.finding) !== getString(row.snapshot, ['status'], '');
+      return <Badge tone={moved ? 'warn' : 'muted'}>{moved ? 'Changed' : 'Unchanged'}</Badge>;
+    } }
+  ];
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Findings from captured runs that are open now</CardTitle>
-        <CardDescription>Checked {formatDate(checkedAt)} with an open-status server read per captured run. Use it for remediation follow-up; it does not rewrite the report.</CardDescription>
+        <CardTitle>Captured findings: status now</CardTitle>
+        <CardDescription>Checked {formatTimestamp(checkedAt)} by reading each finding this report captured. Use it for remediation follow-up; it does not rewrite the report.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="stack-tight">
         {!readable ? (
           <p className="muted">Your role cannot read findings, so current status is not shown.</p>
-        ) : validRunIds.length === 0 ? (
-          <p className="muted">This report records no captured run, so no current finding is linked to it.</p>
-        ) : live.state === 'loading' ? (
-          <p className="muted" role="status">Reading open findings for {formatNumber(validRunIds.length)} captured {validRunIds.length === 1 ? 'run' : 'runs'}.</p>
-        ) : live.state === 'error' ? (
-          <p className="form-banner error" role="alert">Current findings unavailable: {live.error}</p>
-        ) : rows.length === 0 ? (
-          <p className="muted">No open finding comes from the {formatNumber(validRunIds.length)} captured {validRunIds.length === 1 ? 'run' : 'runs'}.</p>
+        ) : !hasSnapshot ? (
+          <p className="muted">Not recorded (legacy report).</p>
+        ) : findingIds.length === 0 ? (
+          <p className="muted">This report captured no findings.</p>
         ) : (
           <>
-            <p className="muted small">
-              {unknownTotal ? `${formatNumber(rows.length)} open shown; the server did not report a total for every run.` : `${formatNumber(total)} open ${total === 1 ? 'finding' : 'findings'} across the captured runs.`}
-              {hidden > 0 ? ` Showing the newest ${formatNumber(LIVE_RUN_FINDINGS_LIMIT)} per run; ${formatNumber(hidden)} more are on Findings.` : ''}
+            <p className="muted small" role="status">
+              {settled.length < rows.length
+                ? `Reading ${formatNumber(rows.length)} captured ${pluralize(rows.length, 'finding')}…`
+                : `${formatNumber(stillOpen)} of ${formatNumber(rows.length)} captured findings are still open; ${formatNumber(changed)} changed since generation.`}
+              {failed > 0 ? ` ${formatNumber(failed)} could not be read.` : ''}
+              {capped ? ` Only the first ${formatNumber(LIVE_FINDING_READ_LIMIT)} captured findings are checked.` : ''}
             </p>
-            <ul className="report-live-list">
-              {rows.map((finding) => (
-                <li key={getString(finding, ['id'])}>
-                  <DetailEntityLink route="finding-detail" id={getString(finding, ['id'])} label={plainFindingTitle(finding, data.targets, data.checks)} />
-                  <span className="muted small"> · {formatSeverityLabel(getString(finding, ['severity'], ''))} · <code className="mono">{getString(finding, ['test_run_id'])}</code></span>
-                </li>
-              ))}
-            </ul>
+            {failed > 0 && settled.length === rows.length ? (
+              <div className="row-actions"><Button size="sm" variant="secondary" onClick={() => setReloadTick((count) => count + 1)}>Retry</Button></div>
+            ) : null}
+            <DataTable columns={columns} items={rows} getRowId={(row) => row.id} empty={null} />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReportComparisonCard({
+  report,
+  reports,
+  config,
+  session,
+  targets,
+  checks
+}: {
+  report: DataItem;
+  reports: DataItem[];
+  config: PortalConfig;
+  session: Session;
+  targets: DataItem[];
+  checks: DataItem[];
+}) {
+  const candidates = useMemo(() => eligibleBaselines(report, reports), [report, reports]);
+  const [chosenId, setChosenId] = useState('');
+  const selectedId = chosenId && candidates.some((item) => getString(item, ['id'], '') === chosenId)
+    ? chosenId
+    : getString(candidates[0] ?? {}, ['id'], '');
+  const [baseline, setBaseline] = useState<{ id: string; status: 'idle' | 'loading' | 'loaded' | 'error'; report: DataItem | null; error: string }>({ id: '', status: 'idle', report: null, error: '' });
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setBaseline({ id: '', status: 'idle', report: null, error: '' });
+      return undefined;
+    }
+    let cancelled = false;
+    setBaseline({ id: selectedId, status: 'loading', report: null, error: '' });
+    requestJson(config, session, `/v1/reports/${encodeURIComponent(selectedId)}`)
+      .then((payload) => {
+        if (cancelled) return;
+        const stored = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as DataItem : null;
+        setBaseline(stored ? { id: selectedId, status: 'loaded', report: stored, error: '' } : { id: selectedId, status: 'error', report: null, error: 'The baseline report response was not a report record.' });
+      })
+      .catch((err) => {
+        if (!cancelled) setBaseline({ id: selectedId, status: 'error', report: null, error: apiErrorMessage(err, 'The baseline report could not be loaded.') });
+      });
+    return () => { cancelled = true; };
+  }, [selectedId, config, session, reloadTick]);
+
+  const diff = !selectedId
+    ? diffReports(report, null)
+    : baseline.id === selectedId && baseline.status === 'loaded'
+      ? diffReports(report, baseline.report)
+      : null;
+  const findingLink = (item: { id: string; title: string }) => (
+    <DetailEntityLink route="finding-detail" id={item.id} label={plainFindingTitle(item, targets, checks)} />
+  );
+  const changeList = (label: string, items: Array<{ id: string; title: string; detail?: string }>) => (
+    items.length ? (
+      <div key={label}>
+        <p className="check-fact-label">{label} ({formatNumber(items.length)})</p>
+        <ul className="report-live-list">
+          {items.slice(0, 10).map((item) => (
+            <li key={item.id}>{findingLink(item)}{item.detail ? <span className="muted small"> · {item.detail}</span> : null}</li>
+          ))}
+        </ul>
+        {items.length > 10 ? <p className="muted small">and {formatNumber(items.length - 10)} more.</p> : null}
+      </div>
+    ) : null
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Compared with previous report</CardTitle>
+        <CardDescription>Derived from two stored snapshots: this report and an earlier report of the same kind and scope. Nothing is filled in from current data.</CardDescription>
+      </CardHeader>
+      <CardContent className="stack-tight">
+        {candidates.length > 1 ? (
+          <Select
+            label="Baseline report"
+            value={selectedId}
+            onChange={setChosenId}
+            options={candidates.map((item) => ({
+              value: getString(item, ['id'], ''),
+              label: `${getString(item, ['title'], getString(item, ['id'], 'Report'))} · ${formatTimestamp(reportAsOf(item))}`
+            }))}
+          />
+        ) : candidates.length === 1 ? (
+          <p className="muted small">Baseline: <DetailEntityLink route="report-detail" id={selectedId} label={getString(candidates[0], ['title'], selectedId)} /> · {formatTimestamp(reportAsOf(candidates[0]))}</p>
+        ) : null}
+        {selectedId && baseline.id === selectedId && baseline.status === 'error' ? (
+          <div className="form-banner error row-actions" role="alert">
+            <span>Not compared: {baseline.error}</span>
+            <Button size="sm" variant="secondary" onClick={() => setReloadTick((count) => count + 1)}>Retry</Button>
+          </div>
+        ) : !diff ? (
+          <p className="muted small" role="status">Reading the baseline report…</p>
+        ) : diff.status === 'not_compared' ? (
+          <p className="muted">Not compared: {diff.reason}</p>
+        ) : (
+          <>
+            <div className="kv-list">
+              <div><span>New findings</span><strong>{formatNumber(diff.added.length)}</strong></div>
+              <div><span>No longer present</span><strong>{formatNumber(diff.removed.length)}</strong></div>
+              <div><span>Status changed</span><strong>{formatNumber(diff.statusChanged.length)}{diff.statusChanged.some((item) => item.acceptedRisk) ? ` (${formatNumber(diff.statusChanged.filter((item) => item.acceptedRisk).length)} newly accepted risk)` : ''}</strong></div>
+              <div><span>Severity changed</span><strong>{formatNumber(diff.severityChanged.length)}</strong></div>
+              <div><span>Unchanged</span><strong>{formatNumber(diff.unchanged)}</strong></div>
+              <div>
+                <span>Readiness score</span>
+                <strong>{diff.readiness.compared
+                  ? `${formatNumber(diff.readiness.from)} → ${formatNumber(diff.readiness.to)} (${diff.readiness.delta > 0 ? '+' : ''}${formatNumber(diff.readiness.delta)})`
+                  : `Not compared: ${diff.readiness.reason}`}</strong>
+              </div>
+            </div>
+            {changeList('New findings', diff.added)}
+            {changeList('No longer present', diff.removed)}
+            {changeList('Status changed', diff.statusChanged.map((item) => ({ ...item, detail: `${formatStatusLabel(item.from, 'Not recorded')} → ${formatStatusLabel(item.to, 'Not recorded')}` })))}
+            {changeList('Severity changed', diff.severityChanged.map((item) => ({ ...item, detail: `${formatSeverityLabel(item.from)} → ${formatSeverityLabel(item.to)}` })))}
+            {diff.readiness.compared && diff.readiness.factors.length ? (
+              <div>
+                <p className="check-fact-label">Score factors that moved</p>
+                <ul className="report-live-list">
+                  {diff.readiness.factors.map((factor) => (
+                    <li key={factor.key}>{formatStatusLabel(factor.label)}: {factor.from ?? 'not recorded'} → {factor.to ?? 'not recorded'}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </>
         )}
       </CardContent>
@@ -4137,6 +5101,7 @@ export function ReportDetailPage({
   const report = reportDetail.detail;
   const exporter = useReportExport(config, session, onRefresh);
   const [liveCheckedAt] = useState(() => new Date().toISOString());
+  const declaredTargets = useDeclaredTargets(data, config, session);
 
   if (!entityId) {
     return (
@@ -4192,7 +5157,12 @@ export function ReportDetailPage({
   const readinessReason = getString(summary ?? {}, ['readiness_score_reason'], '');
   const openFindings = getNestedNumber(report, ['summary', 'findings_snapshot', 'open_total'], getNestedNumber(report, ['summary', 'open_findings'], NaN));
   const hasOpenFindings = Number.isFinite(openFindings);
+  const openedInPeriod = getNestedNumber(report, ['summary', 'findings_snapshot', 'opened_in_period'], NaN);
+  const excludedByPeriod = getNestedNumber(report, ['summary', 'findings_snapshot', 'excluded_by_period'], 0);
   const readinessFactors = getNestedArray(report, ['summary', 'readiness_factors']);
+  const scoreBasisMissing = hasReadinessScore && (!frozen || readinessFactors.length === 0);
+  const frameworkKind = reportKindIsFramework(kind);
+  const targetLabels = new Map(declaredTargets.map((item) => [getString(item, ['id'], ''), getString(item, ['value', 'hostname'], '')]));
   const compliance = getNestedItem(report, ['summary', 'compliance']);
   const frameworks = Array.isArray(compliance?.frameworks) ? (compliance!.frameworks as unknown[]).map(String) : [];
   const scope = getNestedItem(summary, ['scope']);
@@ -4237,8 +5207,8 @@ export function ReportDetailPage({
       ].filter(Boolean).join(' · ') || scopeMode.replaceAll('_', ' ');
   const periodText = periodBounds
     ? getString(periodBounds, ['status'], '') === 'bounded'
-      ? `${formatDate(getString(periodBounds, ['start'], ''))} to ${formatDate(getString(periodBounds, ['end'], ''))}`
-      : getString(periodBounds, ['status'], '') === 'unbounded' ? `All time, until ${formatDate(getString(periodBounds, ['end'], ''))}` : 'Not recorded'
+      ? `${formatTimestamp(getString(periodBounds, ['start'], ''))} to ${formatTimestamp(getString(periodBounds, ['end'], ''))}`
+      : getString(periodBounds, ['status'], '') === 'unbounded' ? `All time, until ${formatTimestamp(getString(periodBounds, ['end'], ''))}` : 'Not recorded'
     : reportPeriodDisplay(data, report) === '—' ? 'Not recorded' : reportPeriodDisplay(data, report);
   const readinessNote = hasReadinessScore
     ? null
@@ -4266,7 +5236,7 @@ export function ReportDetailPage({
     } },
     { key: 'target', label: 'Target', render: (row) => {
       const targetId = getString((row.snapshot as DataItem | null) ?? {}, ['target_id'], '');
-      return targetId ? <DetailEntityLink route="target-detail" id={targetId} /> : <span className="muted">Not recorded</span>;
+      return targetId ? <DetailEntityLink route="target-detail" id={targetId} label={targetLabels.get(targetId) || targetId} /> : <span className="muted">Not recorded</span>;
     } },
     { key: 'status', label: 'Status at capture', render: (row) => {
       const status = getString((row.snapshot as DataItem | null) ?? {}, ['status'], '');
@@ -4281,12 +5251,42 @@ export function ReportDetailPage({
     } }
   ];
   const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'title', label: 'Finding at generation', render: (item) => <span className="cp-stack"><span>{getString(item, ['title'], 'Untitled finding')}</span><span className="mono muted small">{getString(item, ['id'])}</span></span> },
-    { key: 'severity', label: 'Severity', render: (item) => formatSeverityLabel(getString(item, ['severity'], '')) },
-    { key: 'status', label: 'Status at generation', render: (item) => formatStatusLabel(getString(item, ['status'], ''), 'Not recorded') },
+    { key: 'title', label: 'Finding at generation', render: (item) => (
+      <span className="cp-stack">
+        <DetailEntityLink route="finding-detail" id={getString(item, ['id'], '')} label={plainFindingTitle(item, declaredTargets, data.checks)} />
+        <span className="mono muted small">{getString(item, ['id'])}</span>
+      </span>
+    ) },
+    { key: 'severity', label: 'Severity', render: (item) => {
+      const severity = getString(item, ['severity'], '');
+      return severity ? <Badge tone={severityTone(severity)}>{formatSeverityLabel(severity)}</Badge> : <span className="muted">Not recorded</span>;
+    } },
+    { key: 'status', label: 'Status at generation', render: (item) => {
+      const status = getString(item, ['status'], '');
+      return status ? <StatusBadge value={status} tone={findingStatusTone(status)} /> : <span className="muted">Not recorded</span>;
+    } },
     { key: 'proof', label: 'Proof', render: (item) => <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector({ entry: 'finding', finding_id: getString(item, ['id']) }, { focusKey: getString(item, ['id']) })}>View evidence</Button> }
   ];
   const formatOptions = reportOptionsFromCapabilities(data.reportCapabilities, 'formats', REPORT_FORMAT_FALLBACK_OPTIONS);
+  const evidenceReferenceList = capturedEvidenceIds.length === 0
+    ? <p className="muted">{summary ? 'No evidence references were captured.' : 'Not recorded (legacy report).'}</p>
+    : (
+      <ul className="report-live-list">
+        {capturedEvidenceIds.map((evidenceId) => {
+          const known = evidenceItems.find((item) => getString(item, ['id'], '') === evidenceId);
+          const knownLabel = known ? getString(known, ['label'], '') : '';
+          return (
+            <li key={evidenceId} className="row-actions">
+              <span className="cp-stack">
+                <span>{knownLabel ? humanizeSignalType(knownLabel) : 'Evidence record'}</span>
+                <code className="mono-hash muted small">{evidenceId}</code>
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector({ entry: 'artifact', evidence_id: evidenceId }, { focusKey: evidenceId })}>View evidence</Button>
+            </li>
+          );
+        })}
+      </ul>
+    );
 
   return (
     <div className="content report-detail-page">
@@ -4304,7 +5304,7 @@ export function ReportDetailPage({
         )}
       />
       <PageContextSummary>
-        {asOf ? `Snapshot frozen ${formatDate(asOf)}` : `Report created ${formatDate(report.created_at)} · snapshot time not recorded`} · Scope: {scopeText}
+        {asOf ? `Snapshot frozen ${formatTimestamp(asOf)}` : `Report created ${formatTimestamp(report.created_at)} · snapshot time not recorded`} · Scope: {scopeText}
       </PageContextSummary>
       {!frozen ? (
         <div className="form-banner neutral" role="note">This is a legacy report: its inputs were not frozen at generation. Only the stored run references and summary values are shown; nothing is filled in from current data.</div>
@@ -4325,34 +5325,51 @@ export function ReportDetailPage({
               <div><span>Period</span><strong>{periodText}</strong></div>
               <div><span>Declared targets captured</span><strong>{countText(declaredMembers)}</strong></div>
               <div><span>Runs captured</span><strong>{runCapture ? `${countText(runCapture)}${getString(runCapture, ['limit'], '') ? `, most recent ${getString(runCapture, ['limit'], '')}` : ''}` : `${formatNumber(capturedRunIds.length)} (total not recorded)`}</strong></div>
-              <div><span>Findings captured</span><strong>{findingsSnapshot ? countText(findingsSnapshot) : 'Not recorded'}</strong></div>
-              <div><span>Open findings at generation</span><strong>{hasOpenFindings ? openFindings : 'Not recorded'}</strong></div>
+              <div>
+                <span>Findings in this snapshot</span>
+                <strong>
+                  {findingsSnapshot ? countText(findingsSnapshot) : 'Not recorded'}
+                  {findingsSnapshot && excludedByPeriod > 0 ? <span className="muted"> ({formatNumber(excludedByPeriod)} older closed {pluralize(excludedByPeriod, 'finding')} outside the period)</span> : null}
+                </strong>
+              </div>
+              <div><span>Open at generation (any opened date)</span><strong>{hasOpenFindings ? formatNumber(openFindings) : 'Not recorded'}</strong></div>
+              <div><span>Opened in period</span><strong>{Number.isFinite(openedInPeriod) ? formatNumber(openedInPeriod) : 'Not recorded'}</strong></div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Readiness at {asOf ? formatDate(asOf) : 'generation'}</CardTitle>
+              <CardTitle>Readiness at {asOf ? formatTimestamp(asOf) : 'generation'}</CardTitle>
               <CardDescription>Values recorded in the report. They do not change when current results change.</CardDescription>
             </CardHeader>
             <CardContent className="report-summary-layout">
-              {hasReadinessScore ? <ReadinessGauge score={readinessScore} showBand={false} /> : <p className="cp-note">{readinessNote}</p>}
+              {hasReadinessScore ? (
+                <div className="stack-tight">
+                  <ReadinessGauge score={readinessScore} showBand={false} muted={scoreBasisMissing} />
+                  {scoreBasisMissing ? <p className="cp-note">Score basis not recorded in this snapshot; it cannot be traced to evidence.</p> : null}
+                </div>
+              ) : <p className="cp-note">{readinessNote}</p>}
               <div className="kv-list">
-                <div><span>{reportKindIsFramework(kind) ? 'Framework mapping' : 'Audience'}</span><strong>{compliance ? getString(compliance, ['template_title'], reportKindLabel(kind)) : reportKindLabel(kind)}</strong></div>
-                {frameworks.length ? <div><span>Frameworks</span><strong>{frameworks.map((framework) => plainCodeLabel(framework)).join(', ')}</strong></div> : null}
+                <div><span>{frameworkKind ? 'Framework mapping' : 'Audience'}</span><strong>{compliance ? getString(compliance, ['template_title'], reportKindLabel(kind)) : reportKindLabel(kind)}</strong></div>
+                {frameworks.length ? <div><span>{frameworkKind ? 'Frameworks' : 'Control areas'}</span><strong>{frameworks.map((framework) => plainCodeLabel(framework)).join(', ')}</strong></div> : null}
                 <div><span>Status</span><StatusBadge value={getString(report, ['status'], '')} tone={reportStatusTone(getString(report, ['status'], ''))} fallback="Not recorded" /></div>
               </div>
             </CardContent>
           </Card>
         </div>
         <p className="cp-note">{getString(compliance ?? {}, ['disclaimer'], 'Evidence mapping is not a certification or a statement of compliance.')} Protection profiles are {getNestedString(summary, ['sections', 'protection_profile', 'status'], 'not_included') === 'included' ? 'included' : 'not included in this report'}.</p>
-        {readinessFactors.length ? (
+        {hasReadinessScore ? (
           <Card>
             <CardHeader>
               <CardTitle>Score factors in this snapshot</CardTitle>
               <CardDescription>As recorded; not recalculated from current data.</CardDescription>
             </CardHeader>
             <CardContent>
-              <DataTable columns={factorColumns} items={readinessFactors} getRowId={(factor) => getString(factor, ['key', 'label'], JSON.stringify(factor))} empty={null} />
+              <DataTable
+                columns={factorColumns}
+                items={readinessFactors}
+                getRowId={(factor) => getString(factor, ['key', 'label'], JSON.stringify(factor))}
+                empty={<EmptyState icon={ClipboardList} title="No score factors recorded." body="No score factors were recorded in this snapshot." />}
+              />
             </CardContent>
           </Card>
         ) : null}
@@ -4386,28 +5403,28 @@ export function ReportDetailPage({
             </CardContent>
           </Card>
         ) : null}
-        <Card>
-          <CardHeader>
-            <CardTitle>Evidence references ({formatNumber(capturedEvidenceIds.length)})</CardTitle>
-            <CardDescription>Every evidence ID the snapshot references. Opening one shows its recorded integrity; a reference is not verification.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {capturedEvidenceIds.length === 0 ? <p className="muted">{summary ? 'No evidence references were captured.' : 'Not recorded (legacy report).'}</p> : (
-              <ul className="report-live-list">
-                {capturedEvidenceIds.map((evidenceId) => {
-                  const known = evidenceItems.find((item) => getString(item, ['id'], '') === evidenceId);
-                  return (
-                    <li key={evidenceId} className="row-actions">
-                      <code className="mono-hash">{evidenceId}</code>
-                      {known ? <span className="muted small">{getString(known, ['label'], '')}</span> : null}
-                      <Button size="sm" variant="ghost" onClick={() => openEvidenceInspector({ entry: 'artifact', evidence_id: evidenceId }, { focusKey: evidenceId })}>View evidence</Button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+        <ReportComparisonCard report={report} reports={data.reports} config={config} session={session} targets={declaredTargets} checks={data.checks} />
+        {frameworkKind ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Evidence references ({formatNumber(capturedEvidenceIds.length)})</CardTitle>
+              <CardDescription>Every evidence ID the snapshot references. Opening one shows its recorded integrity; a reference is not verification.</CardDescription>
+            </CardHeader>
+            <CardContent>{evidenceReferenceList}</CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent>
+              <details className="detail-technical" style={{ borderTop: 'none', paddingTop: 0 }}>
+                <summary><ChevronRight className="detail-technical-chevron" size={16} aria-hidden="true" />Evidence references ({formatNumber(capturedEvidenceIds.length)})</summary>
+                <div className="stack-tight">
+                  <p className="muted small">Every evidence ID the snapshot references. Opening one shows its recorded integrity; a reference is not verification.</p>
+                  {evidenceReferenceList}
+                </div>
+              </details>
+            </CardContent>
+          </Card>
+        )}
         {declarationSnapshot ? (
           <p className="muted small">Declarations: {getString(declarationSnapshot, ['status'], 'not recorded').replaceAll('_', ' ')}{getNestedArray(declarationSnapshot, ['items']).length ? ` · ${formatNumber(getNestedArray(declarationSnapshot, ['items']).length)} target declarations frozen` : ''}.</p>
         ) : null}
@@ -4415,7 +5432,15 @@ export function ReportDetailPage({
 
       <section className="report-live" aria-labelledby="report-live-heading">
         <h2 id="report-live-heading" className="report-section-title">Current status <span className="muted">· live, not part of the report</span></h2>
-        <ReportLiveOpenFindings data={data} config={config} session={session} runIds={capturedRunIds} checkedAt={liveCheckedAt} />
+        <ReportLiveFindingStatus
+          data={data}
+          config={config}
+          session={session}
+          snapshotFindings={snapshotFindings}
+          hasSnapshot={Boolean(findingsSnapshot)}
+          targets={declaredTargets}
+          checkedAt={liveCheckedAt}
+        />
       </section>
     </div>
   );

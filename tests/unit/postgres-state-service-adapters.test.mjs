@@ -421,7 +421,10 @@ describe('postgres state service adapter', () => {
     const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
     assert.equal(soc.score, 0);
     assert.match(soc.detail, /Kill switch state recorded/);
-    assert.match(soc.detail, /Pending gates remain/);
+    assert.match(soc.detail, /Pending gates remain on 1 high-scale request: \d+ missing accepted artifacts, SOC approvals 0\/2\./);
+    assert.doesNotMatch(soc.detail, /hs_1/, 'the governance detail never leaks a raw request ID');
+    assert.equal(payload.readiness.governance.pending_gates[0].requestId, 'hs_1');
+    assert.equal(payload.readiness.governance.pending_gates[0].label, 'High-scale request');
     assert.equal(payload.readiness.persistence, 'postgres');
   });
 
@@ -597,6 +600,7 @@ describe('postgres state service adapter', () => {
         {
           id: 'hs_pending',
           tenant_id: 'ten_demo',
+          objective: 'Checkout launch surge rehearsal',
           state: 'under_review',
           artifacts: [{ id: 'art_auth', type: 'customer_authorization', status: 'accepted' }],
           soc_approvals: [{ user_id: 'soc_a', at: RECENT_TS }],
@@ -609,9 +613,41 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.high_scale_requests, 1);
     assert.equal(payload.high_scale_status, 'pending');
     assert.equal(soc.score, 0);
-    assert.match(soc.detail, /Pending gates remain/);
+    assert.match(soc.detail, /Pending gates remain on high-scale request "Checkout launch surge rehearsal"/);
     assert.match(soc.detail, /SOC approvals 1\/2/);
-    assert.match(soc.detail, /missing accepted artifacts/);
+    assert.match(soc.detail, /\d+ missing accepted artifacts/);
+    assert.doesNotMatch(soc.detail, /hs_pending/, 'the governance detail never leaks a raw request ID');
+    assert.doesNotMatch(soc.detail, /customer_authorization_letter|emergency_contacts/, 'artifact types are counted, not listed');
+    const [gate] = payload.readiness.governance.pending_gates;
+    assert.equal(gate.requestId, 'hs_pending');
+    assert.equal(gate.label, 'Checkout launch surge rehearsal');
+    assert.equal(gate.approvals, 1);
+    assert.ok(Array.isArray(gate.missing_artifacts) && gate.missing_artifacts.length > 0);
+    assert.ok(gate.missing_artifacts.includes('customer_authorization_letter'));
+    assert.equal(gate.pack_complete, false);
+    assert.equal(soc.detail.match(/missing accepted artifacts/g)?.length, 1);
+  });
+
+  it('flags an incomplete authorization pack when every artifact is accepted but out of validity', async () => {
+    const expired = acceptedAuthorizationArtifacts().map((artifact) => ({
+      ...artifact,
+      valid_window: { window_start: '2026-01-01T00:00:00.000Z', window_end: '2026-01-02T00:00:00.000Z' },
+    }));
+    const repositories = stubRepositories({
+      highScaleRequests: [
+        { ...GOVERNED_REQUEST, id: 'hs_expired', objective: 'Expired pack rehearsal', state: 'under_review', artifacts: expired, soc_approvals: [{ user_id: 'soc_a', at: RECENT_TS }] },
+      ],
+    });
+    const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
+    const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
+    const soc = payload.readiness.factors.find((f) => f.key === 'soc_readiness');
+    const [gate] = payload.readiness.governance.pending_gates;
+    assert.equal(gate.requestId, 'hs_expired');
+    assert.deepEqual(gate.missing_artifacts, []);
+    assert.equal(gate.pack_complete, false, 'accepted but expired artifacts leave the pack incomplete');
+    assert.equal(gate.approvals, 1);
+    assert.match(soc.detail, /authorization artifact validity or scope incomplete, SOC approvals 1\/2\./);
+    assert.doesNotMatch(soc.detail, /hs_expired/);
   });
 
   it('records governance but no protection credit for accepted authorization pack and two distinct approvers', async () => {
@@ -635,6 +671,7 @@ describe('postgres state service adapter', () => {
     assert.equal(soc.score, 0);
     assert.match(soc.detail, /authorization pack accepted/);
     assert.match(soc.detail, /2 SOC approver/);
+    assert.doesNotMatch(soc.detail, /hs_ready/, 'governance evidence lines name the request, never its ID');
   });
 
   it('records governance without protection credit for kill-switch evidence and returns only safe fields', async () => {

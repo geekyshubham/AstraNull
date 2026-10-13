@@ -61,7 +61,6 @@ export function FindingCard({
       <span className="fc-facets">
         {checkLabel ? <span><span className="fc-key">Check:</span> {checkLabel}</span> : null}
         {checkLabel ? <span className="fc-sep" aria-hidden="true">·</span> : null}
-        <span className="fc-sep" aria-hidden="true">·</span>
         <span><span className="fc-key">Opened:</span> {formatDate(openedAt)}</span>
       </span>
     </a>

@@ -42,14 +42,16 @@ test.describe('settings automation and vault finite action states', () => {
     const panel = page.locator('#settings-sections-panel-access');
     const form = panel.locator('form').first();
     await form.getByLabel('Name', { exact: true }).fill('Synthetic automation owner');
-    await form.getByLabel(/^Scopes/).fill('not a valid scope');
-    await form.getByLabel(/^Scopes/).press('Enter');
-    await receipt(testInfo, 'handleCreateServiceAccount', 'invalid', async () => {
-      await expect(page.getByRole('alert')).toContainText('Scopes must look like resource:action'); expect(writes).toEqual([]);
-      return ['Keyboard submission rejects malformed scope before API writes'];
-    });
-    await form.getByLabel(/^Scopes/).fill('report:read');
     await form.getByRole('combobox', { name: /^Role/ }).selectOption('viewer');
+    await form.getByRole('checkbox', { name: /tenant:read/ }).uncheck();
+    await form.getByRole('checkbox', { name: /evidence:read/ }).uncheck();
+    await form.getByLabel('Name', { exact: true }).press('Enter');
+    await receipt(testInfo, 'handleCreateServiceAccount', 'invalid', async () => {
+      await expect(page.getByRole('alert')).toContainText('Select at least one scope.'); expect(writes).toEqual([]);
+      return ['Keyboard submission with no role-held scope selected is rejected before API writes'];
+    });
+    await expect(form.getByRole('checkbox', { name: /test_run:execute/ })).toHaveCount(0);
+    await form.getByRole('checkbox', { name: /report:read/ }).check();
     await form.getByRole('button', { name: 'Create service account', exact: true }).click();
     try {
       await receipt(testInfo, 'handleCreateServiceAccount', 'busy', async () => {

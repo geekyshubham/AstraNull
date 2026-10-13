@@ -2,7 +2,7 @@
 import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { isProtectionValidationEnabledForTenant, loadRuntimeConfig } from '../../src/config.mjs';
 import {
   classifyFirewallComparisonItem,
@@ -22,6 +22,7 @@ import { createProtectionValidationFacade, edgeDetectionSignals } from '../../sr
 import { resolveDevProtectionRetestAuthorization } from '../../src/services/protectionValidationRetest.mjs';
 import { getTenantDeploymentFeatures, isProtectionValidationEnabled } from '../../src/services/tenantDeploymentFeatures.mjs';
 import { attachConfigurationContext } from '../../src/services/protectionProfile.mjs';
+import { DEMO_AUTO_VERIFY_ENV } from '../../src/lib/demoAutoVerify.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
@@ -63,6 +64,16 @@ function firewallEvaluation(exp, { id = 'fwc_int', candidate = ['no_response', '
 }
 
 describe('tenant gate', () => {
+  let previousDemoTenants;
+  beforeEach(() => {
+    previousDemoTenants = process.env[DEMO_AUTO_VERIFY_ENV];
+    process.env[DEMO_AUTO_VERIFY_ENV] = 'Astra-demo-1';
+  });
+  afterEach(() => {
+    if (previousDemoTenants === undefined) delete process.env[DEMO_AUTO_VERIFY_ENV];
+    else process.env[DEMO_AUTO_VERIFY_ENV] = previousDemoTenants;
+  });
+
   it('is off by default, honours tenant overrides, and an explicit global off wins', () => {
     const base = loadRuntimeConfig({ ...process.env, ASTRANULL_PROTECTION_VALIDATION_ENABLED: '', ASTRANULL_PROTECTION_VALIDATION_ENABLED_TENANTS: '{"ten_a":true}' });
     assert.equal(isProtectionValidationEnabledForTenant(base, 'ten_a'), true);

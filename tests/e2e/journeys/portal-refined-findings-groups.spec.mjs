@@ -116,7 +116,7 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
 
       const link = alertLink(page, /Origin direct bypass/i);
       await expect(link).toBeVisible();
-      // The default Open filter counts only targets with an open member.
+      // The default Open queue filter counts only targets with an open member.
       await expect(link).toHaveAttribute('aria-label', /1 affected target$/);
 
       // Keyboard: Enter on the focused alert link opens the group detail.
@@ -132,9 +132,10 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
       const filters = page.getByRole('group', { name: 'Affected target status filter' });
       const filterButton = (label) => filters.getByRole('button', { name: new RegExp(`^${label}`) });
       await expect(filterButton('All').locator('.rf-tab-count')).toHaveText('2');
-      await expect(filterButton('Open').locator('.rf-tab-count')).toHaveText('1');
-      await expect(filterButton('Accepted').locator('.rf-tab-count')).toHaveText('1');
+      await expect(filterButton('Active').locator('.rf-tab-count')).toHaveText('1');
+      await expect(filterButton('Risk decisions').locator('.rf-tab-count')).toHaveText('1');
       await expect(filterButton('Closed').locator('.rf-tab-count')).toHaveText('2');
+      await expect(filterButton('Other')).toHaveCount(0);
 
       // All filter: one explicit evidence action per historical finding (each member's own proof).
       const member = (findingId) => page.locator(`[data-focus-key="member-${findingId}"]`);
@@ -144,8 +145,8 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
       await expect(page.getByText(/3 findings:/)).toBeVisible();
 
       // Lifecycle filter narrows the actions to that lifecycle only.
-      await filterButton('Accepted').click();
-      await expect(filterButton('Accepted')).toHaveAttribute('aria-pressed', 'true');
+      await filterButton('Risk decisions').click();
+      await expect(filterButton('Risk decisions')).toHaveAttribute('aria-pressed', 'true');
       await expect(member('fnd_hist_accepted')).toHaveCount(1);
       await expect(member('fnd_hist_open')).toHaveCount(0);
       await expect(member('fnd_hist_closed_2')).toHaveCount(0);
@@ -166,7 +167,7 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
       await page.getByRole('link', { name: /Open full finding for/ }).first().click();
       await expect(page).toHaveURL(/#finding-detail\?id=fnd_hist_/);
       await waitForPortalRouteSettled(page);
-      const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
+      const ruleAssets = page.getByRole('region', { name: 'Other targets with this finding' });
       await expect(ruleAssets).toBeVisible();
       await expect(ruleAssets).toContainText('checkout.acme.com');
       await expect(ruleAssets).not.toContainText('Group name unavailable');
@@ -245,11 +246,36 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
   test('finding-detail cold deep link shows direct domains (F12)', async ({ page }) => {
     await prepare(page);
     await gotoHash(page, 'finding-detail?id=fnd_hist_open');
-    const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
+    const ruleAssets = page.getByRole('region', { name: 'Other targets with this finding' });
     await expect(ruleAssets).toBeVisible();
     await expect(ruleAssets).toContainText('checkout.acme.com');
     await expect(ruleAssets).not.toContainText(ids.targetGroupId);
     await expect(ruleAssets).not.toContainText('Group name unavailable');
+  });
+
+  test('bulk triage assigns an owner with one PATCH per selected finding', async ({ page }) => {
+    await prepare(page);
+    const patches = [];
+    await page.route(/\/v1\/findings\/[^/?]+$/, (route) => {
+      if (route.request().method() !== 'PATCH') return route.fallback();
+      patches.push({ url: new URL(route.request().url()).pathname, body: route.request().postDataJSON() });
+      return route.fulfill({ json: { ok: true } });
+    });
+    await gotoHash(page, 'findings?variant=refined');
+    await alertLink(page, /Origin direct bypass/i).click();
+    await waitForPortalRouteSettled(page);
+    const filters = page.getByRole('group', { name: 'Affected target status filter' });
+    await filters.getByRole('button', { name: /^Closed/ }).click();
+    await page.getByRole('checkbox', { name: 'Select all shown' }).check();
+    const bar = page.getByRole('region', { name: 'Bulk triage' });
+    await expect(bar).toContainText('2 findings selected. Each keeps its own evidence and audit record.');
+    await bar.getByRole('button', { name: 'Assign owner…' }).click();
+    const dialog = page.getByRole('dialog', { name: /Assign an owner to 2 findings/ });
+    await dialog.getByLabel('Owner').fill('sre-oncall');
+    await dialog.getByRole('button', { name: 'Assign owner' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Updated 2, skipped 0, failed 0' })).toBeVisible();
+    expect(patches.map((patch) => patch.url).sort()).toEqual(['/v1/findings/fnd_hist_closed', '/v1/findings/fnd_hist_closed_2']);
+    expect(patches.every((patch) => patch.body.assignee === 'sre-oncall' && !('status' in patch.body))).toBe(true);
   });
 
   test('finding-detail does not depend on target-group loading (F12)', async ({ page }) => {
@@ -260,7 +286,7 @@ test.describe('Refined grouped findings, SLA wording and detail group names', ()
         : route.fallback()
     ));
     await gotoHash(page, 'finding-detail?id=fnd_hist_open');
-    const ruleAssets = page.getByRole('region', { name: 'Affected assets for this rule' });
+    const ruleAssets = page.getByRole('region', { name: 'Other targets with this finding' });
     await expect(ruleAssets).toBeVisible();
     await expect(ruleAssets).toContainText('checkout.acme.com');
     await expect(ruleAssets.getByRole('status').filter({ hasText: 'Target group names are unavailable' })).toHaveCount(0);

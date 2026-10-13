@@ -92,7 +92,8 @@ test.describe('target-first check library workflow', () => {
     const appRow = page.locator('.vector-library-table tbody tr').filter({ hasText: 'EVA-004' });
     await expect(appRow).toHaveCount(1);
     await expect(appRow).toContainText('Bounded check available');
-    await appRow.getByRole('button', { name: 'Review' }).click();
+    await expect(page.getByRole('button', { name: 'Fit for target', exact: true })).toContainText('Bounded check available');
+    await appRow.getByRole('button', { name: 'Details for EVA-004', exact: true }).click();
 
     const detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('What it checks');
@@ -100,6 +101,13 @@ test.describe('target-first check library workflow', () => {
     await expect(detail).toContainText('Expected protection');
     await expect(detail).toContainText('Semantic-safe evidence');
     await expect(detail.getByRole('heading', { name: 'Mapped checks' })).toBeVisible();
+    await expect(detail.locator('.vector-mapped-run').first()).toHaveText(/Not run on this target|·/);
+    const railBeforeGrid = await detail.locator('.vector-detail').evaluate((root) => {
+      const rail = root.querySelector('.vector-detail-rail');
+      const grid = root.querySelector('.vector-detail-grid');
+      return Boolean(rail && grid && (rail.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING));
+    });
+    expect(railBeforeGrid).toBe(true);
     await expect(detail.getByRole('link').first()).toHaveAttribute('href', new RegExp(`#check-detail\\?id=[^&]+&target=${PORTAL_BASELINE_IDS.targetId}`));
     await expect(detail.getByRole('button', { name: 'Review run' })).toBeDisabled();
     await chooseFirstRealOption(detail, 'Mapped bounded check');
@@ -107,10 +115,16 @@ test.describe('target-first check library workflow', () => {
 
     const confirm = page.locator('dialog.modal-confirm[open]');
     await expect(confirm).toContainText(PORTAL_BASELINE_IDS.targetId);
-    await expect(confirm).toContainText('Evidence limit:');
-    await expect(confirm).toContainText('rechecked by the server before anything is sent');
+    await expect(confirm.getByRole('heading')).toContainText(/^Start .+ on checkout\.acme\.com\?$/);
+    const review = confirm.locator('dl.td-review-list');
+    await expect(review.locator('dt')).toContainText(['Target', 'Check', 'Upper bound']);
+    await expect(review).toContainText('Evidence limit');
+    await expect(review).toContainText('Catalog vector');
+    await expect(review.locator('div').filter({ hasText: 'Upper bound' }).locator('dd')).toHaveText(/^(\d[\d,]* requests?(, [\d,]+ ms timeout)?|Not recorded in the catalog)$/);
+    await expect(confirm).toContainText('The server re-checks ownership, safe windows, rate and concurrency gates when you start.');
+    await expect(confirm).toContainText('A bounded check does not measure volumetric capacity.');
     expect(runBodies).toHaveLength(0);
-    await confirm.getByRole('button', { name: 'Start bounded check' }).click();
+    await confirm.getByRole('button', { name: 'Start check', exact: true }).click();
     await expect.poll(() => runBodies.length).toBe(1);
     expect(runBodies[0]).toMatchObject({
       target_id: PORTAL_BASELINE_IDS.targetId,
@@ -130,7 +144,7 @@ test.describe('target-first check library workflow', () => {
     const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
 
     await search.fill('NET-016');
-    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'NET-016' }).getByRole('button', { name: 'Review' }).click();
+    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'NET-016' }).getByRole('button', { name: 'Details for NET-016', exact: true }).click();
     let detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('SOC-gated only');
     await expect(detail).toContainText('supplemental declaration or transport evidence is not an exposure result');
@@ -138,7 +152,7 @@ test.describe('target-first check library workflow', () => {
     await detail.getByRole('button', { name: 'Close dialog' }).click();
 
     await search.fill('AMP-073');
-    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'AMP-073' }).getByRole('button', { name: 'Review' }).click();
+    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'AMP-073' }).getByRole('button', { name: 'Review AMP-073', exact: true }).click();
     detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('Monitor only');
     await expect(detail).toContainText('no active outside-in result is claimed');
@@ -175,17 +189,34 @@ test.describe('target-first check library workflow', () => {
 
   test('restores the target, search, and page from a shared address', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
-    await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}&q=AMP&page=2`, { waitUntil: 'networkidle' });
+    await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}&fit=all&q=AMP&page=2`, { waitUntil: 'networkidle' });
     await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com', { timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'Fit for target', exact: true })).toContainText('Any fit');
     await expect(page.getByPlaceholder('Name, ID, protocol, exposure, control')).toHaveValue('AMP');
     await expect(page.getByText(/^Page 2 of /)).toBeVisible();
   });
 
-  test('restores focus to Review after detail closes by button or Escape', async ({ page }) => {
+  test('narrows to bounded-check fit when a target is chosen and can show every fit', async ({ page }) => {
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'checks', sourceBaseUrl);
+    await chooseFirstRealOption(page, 'Target');
+    const fit = page.getByRole('button', { name: 'Fit for target', exact: true });
+    await expect(fit).toContainText('Bounded check available');
+    await expect(page).toHaveURL(/fit=safe_runnable/);
+    await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill('AMP-073');
+    const empty = page.locator('.vector-library-table').getByRole('region');
+    await expect(empty).toContainText('No vectors match these filters.');
+    await empty.getByRole('button', { name: 'Show all fits', exact: true }).click();
+    await expect(fit).toContainText('Any fit');
+    await expect(page.locator('.vector-library-table tbody tr').filter({ hasText: 'AMP-073' })).toHaveCount(1);
+    await expect(page).toHaveURL(/fit=all/);
+  });
+
+  test('restores focus to Details after detail closes by button or Escape', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
     await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill('APP-003');
-    const review = page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-003' }).getByRole('button', { name: 'Review' });
+    const review = page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-003' }).getByRole('button', { name: 'Details for APP-003', exact: true });
     await review.click();
     let detail = page.locator('dialog.form-modal[open]');
     await detail.getByRole('button', { name: 'Close dialog' }).click();
@@ -210,7 +241,7 @@ test.describe('target-first check library workflow', () => {
     await expect(page.getByLabel('Catalog and check counts')).toContainText('Review only');
     const search = page.getByPlaceholder('Name, ID, protocol, exposure, control');
     await search.fill('EVA-004');
-    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'EVA-004' }).getByRole('button', { name: 'Review' }).click();
+    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'EVA-004' }).getByRole('button', { name: 'Details for EVA-004', exact: true }).click();
     const detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('only owners, admins, and engineers can start bounded checks');
     await expect(detail.getByRole('button', { name: 'Mapped bounded check' })).toHaveCount(0);

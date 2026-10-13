@@ -424,6 +424,83 @@ describe('declared-host analytics API', () => {
     }
   });
 
+  it('exports the filtered audit log with every hash, audits the export, and stays tenant-scoped', async () => {
+    freshStore();
+    const env = {
+      ...process.env,
+      ASTRANULL_NO_PERSIST: '1',
+      ASTRANULL_RATE_LIMIT_DISABLED: '1',
+    };
+    Object.assign(process.env, env);
+    const server = createServer({ runtimeConfig: loadRuntimeConfig(env), env });
+    server.listen(0);
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const store = getStore();
+      store.auditLog.push(
+        auditRow('aud_lo', 'ten_demo', LO, 2, 'usr_admin', 'target.added', 'target', 'tgt_host'),
+        auditRow('aud_hi', 'ten_demo', HI, 3, 'usr_admin', 'target.added', 'target', 'tgt_host'),
+        auditRow('aud_other', 'ten_demo', LATER, 4, 'usr_other', 'target.updated', 'target_group', 'tg_1'),
+        auditRow('aud_foreign', 'ten_other', HI, 1, 'usr_foreign', 'target.added', 'target', 'tgt_foreign'),
+      );
+
+      const exported = await get(baseUrl, '/v1/audit-log/export?action=target.added');
+      assert.equal(exported.status, 200, exported.text);
+      assert.deepEqual(exported.json.filters, { action: 'target.added' });
+      assert.equal(exported.json.count, 2);
+      assert.deepEqual(exported.json.items.map((entry) => entry.id), ['aud_lo', 'aud_hi']);
+      for (const entry of exported.json.items) {
+        assert.deepEqual(Object.keys(entry).sort(), ['action', 'actor_user_id', 'entry_hash', 'id', 'metadata', 'prev_hash', 'resource_id', 'resource_type', 'sequence', 'timestamp']);
+        assert.equal(entry.entry_hash, `hash-${entry.id}`);
+        assert.equal(entry.prev_hash, `prev-${entry.id}`);
+      }
+      assert.equal(typeof exported.json.exported_at, 'string');
+      assert.match(exported.json.custody.content_sha256, /^[0-9a-f]{64}$|^sha256:/);
+      assert.equal(exported.json.custody.tenant_id, 'ten_demo');
+      assert.equal(exported.text.includes('aud_foreign'), false);
+
+      const record = store.auditLog.find((entry) => entry.action === 'audit.exported' && entry.tenant_id === 'ten_demo');
+      assert.ok(record, 'the export is itself audited');
+      assert.equal(record.actor_user_id, 'usr_admin');
+      assert.deepEqual(record.metadata.filters, { action: 'target.added' });
+      assert.equal(record.metadata.count, 2);
+      assert.equal(record.metadata.content_sha256, exported.json.custody.content_sha256);
+      assert.equal(JSON.stringify(record.metadata).includes('hash-aud_lo'), false, 'audit metadata holds the digest only, never the rows');
+
+      const actor = await get(baseUrl, '/v1/audit-log/export?actor=usr_other');
+      assert.equal(actor.status, 200, actor.text);
+      assert.deepEqual(actor.json.items.map((entry) => entry.id), ['aud_other']);
+      const ranged = await get(baseUrl, `/v1/audit-log/export?action=target.added&from=${encodeURIComponent(HI)}&to=${encodeURIComponent(HI)}`);
+      assert.deepEqual(ranged.json.items.map((entry) => entry.id), ['aud_hi']);
+
+      const auditor = await get(baseUrl, '/v1/audit-log/export?resource=tg_1', demoHeaders('auditor', 'ten_demo', 'usr_auditor'));
+      assert.equal(auditor.status, 200, auditor.text);
+      assert.deepEqual(auditor.json.items.map((entry) => entry.id), ['aud_other']);
+
+      const viewer = await get(baseUrl, '/v1/audit-log/export', demoHeaders('viewer'));
+      assert.equal(viewer.status, 403);
+      assert.equal(viewer.text.includes('hash-aud_lo'), false);
+
+      const foreign = await get(baseUrl, '/v1/audit-log/export?action=target.added', adminHeaders('ten_other'));
+      assert.equal(foreign.status, 200, foreign.text);
+      assert.deepEqual(foreign.json.items.map((entry) => entry.id), ['aud_foreign']);
+
+      assert.equal((await get(baseUrl, '/v1/audit-log/export?cursor=abc')).status, 400);
+      assert.equal((await get(baseUrl, '/v1/audit-log/export?since=not-a-date')).status, 400);
+
+      for (let index = 0; index < 10_001; index += 1) {
+        store.auditLog.push(auditRow(`aud_bulk_${index}`, 'ten_bulk', HI, index + 1, 'usr_admin', 'target.added', 'target', `tgt_${index}`));
+      }
+      const tooLarge = await get(baseUrl, '/v1/audit-log/export', adminHeaders('ten_bulk'));
+      assert.equal(tooLarge.status, 400, tooLarge.text);
+      assert.equal(tooLarge.json.error, 'export_too_large');
+      assert.equal(tooLarge.json.max_rows, 10_000);
+      assert.equal(store.auditLog.some((entry) => entry.action === 'audit.exported' && entry.tenant_id === 'ten_bulk'), false);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('rejects a bad report scope before write and publishes builder capabilities', async () => {
     freshStore();
     const env = {
@@ -773,6 +850,19 @@ describe('declared-host analytics API', () => {
         const filtered = await get(baseUrl, '/v1/audit-log?action=target.added', headers);
         assert.equal(filtered.json.total, 2);
         assert.equal(filtered.json.items.some((entry) => entry.action === 'rbac.denied'), false);
+
+        const exported = await get(baseUrl, '/v1/audit-log/export?action=target.added', headers);
+        assert.equal(exported.status, 200, exported.text);
+        assert.deepEqual(exported.json.items.map((entry) => entry.id), ['aud_lo', 'aud_hi']);
+        assert.equal(exported.json.items.every((entry) => typeof entry.entry_hash === 'string' && 'prev_hash' in entry), true);
+        assert.equal(exported.text.includes('aud_foreign'), false);
+        const exportAudit = await ownerPool.query(
+          "SELECT metadata_json FROM audit_logs WHERE action = 'audit.exported' ORDER BY sequence DESC LIMIT 1",
+        );
+        assert.equal(exportAudit.rows.length, 1);
+        assert.equal(exportAudit.rows[0].metadata_json.count, 2);
+        assert.equal(exportAudit.rows[0].metadata_json.content_sha256, exported.json.custody.content_sha256);
+        assert.equal((await get(baseUrl, '/v1/audit-log/export', demoHeaders('viewer', 'ten_api', 'usr_viewer'))).status, 403);
       } finally {
         await closeServer(server);
         await runtime.close();

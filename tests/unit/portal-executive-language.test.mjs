@@ -3,15 +3,18 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   dashboardReadinessMessage,
+  EXPECTED_VERDICT_LABELS,
   evidenceModePresentation,
   evidenceTierInfo,
   plainCheckName,
   plainCodeLabel,
   plainEmptyReason,
+  plainExpectedVerdictLabel,
   plainFindingTitle,
   plainInlineText,
   plainProtectionLabel,
   plainVerdictLabel,
+  plainVerdictShortLabel,
   plainVerificationLabel,
 } from '../../apps/web/react/src/lib/plain-language.mjs';
 
@@ -172,6 +175,64 @@ describe('portal executive language', () => {
       dashboardReadinessMessage({ score: 95, highPriorityFindings: 0, coveragePercent: 100 }).headline,
       /^Ready for a DDoS attack$/,
     );
+  });
+
+  it('says no score yet instead of a partial verdict when nothing has been validated', () => {
+    const empty = dashboardReadinessMessage({ score: 0, coveragePercent: null, hasEvidence: false });
+    assert.equal(empty.headline, 'No readiness score yet');
+    assert.equal(empty.tone, 'muted');
+    assert.doesNotMatch(empty.headline, /Partly ready|Passed this check/);
+    assert.equal(
+      dashboardReadinessMessage({ dataUnavailable: true, hasEvidence: false }).headline,
+      'Readiness is not known yet',
+      'unavailable data still wins over the empty state',
+    );
+  });
+
+  it('counts open high-priority findings without calling them gaps', () => {
+    const one = dashboardReadinessMessage({ score: 95, highPriorityFindings: 1, coveragePercent: 100 });
+    assert.equal(one.headline, 'Not ready yet: 1 high-priority finding is open');
+    assert.doesNotMatch(one.headline, /gap/i);
+    assert.equal(one.detail, 'Resolve the open findings below, then run the same checks again.');
+    assert.equal(
+      dashboardReadinessMessage({ score: 95, highPriorityFindings: 3, coveragePercent: 100 }).headline,
+      'Not ready yet: 3 high-priority findings are open',
+    );
+  });
+
+  it('keeps catalog check names that contain API unchanged', () => {
+    assert.equal(plainCheckName('API Surface Scan (Safe)'), 'API Surface Scan (Safe)');
+    assert.equal(plainCheckName('Batch API Limit Readiness (Safe)'), 'Batch API Limit Readiness (Safe)');
+    assert.equal(plainCheckName('L7/API flood readiness'), 'application layer flood readiness');
+  });
+
+  it('maps verdicts to short pill labels and keeps full sentences as the subline', () => {
+    for (const verdict of ['protected', 'pass', 'passed', 'edge_protected', 'allowed_as_expected']) {
+      assert.equal(plainVerdictShortLabel(verdict), 'Protected', verdict);
+    }
+    for (const verdict of ['bypassable', 'penetrated', 'exposed', 'edge_exposed', 'gap', 'fail', 'failed']) {
+      assert.equal(plainVerdictShortLabel(verdict), 'Gap found', verdict);
+    }
+    assert.equal(plainVerdictShortLabel('inconclusive'), 'Inconclusive');
+    assert.equal(plainVerdictShortLabel('unknown'), 'Inconclusive');
+    assert.equal(plainVerdictShortLabel('review'), 'Needs review');
+    assert.equal(plainVerdictShortLabel('rate_limited_partially'), 'Rate limited partially');
+    assert.equal(plainVerdictLabel('protected'), 'Protection stopped the test traffic');
+  });
+
+  it('labels expected verdicts as expectations, not outcomes', () => {
+    assert.equal(plainExpectedVerdictLabel('pass'), 'Expect protection to hold');
+    assert.equal(plainExpectedVerdictLabel('warn'), 'Expect a warning');
+    assert.equal(plainExpectedVerdictLabel('fail'), 'Expect a gap');
+    assert.equal(plainExpectedVerdictLabel('manual_review'), 'Needs review (observation only)');
+    assert.equal(plainExpectedVerdictLabel('custom_value'), 'Custom value');
+    assert.equal(Object.isFrozen(EXPECTED_VERDICT_LABELS), true);
+  });
+
+  it('labels URL, IP and CIDR target kinds in plain words', () => {
+    assert.equal(plainCodeLabel('url'), 'URL');
+    assert.equal(plainCodeLabel('ip'), 'IP address');
+    assert.equal(plainCodeLabel('cidr'), 'CIDR range');
   });
 
   it('keeps executive and target summaries evidence-aware in source', () => {

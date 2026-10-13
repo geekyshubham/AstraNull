@@ -16,6 +16,7 @@ import { getStore, resetStoreForTests } from '../../src/store.mjs';
 const PASSWORD = 'N7!vR2#qL9@z';
 const SESSION_SECRET = 'password-auth-test-session-secret-32-chars';
 const PASSWORD_HASH = await hashPassword(PASSWORD);
+const OTHER_PASSWORD_HASH = await hashPassword('Other!Pass7#Kq');
 const RUNTIME_CONFIG = {
   authMode: 'signed-session',
   sessionSecret: SESSION_SECRET,
@@ -51,8 +52,28 @@ function credential(overrides = {}) {
   };
 }
 
-function seed({ users = [user()], credentials = [credential()], invites = [] } = {}) {
+const INVALID_CREDENTIALS = Object.freeze({
+  error: 'invalid_credentials',
+  status: 401,
+  message: 'Email or password is incorrect.',
+});
+
+function multiTenantSeed({ matching = [] } = {}) {
+  const tenantIds = ['ten_a', 'ten_b', 'ten_c'];
+  return {
+    tenants: tenantIds.map((id) => ({ id, name: `Tenant ${id.slice(-1).toUpperCase()} Corp` })),
+    users: tenantIds.map((id) => user({ id: `usr_${id.slice(-1)}`, tenant_id: id, email: 'shared@example.com' })),
+    credentials: tenantIds.map((id) => credential({
+      user_id: `usr_${id.slice(-1)}`,
+      tenant_id: id,
+      password_hash: matching.includes(id) ? PASSWORD_HASH : OTHER_PASSWORD_HASH,
+    })),
+  };
+}
+
+function seed({ users = [user()], credentials = [credential()], invites = [], tenants = [] } = {}) {
   resetStoreForTests({
+    tenants,
     users,
     userCredentials: credentials,
     userPasswordInvites: invites,
@@ -194,14 +215,88 @@ describe('password login', () => {
     assert.equal(unavailable.status, 503);
   });
 
-  it('requires password setup for invited users', async () => {
-    const repository = seed({ users: [user({ status: 'invited' })], credentials: [] });
-    const result = await loginWithPassword(
+  it('reports invitation state only after the password is correct', async () => {
+    let repository = seed({ users: [user({ status: 'invited' })], credentials: [] });
+    const noCredential = await loginWithPassword(
       { email: 'engineer@example.com', password: PASSWORD },
       { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'invited', now: NOW },
     );
-    assert.equal(result.error, 'password_setup_required');
-    assert.equal(result.status, 403);
+    assert.deepEqual(noCredential, INVALID_CREDENTIALS);
+
+    resetPasswordAuthRateLimitsForTests();
+    repository = seed({ users: [user({ status: 'invited' })] });
+    const correct = await loginWithPassword(
+      { email: 'engineer@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'invited-correct', now: NOW },
+    );
+    assert.equal(correct.error, 'password_setup_required');
+    assert.equal(correct.status, 403);
+  });
+
+  it('returns an identical 401 body for every wrong-password and unknown-account shape', async () => {
+    const attempts = [
+      [{ users: [user()] }, { email: 'engineer@example.com', password: 'WrongPass9!Zz' }],
+      [{ users: [user()] }, { email: 'nobody@example.com', password: PASSWORD }],
+      [{ users: [user({ status: 'invited' })], credentials: [] }, { email: 'engineer@example.com', password: PASSWORD }],
+      [{ users: [user({ status: 'invited' })] }, { email: 'engineer@example.com', password: 'WrongPass9!Zz' }],
+      [{ users: [user({ status: 'disabled' })] }, { email: 'engineer@example.com', password: 'WrongPass9!Zz' }],
+      [multiTenantSeed(), { email: 'shared@example.com', password: 'WrongPass9!Zz' }],
+    ];
+    const results = [];
+    for (const [seedOptions, body] of attempts) {
+      resetPasswordAuthRateLimitsForTests();
+      const repository = seed(seedOptions);
+      results.push(await loginWithPassword(body, {
+        repository,
+        runtimeConfig: RUNTIME_CONFIG,
+        clientKey: `parity-${results.length}`,
+        now: NOW,
+      }));
+    }
+    for (const result of results) assert.deepEqual(result, INVALID_CREDENTIALS);
+    assert.ok(results.every((result) => !Object.hasOwn(result, 'workspaces')));
+  });
+
+  it('signs a multi-workspace email straight in when the password matches one workspace', async () => {
+    const repository = seed(multiTenantSeed({ matching: ['ten_b'] }));
+    const result = await loginWithPassword(
+      { email: 'shared@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-one', now: NOW },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.tenant_id, 'ten_b');
+    assert.equal(result.user_id, 'usr_b');
+  });
+
+  it('asks for a workspace and lists only the workspaces whose password matched', async () => {
+    const repository = seed(multiTenantSeed({ matching: ['ten_a', 'ten_c'] }));
+    const result = await loginWithPassword(
+      { email: 'shared@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-two', now: NOW },
+    );
+    assert.equal(result.error, 'tenant_required');
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.workspaces, [
+      { tenant_id: 'ten_a', name: 'Tenant A Corp' },
+      { tenant_id: 'ten_c', name: 'Tenant C Corp' },
+    ]);
+
+    resetPasswordAuthRateLimitsForTests();
+    const chosen = await loginWithPassword(
+      { email: 'shared@example.com', password: PASSWORD, tenant_id: 'ten_c' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-chosen', now: NOW },
+    );
+    assert.equal(chosen.tenant_id, 'ten_c');
+  });
+
+  it('records a failure against every workspace credential when a multi-workspace password is wrong', async () => {
+    const repository = seed(multiTenantSeed());
+    const result = await loginWithPassword(
+      { email: 'shared@example.com', password: 'WrongPass9!Zz' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-wrong', now: NOW },
+    );
+    assert.deepEqual(result, INVALID_CREDENTIALS);
+    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [1, 1, 1]);
   });
 
   it('rate limits repeated attempts by normalized email', async () => {

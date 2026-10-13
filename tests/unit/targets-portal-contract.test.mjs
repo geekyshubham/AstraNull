@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { latestEvidenceRunByTarget, latestRunVerdict } from '../../apps/web/react/src/lib/dashboard-metrics.ts';
 
 const PAGES = new URL('../../apps/web/react/src/pages/', import.meta.url);
 const readPage = (name) => readFileSync(new URL(name, PAGES), 'utf8');
@@ -20,10 +21,13 @@ describe('Targets portal contract', () => {
     ]) {
       assert.match(source, new RegExp(`label: '${label}'`));
     }
-    assert.match(source, /<span>\{targetKindLabel\(item\)\}<\/span>/, 'kind stays visible in the target cell');
+    assert.match(source, /<span>\{formatTargetKind\(getString\(item, \['kind'\], ''\), getString\(item, \['value'\], ''\)\)\}<\/span>/, 'kind stays visible in the target cell');
+    assert.doesNotMatch(source, /function targetKindLabel/, 'kind labels come from the shared formatTargetKind');
     // Pending ownership is never counted as ready, and a missing timestamp is not "Never".
     assert.doesNotMatch(source, /Ready for validation/);
-    assert.match(source, /Not available in inventory/);
+    assert.doesNotMatch(source, /Not available in inventory/);
+    assert.match(source, /runsUnavailable \? 'Unavailable' : 'No result yet'/);
+    assert.match(source, /\{runsUnavailable \? \(\s*<Badge[^>]*>Unavailable<\/Badge>/, 'a recorded date never pairs with "Not recorded" when runs failed to load');
     assert.doesNotMatch(source, /: 'Never'/);
     // ADR-0008: direct target creation via POST /v1/targets with top-level tags + optional group.
     assert.match(source, /requestJson\(config, session, '\/v1\/targets', \{ method: 'POST', body \}\)/);
@@ -48,13 +52,61 @@ describe('Targets portal contract', () => {
     for (const source of [finding]) {
       assert.match(source, /aria-label={`Open target \$\{getString\(item,/);
     }
-    // Targets leads each row with one explicit link: Open, or Verify ownership while pending.
-    assert.match(targets, /aria-label=\{verified \? `Open target \$\{value\}` : `Verify ownership of \$\{value\}`\}/);
+    // Targets leads each row with one explicit link: Verify ownership only for a pending target the
+    // viewer can change, otherwise Open.
+    assert.match(targets, /const promptVerify = !verified && canWriteTargets;/);
+    assert.match(targets, /aria-label=\{promptVerify \? `Verify ownership of \$\{value\}` : `Open target \$\{value\}`\}/);
+    assert.match(targets, /\{promptVerify \? 'Verify' : 'Open'\}/);
     assert.match(targets, /href=\{verified \? buildDetailHref\('target-detail', id\)/);
     assert.doesNotMatch(targets, /function rowProps|getRowProps=\{\(item\) => rowProps/);
     assert.doesNotMatch(finding, /targetRowNavProps/);
   });
 
+
+  it('offers Validate only on ownership-verified rows for roles that can start a run', () => {
+    const source = readPage('targets-page.tsx');
+    assert.match(source, /import \{ canStartRun \} from '\.\.\/lib\/run-permissions\.mjs';/);
+    assert.match(source, /const canRunChecks = canStartRun\(session\.role\);/);
+    assert.match(source, /\{verified && canRunChecks \? \(\s*<AnchorButton[\s\S]*?href=\{`\$\{buildDetailHref\('target-detail', id\)\}&tab=validate`\}[\s\S]*?aria-label=\{`Validate \$\{value\}`\}/);
+    assert.equal((source.match(/&tab=validate/g) ?? []).length, 1, 'the validate deep link appears only behind the verified-and-permitted guard');
+  });
+
+  it('opens the declare form from the #targets?add=1 deep link only for target writers, then strips the param', () => {
+    const source = readPage('targets-page.tsx');
+    assert.match(source, /useState\(\(\) => canWriteTargets && getRouteParam\('add'\) === '1'\)/);
+    assert.match(source, /canWriteTargetsRef\.current = canWriteTargets;/, 'the hash listener reads current permissions, not the first render');
+    assert.match(source, /if \(requested === '1' && canWriteTargetsRef\.current\) setShowAdd\(true\);\s*replaceRouteParams\(\{ add: null \}\);/);
+    assert.match(source, /window\.addEventListener\('hashchange', sync\)/);
+    assert.match(source, /if \(showAdd\) kindSelectRef\.current\?\.focus\(\);/, 'opening the form moves focus to Kind');
+  });
+
+  it('explains each add-target choice and never promises CIDR ranges', () => {
+    const source = readPage('targets-page.tsx');
+    assert.match(source, /<small id="add-kind-hint" className="muted">\{addKindOption\.hint\}<\/small>/);
+    assert.match(source, /placeholder=\{addKindOption\.placeholder\}/);
+    assert.match(source, /aria-describedby="add-behavior-hint"/);
+    assert.match(source, /Ranges \(CIDR\) are not supported; declare each IP you own\./);
+    assert.doesNotMatch(source, /hostnames, IPs and CIDRs|IP, CIDR or endpoint/);
+    assert.match(source, /role="group" aria-label="Target inventory summary"/);
+    assert.match(source, /addBehavior === UNDECIDED_BEHAVIOR \? \{\} : \{ expected_behavior: addBehavior \}/);
+    assert.doesNotMatch(source, /declare one later on the target/, 'no promise of a post-creation expected-behaviour editor');
+  });
+
+  it('shows the latest evidence-backed result per target and "No result yet" for an unprobed target', () => {
+    const runs = [
+      { id: 'run_old', target_id: 'tgt_verified', status: 'completed', verdict: { id: 'vrd_1', verdict: 'gap' }, completed_at: '2026-09-01T10:00:00.000Z' },
+      { id: 'run_new', target_id: 'tgt_verified', status: 'completed', verdict: { id: 'vrd_2', verdict: 'protected' }, completed_at: '2026-09-02T10:00:00.000Z' },
+      { id: 'run_unbacked', target_id: 'tgt_verified', status: 'completed', verdict: 'gap', completed_at: '2026-09-03T10:00:00.000Z' }
+    ];
+    const latest = latestEvidenceRunByTarget(runs);
+    const result = latestRunVerdict(latest.get('tgt_verified'));
+    assert.equal(latest.get('tgt_verified')?.id, 'run_new', 'an unbacked newer run never replaces the evidence-backed result');
+    assert.equal(result?.status, 'pass');
+    assert.equal(result?.label, 'Pass');
+    assert.equal(result?.completedAt, '2026-09-02T10:00:00.000Z');
+    assert.equal(latest.has('tgt_unprobed'), false);
+    assert.equal(latestRunVerdict(latest.get('tgt_unprobed')), null);
+  });
 
   it('exposes disclosure semantics on the Add target toggle (A11Y-01)', () => {
     const source = readPage('targets-page.tsx');

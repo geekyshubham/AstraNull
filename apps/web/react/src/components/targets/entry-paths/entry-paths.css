@@ -97,3 +97,7 @@
 @media (prefers-reduced-motion: reduce) {
   .pv-cell-button, .pv-picker-option { transition: none; }
 }
+
+@media (pointer: coarse) {
+  .pv-notice a { display: inline-flex; align-items: center; min-height: var(--touch-target); }
+}

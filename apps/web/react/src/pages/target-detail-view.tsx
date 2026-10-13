@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowLeft,
-  Check,
   ChevronDown,
   ChevronUp,
-  Copy,
   ExternalLink,
   Eye,
   FileCheck2,
@@ -38,7 +35,7 @@ import {
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import { findingStatus, isFindingOpen } from '../lib/finding-lifecycle.mjs';
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
-import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
+import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
@@ -58,7 +55,7 @@ import { useRecordedActivity } from '../components/evidence/use-recorded-activit
 import { prefersReducedMotion } from '../lib/motion';
 import { apiErrorMessage } from '../lib/error-messages';
 import { ConfirmModal } from '../lib/crud-ui';
-import { isScanActive, scanErrorMessage } from '../lib/validation-scan.mjs';
+import { MAX_SCAN_CHECKS, isScanActive, scanErrorMessage } from '../lib/validation-scan.mjs';
 import {
   EDGE_DETECTION_CHECK_ID,
   buildCheckRows,
@@ -68,6 +65,8 @@ import {
   originExposureDetail,
   originExposureStatus,
   providerFamilyRows,
+  recommendedStarterRow,
+  wafCheckBlocking,
   retainedCoveragePairs,
   assessmentChecks,
   targetCheckRequirement,
@@ -86,6 +85,7 @@ import { TargetAuthorization } from '../components/targets/target-authorization'
 import { OriginRelations } from '../components/targets/origin-relations';
 import { DeclaredEntryPaths, FirewallChangeComparison } from '../components/targets/entry-paths';
 import { ProbeActivity } from '../components/targets/probe-activity';
+import { OwnershipProof } from '../components/targets/ownership-proof';
 import { DECLARATION_LIMITS, validateDeclarationDraft } from '../lib/domain-checks.mjs';
 import { CancelScanDialog } from '../components/runs/validation-scans-table';
 import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
@@ -93,11 +93,13 @@ import { useInteractionHold, useStableList } from '../components/evidence/use-st
 import { navScopeKey } from '../lib/nav-state.mjs';
 import { evidenceModePresentation, plainCheckName, plainFindingTitle, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 import { PortalUnavailablePage } from './public-pages';
+import { DetailBackLink } from '../components/layout/detail-back-link';
+import { useEntityDocumentTitle } from '../components/layout/app-shell';
 import './target-detail-view.css';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 type EdgeLocalState = '' | 'pending' | 'blocked' | 'error';
-type ReviewPlan = { mode: 'single'; checkId: string } | { mode: 'all' } | { mode: 'detect' } | null;
+type ReviewPlan = { mode: 'single'; checkId: string } | { mode: 'selected'; checkIds: string[] } | { mode: 'all' } | { mode: 'detect' } | null;
 
 const TARGET_RUNS_LIMIT = 100;
 const EDGE_POLL_MS = 4_000;
@@ -106,6 +108,9 @@ const EDGE_BLOCKED_RETRY_MS = 15_000;
 const EDGE_BLOCKED_MAX_RETRIES = 20;
 const DNS_RECHECK_MS = 30_000;
 const DNS_RECHECK_MAX_MS = 15 * 60 * 1000;
+const CLOCK_TICK_MS = 60_000;
+const DNS_TXT_KINDS = new Set(['fqdn', 'url']);
+const OWNERSHIP_LOCKED_REASON = 'Prove ownership first. External checks stay blocked until this target is verified.';
 const ACTIVE_STEP_STATUSES = new Set(['pending', 'deferred', 'starting', 'running', 'collecting']);
 const SEVERITY_RANK: Record<string, number> = { critical: 5, s1: 5, high: 4, s2: 4, medium: 3, moderate: 3, s3: 3, low: 2, s4: 2, info: 1 };
 
@@ -194,34 +199,12 @@ function recentRunVerdict(run: DataItem) {
   return hasEvidenceBackedVerdict(normalizedRun, []) ? publishedRunVerdict(normalizedRun) : '';
 }
 
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  if (!value) return null;
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      aria-label={`Copy ${label}`}
-      onClick={async () => {
-        try {
-          await navigator.clipboard?.writeText(value);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        } catch {
-          setCopied(false);
-        }
-      }}
-    >
-      {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-      {copied ? 'Copied' : 'Copy'}
-    </Button>
-  );
-}
-
 function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boolean; onChange: (next: string[]) => Promise<void> }) {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const showForm = adding || Boolean(draft) || Boolean(error);
 
   async function commit(next: string[]) {
     setBusy(true);
@@ -258,9 +241,15 @@ function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boole
           </span>
         ))}
       </div>
-      {canEdit ? (
+      {canEdit && !showForm ? (
+        <div className="td-tag-form">
+          <Button size="sm" variant="ghost" onClick={() => setAdding(true)}><Plus size={14} aria-hidden="true" />Add tag</Button>
+        </div>
+      ) : null}
+      {canEdit && showForm ? (
         <div className="td-tag-form">
           <input
+            autoFocus={adding && !draft}
             type="text"
             value={draft}
             placeholder="Add a tag, e.g. env:prod"
@@ -272,6 +261,7 @@ function TagEditor({ tags, canEdit, onChange }: { tags: string[]; canEdit: boole
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') { event.preventDefault(); void addFromDraft(); }
+              if (event.key === 'Escape' && !draft) { event.preventDefault(); setError(''); setAdding(false); }
             }}
           />
           <Button size="sm" variant="secondary" disabled={busy || !draft.trim()} loading={busy} onClick={() => void addFromDraft()}>
@@ -293,9 +283,9 @@ function declarationSummary(declaration: DataItem | null) {
     const status = getString(row, ['status'], 'unassigned');
     if (status === 'unassigned') return { text: 'Unassigned', source: '' };
     const value = getString(row, [valueKey], '');
-    return { text: value ? formatLabel(value) : 'Not recorded', source: status === 'inherited' ? 'inherited from group' : 'declared' };
+    return { text: value ? formatLabel(value) : 'Not recorded', source: status === 'inherited' ? 'inherited' : 'declared' };
   };
-  const inherited = (key: string) => getString(declaration, [key], '') === 'inherited' ? 'inherited from group' : '';
+  const inherited = (key: string) => getString(declaration, [key], '') === 'inherited' ? 'inherited' : '';
   return {
     purpose: getString(declaration, ['purpose'], ''),
     purposeSource: inherited('purpose_status'),
@@ -354,7 +344,7 @@ function DeclarationEditor({
       }}
     >
       <h3 id="td-declaration-title" ref={headingRef} tabIndex={-1}>Edit declared context</h3>
-      <p className="td-muted">Recorded as your declaration and audited. Only fields you change are saved; untouched fields keep inheriting from the group. It never grants scope and never changes the target value or kind.</p>
+      <p className="td-muted">Recorded as your declaration and audited. Only fields you change are saved; untouched fields keep their inherited values. It never grants scope and never changes the target value or kind.</p>
       <label className="td-field">
         <span>Purpose</span>
         <input
@@ -466,6 +456,10 @@ export function TargetDetailView({
   const [stopSingleRun, setStopSingleRun] = useState<{ id: string; name: string } | null>(null);
   const [editingContext, setEditingContext] = useState(false);
   const [dnsWatchStartedAt, setDnsWatchStartedAt] = useState(0);
+  const [dnsWatchStopped, setDnsWatchStopped] = useState(false);
+  const [ownershipError, setOwnershipError] = useState('');
+  const [runSelection, setRunSelection] = useState<string[]>([]);
+  const [clock, setClock] = useState(() => Date.now());
   const edgeRetriesRef = useRef(0);
   const loadGeneration = useRef(0);
   const openInspector = useOpenInspector();
@@ -526,12 +520,12 @@ export function TargetDetailView({
   const kind = getString(target, ['kind'], 'unknown');
   const eligibility = getString(target, ['eligibility'], 'unknown');
   const verificationState = getString(verification, ['state'], getString(target, ['verification_state'], 'unverified'));
-  const ownershipProven = (ownershipStepStatus(verificationState, challenge) as { done: boolean }).done;
   const targetEligible = isTargetRunEligible(eligibility, verificationState);
   const rawProvenance = resolveTargetVerificationProvenance(target, verification);
   const provenance = /agent/i.test(rawProvenance) ? `Recorded ownership evidence for ${verificationState}.` : rawProvenance;
   const canWrite = canStartRun(session.role);
   const canStartBoundedRun = canStartRun(session.role);
+  useEntityDocumentTitle(target ? targetDisplayValue(target) : undefined);
 
   const runsRecentLatest = useMemo(() => uniqueRecentRuns(detail?.runs_recent) as DataItem[], [detail?.runs_recent]);
   const historyHold = useInteractionHold();
@@ -568,6 +562,8 @@ export function TargetDetailView({
     return exact ? rows.map((row) => row.checkId === exact.checkId ? exact : row) : rows;
   }, [selectableChecks, scan, targetRuns, scopedAcceptedRun]);
   const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
+  const wafBlocking = useMemo(() => wafCheckBlocking(checkRows), [checkRows]);
+  const recommendedRow = useMemo(() => recommendedStarterRow(checkRows), [checkRows]);
   const effectiveSelectedCheckId = checkRows.some((row) => row.checkId === selectedCheckId) ? selectedCheckId : '';
   const selectedCheckMissing = Boolean(selectedCheckId) && !effectiveSelectedCheckId && checkRows.length > 0;
   const selectedRow = checkRows.find((row) => row.checkId === effectiveSelectedCheckId) ?? null;
@@ -587,13 +583,17 @@ export function TargetDetailView({
   const activeStandalone = targetRuns.find((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], ''))) ?? null;
   const activeCheckRow = checkRows.find((row) => row.status === 'running' && row.runId) ?? null;
   const currentScanStep = Array.isArray(scan?.steps) ? (scan.steps as DataItem[]).find((step) => ['running', 'collecting', 'starting'].includes(getString(step, ['status'], '')) && getString(step, ['test_run_id'], '')) ?? null : null;
-  const latestTargetRun = targetRuns[0] ?? null;
-  const activityRow = selectedRow ?? activeCheckRow ?? checkRows.find((row) => row.runId === getString(latestTargetRun, ['id'], '')) ?? null;
+  const activityRow = selectedRow ?? activeCheckRow ?? null;
   const activityPinnedRow = selectedRow?.runId ? selectedRow : null;
   const exactAcceptedRun = acceptedRun?.scope === executionScope && (!selectedRow || selectedRow.checkId === acceptedRun.checkId) ? acceptedRun : null;
-  const activityRunId = exactAcceptedRun?.id || (activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || getString(latestTargetRun, ['id'], '') || activityRow?.runId || '');
+  const activityRunId = exactAcceptedRun?.id || (activityPinnedRow ? activityPinnedRow.runId : getString(currentScanStep, ['test_run_id'], '') || getString(activeStandalone, ['id'], '') || activityRow?.runId || '');
   const activityRunning = exactAcceptedRun ? ['planned', 'running', 'collecting'].includes(getString(targetRuns.find((run) => run.id === exactAcceptedRun.id), ['status'], getString(exactAcceptedRun.record, ['status'], ''))) : activityPinnedRow ? activityPinnedRow.status === 'running' : Boolean(currentScanStep || activeStandalone);
-  const activityCheckName = exactAcceptedRun ? displayCheckName(exactAcceptedRun.checkId) : activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : (latestTargetRun ? displayCheckName(getString(latestTargetRun, ['check_id'], '')) : activityRow?.name || ''));
+  const activityCheckName = exactAcceptedRun ? displayCheckName(exactAcceptedRun.checkId) : activityPinnedRow?.name || (currentScanStep ? displayCheckName(getString(currentScanStep, ['check_id'], '')) : activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : activityRow?.name || '');
+  const showActivity = Boolean(selectedRow || exactAcceptedRun || currentScanStep || activeStandalone || activeCheckRow);
+  const inspectingActivityRun = Boolean(
+    (inspected?.entry === 'check_result' && activityRunId && inspected.test_run_id === activityRunId)
+    || (inspected?.entry === 'validation_scan' && scanActive && inspected.scan_id && inspected.scan_id === getString(scan, ['id'], '')),
+  );
   const scanId = getString(scan, ['id'], '');
   const fingerprintStep = Array.isArray(scan?.steps)
     ? (scan!.steps as DataItem[]).find((step) => getString(step, ['check_id'], '') === EDGE_DETECTION_CHECK_ID) ?? null
@@ -608,8 +608,9 @@ export function TargetDetailView({
   });
   const edgeEvaluating = edgePhase === 'evaluating';
   const edgeRequestRunId = getString(edgeRequest, ['test_run_id'], '');
-  const ownershipStep = ownershipStepStatus(verificationState, challenge) as { tone: StatTone; label: string; done: boolean };
+  const ownershipStep = ownershipStepStatus(verificationState, challenge, clock) as { tone: StatTone; label: string; done: boolean };
   const ownershipDone = ownershipStep.done;
+  const challengeState = getString(challenge as unknown as DataItem, ['state'], '');
   const edgeCheck = checks.find((check) => getString(check, ['check_id', 'id'], '') === EDGE_DETECTION_CHECK_ID) ?? null;
 
   const loadTargetActivity = useCallback(async () => {
@@ -638,6 +639,9 @@ export function TargetDetailView({
     setEdgeError('');
     setEdgeReason('');
     setDnsWatchStartedAt(0);
+    setDnsWatchStopped(false);
+    setOwnershipError('');
+    setRunSelection([]);
     setStopSingleRun(null);
     setAcceptedRun(null);
     setReview(null);
@@ -772,14 +776,27 @@ export function TargetDetailView({
     return () => { cancelled = true; };
   }, [config, session, edgePhase, edgeRequestRunId, wafEdgeEnabled]);
 
+  // The challenge lifetime is shown in minutes, so the clock only needs to tick while one is live.
+  const challengeExpiresAt = challenge?.expires_at ?? '';
+  useEffect(() => {
+    if (ownershipDone || challengeState !== 'pending' || !challengeExpiresAt) return undefined;
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), CLOCK_TICK_MS);
+    const untilExpiry = Date.parse(challengeExpiresAt) - Date.now();
+    const expiry = Number.isFinite(untilExpiry) && untilExpiry > 0 ? window.setTimeout(() => setClock(Date.now()), untilExpiry + 250) : 0;
+    return () => { window.clearInterval(timer); if (expiry) window.clearTimeout(expiry); };
+  }, [ownershipDone, challengeState, challengeExpiresAt]);
+
   // DNS re-checks run only after the user chose Check now or issued a record in this visit.
   useEffect(() => {
-    if (!dnsWatchStartedAt || !canWrite || ownershipDone || !challenge?.id || getString(challenge as unknown as DataItem, ['state'], '') !== 'pending') return undefined;
+    if (!dnsWatchStartedAt || !canWrite || ownershipDone || !challenge?.id || !isActiveDnsChallenge(challenge, Date.now())) return undefined;
     const challengeId = challenge.id;
+    const watched = challenge;
     let busyCheck = false;
     const timer = window.setInterval(() => {
       if (busyCheck) return;
-      if (Date.now() - dnsWatchStartedAt > DNS_RECHECK_MAX_MS) { window.clearInterval(timer); setDnsWatchStartedAt(0); return; }
+      if (!isActiveDnsChallenge(watched, Date.now())) { window.clearInterval(timer); setDnsWatchStartedAt(0); setClock(Date.now()); return; }
+      if (Date.now() - dnsWatchStartedAt > DNS_RECHECK_MAX_MS) { window.clearInterval(timer); setDnsWatchStartedAt(0); setDnsWatchStopped(true); return; }
       busyCheck = true;
       verifyOwnershipChallenge(config, session, entityId, challengeId)
         .then(async (result) => {
@@ -791,26 +808,74 @@ export function TargetDetailView({
             await reload().catch(() => undefined);
           }
         })
-        .catch(() => undefined)
+        .catch((err) => {
+          if (apiErrorCode(err) !== 'challenge_expired') return;
+          window.clearInterval(timer);
+          setDnsWatchStartedAt(0);
+          setOwnershipError(apiErrorMessage(err, 'This DNS TXT value expired before it was found. Issue a new record and publish the new value.'));
+          void reload().catch(() => undefined);
+        })
         .finally(() => { busyCheck = false; });
     }, DNS_RECHECK_MS);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state]);
+  }, [dnsWatchStartedAt, config, session, canWrite, ownershipDone, challenge?.id, challenge?.state, challenge?.expires_at]);
 
+  const runnableIds = new Set(checkRows.map((row) => row.checkId));
+  const selectedRunIds = runSelection.filter((id) => runnableIds.has(id)).slice(0, MAX_SCAN_CHECKS);
+  const startCheckId = selectedRunIds.length === 1 ? selectedRunIds[0] : effectiveSelectedCheckId;
+  const startRow = checkRows.find((row) => row.checkId === startCheckId) ?? null;
+  const activeStandaloneName = activeStandalone ? displayCheckName(getString(activeStandalone, ['check_id'], '')) : '';
+  const runAllDisabledReason = canStartBoundedRun && !targetEligible ? 'Prove ownership first.' : '';
+  const runAllBlockedReason = !scanActive && activeStandalone
+    ? `${activeStandaloneName} is running on this target. Wait for it to finish or stop it before starting all checks.`
+    : '';
 
+  const reviewSlotReason = scanActive
+    ? 'A scan is in progress on this target.'
+    : activeStandalone
+      ? `${activeStandaloneName} is running on this target. Wait for it to finish or stop it before starting another check.`
+      : '';
   const singleDisabledReason = !canStartBoundedRun
     ? 'Your role can inspect evidence but cannot start checks.'
     : !targetEligible
-      ? 'No runnable checks are eligible for this target.'
-      : !effectiveSelectedCheckId
+      ? OWNERSHIP_LOCKED_REASON
+      : !startCheckId
         ? 'Select a check in the list first.'
-        : scanActive
-          ? 'A multi-check run is in progress on this target.'
-          : '';
+        : reviewSlotReason;
+
+  async function startScan(checkIds: string[], name: string, submittedScope: string) {
+    const current = () => scopeRef.current === submittedScope;
+    setBusy('run-all');
+    setError('');
+    setBanner('');
+    try {
+      const created = await requestJson(config, session, '/v1/validation-scans', {
+        method: 'POST',
+        body: { target_id: entityId, check_ids: checkIds, name: name.slice(0, 120) },
+      }) as DataItem;
+      if (!current()) return;
+      setReview(null);
+      setAcceptedRun(null);
+      setRunSelection([]);
+      setScan(created);
+      const acceptedScanId = getString(created, ['id'], '');
+      if (!acceptedScanId) { setError('The scan start returned no recorded ID. No other scan was substituted.'); return; }
+      setTab('validate');
+      openInspector({ entry: 'validation_scan', target_id: entityId, scan_id: acceptedScanId }, 'td-run-all');
+      setBanner(`Queued ${checkIds.length} bounded checks. Follow progress in the Inspector.`);
+    } catch (err) {
+      if (!current()) return;
+      setReview(null);
+      setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'The scan could not start.')));
+    } finally {
+      if (current()) setBusy('');
+    }
+  }
 
   async function startReviewed() {
     if (!review || !target) return;
+    if (!targetEligible) { setReview(null); return; }
     const submittedScope = executionScope;
     const current = () => scopeRef.current === submittedScope;
     if (review.mode === 'detect') {
@@ -818,8 +883,10 @@ export function TargetDetailView({
       await queueEdgeDetection();
       return;
     }
+    if (!ownershipDone) { setReview(null); return; }
+    if (scanActive || activeStandalone) { setReview(null); return; }
     if (review.mode === 'single') {
-      if (singleDisabledReason || review.checkId !== effectiveSelectedCheckId) return;
+      if (singleDisabledReason || review.checkId !== startCheckId) return;
       const reviewedCheckId = review.checkId;
       setBusy('run');
       setError('');
@@ -836,9 +903,11 @@ export function TargetDetailView({
         if (!runId) { setError('The start was accepted without a recorded run ID. No historical run was substituted; refresh recorded runs.'); return; }
         if ((created.target_id && created.target_id !== entityId) || (created.check_id && created.check_id !== reviewedCheckId)) { setError('The accepted execution did not match the reviewed target/check. No other run was substituted.'); return; }
         setAcceptedRun({ scope: submittedScope, id: runId, checkId: reviewedCheckId, record: created });
+        setRunSelection([]);
+        if (reviewedCheckId !== effectiveSelectedCheckId) selectCheck(reviewedCheckId);
         setTab('validate');
         openInspector({ entry: 'check_result', target_id: entityId, check_id: reviewedCheckId, test_run_id: runId }, `check-start-${reviewedCheckId}`);
-        setBanner(`${displayCheckName(reviewedCheckId)} accepted. The Inspector follows this exact run and its recorded evidence.`);
+        setBanner(`${displayCheckName(reviewedCheckId)} started. Follow its progress and evidence in the Inspector.`);
         void loadTargetActivity();
         void reload().catch(() => undefined);
         void onRefresh().catch(() => undefined);
@@ -851,34 +920,17 @@ export function TargetDetailView({
       }
       return;
     }
-    setBusy('run-all');
-    setError('');
-    setBanner('');
-    try {
-      const created = await requestJson(config, session, '/v1/validation-scans', {
-        method: 'POST',
-        body: {
-          target_id: entityId,
-          check_ids: runAll.map((check) => getString(check, ['check_id'], '')).filter(Boolean),
-          name: `All compatible checks · ${targetDisplayValue(target)}`.slice(0, 120),
-        },
-      }) as DataItem;
-      if (!current()) return;
-      setReview(null);
-      setAcceptedRun(null);
-      setScan(created);
-      const acceptedScanId = getString(created, ['id'], '');
-      if (!acceptedScanId) { setError('The assessment start returned no recorded ID. No other assessment was substituted.'); return; }
-      setTab('validate');
-      openInspector({ entry: 'validation_scan', target_id: entityId, scan_id: acceptedScanId }, 'td-run-all');
-      setBanner(`Queued ${runAll.length} bounded checks. The Inspector follows the exact assessment and its active child.`);
-    } catch (err) {
-      if (!current()) return;
-      setReview(null);
-      setError(scanErrorMessage((err as { payload?: unknown }).payload, apiErrorMessage(err, 'The multi-check run could not start.')));
-    } finally {
-      if (current()) setBusy('');
+    if (review.mode === 'selected') {
+      const checkIds = review.checkIds.filter((id) => runnableIds.has(id)).slice(0, MAX_SCAN_CHECKS);
+      if (checkIds.length < 2) { setReview(null); return; }
+      await startScan(checkIds, `Selected checks · ${targetDisplayValue(target)}`, submittedScope);
+      return;
     }
+    await startScan(
+      runAll.map((check) => getString(check, ['check_id'], '')).filter(Boolean),
+      `All compatible checks · ${targetDisplayValue(target)}`,
+      submittedScope,
+    );
   }
 
   const runAllRequestBound = runAll.reduce((total, check) => {
@@ -886,6 +938,14 @@ export function TargetDetailView({
     return total + (Number.isFinite(max) ? max : 0);
   }, 0);
   const runAllCategoryCount = new Set(checkRows.filter((row) => runAll.some((check) => check.check_id === row.checkId)).map((row) => row.category.id)).size;
+  const reviewSelectedIds = review?.mode === 'selected' ? review.checkIds.filter((id) => runnableIds.has(id)) : [];
+  const reviewSelectedRows = checkRows.filter((row) => reviewSelectedIds.includes(row.checkId));
+  const selectedRequestBound = reviewSelectedRows.reduce((total, row) => total + (row.maxRequests ?? 0), 0);
+  const selectedUnbounded = reviewSelectedRows.filter((row) => row.maxRequests === null).length;
+  const selectedObservationCount = reviewSelectedRows.filter((row) => !row.readinessCapable).length;
+  const selectedCategoryCount = new Set(reviewSelectedRows.map((row) => row.category.id)).size;
+  const detectMax = (edgeCheck?.probe_profile as DataItem | undefined)?.max_requests;
+  const detectBound = detectMax === null || detectMax === undefined || detectMax === '' || !Number.isFinite(Number(detectMax)) ? null : Number(detectMax);
 
   async function stopSingleCheck() {
     if (!stopSingleRun) return;
@@ -922,12 +982,15 @@ export function TargetDetailView({
     setBusy('issue');
     setError('');
     setBanner('');
+    setOwnershipError('');
+    setDnsWatchStopped(false);
     try {
       await issueOwnershipChallenge(config, session, entityId);
+      setDnsWatchStartedAt(0);
       setBanner('DNS TXT record issued. Add it at your DNS provider, then choose Check now.');
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not issue an ownership challenge.');
+      setOwnershipError(apiErrorMessage(err, 'Could not issue a DNS TXT record.'));
     } finally {
       setBusy('');
     }
@@ -938,6 +1001,8 @@ export function TargetDetailView({
     setBusy('verify');
     setError('');
     setBanner('');
+    setOwnershipError('');
+    setDnsWatchStopped(false);
     try {
       const result = await verifyOwnershipChallenge(config, session, entityId, challenge.id) as DataItem;
       const verified = result?.verified === true || getString(asDataItem(result.challenge), ['state']) === 'resolved';
@@ -946,12 +1011,17 @@ export function TargetDetailView({
         setBanner('Ownership proven. You can now review and start bounded checks on this target.');
       } else {
         setDnsWatchStartedAt(Date.now());
-        setBanner('The DNS TXT record was not found yet. DNS can take a few minutes; this page re-checks every 30 seconds for 15 minutes while it stays open.');
+        setBanner('The DNS TXT record was not found yet. DNS can take a few minutes; this page re-checks every 30 seconds while the record is valid and the page stays open.');
       }
       await onRefresh();
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not check the DNS record.');
+      setOwnershipError(apiErrorMessage(err, 'Could not check the DNS record.'));
+      if (apiErrorCode(err) === 'challenge_expired') {
+        setDnsWatchStartedAt(0);
+        setClock(Date.now());
+        void reload().catch(() => undefined);
+      }
     } finally {
       setBusy('');
     }
@@ -1000,51 +1070,62 @@ export function TargetDetailView({
       return <p className="td-muted">Verified via {ownershipMethodText(verification)}.</p>;
     }
     return (
-      <div className="td-ownership">
-        {!compact ? (
-          <p className="td-copy">External checks stay blocked until you prove you control this target. Publish the DNS TXT record below, then choose Check now. We only check the declared hostname.</p>
-        ) : null}
-        {challenge && challenge.record_name ? (
-          <>
-            <div className="td-dns">
-              <div className="td-dns-row"><span className="td-dns-key">Type</span><span className="td-dns-val">TXT</span><span /></div>
-              <div className="td-dns-row">
-                <span className="td-dns-key">Name</span>
-                <span className="td-dns-val">{challenge.record_name}</span>
-                <CopyButton value={challenge.record_name} label="DNS record name" />
-              </div>
-              <div className="td-dns-row">
-                <span className="td-dns-key">Value</span>
-                <span className="td-dns-val">{challenge.record_value}</span>
-                <CopyButton value={challenge.record_value} label="DNS record value" />
-              </div>
-            </div>
-            <div className="td-actions">
-              {canWrite ? (
-                <Button size="sm" loading={busy === 'verify'} disabled={busy !== ''} onClick={() => void checkOwnership()}>
-                  <ShieldCheck size={15} aria-hidden="true" />Check now
-                </Button>
-              ) : <Badge tone="muted">Read-only role</Badge>}
-              {canWrite ? (
-                <Button size="sm" variant="ghost" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>Reissue record</Button>
-              ) : null}
-              {challenge.expires_at ? <span className="td-muted">Expires {formatDate(challenge.expires_at)}</span> : null}
-              {challenge.last_checked_at ? <span className="td-muted">Last checked {formatDate(challenge.last_checked_at)}</span> : null}
-              {dnsWatchStartedAt ? <span className="td-muted" role="status">Re-checking every 30 seconds</span> : null}
-            </div>
-          </>
-        ) : (
-          <div className="td-actions">
-            {canWrite ? (
-              <Button size="sm" loading={busy === 'issue'} disabled={busy !== ''} onClick={() => void issueOwnership()}>
-                <ShieldCheck size={15} aria-hidden="true" />Issue DNS TXT record
-              </Button>
-            ) : <Badge tone="muted">Ask an engineer or admin to prove ownership</Badge>}
-          </div>
-        )}
-      </div>
+      <OwnershipProof
+        kind={kind}
+        hostname={targetDisplayValue(target)}
+        challenge={challenge}
+        now={clock}
+        compact={compact}
+        panelId={compact ? 'td-validate-ownership' : 'td-ownership-panel'}
+        canWrite={canWrite}
+        busy={busy}
+        error={ownershipError}
+        watching={Boolean(dnsWatchStartedAt)}
+        watchStopped={dnsWatchStopped}
+        onIssue={() => void issueOwnership()}
+        onCheck={() => void checkOwnership()}
+      />
     );
   }
+
+  function focusOwnership(panelId: string) {
+    window.requestAnimationFrame(() => {
+      const panel = document.getElementById(panelId);
+      if (!panel) return;
+      panel.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+      const action = Array.from(panel.querySelectorAll<HTMLButtonElement>('button:not([disabled])'))
+        .find((button) => /^(Check now|Issue DNS TXT record|Issue a new record)$/.test(button.textContent?.trim() ?? ''));
+      (action ?? panel).focus({ preventScroll: true });
+    });
+  }
+
+  function proveOwnership() {
+    setTab('overview');
+    window.requestAnimationFrame(() => {
+      const heading = document.getElementById('td-next-title');
+      if (!heading) return;
+      heading.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+      const panel = document.getElementById('td-ownership-panel');
+      const action = panel
+        ? Array.from(panel.querySelectorAll<HTMLButtonElement>('button:not([disabled])')).find((button) => /^(Check now|Issue DNS TXT record|Issue a new record)$/.test(button.textContent?.trim() ?? ''))
+        : null;
+      (action ?? heading).focus({ preventScroll: true });
+    });
+  }
+
+  const lastCheckAt = (() => {
+    const recorded = getString(target, ['last_validation_at', 'last_validated_at'], '');
+    if (recorded) return recorded;
+    let newest = Number.NEGATIVE_INFINITY;
+    let newestText = '';
+    for (const run of targetRuns) {
+      const at = getString(run, ['started_at'], '') || getString(run, ['created_at'], '');
+      const ms = Date.parse(at);
+      if (Number.isFinite(ms) && ms > newest) { newest = ms; newestText = at; }
+    }
+    return newestText;
+  })();
+  const proveOwnershipFirst = canStartBoundedRun && !ownershipDone && !scanActive && !activeStandalone;
 
   function renderHeader() {
     const hasTarget = Boolean(target);
@@ -1052,13 +1133,13 @@ export function TargetDetailView({
     return (
       <header className="page-head td-page-head">
         <div className="td-identity">
-          <a href="#targets" className="td-back"><ArrowLeft size={14} aria-hidden="true" />Targets</a>
+          <DetailBackLink route="target-detail" />
           <div className="td-title-cluster">
             <h1 className="page-title mono">{title || 'Target'}</h1>
             {hasTarget ? (
               <div className="td-title-badges">
                 <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>
-                  {targetEligible ? 'Validation unlocked' : 'Validation locked'}
+                  {targetEligible ? 'Validation unlocked' : 'Ownership pending · checks locked'}
                 </Badge>
                 <Badge tone="muted">{formatLabel(kind)}</Badge>
               </div>
@@ -1078,6 +1159,8 @@ export function TargetDetailView({
               )}
               <div className="td-metaline">
                 <span>Expected: {formatLabel(getString(target, ['expected_behavior', 'expected'], 'Not reported'))}</span>
+                <span className="dot" aria-hidden="true">·</span>
+                <span className="td-last-check">{lastCheckAt ? <>Last check <time dateTime={lastCheckAt}>{formatDate(lastCheckAt)}</time></> : 'No checks recorded yet'}</span>
               </div>
               <TagEditor tags={tags} canEdit={canWrite} onChange={saveTags} />
             </div>
@@ -1085,14 +1168,19 @@ export function TargetDetailView({
         </div>
         {hasTarget ? (
           <div className="td-head-actions">
+            {proveOwnershipFirst ? (
+              <Button onClick={proveOwnership}>
+                <ShieldCheck size={15} aria-hidden="true" />Prove ownership
+              </Button>
+            ) : null}
             {canStartBoundedRun ? (
-              <Button onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById(scanActive || activeStandalone ? 'probe-activity-title' : 'td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
+              <Button variant={proveOwnershipFirst ? 'secondary' : 'default'} onClick={() => { setTab('validate'); window.requestAnimationFrame(() => document.getElementById(scanActive || activeStandalone ? 'probe-activity-title' : 'td-all-checks')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}>
                 <Play size={15} aria-hidden="true" />{scanActive || activeStandalone ? 'View activity' : 'Plan validation'}
               </Button>
             ) : null}
             {canStartBoundedRun && (scanActive || activeStandalone) ? (
               <Button variant="danger" onClick={() => scanActive ? setStopOpen(true) : setStopSingleRun({ id: getString(activeStandalone, ['id'], ''), name: displayCheckName(getString(activeStandalone, ['check_id'], '')) })}>
-                <Square size={14} aria-hidden="true" />{scanActive ? 'Stop validation' : 'Stop current check'}
+                <Square size={14} aria-hidden="true" />{scanActive ? 'Stop scan' : 'Stop current check'}
               </Button>
             ) : null}
             {declared && canWrite && !editingContext ? (
@@ -1172,7 +1260,7 @@ export function TargetDetailView({
       return (
         <section className="td-next" data-kind="ownership" aria-labelledby="td-next-title">
           <div className="td-next-head">
-            <h2 id="td-next-title">Prove ownership to unlock validation</h2>
+            <h2 id="td-next-title" tabIndex={-1}>Prove ownership to unlock validation</h2>
             <Badge tone={ownershipStep.tone}>{ownershipStep.label}</Badge>
             <Badge tone="muted">Next step</Badge>
           </div>
@@ -1182,17 +1270,19 @@ export function TargetDetailView({
     }
     if (topFinding) {
       const id = getString(topFinding, ['id'], '');
+      const hasEvidence = Array.isArray(topFinding.evidence_ids) && (topFinding.evidence_ids as unknown[]).some((value) => typeof value === 'string' && value.trim());
       return (
         <section className="td-next" data-kind="finding" aria-labelledby="td-next-title">
           <div className="td-next-head">
             <h2 id="td-next-title">{plainFindingTitle(topFinding, [target], checks)}</h2>
             <Badge tone={severityTone(getString(topFinding, ['severity'], ''))}>{formatSeverityLabel(getString(topFinding, ['severity'], 'unknown'))}</Badge>
             <Badge tone="muted">Highest-priority open finding</Badge>
+            {hasEvidence ? <Badge tone="muted">Evidence attached</Badge> : <Badge tone="warn">No evidence recorded</Badge>}
           </div>
           <p className="td-copy">
             Opened {formatDate(topFinding.created_at ?? topFinding.opened_at)}
             {openFindings.length > 1 ? `. ${openFindings.length - 1} more open on this target.` : '.'}
-            {' '}A later passing check does not close it; review the original evidence first.
+            {' '}A later passing check does not close it; {hasEvidence ? 'review the original evidence first.' : 'no supporting evidence is recorded for it yet; open the full finding to review its run.'}
           </p>
           <div className="td-actions">
             <Button size="sm" variant="secondary" data-focus-key={`finding-${id}`} onClick={() => inspectFinding(topFinding)}><Eye size={14} aria-hidden="true" />View evidence</Button>
@@ -1235,7 +1325,9 @@ export function TargetDetailView({
   function renderCoverage() {
     if (coverage) {
       const applicable = Number(coverage.applicable_count);
-      const percentage = coverage.percentage === null || coverage.percentage === undefined ? null : Number(coverage.percentage);
+      const conclusive = Number(coverage.conclusive_count);
+      const observationOnly = Number(coverage.observation_only_count);
+      const planTitle = `Server applicability plan ${getString(coverage, ['plan_version'], 'version not recorded')}`;
       const countText = (value: unknown) => (value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? 'Not recorded' : String(value));
       const cell = (label: string, key: string) => (
         <div key={key}><dt>{label}</dt><dd className="tabular-nums">{countText(coverage[key])}</dd></div>
@@ -1245,15 +1337,18 @@ export function TargetDetailView({
           <header className="td-section-head">
             <div>
               <h2 id="td-coverage-title">Check coverage</h2>
-              <p>Applicable target and check pairs from the server plan ({getString(coverage, ['plan_version'], 'version not recorded')}).</p>
+              <p className="td-coverage-scope tabular-nums">
+                Catalog {fullCatalog ? fullCatalog.length : 'not loaded'} · Runnable on this target {runAll.length} · Scored for readiness {countText(coverage.applicable_count)}
+              </p>
             </div>
-            <span className="td-coverage-figure-wrap">
-              <strong className="td-coverage-figure tabular-nums">{applicable > 0 && percentage !== null ? (percentage === 0 && Number(coverage.conclusive_count) > 0 ? '<1%' : `${percentage}%`) : 'Not applicable'}</strong>
-              <span className="td-muted">{applicable > 0 && percentage !== null ? 'of applicable pairs have a conclusive result' : 'No applicable target and check pairs'}</span>
-            </span>
           </header>
+          <p className="td-copy td-coverage-summary" title={planTitle}>
+            {applicable > 0
+              ? `${Number.isFinite(conclusive) ? conclusive : 0} of ${applicable} readiness-scored checks have a conclusive result.`
+              : 'No readiness-scored checks for this target.'}
+          </p>
           <dl className="td-count-grid">
-            {cell('Applicable', 'applicable_count')}
+            {cell('Scored for readiness', 'applicable_count')}
             {cell('Evaluated', 'evaluated_count')}
             {cell('Conclusive', 'conclusive_count')}
             {cell('Inconclusive', 'inconclusive_count')}
@@ -1261,10 +1356,9 @@ export function TargetDetailView({
             {cell('Stale', 'stale_count')}
             {cell('Unknown', 'unknown_count')}
             {cell('Partial', 'partial_count')}
-            {cell('Excluded', 'excluded_count')}
           </dl>
-          {Number(coverage.observation_only_count) > 0 ? (
-            <p className="td-copy">{String(coverage.observation_only_count)} transport or liveness checks are observations only. They are included in the full assessment under Validate and remain excluded from conclusive readiness coverage.</p>
+          {observationOnly > 0 ? (
+            <p className="td-copy">{String(observationOnly)} runnable checks are observations only; they run under Validate but are not scored for readiness.</p>
           ) : null}
           {Array.isArray(coverage.inconclusive_reasons) && coverage.inconclusive_reasons.length > 0 ? (
             <div className="td-retained" role="note">
@@ -1301,7 +1395,7 @@ export function TargetDetailView({
             <div className="td-dimensions" role="region" aria-label="Coverage by readiness dimension" tabIndex={0}>
               <table className="data-table">
                 <caption className="sr-only">Applicable check coverage per readiness dimension. Coverage shows what was evaluated, not whether it passed.</caption>
-                <thead><tr><th scope="col">Dimension</th><th scope="col">Coverage state</th><th scope="col">Evaluated</th><th scope="col">Conclusive</th><th scope="col">Not run</th><th scope="col">Unknown or partial</th><th scope="col">Stale</th><th scope="col">Excluded</th></tr></thead>
+                <thead><tr><th scope="col">Dimension</th><th scope="col">Coverage state</th><th scope="col">Evaluated</th><th scope="col">Conclusive</th><th scope="col">Not run</th><th scope="col">Unknown or partial</th><th scope="col">Stale</th></tr></thead>
                 <tbody>
                   {dimensions.map((dimension) => {
                     const applicableCount = Number(dimension.applicable_count);
@@ -1314,7 +1408,6 @@ export function TargetDetailView({
                         <td className="tabular-nums">{String(dimension.not_run_count ?? 'Not recorded')}</td>
                         <td className="tabular-nums">{dimension.unknown_count === undefined && dimension.partial_count === undefined ? 'Not recorded' : `${dimension.unknown_count ?? 0} / ${dimension.partial_count ?? 0}`}</td>
                         <td className="tabular-nums">{String(dimension.stale_count ?? 'Not recorded')}</td>
-                        <td className="tabular-nums">{String(dimension.excluded_count ?? 'Not recorded')}</td>
                       </tr>
                     );
                   })}
@@ -1322,7 +1415,26 @@ export function TargetDetailView({
               </table>
             </div>
           ) : null}
-          <p className="td-muted">Coverage shows which applicable checks have results, not whether they passed. Launch gates are re-evaluated by the server when you start a check.</p>
+          <details className="td-coverage-about">
+            <summary>About these numbers</summary>
+            <p className="td-copy">
+              Catalog counts every check AstraNull offers. Runnable checks fit this target and can be started under Validate. Readiness-scored checks are the runnable checks that can produce a verdict; observation checks run but are never scored.
+            </p>
+            <p className="td-copy">
+              Excluded: <span className="tabular-nums">{countText(coverage.excluded_count)}</span> catalog checks do not fit this target kind, so they are neither run nor scored here.
+            </p>
+            {dimensions.some((dimension) => dimension.excluded_count !== undefined && dimension.excluded_count !== null) ? (
+              <ul className="td-coverage-excluded">
+                {dimensions.map((dimension) => (
+                  <li key={getString(dimension, ['id'], '')}>
+                    {DIMENSION_LABELS[getString(dimension, ['id'], '')] ?? formatLabel(getString(dimension, ['id'], ''))}: <span className="tabular-nums">{String(dimension.excluded_count ?? 'Not recorded')}</span> excluded
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="td-muted" title={planTitle}>Counts come from the server applicability plan.</p>
+          </details>
+          <p className="td-muted">Coverage shows which readiness-scored checks have results, not whether they passed. Launch gates are re-evaluated by the server when you start a check.</p>
         </section>
       );
     }
@@ -1336,7 +1448,7 @@ export function TargetDetailView({
         </header>
         <dl className="td-count-grid">
           <div><dt>Gap found</dt><dd className="tabular-nums">{rowCounts.failed ?? 0}</dd></div>
-          <div><dt>Passed</dt><dd className="tabular-nums">{rowCounts.passed ?? 0}</dd></div>
+          <div><dt>Protected</dt><dd className="tabular-nums">{rowCounts.passed ?? 0}</dd></div>
           <div><dt>Inconclusive</dt><dd className="tabular-nums">{rowCounts.inconclusive ?? 0}</dd></div>
           <div><dt>Observed only</dt><dd className="tabular-nums">{rowCounts.observed ?? 0}</dd></div>
           <div><dt>Not run</dt><dd className="tabular-nums">{rowCounts.not_run ?? 0}</dd></div>
@@ -1352,7 +1464,7 @@ export function TargetDetailView({
     if (edgePhase === 'waiting') return 'Another run holds the execution slot for this target. Your detection request starts when it frees up.';
     if (edgePhase === 'error') return edgeError || 'WAF/CDN detection could not be queued.';
     if (edgePhase === 'no_result') return edgeDetectionReasonExplanation(edgeReason) || 'The last detection run finished without a trusted result, so nothing is asserted.';
-    if (edgePhase === 'not_started') return 'Initial WAF/CDN detection is queued when this domain is added. It starts after ownership and execution requirements are met.';
+    if (edgePhase === 'not_started') return DNS_TXT_KINDS.has(kind) ? null : 'No WAF/CDN detection is recorded for this target yet.';
     return null;
   }
 
@@ -1513,7 +1625,22 @@ export function TargetDetailView({
     { id: 'history' as const, label: 'Changes & history' },
   ];
 
-  const selectedBound = selectedRow?.maxRequests ?? null;
+  const reviewRow = review?.mode === 'single' ? checkRows.find((row) => row.checkId === review.checkId) ?? null : null;
+  const selectedBound = reviewRow?.maxRequests ?? null;
+  const multiSelected = selectedRunIds.length > 1;
+  const startReason = multiSelected
+    ? (!targetEligible ? OWNERSHIP_LOCKED_REASON : '')
+    : singleDisabledReason;
+  const probeSourceRanges = Array.isArray(config.siteConfig?.probe_source_ranges)
+    ? (config.siteConfig.probe_source_ranges as unknown[]).filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    : [];
+  const trafficNotice = (bound: string) => (
+    <>
+      Requests come from AstraNull signed public probe workers. Most carry a User-Agent containing “AstraNull”, but some phases deliberately vary or omit headers, so the request bound ({bound}) is the reliable limit. Traffic starts when you confirm and stops at the timeout or when you choose Stop.
+      {' '}Source addresses: {probeSourceRanges.length ? <span className="mono">{probeSourceRanges.join(', ')}</span> : 'ask your AstraNull operator'}.
+      {' '}<a href="#support" className="td-inline-link">Share with your SOC/WAF team</a>
+    </>
+  );
 
   return (
     <div className="content target-detail-view">
@@ -1564,6 +1691,8 @@ export function TargetDetailView({
               note={edgeNote()}
               action={detectAction}
               onInspect={inspectProvider}
+              checkBlocking={wafBlocking}
+              onOpenChecks={() => setTab('validate')}
             />
             {renderCoverage()}
             {target ? <TargetAuthorization target={target} config={config} session={session} canWrite={canWrite} ownershipDone={ownershipDone} /> : null}
@@ -1617,14 +1746,16 @@ export function TargetDetailView({
                 The linked check <span className="mono">{selectedCheckId}</span> is not compatible with this target kind, so it is not listed. No other check was selected.
               </div>
             ) : null}
-            <ProbeActivity
-              config={config} session={session} runId={activityRunId}
-              checkName={activityCheckName}
-              running={activityRunning} canStop={canStartBoundedRun && Boolean(activityRunId)}
-              onStop={() => setStopSingleRun({ id: activityRunId, name: activityCheckName || 'Current check' })}
-              onFollowActive={selectedRow && activeCheckRow && selectedRow.checkId !== activeCheckRow.checkId ? () => selectCheck(activeCheckRow.checkId) : undefined}
-              notSent={activityRow && !activityRunId && ['blocked', 'skipped', 'cancelled'].includes(activityRow.status) ? { reason: activityRow.reason, at: activityRow.finishedAt || activityRow.startedAt } : null}
-            />
+            {showActivity ? (
+              <ProbeActivity
+                config={config} session={session} runId={activityRunId}
+                checkName={activityCheckName}
+                running={activityRunning} canStop={canStartBoundedRun && Boolean(activityRunId) && !inspectingActivityRun}
+                onStop={() => setStopSingleRun({ id: activityRunId, name: activityCheckName || 'Current check' })}
+                onFollowActive={selectedRow && activeCheckRow && selectedRow.checkId !== activeCheckRow.checkId ? () => selectCheck(activeCheckRow.checkId) : undefined}
+                notSent={activityRow && !activityRunId && ['blocked', 'skipped', 'cancelled'].includes(activityRow.status) ? { reason: activityRow.reason, at: activityRow.finishedAt || activityRow.startedAt } : null}
+              />
+            ) : null}
             <CheckQueue
               rows={checkRows}
               runAllCount={runAll.length}
@@ -1640,12 +1771,18 @@ export function TargetDetailView({
               onRunAll={() => setReview({ mode: 'all' })}
               onStop={() => setStopOpen(true)}
               onStopCheck={canStartBoundedRun ? openStopCheck : undefined}
-              onActivity={(row) => { selectCheck(row.checkId); document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' }); }}
+              onActivity={(row) => { selectCheck(row.checkId); window.requestAnimationFrame(() => document.getElementById('probe-activity-title')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' })); }}
+              runAllDisabledReason={runAllDisabledReason}
+              runAllBlockedReason={runAllBlockedReason}
+              recommendedRow={activeStandalone ? null : recommendedRow}
+              onStartRecommended={(row) => { setRunSelection([]); selectCheck(row.checkId); setReview({ mode: 'single', checkId: row.checkId }); }}
+              runSelection={selectedRunIds}
+              onRunSelectionChange={setRunSelection}
               liveNotes={liveNotes}
               footer={<>
                 {catalogError ? <p role="alert">{catalogError}</p> : null}
                 {remainingCatalog.length ? <details className="td-retained td-catalog-requirements">
-                  <summary>{remainingCatalog.length} more catalog checks · requirements and applicability</summary>
+                  <summary>{remainingCatalog.length} catalog checks not runnable on this target · requirements</summary>
                   <p>Every catalog check is listed here or in the runnable list above. Required setup never counts as passed protection.</p>
                   <ul>{remainingCatalog.map((check) => <li key={getString(check, ['check_id'], '')}>
                     <strong>{getString(check, ['name'], '')}</strong> <code>{getString(check, ['check_id'], '')}</code>
@@ -1662,17 +1799,23 @@ export function TargetDetailView({
             {canStartBoundedRun && !scanActive && !activeStandalone ? (
               <div className="td-start-bar" role="region" aria-label="Start the selected check">
                 <span className="td-start-copy">
-                  {selectedRow ? <><strong>{selectedRow.name}</strong> on <span className="mono">{targetDisplayValue(target)}</span></> : 'No check selected'}
+                  {multiSelected
+                    ? <><strong>{selectedRunIds.length} checks selected</strong> on <span className="mono">{targetDisplayValue(target)}</span></>
+                    : startRow
+                      ? <><strong>{startRow.name}</strong> on <span className="mono">{targetDisplayValue(target)}</span>{selectedRunIds.length === 1 ? <span className="td-muted"> · 1 check selected</span> : null}</>
+                      : 'No check selected'}
                 </span>
+                {selectedRunIds.length ? <Button size="sm" variant="ghost" onClick={() => setRunSelection([])}>Clear</Button> : null}
+                {!ownershipDone ? <Button size="sm" variant="ghost" onClick={() => focusOwnership('td-validate-ownership')}>Go to ownership step</Button> : null}
                 <Button
-                  data-focus-key={`check-start-${effectiveSelectedCheckId}`}
-                  disabled={!targetEligible || !effectiveSelectedCheckId || busy !== '' || scanActive}
-                  title={singleDisabledReason || undefined}
-                  onClick={() => setReview({ mode: 'single', checkId: effectiveSelectedCheckId })}
+                  data-focus-key={multiSelected ? 'check-start-selected' : `check-start-${startCheckId}`}
+                  disabled={!targetEligible || (!multiSelected && !startCheckId) || busy !== '' || scanActive}
+                  aria-describedby={startReason ? 'td-start-reason' : undefined}
+                  onClick={() => setReview(multiSelected ? { mode: 'selected', checkIds: selectedRunIds } : { mode: 'single', checkId: startCheckId })}
                 >
-                  <Play size={15} aria-hidden="true" />Review and start
+                  <Play size={15} aria-hidden="true" />{selectedRunIds.length ? `Review and start ${selectedRunIds.length}` : 'Review and start'}
                 </Button>
-                {singleDisabledReason ? <span className="td-muted td-start-reason">{singleDisabledReason}</span> : null}
+                {startReason ? <span className="td-muted td-start-reason" id="td-start-reason">{startReason}</span> : null}
               </div>
             ) : null}
           </div>
@@ -1862,7 +2005,7 @@ export function TargetDetailView({
               <tr><th scope="row">Kind</th><td>{formatLabel(kind)}</td></tr>
               <tr><th scope="row">Declaration source</th><td>{plainCheckName(targetDeclarationProvenanceLabel(target))}</td></tr>
               <tr><th scope="row">Ownership method</th><td><span className="mono">{ownershipMethodText(verification)}</span></td></tr>
-              {detail.loa ? <tr><th scope="row">Group LOA</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
+              {detail.loa ? <tr><th scope="row">Authorization</th><td>{formatLabel(getString(detail.loa, ['state'], 'Not reported'))}</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -1874,37 +2017,55 @@ export function TargetDetailView({
           ? `Detect WAF and CDN on ${targetDisplayValue(target)}?`
           : review?.mode === 'all'
             ? `Start ${runAll.length} checks on ${targetDisplayValue(target)}?`
-            : `Start ${selectedRow?.name ?? 'this check'} on ${targetDisplayValue(target)}?`}
+            : review?.mode === 'selected'
+              ? `Start ${reviewSelectedRows.length} selected checks on ${targetDisplayValue(target)}?`
+              : `Start ${reviewRow?.name ?? 'this check'} on ${targetDisplayValue(target)}?`}
         description={(
           <div className="stack-tight scan-review">
             {review?.mode === 'detect' ? (
               <>
                 <p>One bounded fingerprint run against this exact target: DNS resolution plus benign HTTP requests from the signed worker.</p>
-                <p>Upper bound: {Number.isFinite(Number((edgeCheck?.probe_profile as DataItem | undefined)?.max_requests)) ? `${Number((edgeCheck!.probe_profile as DataItem).max_requests)} requests` : 'not recorded in the catalog'}. Ownership: {ownershipDone ? 'verified' : 'not verified'}.</p>
+                <p>Upper bound: {detectBound !== null ? `${detectBound} requests` : 'not recorded in the catalog'}. Ownership: {ownershipDone ? 'verified' : 'not verified'}.</p>
                 <p>It identifies providers only. It does not test blocking or capacity.</p>
+                <p className="td-review-traffic"><strong>What your team will see:</strong> {trafficNotice(detectBound !== null ? `at most ${detectBound} requests` : 'shown above')}</p>
               </>
-            ) : review?.mode === 'all' ? (
+            ) : review?.mode === 'all' || review?.mode === 'selected' ? (
               <>
-                <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
-                <p>Includes provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
-                <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the run pauses and shows when it resumes. Other runs sharing the execution limit wait until it finishes, and you can stop it at any time.</p>
+                {review.mode === 'all' ? (
+                  <>
+                    <p><strong>{runAll.length} bounded external checks</strong> across {runAllCategoryCount} categories, at most {runAllRequestBound} probe requests in total.</p>
+                    <p>Includes provider, DNS, transport, and protocol observations. These observations do not score as readiness verdicts.</p>
+                  </>
+                ) : (
+                  <>
+                    <p><strong>{reviewSelectedRows.length} bounded external checks</strong> across {selectedCategoryCount} {selectedCategoryCount === 1 ? 'category' : 'categories'}, at most {selectedRequestBound} probe requests in total.{selectedUnbounded ? ` ${selectedUnbounded} of them ${selectedUnbounded === 1 ? 'has' : 'have'} no request bound recorded in the catalog.` : ''}</p>
+                    {selectedObservationCount ? <p>{selectedObservationCount} of these {selectedObservationCount === 1 ? 'is an observation' : 'are observations'} and {selectedObservationCount === 1 ? 'does' : 'do'} not score as a readiness verdict.</p> : null}
+                  </>
+                )}
+                <p>They run one at a time inside your safe-run limits; if an hourly limit is reached the scan pauses and shows when it resumes. While it runs it holds this target&apos;s execution slot, so no other check can start on this target until it finishes. You can stop it at any time.</p>
                 <p>The server re-checks ownership, safe windows, rate and concurrency gates when you start.</p>
+                <p className="td-review-traffic"><strong>What your team will see:</strong> {trafficNotice(`at most ${review.mode === 'all' ? runAllRequestBound : selectedRequestBound} requests`)}</p>
+                {!ownershipDone ? <p className="td-form-error" role="alert">{OWNERSHIP_LOCKED_REASON}</p> : reviewSlotReason ? <p className="td-form-error" role="alert">{reviewSlotReason}</p> : null}
               </>
             ) : (
               <>
                 <dl className="td-review-list">
                   <div><dt>Target</dt><dd className="mono">{targetDisplayValue(target)}</dd></div>
-                  <div><dt>Check</dt><dd>{selectedRow?.name ?? 'Not selected'} <span className="mono">{effectiveSelectedCheckId}</span></dd></div>
-                  <div><dt>Upper bound</dt><dd>{selectedBound !== null ? `${selectedBound} request${selectedBound === 1 ? '' : 's'}` : 'Not recorded in the catalog'}{selectedRow?.timeoutMs ? `, ${selectedRow.timeoutMs} ms timeout` : ''}</dd></div>
+                  <div><dt>Check</dt><dd>{reviewRow?.name ?? 'Not selected'} <span className="mono">{review?.mode === 'single' ? review.checkId : ''}</span></dd></div>
+                  <div><dt>Upper bound</dt><dd>{selectedBound !== null ? `${selectedBound} request${selectedBound === 1 ? '' : 's'}` : 'Not recorded in the catalog'}{reviewRow?.timeoutMs ? `, ${reviewRow.timeoutMs} ms timeout` : ''}</dd></div>
+                  <div><dt>Result type</dt><dd>{reviewRow?.readinessCapable ? 'Produces a readiness verdict' : 'Observation only — no readiness credit'}</dd></div>
                   <div><dt>Ownership</dt><dd>{ownershipDone ? 'Verified' : 'Not verified'}</dd></div>
+                  <div><dt>What your team will see</dt><dd>{trafficNotice(selectedBound !== null ? `at most ${selectedBound} request${selectedBound === 1 ? '' : 's'}` : 'not recorded in the catalog')}</dd></div>
                 </dl>
                 <p>The server re-checks ownership, safe windows, rate and concurrency gates when you start. A bounded check does not measure volumetric capacity.</p>
+                {!ownershipDone ? <p className="td-form-error" role="alert">{OWNERSHIP_LOCKED_REASON}</p> : reviewSlotReason ? <p className="td-form-error" role="alert">{reviewSlotReason}</p> : null}
               </>
             )}
           </div>
         )}
-        confirmLabel={review?.mode === 'detect' ? 'Start detection' : review?.mode === 'all' ? 'Start all checks' : 'Start check'}
+        confirmLabel={review?.mode === 'detect' ? 'Start detection' : review?.mode === 'all' ? 'Start all checks' : review?.mode === 'selected' ? `Start ${reviewSelectedRows.length} checks` : 'Start check'}
         confirmTone="default"
+        confirmDisabled={review !== null && review.mode !== 'detect' && (!ownershipDone || Boolean(reviewSlotReason))}
         busy={busy === 'run' || busy === 'run-all'}
         onCancel={() => setReview(null)}
         onConfirm={() => void startReviewed()}
@@ -1912,7 +2073,7 @@ export function TargetDetailView({
       <ConfirmModal
         open={stopSingleRun !== null}
         title={`Stop ${stopSingleRun?.name || 'this check'}?`}
-        description={scanActive ? 'This stops only this check. The remaining checks in the validation batch continue. Use Stop validation to stop the whole batch.' : 'The worker stops further attempts and retains recorded activity. A bounded request already in flight may finish.'}
+        description={scanActive ? 'This stops only this check. The remaining checks in this scan continue. Use Stop scan to stop the whole scan.' : 'The worker stops further attempts and retains recorded activity. A bounded request already in flight may finish.'}
         confirmLabel="Stop check" confirmTone="danger" busy={busy === 'stop-check'}
         onCancel={() => setStopSingleRun(null)} onConfirm={() => void stopSingleCheck()}
       />
@@ -1924,7 +2085,7 @@ export function TargetDetailView({
         onCancelled={(result) => {
           setStopOpen(false);
           setScan(result);
-          setBanner('Assessment Stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.');
+          setBanner('Scan stop requested. Queued checks cannot start; finished results are kept. Worker acknowledgment remains separate.');
           void loadTargetActivity();
         }}
       />

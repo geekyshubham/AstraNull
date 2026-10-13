@@ -133,10 +133,12 @@ export function loadDevReportWorld(store, tenantId, parsed, bounds) {
     return true;
   };
   const scopedFindings = findings.filter(inFindingScope);
-  const windowedFindings = scopedFindings.filter((finding) => withinPeriod(rowInstantMs(finding, ['created_at']), bounds) === true);
+  const openedInPeriod = (finding) => withinPeriod(rowInstantMs(finding, ['created_at']), bounds) === true;
+  const windowedFindings = scopedFindings.filter((finding) => finding.status === 'open' || openedInPeriod(finding));
+  const newestFirst = compareNewest((finding) => rowInstantMs(finding, ['created_at']));
   const includedFindings = windowedFindings
     .slice()
-    .sort(compareNewest((finding) => rowInstantMs(finding, ['created_at'])))
+    .sort((left, right) => Number(right.status === 'open') - Number(left.status === 'open') || newestFirst(left, right))
     .slice(0, MAX_SNAPSHOT_FINDINGS);
 
   const includedRunIds = new Set((parsed.runIds ? parsed.runIds : includedRuns.map((run) => run.id)));
@@ -156,7 +158,8 @@ export function loadDevReportWorld(store, tenantId, parsed, bounds) {
     findings: includedFindings,
     finding_total: windowedFindings.length,
     finding_total_unwindowed: scopedFindings.length,
-    open_finding_total: windowedFindings.filter((finding) => finding.status === 'open').length,
+    open_finding_total: scopedFindings.filter((finding) => finding.status === 'open').length,
+    opened_in_period_total: windowedFindings.filter((finding) => finding.status === 'open' && openedInPeriod(finding)).length,
     verdicts: includedVerdicts,
     evidence: evidencePool.slice(0, MAX_SNAPSHOT_EVIDENCE),
     evidence_total: evidencePool.length,
@@ -401,7 +404,7 @@ th{background:#f4f4f4}
 <h1>${escapeHtml(payload.title)}</h1>
 <p class="muted">AstraNull readiness report · kind: ${escapeHtml(payload.kind)} · metadata-only export</p>
 <p>Readiness score: <span class="score">${escapeHtml(readinessExportText(payload.summary))}</span></p>
-<p>Open findings: ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
+<p>Open findings at generation (any opened date): ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
 <h2>Recent runs</h2>
 <table><thead><tr><th>Run</th><th>Check</th><th>Vector</th><th>Status</th></tr></thead><tbody>${runs || '<tr><td colspan="4">None</td></tr>'}</tbody></table>
 <h2>Verdicts</h2>
@@ -481,7 +484,7 @@ export function exportFinding(ctx, id) {
   if (!finding) return null;
   const check = getCheckById(finding.check_id);
   // EVIDENCE-01 / ADR-0008: finding export (customer artifact) must read external-only. Scrub the
-  // free-text prose (notes, remediation copy) before it is hashed into the custody digest.
+  // free-text prose (system summary, notes, remediation copy) before it is hashed into the custody digest.
   const payload = redactObject({
     finding_id: finding.id,
     title: finding.title,
@@ -491,6 +494,7 @@ export function exportFinding(ctx, id) {
     vector_family: check?.vector_family,
     remediation_template: scrubAgentPlacementText(check?.remediation_template),
     evidence_ids: finding.evidence_ids,
+    system_summary: scrubAgentPlacementText(finding.system_summary ?? null),
     notes: scrubAgentPlacementText(finding.notes),
   });
   const priorGlobal = getLatestChainedAuditEntry();

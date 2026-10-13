@@ -17,7 +17,7 @@ export type EvidenceInspectorRef = {
   audit_id?: string;
 };
 
-export type InspectorState = 'loading' | 'ready' | 'no_refs' | 'partial' | 'denied' | 'not_found' | 'unavailable' | 'unbound' | 'expired' | 'auth';
+export type InspectorState = 'loading' | 'ready' | 'pending' | 'no_refs' | 'partial' | 'denied' | 'not_found' | 'unavailable' | 'unbound' | 'expired' | 'auth';
 
 export type InspectorObservation = {
   testRunId: string;
@@ -50,6 +50,8 @@ export type EvidenceContextModel = {
   originating: InspectorObservation | null;
   later: InspectorObservation | null;
   alternatives: InspectorObservation[];
+  /** Artifacts recorded for the originating run that the finding itself does not cite. */
+  runArtifacts: number;
   request: InspectorSummaryBlock;
   response: InspectorSummaryBlock;
   evaluation: InspectorSummaryBlock;
@@ -87,6 +89,8 @@ export declare function createInspectorGeneration(): {
   cancel(): void;
 };
 export declare function limitationLabel(code: string): string;
+export declare const ORIGINATING_RUN_ARTIFACT: 'originating_run_artifact';
+export declare function relationshipLabel(code: string): string;
 export declare function fallbackRecordPath(ref: EvidenceInspectorRef): string;
 export declare function fallbackContextFromRecord(ref: EvidenceInspectorRef, source: unknown): { payload: Record<string, unknown> | null; mismatch: boolean; unbound?: boolean };
 export declare function looksLikeCredential(value: unknown): boolean;

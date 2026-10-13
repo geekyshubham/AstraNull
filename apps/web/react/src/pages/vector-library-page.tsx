@@ -12,14 +12,18 @@ import { ConfirmModal, FormModal } from '../lib/crud-ui';
 import { requestJson } from '../lib/api';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
-import { plainCheckName } from '../lib/plain-language.mjs';
+import { plainCheckName, plainCodeLabel, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { apiErrorMessage } from '../lib/error-messages';
+import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { formatNumber } from '../lib/utils';
+import { formatDate, formatNumber, formatTargetKind } from '../lib/utils';
 import {
+  countCompatibleSafeChecks,
   evidenceCapabilityCopy,
+  latestRunForCheckOnTarget,
   preferredRunnableCheck,
   searchAndFilterVectors,
+  sortVectorsByTargetFit,
   vectorTargetAvailability,
   type VectorAvailability,
 } from '../lib/vector-library.mjs';
@@ -45,14 +49,39 @@ function itemArray(value: unknown) {
   return Array.isArray(value) ? value as DataItem[] : [];
 }
 
-function humanize(value: string) {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
 function targetLabel(target: DataItem) {
   const value = getString(target, ['value', 'hostname', 'id'], 'Unnamed target');
-  const kind = humanize(getString(target, ['kind'], 'target'));
-  return `${value} · ${kind}`;
+  return `${value} · ${formatTargetKind(getString(target, ['kind'], ''), value)}`;
+}
+
+const VERIFIED_OWNERSHIP_STATES = new Set(['dns_verified', 'provider_verified', 'user_confirmed']);
+
+function targetOwnershipLabel(target: DataItem | null) {
+  if (!target) return '';
+  const verification = target.verification && typeof target.verification === 'object' && !Array.isArray(target.verification)
+    ? target.verification as DataItem
+    : null;
+  const state = (getString(target, ['verification_state'], '') || getString(verification, ['state'], '') || getString(target, ['verify_state'], '')).toLowerCase();
+  if (!state) return '';
+  return VERIFIED_OWNERSHIP_STATES.has(state) ? 'Verified' : 'Not verified';
+}
+
+function checkUpperBound(check: DataItem) {
+  const profile = check.probe_profile && typeof check.probe_profile === 'object' && !Array.isArray(check.probe_profile)
+    ? check.probe_profile as DataItem
+    : {};
+  const maxRequests = Number(profile.max_requests);
+  if (!Number.isFinite(maxRequests) || maxRequests <= 0) return 'Not recorded in the catalog';
+  const timeoutMs = Number(profile.timeout_ms);
+  const requests = `${formatNumber(maxRequests)} ${maxRequests === 1 ? 'request' : 'requests'}`;
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? `${requests}, ${formatNumber(timeoutMs)} ms timeout` : requests;
+}
+
+function initialTargetAvailability() {
+  const fit = getRouteParam('fit');
+  if (fit === 'all') return '';
+  if (TARGET_AVAILABILITY_OPTIONS.some((option) => option.value === fit)) return fit;
+  return getRouteParam('target') ? 'safe_runnable' : '';
 }
 
 let vectorLibraryRequestCache: { key: string; promise: Promise<DataItem[]> } | null = null;
@@ -108,6 +137,20 @@ function readInitialPage() {
   return Number.isInteger(value) && value > 1 ? value - 1 : 0;
 }
 
+function MappedCheckLatestRun({ run, evidence }: { run: DataItem | null; evidence: DataItem[] }) {
+  if (!run) return <span className="vector-mapped-run muted small">Not run on this target</span>;
+  const runId = getString(run, ['id']);
+  const verdictValue = hasEvidenceBackedVerdict(run, evidence) ? publishedRunVerdict(run) : '';
+  const outcome = verdictValue ? plainVerdictLabel(verdictValue) : plainCodeLabel(getString(run, ['status'], 'planned'));
+  const when = formatDate(run.started_at ?? run.created_at);
+  return (
+    <span className="vector-mapped-run small">
+      {runId ? <a className="detail-entity-link" href={buildDetailHref('run-detail', runId)}>{outcome}</a> : <span>{outcome}</span>}
+      <span className="muted"> · {when}</span>
+    </span>
+  );
+}
+
 export function VectorLibraryPage({
   data,
   config,
@@ -126,7 +169,7 @@ export function VectorLibraryPage({
   const [section, setSection] = useState('');
   const [capability, setCapability] = useState('');
   const [execution, setExecution] = useState('');
-  const [targetAvailability, setTargetAvailability] = useState('');
+  const [targetAvailability, setTargetAvailability] = useState(initialTargetAvailability);
   const [page, setPage] = useState(readInitialPage);
   const [targets, setTargets] = useState<DataItem[]>([]);
   const [targetsStatus, setTargetsStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
@@ -159,7 +202,7 @@ export function VectorLibraryPage({
     return () => { cancelled = true; };
   }, [config, session, reloadKey]);
 
-  // Target-first: one declared-target list; each target's group is resolved from its own record.
+  // Target-first: one declared-target list; fit is computed for the selected target only.
   useEffect(() => {
     let cancelled = false;
     setTargetsStatus('loading');
@@ -180,8 +223,13 @@ export function VectorLibraryPage({
   }, [config, session, targetReloadKey]);
 
   useEffect(() => {
-    replaceRouteParams({ target: targetId || null, q: query.trim() || null, page: page > 0 ? String(page + 1) : null });
-  }, [targetId, query, page]);
+    replaceRouteParams({
+      target: targetId || null,
+      fit: targetId ? targetAvailability || 'all' : null,
+      q: query.trim() || null,
+      page: page > 0 ? String(page + 1) : null,
+    });
+  }, [targetId, targetAvailability, query, page]);
 
   const selectedTarget = targets.find((target) => getString(target, ['id']) === targetId) ?? null;
   const missingDeepLinkTarget = Boolean(targetId) && targetsStatus === 'loaded' && !selectedTarget;
@@ -215,19 +263,20 @@ export function VectorLibraryPage({
     return () => { cancelled = true; };
   }, [config, session, fitTargetId]);
   const fitForSelected = fitTargetId && serverFit.targetId === fitTargetId ? serverFit : null;
-  const compatibleRunnable = fitForSelected?.status === 'loaded'
-    ? fitForSelected.checks.filter((check) => getString(check, ['safety_class']) === 'safe')
-    : [];
+  const compatibleRunnableCount = fitForSelected?.status === 'loaded'
+    ? countCompatibleSafeChecks(fitForSelected.checks, data.checks)
+    : 0;
+  const effectiveTargetAvailability = selectedTarget ? targetAvailability : '';
 
-  const filteredVectors = useMemo(() => searchAndFilterVectors(vectors, {
+  const filteredVectors = useMemo(() => sortVectorsByTargetFit(searchAndFilterVectors(vectors, {
     query,
     section,
     capability,
     execution,
-    targetAvailability,
+    targetAvailability: effectiveTargetAvailability,
     checks: data.checks,
     target: selectedTarget,
-  }), [vectors, query, section, capability, execution, targetAvailability, data.checks, selectedTarget]);
+  }), data.checks, selectedTarget), [vectors, query, section, capability, execution, effectiveTargetAvailability, data.checks, selectedTarget]);
 
   const [filterSignature, setFilterSignature] = useState(`${section}|${capability}|${execution}|${targetAvailability}`);
   useEffect(() => {
@@ -250,7 +299,7 @@ export function VectorLibraryPage({
     section ? `Section: ${section}` : '',
     capability ? `Evidence: ${CAPABILITY_OPTIONS.find((option) => option.value === capability)?.label ?? capability}` : '',
     execution ? `Execution: ${EXECUTION_OPTIONS.find((option) => option.value === execution)?.label ?? execution}` : '',
-    targetAvailability ? `Fit: ${TARGET_AVAILABILITY_OPTIONS.find((option) => option.value === targetAvailability)?.label ?? targetAvailability}` : '',
+    effectiveTargetAvailability ? `Fit: ${TARGET_AVAILABILITY_OPTIONS.find((option) => option.value === effectiveTargetAvailability)?.label ?? effectiveTargetAvailability}` : '',
     query.trim() ? `Search: “${query.trim()}”` : '',
   ].filter(Boolean);
 
@@ -265,6 +314,7 @@ export function VectorLibraryPage({
 
   function chooseTarget(next: string) {
     setTargetId(next);
+    setTargetAvailability(next ? 'safe_runnable' : '');
     setPage(0);
     setPendingRun(null);
     setSelectedCheckId('');
@@ -345,7 +395,14 @@ export function VectorLibraryPage({
       label: 'Vector',
       render: (vector) => (
         <span className="vector-primary">
-          <strong>{plainCheckName(getString(vector, ['canonical_name'], 'Unnamed vector'))}</strong>
+          <button
+            type="button"
+            className="vector-name-link"
+            onClick={() => openVector(vector)}
+            aria-label={`Review ${getString(vector, ['vector_id'])}`}
+          >
+            {plainCheckName(getString(vector, ['canonical_name'], 'Unnamed vector'))}
+          </button>
           <code className="traffic-path-label">{getString(vector, ['vector_id'], 'No ID')}</code>
           <small>{getString(vector, ['family'])} · {getString(vector, ['protocol_service'])}</small>
         </span>
@@ -376,7 +433,7 @@ export function VectorLibraryPage({
     {
       key: 'action',
       label: 'Action',
-      render: (vector) => <Button size="sm" variant="secondary" onClick={() => openVector(vector)} aria-label={`Review ${getString(vector, ['vector_id'])}`}>Review</Button>,
+      render: (vector) => <Button size="sm" variant="secondary" onClick={() => openVector(vector)} aria-label={`Details for ${getString(vector, ['vector_id'])}`}>Details</Button>,
     },
   ];
 
@@ -414,12 +471,12 @@ export function VectorLibraryPage({
         <div>
           <dt>Runnable checks</dt>
           <dd className="tabular-nums">{data.loadErrors.checks ? 'Unavailable' : formatNumber(runnableChecks.length)}</dd>
-          <dd className="vector-fact-hint">Customer-safe bounded checks in the catalog</dd>
+          <dd className="vector-fact-hint">Customer-safe subset of the check catalog; SOC-gated checks are not counted.</dd>
         </div>
         <div>
           <dt>Fit this target</dt>
-          <dd className="tabular-nums">{!selectedTarget ? 'No target' : !fitForSelected || fitForSelected.status === 'loading' ? 'Checking' : fitForSelected.status === 'error' ? 'Unavailable' : formatNumber(compatibleRunnable.length)}</dd>
-          <dd className="vector-fact-hint">{selectedTarget ? `Runnable checks supporting ${humanize(getString(selectedTarget, ['kind'], 'this kind'))}` : 'Choose a target below'}</dd>
+          <dd className="tabular-nums">{!selectedTarget ? 'No target' : !fitForSelected || fitForSelected.status === 'loading' ? 'Checking' : fitForSelected.status === 'error' ? 'Unavailable' : formatNumber(compatibleRunnableCount)}</dd>
+          <dd className="vector-fact-hint">{selectedTarget ? 'Customer-safe checks that support this target' : 'Choose a target below'}</dd>
         </div>
         <div>
           <dt>Launch access</dt>
@@ -428,7 +485,7 @@ export function VectorLibraryPage({
         </div>
       </dl>
       <PageContextSummary>
-        Catalog vectors, runnable checks, and checks that fit a target are different counts. No vector receives a verdict on its own.
+        Vectors describe exposures; runnable checks are what can be sent; Fit this target narrows runnable checks to the selected target.
       </PageContextSummary>
       {message ? (
         <Toast
@@ -454,7 +511,7 @@ export function VectorLibraryPage({
 
       <Card className="vector-scope-card">
         <CardHeader>
-          <div><CardTitle>Target</CardTitle><CardDescription>Pick the exact declared target. Its group is taken from the target record; nothing is chosen for you.</CardDescription></div>
+          <div><CardTitle>Target</CardTitle><CardDescription>Pick the exact declared target. Fit is computed for that target only; nothing is chosen for you.</CardDescription></div>
           <Badge tone={selectedTarget ? 'success' : 'muted'}>{selectedTarget ? 'Target selected' : 'Browsing'}</Badge>
         </CardHeader>
         <CardContent className="vector-scope-body">
@@ -465,7 +522,7 @@ export function VectorLibraryPage({
                 type="search"
                 value={targetQuery}
                 onChange={(event) => setTargetQuery(event.target.value)}
-                placeholder="Hostname, URL, IP, or group"
+                placeholder="Hostname, URL, or IP"
                 autoComplete="off"
                 disabled={targetsStatus !== 'loaded'}
               />
@@ -553,7 +610,18 @@ export function VectorLibraryPage({
               loadError={loadError}
               onRetry={() => setReloadKey((value) => value + 1)}
               empty={vectors.length > 0
-                ? <EmptyState icon={BookOpenCheck} title="No vectors match these filters." body={activeFilters.join(' · ') || 'Adjust the search or filters.'} actionLabel="Clear filters" onAction={clearFilters} />
+                ? (
+                  <EmptyState
+                    icon={BookOpenCheck}
+                    title="No vectors match these filters."
+                    body={activeFilters.join(' · ') || 'Adjust the search or filters.'}
+                    actionLabel="Clear filters"
+                    onAction={clearFilters}
+                    actions={effectiveTargetAvailability
+                      ? <Button variant="ghost" onClick={() => { setTargetAvailability(''); setPage(0); }}>Show all fits</Button>
+                      : undefined}
+                  />
+                )
                 : <EmptyState icon={BookOpenCheck} title="The vector catalog is empty." body="No catalog entries were returned for this workspace." />}
             />
           )}
@@ -578,32 +646,6 @@ export function VectorLibraryPage({
       >
         {selectedVector && detailAvailability && detailEvidence ? (
           <div className="vector-detail">
-            <div className="vector-detail-grid">
-              <section className="vector-detail-block"><h4>What it checks</h4><p>{getString(selectedVector, ['intended_detection_goal'], 'Not recorded')}</p></section>
-              <section className="vector-detail-block"><h4>Why it matters</h4><p>{getString(selectedVector, ['failure_means'], 'Not recorded')}</p></section>
-              <section className="vector-detail-block"><h4>Expected protection</h4><p>{getString(selectedVector, ['expected_controls'], 'Not recorded')}</p></section>
-              <section className="vector-detail-block"><h4>Evidence limits</h4><p><Badge tone={detailEvidence.tone as Tone}>{detailEvidence.label}</Badge></p><p>{detailEvidence.detail}</p></section>
-              <section className="vector-detail-block full"><h4>How the exposure works</h4><p>{getString(selectedVector, ['how_it_works'], 'Not recorded')}</p></section>
-              <section className="vector-detail-block"><h4>Defensive indicators</h4><p>{getString(selectedVector, ['defensive_indicators'], 'Not recorded')}</p></section>
-              <section className="vector-detail-block"><h4>Scope boundary</h4><p>{getString(selectedVector, ['boundaries', 'out_of_scope_reason'], 'No additional boundary recorded.')}</p></section>
-              <section className="vector-detail-block full">
-                <h4>Mapped checks</h4>
-                {mappedCheckIds.length ? (
-                  <ul className="vector-mapped-checks">
-                    {mappedCheckIds.map((checkId) => {
-                      const check = data.checks.find((candidate) => getString(candidate, ['check_id']) === checkId);
-                      return (
-                        <li key={checkId}>
-                          {check ? <a href={checkHref(checkId)}>{plainCheckName(getString(check, ['name'], checkId))}</a> : <span>{checkId}</span>}
-                          <code className="traffic-path-label">{checkId}</code>
-                          {!check ? <span className="muted small"> not in the current catalog</span> : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : <p>No bounded check is mapped. This vector is explanatory only.</p>}
-              </section>
-            </div>
             <div className="vector-detail-rail" role="group" aria-label="Target fit and launch">
               <div className="vector-target-note" role="note">
                 {detailAvailability.id === 'safe_runnable' ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
@@ -621,23 +663,58 @@ export function VectorLibraryPage({
                 {detailAvailability.id === 'safe_runnable' && canStartBoundedRun ? <Button size="sm" disabled={!selectedCheckId || busy !== ''} onClick={prepareRun}>Review run</Button> : null}
               </div>
             </div>
+            <div className="vector-detail-grid">
+              <section className="vector-detail-block"><h4>What it checks</h4><p>{getString(selectedVector, ['intended_detection_goal'], 'Not recorded')}</p></section>
+              <section className="vector-detail-block"><h4>Why it matters</h4><p>{getString(selectedVector, ['failure_means'], 'Not recorded')}</p></section>
+              <section className="vector-detail-block"><h4>Expected protection</h4><p>{getString(selectedVector, ['expected_controls'], 'Not recorded')}</p></section>
+              <section className="vector-detail-block"><h4>Evidence limits</h4><p><Badge tone={detailEvidence.tone as Tone}>{detailEvidence.label}</Badge></p><p>{detailEvidence.detail}</p></section>
+              <section className="vector-detail-block full"><h4>How the exposure works</h4><p>{getString(selectedVector, ['how_it_works'], 'Not recorded')}</p></section>
+              <section className="vector-detail-block"><h4>Defensive indicators</h4><p>{getString(selectedVector, ['defensive_indicators'], 'Not recorded')}</p></section>
+              <section className="vector-detail-block"><h4>Scope boundary</h4><p>{getString(selectedVector, ['boundaries', 'out_of_scope_reason'], 'No additional boundary recorded.')}</p></section>
+              <section className="vector-detail-block full">
+                <h4>Mapped checks</h4>
+                {mappedCheckIds.length ? (
+                  <ul className="vector-mapped-checks">
+                    {mappedCheckIds.map((checkId) => {
+                      const check = data.checks.find((candidate) => getString(candidate, ['check_id']) === checkId);
+                      const latestRun = selectedTarget ? latestRunForCheckOnTarget(data.runs, checkId, targetId) : null;
+                      return (
+                        <li key={checkId}>
+                          {check ? <a href={checkHref(checkId)}>{plainCheckName(getString(check, ['name'], checkId))}</a> : <span>{checkId}</span>}
+                          <code className="traffic-path-label">{checkId}</code>
+                          {!check ? <span className="muted small"> not in the current catalog</span> : null}
+                          {selectedTarget ? <MappedCheckLatestRun run={latestRun} evidence={data.evidence} /> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : <p>No bounded check is mapped. This vector is explanatory only.</p>}
+                {mappedCheckIds.length && selectedTarget ? <p className="muted small">Latest result per check on {getString(selectedTarget, ['value'], targetId)}, from recent runs.</p> : null}
+              </section>
+            </div>
           </div>
         ) : null}
       </FormModal>
 
       <ConfirmModal
         open={Boolean(pendingRun)}
-        title="Start this bounded check?"
+        title={pendingRun && selectedTarget
+          ? `Start ${plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} on ${getString(selectedTarget, ['value', 'hostname'], targetId)}?`
+          : 'Start this check?'}
         description={pendingRun && selectedTarget ? (
-          <div className="stack-tight">
-            <p><strong>Exact target:</strong> {targetLabel(selectedTarget)} <code>{targetId}</code></p>
-            <p><strong>Check:</strong> {plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} <code>{getString(pendingRun.check, ['check_id'])}</code></p>
-            <p><strong>Catalog vector:</strong> {getString(pendingRun.vector, ['vector_id'])}</p>
-            <p><strong>Evidence limit:</strong> {evidenceCapabilityCopy(pendingRun.vector.evidence_capability).detail}</p>
-            <p className="muted">Ownership, eligibility, concurrency, and rate limits are rechecked by the server before anything is sent.</p>
+          <div className="stack-tight scan-review">
+            <dl className="td-review-list">
+              <div><dt>Target</dt><dd>{targetLabel(selectedTarget)} <code>{targetId}</code></dd></div>
+              <div><dt>Check</dt><dd>{plainCheckName(getString(pendingRun.check, ['name', 'title', 'check_id']))} <code>{getString(pendingRun.check, ['check_id'])}</code></dd></div>
+              <div><dt>Upper bound</dt><dd>{checkUpperBound(pendingRun.check)}</dd></div>
+              {targetOwnershipLabel(selectedTarget) ? <div><dt>Ownership</dt><dd>{targetOwnershipLabel(selectedTarget)}</dd></div> : null}
+              <div><dt>Evidence limit</dt><dd>{evidenceCapabilityCopy(pendingRun.vector.evidence_capability).detail}</dd></div>
+              <div><dt>Catalog vector</dt><dd><code>{getString(pendingRun.vector, ['vector_id'])}</code></dd></div>
+            </dl>
+            <p className="muted">The server re-checks ownership, safe windows, rate and concurrency gates when you start. A bounded check does not measure volumetric capacity.</p>
           </div>
         ) : ''}
-        confirmLabel="Start bounded check"
+        confirmLabel="Start check"
         confirmTone="default"
         busy={busy === 'start-run'}
         onCancel={() => setPendingRun(null)}

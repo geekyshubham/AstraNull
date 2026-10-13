@@ -55,7 +55,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     await stopPortalPlaywrightServer();
   });
 
-  test('safe-run action opens the vector library and never chooses scope implicitly', async ({ page }) => {
+  test('safe-run action opens the check library and never chooses scope implicitly', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
     const nativeDialogs = forbidNativeDialogs(page);
@@ -67,7 +67,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     });
 
     await gotoPortalRoute(page, 'runs', baseUrl);
-    const libraryButton = page.getByRole('button', { name: 'Open vector library' }).first();
+    const libraryButton = page.getByRole('button', { name: 'Open check library' }).first();
     await expect(libraryButton).toBeEnabled({ timeout: 15_000 });
     await libraryButton.click();
 
@@ -75,7 +75,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Check library' })).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.vector-target-note')).toContainText('Browsing without a target');
     await expect(page.getByRole('button', { name: 'Target', exact: true })).toBeEnabled();
-    await expect(page.getByRole('button', { name: /^(Review run|Start bounded check)$/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^(Review run|Start check)$/ })).toHaveCount(0);
     expect(runPosts, 'navigation must not start a run').toHaveLength(0);
     expect(nativeDialogs, 'no native window.confirm may be raised').toEqual([]);
   });
@@ -100,7 +100,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     const confirm = page.locator('dialog.modal-confirm[open]');
     await expect(confirm).toBeVisible({ timeout: 10_000 });
     await expect(confirm).toContainText('Save retention settings?');
-    await expect(confirm).toContainText('Shorter windows can immediately purge stored metadata.');
+    await expect(confirm).toContainText('No purging period gets shorter, so nothing becomes newly eligible for deletion.');
     expect(patches, 'opening the confirm must not save').toHaveLength(0);
 
     await confirm.getByRole('button', { name: 'Save retention policy' }).click();
@@ -157,18 +157,31 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
 
   test('cold deep-link into a role-gated route keeps the route when the role is already stored', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
-    // `release-evidence` is narrowed to the auditor role in lib/route-access; the access gate
-    // redirects to #dashboard for anyone else. A cold load must evaluate that gate against the
-    // stored session, never against a default one that has not hydrated yet.
+    // `audit` requires audit:read, which engineer, viewer and a not-yet-hydrated session lack, so the gate must read the stored role.
     await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role: 'auditor' });
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      await page.goto(`${baseUrl}/app#release-evidence`, { waitUntil: 'networkidle', timeout: 60_000 });
+      await page.goto(`${baseUrl}/app#audit`, { waitUntil: 'networkidle', timeout: 60_000 });
       await expect(page.locator('#root > *')).not.toHaveCount(0);
-      // Give any late access-gate effect a chance to fire before asserting.
       await expect
         .poll(async () => new URL(page.url()).hash, { timeout: 5_000, intervals: [250, 250, 250, 500] })
-        .toBe('#release-evidence');
+        .toBe('#audit');
     }
+  });
+
+  test('cold deep-link to release-evidence shows the unavailable page to an auditor because the customer surface is removed', async ({ page }) => {
+    const baseUrl = getPortalPlaywrightBaseUrl();
+    /** @type {string[]} */
+    const releaseReads = [];
+    page.on('request', (req) => {
+      if (new URL(req.url()).pathname.startsWith('/v1/production-release-evidence')) releaseReads.push(req.url());
+    });
+    await injectPortalDevHeadersSession(page, { ...PORTAL_SESSION, role: 'auditor' });
+    await page.goto(`${baseUrl}/app#release-evidence`, { waitUntil: 'networkidle', timeout: 60_000 });
+    // Removed pages are not redirected: the portal shows the unavailable page in place and loads nothing from the route.
+    await expect(page.locator('[data-unavailable-kind]')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /Release evidence/i })).toHaveCount(0);
+    await expect(page.locator('a[href="#release-evidence"]')).toHaveCount(0);
+    expect(releaseReads).toEqual([]);
   });
 });

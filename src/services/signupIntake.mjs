@@ -77,14 +77,16 @@ function checkPublicSignupRate(clientKey, maxPerHour = 20) {
   return { ok: true };
 }
 
-function findDuplicateSignup(store, emailDomain, organization) {
-  const org = organization.trim().toLowerCase();
+const DOMAIN_DUPLICATE_STATES = new Set(['submitted', 'under_review']);
+
+function findDuplicateSignup(store, contactEmail, emailDomain) {
+  const email = contactEmail.trim().toLowerCase();
   const domain = emailDomain.trim().toLowerCase();
   const requests = store.signupRequests ?? [];
   return requests.find((r) => {
-    if (['rejected'].includes(r.state)) return false;
-    return r.email_domain === domain
-      || r.organization_name.trim().toLowerCase() === org;
+    if (r.state === 'rejected') return false;
+    if (String(r.contact_email ?? '').trim().toLowerCase() === email) return true;
+    return r.email_domain === domain && DOMAIN_DUPLICATE_STATES.has(r.state);
   }) ?? null;
 }
 
@@ -104,11 +106,11 @@ export function createSignupRequest(body, options = {}) {
   if (!Array.isArray(store.signupRequests)) store.signupRequests = [];
   const duplicate = findDuplicateSignup(
     store,
+    validated.value.contact_email,
     validated.value.email_domain,
-    validated.value.organization_name,
   );
   if (duplicate) {
-    return { error: 'duplicate_request', existing_id: duplicate.id };
+    return { error: 'duplicate_request' };
   }
 
   const now = new Date().toISOString();
@@ -169,7 +171,6 @@ export function sanitizeSignupForPublic(record) {
     created_at: record.created_at,
     updated_at: record.updated_at,
     customer_notice: record.customer_notice ?? null,
-    provisioned_tenant_id: record.state === 'customer_invited' ? record.provisioned_tenant_id : null,
   };
 }
 

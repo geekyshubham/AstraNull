@@ -194,7 +194,7 @@ th{background:#f4f4f4}
 <h1>${escapeHtml(payload.title)}</h1>
 <p class="muted">AstraNull readiness report · kind: ${escapeHtml(payload.kind)} · metadata-only export</p>
 <p>Readiness score: <span class="score">${escapeHtml(readinessExportText(payload.summary))}</span></p>
-<p>Open findings: ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
+<p>Open findings at generation (any opened date): ${escapeHtml(String(payload.summary?.open_findings ?? 0))}</p>
 <h2>Recent runs</h2>
 <table><thead><tr><th>Run</th><th>Check</th><th>Vector</th><th>Status</th></tr></thead><tbody>${runs || '<tr><td colspan="4">None</td></tr>'}</tbody></table>
 <h2>Verdicts</h2>
@@ -477,7 +477,7 @@ export function createPostgresReportServices(repositories, options = {}) {
       if (!finding) return null;
       const check = getCheckById(finding.check_id);
       // EVIDENCE-01 / ADR-0008: finding export (customer artifact) must read external-only. Scrub
-      // notes/remediation prose before it is hashed into the custody digest.
+      // summary/notes/remediation prose before it is hashed into the custody digest.
       const payload = redactObject({
         finding_id: finding.id,
         title: finding.title,
@@ -487,6 +487,7 @@ export function createPostgresReportServices(repositories, options = {}) {
         vector_family: check?.vector_family,
         remediation_template: scrubAgentPlacementText(check?.remediation_template),
         evidence_ids: finding.evidence_ids,
+        system_summary: scrubAgentPlacementText(finding.system_summary ?? null),
         notes: scrubAgentPlacementText(finding.notes),
       });
 

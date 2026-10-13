@@ -1084,8 +1084,9 @@ describe('WAF posture API', () => {
     assert.equal(finding.severity, 'medium');
     assert.match(finding.title, /WAF posture underprotected/i);
     assert.match(finding.title, /waf-app\.example\.com/);
-    assert.match(finding.notes, /marker_rule_not_blocking/);
-    assert.match(finding.notes, /Retest:/);
+    assert.match(finding.system_summary, /marker_rule_not_blocking/);
+    assert.match(finding.system_summary, /Retest:/);
+    assert.equal(finding.notes, null);
     assert.ok(Array.isArray(finding.evidence_ids));
     assert.ok(finding.evidence_ids.length >= 1);
 

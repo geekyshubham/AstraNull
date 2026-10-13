@@ -20,6 +20,7 @@ export const PERMISSIONS = {
   'test_run:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'finding:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'finding:write': ['owner', 'admin', 'engineer'],
+  'finding:accept_risk': ['owner', 'admin'],
   'report:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'report:create': ['owner', 'admin', 'engineer', 'soc', 'auditor'],
   'audit:read': ['owner', 'admin', 'soc', 'auditor'],

@@ -91,7 +91,9 @@ describe('ui and api smoke', () => {
     assert.ok(reactAppJs.text.includes('/v1/test-policies'), 'React test policies page creates safe policy records');
     assert.ok(reactAppJs.text.includes('/internal/soc/high-scale/'), 'React SOC console calls governed SOC execution routes');
     assert.ok(reactAppJs.text.includes('/internal/admin/signup-requests/'), 'React staff console approves signup requests');
-    assert.ok(reactAppJs.text.includes('Open vector library'), 'React runs page routes operators into explicit vector, domain, and check selection');
+    assert.equal(reactAppJs.text.includes('React staff console'), false, 'Staff decisions send the reviewer reason, never a canned console string');
+    assert.ok(reactAppJs.text.includes('Reason (shown to the applicant)'), 'Signup rejection asks for a reason the applicant will see');
+    assert.ok(reactAppJs.text.includes('Open check library'), 'React runs page routes operators into explicit vector, domain, and check selection');
     assert.ok(reactAppJs.text.includes('/v1/waf/coverage/summary'), 'React dashboard loads WAF coverage summary');
     assert.ok(reactAppJs.text.includes('/v1/high-scale-requests'), 'React portal references governed high-scale requests');
     assert.ok(reactAppJs.text.includes('Vector coverage matrix'), 'Dashboard risk trends retains vector coverage panel');

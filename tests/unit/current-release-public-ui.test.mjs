@@ -148,6 +148,122 @@ describe('current-release public pages', () => {
     });
   });
 
+  describe('staff return-to-intent contract', () => {
+    it('keeps only staff routes, with a safe id and tenant on detail routes', () => {
+      assert.equal(mod.sanitizeStaffReturnHash('#admin'), '#admin');
+      assert.equal(mod.sanitizeStaffReturnHash('internal-soc'), '#internal-soc');
+      assert.equal(
+        mod.sanitizeStaffReturnHash('#queue-detail?id=hsr_123&tenant=ten_demo&token=pwi_secret&q=free+text'),
+        '#queue-detail?id=hsr_123&tenant=ten_demo',
+      );
+      assert.equal(mod.sanitizeStaffReturnHash('#tenant-detail?id=ten_acme&tenant_id=ten_acme'), '#tenant-detail?id=ten_acme&tenant=ten_acme');
+      assert.equal(mod.sanitizeStaffReturnHash('#queue-detail?id=pwi_secret'), '#queue-detail');
+      assert.equal(mod.sanitizeStaffReturnHash('#queue-detail?id=eyJhbGciOiJIUzI1NiJ9.e30.sig'), '#queue-detail');
+    });
+
+    it('rejects customer routes, unknown routes, external URLs and free text', () => {
+      for (const value of [
+        '#findings', '#dashboard', '#target-detail?id=tgt_1', '#not-a-route', 'https://evil.example/#admin',
+        '//evil.example', 'admin console', '#Admin', '#admin<script>', '', null, `#${'a'.repeat(2100)}`,
+      ]) {
+        assert.equal(mod.sanitizeStaffReturnHash(value), null, String(value).slice(0, 40));
+      }
+      assert.equal(mod.sanitizeReturnHash('#queue-detail?id=hsr_1'), null, 'the customer sanitizer still drops staff routes');
+    });
+
+    it('builds a staff sign-in URL with next and reason, leaving identity-provider URLs untouched', () => {
+      assert.equal(
+        mod.buildStaffLoginReturnUrl('/internal/admin/login', { hash: '#queue-detail?id=hsr_1&token=x', reason: 'session_expired' }),
+        `/internal/admin/login?next=${encodeURIComponent('#queue-detail?id=hsr_1')}&reason=session_expired`,
+      );
+      assert.equal(mod.buildStaffLoginReturnUrl('/internal/admin/login', { hash: '#findings', reason: 'bogus' }), '/internal/admin/login');
+      assert.equal(
+        mod.buildStaffLoginReturnUrl('https://idp.example/staff', { hash: '#internal-soc', reason: 'session_expired' }),
+        'https://idp.example/staff',
+      );
+      assert.equal(mod.staffReturnDestinationLabel('#queue-detail?id=hsr_1'), 'Queue detail');
+      assert.equal(mod.staffReturnDestinationLabel('#findings'), null);
+    });
+
+    it('returns a staff session to the requested route only when its role can open it', () => {
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'soc_analyst' }, '#queue-detail?id=hsr_1'), '/internal/soc#queue-detail?id=hsr_1');
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'internal_admin' }, '#queue-detail?id=hsr_1'), '/internal/admin');
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'soc_analyst' }, '#tenant-detail?id=ten_acme'), '/internal/soc');
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'internal_admin' }, '#tenant-detail?id=ten_acme'), '/internal/admin#tenant-detail?id=ten_acme');
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'soc_lead' }, '#findings'), '/internal/soc');
+      assert.equal(mod.resolveStaffReturnPath({ staff_role: 'internal_admin' }, null), '/internal/admin');
+    });
+  });
+
+  describe('workspace choice after a correct password', () => {
+    it('keeps only safe, unique workspace ids and falls back to the id for a missing name', () => {
+      assert.deepEqual(mod.loginWorkspaceOptions(null), []);
+      assert.deepEqual(mod.loginWorkspaceOptions([
+        { tenant_id: 'ten_a', name: 'Acme Prod' },
+        { tenant_id: 'ten_a', name: 'Duplicate' },
+        { tenant_id: '../ten_b', name: 'Traversal' },
+        { tenant_id: 'ten_c' },
+        'ten_d',
+      ]), [
+        { tenant_id: 'ten_a', name: 'Acme Prod' },
+        { tenant_id: 'ten_c', name: 'ten_c' },
+      ]);
+    });
+  });
+
+  describe('public auth states render without alarming the visitor', () => {
+    const baseConfig = {
+      authMode: 'signed-session',
+      portalPath: '/app',
+      loginUrl: '/login',
+      staffLoginPath: '/internal/admin/login',
+      bundledLoginEnabled: false,
+      passwordLoginEnabled: true,
+      siteConfig: { signup_enabled: true, password_login_enabled: true },
+    };
+
+    it('shows an informational notice, not an error, when staff SSO has no sign-in link', () => {
+      const html = renderToStaticMarkup(createElement(mod.StaffLoginPage, {
+        config: { ...baseConfig, authMode: 'oidc-jwt', staffLoginPath: '/internal/admin/login' },
+      }));
+      assert.match(html, /Staff sign-in uses your organization identity provider\./);
+      assert.match(html, /<h1 class="public-auth-task-title">Staff sign-in<\/h1>/);
+      assert.doesNotMatch(html, /role="alert"/);
+      assert.doesNotMatch(html, /<form/);
+    });
+
+    it('labels the staff call to action by destination and turns off native validation', () => {
+      const html = renderToStaticMarkup(createElement(mod.StaffLoginPage, { config: { ...baseConfig, authMode: 'dev-headers' } }));
+      assert.match(html, /Continue to internal admin/);
+      assert.match(html, /novalidate=""/i);
+      assert.match(html, /Pick a staff identity and role to preview the internal control plane\./);
+    });
+
+    it('replaces password setup with an identity-provider notice when passwords are not used', () => {
+      const html = renderToStaticMarkup(createElement(mod.SetPasswordPage, {
+        config: { ...baseConfig, authMode: 'oidc-jwt', passwordLoginEnabled: false, siteConfig: { password_login_enabled: false } },
+      }));
+      assert.match(html, /This organization signs in through its identity provider\./);
+      assert.match(html, /Password setup is not used on this deployment\. No password is needed\./);
+      assert.doesNotMatch(html, /Invitation code/);
+    });
+
+    it('starts request access with no plan or region chosen', () => {
+      const html = renderToStaticMarkup(createElement(mod.SignupPage, { config: baseConfig }));
+      assert.match(html, /Choose a plan/);
+      assert.match(html, /Choose a data region/);
+      const blank = mod.validateSignupDraft({
+        organization_name: 'Northwind Ferries',
+        contact_name: 'Rowan Achebe',
+        contact_email: 'rowan@ferries.test',
+        intended_use: 'Validate public booking site',
+        requested_plan: '',
+        region: '',
+      });
+      assert.deepEqual(blank, { requested_plan: 'Choose a plan.', region: 'Choose a region.' });
+    });
+  });
+
   describe('signup lifecycle derives only from recorded state', () => {
     it('maps every backend state and never claims the account is active', () => {
       for (const state of SIGNUP_REQUEST_STATES) {

@@ -275,7 +275,7 @@ export function FindingsListView({
           </label>
           <Select className="ft-field" label="Severity" value={severityFilter} options={[{ value: 'all', label: 'All severities' }, ...severities.map((severity) => ({ value: severity, label: formatSeverityLabel(severity) }))]} onChange={setSeverityFilter} />
           <Select className="ft-field" label="Owner" value={ownerFilter} options={[{ value: 'all', label: 'All owners' }, ...owners.map((owner) => ({ value: owner, label: owner }))]} onChange={setOwnerFilter} />
-          <Select className="ft-field" label="Domain" value={targetFilter} options={[{ value: 'all', label: 'All domains' }, ...targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))]} onChange={setTargetFilter} />
+          <Select className="ft-field" label="Target" value={targetFilter} options={[{ value: 'all', label: 'All targets' }, ...targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))]} onChange={setTargetFilter} />
           <Select className="ft-field" label="Sort" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as SortKey)} />
         </div>
         <p className="findings-result-count" aria-live="polite">
@@ -291,7 +291,7 @@ export function FindingsListView({
         getRowProps={rowProps}
         loadError={loadError}
         onRetry={onRetry}
-        empty={<EmptyState icon={TriangleAlert} title="No matching findings" body={findings.length ? 'Adjust the status, severity, owner, domain, or search filters.' : 'Findings appear only after validation publishes an evidence-backed gap.'} actionLabel="Open test runs" actionHref="#runs" />}
+        empty={<EmptyState icon={TriangleAlert} title="No matching findings" body={findings.length ? 'Adjust the status, severity, owner, target, or search filters.' : 'Findings appear only after validation publishes an evidence-backed gap.'} actionLabel="Open targets" actionHref="#targets" />}
       />
 
       <div className="findings-pager">

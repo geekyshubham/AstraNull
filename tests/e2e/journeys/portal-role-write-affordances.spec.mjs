@@ -91,13 +91,11 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
     await expect(page.locator('dialog[open]')).toHaveCount(0);
 
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
-    await expectNoButton(page, 'Save triage');
-    await expectNoButton(page, 'Accept risk');
-    await expectNoButton(page, 'Close finding');
-    await expectNoButton(page, 'Review retest');
-    await expectNoButton(page, 'Start retest');
+    for (const label of ['Save triage', 'Accept risk', 'Close', 'Close finding', 'Mark resolved', 'Mark false positive', 'Start work', 'Reopen', 'Review retest', 'Start retest']) {
+      await expectNoButton(page, label);
+    }
     await expect(page.locator('dialog[open]')).toHaveCount(0);
-    await expect(page.getByText('Finding triage is read-only for your role.')).toBeVisible();
+    await expect(page.getByText('Finding triage is read-only for your role. Changes need finding:write.')).toBeVisible();
   });
 
   test('keeps fine-grained permitted actions for engineer and auditor roles', async ({ page }) => {
@@ -109,7 +107,7 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
 
     await gotoPortalRoute(page, 'integrations', baseUrl);
     await page.getByRole('button', { name: 'Add provider' }).click();
-    await expect(page.getByRole('button', { name: 'Add single domain' })).toBeEnabled();
+    await expect(page.getByRole('link', { name: 'Add target in Targets' })).toHaveAttribute('href', '#targets?add=1');
     await expect(page.getByRole('button', { name: 'Continue to connect' })).toBeDisabled();
   });
 
@@ -126,7 +124,12 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
 
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
     await expectNoButton(page, 'Accept risk');
+    await expectNoButton(page, 'Close');
     await expectNoButton(page, 'Close finding');
+    const triage = page.locator('.finding-triage-readonly');
+    await expect(triage.locator('[data-field="notes"]')).toContainText('No triage notes recorded.');
+    await expect(triage).toContainText('Status');
+    await expect(page.locator('[data-role-restricted="true"]')).toHaveText('Finding triage is read-only for your role. Changes need finding:write.');
 
     await gotoPortalRoute(page, 'settings', baseUrl);
     await expectNoButton(page, 'Save organization');

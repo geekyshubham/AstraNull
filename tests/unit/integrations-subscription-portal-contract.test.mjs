@@ -125,12 +125,12 @@ describe('Integrations portal annotations', () => {
     assert.ok(existsSync(new URL('../../docs/integrations/03-dns-edge-provider-setup.md', import.meta.url)));
   });
 
-  it('declares single domains via POST /v1/targets without environments (ADR-0008)', () => {
-    assert.match(integrations, /validateDeclaredHostname/);
-    assert.match(integrations, /requestJson\(config, session, '\/v1\/targets', \{/);
-    assert.match(integrations, /kind: 'fqdn'/);
+  it('sends single domains to Targets, which owns declaration and the ownership challenge (ADR-0008)', () => {
+    assert.match(integrations, /<AnchorButton href='#targets\?add=1' size="sm" variant="secondary">Add target in Targets<\/AnchorButton>|<AnchorButton href="#targets\?add=1" size="sm" variant="secondary">Add target in Targets<\/AnchorButton>/);
+    assert.match(integrations, /No provider needed — declare the domain as a target\. Ownership verification remains required\./);
+    assert.doesNotMatch(integrations, /'\/v1\/targets'/);
+    assert.doesNotMatch(integrations, /validateDeclaredHostname|handleAddSingleDomain|Add single domain/);
     assert.doesNotMatch(integrations, /target_group_id: groupId/);
-    assert.match(integrations, /Ownership remains unverified/);
     // Environments are gone: no environment fetch, picker, or /v1/environments call.
     assert.doesNotMatch(integrations, /\/v1\/environments/);
     assert.doesNotMatch(integrations, /environment_id/);
@@ -141,8 +141,13 @@ describe('Integrations portal annotations', () => {
   it('keeps the single-domain path usable when connectors are disabled', () => {
     assert.match(integrations, /const connectorsEnabled = featureFlags\?\.connectors === true/);
     assert.match(integrations, /connector add-on is not enabled/i);
-    // Add domain action is gated on target write, not on connectors being enabled.
+    // The single-domain path is gated on target write, not on connectors being enabled.
     assert.match(integrations, /canWriteIntegrationTargets \? \(/);
+    assert.match(integrations, /declare targets directly on <a className="cp-link" href="#targets">Targets<\/a>/);
+    const header = integrations.slice(integrations.indexOf('<PageHeader'), integrations.indexOf('<div className="kpi-row"'));
+    assert.doesNotMatch(header, /Add domain/);
+    assert.match(header, /<Button variant="default" size="sm" disabled=\{busy !== ''\} onClick=\{\(\) => openProviderFlow\(\)\}>/);
+    assert.doesNotMatch(integrations, /PageContextSummary|label="Provider paths"/);
   });
 
   it('renders list failures before connector empty states', () => {
@@ -154,7 +159,8 @@ describe('Integrations portal annotations', () => {
 
   it('mounts notification channels and offers direct CTAs from the connector empty state', () => {
     assert.match(integrations, /import \{ NotificationChannelsPanel \} from '\.\.\/components\/integrations\/notification-channels'/);
-    assert.match(integrations, /<NotificationChannelsPanel\s+config=\{config\}\s+session=\{session\}\s+onChanged=\{onRefresh\}/);
+    assert.match(integrations, /<NotificationChannelsPanel\s+config=\{config\}\s+session=\{session\}\s+onChanged=\{\(\) => onRefresh\(\['connectors', 'secrets', 'notifications'\]\)\}/);
+    assert.match(integrations, /onRefresh: \(datasets\?: readonly PortalDataset\[\]\) => Promise<void>/);
     assert.match(integrations, /title="No connectors configured yet"/);
     assert.match(integrations, /actionLabel=\{canAddIntegration \? 'Add provider' : undefined\}/);
     assert.match(integrations, /onAction=\{canAddIntegration \? \(\) => openProviderFlow\(\) : undefined\}/);

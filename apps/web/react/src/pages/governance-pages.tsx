@@ -13,21 +13,41 @@ import {
   summarizeReleaseEvidenceValidation
 } from '../lib/release-evidence';
 import {
-  GOVERNED_HIGH_SCALE_SCENARIOS,
   buildLifecycleTimeline,
-  providerApprovalRequired
+  governedLimitDisplay,
+  providerApprovalRequired,
+  requestDomainDisplay,
+  scheduledWindowState
 } from '../lib/high-scale';
 import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId, parseInspectorRef, replaceRouteParams } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
-import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, pluralize, sensitiveResourceLabel } from '../lib/utils';
+import {
+  AUDIT_ACTION_LABELS,
+  AUDIT_ACTIONS,
+  RESOURCE_TYPE_LABELS,
+  formatAuditAction,
+  formatDate,
+  formatNumber,
+  formatResourceTypeLabel,
+  pluralize,
+  sensitiveResourceLabel,
+  tailTruncateId
+} from '../lib/utils';
+import { prefersReducedMotion } from '../lib/motion';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
 import { plainCodeLabel } from '../lib/plain-language.mjs';
 import { CustomerPageStyles, KpiCell, PageContextSummary, PageHeader, PanelCardHeader } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { highScaleStateTone } from '../lib/status-tone';
+import {
+  DEFAULT_NOTIFICATION_TRIGGERS,
+  NOTIFICATION_TRIGGER_OPTIONS,
+  notificationChannelLabel,
+  notificationTriggerLabel
+} from '../lib/notification-channels.mjs';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -57,39 +77,11 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
   return fallback;
 }
 
-const NOTIFICATION_TRIGGERS = [
-  'finding.high_severity',
-  'safe_test.completed',
-  'high_scale.state_change',
-  'report.ready'
-] as const;
-
-const NOTIFICATION_TRIGGER_LABELS: Record<(typeof NOTIFICATION_TRIGGERS)[number], string> = {
-  'finding.high_severity': 'High-severity finding',
-  'safe_test.completed': 'Safe test completed',
-  'high_scale.state_change': 'High-scale state change',
-  'report.ready': 'Report ready'
-};
-
-function humanizeNotificationTrigger(trigger: string) {
-  const known = NOTIFICATION_TRIGGER_LABELS[trigger as (typeof NOTIFICATION_TRIGGERS)[number]];
-  if (known) return known;
-  return trigger
-    .split('.')
-    .map((segment) => segment.split('_').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '))
-    .join(' · ');
-}
-
 function isFlatMetadataObject(value: unknown): value is Record<string, string | number | boolean | null> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.values(value).every(
     (entry) => entry === null || ['string', 'number', 'boolean'].includes(typeof entry)
   );
-}
-
-function requestDomainDisplay(data: PortalData, item: DataItem) {
-  const ids = Array.isArray(item.target_ids) ? item.target_ids.map(String) : item.target_id ? [String(item.target_id)] : [];
-  return ids.length ? ids.map((id) => getString(data.targets.find((target) => getString(target, ['id'], '') === id), ['value'], 'Domain not recorded')).join(', ') : 'Domain scope not recorded';
 }
 
 function auditEntrySelectionKey(item: DataItem) {
@@ -113,42 +105,21 @@ function downloadJsonFile(filename: string, payload: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function validateNotificationDestination(channel: string, rawDestination: string): { destination: string } | { error: string } {
-  const destination = rawDestination.trim();
-  if (channel === 'in_app') {
-    return { destination: '' };
-  }
-  if (channel === 'webhook') {
-    if (!/^https?:\/\/.+/i.test(destination)) {
-      return { error: 'Enter a valid http(s) webhook URL before adding the rule.' };
-    }
-    try {
-      const parsed = new URL(destination);
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        return { error: 'Webhook destination must use http or https.' };
-      }
-    } catch {
-      return { error: 'Enter a valid webhook URL before adding the rule.' };
-    }
-    return { destination };
-  }
-  if (channel === 'email') {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destination)) {
-      return { error: 'Enter a valid email address before adding the rule.' };
-    }
-    return { destination };
-  }
-  if (!destination) {
-    return { error: 'Enter a destination before adding the rule.' };
-  }
-  return { destination };
+function killSwitchIdList(item: DataItem, key: 'stopped_request_ids' | 'cancelled_run_ids') {
+  const value = item[key];
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
 function summarizeSocActionPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object') return 'Action completed successfully.';
   const item = payload as DataItem;
   if ('active' in item) {
-    return item.active ? 'Kill switch is now active for this tenant.' : 'Kill switch cleared; governed runs may resume when approved.';
+    if (!item.active) return 'Kill switch cleared; governed runs may resume when approved.';
+    const stopped = killSwitchIdList(item, 'stopped_request_ids').length;
+    const cancelled = killSwitchIdList(item, 'cancelled_run_ids').length;
+    const operator = getString(item, ['updated_by'], 'an unrecorded operator');
+    const at = item.updated_at ? formatDate(item.updated_at) : 'an unrecorded time';
+    return `Kill switch engaged by ${operator} at ${at}. Stopped ${formatNumber(stopped)} high-scale ${pluralize(stopped, 'request')}, cancelled ${formatNumber(cancelled)} safe ${pluralize(cancelled, 'run')}.`;
   }
   const adapterState = getNestedString(item, ['adapter', 'state'], '');
   if (adapterState && adapterState !== '—') {
@@ -261,25 +232,6 @@ function providerApprovalSummary(item: DataItem): { label: string; detail: strin
   return { label: formatGovernanceStatusLabel(pending), detail: providerNames || 'Provider approval is not yet accepted', tone: 'warn' };
 }
 
-function governedLimitDisplay(item: DataItem) {
-  const familyId = Array.isArray(item.requested_scenario_families)
-    ? String(item.requested_scenario_families[0] ?? '')
-    : '';
-  const scenario = GOVERNED_HIGH_SCALE_SCENARIOS.find((entry) => entry.id === familyId);
-  const limits = item.requested_limits && typeof item.requested_limits === 'object' && !Array.isArray(item.requested_limits)
-    ? item.requested_limits as DataItem
-    : {};
-  const rateValue = scenario ? limits[scenario.limit.field] : undefined;
-  const rate = scenario && typeof rateValue === 'number'
-    ? `${formatNumber(rateValue)} ${scenario.limit.unit}`
-    : '';
-  const durationValue = limits.max_duration_minutes;
-  const duration = typeof durationValue === 'number'
-    ? `${formatNumber(durationValue)} min`
-    : '';
-  return [rate, duration].filter(Boolean).join(' · ') || '—';
-}
-
 function notificationOperationDisabledReason(
   canWrite: boolean,
   busy: string,
@@ -293,101 +245,7 @@ function notificationOperationDisabledReason(
   return '';
 }
 
-const NOTIFICATION_CHANNEL_OPTIONS = [
-  { value: 'webhook', label: 'Webhook' },
-  { value: 'email', label: 'Email' },
-  { value: 'slack', label: 'Slack' },
-  { value: 'teams', label: 'Teams' },
-  { value: 'in_app', label: 'In-app' }
-] as const;
-
-function deliveryAttempts(events: DataItem[]) {
-  return events.flatMap((event) => {
-    const attempts = Array.isArray(event.delivery_attempts) ? event.delivery_attempts as DataItem[] : [];
-    return attempts.map((attempt) => ({
-      ...attempt,
-      event_id: event.id,
-      trigger: event.trigger
-    }));
-  });
-}
-
-type ProviderHealthRow = {
-  channel: string;
-  label: string;
-  detail: string;
-  ruleCount: number;
-  enabledCount: number;
-  delivered: number;
-  retrying: number;
-  dlq: number;
-  tone: GovernanceBadgeTone;
-  status: string;
-};
-
-// Derives per-provider delivery health from real notification rules (configured channels)
-// correlated with recorded delivery attempts. No provider status is hardcoded.
-function buildProviderHealthRows(rules: DataItem[], attempts: DataItem[]): ProviderHealthRow[] {
-  type Acc = { ruleCount: number; enabledCount: number; delivered: number; retrying: number; dlq: number; detail: string };
-  const channels = new Map<string, Acc>();
-  const ensure = (channel: string): Acc => {
-    const existing = channels.get(channel);
-    if (existing) return existing;
-    const created: Acc = { ruleCount: 0, enabledCount: 0, delivered: 0, retrying: 0, dlq: 0, detail: '' };
-    channels.set(channel, created);
-    return created;
-  };
-  for (const rule of rules) {
-    const channel = getString(rule, ['channel'], '').trim();
-    if (!channel || channel === '—') continue;
-    const entry = ensure(channel);
-    entry.ruleCount += 1;
-    if (rule.enabled !== false) entry.enabledCount += 1;
-    if (!entry.detail) {
-      const dest = getString(rule, ['destination_preview'], '');
-      if (dest && dest !== '—') entry.detail = dest;
-    }
-  }
-  for (const attempt of attempts) {
-    const channel = getString(attempt, ['channel'], '').trim();
-    if (!channel || channel === '—') continue;
-    const entry = ensure(channel);
-    const status = getString(attempt, ['status'], '');
-    if (status === 'delivered_provider') entry.delivered += 1;
-    else if (status === 'provider_retry_scheduled') entry.retrying += 1;
-    else if (status === 'provider_failed_dlq') entry.dlq += 1;
-    if (!entry.detail) {
-      const dest = getString(attempt, ['destination_preview'], '');
-      if (dest && dest !== '—') entry.detail = dest;
-    }
-  }
-  return Array.from(channels.entries())
-    .map(([channel, entry]) => {
-      const label = NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label
-        ?? formatGovernanceStatusLabel(channel);
-      let tone: GovernanceBadgeTone;
-      let status: string;
-      if (entry.dlq > 0) {
-        tone = 'danger';
-        status = 'Dead-letter';
-      } else if (entry.retrying > 0) {
-        tone = 'warn';
-        status = 'Retrying';
-      } else if (entry.delivered > 0) {
-        tone = 'success';
-        status = 'Healthy';
-      } else {
-        tone = 'muted';
-        status = entry.ruleCount > 0 ? 'Idle' : 'No rules';
-      }
-      const detail = entry.detail
-        || (entry.ruleCount > 0 ? `${entry.ruleCount} rule${entry.ruleCount === 1 ? '' : 's'}` : 'metadata-only');
-      return { channel, label, ...entry, detail, tone, status };
-    })
-    .sort((left, right) => left.label.localeCompare(right.label));
-}
-
-function GovernanceFeedbackBanner({ message, error }: { message: string; error: string }) {
+function GovernanceFeedbackBanner({ message, error, children }: { message: string; error: string; children?: ReactNode }) {
   if (!message && !error) return null;
   return (
     <div
@@ -396,6 +254,7 @@ function GovernanceFeedbackBanner({ message, error }: { message: string; error: 
       aria-live="polite"
     >
       {error || message}
+      {!error && children ? children : null}
     </div>
   );
 }
@@ -453,7 +312,7 @@ function KillSwitchReadOnlyCard({ active, reason }: { active: boolean; reason: s
       </CardHeader>
       <CardContent className="kv-list">
         <KvField label="Status">
-          <Badge tone={active ? 'danger' : 'success'}>{active ? 'Active' : 'Inactive'}</Badge>
+          <Badge tone={active ? 'danger' : 'success'}>{active ? 'Active' : 'Clear'}</Badge>
         </KvField>
         <KvField label="Reason">{reason || <span className="muted">Not recorded</span>}</KvField>
       </CardContent>
@@ -522,10 +381,10 @@ const SOC_SCHEDULED_STATES = ['scheduled', 'approved'];
 const SOC_REVIEW_STATES = ['submitted', 'under_review', 'pending', 'draft'];
 const SOC_RUNNING_STATES = ['running', 'executing', 'active', 'started'];
 
-// Validated kill-switch sequence, mirroring the frozen server contract
-// (src/contracts/killSwitchValidation.mjs → KILL_SWITCH_REQUIRED_STEP_IDS).
-// Rendered as the documented arming sequence; each step is custody-recorded on exercise.
-const KILL_SWITCH_VALIDATED_SEQUENCE = [
+const SOC_TERMINAL_STATES = ['closed', 'stopped', 'rejected', 'cancelled', 'completed'];
+
+// Mirrors KILL_SWITCH_REQUIRED_STEP_IDS in src/contracts/killSwitchValidation.mjs.
+const KILL_SWITCH_SEQUENCE = [
   'activate_tenant_kill_switch',
   'block_new_safe_runs',
   'cancel_active_safe_runs',
@@ -535,6 +394,19 @@ const KILL_SWITCH_VALIDATED_SEQUENCE = [
   'clear_and_resume_guarded'
 ] as const;
 
+const KILL_SWITCH_STEP_LABELS: Record<(typeof KILL_SWITCH_SEQUENCE)[number], string> = {
+  activate_tenant_kill_switch: 'Arm tenant kill switch',
+  block_new_safe_runs: 'Block new safe runs',
+  cancel_active_safe_runs: 'Cancel active safe runs',
+  probe_fleet_stops_leasing: 'Probe fleet stops leasing work',
+  adapter_stop_path_invoked: 'Invoke execution adapter stop',
+  audit_timeline_recorded: 'Record audit timeline',
+  clear_and_resume_guarded: 'Clear and resume behind safety gates'
+};
+
+const KILL_SWITCH_REASON_MIN = 8;
+const KILL_SWITCH_REASON_MAX = 280;
+
 function normalizeHighScaleState(item: DataItem) {
   return getString(item, ['state'], '').trim().toLowerCase();
 }
@@ -542,12 +414,21 @@ function normalizeHighScaleState(item: DataItem) {
 type SocGoNoGoGate = { key: string; label: string; tone: GovernanceBadgeTone; status: string };
 
 const SOC_GATE_LABEL = {
-  packs: 'Authorization packs reviewed',
+  packs: 'Authorization packs',
   providers: 'Provider approvals',
-  kill: 'Kill switch clear',
-  execution: 'Managed execution only',
-  findings: 'Findings triaged'
+  kill: 'Tenant kill switch',
+  execution: 'Running governed tests',
+  findings: 'Open findings'
 } as const;
+
+const SOC_VERDICT_GATE_KEYS = ['kill', 'packs', 'providers'];
+
+function socGoNoGoVerdict(gates: SocGoNoGoGate[]): { tone: GovernanceBadgeTone; label: string } {
+  const blocking = gates.filter((gate) => SOC_VERDICT_GATE_KEYS.includes(gate.key) && (gate.tone === 'danger' || gate.tone === 'warn'));
+  if (blocking.length === 0) return { tone: 'success', label: 'Go for scheduled requests' };
+  const reasons = blocking.map((gate) => `${gate.label.toLowerCase()} ${gate.status.toLowerCase()}`).join(', ');
+  return { tone: blocking.some((gate) => gate.tone === 'danger') ? 'danger' : 'warn', label: `No-Go · ${reasons}` };
+}
 
 const SOC_GO_NO_GO_LABELS = Object.entries(SOC_GATE_LABEL).map(([key, label]) => ({ key, label }));
 
@@ -590,19 +471,19 @@ function buildSocGoNoGoGates(
       key: 'kill',
       label: SOC_GATE_LABEL.kill,
       tone: context.killSwitchActive ? 'danger' : 'success',
-      status: context.killSwitchActive ? 'Armed' : 'Clear'
+      status: context.killSwitchActive ? 'Active' : 'Clear'
     },
     {
       key: 'execution',
       label: SOC_GATE_LABEL.execution,
-      tone: context.runningCount > 0 ? 'warn' : 'success',
-      status: context.runningCount > 0 ? `${context.runningCount} active` : 'Idle'
+      tone: context.runningCount > 0 ? 'info' : 'muted',
+      status: context.runningCount > 0 ? `${formatNumber(context.runningCount)} running` : 'None running'
     },
     {
       key: 'findings',
       label: SOC_GATE_LABEL.findings,
-      tone: context.openFindings > 0 ? 'warn' : 'success',
-      status: context.openFindings > 0 ? `${context.openFindings} open` : 'Clear'
+      tone: context.openFindings > 0 ? 'info' : 'muted',
+      status: context.openFindings > 0 ? `${formatNumber(context.openFindings)} open` : 'None open'
     }
   ];
 }
@@ -674,15 +555,17 @@ const providerContactColumns: TableColumn<ProviderContactRow>[] = [
   }
 ];
 
-type SocTimelineRow = { key: string; requestId: string; action: string; at: string; by: string };
+type SocTimelineRow = { key: string; requestId: string; objective: string; action: string; at: string; by: string };
 
 function buildSocExecutionTimeline(requests: DataItem[]): SocTimelineRow[] {
   return requests
     .flatMap((request) => {
       const requestId = getString(request, ['id'], '—');
+      const objective = getString(request, ['objective', 'title', 'reason', 'name'], '');
       return buildLifecycleTimeline(request).map((event, index) => ({
         key: `${requestId}::${index}::${event.at}`,
         requestId,
+        objective,
         action: event.action,
         at: event.at,
         by: event.by
@@ -692,53 +575,81 @@ function buildSocExecutionTimeline(requests: DataItem[]): SocTimelineRow[] {
     .slice(-12);
 }
 
-type SocCrossTenantRow = { id: string; tenantId: string; kind: string; state: string; requestedAt: string };
+type SocCrossTenantRow = {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  state: string;
+  requestedAt: string;
+  windowStart: string;
+  windowEnd: string;
+};
 
 // Staff SOC surface only: rows come from GET /internal/admin/soc/high-scale-requests (staff:soc:read, audited).
 function isHighScaleApprovalKind(kind: string) {
   return kind.trim().toLowerCase().startsWith('high_scale');
 }
 
+function isSocRunningState(state: string) {
+  return SOC_RUNNING_STATES.includes(state.trim().toLowerCase());
+}
+
 function buildSocCrossTenantRows(approvals: DataItem[]): SocCrossTenantRow[] {
   return approvals
     .filter((item) => isHighScaleApprovalKind(getString(item, ['kind'], '')))
     .map((item) => ({
-      // Prefer linked high-scale request id over the internal approval record id.
       id: getString(item, ['high_scale_request_id', 'subject_id', 'resource_id', 'request_id', 'id'], '—'),
       tenantId: getString(item, ['tenant_id'], '—'),
-      kind: getString(item, ['kind'], '—'),
+      tenantName: getString(item, ['tenant_name'], ''),
       state: getString(item, ['state'], '—'),
-      requestedAt: getString(item, ['created_at', 'requested_at'], '')
+      requestedAt: getString(item, ['created_at', 'requested_at'], ''),
+      windowStart: getNestedString(item, ['scheduled_window', 'window_start'], ''),
+      windowEnd: getNestedString(item, ['scheduled_window', 'window_end'], '')
     }))
-    .sort((left, right) => new Date(right.requestedAt).getTime() - new Date(left.requestedAt).getTime());
+    .sort((left, right) => {
+      const running = Number(isSocRunningState(right.state)) - Number(isSocRunningState(left.state));
+      if (running !== 0) return running;
+      return (Date.parse(right.requestedAt) || 0) - (Date.parse(left.requestedAt) || 0);
+    });
 }
 
-const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
-  { key: 'tenant', label: 'Tenant', render: (item) => <span className="mono">{item.tenantId}</span> },
-  { key: 'request', label: 'Request', render: (item) => <span title={item.id}>High-scale request</span> },
-  { key: 'kind', label: 'Kind', render: (item) => <Badge tone="muted">{formatGovernanceStatusLabel(item.kind, 'high scale')}</Badge> },
-  {
-    key: 'state',
-    label: 'State',
-    render: (item) => <Badge tone={highScaleStateTone(item.state)}>{formatGovernanceStatusLabel(item.state, 'Unknown')}</Badge>
-  },
-  { key: 'requested', label: 'Requested', render: (item) => formatDate(item.requestedAt) },
-  {
-    key: 'actions',
-    label: 'Actions',
-    render: (item) => (
-      <AnchorButton
-        size="sm"
-        variant="secondary"
-        href={buildDetailHref('queue-detail', item.id, {
-          tenantId: item.tenantId !== '—' ? item.tenantId : undefined
-        })}
-      >
-        Open
-      </AnchorButton>
-    )
+function socWindowRange(start: string, end: string) {
+  if (!start || !end) return '';
+  return `${formatDate(start)} – ${formatDate(end)}`;
+}
+
+const SOC_WINDOW_BADGE: Record<string, { tone: GovernanceBadgeTone; label: string }> = {
+  expired: { tone: 'danger', label: 'Expired' },
+  open: { tone: 'success', label: 'Open' },
+  upcoming: { tone: 'muted', label: 'Upcoming' },
+  unscheduled: { tone: 'muted', label: 'Unscheduled' }
+};
+
+function SocWindowCell({ start, end, state, terminalWarn = false }: { start: string; end: string; state: string; terminalWarn?: boolean }) {
+  const windowState = scheduledWindowState(start, end);
+  const range = socWindowRange(start, end);
+  if (terminalWarn) {
+    const passed = windowState === 'expired' && !SOC_TERMINAL_STATES.includes(state.trim().toLowerCase());
+    return (
+      <span className="cp-stack">
+        <span>{range || <span className="muted">Not scheduled</span>}</span>
+        {passed ? <Badge tone="warn">Window passed</Badge> : null}
+      </span>
+    );
   }
-];
+  const badge = SOC_WINDOW_BADGE[windowState] ?? SOC_WINDOW_BADGE.unscheduled;
+  return (
+    <span className="cp-stack">
+      <Badge tone={badge.tone}>{badge.label}</Badge>
+      {range ? <span className="muted small">{range}</span> : null}
+    </span>
+  );
+}
+
+function socTenantLabel(name: string, id: string) {
+  if (!id || id === '—') return name || 'Unknown tenant';
+  return name ? `${name} (${id})` : id;
+}
 
 type AttemptView = {
   key: string;
@@ -781,13 +692,11 @@ export function NotificationsPage({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [destinationError, setDestinationError] = useState('');
+  const [channelError, setChannelError] = useState('');
   const [triggerError, setTriggerError] = useState('');
   const [ruleFormOpen, setRuleFormOpen] = useState(false);
-  const [ruleMode, setRuleMode] = useState<'new' | 'existing'>('new');
   const [existingRuleId, setExistingRuleId] = useState('');
-  const [ruleChannel, setRuleChannel] = useState('webhook');
-  const [ruleTriggers, setRuleTriggers] = useState<string[]>(['finding.high_severity']);
+  const [ruleTriggers, setRuleTriggers] = useState<string[]>(() => [...DEFAULT_NOTIFICATION_TRIGGERS]);
   const [ruleEnabled, setRuleEnabled] = useState(true);
   const [selectedAttemptKey, setSelectedAttemptKey] = useState(() => readNotificationParam('focus'));
   const [attemptFilter, setAttemptFilter] = useState<'problems' | 'all'>('problems');
@@ -856,46 +765,19 @@ export function NotificationsPage({
     setRuleTriggers((current) => current.includes(trigger) ? current.filter((item) => item !== trigger) : [...current, trigger]);
   }
 
-  async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
+  async function handleAddEvents(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formEl = event.currentTarget;
-    const triggers = NOTIFICATION_TRIGGERS.filter((trigger) => ruleTriggers.includes(trigger));
-    if (triggers.length === 0) {
-      setTriggerError('Choose at least one event to route.');
-      return;
-    }
-    setTriggerError('');
-    if (ruleMode === 'existing') {
-      const rule = rules.find((item) => getString(item, ['id'], '') === existingRuleId);
-      if (!rule) {
-        setDestinationError('Choose an existing channel.');
-        return;
-      }
-      setDestinationError('');
-      const merged = [...new Set([...(Array.isArray(rule.triggers) ? (rule.triggers as unknown[]).map(String) : []), ...triggers])];
-      const updated = await runAction('create-notification-rule', () => requestJson(config, session, `/v1/notifications/${encodeURIComponent(existingRuleId)}`, {
-        method: 'PATCH',
-        body: { triggers: merged, enabled: ruleEnabled }
-      }), `Routed ${triggers.map(humanizeNotificationTrigger).join(', ')} to the existing ${getString(rule, ['channel'])} channel ${getString(rule, ['destination_preview'], '')}. Its stored destination was not changed.`);
-      if (updated) setRuleFormOpen(false);
-      return;
-    }
-    const form = new FormData(formEl);
-    const channel = ruleChannel.trim();
-    const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
-    if ('error' in validation) {
-      setDestinationError(validation.error);
-      return;
-    }
-    setDestinationError('');
-    const created = await runAction('create-notification-rule', () => requestJson(config, session, '/v1/notifications', {
-      method: 'POST',
-      body: { channel, enabled: ruleEnabled, triggers, destination: validation.destination }
-    }), `Rule created ${ruleEnabled ? 'and enabled' : 'disabled'}. Nothing was sent; the first message goes out when a matching event occurs and outbound delivery is enabled.`);
-    if (created) {
-      formEl.reset();
-      setRuleFormOpen(false);
-    }
+    const triggers = NOTIFICATION_TRIGGER_OPTIONS.map((option) => option.id).filter((trigger) => ruleTriggers.includes(trigger));
+    const rule = rules.find((item) => getString(item, ['id'], '') === existingRuleId);
+    setChannelError(rule ? '' : 'Choose a channel.');
+    setTriggerError(triggers.length ? '' : 'Choose at least one event to route.');
+    if (!rule || triggers.length === 0) return;
+    const merged = [...new Set([...(Array.isArray(rule.triggers) ? (rule.triggers as unknown[]).map(String) : []), ...triggers])];
+    const updated = await runAction('add-notification-events', () => requestJson(config, session, `/v1/notifications/${encodeURIComponent(existingRuleId)}`, {
+      method: 'PATCH',
+      body: { triggers: merged, enabled: ruleEnabled }
+    }), `Routed ${triggers.map(notificationTriggerLabel).join(', ')} to the ${notificationChannelLabel(getString(rule, ['channel'], ''))} channel ${getString(rule, ['destination_preview'], '')}. Its stored destination was not changed.`);
+    if (updated) setRuleFormOpen(false);
   }
 
   async function previewAttemptRetry(view: AttemptView) {
@@ -960,13 +842,13 @@ export function NotificationsPage({
         const channel = getString(item, ['channel']);
         return (
           <span className="cp-stack">
-            <span>{NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? formatGovernanceStatusLabel(channel)}</span>
+            <span>{notificationChannelLabel(channel)}</span>
             <span className="muted small mono">{getString(item, ['destination_preview'], 'Destination hidden')}</span>
           </span>
         );
       }
     },
-    { key: 'triggers', label: 'Routes', render: (item) => (Array.isArray(item.triggers) ? (item.triggers as unknown[]).map((trigger) => humanizeNotificationTrigger(String(trigger))).join(', ') : '') || <span className="muted">No events</span> },
+    { key: 'triggers', label: 'Routes', render: (item) => (Array.isArray(item.triggers) ? (item.triggers as unknown[]).map((trigger) => notificationTriggerLabel(String(trigger))).join(', ') : '') || <span className="muted">No events</span> },
     { key: 'enabled', label: 'Sending', render: (item) => <Badge tone="muted">{item.enabled === false ? 'Disabled' : 'Enabled'}</Badge> },
     {
       key: 'last',
@@ -984,7 +866,7 @@ export function NotificationsPage({
   const attemptColumns: TableColumn<AttemptView>[] = [
     { key: 'status', label: 'Outcome', render: (view) => { const copy = attemptStatusCopy(view.status); return <Badge tone={copy.tone}>{copy.label}</Badge>; } },
     { key: 'time', label: 'Attempted', render: (view) => <span className="mono">{formatDate(view.attempt.attempted_at ?? view.attempt.created_at ?? view.event.created_at)}</span> },
-    { key: 'event', label: 'Event', render: (view) => <span className="cp-stack"><span>{humanizeNotificationTrigger(getString(view.event, ['trigger']))}</span><span className="muted small">{getString(view.event, ['subject'], '')}</span></span> },
+    { key: 'event', label: 'Event', render: (view) => <span className="cp-stack"><span>{notificationTriggerLabel(getString(view.event, ['trigger']))}</span><span className="muted small">{getString(view.event, ['subject'], '')}</span></span> },
     { key: 'channel', label: 'Channel', render: (view) => <span className="cp-stack"><span>{formatGovernanceStatusLabel(getString(view.attempt, ['channel'], ''), 'Not recorded')}</span><span className="muted small mono">{getString(view.attempt, ['destination_preview'], getString(view.rule ?? {}, ['destination_preview'], ''))}</span></span> },
   ];
 
@@ -998,8 +880,10 @@ export function NotificationsPage({
       <PageHeader
         route="notifications"
         title="Notifications"
-        description={<>Routing rules decide which events go to which channel. Channel destinations are set up in <a className="cp-link" href="#integrations">Integrations</a>. An event being recorded is not a message delivered.</>}
-        actions={canWrite ? (
+        description={<>Each channel receives the events chosen for it. Channels are set up in <a className="cp-link" href="#integrations">Integrations</a>. An event being recorded is not a message delivered.</>}
+        actions={!canWrite ? <Badge tone="muted">Read only</Badge> : rules.length === 0 ? (
+          <AnchorButton size="sm" href="#integrations">Set up a channel in Integrations</AnchorButton>
+        ) : (
           <Button
             size="sm"
             variant={ruleFormOpen ? 'ghost' : 'default'}
@@ -1007,9 +891,9 @@ export function NotificationsPage({
             aria-controls={ruleFormOpen ? 'notifications-create-rule' : undefined}
             onClick={() => setRuleFormOpen((open) => !open)}
           >
-            {ruleFormOpen ? 'Close routing form' : 'Route events'}
+            {ruleFormOpen ? 'Close events form' : 'Choose events'}
           </Button>
-        ) : <Badge tone="muted">Read only</Badge>}
+        )}
       />
       <div className="kpi-row" role="group" aria-label="Delivery summary for loaded events">
         <KpiCell label="Channels" value={`${formatNumber(enabledRules)} of ${formatNumber(rules.length)}`} delta="enabled" />
@@ -1022,79 +906,48 @@ export function NotificationsPage({
       ) : null}
       <GovernanceFeedbackBanner message={message} error={error} />
 
-      {canWrite && ruleFormOpen ? (
+      {canWrite && ruleFormOpen && rules.length > 0 ? (
         <Card id="notifications-create-rule" raised>
           <CardHeader>
             <div>
-              <CardTitle><span ref={formHeadingRef} tabIndex={-1}>Route events to a channel</span></CardTitle>
-              <CardDescription>Send chosen events to a new destination, or add them to a channel you already set up. Saving sends nothing.</CardDescription>
+              <CardTitle><span ref={formHeadingRef} tabIndex={-1}>Choose events for a channel</span></CardTitle>
+              <CardDescription>Add events to a channel you already set up in Integrations. Its destination is not changed, and saving sends nothing.</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
-            <form className="product-form" onSubmit={handleCreateRule} aria-busy={busy === 'create-notification-rule'} noValidate>
-              <fieldset className="full report-kind-group">
-                <legend>Destination</legend>
-                <div className="cp-toolbar">
-                  <label className="check-row"><input type="radio" name="rule_mode" checked={ruleMode === 'new'} onChange={() => { setRuleMode('new'); setDestinationError(''); }} /><span>New destination</span></label>
-                  <label className="check-row"><input type="radio" name="rule_mode" checked={ruleMode === 'existing'} disabled={rules.length === 0} onChange={() => { setRuleMode('existing'); setDestinationError(''); }} /><span>Existing channel{rules.length === 0 ? ' (none yet)' : ''}</span></label>
-                </div>
-              </fieldset>
-              {ruleMode === 'new' ? (
-                <>
-                  <Select
-                    label="Channel type"
-                    value={ruleChannel}
-                    options={NOTIFICATION_CHANNEL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-                    onChange={(value) => { setRuleChannel(value); setDestinationError(''); }}
-                    disabled={busy !== ''}
-                  />
-                  <label className="full">
-                    <span>{ruleChannel === 'in_app' ? 'Destination (not needed for in-app)' : 'Destination'}</span>
-                    <input
-                      name="destination_preview"
-                      placeholder={ruleChannel === 'email' ? 'alerts@example.com' : ruleChannel === 'in_app' ? 'Delivered to the in-app feed' : 'https://hooks.example.invalid/notifications'}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-invalid={destinationError ? true : undefined}
-                      aria-describedby={destinationError ? 'notification-destination-error' : 'notification-destination-help'}
-                      disabled={busy !== '' || ruleChannel === 'in_app'}
-                    />
-                    <span className="muted small" id="notification-destination-help">Webhook URLs can contain secrets. After saving, only a redacted preview is shown and the URL is not kept in this form.</span>
-                  </label>
-                </>
-              ) : (
-                <Select
-                  className="full"
-                  label="Existing channel"
-                  value={existingRuleId}
-                  options={[{ value: '', label: 'Choose a channel' }, ...rules.map((rule) => ({
-                    value: getString(rule, ['id'], ''),
-                    label: `${NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === getString(rule, ['channel']))?.label ?? getString(rule, ['channel'])} · ${getString(rule, ['destination_preview'], 'destination hidden')}`
-                  }))]}
-                  onChange={(value) => { setExistingRuleId(value); setDestinationError(''); }}
-                  error={destinationError || undefined}
-                />
-              )}
+            <form className="product-form" onSubmit={handleAddEvents} aria-busy={busy === 'add-notification-events'} noValidate>
+              <Select
+                className="full"
+                label="Channel"
+                value={existingRuleId}
+                options={[{ value: '', label: 'Choose a channel' }, ...rules.map((rule) => ({
+                  value: getString(rule, ['id'], ''),
+                  label: `${notificationChannelLabel(getString(rule, ['channel'], ''))} · ${getString(rule, ['destination_preview'], 'destination hidden')}`
+                }))]}
+                onChange={(value) => { setExistingRuleId(value); setChannelError(''); }}
+                error={channelError || undefined}
+              />
               <fieldset className="full">
                 <legend>Events to route</legend>
-                {NOTIFICATION_TRIGGERS.filter((trigger) => trigger !== 'high_scale.state_change').map((trigger) => (
-                  <label key={trigger} className="check-row">
-                    <input type="checkbox" name="triggers" value={trigger} checked={ruleTriggers.includes(trigger)} onChange={() => toggleRuleTrigger(trigger)} disabled={busy !== ''} />
-                    <span>{humanizeNotificationTrigger(trigger)}</span>
+                {NOTIFICATION_TRIGGER_OPTIONS.map((option) => (
+                  <label key={option.id} className="check-row">
+                    <input type="checkbox" name="triggers" value={option.id} checked={ruleTriggers.includes(option.id)} onChange={() => toggleRuleTrigger(option.id)} disabled={busy !== ''} />
+                    <span className="cp-stack">
+                      <span>{option.label}</span>
+                      <span className="muted small">{option.detail}</span>
+                    </span>
                   </label>
                 ))}
               </fieldset>
               {triggerError ? <p className="field-error full" role="alert">{triggerError}</p> : null}
               <label className="check-row full">
                 <input type="checkbox" name="enabled" checked={ruleEnabled} onChange={(changeEvent) => setRuleEnabled(changeEvent.target.checked)} disabled={busy !== ''} />
-                <span>Enabled after saving</span>
+                <span>Channel enabled after saving</span>
               </label>
-              {destinationError && ruleMode === 'new' ? <p className="field-error full" id="notification-destination-error" role="alert">{destinationError}</p> : null}
               <div className="form-actions full">
                 <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setRuleFormOpen(false)}>Cancel</Button>
-                <Button type="submit" loading={busy === 'create-notification-rule'} disabled={busy !== '' && busy !== 'create-notification-rule'}>{ruleMode === 'existing' ? 'Add to channel' : 'Save rule'}</Button>
+                <Button type="submit" loading={busy === 'add-notification-events'} disabled={busy !== '' && busy !== 'add-notification-events'}>Add events</Button>
               </div>
-              <p className="muted small full">Your channel type, events, and enabled choice are kept if you close this form; the destination is not.</p>
             </form>
           </CardContent>
         </Card>
@@ -1120,7 +973,7 @@ export function NotificationsPage({
               selectedId={selectedAttemptKey || null}
               getRowProps={(view) => ({
                 tabIndex: 0,
-                'aria-label': `Inspect ${attemptStatusCopy(view.status).label.toLowerCase()} delivery for ${humanizeNotificationTrigger(getString(view.event, ['trigger']))}`,
+                'aria-label': `Inspect ${attemptStatusCopy(view.status).label.toLowerCase()} delivery for ${notificationTriggerLabel(getString(view.event, ['trigger']))}`,
                 onClick: () => setSelectedAttemptKey(view.key),
                 onKeyDown: (event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -1132,7 +985,9 @@ export function NotificationsPage({
               onRetry={() => void onRefresh()}
               empty={attempts.length > 0
                 ? <EmptyState icon={CheckCircle2} title="No failed or retrying deliveries." body="Every loaded attempt was delivered or recorded without sending." actionLabel="Show all attempts" onAction={() => setAttemptFilter('all')} />
-                : <EmptyState icon={ClipboardList} title="No delivery attempts recorded." body={rules.length ? 'Attempts appear when a routed event occurs.' : 'Route events to a channel first.'} />}
+                : rules.length
+                  ? <EmptyState icon={ClipboardList} title="No delivery attempts recorded." body="Attempts appear when a routed event occurs." />
+                  : <EmptyState icon={ClipboardList} title="No delivery attempts recorded." body="Set up a channel first; attempts appear when a routed event occurs." actionLabel="Set up a channel in Integrations" actionHref="#integrations" />}
             />
           </CardContent>
         </Card>
@@ -1141,7 +996,7 @@ export function NotificationsPage({
             <section aria-label="Selected delivery attempt">
               <CardHeader>
                 <div>
-                  <CardTitle>{selectedCopy.label}: {humanizeNotificationTrigger(getString(selected.event, ['trigger']))}</CardTitle>
+                  <CardTitle>{selectedCopy.label}: {notificationTriggerLabel(getString(selected.event, ['trigger']))}</CardTitle>
                   <CardDescription>{selectedCopy.meaning}</CardDescription>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setSelectedAttemptKey('')}>Close</Button>
@@ -1153,7 +1008,7 @@ export function NotificationsPage({
                   <KvField label="Attempt">{selectedAttemptNumber ? `${selectedAttemptNumber}${selectedMaxAttempts ? ` of ${selectedMaxAttempts}` : ''}` : 'Not recorded'}</KvField>
                   <KvField label="Event">{getString(selected.event, ['subject'], 'Not recorded')} · {formatDate(selected.event.created_at)}</KvField>
                   <KvField label="Channel">{formatGovernanceStatusLabel(getString(selected.attempt, ['channel'], ''), 'Not recorded')} <span className="mono muted">{getString(selected.attempt, ['destination_preview'], '')}</span></KvField>
-                  <KvField label="Rule">{selected.rule ? `${selected.rule.enabled === false ? 'Disabled' : 'Enabled'} · routes ${(Array.isArray(selected.rule.triggers) ? (selected.rule.triggers as unknown[]).length : 0)} event types` : 'Rule removed or not recorded'}</KvField>
+                  <KvField label="Channel routing">{selected.rule ? `${selected.rule.enabled === false ? 'Disabled' : 'Enabled'} · routes ${(Array.isArray(selected.rule.triggers) ? (selected.rule.triggers as unknown[]).length : 0)} event types` : 'Channel removed or not recorded'}</KvField>
                 </div>
                 <div className="row-actions">
                   {selected.rule ? <AnchorButton size="sm" variant="secondary" href={`#integrations?focus=${encodeURIComponent(getString(selected.rule, ['id'], ''))}`}>Fix channel configuration</AnchorButton> : null}
@@ -1185,20 +1040,20 @@ export function NotificationsPage({
       </div>
 
       <Card>
-        <PanelCardHeader title="Routing rules" description="Each rule sends chosen events to one channel. Edit destinations and turn channels on or off in Integrations." />
+        <PanelCardHeader title="Channels" description="Each channel receives the events chosen for it. Set up, turn on or off, and remove channels in Integrations." />
         <CardContent>
           <DataTable
             columns={ruleColumns}
             items={rules}
             getRowId={(item) => getString(item, ['id'], '')}
-            empty={<EmptyState icon={Bell} title="No routing rules." body="Nothing is routed to a channel yet." actionLabel={canWrite ? 'Route events' : undefined} onAction={canWrite ? () => setRuleFormOpen(true) : undefined} />}
+            empty={<EmptyState icon={Bell} title="No channels yet." body="Nothing is routed to a channel yet." actionLabel={canWrite ? 'Set up a channel in Integrations' : undefined} actionHref={canWrite ? '#integrations' : undefined} />}
             loadError={data.loadErrors.notificationRules}
             onRetry={() => void onRefresh()}
           />
         </CardContent>
       </Card>
 
-      {canWrite ? (
+      {canWrite && (events.length > 0 || eventsUnavailable) ? (
         <Card>
           <PanelCardHeader title="Bulk recovery" description="Preview first. Live actions apply to every matching attempt and can produce duplicates if earlier sends arrived." />
           <CardContent className="stack-tight">
@@ -1314,8 +1169,7 @@ function readAuditFilters(): AuditFilters {
   };
 }
 
-/** Server query for the exact filters the user applied; local calendar days become inclusive instants. */
-export function auditListQuery(filters: AuditFilters, cursor: string, limit = AUDIT_PAGE_SIZE) {
+function auditFilterParams(filters: AuditFilters) {
   const params = new URLSearchParams();
   if (filters.actor.trim()) params.set('actor', filters.actor.trim());
   if (filters.action.trim()) params.set('action', filters.action.trim());
@@ -1324,9 +1178,33 @@ export function auditListQuery(filters: AuditFilters, cursor: string, limit = AU
   const until = auditDayBound(filters.until, true);
   if (Number.isFinite(since)) params.set('since', new Date(since).toISOString());
   if (Number.isFinite(until)) params.set('until', new Date(until).toISOString());
+  return params;
+}
+
+/** Server query for the exact filters the user applied; local calendar days become inclusive instants. */
+export function auditListQuery(filters: AuditFilters, cursor: string, limit = AUDIT_PAGE_SIZE) {
+  const params = auditFilterParams(filters);
   if (cursor) params.set('cursor', cursor);
   params.set('limit', String(limit));
   return `/v1/audit-log?${params.toString()}`;
+}
+
+/** Export of every entry matching the applied filters; the server pages internally. */
+export function auditExportQuery(filters: AuditFilters) {
+  const query = auditFilterParams(filters).toString();
+  return `/v1/audit-log/export${query ? `?${query}` : ''}`;
+}
+
+export function auditExportFilename(filters: AuditFilters, digest: string) {
+  const digest8 = digest.replace(/^sha256:/, '').slice(0, 8) || 'nodigest';
+  return `audit-log-${filters.since || 'start'}-${filters.until || 'now'}-${digest8}.json`;
+}
+
+/** Map a typed label (as shown in the table) back to its stored key; keys and dotted values pass through. */
+export function resolveAuditFilterKey(typed: string, labels: ReadonlyMap<string, string>) {
+  const value = typed.trim();
+  if (!value || value.includes('.')) return value;
+  return labels.get(value.toLowerCase()) ?? value;
 }
 
 export function AuditPage({
@@ -1352,6 +1230,7 @@ export function AuditPage({
   const [showRawAuditMetadata, setShowRawAuditMetadata] = useState(false);
   const [copyNotice, setCopyNotice] = useState('');
   const [dateError, setDateError] = useState('');
+  const [exportState, setExportState] = useState<{ status: 'idle' | 'loading' | 'done' | 'error'; message: string }>({ status: 'idle', message: '' });
   const configRef = useRef<PortalConfig | null>(config ?? null);
   const viewerZone = (() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'; } catch { return 'local time'; }
@@ -1441,15 +1320,66 @@ export function AuditPage({
     setCopyNotice('');
   }, [selectedId]);
 
-  function applyFilters(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    if (draft.since && draft.until && draft.since > draft.until) {
+  const actionLabelKeys = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [key, label] of Object.entries(AUDIT_ACTION_LABELS)) map.set(label.toLowerCase(), key);
+    for (const entry of listState.items) {
+      const key = getString(entry, ['action'], '');
+      if (!key || key === '—') continue;
+      map.set(formatAuditAction(key).toLowerCase(), key);
+      map.set(formatAuditAction(key, key, entry.metadata).toLowerCase(), key);
+    }
+    return map;
+  }, [listState.items]);
+  const resourceLabelKeys = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const [key, label] of Object.entries(RESOURCE_TYPE_LABELS)) map.set(label.toLowerCase(), key);
+    for (const entry of listState.items) {
+      const key = getString(entry, ['resource_type'], '');
+      if (key && key !== '—') map.set(formatResourceTypeLabel(key).toLowerCase(), key);
+    }
+    return map;
+  }, [listState.items]);
+
+  function applyFilterValues(next: AuditFilters) {
+    if (next.since && next.until && next.since > next.until) {
       setDateError('The start date is after the end date. Fix the range before applying.');
       return;
     }
     setDateError('');
-    setApplied({ ...draft, actor: draft.actor.trim(), action: draft.action.trim(), resource: draft.resource.trim() });
+    const resolved = {
+      ...next,
+      actor: next.actor.trim(),
+      action: resolveAuditFilterKey(next.action, actionLabelKeys),
+      resource: resolveAuditFilterKey(next.resource, resourceLabelKeys)
+    };
+    setDraft(resolved);
+    setApplied(resolved);
     setCursorStack(['']);
+    setExportState({ status: 'idle', message: '' });
+  }
+
+  function applyFilters(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    applyFilterValues(draft);
+  }
+
+  function filterTo(field: 'actor' | 'action' | 'resource', value: string) {
+    if (!value || value === '—') return;
+    applyFilterValues({ ...draft, [field]: value });
+  }
+
+  async function exportFilteredEvents() {
+    setExportState({ status: 'loading', message: '' });
+    try {
+      const payload = await requestJson(await resolvedConfig(), session, auditExportQuery(applied)) as DataItem;
+      const digest = getNestedString(payload, ['custody', 'content_sha256'], '');
+      const count = typeof payload?.count === 'number' ? payload.count : 0;
+      downloadJsonFile(auditExportFilename(applied, digest), payload);
+      setExportState({ status: 'done', message: `Exported ${formatNumber(count)} ${pluralize(count, 'event')} with their hashes. The export itself was recorded in the audit log.` });
+    } catch (err) {
+      setExportState({ status: 'error', message: apiErrorMessage(err, 'The audit export could not be created.') });
+    }
   }
 
   function clearFilters() {
@@ -1457,10 +1387,27 @@ export function AuditPage({
     setApplied(EMPTY_AUDIT_FILTERS);
     setCursorStack(['']);
     setDateError('');
+    setExportState({ status: 'idle', message: '' });
   }
 
   const filtersActive = Object.values(applied).some(Boolean);
   const suggestions = (key: 'actor_user_id' | 'action' | 'resource_type') => [...new Set(items.map((entry) => getString(entry, [key], '')).filter((value) => value && value !== '—'))].sort();
+  const actorOptions = [...new Map(items.flatMap((entry) => {
+    const id = getString(entry, ['actor_user_id'], '');
+    if (!id || id === '—') return [];
+    const role = getString(entry, ['actor_role'], '');
+    return [[id, role && role !== '—' ? plainCodeLabel(role) : 'Role not recorded'] as const];
+  })).entries()].sort(([left], [right]) => left.localeCompare(right));
+  const actionOptions = [...new Set([...AUDIT_ACTIONS.map((entry) => entry.value), ...suggestions('action')])].sort();
+  const resourceOptions = [...new Set([...Object.keys(RESOURCE_TYPE_LABELS), ...suggestions('resource_type')])].sort();
+  const nothingToExport = listState.status === 'ready' && (listState.total === 0 || (listState.total === null && items.length === 0 && cursorStack.length === 1));
+  const exportDisabledReason = listState.status === 'loading'
+    ? 'Wait for the events to load.'
+    : listState.status !== 'ready'
+      ? 'Events could not be loaded, so there is nothing to export.'
+      : nothingToExport
+        ? 'No events match the applied filters, so there is nothing to export.'
+        : '';
 
   function formatAuditHash(item: DataItem) {
     const hash = getString(item, ['entry_hash'], '');
@@ -1497,7 +1444,7 @@ export function AuditPage({
         );
       }
     },
-    { key: 'action', label: 'Action', render: (item) => <span>{formatAuditAction(getString(item, ['action']))}</span> },
+    { key: 'action', label: 'Action', render: (item) => <span title={getString(item, ['action'], '')}>{formatAuditAction(getString(item, ['action']), 'Unknown action', item.metadata)}</span> },
     { key: 'resource', label: 'Resource', render: resourceCell },
     {
       key: 'hash',
@@ -1511,13 +1458,37 @@ export function AuditPage({
 
   const resourceRoute = selectedEntry ? AUDIT_RESOURCE_ROUTES[getString(selectedEntry, ['resource_type'], '')] : '';
   const selectedResourceId = selectedEntry ? getString(selectedEntry, ['resource_id'], '') : '';
+  const presentValue = (value: string) => (value && value !== '—' ? value : '');
+  const selectedActorId = selectedEntry ? presentValue(getString(selectedEntry, ['actor_user_id'], '')) : '';
+  const selectedActionKey = selectedEntry ? presentValue(getString(selectedEntry, ['action'], '')) : '';
+  const selectedResourceType = selectedEntry ? presentValue(getString(selectedEntry, ['resource_type'], '')) : '';
+  const selectedResourceFilter = selectedEntry && sensitiveResourceLabel(selectedResourceType)
+    ? selectedResourceType
+    : presentValue(selectedResourceId) || selectedResourceType;
   const pageNumber = cursorStack.length;
   const totalText = listState.total === null ? 'total not returned' : `${formatNumber(listState.total)} matching`;
 
   return (
     <div className="content audit-page">
       <CustomerPageStyles />
-      <PageHeader route="audit" title="Audit log" description="Who did what, when, and to which resource. A recorded hash shows what the server stored with each entry. This page does not verify the hash chain. Filters and paging run on the server across the whole log." />
+      <PageHeader
+        route="audit"
+        title="Audit log"
+        description="Who did what, when, and to which resource. Entries are append-only and hash-chained. Each export includes every entry's hash and previous hash so the chain can be checked offline. This page does not verify the hash chain."
+        actions={allowed ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={exportState.status === 'loading'}
+            disabled={Boolean(exportDisabledReason) || exportState.status === 'loading'}
+            title={exportDisabledReason || undefined}
+            aria-describedby={exportDisabledReason ? 'audit-export-reason' : undefined}
+            onClick={() => void exportFilteredEvents()}
+          >
+            Export filtered events
+          </Button>
+        ) : undefined}
+      />
       {!allowed ? (
         <EmptyState icon={Lock} title="Audit access required." body="Owners, admins, SOC, and auditors can read the audit log. Your role cannot, so no events are shown." />
       ) : (
@@ -1525,6 +1496,14 @@ export function AuditPage({
           <PageContextSummary>
             {listState.status === 'ready' ? <>{totalText}{filtersActive ? ' for the applied filters' : ''} · page {formatNumber(pageNumber)}, newest first</> : listState.status === 'loading' ? 'Loading events…' : 'Events unavailable'}
           </PageContextSummary>
+          {exportDisabledReason ? <p className="sr-only" id="audit-export-reason">{exportDisabledReason}</p> : null}
+          {exportState.status === 'done' ? <div className="form-banner" role="status" aria-live="polite">{exportState.message}</div> : null}
+          {exportState.status === 'error' ? (
+            <div className="form-banner error row-actions" role="alert">
+              <span>{exportState.message}</span>
+              <Button size="sm" variant="secondary" onClick={() => void exportFilteredEvents()}>Retry export</Button>
+            </div>
+          ) : null}
           <form className="audit-filter-toolbar" role="search" aria-label="Audit filters" onSubmit={applyFilters} noValidate>
             <div className="audit-filter-fields">
               <label className="field">
@@ -1536,26 +1515,26 @@ export function AuditPage({
                 <input type="date" value={draft.until} onChange={(event) => setDraft((current) => ({ ...current, until: event.target.value }))} min={draft.since || undefined} aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'audit-date-error' : undefined} />
               </label>
               <label className="field">
-                <span>Actor user ID</span>
-                <input list="audit-actor-options" value={draft.actor} onChange={(event) => setDraft((current) => ({ ...current, actor: event.target.value }))} placeholder="Exact user ID" autoComplete="off" spellCheck={false} />
-                <datalist id="audit-actor-options">{suggestions('actor_user_id').map((value) => <option key={value} value={value} />)}</datalist>
+                <span>Actor (user ID)</span>
+                <input list="audit-actor-options" value={draft.actor} onChange={(event) => setDraft((current) => ({ ...current, actor: event.target.value }))} placeholder="Exact user ID" autoComplete="off" spellCheck={false} aria-describedby="audit-filter-help" />
+                <datalist id="audit-actor-options">{actorOptions.map(([value, role]) => <option key={value} value={value} label={role} />)}</datalist>
               </label>
               <label className="field">
                 <span>Action</span>
-                <input list="audit-action-options" value={draft.action} onChange={(event) => setDraft((current) => ({ ...current, action: event.target.value }))} placeholder="e.g. report.generated" autoComplete="off" spellCheck={false} />
-                <datalist id="audit-action-options">{suggestions('action').map((value) => <option key={value} value={value} />)}</datalist>
+                <input list="audit-action-options" value={draft.action} onChange={(event) => setDraft((current) => ({ ...current, action: event.target.value }))} placeholder="Choose or type an action" autoComplete="off" spellCheck={false} aria-describedby="audit-filter-help" />
+                <datalist id="audit-action-options">{actionOptions.map((value) => <option key={value} value={value} label={formatAuditAction(value)} />)}</datalist>
               </label>
               <label className="field">
                 <span>Resource type or ID</span>
-                <input list="audit-resource-options" value={draft.resource} onChange={(event) => setDraft((current) => ({ ...current, resource: event.target.value }))} placeholder="e.g. target or tgt_123" autoComplete="off" spellCheck={false} />
-                <datalist id="audit-resource-options">{suggestions('resource_type').map((value) => <option key={value} value={value} />)}</datalist>
+                <input list="audit-resource-options" value={draft.resource} onChange={(event) => setDraft((current) => ({ ...current, resource: event.target.value }))} placeholder="e.g. Target or tgt_123" autoComplete="off" spellCheck={false} aria-describedby="audit-filter-help" />
+                <datalist id="audit-resource-options">{resourceOptions.map((value) => <option key={value} value={value} label={formatResourceTypeLabel(value)} />)}</datalist>
               </label>
             </div>
             {dateError ? <p className="field-error" id="audit-date-error" role="alert">{dateError}</p> : null}
             <div className="cp-toolbar">
               <Button type="submit" size="sm">Apply filters</Button>
               {filtersActive ? <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>Clear filters</Button> : null}
-              <span className="muted small">Filters match exactly; dates are whole days in your timezone.</span>
+              <span className="muted small" id="audit-filter-help">Type the action or resource as shown, or its key; filters match exactly. Dates are whole days in your timezone.</span>
             </div>
           </form>
           {selectedId && !selectedEntry ? (
@@ -1575,7 +1554,7 @@ export function AuditPage({
               <section id="audit-event-detail" tabIndex={-1} aria-label="Selected audit event" className="audit-event-detail">
                 <CardHeader>
                   <div>
-                    <CardTitle>{formatAuditAction(getString(selectedEntry, ['action']))}</CardTitle>
+                    <CardTitle>{formatAuditAction(getString(selectedEntry, ['action']), 'Unknown action', selectedEntry.metadata)}</CardTitle>
                     <CardDescription>{auditTimestamp(selectedEntry) ? formatDate(auditTimestamp(selectedEntry)) : 'Time not recorded'} · {formatResourceTypeLabel(getString(selectedEntry, ['resource_type'], 'resource'))}</CardDescription>
                   </div>
                   <Button size="sm" variant="ghost" onClick={() => setSelectedId('')}>Close</Button>
@@ -1608,6 +1587,11 @@ export function AuditPage({
                         : <KvField label="Recorded change">No metadata recorded</KvField>}
                   </div>
                   <p className="muted small">This records that the action happened. Whether the resulting configuration works is shown by evidence on the resource itself.</p>
+                  <div className="row-actions" role="group" aria-label="Filter the log to this event's values">
+                    <Button size="sm" variant="ghost" disabled={!selectedActorId} onClick={() => filterTo('actor', selectedActorId)}>Filter to this actor</Button>
+                    <Button size="sm" variant="ghost" disabled={!selectedActionKey} onClick={() => filterTo('action', selectedActionKey)}>Filter to this action</Button>
+                    <Button size="sm" variant="ghost" disabled={!selectedResourceFilter} onClick={() => filterTo('resource', selectedResourceFilter)}>Filter to this resource</Button>
+                  </div>
                   <div className="row-actions">
                     <Button
                       size="sm"
@@ -1665,7 +1649,7 @@ export function AuditPage({
                         setSelectedId(key);
                       },
                       tabIndex: 0,
-                      'aria-label': `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${resourceLabel}`
+                      'aria-label': `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'), 'audit event', item.metadata)} on ${resourceLabel}`
                     };
                   }}
                   empty={filtersActive
@@ -1969,11 +1953,16 @@ export function SocConsolePage({
   const [queueRefreshing, setQueueRefreshing] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [stoppedRequestIds, setStoppedRequestIds] = useState<string[]>([]);
   const [output, setOutput] = useState('');
   const [outputSummary, setOutputSummary] = useState('');
   const [showActionTechnicalDetails, setShowActionTechnicalDetails] = useState(false);
   const [lastActionRequestId, setLastActionRequestId] = useState('');
   const [executionTenantId, setExecutionTenantId] = useState(() => getRouteTenantId(session.tenant_id ?? '').trim());
+  const [killSwitchReasonDraft, setKillSwitchReasonDraft] = useState('');
+  const [killSwitchFocusPending, setKillSwitchFocusPending] = useState(false);
+  const killSwitchCardRef = useRef<HTMLDivElement>(null);
+  const killSwitchReasonRef = useRef<HTMLTextAreaElement>(null);
 
   function setActionOutput(payload: unknown, requestId = '') {
     setOutput(JSON.stringify(payload, null, 2));
@@ -1981,6 +1970,13 @@ export function SocConsolePage({
     setShowActionTechnicalDetails(false);
     setLastActionRequestId(requestId);
   }
+
+  function resetFeedback() {
+    setError('');
+    setMessage('');
+    setStoppedRequestIds([]);
+  }
+
   const isSoc = staffSocSurface
     ? session.principal === 'staff' && isStaffSocRole(session)
     : session.role === 'soc' && session.principal !== 'staff';
@@ -2018,12 +2014,13 @@ export function SocConsolePage({
 
   async function applyExecutionTenant(tenantId: string) {
     const nextTenant = tenantId.trim();
+    if (nextTenant !== effectiveSocTenant) setKillSwitchReasonDraft('');
     setExecutionTenantId(nextTenant);
     if (!staffSocSurface) return;
     const nextSession = { ...session, tenant_id: nextTenant || undefined };
     saveSession(nextSession);
-    setError('');
-    setMessage(nextTenant ? `Execution tenant set to ${nextTenant}.` : 'Execution tenant cleared.');
+    resetFeedback();
+    setMessage(nextTenant ? `Execution tenant set to ${tenantDisplayName(nextTenant)}.` : 'Execution tenant cleared.');
     setQueueRefreshing(true);
     try {
       await onRefresh();
@@ -2031,6 +2028,22 @@ export function SocConsolePage({
       setQueueRefreshing(false);
     }
   }
+
+  function prepareKillSwitchFor(tenantId: string) {
+    setKillSwitchFocusPending(true);
+    if (tenantId !== effectiveSocTenant) void applyExecutionTenant(tenantId);
+  }
+
+  useEffect(() => {
+    setKillSwitchReasonDraft('');
+  }, [effectiveSocTenant]);
+
+  useEffect(() => {
+    if (!killSwitchFocusPending || !effectiveSocTenant) return;
+    setKillSwitchFocusPending(false);
+    killSwitchCardRef.current?.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    killSwitchReasonRef.current?.focus({ preventScroll: true });
+  }, [killSwitchFocusPending, effectiveSocTenant]);
 
   async function socRequest(path: string, options: { method?: string; body?: unknown; tenantId?: string } = {}) {
     if (staffSocSurface) {
@@ -2046,6 +2059,26 @@ export function SocConsolePage({
     }
     return requestJson(config, session, path, options);
   }
+
+  const tenantNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const tenant of socQueue.tenants) {
+      const id = getString(tenant, ['tenant_id'], '');
+      const name = getString(tenant, ['name'], '');
+      if (id && name) names.set(id, name);
+    }
+    for (const item of socQueue.items) {
+      const id = getString(item, ['tenant_id'], '');
+      const name = getString(item, ['tenant_name'], '');
+      if (id && name && !names.has(id)) names.set(id, name);
+    }
+    return names;
+  }, [socQueue.items, socQueue.tenants]);
+
+  function tenantDisplayName(tenantId: string) {
+    return socTenantLabel(tenantNames.get(tenantId) ?? '', tenantId);
+  }
+
   const requestColumns: TableColumn<DataItem>[] = [
     { key: 'id', label: 'Request', render: (item) => { const id = getString(item, ['id'], ''); return <span title={id || undefined}>{getString(item, ['objective', 'reason', 'name'], 'High-scale validation request')}</span>; } },
     {
@@ -2056,7 +2089,25 @@ export function SocConsolePage({
         return <Badge tone={highScaleStateTone(state)}>{formatGovernanceStatusLabel(state, 'Unknown')}</Badge>;
       }
     },
-    { key: 'target', label: 'Domains', render: (item) => requestDomainDisplay(data, item) },
+    {
+      key: 'window',
+      label: 'Window',
+      render: (item) => (
+        <SocWindowCell
+          start={getNestedString(item, ['scheduled_window', 'window_start'], '')}
+          end={getNestedString(item, ['scheduled_window', 'window_end'], '')}
+          state={normalizeHighScaleState(item)}
+        />
+      )
+    },
+    {
+      key: 'target',
+      label: 'Domains',
+      render: (item) => {
+        const domains = requestDomainDisplay(data, item);
+        return domains.length ? domains.join(', ') : <span className="muted">Domain scope not recorded</span>;
+      }
+    },
     {
       key: 'pack',
       label: 'Pack',
@@ -2084,15 +2135,14 @@ export function SocConsolePage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const state = normalizeHighScaleState(item);
+        const reviewable = ['submitted', 'under_review'].includes(state);
         const packReady = getNestedString(item, ['authorization_pack_status', 'overall'], '').toLowerCase() === 'accepted';
         const executionTenantMissing = staffSocSurface && !effectiveSocTenant;
-        const approvalDisabledReason = executionTenantMissing
-          ? 'Select an execution tenant before approving this request.'
-          : !['submitted', 'under_review'].includes(state)
-            ? 'Quick approval is available only while a request is submitted or under review.'
-            : !packReady
-              ? 'Every required authorization artifact and provider approval must be accepted first.'
-              : '';
+        const approvalDisabled = executionTenantMissing
+          ? { full: 'Select an execution tenant before approving this request.', short: 'Select a tenant' }
+          : !packReady
+            ? { full: 'Every required authorization artifact and provider approval must be accepted before approval.', short: 'Pack not accepted' }
+            : null;
         const approvalControlId = `quick-approve-reason-${id}`;
         return (
           <div className="stack-tight">
@@ -2101,53 +2151,57 @@ export function SocConsolePage({
               variant="secondary"
               href={buildDetailHref('queue-detail', id, staffSocSurface && effectiveSocTenant ? { tenantId: effectiveSocTenant } : undefined)}
             >Open</AnchorButton>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === `approve-${id}`}
-              disabled={Boolean(approvalDisabledReason) || (busy !== '' && busy !== `approve-${id}`)}
-              title={approvalDisabledReason || (busy && busy !== `approve-${id}` ? 'Another SOC action is in progress.' : undefined)}
-              aria-describedby={approvalDisabledReason ? approvalControlId : undefined}
-              onClick={(clickEvent) => {
-                clickEvent.stopPropagation();
-                void socAction(id, 'approve');
-              }}
-            >
-              Quick approve
-            </Button>
-            {approvalDisabledReason ? <span className="muted text-xs" id={approvalControlId}>{approvalDisabledReason}</span> : null}
+            {reviewable ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={busy === `approve-${id}`}
+                  disabled={Boolean(approvalDisabled) || (busy !== '' && busy !== `approve-${id}`)}
+                  title={approvalDisabled?.full || (busy && busy !== `approve-${id}` ? 'Another SOC action is in progress.' : undefined)}
+                  aria-describedby={approvalDisabled ? approvalControlId : undefined}
+                  onClick={(clickEvent) => {
+                    clickEvent.stopPropagation();
+                    void socAction(item, 'approve');
+                  }}
+                >
+                  Quick approve
+                </Button>
+                {approvalDisabled ? (
+                  <span className="muted text-xs">
+                    <span aria-hidden="true">{approvalDisabled.short}</span>
+                    <span className="sr-only" id={approvalControlId}>{approvalDisabled.full}</span>
+                  </span>
+                ) : null}
+              </>
+            ) : null}
           </div>
         );
       }
     }
   ];
 
-  async function socAction(requestId: string, action: string, body: Record<string, unknown> = {}) {
+  async function socAction(item: DataItem, action: 'approve', body: Record<string, unknown> = {}) {
+    const requestId = getString(item, ['id'], '');
     if (!requestId) return null;
-    const lifecycleConfirm: Record<string, string> = {
-      approve: `Approve high-scale request ${requestId} and move it to approved?`,
-      schedule: `Schedule high-scale request ${requestId} for execution?`,
-      start: `Start high-scale execution for ${requestId}? Governed adapter traffic will begin.`,
-      stop: `Stop high-scale execution for ${requestId} immediately?`,
-      close: `Close high-scale request ${requestId} and finalize the test lifecycle?`
-    };
-    const lifecycleMessage = lifecycleConfirm[action];
-    if (lifecycleMessage && !(await confirm({
-      title: `${formatGovernanceStatusLabel(action)} high-scale request`,
-      description: lifecycleMessage,
-      confirmLabel: formatGovernanceStatusLabel(action),
-      confirmTone: action === 'approve' || action === 'schedule' || action === 'start' ? 'default' : 'danger'
+    const objective = getString(item, ['objective', 'title', 'reason', 'name'], '');
+    const tenantId = staffSocSurface ? effectiveSocTenant : String(session.tenant_id ?? '').trim();
+    const subject = objective ? `“${objective}”` : 'this high-scale request';
+    if (!(await confirm({
+      title: `Approve ${objective ? `“${objective}”` : 'high-scale request'}`,
+      description: `Approve ${subject} (${requestId}) for tenant ${tenantDisplayName(tenantId)} and move it to approved? Scheduling and execution remain separate SOC steps behind the authorization pack and safety gates.`,
+      confirmLabel: 'Approve request',
+      confirmTone: 'default'
     }))) return null;
     setBusy(`${action}-${requestId}`);
-    setError('');
-    setMessage('');
+    resetFeedback();
     try {
       const payload = await socRequest(`/internal/soc/high-scale/${encodeURIComponent(requestId)}/${action}`, {
         method: 'POST',
         body
       });
       setActionOutput(payload, requestId);
-      setMessage(`SOC ${action} completed for ${requestId}.`);
+      setMessage(`Approved ${objective || requestId}.`);
       setQueueRefreshing(true);
       try {
         await onRefresh();
@@ -2163,20 +2217,39 @@ export function SocConsolePage({
     }
   }
 
+  const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
+  const killSwitchReason = getString(data.state?.kill_switch as DataItem, ['reason'], '');
+  const runningCount = data.highScale.filter((item) => SOC_RUNNING_STATES.includes(normalizeHighScaleState(item))).length;
+  const killSwitchReasonText = killSwitchReasonDraft.trim();
+  const killSwitchReasonShort = killSwitchReasonText.length < KILL_SWITCH_REASON_MIN;
+
   async function setKillSwitch(active: boolean) {
+    const reason = killSwitchReasonText;
+    if (reason.length < KILL_SWITCH_REASON_MIN) return;
+    const tenantLabel = tenantDisplayName(effectiveSocTenant);
     if (active) {
-      if (!await confirm({ title: 'Activate tenant kill switch', description: 'Activate the tenant kill switch? New safe runs will be blocked, active safe runs cancelled, and governed high-scale execution stopped for this tenant.', confirmLabel: 'Activate kill switch' })) return;
-    } else if (!await confirm({ title: 'Clear tenant kill switch', description: 'Clear the kill switch? Execution remains subject to authorization packs, approved windows, and all other safety gates.', confirmLabel: 'Clear kill switch', confirmTone: 'default' })) return;
+      if (!await confirm({
+        title: `Activate kill switch for ${tenantLabel}`,
+        description: `${formatNumber(runningCount)} running high-scale ${pluralize(runningCount, 'request')} will be stopped. New safe runs will be blocked and active safe runs cancelled for this tenant. Reason: ${reason}`,
+        confirmLabel: 'Activate kill switch'
+      })) return;
+    } else if (!await confirm({
+      title: `Clear kill switch for ${tenantLabel}`,
+      description: `Execution remains subject to authorization packs, approved windows, and all other safety gates. Reason: ${reason}`,
+      confirmLabel: 'Clear kill switch',
+      confirmTone: 'default'
+    })) return;
     setBusy(active ? 'kill-on' : 'kill-off');
-    setError('');
-    setMessage('');
+    resetFeedback();
     try {
       const payload = await socRequest('/internal/soc/kill-switch', {
         method: 'POST',
-        body: { active, reason: active ? 'SOC console activation' : 'SOC console cleared' }
+        body: { active, reason }
       });
       setActionOutput(payload, '');
-      setMessage(active ? 'Kill switch activated.' : 'Kill switch cleared.');
+      setMessage(summarizeSocActionPayload(payload));
+      setStoppedRequestIds(active && payload && typeof payload === 'object' ? killSwitchIdList(payload as DataItem, 'stopped_request_ids') : []);
+      setKillSwitchReasonDraft('');
       setQueueRefreshing(true);
       try {
         await onRefresh();
@@ -2190,13 +2263,13 @@ export function SocConsolePage({
     }
   }
 
-  const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
-  const killSwitchReason = getString(data.state?.kill_switch as DataItem, ['reason'], '');
-  const runningCount = data.highScale.filter((item) => SOC_RUNNING_STATES.includes(normalizeHighScaleState(item))).length;
   const openFindingsCount = Number(data.state?.open_findings ?? data.findings.filter(isFindingOpen).length) || 0;
   const providerContactRows = buildProviderContactRows(data.highScale);
   const executionTimeline = buildSocExecutionTimeline(data.highScale);
-  const crossTenantHighScale = staffSocSurface ? buildSocCrossTenantRows(socQueue.items) : [];
+  const crossTenantHighScale = useMemo(
+    () => (staffSocSurface ? buildSocCrossTenantRows(socQueue.items) : []),
+    [staffSocSurface, socQueue.items]
+  );
   const executionTenantMissing = staffSocSurface && !effectiveSocTenant;
   const goNoGoGates = buildSocGoNoGoGates(data.highScale, {
     killSwitchActive,
@@ -2204,36 +2277,121 @@ export function SocConsolePage({
     openFindings: openFindingsCount,
     tenantSelected: !executionTenantMissing
   });
+  const goNoGoVerdict = socGoNoGoVerdict(goNoGoGates);
   const kpiStates = data.highScale.map(normalizeHighScaleState);
   const scheduledCount = kpiStates.filter((state) => SOC_SCHEDULED_STATES.includes(state)).length;
   const inReviewCount = kpiStates.filter((state) => SOC_REVIEW_STATES.includes(state)).length;
   const crossTenantRequestCount = new Set(crossTenantHighScale.map((row) => row.id)).size;
+  const killSwitchReasonRequired = `Enter a reason of at least ${KILL_SWITCH_REASON_MIN} characters; it is recorded in the audit log and shown to the tenant.`;
   const activateKillSwitchReason = executionTenantMissing
     ? 'Select an execution tenant before activating the kill switch.'
     : killSwitchActive
       ? 'The tenant kill switch is already active.'
       : busy && busy !== 'kill-on'
         ? 'Another SOC action is in progress.'
-        : '';
+        : killSwitchReasonShort
+          ? killSwitchReasonRequired
+          : '';
   const clearKillSwitchReason = executionTenantMissing
     ? 'Select an execution tenant before clearing the kill switch.'
     : !killSwitchActive
       ? 'The tenant kill switch is already clear.'
       : busy && busy !== 'kill-off'
         ? 'Another SOC action is in progress.'
-        : '';
-  const activeTenantCount = new Set(
-    crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—')
-  ).size;
+        : killSwitchReasonShort
+          ? killSwitchReasonRequired
+          : '';
+  const killSwitchHelp = executionTenantMissing
+    ? 'Select an execution tenant before activating or clearing the kill switch.'
+    : killSwitchActive
+      ? clearKillSwitchReason || activateKillSwitchReason
+      : activateKillSwitchReason || clearKillSwitchReason;
+  const crossTenantIds = useMemo(
+    () => [...new Set(crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—'))],
+    [crossTenantHighScale]
+  );
+  const activeTenantCount = crossTenantIds.length;
   const tenantSelectOptions = useMemo(() => {
-    const names = new Map(socQueue.tenants.map((tenant) => [getString(tenant, ['tenant_id'], ''), getString(tenant, ['name'], '')]));
-    const fromCross = crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—');
-    const ids = [...new Set([...fromCross, ...names.keys(), effectiveSocTenant].filter(Boolean))];
+    const ids = [...new Set([...crossTenantIds, ...tenantNames.keys(), effectiveSocTenant].filter(Boolean))];
     return [
       { value: '', label: 'Select execution tenant…' },
-      ...ids.map((id) => ({ value: id, label: names.get(id) ? `${names.get(id)} (${id})` : id }))
+      ...ids.map((id) => ({ value: id, label: socTenantLabel(tenantNames.get(id) ?? '', id) }))
     ];
-  }, [crossTenantHighScale, effectiveSocTenant, socQueue.tenants]);
+  }, [crossTenantIds, effectiveSocTenant, tenantNames]);
+
+  const suggestedExecutionTenant = staffSocSurface && isSoc && !effectiveSocTenant && crossTenantIds.length === 1
+    ? crossTenantIds[0]
+    : '';
+
+  const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
+    {
+      key: 'tenant',
+      label: 'Tenant',
+      render: (item) => (
+        <span className="cp-stack">
+          <span>{item.tenantName || tenantNames.get(item.tenantId) || 'Name not recorded'}</span>
+          <span className="mono muted small">{item.tenantId}</span>
+        </span>
+      )
+    },
+    {
+      key: 'request',
+      label: 'Request',
+      render: (item) => <span className="mono" title={item.id}>{tailTruncateId(item.id, 18)}</span>
+    },
+    {
+      key: 'window',
+      label: 'Window',
+      render: (item) => <SocWindowCell start={item.windowStart} end={item.windowEnd} state={item.state} terminalWarn />
+    },
+    {
+      key: 'state',
+      label: 'State',
+      render: (item) => <Badge tone={highScaleStateTone(item.state)}>{formatGovernanceStatusLabel(item.state, 'Unknown')}</Badge>
+    },
+    { key: 'requested', label: 'Requested', render: (item) => formatDate(item.requestedAt) },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => {
+        const tenantKnown = item.tenantId !== '—';
+        const selected = tenantKnown && item.tenantId === effectiveSocTenant;
+        const tenantLabel = item.tenantName || tenantNames.get(item.tenantId) || item.tenantId;
+        return (
+          <div className="row-actions">
+            <AnchorButton
+              size="sm"
+              variant="secondary"
+              href={buildDetailHref('queue-detail', item.id, {
+                tenantId: tenantKnown ? item.tenantId : undefined
+              })}
+            >
+              Open
+            </AnchorButton>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!tenantKnown || selected}
+              title={selected ? 'This tenant is already the execution tenant.' : undefined}
+              onClick={() => void applyExecutionTenant(item.tenantId)}
+            >
+              Work on tenant
+            </Button>
+            {tenantKnown && isSocRunningState(item.state) ? (
+              <Button
+                size="sm"
+                variant="danger"
+                aria-label={`Engage kill switch for ${tenantLabel}`}
+                onClick={() => prepareKillSwitchFor(item.tenantId)}
+              >
+                Kill switch
+              </Button>
+            ) : null}
+          </div>
+        );
+      }
+    }
+  ];
 
   if (!isSoc) {
     return (
@@ -2260,6 +2418,115 @@ export function SocConsolePage({
     );
   }
 
+  const feedbackBanner = (
+    <GovernanceFeedbackBanner message={message} error={error}>
+      {stoppedRequestIds.length > 0 ? (
+        <span className="cp-toolbar">
+          <span>Stopped requests:</span>
+          {stoppedRequestIds.map((id) => (
+            <a key={id} className="cp-link mono" href={buildDetailHref('queue-detail', id, effectiveSocTenant ? { tenantId: effectiveSocTenant } : {})}>{id}</a>
+          ))}
+        </span>
+      ) : null}
+    </GovernanceFeedbackBanner>
+  );
+
+  const controls = (
+    <>
+      {feedbackBanner}
+      <div className="dash-grid">
+        <Card density="compact">
+          <div ref={killSwitchCardRef}>
+            <CardHeader>
+              <CardTitle>Kill switch</CardTitle>
+              <CardDescription>Tenant-scoped emergency stop across bounded safe runs and governed high-scale adapter execution.</CardDescription>
+            </CardHeader>
+            <CardContent className="stack-tight">
+              <div className="kv-list">
+                <KvField label="Status">
+                  {executionTenantMissing
+                    ? <Badge tone="muted">Tenant not selected</Badge>
+                    : <Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Active' : 'Clear'}</Badge>}
+                </KvField>
+                <KvField label="Reason">{killSwitchReason && !executionTenantMissing ? killSwitchReason : <span className="muted">Not recorded</span>}</KvField>
+              </div>
+              <label className="field full">
+                <span>Reason (recorded in audit and shown to the tenant)</span>
+                <textarea
+                  ref={killSwitchReasonRef}
+                  rows={2}
+                  maxLength={KILL_SWITCH_REASON_MAX}
+                  value={killSwitchReasonDraft}
+                  onChange={(event) => setKillSwitchReasonDraft(event.target.value)}
+                  disabled={executionTenantMissing || busy === 'kill-on' || busy === 'kill-off'}
+                  placeholder="e.g. Customer reported origin errors during the approved window"
+                  aria-describedby="kill-switch-reason-count"
+                />
+                <span className="muted small" id="kill-switch-reason-count">{formatNumber(killSwitchReasonDraft.length)}/{KILL_SWITCH_REASON_MAX} characters · at least {KILL_SWITCH_REASON_MIN}</span>
+              </label>
+              <div className="row-actions">
+                <Button
+                  variant="danger"
+                  loading={busy === 'kill-on'}
+                  disabled={Boolean(activateKillSwitchReason)}
+                  title={activateKillSwitchReason || undefined}
+                  aria-describedby={activateKillSwitchReason ? 'kill-switch-disabled-reason' : undefined}
+                  onClick={() => void setKillSwitch(true)}
+                >Activate kill switch</Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={busy === 'kill-off'}
+                  disabled={Boolean(clearKillSwitchReason)}
+                  title={clearKillSwitchReason || undefined}
+                  aria-describedby={clearKillSwitchReason ? 'kill-switch-disabled-reason' : undefined}
+                  onClick={() => void setKillSwitch(false)}
+                >Clear</Button>
+              </div>
+              {killSwitchHelp ? (
+                <p className="muted text-xs" id="kill-switch-disabled-reason">{killSwitchHelp}</p>
+              ) : null}
+              <details className="disclosure">
+                <summary>What activation does · {KILL_SWITCH_SEQUENCE.length} steps</summary>
+                <div className="timeline-list">
+                  {KILL_SWITCH_SEQUENCE.map((step, index) => (
+                    <div key={step}>
+                      <span aria-hidden="true">{index + 1}</span>
+                      <div><strong title={step}>{KILL_SWITCH_STEP_LABELS[step]}</strong></div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            </CardContent>
+          </div>
+        </Card>
+        <Card density="compact">
+          <CardHeader>
+            <CardTitle>Go / No-Go</CardTitle>
+            <CardDescription>Tenant-wide pre-flight across the governed queue. Per-request gates are on each request page.</CardDescription>
+          </CardHeader>
+          {executionTenantMissing ? (
+            <CardContent>
+              <p className="muted">Select an execution tenant to compute pre-flight gates.</p>
+            </CardContent>
+          ) : (
+            <CardContent className="stack-tight">
+              <p role="status"><Badge tone={goNoGoVerdict.tone}>{goNoGoVerdict.label}</Badge></p>
+              <div className="kv-list">
+                {goNoGoGates.map((gate) => (
+                  <KvField key={gate.key} label={gate.label}>
+                    <Badge tone={gate.tone}>{gate.status}</Badge>
+                  </KvField>
+                ))}
+              </div>
+              <p className="muted text-xs">Running tests and open findings are informational and do not change the verdict.</p>
+            </CardContent>
+          )}
+        </Card>
+      </div>
+    </>
+  );
+
   return (
     <div className="content">
       <PageHeader
@@ -2272,7 +2539,7 @@ export function SocConsolePage({
           <CardHeader>
             <CardTitle>Execution tenant</CardTitle>
             <CardDescription>
-              Staff SOC actions are tenant-scoped. Select a tenant before kill switch or queue mutations, or open a cross-tenant request with ?tenant=.
+              Staff SOC actions are tenant-scoped. Choose a tenant here, or use Work on tenant on a row in Cross-tenant execution.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -2287,9 +2554,23 @@ export function SocConsolePage({
                 No execution tenant selected — queue hydration and all tenant mutations stay disabled until you choose one.
               </p>
             ) : null}
+            {suggestedExecutionTenant ? (
+              <div className="mt-3">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={queueRefreshing}
+                  onClick={() => void applyExecutionTenant(suggestedExecutionTenant)}
+                >
+                  Work on {tenantDisplayName(suggestedExecutionTenant)}
+                </Button>
+                <p className="muted small mt-3">Only one tenant has governed high-scale work in the cross-tenant queue.</p>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
+      {staffSocSurface ? controls : null}
       {executionTenantMissing ? (
         <div className="callout">
           <Info size={18} aria-hidden="true" />
@@ -2316,7 +2597,7 @@ export function SocConsolePage({
         {executionTenantMissing ? (
           <KpiCell label="Kill switch" value="—" delta="Select a tenant" tone="muted" />
         ) : (
-          <KpiCell label="Kill switch" value={killSwitchActive ? 'Armed' : 'Clear'} delta="tenant emergency stop" tone={killSwitchActive ? 'danger' : 'success'} />
+          <KpiCell label="Kill switch" value={killSwitchActive ? 'Active' : 'Clear'} delta="tenant emergency stop" tone={killSwitchActive ? 'danger' : 'success'} />
         )}
       </div>
       <PageContextSummary>
@@ -2334,81 +2615,12 @@ export function SocConsolePage({
           </>
         )}
       </PageContextSummary>
-      <GovernanceFeedbackBanner message={message} error={error} />
-      <div className="dash-grid">
-        <Card density="compact">
-          <CardHeader>
-            <CardTitle>Kill switch</CardTitle>
-            <CardDescription>Tenant-scoped emergency stop across bounded safe runs and governed high-scale adapter execution.</CardDescription>
-          </CardHeader>
-          <CardContent className="stack-tight">
-            <div className="kv-list">
-              <KvField label="Status">
-                {executionTenantMissing
-                  ? <Badge tone="muted">Tenant not selected</Badge>
-                  : <Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Armed' : 'Clear'}</Badge>}
-              </KvField>
-              <KvField label="Reason">{killSwitchReason && !executionTenantMissing ? killSwitchReason : <span className="muted">Not recorded</span>}</KvField>
-            </div>
-            <div className="row-actions">
-              <Button
-                size="sm"
-                variant="danger"
-                loading={busy === 'kill-on'}
-                disabled={Boolean(activateKillSwitchReason)}
-                title={activateKillSwitchReason || undefined}
-                aria-describedby={activateKillSwitchReason ? 'kill-switch-disabled-reason' : undefined}
-                onClick={() => void setKillSwitch(true)}
-              >Activate</Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                loading={busy === 'kill-off'}
-                disabled={Boolean(clearKillSwitchReason)}
-                title={clearKillSwitchReason || undefined}
-                aria-describedby={clearKillSwitchReason ? 'kill-switch-disabled-reason' : undefined}
-                onClick={() => void setKillSwitch(false)}
-              >Clear</Button>
-            </div>
-            {(activateKillSwitchReason || clearKillSwitchReason) ? (
-              <p className="muted text-xs" id="kill-switch-disabled-reason">
-                {executionTenantMissing
-                  ? 'Select an execution tenant before activating or clearing the kill switch.'
-                  : killSwitchActive ? activateKillSwitchReason : clearKillSwitchReason}
-              </p>
-            ) : null}
-            <details className="disclosure">
-              <summary>Validated emergency-stop sequence · {KILL_SWITCH_VALIDATED_SEQUENCE.length} custody-recorded steps</summary>
-              <div className="timeline-list">
-                {KILL_SWITCH_VALIDATED_SEQUENCE.map((step) => (
-                  <div key={step}>
-                    <span aria-hidden="true" />
-                    <div><strong className="mono">{step}</strong></div>
-                  </div>
-                ))}
-              </div>
-            </details>
-          </CardContent>
-        </Card>
-        <Card density="compact">
-          <CardHeader>
-            <CardTitle>Go / No-Go</CardTitle>
-            <CardDescription>Pre-flight gates computed from the current governed queue and tenant safety state.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            {goNoGoGates.map((gate) => (
-              <KvField key={gate.key} label={gate.label}>
-                <Badge tone={gate.tone}>{gate.status}</Badge>
-              </KvField>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+      {staffSocSurface ? null : controls}
       {staffSocSurface ? (
         <Card>
           <CardHeader>
             <CardTitle>Cross-tenant execution</CardTitle>
-            <CardDescription>Governed high-scale requests across all customer tenants, read from the audited staff SOC queue. Open a request for the full lifecycle workspace.</CardDescription>
+            <CardDescription>Governed high-scale requests across all customer tenants, read from the audited staff SOC queue. Running requests are listed first. Open a request for the full lifecycle workspace.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
@@ -2426,8 +2638,8 @@ export function SocConsolePage({
         <CardHeader>
           <CardTitle>High-scale queue</CardTitle>
           <CardDescription>{staffSocSurface
-            ? 'Governed requests for the active execution-tenant context. Open a request for the full lifecycle workspace; quick approve is available when the authorization pack is accepted.'
-            : 'Open a request for the full lifecycle workspace. Quick approve is available here only when the authorization pack is accepted.'}</CardDescription>
+            ? 'Governed requests for the active execution-tenant context. Open a request for the full lifecycle workspace; quick approve is offered for submitted or in-review requests once the authorization pack is accepted.'
+            : 'Open a request for the full lifecycle workspace. Quick approve is offered for submitted or in-review requests once the authorization pack is accepted.'}</CardDescription>
         </CardHeader>
         <CardContent aria-busy={queueRefreshing}>
           <DataTable
@@ -2462,7 +2674,7 @@ export function SocConsolePage({
                   <div key={event.key}>
                     <span>{index + 1}</span>
                     <div>
-                      <strong>{formatGovernanceStatusLabel(event.action)} · <span className="mono">{event.requestId}</span></strong>
+                      <strong>{formatGovernanceStatusLabel(event.action)} · <span title={event.requestId}>{event.objective || 'High-scale request'}</span></strong>
                       <p>{formatDate(event.at)} · {event.by}</p>
                     </div>
                   </div>

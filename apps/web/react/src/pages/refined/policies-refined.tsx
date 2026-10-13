@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { DomainPicker } from '../../components/targets/domain-picker';
 import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
+import { AnchorButton, Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Select, type SelectOption } from '../../components/ui/select';
 import { DataTable, type TableColumn } from '../../components/ui/table';
@@ -22,7 +22,7 @@ import { requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../../lib/route-params';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { plainCheckName, plainVerdictLabel } from '../../lib/plain-language.mjs';
+import { EXPECTED_VERDICT_LABELS, plainCheckName, plainExpectedVerdictLabel } from '../../lib/plain-language.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatNumber } from '../../lib/utils';
 import './policies-refined.css';
@@ -178,6 +178,38 @@ export function scheduleCheck(policy: DataItem, checks: DataItem[]) {
     inCatalog: Boolean(catalog),
     name: plainCheckName(str(catalog ?? embedded, ['name', 'title'], checkId || 'Check not recorded')) as string
   };
+}
+
+const EXPECTED_VERDICT_OPTIONS: SelectOption[] = Object.entries(EXPECTED_VERDICT_LABELS as Record<string, string>)
+  .map(([value, label]) => ({ value, label }));
+
+const OBSERVATION_ONLY_HINT = 'This check records external observations only and cannot prove protection.';
+
+/** Observation-only checks (or evidence tier E2) can only be compared with manual review. */
+export function isObservationOnlyCheck(check: DataItem | null | undefined) {
+  if (!check) return false;
+  const profile = nested(check, 'probe_profile');
+  return check.observation_only === true
+    || check.readiness_conclusion === false
+    || profile.observation_only === true
+    || profile.readiness_conclusion === false
+    || str(check, ['evidence_tier']).toUpperCase() === 'E2';
+}
+
+export function expectedVerdictOptionsFor(check: DataItem | null | undefined): SelectOption[] {
+  if (!isObservationOnlyCheck(check)) return EXPECTED_VERDICT_OPTIONS;
+  return EXPECTED_VERDICT_OPTIONS.filter((option) => option.value === 'manual_review');
+}
+
+/** Observation-only checks always default to manual review, whatever was recorded before. */
+export function editableExpectedVerdict(check: DataItem | null | undefined, recorded: string) {
+  if (isObservationOnlyCheck(check)) return 'manual_review';
+  return recorded || 'pass';
+}
+
+/** A legacy schedule has a check but no exact target binding; it can only be replaced. */
+export function isLegacySchedule(policy: DataItem, checks: DataItem[]) {
+  return !scheduleTarget(policy).targetId && Boolean(scheduleCheck(policy, checks).checkId);
 }
 
 export function scheduleTarget(policy: DataItem) {
@@ -352,7 +384,12 @@ export function ScheduleEditDialog({
 }) {
   const id = rowId(policy);
   const initialCadence = str(policy, ['cadence'], 'manual');
-  const initialVerdict = str(policy, ['expected_verdict'], 'pass');
+  const check = scheduleCheck(policy, checks);
+  const observationOnly = isObservationOnlyCheck(check.record);
+  const recordedVerdict = str(policy, ['expected_verdict']);
+  const savedVerdict = recordedVerdict || 'pass';
+  const initialVerdict = editableExpectedVerdict(check.record, recordedVerdict);
+  const verdictCorrection = observationOnly && recordedVerdict !== '' && recordedVerdict !== initialVerdict;
   const initialTimezone = str(policy, ['timezone'], 'UTC');
   const initialWindowsKey = JSON.stringify(scheduleSafeWindows(policy).map(({ day, start, end }) => ({ day, start, end })));
   const [cadence, setCadence] = useState(initialCadence);
@@ -364,7 +401,6 @@ export function ScheduleEditDialog({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const nextKey = useRef(100);
   const errorId = useId();
-  const check = scheduleCheck(policy, checks);
   const target = scheduleTarget(policy);
   const viewerZone = browserTimezone();
 
@@ -383,16 +419,17 @@ export function ScheduleEditDialog({
   const windowPayload = windows.map(({ day, start, end }) => ({ day, start, end }));
   const changed: Record<string, unknown> = {};
   if (cadence !== initialCadence) changed.cadence = cadence;
-  if (verdict !== initialVerdict) changed.expected_verdict = verdict;
+  if (verdict !== savedVerdict) changed.expected_verdict = verdict;
   if (timezone.trim() !== initialTimezone) changed.timezone = timezone.trim();
   if (JSON.stringify(windowPayload) !== initialWindowsKey || ('timezone' in changed && windows.length > 0)) {
     changed.safe_windows = windowPayload.map((entry) => ({ ...entry, timezone: timezone.trim() }));
   }
   const dirty = Object.keys(changed).length > 0;
+  const editedByViewer = Object.keys(changed).some((key) => key !== 'expected_verdict') || verdict !== initialVerdict;
 
   function requestClose() {
     if (saving) return;
-    if (dirty && !confirmDiscard) {
+    if (editedByViewer && !confirmDiscard) {
       setConfirmDiscard(true);
       return;
     }
@@ -451,12 +488,20 @@ export function ScheduleEditDialog({
           { value: 'weekly', label: 'Weekly' },
           { value: 'monthly', label: 'Monthly' }
         ]} onChange={setCadence} disabled={saving} />
-        <Select label="Expected verdict" name="expected_verdict" value={verdict} options={[
-          { value: 'pass', label: 'Pass' },
-          { value: 'warn', label: 'Warn' },
-          { value: 'fail', label: 'Fail' },
-          { value: 'manual_review', label: 'Manual review' }
-        ]} onChange={setVerdict} disabled={saving} hint="A declaration compared with recorded evidence, not a result." />
+        <Select
+          label="Expected verdict"
+          name="expected_verdict"
+          value={verdict}
+          options={expectedVerdictOptionsFor(check.record)}
+          onChange={setVerdict}
+          disabled={saving}
+          hint={observationOnly ? OBSERVATION_ONLY_HINT : 'A declaration compared with recorded evidence, not a result.'}
+        />
+        {verdictCorrection ? (
+          <p className="rf-help full" role="note" data-testid="schedule-verdict-correction">
+            This schedule recorded &quot;{plainExpectedVerdictLabel(recordedVerdict)}&quot;, which this check cannot prove. Saving records Manual review instead.
+          </p>
+        ) : null}
         <label className="full">
           <span>Schedule timezone (IANA)</span>
           <input
@@ -547,6 +592,7 @@ export function ScheduleActions({
   canWrite,
   onChanged,
   onError,
+  onCreateReplacement,
   compact = false
 }: {
   policy: DataItem;
@@ -556,6 +602,8 @@ export function ScheduleActions({
   canWrite: boolean;
   onChanged: (message: string) => void | Promise<void>;
   onError: (message: string) => void;
+  /** Opens the in-page create form for the same check instead of navigating. */
+  onCreateReplacement?: (checkId: string) => void;
   compact?: boolean;
 }) {
   const { confirm } = useConfirmModal();
@@ -568,6 +616,8 @@ export function ScheduleActions({
   const archived = dispatch.bucket === 'archived';
   const paused = dispatch.bucket === 'paused';
   const recordedState = str(policy, ['state']);
+  const legacy = isLegacySchedule(policy, checks);
+  const legacyCheckId = scheduleCheck(policy, checks).checkId;
   const canTogglePause = recordedState === 'active' || recordedState === 'paused';
   if (!canWrite) return compact ? <span className="muted small">Read only</span> : null;
   if (archived) return compact ? <span className="muted small">Archived</span> : null;
@@ -614,22 +664,39 @@ export function ScheduleActions({
 
   return (
     <div className="row-actions rf-schedule-actions" aria-busy={busy !== '' || undefined}>
-      <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => setEditOpen(true)} aria-label={compact ? `Edit schedule ${name}` : undefined}>Edit</Button>
-      {canTogglePause ? (
+      {legacy ? (
+        <AnchorButton
+          size="sm"
+          variant="default"
+          href={`#test-policies?check=${encodeURIComponent(legacyCheckId)}`}
+          onClick={onCreateReplacement ? (event) => {
+            event.preventDefault();
+            onCreateReplacement(legacyCheckId);
+          } : undefined}
+          aria-label={compact ? `Create replacement for schedule ${name}` : undefined}
+        >
+          Create replacement
+        </AnchorButton>
+      ) : (
+        <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => setEditOpen(true)} aria-label={compact ? `Edit schedule ${name}` : undefined}>Edit</Button>
+      )}
+      {canTogglePause && !legacy ? (
         <Button size="sm" variant="secondary" loading={busy === 'pause' || busy === 'resume'} disabled={busy !== ''} onClick={() => void togglePause()} aria-label={compact ? `${paused ? 'Resume' : 'Pause'} schedule ${name}` : undefined}>
           {paused ? 'Resume' : 'Pause'}
         </Button>
       ) : null}
       <Button size="sm" variant="danger" loading={busy === 'archive'} disabled={busy !== ''} onClick={() => void archive()} aria-label={compact ? `Archive schedule ${name}` : undefined}>Archive</Button>
-      <ScheduleEditDialog
-        policy={policy}
-        checks={checks}
-        config={config}
-        session={session}
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSaved={onChanged}
-      />
+      {legacy ? null : (
+        <ScheduleEditDialog
+          policy={policy}
+          checks={checks}
+          config={config}
+          session={session}
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          onSaved={onChanged}
+        />
+      )}
     </div>
   );
 }
@@ -762,6 +829,7 @@ function CreateSchedulePanel({
               label="Expected verdict"
               value={form.expectedVerdict}
               options={form.verdictOptions}
+              hint={isObservationOnlyCheck(form.selectedCheck) ? OBSERVATION_ONLY_HINT : undefined}
               onChange={form.onExpectedVerdictChange}
             />
             <p className="rf-help full">
@@ -847,7 +915,7 @@ function CreateSchedulePanel({
                 ))}
               </ul>
               <p className="rf-help full">
-                {optionLabel(form.cadenceOptions, form.cadence)} cadence · {timezoneValid ? form.timezone : 'timezone invalid'} · expects {optionLabel(form.verdictOptions, form.expectedVerdict).toLowerCase()} · {formatNumber(selectedCount)} {selectedCount === 1 ? 'record' : 'records'}
+                {optionLabel(form.cadenceOptions, form.cadence)} cadence · {timezoneValid ? form.timezone : 'timezone invalid'} · {plainExpectedVerdictLabel(form.expectedVerdict)} · {formatNumber(selectedCount)} {selectedCount === 1 ? 'record' : 'records'}
               </p>
             </div>
           </div>
@@ -954,7 +1022,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
             {check.checkId ? <span className="rf-mono rf-cell-meta">{check.checkId}</span> : null}
             {str(item, ['expected_verdict']) ? (
               <span className="rf-cell-meta" title="Declared expectation, not observed evidence">
-                Expects: {plainVerdictLabel(str(item, ['expected_verdict']))}
+                Expects: {plainExpectedVerdictLabel(str(item, ['expected_verdict']))}
               </span>
             ) : null}
           </div>
@@ -1014,6 +1082,10 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           session={session}
           canWrite={canWritePolicies}
           compact
+          onCreateReplacement={(checkId) => {
+            props.onCreateSchedule();
+            createForm.onCheckChange(checkId);
+          }}
           onChanged={async (success) => {
             props.onActionResult(success, '');
             await props.onRefresh();
@@ -1089,7 +1161,9 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
         <Stat
           label="Not dispatching"
           value={policiesUnavailable ? 'Unavailable' : formatNumber(counts.blocked)}
-          hint={counts.blocked > 0 ? 'Active but blocked or manual; see the reason per row' : 'No blocked schedules'}
+          hint={policiesUnavailable
+            ? 'Schedule data unavailable'
+            : counts.blocked > 0 ? 'Disabled, blocked, or manual only; see the reason per row' : 'Every live schedule can dispatch'}
         />
         <Stat
           label="Paused"
@@ -1131,8 +1205,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
                   aria-pressed={stateFilter === option.id}
                   onClick={() => setStateFilter(option.id)}
                 >
-                  {option.label}
-                  <span className="rf-segmented-count">{formatNumber(counts[option.id])}</span>
+                  {option.label}{' '}<span className="rf-segmented-count">{formatNumber(counts[option.id])}</span>
                 </button>
               ))}
             </div>
@@ -1157,7 +1230,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
           {!canWritePolicies ? (
             <p className="rf-footnote">
               <Lock size={14} aria-hidden="true" />
-              <span>Read only. Changing schedules requires the test_policy:write permission.</span>
+              <span>Read only. Ask an owner or admin to change schedules.</span>
             </p>
           ) : null}
         </div>

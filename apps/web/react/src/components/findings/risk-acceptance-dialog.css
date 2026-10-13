@@ -1,0 +1,20 @@
+/* Risk acceptance dialog fields. */
+body .risk-acceptance-form .field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+body .risk-acceptance-form textarea,
+body .risk-acceptance-form select,
+body .risk-acceptance-form input[type='date'] {
+  width: 100%;
+  min-height: 44px;
+}
+
+body .risk-acceptance-form .field-error {
+  color: var(--danger);
+}
+
+body .risk-acceptance-form [aria-invalid='true'] {
+  border-color: var(--danger);
+}

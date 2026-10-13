@@ -103,9 +103,9 @@ test.describe('finding-count truth from current React source', () => {
     });
     await expect(page.getByRole('heading', { name: expectedOpenFindingTitle })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Verdict explanation' })).toBeVisible();
-    const severityBadges = page.locator('[title="Recorded severity: Severity 2 · High"]');
+    const severityBadges = page.locator('[title="Recorded severity: High"]');
     await expect(severityBadges).toHaveCount(1);
-    await expect(severityBadges).toHaveText(['Severity 2 · High']);
+    await expect(severityBadges).toHaveText(['High']);
     await page.waitForLoadState('networkidle');
 
     expect(consoleErrors, 'console errors').toEqual([]);

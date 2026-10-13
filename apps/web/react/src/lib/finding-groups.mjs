@@ -24,7 +24,8 @@
  * once per index and cached by record. Summary and filtered grouping that share one index
  * therefore stay linear in the number of findings instead of findings x targets.
  */
-import { findingStatus } from './finding-lifecycle.mjs';
+import { SLA_ACTIVE_STATUSES, findingStatus } from './finding-lifecycle.mjs';
+import { FINDING_STATUS_GROUPS } from './findings-query.mjs';
 import { plainCheckName, plainVerdictLabel } from './plain-language.mjs';
 
 /** Mirrors FINDING_SLA_HOURS in findings-helpers.ts (parity is unit-tested). */
@@ -82,17 +83,28 @@ export function findingGroupSlaHours(severity) {
 
 const SEVERITY_SLA_ALIASES = Object.freeze({ s1: 'critical', s2: 'high', s3: 'medium', moderate: 'medium', s4: 'low' });
 
+const GROUP_BUCKETS = Object.freeze({ active: 'open', decided: 'accepted', closed: 'closed' });
+
+/** One status-to-bucket map for every lifecycle filter, built from the shared status groups. */
+const STATUS_BUCKETS = Object.freeze(Object.fromEntries([
+  ...FINDING_STATUS_GROUPS.flatMap((group) => group.statuses.map((status) => [status, GROUP_BUCKETS[/** @type {'active'} */ (group.id)] ?? 'other'])),
+  ['remediation_pending', 'open'],
+  ['reopened', 'open'],
+]));
+
+/** @param {string} status */
+function bucketOfStatus(status) {
+  return STATUS_BUCKETS[/** @type {keyof typeof STATUS_BUCKETS} */ (status)] ?? 'other';
+}
+
 /**
- * Lifecycle bucket used by the status tabs: open, accepted, closed, or other
- * (for example remediation_pending). Matches the classic queue's tab semantics.
+ * Lifecycle bucket used by the status filters: open (active work: open, in progress,
+ * remediation pending, reopened), accepted (risk decisions), closed (resolved, closed,
+ * false positive), or other (any status the portal does not recognise).
  * @param {unknown} finding
  */
 export function findingStatusBucket(finding) {
-  const status = findingStatus(asRecord(finding));
-  if (status === 'open') return 'open';
-  if (status === 'accepted' || status === 'accepted_risk') return 'accepted';
-  if (status === 'closed' || status === 'resolved') return 'closed';
-  return 'other';
+  return bucketOfStatus(findingStatus(asRecord(finding)));
 }
 
 /** @param {Record<string, unknown>} finding */
@@ -207,14 +219,6 @@ function resolveIndex(context) {
   return record[/** @type {any} */ (INDEX_MARK)] ? /** @type {any} */ (record) : createFindingGroupIndex(/** @type {any} */ (record));
 }
 
-/** @param {string} status */
-function bucketOfStatus(status) {
-  if (status === 'open') return 'open';
-  if (status === 'accepted' || status === 'accepted_risk') return 'accepted';
-  if (status === 'closed' || status === 'resolved') return 'closed';
-  return 'other';
-}
-
 /**
  * @param {Record<string, unknown>} record
  * @param {Record<string, unknown> | null} target
@@ -237,13 +241,15 @@ function issueIdentityOf(record, target, check) {
 }
 
 /**
- * @param {string} bucket
+ * SLA clock for one finding. It runs only while work is active (open or in progress) and
+ * starts at the recorded opening, created_at or opened_at.
+ * @param {string} status normalized lifecycle status
  * @param {Record<string, unknown>} record
  * @param {number} now
  */
-function slaOf(bucket, record, now) {
-  if (bucket !== 'open') return { state: 'inactive', dueAt: null, hoursLeft: null };
-  const created = timestamp(record.created_at);
+function slaOf(status, record, now) {
+  if (!SLA_ACTIVE_STATUSES.includes(status)) return { state: 'inactive', dueAt: null, hoursLeft: null };
+  const created = timestamp(record.created_at ?? record.opened_at);
   if (created === null) return { state: 'undated', dueAt: null, hoursLeft: null };
   const dueAt = created + findingGroupSlaHours(pick(record, ['severity']) || 'low') * HOUR_MS;
   const hoursLeft = Math.round((dueAt - now) / HOUR_MS);
@@ -281,8 +287,9 @@ function findingFacts(record, index) {
     severityRank: findingGroupSeverityRank(severity),
     owner: ownerOf(record),
     opened: timestamp(record.created_at ?? record.opened_at),
-    observed: timestamp(record.updated_at ?? record.last_observed_at ?? record.created_at ?? record.opened_at),
-    sla: slaOf(bucket, record, index.now),
+    observed: timestamp(record.last_observed_at ?? record.created_at ?? record.opened_at),
+    lastObserved: timestamp(record.last_observed_at),
+    sla: slaOf(status, record, index.now),
     asset: assetIdentity(record, target, index.groupsById)
   };
   index.facts.set(record, facts);
@@ -347,14 +354,14 @@ export function findingGroupHref(key) {
 }
 
 /**
- * SLA position of one finding, from its recorded severity and created_at.
- * Only open findings carry an SLA clock, matching computeFindingKpis.
+ * SLA position of one finding, from its recorded severity and created_at (or opened_at).
+ * Only open and in-progress findings carry an SLA clock.
  * @param {unknown} finding
  * @param {number} [now]
  */
 export function findingSlaState(finding, now = Date.now()) {
   const record = asRecord(finding);
-  return slaOf(findingStatusBucket(record), record, now);
+  return slaOf(findingStatus(record), record, now);
 }
 
 /** @param {Record<string, unknown>} finding */
@@ -453,7 +460,9 @@ function buildGroup(key, entries) {
   let earliestOpenedAt = null;
   let latestOpenedAt = null;
   let lastObservedAt = null;
+  let firstObservedAt = null;
   let nearestSlaDueAt = null;
+  let slaActiveCount = 0;
   let slaBreachCount = 0;
   let openDatedCount = 0;
   let openUndatedCount = 0;
@@ -474,9 +483,11 @@ function buildGroup(key, entries) {
       if (earliestOpenedAt === null || facts.opened < earliestOpenedAt) earliestOpenedAt = facts.opened;
       if (latestOpenedAt === null || facts.opened > latestOpenedAt) latestOpenedAt = facts.opened;
     }
-    if (facts.observed !== null && (lastObservedAt === null || facts.observed > lastObservedAt)) lastObservedAt = facts.observed;
+    if (facts.lastObserved !== null && (lastObservedAt === null || facts.lastObserved > lastObservedAt)) lastObservedAt = facts.lastObserved;
+    if (facts.opened !== null && (firstObservedAt === null || facts.opened < firstObservedAt)) firstObservedAt = facts.opened;
 
     const sla = facts.sla;
+    if (sla.state !== 'inactive') slaActiveCount += 1;
     if (sla.state === 'breached') slaBreachCount += 1;
     if (sla.state === 'undated') openUndatedCount += 1;
     else if (sla.dueAt !== null) openDatedCount += 1;
@@ -552,7 +563,9 @@ function buildGroup(key, entries) {
     earliestOpenedAt: iso(earliestOpenedAt),
     latestOpenedAt: iso(latestOpenedAt),
     lastObservedAt: iso(lastObservedAt),
+    firstObservedAt: iso(firstObservedAt),
     nearestSlaDueAt: iso(nearestSlaDueAt),
+    slaActiveCount,
     slaBreachCount,
     hasSlaBreach: slaBreachCount > 0,
     openDatedCount,
@@ -606,14 +619,14 @@ export function assetMembersInLifecycle(asset, lifecycle) {
 
 /**
  * Group-level SLA assessment that keeps unknown deadlines visible instead of reporting
- * them as within SLA.
- *   state: breached | due_soon | on_track | unknown (open members, none dated) | inactive (no open members)
- *   assessment: complete | partial (some open members undated) | unknown (all undated) | none (no open members)
- * @param {{ openCount?: number; slaBreachCount?: number; nearestSlaDueAt?: string | null; openDatedCount?: number; openUndatedCount?: number }} group
+ * them as within SLA. Active members are open or in progress; only they carry a clock.
+ *   state: breached | due_soon | on_track | unknown (active members, none dated) | inactive (no active members)
+ *   assessment: complete | partial (some active members undated) | unknown (all undated) | none (no active members)
+ * @param {{ slaActiveCount?: number; openCount?: number; slaBreachCount?: number; nearestSlaDueAt?: string | null; openDatedCount?: number; openUndatedCount?: number }} group
  * @param {number} [now]
  */
 export function groupSlaSummary(group, now = Date.now()) {
-  const openCount = group?.openCount ?? 0;
+  const openCount = group?.slaActiveCount ?? group?.openCount ?? 0;
   const breachCount = group?.slaBreachCount ?? 0;
   const undated = group?.openUndatedCount ?? 0;
   const dated = group?.openDatedCount ?? Math.max(0, openCount - undated);
@@ -706,4 +719,81 @@ export function matchesFindingFilters(finding, filters, options = {}) {
     options.searchText ? options.searchText(record) : ''
   ].join(' ').toLowerCase();
   return haystack.includes(needle);
+}
+
+/**
+ * The machine-recorded explanation and the human triage notes as separate, labelled sections.
+ * Machine text lives in system_summary; notes are only what a person typed.
+ * @param {unknown} finding
+ */
+export function findingNoteSections(finding) {
+  const record = asRecord(finding);
+  const summary = typeof record.system_summary === 'string' ? record.system_summary.trim() : '';
+  const notes = typeof record.notes === 'string' ? record.notes.trim() : '';
+  const sections = [];
+  if (summary) sections.push({ id: 'recorded', label: 'Recorded explanation', text: summary });
+  if (notes) sections.push({ id: 'triage', label: 'Triage notes', text: notes });
+  return sections;
+}
+
+/**
+ * Member findings a bulk action would touch: every member of each selected asset that is in
+ * the active lifecycle filter, de-duplicated by finding id, in asset order.
+ * @param {Array<{ key: string; members?: Array<{ findingId: string; statusBucket: string }> }> | null | undefined} assets
+ * @param {Iterable<string> | null | undefined} selectedKeys
+ * @param {string} lifecycle
+ */
+export function bulkSelectionMembers(assets, selectedKeys, lifecycle) {
+  const keys = new Set(selectedKeys ?? []);
+  /** @type {any[]} */
+  const members = [];
+  const seen = new Set();
+  for (const asset of Array.isArray(assets) ? assets : []) {
+    if (!keys.has(asset.key)) continue;
+    for (const member of assetMembersInLifecycle(/** @type {any} */ (asset), lifecycle)) {
+      if (!member.findingId || seen.has(member.findingId)) continue;
+      seen.add(member.findingId);
+      members.push(member);
+    }
+  }
+  return members;
+}
+
+/**
+ * Split selected members into those a bulk action changes and those already in its target
+ * state, so no PATCH is sent for a no-op.
+ * @param {Array<{ findingId: string; status: string; owner: string }>} members
+ * @param {{ kind: 'assign'; assignee: string } | { kind: 'accept_risk' } | { kind: 'close'; status: string }} action
+ */
+export function planBulkFindingAction(members, action) {
+  const apply = [];
+  const skip = [];
+  for (const member of Array.isArray(members) ? members : []) {
+    let unchanged = false;
+    if (action.kind === 'assign') unchanged = String(member.owner ?? '').trim() === String(action.assignee ?? '').trim();
+    else if (action.kind === 'accept_risk') unchanged = member.status === 'accepted_risk';
+    else if (action.kind === 'close') unchanged = member.status === action.status;
+    (unchanged ? skip : apply).push(member);
+  }
+  return { apply, skip };
+}
+
+/**
+ * Plain-language result line for a bulk action.
+ * @param {{ updated: number; skipped: number; failed: number }} counts
+ */
+export function bulkFindingResultSummary(counts) {
+  return `Updated ${counts.updated}, skipped ${counts.skipped}, failed ${counts.failed}`;
+}
+
+/**
+ * Notes for a reasoned decision: the existing triage notes, then one labelled reason line.
+ * @param {unknown} notes
+ * @param {string} label
+ * @param {string} reason
+ */
+export function findingDecisionNote(notes, label, reason) {
+  const existing = typeof notes === 'string' ? notes.trim() : '';
+  const line = `${label}: ${String(reason ?? '').trim()}`;
+  return existing ? `${existing}\n\n${line}` : line;
 }

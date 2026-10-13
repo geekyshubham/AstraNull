@@ -1,0 +1,79 @@
+body .finding-triage-card .finding-triage-group-label {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+body .finding-triage-card .finding-recorded-explanation {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+body .finding-triage-card .finding-recorded-explanation p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+body .finding-triage-card .finding-recorded-explanation small {
+  color: var(--muted-text);
+}
+
+body .finding-triage-card .finding-decision-group {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+body .finding-triage-card .finding-decision-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+body .finding-triage-card .finding-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+body .finding-decision-actions .btn.finding-accept-risk-btn {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+body .finding-decision-actions .btn.finding-accept-risk-btn:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in oklab, var(--danger), transparent 90%);
+  color: var(--danger);
+}
+
+body .finding-decision-actions .btn.finding-accept-risk-btn:active:not(:disabled) {
+  background: color-mix(in oklab, var(--danger), transparent 84%);
+}
+
+body .finding-decision-actions .btn.finding-accept-risk-btn:focus-visible {
+  outline-color: var(--danger);
+}
+
+body .finding-triage-card .finding-notes-value {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  body .finding-triage-card .finding-decision-actions > .btn {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+}

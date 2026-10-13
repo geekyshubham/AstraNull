@@ -78,7 +78,7 @@ function formatProbeResultEntry(eventId, at, metadata, producerKind, row) {
   // Only the separately published verdict supplies a protection outcome.
   const summary = simulated ? 'Simulation result; no target traffic' : 'Worker result recorded';
   return entry(safeText(eventId), at, 'recv', simulated ? 'SIMULATION' : 'RECV',
-    `${summary}${extResult ? `: ${extResult}` : ''}${statusStr}`, {
+    `${summary}${extResult ? `: ${extResult}` : ''}${statusStr} (probe observation, not a verdict)`, {
       checkId: row?.checkId,
       tone: 'info',
       ...(statusCode !== null ? { statusCode } : {}),

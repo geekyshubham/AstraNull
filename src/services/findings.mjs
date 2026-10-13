@@ -36,6 +36,7 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   );
   if (existing) {
     existing.last_verdict_id = verdict.id;
+    existing.system_summary = verdict.explanation ?? existing.system_summary ?? null;
     existing.updated_at = new Date().toISOString();
     audit({
       tenant_id: ctx.tenantId,
@@ -60,7 +61,8 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
     severity: verdict.severity ?? 'medium',
     status: 'open',
     assignee: null,
-    notes: verdict.explanation,
+    notes: null,
+    system_summary: verdict.explanation ?? null,
     evidence_ids: verdict.evidence_ids,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -220,6 +222,7 @@ export function getFinding(ctx, id) {
     && item.check_id === row.check_id);
   const presented = presentFindingLineage({ finding: row, runs, lineage, siblings });
   view.closed_at = row.closed_at ?? null;
+  view.risk_acceptance = row.risk_acceptance ?? null;
   view.lineage = presented;
   view.retests = presented.retests;
   view.originating = presented.originating;
@@ -230,9 +233,10 @@ export function getFinding(ctx, id) {
 export function patchFinding(ctx, id, body) {
   const f = findFindingRow(ctx, id);
   if (!f) return null;
-  const planned = planFindingPatch(body);
+  const planned = planFindingPatch(body, ctx, { findingId: id });
   if (planned.error) return planned;
   if (planned.patch.status) f.status = planned.patch.status;
+  if (planned.patch.risk_acceptance !== undefined) f.risk_acceptance = planned.patch.risk_acceptance;
   if (planned.patch.closed_at === null) f.closed_at = null;
   else if (planned.patch.closed_at && !f.closed_at) f.closed_at = planned.patch.closed_at;
   if (body.assignee !== undefined) f.assignee = body.assignee;

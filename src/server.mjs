@@ -65,7 +65,8 @@ import {
   queryDeclaredHostAnalytics,
 } from './services/declaredHostAnalytics.mjs';
 import { DeclaredHostQueryError } from './lib/declaredHostAnalytics.mjs';
-import { AuditQueryError } from './persistence/postgres/auditRepository.mjs';
+import { AuditQueryError, MAX_AUDIT_LIST_LIMIT } from './persistence/postgres/auditRepository.mjs';
+import { buildCustodyManifest } from './lib/custody.mjs';
 import { attachConfigurationContext, deriveProtectionProfile } from './services/protectionProfile.mjs';
 import {
   assessComparability,
@@ -464,6 +465,13 @@ function blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)
 
 function blockPostgresAuditLogRoute(runtimeConfig, serviceDeps, path, method, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
+  if (path === AUDIT_EXPORT_PATH) {
+    if (method !== 'GET') return false;
+    const reader = serviceDeps.state?.queryAuditEntries ?? serviceDeps.audit?.queryAuditEntries;
+    if (typeof reader === 'function' && typeof serviceDeps.audit?.appendAuditEvent === 'function') return false;
+    respondPostgresRouteNotWired(res);
+    return true;
+  }
   const exact = path === '/v1/audit-log';
   const one = /^\/v1\/audit-log\/[^/]+$/.test(path);
   if (method !== 'GET' || (!exact && !one)) return false;
@@ -569,6 +577,88 @@ const AUDIT_QUERY_ALIASES = Object.freeze([
   ['from', 'since'],
   ['to', 'until'],
 ]);
+
+const AUDIT_EXPORT_PATH = '/v1/audit-log/export';
+const AUDIT_EXPORT_MAX_ROWS = 10_000;
+const AUDIT_EXPORT_FILTER_KEYS = Object.freeze(['resource', 'actor', 'action', 'since', 'until']);
+
+function auditExportRow(entry) {
+  return {
+    id: entry.id,
+    timestamp: entry.timestamp ?? entry.created_at ?? null,
+    actor_user_id: entry.actor_user_id ?? null,
+    action: entry.action,
+    resource_type: entry.resource_type ?? null,
+    resource_id: entry.resource_id ?? null,
+    sequence: entry.sequence ?? null,
+    prev_hash: entry.prev_hash ?? null,
+    entry_hash: entry.entry_hash ?? null,
+    metadata: entry.metadata ?? {},
+  };
+}
+
+function compareAuditExportRows(left, right) {
+  const leftSeq = Number(left.sequence);
+  const rightSeq = Number(right.sequence);
+  if (Number.isFinite(leftSeq) && Number.isFinite(rightSeq) && leftSeq !== rightSeq) return leftSeq - rightSeq;
+  const leftAt = String(left.timestamp ?? '');
+  const rightAt = String(right.timestamp ?? '');
+  if (leftAt !== rightAt) return leftAt < rightAt ? -1 : 1;
+  return String(left.id) < String(right.id) ? -1 : String(left.id) > String(right.id) ? 1 : 0;
+}
+
+/**
+ * Filtered, tenant-scoped audit export with every entry's hash and previous hash, so an auditor
+ * can check the chain offline. Pages internally and refuses more than AUDIT_EXPORT_MAX_ROWS rows.
+ */
+async function exportAuditLog(ctx, query, queryFn, recordAudit) {
+  for (const key of ['cursor', 'limit', 'envelope']) {
+    if (query[key] != null && query[key] !== '') {
+      throw new AuditQueryError('unknown_query_param', `Export pages internally; remove "${key}".`);
+    }
+  }
+  const filters = {};
+  for (const key of AUDIT_EXPORT_FILTER_KEYS) {
+    if (query[key] != null && query[key] !== '') filters[key] = query[key];
+  }
+  const rows = [];
+  const seen = new Set();
+  let cursor = null;
+  do {
+    const page = await queryFn(ctx, { ...filters, limit: MAX_AUDIT_LIST_LIMIT, ...(cursor ? { cursor } : {}) });
+    if (typeof page?.total === 'number' && page.total > AUDIT_EXPORT_MAX_ROWS) return { tooLarge: true, total: page.total };
+    for (const entry of Array.isArray(page?.items) ? page.items : []) {
+      if (!entry || entry.tenant_id !== ctx.tenantId || seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      rows.push(auditExportRow(entry));
+    }
+    if (rows.length > AUDIT_EXPORT_MAX_ROWS) return { tooLarge: true, total: rows.length };
+    cursor = page?.next_cursor ?? null;
+  } while (cursor);
+  rows.sort(compareAuditExportRows);
+  const exportedAt = new Date().toISOString();
+  const content = { exported_at: exportedAt, filters, count: rows.length, items: rows };
+  const custody = buildCustodyManifest({
+    tenant_id: ctx.tenantId,
+    artifact_type: 'audit_log_export',
+    artifact_id: `audit_export_${exportedAt}`,
+    format: 'json',
+    created_by: ctx.userId ?? null,
+    content,
+    subject_ids: [],
+    created_at: exportedAt,
+  });
+  await recordAudit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action: 'audit.exported',
+    resource_type: 'audit_log',
+    resource_id: custody.artifact_id,
+    metadata: { filters, count: rows.length, content_sha256: custody.content_sha256 },
+  });
+  return { body: { ...content, custody } };
+}
 
 function normalizeAuditRouteQuery(query) {
   const next = { ...query };
@@ -3823,6 +3913,34 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
         return respondPostgresRouteNotWired(res);
       }
       return json(res, 200, state.queryAuditEntries(ctx, query));
+    } catch (error) {
+      return queryFailure(res, error);
+    }
+  }
+  if (path === AUDIT_EXPORT_PATH && method === 'GET') {
+    const gate = requirePermission(ctx, 'audit:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockPostgresAuditLogRoute(runtimeConfig, serviceDeps, path, method, res)) return;
+    const postgres = runtimeConfig.persistenceMode === 'postgres';
+    const queryFn = postgres
+      ? (serviceDeps.state?.queryAuditEntries ?? serviceDeps.audit?.queryAuditEntries)
+      : state.queryAuditEntries;
+    const recordAudit = postgres
+      ? serviceDeps.audit?.appendAuditEvent?.bind(serviceDeps.audit)
+      : appendDevAudit;
+    if (typeof queryFn !== 'function' || typeof recordAudit !== 'function') return respondPostgresRouteNotWired(res);
+    try {
+      const query = normalizeAuditRouteQuery(searchParamsObject(url));
+      const result = await exportAuditLog(ctx, query, queryFn, recordAudit);
+      if (result.tooLarge) {
+        return json(res, 400, {
+          error: 'export_too_large',
+          message: `Narrow the filters: an export holds at most ${AUDIT_EXPORT_MAX_ROWS} entries.`,
+          max_rows: AUDIT_EXPORT_MAX_ROWS,
+          total: result.total,
+        });
+      }
+      return json(res, 200, result.body);
     } catch (error) {
       return queryFailure(res, error);
     }

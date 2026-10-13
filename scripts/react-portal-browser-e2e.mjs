@@ -31,7 +31,6 @@ const ROUTES = [
   'report-detail',
   'notifications',
   'audit',
-  'release-evidence',
   'settings',
   'support',
   'subscription',

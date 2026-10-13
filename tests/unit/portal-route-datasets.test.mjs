@@ -9,9 +9,12 @@ import {
 describe('portal route dataset policy', () => {
   it('covers every real route and reserves an empty dataset for unknown locations', () => {
     const routeIds = [...NAV_ITEMS, ...DETAIL_ROUTE_ITEMS].map((item) => item.id).sort();
-    const datasetRouteIds = Object.keys(PORTAL_ROUTE_DATASETS).filter((id) => id !== 'not-found').sort();
+    // release-evidence keeps its RouteId but has no portal route (docs/ux/14 §3.1), so it hydrates nothing.
+    const retired = new Set(['not-found', 'release-evidence']);
+    const datasetRouteIds = Object.keys(PORTAL_ROUTE_DATASETS).filter((id) => !retired.has(id)).sort();
     assert.deepEqual(datasetRouteIds, routeIds);
     assert.deepEqual(PORTAL_ROUTE_DATASETS['not-found'], []);
+    assert.deepEqual(PORTAL_ROUTE_DATASETS['release-evidence'], []);
   });
 
   it('places direct Targets in scope with bounded inventory hydration', () => {
@@ -20,7 +23,8 @@ describe('portal route dataset policy', () => {
 
     assert.notEqual(targetsIndex, -1);
     assert.equal(NAV_ITEMS.some((item) => item.id === 'target-groups'), false);
-    assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets']);
+    // Runs and findings feed the Last validation and open-finding columns per target_id.
+    assert.deepEqual(PORTAL_ROUTE_DATASETS.targets, ['targets', 'runs', 'findings']);
   });
 
   it('never hydrates a customer target-group dataset on any route', () => {

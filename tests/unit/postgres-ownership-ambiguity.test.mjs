@@ -1,12 +1,22 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { createOwnershipVerificationRepository } from '../../src/persistence/postgres/ownershipVerificationRepository.mjs';
-import { isDemoAutoVerifyTenant } from '../../src/lib/demoAutoVerify.mjs';
+import { DEMO_AUTO_VERIFY_ENV, isDemoAutoVerifyTenant } from '../../src/lib/demoAutoVerify.mjs';
 
 const CTX = { tenantId: 'Astra-chronology-fixture', userId: 'usr_owner', role: 'owner' };
 const AMBIGUOUS = { id: 'tv_ambiguous', tenant_id: CTX.tenantId, target_id: 'tgt_ambiguous',
   state: 'pending', source_kind: 'ownership_ambiguous', source_ref: {},
   transitioned_at: new Date('2026-10-10T00:00:00.000Z') };
+
+let previousDemoTenants;
+before(() => {
+  previousDemoTenants = process.env[DEMO_AUTO_VERIFY_ENV];
+  process.env[DEMO_AUTO_VERIFY_ENV] = CTX.tenantId;
+});
+after(() => {
+  if (previousDemoTenants === undefined) delete process.env[DEMO_AUTO_VERIFY_ENV];
+  else process.env[DEMO_AUTO_VERIFY_ENV] = previousDemoTenants;
+});
 
 function recordingPool(handler) {
   const queries = [];

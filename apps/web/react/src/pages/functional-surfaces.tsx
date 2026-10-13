@@ -60,7 +60,7 @@ import {
   roadmapTierMeta,
   roadmapTotalItems
 } from '../lib/waf-helpers';
-import { cn, formatDate, formatRunDuration, pluralize, scoreTone, tailTruncateId } from '../lib/utils';
+import { cn, formatDate, formatNumber, formatRunDuration, pluralize, scoreTone, tailTruncateId } from '../lib/utils';
 import { useTransitionKey } from '../lib/motion';
 import { runStatusTone as runStatusBadgeTone, verdictTone } from '../lib/status-tone';
 import type { ProgressTone } from '../components/ui/progress';
@@ -70,7 +70,6 @@ import { VariantSwitch } from '../components/ui/variant-switch';
 import { RunsRefined, type RunsRefinedProps } from './refined/runs-refined';
 import { FindingsRefined, type FindingsRefinedProps } from './refined/findings-refined';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
-import { sessionHasPermission } from '../lib/dataset-access.mjs';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainVerdictLabel } from '../lib/plain-language.mjs';
 
@@ -132,7 +131,7 @@ function formatVectorFamilyLabel(family: string) {
 
 function formatSafetyClassLabel(safetyClass: string) {
   if (safetyClass === 'safe') return 'Customer-runnable';
-  if (safetyClass === 'soc_gated') return 'Governed request-only';
+  if (safetyClass === 'soc_gated') return 'SOC-governed';
   return safetyClass.replace(/_/g, ' ');
 }
 
@@ -345,9 +344,10 @@ function ensureFunctionalSurfaceStyles() {
 .catalog-check-primary strong { color: var(--fg); }
 .catalog-check-primary small, .catalog-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }
 .validation-catalog-table .data-table { min-width: 1040px; }
-.validation-runs-table .data-table { min-width: 1180px; }
+.validation-runs-table .data-table { min-width: 960px; }
 .validation-runs-table td code.traffic-path-label { display: block; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.validation-runs-table td code.run-id-label { max-width: none; overflow: visible; text-overflow: clip; }
+.validation-runs-table .run-check-cell strong { color: var(--fg); font-weight: 500; }
+.validation-runs-table .run-check-cell code.run-id-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .validation-runs-page .catalog-filter-grid .field > span:first-child { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--meta); }
 @media (max-width: 900px) { .catalog-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .catalog-search-field { grid-column: 1 / -1; } }
 @media (max-width: 620px) { .catalog-filter-grid { grid-template-columns: minmax(0, 1fr); } .catalog-search-field { grid-column: auto; } }
@@ -753,9 +753,10 @@ export function ValidationSurfacePage({
   onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
-  // Both hooks run unconditionally (rules of hooks); each page keeps its own preference.
-  const [runsVariant, setRunsVariant] = useDesignVariant('runs');
-  const [findingsVariant, setFindingsVariant] = useDesignVariant('findings');
+  const showVariantSwitch = session.principal === 'staff';
+  // Both hooks run unconditionally (rules of hooks); only staff persist a layout preference.
+  const [runsVariant, setRunsVariant] = useDesignVariant('runs', { persist: showVariantSwitch });
+  const [findingsVariant, setFindingsVariant] = useDesignVariant('findings', { persist: showVariantSwitch });
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -772,7 +773,6 @@ export function ValidationSurfacePage({
   const [exportPartialMissCount, setExportPartialMissCount] = useState(0);
   const [clipboardNotice, setClipboardNotice] = useState('');
   const [runStatusFilter, setRunStatusFilter] = useState('all');
-  const [showSocRequestForm, setShowSocRequestForm] = useState(false);
   const [cancelRunId, setCancelRunId] = useState('');
   const [finalizeRunId, setFinalizeRunId] = useState('');
   const [scanLauncher, setScanLauncher] = useState<{ mode: ScanLauncherMode; scan: DataItem | null } | null>(null);
@@ -782,7 +782,6 @@ export function ValidationSurfacePage({
   const inFlightRuns = data.runs.filter((run) => isCancellableRunStatus(getString(run, ['status'], '')));
   const activeScans = data.validationScans.filter((scan) => isScanActive(scan));
   const canManageScans = canStartRun(session.role);
-  const canRequestHighScale = sessionHasPermission(session, 'high_scale:request');
 
   const checkSafetyCounts = useMemo(() => countChecksBySafetyScope(data.checks), [data.checks]);
   const filteredChecks = useMemo(
@@ -1089,12 +1088,18 @@ export function ValidationSurfacePage({
     const runColumns: TableColumn<DataItem>[] = [
       {
         key: 'run',
-        label: 'Run',
+        label: 'Check',
         render: (item) => {
+          const runId = getString(item, ['id'], '');
           const scanId = getString(item, ['scan_id'], '');
+          const checkCount = getNumber(item, ['check_count'], -1);
+          const checkLabel = checkCount >= 0
+            ? `${formatNumber(checkCount)} ${pluralize(checkCount, 'check')}`
+            : checkDisplayName(data.checks, getString(item, ['check_id'], ''), runId);
           return (
-            <span className="catalog-cell-stack">
-              <code className="traffic-path-label run-id-label" title={getString(item, ['id'])}>{tailTruncateId(getString(item, ['id']))}</code>
+            <span className="catalog-cell-stack run-check-cell">
+              <strong>{checkLabel}</strong>
+              {runId ? <code className="run-id-label" title={runId}>{tailTruncateId(runId)}</code> : null}
               {scanId ? (
                 <a className="scan-link small" href={buildDetailHref('scan-detail', scanId)} aria-label={`Open parent scan ${scanId}`} onClick={(event) => event.stopPropagation()}>Scan</a>
               ) : null}
@@ -1108,28 +1113,15 @@ export function ValidationSurfacePage({
         render: (item) => getString(data.targets.find((target) => getString(target, ['id']) === getString(item, ['target_id'])), ['value'], getString(item, ['target_id']))
       },
       {
-        key: 'checks',
-        label: 'Checks',
+        key: 'verdict',
+        label: 'Verdict',
         render: (item) => {
-          const checkCount = getNumber(item, ['check_count'], -1);
-          if (checkCount >= 0) return <span className="num tabular-nums">{checkCount}</span>;
-          return checkDisplayName(data.checks, getString(item, ['check_id']), getString(item, ['id']));
-        }
-      },
-      {
-        key: 'mode',
-        label: 'Mode',
-        render: (item) => {
-          const checkId = getString(item, ['check_id'], '');
-          const check = data.checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
-          const safetyClass = getString(check ?? {}, ['safety_class'], '');
-          const tier = getString(check ?? {}, ['evidence_tier'], '');
-          return safetyClass ? (
-            <span className="catalog-cell-stack">
-              <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>
-              {tier ? <small>{tier}</small> : null}
-            </span>
-          ) : <span className="muted">—</span>;
+          const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? getRunVerdictValue(item) : '';
+          if (!verdict) return <span className="muted">No result yet</span>;
+          const verdictRecord = getNestedItem(item, ['verdict']);
+          const rawConfidence = getNumber(verdictRecord ?? {}, ['confidence_pct', 'confidence'], -1);
+          const confidence = rawConfidence < 0 ? '' : rawConfidence <= 1 ? `${Math.round(rawConfidence * 100)}% confidence` : `${Math.round(rawConfidence)}% confidence`;
+          return <span className="catalog-cell-stack"><Badge tone={verdictTone(verdict)} title="Evidence-backed run verdict">{plainVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
         }
       },
       {
@@ -1153,26 +1145,30 @@ export function ValidationSurfacePage({
         }
       },
       {
-        key: 'verdict',
-        label: 'Verdict',
+        key: 'started',
+        label: 'Started',
+        render: (item) => <span className="muted">{formatDate(item.started_at ?? item.created_at)}</span>
+      },
+      {
+        key: 'mode',
+        label: 'Mode',
         render: (item) => {
-          const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? getRunVerdictValue(item) : '';
-          if (!verdict) return <span className="muted">No result yet</span>;
-          const verdictRecord = getNestedItem(item, ['verdict']);
-          const rawConfidence = getNumber(verdictRecord ?? {}, ['confidence_pct', 'confidence'], -1);
-          const confidence = rawConfidence < 0 ? '' : rawConfidence <= 1 ? `${Math.round(rawConfidence * 100)}% confidence` : `${Math.round(rawConfidence)}% confidence`;
-          return <span className="catalog-cell-stack"><Badge tone={verdictTone(verdict)} title="Evidence-backed run verdict">{plainVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
+          const checkId = getString(item, ['check_id'], '');
+          const check = data.checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
+          const safetyClass = getString(check ?? {}, ['safety_class'], '');
+          const tier = getString(check ?? {}, ['evidence_tier'], '');
+          return safetyClass ? (
+            <span className="catalog-cell-stack">
+              <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>
+              {tier ? <small>{tier}</small> : null}
+            </span>
+          ) : <span className="muted">—</span>;
         }
       },
       {
         key: 'duration',
         label: 'Duration',
         render: (item) => <code className="traffic-path-label">{formatRunDuration(item)}</code>
-      },
-      {
-        key: 'started',
-        label: 'Started',
-        render: (item) => <span className="muted">{formatDate(item.started_at ?? item.created_at)}</span>
       },
       {
         key: 'actions',
@@ -1278,7 +1274,7 @@ export function ValidationSurfacePage({
       icon: Activity,
       title: 'No test runs yet.',
       body: 'Start a validation run after declaring target scope.',
-      actionLabel: 'Open vector library',
+      actionLabel: 'Open check library',
       onAction: () => { window.location.hash = '#checks'; }
     });
     const runModals = (
@@ -1296,7 +1292,7 @@ export function ValidationSurfacePage({
         <ConfirmModal
           open={Boolean(finalizeRunId)}
           title="Force finalize this run now?"
-          description={<p>This locks the verdict.</p>}
+          description={<p>Publishes a verdict from the signed probe evidence already recorded for this run. The run must have probe evidence and a closed observation window. The published verdict cannot be changed.</p>}
           confirmLabel="Force finalize"
           busy={busy === `finalize-${finalizeRunId}`}
           onCancel={() => setFinalizeRunId('')}
@@ -1334,7 +1330,7 @@ export function ValidationSurfacePage({
         message,
         error,
         canManageScans,
-        canRequestHighScale,
+        showVariantSwitch,
         inFlightRunCount: inFlightRuns.length,
         activeScanCount: activeScans.length,
         liveCounts,
@@ -1365,7 +1361,7 @@ export function ValidationSurfacePage({
           description="Review safe checks and direct validation runs with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
           actions={(
             <>
-              <VariantSwitch value={runsVariant} onChange={setRunsVariant} />
+              {showVariantSwitch ? <VariantSwitch value={runsVariant} onChange={setRunsVariant} /> : null}
               {runHeadActions}
             </>
           )}
@@ -1380,10 +1376,11 @@ export function ValidationSurfacePage({
         ) : null}
         {!canOpenVectorLibrary && startDisabledReason ? (
           <div className="form-banner neutral" role="note">
-            Open the vector library once ready — {startDisabledReason}
+            Open the check library once ready — {startDisabledReason}
           </div>
         ) : null}
         <MutationFeedbackBanner message={message} error={error} neutral />
+        {runSocGatePanel}
         <Card className="validation-scans-card">
           <CardHeader>
             <div><CardTitle>Validation scans</CardTitle><CardDescription>Multi-check scans run one bounded child run at a time. Scheduled scans dispatch at their planned time and stay editable until then.</CardDescription></div>
@@ -1416,7 +1413,6 @@ export function ValidationSurfacePage({
             />
           </CardContent>
         </Card>
-        {runSocGatePanel}
         {runModals}
       </div>
     );
@@ -1432,6 +1428,7 @@ export function ValidationSurfacePage({
         session,
         variant: findingsVariant,
         onVariantChange: setFindingsVariant,
+        showVariantSwitch,
         busy,
         message,
         error,
@@ -1449,7 +1446,7 @@ export function ValidationSurfacePage({
           description="Every finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path."
           actions={(
             <>
-              <VariantSwitch value={findingsVariant} onChange={setFindingsVariant} />
+              {showVariantSwitch ? <VariantSwitch value={findingsVariant} onChange={setFindingsVariant} /> : null}
               <Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>
             </>
           )}

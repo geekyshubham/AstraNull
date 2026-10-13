@@ -1,4 +1,4 @@
-import { normalizeStoredProtectionConfig } from '../lib/connectorProviders/common.mjs';
+import { computeConfigHash, hashRef, normalizeStoredProtectionConfig } from '../lib/connectorProviders/common.mjs';
 import {
   audit,
   getLatestChainedAuditEntry,
@@ -25,6 +25,7 @@ import {
   WAF_EXPECTED_ACTIONS,
   WAF_SCENARIO_FAMILIES,
   WAF_SCENARIO_INTAKE_STAGES,
+  buildWafPostureFindingSummary,
 } from '../contracts/wafPosture.mjs';
 import {
   normalizeTargetInput,
@@ -272,25 +273,6 @@ function wafPostureFindingTitle({ postureStatus, canonicalUrl }) {
   return `WAF posture ${postureStatus}: ${url}`;
 }
 
-function wafPostureFindingNotes({
-  postureStatus,
-  reasonCodes,
-  wafAssetId,
-  wafValidationRunId,
-  lastWafValidationRunId,
-}) {
-  const codes = (reasonCodes ?? []).filter(Boolean).join(', ') || 'none';
-  const lines = [
-    `Posture status: ${postureStatus}.`,
-    `Reason codes: ${codes}.`,
-    `WAF asset id: ${wafAssetId}.`,
-    `WAF validation run id: ${wafValidationRunId}.`,
-    `Last WAF validation run id: ${lastWafValidationRunId}.`,
-    'Retest: run a safe marker validation after WAF rule or edge changes.',
-  ];
-  return lines.join(' ');
-}
-
 function findOpenWafPostureFinding(ctx, asset) {
   const checkId = wafPostureCheckId(asset.id);
   const targetId = assetTargetIdForFinding(asset);
@@ -337,7 +319,7 @@ function upsertWafPostureFinding(ctx, {
     postureStatus,
     canonicalUrl: asset.canonical_url,
   });
-  const notes = wafPostureFindingNotes({
+  const systemSummary = buildWafPostureFindingSummary({
     postureStatus,
     reasonCodes: classification.reason_codes,
     wafAssetId: asset.id,
@@ -358,7 +340,7 @@ function upsertWafPostureFinding(ctx, {
     existing.last_waf_validation_run_id = validationRun.id;
     existing.test_run_id = boundTestRunId;
     existing.severity = severity;
-    existing.notes = notes;
+    existing.system_summary = systemSummary;
     existing.evidence_ids = evidenceIds;
     existing.remediation_template = WAF_POSTURE_REMEDIATION_TEMPLATE;
     existing.title = title;
@@ -387,7 +369,8 @@ function upsertWafPostureFinding(ctx, {
     severity,
     status: 'open',
     assignee: null,
-    notes,
+    notes: null,
+    system_summary: systemSummary,
     evidence_ids: evidenceIds,
     remediation_template: WAF_POSTURE_REMEDIATION_TEMPLATE,
     verdict_id: null,
@@ -2023,7 +2006,7 @@ export function validateConnector(ctx, id) {
   return { status: 'active', capabilities };
 }
 
-function normalizePollSnapshotInput(entry, connectorId) {
+function normalizePollSnapshotInput(entry, connectorId, provider = '') {
   if (entry === null || entry === undefined || typeof entry !== 'object' || Array.isArray(entry)) {
     const err = new Error('Each snapshot must be a plain object.');
     err.code = 'invalid_request';
@@ -2036,11 +2019,9 @@ function normalizePollSnapshotInput(entry, connectorId) {
     err.code = 'invalid_request';
     throw err;
   }
-  const resource_ref_hash = String(entry.resource_ref_hash ?? '').trim();
   const display_ref = String(entry.display_ref ?? '').trim();
-  const config_hash = String(entry.config_hash ?? '').trim();
-  if (!resource_ref_hash || !display_ref || !config_hash) {
-    const err = new Error('snapshot_kind, resource_ref_hash, display_ref, and config_hash are required.');
+  if (!display_ref) {
+    const err = new Error('snapshot_kind and display_ref are required.');
     err.code = 'invalid_request';
     throw err;
   }
@@ -2053,6 +2034,9 @@ function normalizePollSnapshotInput(entry, connectorId) {
     entry.protection_config ?? entry.summary?.protection_config ?? entry.summary_json?.protection_config,
   );
   if (protectionConfig) summary_json.protection_config = protectionConfig;
+  const resource_ref_hash = String(entry.resource_ref_hash ?? '').trim()
+    || hashRef(`${String(provider ?? '').trim()}:${display_ref}`);
+  const config_hash = String(entry.config_hash ?? '').trim() || computeConfigHash(summary_json);
   return {
     connector_id: connectorId,
     snapshot_kind,
@@ -2068,7 +2052,7 @@ function persistManualConnectorSnapshots(ctx, connector, snapshotInputs, now) {
   const created = [];
   const kindCounts = {};
   for (const entry of snapshotInputs) {
-    const normalized = normalizePollSnapshotInput(entry, connector.id);
+    const normalized = normalizePollSnapshotInput(entry, connector.id, connector.provider);
     const record = {
       id: newId('id'),
       tenant_id: ctx.tenantId,
@@ -2218,7 +2202,7 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
       ? persistManualConnectorSnapshots(ctx, connector, snapshotInputs, now)
       : { created: [], kindCounts: {} };
 
-    const providerSnapshots = outboundSnapshots.map((entry) => normalizePollSnapshotInput(entry, connector.id));
+    const providerSnapshots = outboundSnapshots.map((entry) => normalizePollSnapshotInput(entry, connector.id, connector.provider));
     const created = [...manualResult.created];
     const kindCounts = { ...manualResult.kindCounts };
 

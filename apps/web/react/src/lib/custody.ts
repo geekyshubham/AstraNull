@@ -31,11 +31,19 @@ export function canonicalJsonStringifyForCustody(value: unknown) {
   return stringifyCanonical(normalizeForCustody(value));
 }
 
-export async function sha256Hex(text: string) {
-  if (!globalThis.crypto?.subtle) throw new Error('custody_digest_unavailable');
-  const bytes = new TextEncoder().encode(text);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+export const CUSTODY_DIGEST_UNAVAILABLE_MESSAGE =
+  'SHA-256 fingerprinting is unavailable: this browser does not expose Web Crypto (crypto.subtle). Open the portal over HTTPS in a current browser and try again.';
+
+export async function sha256HexBytes(bytes: ArrayBuffer | Uint8Array) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error(CUSTODY_DIGEST_UNAVAILABLE_MESSAGE);
+  const input = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const digest = await subtle.digest('SHA-256', input as Uint8Array<ArrayBuffer>);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sha256Hex(text: string) {
+  return sha256HexBytes(new TextEncoder().encode(text));
 }
 
 export async function sha256CanonicalJsonForCustody(value: unknown) {

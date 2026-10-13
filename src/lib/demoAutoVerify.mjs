@@ -25,19 +25,8 @@ export function isDemoAutoVerifyTenant(tenantOrCtx, env = process.env) {
   const tenantId = typeof tenantOrCtx === 'object'
     ? (tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '')
     : tenantOrCtx;
-  const email = typeof tenantOrCtx === 'object'
-    ? (tenantOrCtx.userEmail ?? tenantOrCtx.email ?? tenantOrCtx.userId ?? '')
-    : '';
-
   const tid = String(tenantId ?? '').trim();
-  const mail = String(email ?? '').trim().toLowerCase();
-
-  if (
-    tid === 'Astra-D1TrtI4HMTSrwKRW-9' ||
-    tid.startsWith('Astra-')
-  ) {
-    return true;
-  }
+  if (!tid) return false;
   const configured = demoAutoVerifyTenants(env);
   if (configured.has('*') || configured.has('all')) return true;
   return configured.has(tid);

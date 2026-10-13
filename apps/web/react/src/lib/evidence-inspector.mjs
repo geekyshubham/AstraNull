@@ -104,6 +104,9 @@ const ROUTE_PARAM_RULES = Object.freeze({
   obs: 'id',
   hist_family: 'slug',
   binding: 'id',
+  add: 'int',
+  fit: 'slug',
+  target_id: 'id',
 });
 
 const CREDENTIAL_NAME = /(token|password|passwd|secret|credential|invite|invitation|auth|session|cookie|bearer|api[_-]?key|signature|code)/i;
@@ -406,7 +409,30 @@ export function classifyInspectorError(error) {
   return { state: 'unavailable', permission: '' };
 }
 
-const UNAVAILABLE_REASONS = new Set(['no_refs', 'fetch_failed', 'permission_denied', 'expired', 'partial']);
+const UNAVAILABLE_REASONS = new Set(['no_refs', 'fetch_failed', 'permission_denied', 'expired', 'partial', 'pending']);
+
+/** Run lifecycle states in which a verdict has not been correlated yet. */
+const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
+
+export const ORIGINATING_RUN_ARTIFACT = 'originating_run_artifact';
+
+const RELATIONSHIP_LABELS = Object.freeze({
+  [ORIGINATING_RUN_ARTIFACT]: 'Recorded for the originating run (not cited by this finding)',
+});
+
+/** Reader-facing label for an observation relationship code. */
+export function relationshipLabel(code) {
+  const key = text(code);
+  if (RELATIONSHIP_LABELS[key]) return RELATIONSHIP_LABELS[key];
+  const label = key.replace(/_/g, ' ').trim();
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
+}
+
+function countRunArtifacts(alternatives) {
+  const runArtifacts = alternatives.filter((item) => item.relationship === ORIGINATING_RUN_ARTIFACT);
+  const ids = new Set(runArtifacts.flatMap((item) => item.evidenceIds));
+  return ids.size || runArtifacts.length;
+}
 
 function summaryBlock(value) {
   const block = record(value);
@@ -476,7 +502,7 @@ function observation(value, relationship) {
 export function normalizeEvidenceContext(payload, input) {
   const ref = normalizeInspectorRef(input);
   const body = record(payload);
-  const empty = (state, unavailableReason = '') => ({ state, ref, missingEvidenceIds: [], proof: null, provider: { confidence: null, conflict: false, corpus: '', source: '' }, answer: null, primary: null, originating: null, later: null, alternatives: [], request: summaryBlock(null), response: summaryBlock(null), evaluation: summaryBlock(null), subject: {}, limitations: [], unavailableReason });
+  const empty = (state, unavailableReason = '') => ({ state, ref, missingEvidenceIds: [], proof: null, provider: { confidence: null, conflict: false, corpus: '', source: '' }, answer: null, primary: null, originating: null, later: null, alternatives: [], runArtifacts: 0, request: summaryBlock(null), response: summaryBlock(null), evaluation: summaryBlock(null), subject: {}, limitations: [], unavailableReason });
   if (!body) return empty('unavailable', 'fetch_failed');
   // Failure envelopes must discard protected data even when sent with HTTP 200 or stale fields.
   const declaredState = text(body.state);
@@ -493,14 +519,19 @@ export function normalizeEvidenceContext(payload, input) {
   const primary = observation(body.primary, 'originating');
   const originating = observation(body.originating, 'originating');
   const later = observation(body.latest_distinct ?? body.latest_same_check, 'later_run_same_target_check');
+  const subject = record(body.subject) ?? {};
   let state = 'ready';
   if (unavailableReason === 'permission_denied') state = 'denied';
+  else if (unavailableReason === 'pending') state = 'pending';
   else if (unavailableReason === 'no_refs') state = 'no_refs';
   else if (unavailableReason === 'expired') state = 'expired';
   else if (unavailableReason === 'fetch_failed') state = 'unavailable';
   else if (unavailableReason === 'partial') state = 'partial';
   else if (!primary && !answer) state = 'no_refs';
-  const subject = record(body.subject) ?? {};
+  if (state === 'no_refs' && ref?.entry === 'check_result' && !text(answer?.outcome) && ACTIVE_RUN_STATUSES.has(text(subject.run_status).toLowerCase())) {
+    state = 'pending';
+  }
+  const alternatives = list(body.alternatives).map((item) => observation(item, 'alternative')).filter(Boolean);
   const proof = record(subject.proof);
   return {
     state,
@@ -531,7 +562,8 @@ export function normalizeEvidenceContext(payload, input) {
     primary,
     originating,
     later: later && primary && later.testRunId && later.testRunId === primary.testRunId && later.verdictId === primary.verdictId ? null : later,
-    alternatives: list(body.alternatives).map((item) => observation(item, 'alternative')).filter(Boolean),
+    alternatives,
+    runArtifacts: countRunArtifacts(alternatives),
     request: summaryBlock(body.request_summary),
     response: summaryBlock(body.response_summary),
     evaluation: summaryBlock(body.evaluation),
@@ -655,7 +687,7 @@ export function fallbackContextFromRecord(input, source) {
           : null,
         primary: { test_run_id: ref.test_run_id, verdict_id: text(verdict?.id ?? verdict?.verdict_id), evidence_ids: evidenceIds, observed_at: text(body.completed_at ?? verdict?.created_at ?? body.started_at), integrity: null },
         latest_distinct: null,
-        unavailable_reason: verdict ? (evidenceIds.length ? 'partial' : 'no_refs') : 'partial',
+        unavailable_reason: verdict ? (evidenceIds.length ? 'partial' : 'no_refs') : ACTIVE_RUN_STATUSES.has(text(body.status).toLowerCase()) ? 'pending' : 'partial',
       },
     };
   }

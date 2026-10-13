@@ -22,14 +22,14 @@ export interface RunsRefinedProps {
   onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
   variant: DesignVariant;
   onVariantChange: (next: DesignVariant) => void;
+  /** Staff only: customers never see the Classic/Refined layout switch. */
+  showVariantSwitch: boolean;
   /** '' when idle, else e.g. `cancel-<id>`, `finalize-<id>`, 'refresh-runs'. */
   busy: string;
   message: string;
   error: string;
   /** canStartRun(role): gates scan launch and per-row Cancel/Finalize (already applied in runColumns). */
   canManageScans: boolean;
-  /** high_scale:request: gates the SOC request action (already applied in headerActions). */
-  canRequestHighScale: boolean;
   inFlightRunCount: number;
   activeScanCount: number;
   /** e.g. "2 active runs, 1 active scan"; '' when nothing is live. */
@@ -122,8 +122,8 @@ export function RunsRefined(props: RunsRefinedProps) {
   const scheduledScanCount = data.validationScans.filter((scan) => scan.status === 'scheduled').length;
   const columns = refineRunColumns(props.runColumns);
   const vectorLibraryNote = !props.canOpenVectorLibrary && props.startDisabledReason
-    ? `Open the vector library once ready. ${props.startDisabledReason}`
-    : 'Customer-safe runs start in the vector library, where you select the exact domain, vector, and mapped bounded check.';
+    ? `Open the check library once ready. ${props.startDisabledReason}`
+    : 'Customer-safe runs start in the check library, where you select the exact domain, vector, and mapped bounded check.';
   const launchBlocked = !props.canOpenVectorLibrary && Boolean(props.startDisabledReason);
 
   return (
@@ -136,7 +136,7 @@ export function RunsRefined(props: RunsRefinedProps) {
           </p>
         </div>
         <div className="rf-header-actions">
-          <VariantSwitch value={props.variant} onChange={props.onVariantChange} />
+          {props.showVariantSwitch ? <VariantSwitch value={props.variant} onChange={props.onVariantChange} /> : null}
           {props.headerActions}
         </div>
       </header>
@@ -195,6 +195,8 @@ export function RunsRefined(props: RunsRefinedProps) {
         <div className="form-banner neutral" role="note">{vectorLibraryNote}</div>
       ) : null}
 
+      {props.socGatePanel ? <section className="rf-governed">{props.socGatePanel}</section> : null}
+
       <section className="rf-runs-data" aria-label="Runs and scans">
         <div className="rf-runs-viewbar">
           <Tabs<RunsView>
@@ -234,7 +236,7 @@ export function RunsRefined(props: RunsRefinedProps) {
               </div>
             </div>
           </div>
-          <div className="rf-panel rf-panel-flush">
+          <div className="rf-panel rf-panel-flush rf-stack-table">
             <DataTable
               className="validation-runs-table"
               columns={columns}
@@ -265,11 +267,9 @@ export function RunsRefined(props: RunsRefinedProps) {
               </div>
             </div>
           </div>
-          <div className="rf-panel rf-panel-flush">{props.validationScansTable}</div>
+          <div className="rf-panel rf-panel-flush rf-stack-table">{props.validationScansTable}</div>
         </div>
       </section>
-
-      {props.socGatePanel ? <section className="rf-governed">{props.socGatePanel}</section> : null}
 
       {props.modals}
     </div>

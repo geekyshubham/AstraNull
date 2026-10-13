@@ -56,7 +56,19 @@ describe('versioned conservative readiness', () => {
     const world = assuranceWorld({ targetCount: 2 }); addAssuredObservation(world);
     const result = projectReadiness(world);
     assert.equal(result.score, 50); assert.equal(result.coverage.applicable_count, 2); assert.equal(result.coverage.not_run_count, 1);
-    assert.deepEqual(result.posture, { pass: 1, gap: 0, review: 1, total: 2 });
+    assert.deepEqual(result.posture, { pass: 1, gap: 0, not_run: 1, review: 0, total: 2 });
+  });
+  it('counts never-run scenarios as not run, never as review, and the posture buckets sum to the applicable total', () => {
+    const world = assuranceWorld({ targetCount: 3, checkCount: 2 });
+    const result = projectReadiness(world);
+    assert.equal(result.coverage.applicable_count, 6);
+    assert.deepEqual(result.posture, { pass: 0, gap: 0, not_run: result.coverage.applicable_count, review: 0, total: result.coverage.applicable_count });
+    for (const outcome of ['protected', 'exposed', 'inconclusive']) {
+      const observed = assuranceWorld({ targetCount: 2 }); addAssuredObservation(observed, { outcome });
+      const { pass, gap, not_run: notRun, review, total } = projectReadiness(observed).posture;
+      assert.equal(pass + gap + notRun + review, total, outcome);
+      assert.equal(notRun, 1, outcome);
+    }
   });
   it('bounds a narrow sample by the complete target/check denominator', () => {
     const world = assuranceWorld({ targetCount: 3, checkCount: 4 }); addAssuredObservation(world);

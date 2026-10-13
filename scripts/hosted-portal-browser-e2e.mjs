@@ -15,7 +15,7 @@ const CUSTOMER_ROUTES = [
   'dashboard', 'onboarding', 'environments', 'target-groups', 'agents', 'checks',
   'runs', 'findings', 'evidence', 'waf-posture', 'cve-pipeline', 'supply-chain',
   'remediation', 'discovery', 'high-scale', 'soc', 'reports', 'notifications',
-  'audit', 'release-evidence', 'settings',
+  'audit', 'settings',
 ];
 
 const CUSTOMER_ASSETS = ['/react-app.js', '/react-app.css'];

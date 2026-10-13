@@ -12,7 +12,7 @@ import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { requestJson } from '../lib/api';
 import { canReadDataset, sessionHasPermission } from '../lib/dataset-access.mjs';
 import { ROUTE_BY_ID } from '../lib/navigation';
-import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
+import type { DataItem, PortalConfig, PortalData, PortalDataset, RouteId, Session } from '../lib/types';
 import { formatDate, formatNumber } from '../lib/utils';
 import { ProviderLogo, type ProviderLogoId } from '../components/integrations/provider-logos';
 import { getProviderSetupGuide } from '../components/integrations/provider-setup-guides';
@@ -35,10 +35,6 @@ function PageHeader({ route, actions }: { route: RouteId; actions?: ReactNode })
       {actions ? <div className="row-actions">{actions}</div> : null}
     </div>
   );
-}
-
-function PageContextSummary({ children }: { children: ReactNode }) {
-  return <p className="page-context-summary">{children}</p>;
 }
 
 function PanelCardHeader({ title, description, trailing }: { title: ReactNode; description?: ReactNode; trailing?: ReactNode }) {
@@ -215,9 +211,6 @@ const CREDENTIAL_POLL_BACKENDS = new Set<ProviderBackend>([
   'aws_waf',
 ]);
 
-const DECLARED_DOMAIN_BEHAVIORS = new Set(['block_at_edge', 'absorb_at_origin', 'rate_shape']);
-const TAG_RE = /^[a-z0-9][a-z0-9:_.-]{0,47}$/;
-
 function getDirectoryProvider(id: string) {
   return PROVIDER_DIRECTORY.find((provider) => provider.id === id) ?? PROVIDER_DIRECTORY[0];
 }
@@ -245,42 +238,6 @@ function formatConnectorProvider(connector: DataItem) {
 function connectorHasCredentialPoll(connector: DataItem) {
   const provider = getString(connector, ['provider'], '').toLowerCase() as ProviderBackend;
   return CREDENTIAL_POLL_BACKENDS.has(provider) && Boolean(getString(connector, ['secret_id'], ''));
-}
-
-function validateDeclaredHostname(input: string) {
-  const hostname = input.trim().toLowerCase().replace(/\.$/, '');
-  if (!hostname) return { hostname: '', error: 'Enter a hostname.' };
-  if (hostname.length > 253) return { hostname, error: 'Hostname must be 253 characters or fewer.' };
-  if (/[\s/:?#@]/.test(hostname)) {
-    return { hostname, error: 'Enter a hostname only, without a protocol, port, path, query, or spaces.' };
-  }
-  const labels = hostname.split('.');
-  if (labels.length < 2) return { hostname, error: 'Enter a fully qualified domain name, such as api.example.com.' };
-  for (const label of labels) {
-    if (!label || label.length > 63) return { hostname, error: 'Each hostname label must contain 1 to 63 characters.' };
-    if (!/^[a-z0-9-]+$/.test(label) || label.startsWith('-') || label.endsWith('-')) {
-      return { hostname, error: 'Use letters, numbers, and interior hyphens only. International domains must use punycode.' };
-    }
-  }
-  if (/^\d+$/.test(labels[labels.length - 1])) {
-    return { hostname, error: 'The final hostname label cannot contain only numbers.' };
-  }
-  return { hostname, error: '' };
-}
-
-function parseTags(input: string): { tags: string[]; error: string } {
-  const tags = input
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  const deduped = [...new Set(tags)];
-  if (deduped.length > 16) return { tags: deduped, error: 'At most 16 tags are allowed.' };
-  for (const tag of deduped) {
-    if (!TAG_RE.test(tag)) {
-      return { tags: deduped, error: `Invalid tag “${tag}”. Use lowercase letters, numbers, and : _ . - (max 48 chars).` };
-    }
-  }
-  return { tags: deduped, error: '' };
 }
 
 const NOTIFICATION_CHANNELS_HEADING_ID = 'notification-channels-title';
@@ -363,7 +320,7 @@ export function IntegrationPage({
   data: PortalData;
   config: PortalConfig;
   session: Session;
-  onRefresh: () => Promise<void>;
+  onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
   const [selectedConnectorId, setSelectedConnectorId] = useState('');
@@ -375,13 +332,10 @@ export function IntegrationPage({
   const [guideProviderId, setGuideProviderId] = useState('');
   const [showCreateConnector, setShowCreateConnector] = useState(false);
   const [showManualSnapshot, setShowManualSnapshot] = useState(false);
-  const [showAddDomain, setShowAddDomain] = useState(false);
-  const [domainResult, setDomainResult] = useState<{ hostname: string } | null>(null);
   const [snapshots, setSnapshots] = useState<DataItem[]>([]);
   const [snapshotsConnectorId, setSnapshotsConnectorId] = useState('');
   const [connectorDraftDirty, setConnectorDraftDirty] = useState(false);
-  const [domainDraftDirty, setDomainDraftDirty] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState<'' | 'connector' | 'domain'>('');
+  const [confirmDiscard, setConfirmDiscard] = useState<'' | 'connector'>('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -427,28 +381,6 @@ export function IntegrationPage({
     setMessage('');
   }
 
-  function openAddDomain() {
-    if (!canWriteIntegrationTargets) return;
-    setShowProviderFlow(false);
-    setShowAddDomain(true);
-    setDomainResult(null);
-    setError('');
-    setMessage('');
-  }
-
-  function closeAddDomain(force = false) {
-    if (busy === 'add-single-domain') return;
-    if (!force && domainDraftDirty && !domainResult) {
-      setConfirmDiscard('domain');
-      return;
-    }
-    setConfirmDiscard('');
-    setDomainDraftDirty(false);
-    setShowAddDomain(false);
-    setDomainResult(null);
-    setError('');
-  }
-
   function closeCreateConnector(force = false) {
     if (busy === 'create-connector') return;
     if (!force && connectorDraftDirty) {
@@ -473,62 +405,6 @@ export function IntegrationPage({
     } catch (err) {
       setError(apiErrorMessage(err, 'Action failed.'));
       return null;
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function handleAddSingleDomain(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canWriteIntegrationTargets) return;
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const hostnameResult = validateDeclaredHostname(String(form.get('hostname') ?? ''));
-    const expectedBehavior = String(form.get('expected_behavior') ?? '').trim();
-    const tagsResult = parseTags(String(form.get('tags') ?? ''));
-
-    if (hostnameResult.error) {
-      setError(hostnameResult.error);
-      return;
-    }
-    if (!DECLARED_DOMAIN_BEHAVIORS.has(expectedBehavior)) {
-      setError('Select a supported expected behavior for this domain.');
-      return;
-    }
-    if (tagsResult.error) {
-      setError(tagsResult.error);
-      return;
-    }
-
-    setBusy('add-single-domain');
-    setError('');
-    setMessage('');
-    setDomainResult(null);
-
-    try {
-      // Declare the domain directly; the server applies its execution policy.
-      await requestJson(config, session, '/v1/targets', {
-        method: 'POST',
-        body: {
-          kind: 'fqdn',
-          value: hostnameResult.hostname,
-          expected_behavior: expectedBehavior,
-          ...(tagsResult.tags.length ? { tags: tagsResult.tags } : {}),
-        },
-      });
-      try {
-        await onRefresh();
-      } catch {
-        // The write is already complete; let the user refresh later.
-      }
-      setMessage(
-        `${hostnameResult.hostname} was added to declared targets. No provider credentials or inventory discovery were used. Ownership remains unverified.`,
-      );
-      setDomainResult({ hostname: hostnameResult.hostname });
-      setDomainDraftDirty(false);
-      formElement.reset();
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Could not add the declared domain.'));
     } finally {
       setBusy('');
     }
@@ -694,19 +570,21 @@ export function IntegrationPage({
       .map((value) => value.trim())
       .filter(Boolean);
     const ruleCount = Number(form.get('rule_count') ?? 0);
+    const resourceRefHash = String(form.get('resource_ref_hash') ?? '').trim();
+    const configHash = String(form.get('config_hash') ?? '').trim();
     const snapshot = {
       snapshot_kind: String(form.get('snapshot_kind') ?? 'waf_policy'),
       display_ref: String(form.get('display_ref') ?? '').trim(),
-      resource_ref_hash: String(form.get('resource_ref_hash') ?? '').trim(),
-      config_hash: String(form.get('config_hash') ?? '').trim(),
+      ...(resourceRefHash ? { resource_ref_hash: resourceRefHash } : {}),
+      ...(configHash ? { config_hash: configHash } : {}),
       summary: {
         policy_mode: String(form.get('policy_mode') ?? 'monitor'),
         rule_count: Number.isFinite(ruleCount) ? ruleCount : 0,
         ...(hostnames.length ? { hostnames } : {}),
       },
     };
-    if (!snapshot.display_ref || !snapshot.resource_ref_hash || !snapshot.config_hash) {
-      setError('Display ref, resource hash, and config hash are required for a metadata snapshot.');
+    if (!snapshot.display_ref) {
+      setError('Display ref is required for a metadata snapshot.');
       return;
     }
     const result = await runAction(
@@ -816,16 +694,27 @@ export function IntegrationPage({
         return (
           <div className="row-actions row-actions--compact" aria-busy={rowBusy || undefined}>
             {canWriteConnectors ? <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} title="Checks the stored configuration. Does not contact the provider." onClick={() => void validateConnector(id)}>Check configuration</Button> : null}
-            {canWriteConnectors ? (
+            {canWriteConnectors && canPoll ? (
               <Button
                 size="sm"
                 variant="secondary"
                 loading={busy === `poll-${id}`}
-                disabled={rowBlocked || isDisabled || !canPoll}
-                title={canPoll ? 'Sends bounded read-only requests to the provider with the stored credential. No write calls.' : 'Manual metadata connectors never poll; add a snapshot instead.'}
+                disabled={rowBlocked || isDisabled}
+                title="Sends bounded read-only requests to the provider with the stored credential. No write calls."
                 onClick={() => void pollConnector(id)}
               >
                 Poll
+              </Button>
+            ) : null}
+            {canWriteConnectors && !canPoll ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={rowBlocked || isDisabled}
+                title="Record normalized metadata for this connector. The provider is never contacted."
+                onClick={() => openManualSnapshot(id)}
+              >
+                Add snapshot
               </Button>
             ) : null}
             <Button size="sm" variant="ghost" loading={busy === `snapshots-${id}`} disabled={rowBlocked} onClick={() => void loadSnapshots(id)}>Snapshots</Button>
@@ -836,9 +725,29 @@ export function IntegrationPage({
     },
   ];
 
-  function providerConnectorCount(provider: ProviderDirectoryEntry) {
+  function providerConnectors(provider: ProviderDirectoryEntry) {
     if (!canReadConnectors || connectorsLoadError) return null;
-    return connectorRecords.filter((connector) => connectorDirectoryProvider(connector)?.id === provider.id).length;
+    return connectorRecords.filter((connector) => connectorDirectoryProvider(connector)?.id === provider.id);
+  }
+
+  function providerConnectorCount(provider: ProviderDirectoryEntry) {
+    return providerConnectors(provider)?.length ?? null;
+  }
+
+  function providerConfiguredLabel(provider: ProviderDirectoryEntry) {
+    const connectors = providerConnectors(provider) ?? [];
+    const manual = connectors.filter((connector) => !connectorHasCredentialPoll(connector)).length;
+    const total = connectors.length;
+    if (manual === 0) return `${formatNumber(total)} configured`;
+    if (manual === total) return `${formatNumber(total)} configured · manual`;
+    return `${formatNumber(total)} configured · ${formatNumber(manual)} manual`;
+  }
+
+  function openManualSnapshot(connectorId = '') {
+    setError('');
+    setMessage('');
+    if (connectorId) setSelectedConnectorId(connectorId);
+    setShowManualSnapshot(true);
   }
 
   const connectedProviderCount = canReadConnectors && !connectorsLoadError
@@ -854,12 +763,7 @@ export function IntegrationPage({
         route="integrations"
         actions={canAddIntegration ? (
           <>
-            {canWriteIntegrationTargets ? (
-              <Button variant="default" size="sm" disabled={busy !== ''} onClick={openAddDomain}>
-                <Target size={15} aria-hidden="true" /> Add domain
-              </Button>
-            ) : null}
-            <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => openProviderFlow()}>
+            <Button variant="default" size="sm" disabled={busy !== ''} onClick={() => openProviderFlow()}>
               <PlugZap size={15} aria-hidden="true" /> Add provider
             </Button>
             {connectorsEnabled && canReadConnectors && canWriteConnectors ? (
@@ -867,7 +771,7 @@ export function IntegrationPage({
                 variant="ghost"
                 size="sm"
                 disabled={activeConnectors.length === 0 || busy !== '' || Boolean(connectorsLoadError)}
-                onClick={() => { setError(''); setMessage(''); setShowManualSnapshot(true); }}
+                onClick={() => openManualSnapshot()}
               >
                 <FileCheck2 size={15} aria-hidden="true" /> Manual snapshot
               </Button>
@@ -875,10 +779,7 @@ export function IntegrationPage({
           </>
         ) : undefined}
       />
-      <PageContextSummary>Optional enrichment only · no default cloud access · customer-declared targets remain the core path</PageContextSummary>
-
       <div className="kpi-row" aria-label="Integration inventory summary">
-        <KpiCell label="Provider paths" value={formatNumber(PROVIDER_DIRECTORY.length)} delta="Read-only or manual metadata" />
         {canReadConnectors ? (
           <>
             <KpiCell
@@ -903,12 +804,12 @@ export function IntegrationPage({
       </div>
 
       <CalloutNote icon={ShieldCheck} tone="info">
-        Provider access is optional. Core validation continues from customer-declared targets, and opening this directory never grants AstraNull cloud access.
+        Provider access is optional. Core validation continues from customer-declared targets. Opening a provider never grants AstraNull cloud access.
       </CalloutNote>
 
       {!connectorsEnabled ? (
         <CalloutNote icon={PlugZap} tone="warn">
-          The connector add-on is not enabled for this tenant, so live provider polling and metadata snapshots are unavailable. You can still declare domains directly with <strong>Add domain</strong>. Contact support to enable optional read-only connectors.
+          The connector add-on is not enabled for this tenant, so live provider polling and metadata snapshots are unavailable. You can still declare targets directly on <a className="cp-link" href="#targets">Targets</a>. Contact support to enable optional read-only connectors.
         </CalloutNote>
       ) : null}
 
@@ -1022,7 +923,7 @@ export function IntegrationPage({
             <div>
               <h2 id="provider-directory-title" className="card-title">Provider directory</h2>
               <p className="card-description integration-directory-note">
-                Choose an implemented read-only connector, a manual metadata record, or declare one domain directly. Opening a provider never grants AstraNull cloud access. Each card links a least-privilege setup guide.
+                Choose an implemented read-only connector or a manual metadata record. Each card links a least-privilege setup guide.
               </p>
             </div>
             <div className="integration-directory-meta">
@@ -1058,7 +959,7 @@ export function IntegrationPage({
                         <span>{provider.capability}</span>
                       </div>
                     </div>
-                    {connected ? <Badge tone="muted">{`${formatNumber(count ?? 0)} configured`}</Badge> : null}
+                    {connected ? <Badge tone="muted">{providerConfiguredLabel(provider)}</Badge> : null}
                   </div>
                   <p className="integration-tile-desc">{provider.description}</p>
                   <button
@@ -1103,7 +1004,7 @@ export function IntegrationPage({
       <NotificationChannelsPanel
         config={config}
         session={session}
-        onChanged={onRefresh}
+        onChanged={() => onRefresh(['connectors', 'secrets', 'notifications'])}
         headingId={NOTIFICATION_CHANNELS_HEADING_ID}
       />
 
@@ -1161,9 +1062,9 @@ export function IntegrationPage({
             <span className="provider-path-icon" aria-hidden="true"><Target size={18} /></span>
             <Badge tone="muted">Core workflow</Badge>
             <h3>Single domain</h3>
-            <p>Declare a domain directly. Ownership verification remains required.</p>
+            <p>No provider needed — declare the domain as a target. Ownership verification remains required.</p>
             {canWriteIntegrationTargets ? (
-              <Button type="button" size="sm" variant="secondary" onClick={openAddDomain}>Add single domain</Button>
+              <AnchorButton href="#targets?add=1" size="sm" variant="secondary">Add target in Targets</AnchorButton>
             ) : <span className="muted">Domain declaration is read-only for your role.</span>}
           </article>
         </div>
@@ -1244,7 +1145,7 @@ export function IntegrationPage({
                 ) : (
                   <div className="full">
                     <CalloutNote icon={FileCheck2} tone="info">
-                      Manual mode never accepts provider credentials. After creation, add a normalized metadata snapshot with hashes rather than raw provider payloads.
+                      Manual mode never accepts provider credentials. After creation, add a normalized metadata snapshot; hashes are derived for you.
                     </CalloutNote>
                   </div>
                 )}
@@ -1323,15 +1224,8 @@ export function IntegrationPage({
                 </label>
                 <label>
                   <span>Display ref</span>
-                  <input name="display_ref" placeholder="zone-a" required />
-                </label>
-                <label>
-                  <span>Resource hash</span>
-                  <input name="resource_ref_hash" placeholder="res_hash_1" required />
-                </label>
-                <label>
-                  <span>Config hash</span>
-                  <input name="config_hash" placeholder="cfg_hash_1" required />
+                  <input name="display_ref" placeholder="example.com" aria-describedby="manual-snapshot-display-ref-hint" required />
+                  <span className="muted small" id="manual-snapshot-display-ref-hint">Zone or policy name as shown in your provider console (e.g. example.com)</span>
                 </label>
                 <label>
                   <span>Policy mode</span>
@@ -1349,6 +1243,19 @@ export function IntegrationPage({
                   <span>Hostnames</span>
                   <input name="hostnames" placeholder="app.example.com, api.example.com" />
                 </label>
+                <details className="full">
+                  <summary>Advanced: supply your own hashes</summary>
+                  <label>
+                    <span>Resource hash</span>
+                    <input name="resource_ref_hash" placeholder="Auto-derived if blank" aria-describedby="manual-snapshot-resource-hash-hint" autoComplete="off" spellCheck={false} />
+                    <span className="muted small" id="manual-snapshot-resource-hash-hint">Optional. A stable hash of the zone or resource identifier; derived from the display ref when blank.</span>
+                  </label>
+                  <label>
+                    <span>Config hash</span>
+                    <input name="config_hash" placeholder="Auto-derived if blank" aria-describedby="manual-snapshot-config-hash-hint" autoComplete="off" spellCheck={false} />
+                    <span className="muted small" id="manual-snapshot-config-hash-hint">Optional. A hash of the configuration you recorded; derived from the snapshot summary when blank.</span>
+                  </label>
+                </details>
                 <div className="form-actions full">
                   <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowManualSnapshot(false)}>Cancel</Button>
                   <Button loading={busy.startsWith('snapshot-')} disabled={busy !== '' || !effectiveConnectorId} type="submit">Ingest snapshot</Button>
@@ -1359,77 +1266,6 @@ export function IntegrationPage({
         </>
       ) : null}
 
-      <FormModal
-        open={canWriteIntegrationTargets && showAddDomain}
-        title="Add single domain"
-        description="Declare one hostname as a target. This is not provider discovery and does not grant cloud access."
-        wide
-        onClose={() => closeAddDomain()}
-      >
-        {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-        {confirmDiscard === 'domain' ? (
-          <div className="form-banner neutral integration-discard" role="alert">
-            <span>Discard this domain? Nothing has been declared yet.</span>
-            <span className="row-actions">
-              <Button type="button" size="sm" variant="secondary" onClick={() => setConfirmDiscard('')}>Keep editing</Button>
-              <Button type="button" size="sm" variant="danger" onClick={() => closeAddDomain(true)}>Discard</Button>
-            </span>
-          </div>
-        ) : null}
-        {domainResult ? (
-          <div className="domain-result">
-            <div className="domain-result-heading">
-              <div>
-                <h3>{domainResult.hostname} is now declared</h3>
-              </div>
-              <Badge tone="warn">Ownership unverified</Badge>
-            </div>
-            <p>Provenance: manual customer declaration in the AstraNull portal. No provider credentials, account inventory, or automatic discovery were used.</p>
-            <div className="form-actions">
-              <AnchorButton href="#targets" variant="secondary">View target inventory</AnchorButton>
-              <Button type="button" onClick={() => closeAddDomain(true)}>Done</Button>
-            </div>
-          </div>
-        ) : (
-          <form className="product-form" onSubmit={handleAddSingleDomain} onInput={() => setDomainDraftDirty(true)} aria-busy={busy === 'add-single-domain' || undefined}>
-            <fieldset disabled={busy === 'add-single-domain'}>
-              <label className="full">
-                <span>Hostname</span>
-                <input
-                  name="hostname"
-                  className="mono"
-                  placeholder="checkout.example.com"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  inputMode="url"
-                  required
-                  autoFocus
-                />
-              </label>
-              <label className="full">
-                <span>Expected behavior</span>
-                <select name="expected_behavior" defaultValue="block_at_edge" required>
-                  <option value="block_at_edge">Block at edge</option>
-                  <option value="absorb_at_origin">Absorb at origin</option>
-                  <option value="rate_shape">Rate shape</option>
-                </select>
-              </label>
-              <label className="full">
-                <span>Tags (optional)</span>
-                <input name="tags" placeholder="env:production, team:checkout" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
-              </label>
-              <div className="domain-provenance full">
-                <strong>Recorded provenance:</strong> manual customer declaration via AstraNull Integrations; provider access: none. The target starts unverified and cannot receive external probes until ownership is proven.
-              </div>
-              <div className="form-actions full">
-                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => closeAddDomain()}>Cancel</Button>
-                <Button type="submit" loading={busy === 'add-single-domain'} disabled={busy !== ''}>Add declared domain</Button>
-              </div>
-            </fieldset>
-          </form>
-        )}
-      </FormModal>
     </div>
   );
 }

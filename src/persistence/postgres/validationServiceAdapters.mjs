@@ -804,7 +804,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         title: `Finding: ${verdict.verdict} on ${run.target_id}`,
         severity,
         status: 'open',
-        notes: verdict.explanation,
+        notes: null,
+        system_summary: verdict.explanation ?? null,
         evidence_ids: verdict.evidence_ids,
         remediation_template: run.remediation_template,
         verdict_id: priorOpen?.verdict_id ?? verdict.id,
@@ -1961,6 +1962,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
     async getEvidence(ctx, id) {
       return validationEvidence.getEvidence(ctx, id);
     },
+    async listEvidenceForRun(ctx, runId) {
+      if (typeof validationEvidence.listEvidenceForRun !== 'function') return [];
+      return validationEvidence.listEvidenceForRun(ctx, runId);
+    },
     async getTargetEdgeDetection(ctx, targetId) {
       if (typeof validationEvidence.getTargetEdgeDetection !== 'function') {
         throw new Error('missing_configured_read:getTargetEdgeDetection');
@@ -2010,7 +2015,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return view;
     },
     async patchFinding(ctx, id, body) {
-      const planned = planFindingPatch(body ?? {});
+      const planned = planFindingPatch(body ?? {}, ctx, { now: nowFn(), findingId: id });
       if (planned.error) return planned;
       const updated_at = nowFn().toISOString();
       // Only customer lifecycle and assignment fields cross this boundary.

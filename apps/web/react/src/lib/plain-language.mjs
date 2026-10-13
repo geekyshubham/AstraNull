@@ -70,6 +70,9 @@ export function plainCodeLabel(value, fallback = 'Not reported') {
   if (!text) return fallback;
   const labels = {
     fqdn: 'Domain name',
+    url: 'URL',
+    ip: 'IP address',
+    cidr: 'CIDR range',
     must_block_before_origin: 'Block before the origin server',
     should_be_protected: 'Should be protected',
     soc_gated: 'SOC-gated',
@@ -115,8 +118,7 @@ export function plainCheckName(value) {
     .trim()
     .replace(/\bWAF\s*\/\s*API[- ]?Gateway\b/gi, 'WAF application gateway')
     .replace(/\bL7\s*\/\s*API\b/gi, 'application layer')
-    .replace(/\bAPI[- ]?Gateway\b/gi, 'application gateway')
-    .replace(/\bAPI\b/g, 'application interface');
+    .replace(/\bAPI[- ]?Gateway\b/gi, 'application gateway');
 }
 
 const VERDICT_LABELS = Object.freeze({
@@ -157,6 +159,41 @@ const VERDICT_DESCRIPTIONS = Object.freeze({
 export function plainVerdictLabel(value) {
   const key = normalize(value);
   return VERDICT_LABELS[key] ?? sentenceLabel(value);
+}
+
+const VERDICT_SHORT_LABELS = Object.freeze({
+  protected: 'Protected',
+  pass: 'Protected',
+  passed: 'Protected',
+  edge_protected: 'Protected',
+  allowed_as_expected: 'Protected',
+  bypassable: 'Gap found',
+  penetrated: 'Gap found',
+  exposed: 'Gap found',
+  edge_exposed: 'Gap found',
+  gap: 'Gap found',
+  fail: 'Gap found',
+  failed: 'Gap found',
+  inconclusive: 'Inconclusive',
+  unknown: 'Inconclusive',
+  review: 'Needs review',
+});
+
+export function plainVerdictShortLabel(value) {
+  const key = normalize(value);
+  return VERDICT_SHORT_LABELS[key] ?? sentenceLabel(value);
+}
+
+export const EXPECTED_VERDICT_LABELS = Object.freeze({
+  pass: 'Expect protection to hold',
+  warn: 'Expect a warning',
+  fail: 'Expect a gap',
+  manual_review: 'Needs review (observation only)',
+});
+
+export function plainExpectedVerdictLabel(value) {
+  const key = normalize(value);
+  return EXPECTED_VERDICT_LABELS[key] ?? sentenceLabel(value);
 }
 
 export function plainVerdictDescription(value) {
@@ -338,7 +375,13 @@ export function evidenceModePresentation(value, catalogCheck = null) {
   };
 }
 
-export function dashboardReadinessMessage({ score, highPriorityFindings = 0, coveragePercent = null, dataUnavailable = false } = {}) {
+export function dashboardReadinessMessage({
+  score,
+  highPriorityFindings = 0,
+  coveragePercent = null,
+  dataUnavailable = false,
+  hasEvidence = true,
+} = {}) {
   if (dataUnavailable || typeof score !== 'number' || !Number.isFinite(score)) {
     return {
       headline: 'Readiness is not known yet',
@@ -346,10 +389,18 @@ export function dashboardReadinessMessage({ score, highPriorityFindings = 0, cov
       tone: 'warn',
     };
   }
-  if (highPriorityFindings > 0) {
+  if (!hasEvidence) {
     return {
-      headline: 'Not ready yet: high-priority gaps remain',
-      detail: 'Resolve the evidence-backed gaps below, then run the same checks again.',
+      headline: 'No readiness score yet',
+      detail: 'Declare a target, prove ownership and run a bounded check to publish a first score.',
+      tone: 'muted',
+    };
+  }
+  if (highPriorityFindings > 0) {
+    const count = highPriorityFindings;
+    return {
+      headline: `Not ready yet: ${count} high-priority ${count === 1 ? 'finding is' : 'findings are'} open`,
+      detail: 'Resolve the open findings below, then run the same checks again.',
       tone: 'danger',
     };
   }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react';
-import { CircleCheck, CircleDot, Clock, Search, ShieldMinus, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleDot, Clock, Search, ShieldMinus, SlidersHorizontal, TriangleAlert } from 'lucide-react';
 import { FindingCard } from '../../components/findings/finding-card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -7,6 +7,7 @@ import { EmptyState } from '../../components/ui/empty-state';
 import { Select } from '../../components/ui/select';
 import { DataTable, type TableColumn } from '../../components/ui/table';
 import { Toast } from '../../components/ui/toast';
+import { VariantSwitch } from '../../components/ui/variant-switch';
 import { useInspectorRef, useListReturnState, useOpenInspector, useRestoreListPosition } from '../../components/evidence/use-inspector';
 import { getRouteParam, replaceRouteParams } from '../../lib/route-params';
 import { navScopeKey } from '../../lib/nav-state.mjs';
@@ -27,6 +28,7 @@ import {
 import {
   FINDING_SEVERITY_CLASSES,
   FINDING_SEVERITY_CLASS_LABELS,
+  FINDING_STATUS_DESCRIPTIONS,
   FINDING_STATUS_GROUPS,
   FINDING_STATUS_LABELS,
   FINDINGS_LIMIT_MAX,
@@ -52,7 +54,8 @@ export interface FindingsRefinedProps {
   data: PortalData;
   config: PortalConfig;
   session: Session;
-  /** Legacy props kept for callers; the customer UI ships one presentation and ignores them. */
+  /** Staff-only presentation switch; customers always get this view and never see the switch. */
+  showVariantSwitch: boolean;
   variant?: DesignVariant;
   onVariantChange?: (next: DesignVariant) => void;
   /** '' when idle, 'refresh' while the surface refresh runs. */
@@ -88,7 +91,7 @@ const VIEW_STORAGE_KEY = 'astranull.findings-refined.view';
 const PAGE_SIZES = [25, 50, 100] as const;
 const SORT_OPTIONS: Array<{ value: FindingGroupSortKey; label: string }> = [
   { value: 'severity', label: 'Worst severity' },
-  { value: 'assets', label: 'Most affected assets' },
+  { value: 'assets', label: 'Most affected targets' },
   { value: 'recent', label: 'Recently opened' },
   { value: 'oldest', label: 'Oldest first' },
   { value: 'sla', label: 'SLA remaining' },
@@ -211,6 +214,7 @@ export function FindingsPage({ data, config, session, onRefresh }: { data: Porta
       data={data}
       config={config}
       session={session}
+      showVariantSwitch={false}
       busy={busy}
       message=""
       error={error}
@@ -248,6 +252,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const [groupPage, setGroupPage] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const inspected = useInspectorRef();
   const { holding, handlers: holdHandlers } = useInteractionHold();
   const idOfFinding = useCallback((finding: DataItem) => getString(finding, ['id']), []);
@@ -327,10 +332,13 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const listFilters = useMemo(() => ({ ...baseFilters, status: statusFilter === 'all' ? '' : statusFilter }), [baseFilters, statusFilter]);
   const filtered = Boolean(baseFilters.q || baseFilters.severity || baseFilters.target_id);
   const statusTotals = useFindingStatusTotals(config, session, baseFilters, reloadKey);
+  const legacyAcceptedShownRef = useRef<boolean | null>(null);
   // The summary strip is the whole tenant; it needs its own read only while a filter is applied.
   const unfilteredTotals = useFindingStatusTotals(config, session, {}, reloadKey, filtered);
   const estateTotals = filtered ? unfilteredTotals : statusTotals;
   const openSample = useFindingsPage(config, session, { status: 'open', limit: FINDINGS_LIMIT_MAX }, reloadKey);
+  // In-progress work keeps its severity SLA clock, so the breach count reads both active statuses.
+  const inProgressSample = useFindingsPage(config, session, { status: 'in_progress', limit: FINDINGS_LIMIT_MAX }, reloadKey);
   const serverPage = useFindingsPage(config, session, { ...listFilters, limit: pageSize, page }, reloadKey, view === 'all');
   const grouped = useProgressiveFindings(config, session, listFilters, reloadKey, view === 'grouped');
 
@@ -374,6 +382,16 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const openRows = openEnvelope?.items ?? EMPTY_FINDINGS;
   const openComplete = findingsComplete(openEnvelope, openRows.length);
   const openKpis = useMemo(() => computeFindingKpis(openRows), [openRows]);
+  const inProgressEnvelope = inProgressSample.envelope;
+  const inProgressRows = inProgressEnvelope?.items ?? EMPTY_FINDINGS;
+  const inProgressComplete = findingsComplete(inProgressEnvelope, inProgressRows.length);
+  const inProgressKpis = useMemo(() => computeFindingKpis(inProgressRows), [inProgressRows]);
+  const slaSamplesState = openSample.state === 'error' || inProgressSample.state === 'error'
+    ? 'error'
+    : openSample.state === 'ready' && inProgressSample.state === 'ready' ? 'ready' : 'loading';
+  const slaBreachCount = openKpis.slaBreachCount + inProgressKpis.slaBreachCount;
+  const slaComplete = openComplete && inProgressComplete;
+  const slaActiveRows = openRows.length + inProgressRows.length;
   const openGroups = useMemo(() => groupFindings(openRows, groupIndex), [openRows, groupIndex]);
   const openAssets = useMemo(() => {
     const keys = new Set<string>();
@@ -382,7 +400,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   }, [openGroups]);
 
   const targetOptions = useMemo(() => {
-    const options = [{ value: 'all', label: 'All domains' }, ...data.targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))];
+    const options = [{ value: 'all', label: 'All targets' }, ...data.targets.map((target) => ({ value: getString(target, ['id']), label: getString(target, ['value', 'id']) }))];
     if (targetFilter !== 'all' && !options.some((option) => option.value === targetFilter)) options.push({ value: targetFilter, label: 'Unavailable domain' });
     return options;
   }, [data.targets, targetFilter]);
@@ -583,6 +601,17 @@ export function FindingsRefined(props: FindingsRefinedProps) {
   const closedTotal = ['resolved', 'closed', 'false_positive'].reduce<number | null>((sum, status) => (sum === null || total(status) === null ? null : sum + (total(status) as number)), 0);
   const statValue = (value: number | null) => (estateTotals.state === 'error' ? 'Unavailable' : value === null ? (estateTotals.state === 'loading' ? '...' : 'Not reported') : formatNumber(value));
   const sampleNote = openComplete ? '' : openEnvelope?.total ? ` Based on the newest ${formatNumber(openRows.length)} of ${formatNumber(openEnvelope.total)} open findings.` : '';
+  const slaSampleNote = slaComplete
+    ? ''
+    : ` Based on the newest ${formatNumber(slaActiveRows)} of ${formatNumber((openEnvelope?.total ?? openRows.length) + (inProgressEnvelope?.total ?? inProgressRows.length))} open or in-progress findings.`;
+  const legacyAccepted = total('accepted');
+  // The older API-only Accepted status stays visible while its count is unknown, non-zero or selected; a reload keeps the last answer so rows do not shift.
+  if (estateTotals.state === 'ready') legacyAcceptedShownRef.current = legacyAccepted === null || legacyAccepted > 0;
+  const showLegacyAccepted = statusFilter === 'accepted'
+    || (estateTotals.state === 'ready'
+      ? legacyAcceptedShownRef.current === true
+      : estateTotals.state === 'loading' && legacyAcceptedShownRef.current !== null ? legacyAcceptedShownRef.current : true);
+  const activeFilterCount = [search.trim() !== '', severityFilter !== 'all', targetFilter !== 'all'].filter(Boolean).length;
 
   return (
     <div className="content refined rf-findings">
@@ -594,44 +623,45 @@ export function FindingsRefined(props: FindingsRefinedProps) {
           </p>
         </div>
         <div className="rf-header-actions">
+          {props.showVariantSwitch && props.variant && props.onVariantChange ? <VariantSwitch value={props.variant} onChange={props.onVariantChange} /> : null}
           <Button variant="secondary" size="sm" loading={props.busy === 'refresh'} disabled={props.busy !== ''} onClick={refresh}>Refresh</Button>
         </div>
       </header>
 
       <section className="rf-summary-strip rf-findings-summary" aria-label="Finding summary">
-        <div className="rf-stat">
+        <div className="rf-stat rf-stat--open">
           <span className="rf-stat-label">Open</span>
           <span className="rf-stat-value">{statValue(total('open'))}</span>
           <span className="rf-stat-hint">{openSample.state === 'ready' && openComplete ? openKpis.openSeverityBreakdown : 'Server count of every open finding'}</span>
         </div>
-        <div className="rf-stat">
+        <div className="rf-stat rf-stat--wide-only">
           <span className="rf-stat-label">In progress</span>
           <span className="rf-stat-value">{statValue(total('in_progress'))}</span>
           <span className="rf-stat-hint">Active work on record</span>
         </div>
-        <div className="rf-stat">
+        <div className="rf-stat rf-stat--wide-only">
           <span className="rf-stat-label">Accepted risk</span>
           <span className="rf-stat-value">{statValue(total('accepted_risk'))}</span>
-          <span className="rf-stat-hint">{total('accepted') ? `Plus ${formatNumber(total('accepted') ?? 0)} accepted` : 'Risk acceptance on record'}</span>
+          <span className="rf-stat-hint">{legacyAccepted ? `Plus ${formatNumber(legacyAccepted)} with the older Accepted status` : 'Risk acceptance on record'}</span>
         </div>
-        <div className="rf-stat">
+        <div className="rf-stat rf-stat--wide-only">
           <span className="rf-stat-label">Closed</span>
           <span className="rf-stat-value">{statValue(closedTotal)}</span>
           <span className="rf-stat-hint">Resolved, closed and false positive</span>
         </div>
-        <div className="rf-stat" data-tone={openKpis.slaBreachCount > 0 ? 'danger' : undefined}>
+        <div className="rf-stat rf-stat--sla" data-tone={slaSamplesState === 'ready' && slaBreachCount > 0 ? 'danger' : undefined}>
           <span className="rf-stat-label">SLA breached</span>
           <span className="rf-stat-value">
-            {openSample.state !== 'ready' ? (openSample.state === 'error' ? 'Unavailable' : '...') : (
+            {slaSamplesState !== 'ready' ? (slaSamplesState === 'error' ? 'Unavailable' : '...') : (
               <>
-                {openKpis.slaBreachCount > 0 ? <TriangleAlert size={16} aria-hidden="true" /> : null}
-                {formatNumber(openKpis.slaBreachCount)}{openComplete ? '' : '+'}
+                {slaBreachCount > 0 ? <TriangleAlert size={16} aria-hidden="true" /> : null}
+                {formatNumber(slaBreachCount)}{slaComplete ? '' : '+'}
               </>
             )}
           </span>
-          <span className="rf-stat-hint">{openSample.state === 'ready' ? (openRows.length === 0 ? 'No open findings' : `Open past severity SLA.${sampleNote}`) : 'Open past severity SLA'}</span>
+          <span className="rf-stat-hint">{slaSamplesState === 'ready' ? (slaActiveRows === 0 ? 'No open or in-progress findings' : `Open or in progress past severity SLA.${slaSampleNote}`) : 'Open or in progress past severity SLA'}</span>
         </div>
-        <div className="rf-stat">
+        <div className="rf-stat rf-stat--targets">
           <span className="rf-stat-label">Affected targets</span>
           <span className="rf-stat-value">{openSample.state === 'ready' ? `${formatNumber(openAssets)}${openComplete ? '' : '+'}` : openSample.state === 'error' ? 'Unavailable' : '...'}</span>
           <span className="rf-stat-hint">Distinct targets with an open finding.{openSample.state === 'ready' ? sampleNote : ''}</span>
@@ -650,7 +680,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
         <div className="rf-section-head">
           <h2 id="rf-findings-queue">Finding queue</h2>
           <div className="rf-segmented" role="group" aria-label="Finding view">
-            <button type="button" aria-pressed={view === 'grouped'} onClick={() => changeView('grouped')}>Grouped by issue</button>
+            <button type="button" aria-pressed={view === 'grouped'} onClick={() => changeView('grouped')}>By finding group</button>
             <button type="button" aria-pressed={view === 'all'} onClick={() => changeView('all')}>Each finding</button>
           </div>
         </div>
@@ -664,9 +694,10 @@ export function FindingsRefined(props: FindingsRefinedProps) {
             {FINDING_STATUS_GROUPS.map((group) => (
               <span key={group.id} className="rf-status-group" role="group" aria-labelledby={`rf-status-group-${group.id}`}>
                 <span className="rf-status-group-label" id={`rf-status-group-${group.id}`}>{group.label}</span>
-                {group.statuses.map((status) => (
-                  <button key={status} type="button" className="rf-status-chip" aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)}>
+                {group.statuses.filter((status) => status !== 'accepted' || showLegacyAccepted).map((status) => (
+                  <button key={status} type="button" className="rf-status-chip" aria-pressed={statusFilter === status} title={FINDING_STATUS_DESCRIPTIONS[status]} onClick={() => setStatusFilter(status)}>
                     {FINDING_STATUS_LABELS[status]}
+                    {status === 'accepted' ? <span className="sr-only">, older status set through the API</span> : null}
                     <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, status)}</span>
                   </button>
                 ))}
@@ -674,7 +705,19 @@ export function FindingsRefined(props: FindingsRefinedProps) {
             ))}
           </div>
           {statusTotals.state === 'error' ? <p className="rf-result-count" role="alert">Status counts are unavailable: {statusTotals.error}</p> : null}
-          <div className="rf-filter-grid">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="rf-filters-toggle"
+            aria-expanded={filtersOpen}
+            aria-controls="rf-findings-filter-grid"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            <SlidersHorizontal size={14} aria-hidden="true" />
+            {activeFilterCount ? `Filters (${activeFilterCount} active)` : 'Filters'}
+          </Button>
+          <div className="rf-filter-grid" id="rf-findings-filter-grid" data-open={filtersOpen ? 'true' : 'false'}>
             <label className="field rf-search">
               <span>Search</span>
               <span className="rf-search-control">
@@ -691,19 +734,25 @@ export function FindingsRefined(props: FindingsRefinedProps) {
               </span>
             </label>
             <Select label="Severity" value={severityFilter} options={SEVERITY_OPTIONS} onChange={setSeverityFilter} />
-            <Select label="Domain" value={targetFilter} options={targetOptions} onChange={setTargetFilter} />
+            <Select label="Target" value={targetFilter} options={targetOptions} onChange={setTargetFilter} />
             {view === 'grouped' ? <Select label="Sort groups" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as FindingGroupSortKey)} /> : null}
           </div>
           <p className="rf-result-count" aria-live="polite">
             {matchTotal === null ? (
               envelope ? 'This server did not report a total for these filters, so no count is shown.' : 'Counting matching findings.'
             ) : view === 'grouped' ? (
-              <>
-                <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} built from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
-                {groupsComplete ? ' Every matching finding is read, so groups and their counts are complete.' : ' Groups and their counts are partial until every matching finding is read.'}
-              </>
+              groupsComplete ? (
+                <>
+                  <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
+                </>
+              ) : (
+                <>
+                  <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} built from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
+                  {' Groups and their counts are partial until every matching finding is read.'}
+                </>
+              )
             ) : (
-              <><span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, newest first as the server orders them. Select a row to view its evidence.</>
+              <><span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, newest first. Select a row to view its evidence.</>
             )}
           </p>
         </div>

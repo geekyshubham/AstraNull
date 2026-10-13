@@ -5,6 +5,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { createPostgresReportServices } from '../../src/persistence/postgres/reportServiceAdapters.mjs';
 import { createPostgresSubscriptionServices } from '../../src/persistence/postgres/subscriptionServiceAdapters.mjs';
 import { createReport, exportReport, getReport, listReports } from '../../src/services/reports.mjs';
+import { computeReadiness } from '../../src/services/readiness.mjs';
 import { getCurrentSubscriptionSummary } from '../../src/services/subscriptions.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
@@ -267,6 +268,55 @@ describe('current-release report scope and snapshot', () => {
     const second = exportReport(CTX, 'report_old', 'json');
     assert.equal(second.payload.runs[0].status, 'verdicted');
     assert.equal(second.payload.summary.readiness_score, 12);
+  });
+
+  it('counts every in-scope finding still open at generation, whatever its opened date', () => {
+    const store = getStore();
+    const now = Date.now();
+    const daysAgo = (days) => new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
+    const finding = (id, status, createdAt) => ({
+      id,
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_bypass.safe',
+      title: `Finding ${id}`,
+      severity: 'high',
+      status,
+      evidence_ids: [],
+      created_at: createdAt,
+    });
+    store.findings.push(
+      finding('fnd_old_open', 'open', daysAgo(60)),
+      finding('fnd_old_closed', 'closed', daysAgo(60)),
+      finding('fnd_new_closed', 'closed', daysAgo(1)),
+    );
+
+    const report = createReport(CTX, { kind: 'executive', title: 'Weekly', period: 'last-7-days', target_ids: ['tgt_1'] });
+    assert.equal(report.summary.open_findings, 1);
+    assert.equal(report.summary.open_findings_semantics.predicate, "status = 'open' inside scope at generation (any opened date)");
+    assert.equal(report.summary.findings_snapshot.predicate, 'scope_open_any_date_or_period');
+    assert.equal(report.summary.findings_snapshot.opened_in_period, 0);
+    const ids = report.summary.findings_snapshot.items.map((item) => item.id);
+    assert.equal(ids[0], 'fnd_old_open');
+    assert.equal(ids.includes('fnd_new_closed'), true);
+    assert.equal(ids.includes('fnd_old_closed'), false);
+
+    const html = exportReport(CTX, report.id, 'html');
+    assert.match(html.content, /Open findings at generation \(any opened date\): 1/);
+  });
+
+  it('matches the readiness unresolved count for a tenant-scope report', () => {
+    const store = getStore();
+    const old = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    store.findings.push(
+      { id: 'fnd_a', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'origin.direct_bypass.safe', title: 'A', severity: 'high', status: 'open', evidence_ids: [], created_at: old },
+      { id: 'fnd_b', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'origin.direct_bypass.safe', title: 'B', severity: 'medium', status: 'open', evidence_ids: [], created_at: new Date().toISOString() },
+    );
+    const report = createReport(CTX, { kind: 'executive', title: 'Estate', period: 'last-7-days' });
+    const readiness = computeReadiness('ten_demo');
+    assert.equal(report.summary.open_findings, 2);
+    assert.equal(report.summary.open_findings, readiness.findings.unresolved_count);
   });
 });
 

@@ -1,7 +1,7 @@
 import { FileQuestion } from 'lucide-react';
 import { EmptyState } from '../components/ui/empty-state';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
-import type { PortalConfig, PortalData, RouteId, Session } from '../lib/types';
+import type { PortalConfig, PortalData, PortalDataset, RouteId, Session } from '../lib/types';
 import { DetailRoutePage, ReportDetailPage } from './detail-pages';
 import { ValidationSurfacePage } from './functional-surfaces';
 import { DashboardPage } from './dashboard-page';
@@ -14,7 +14,7 @@ import {
   SupportPage,
 } from './page-components';
 import { IntegrationPage } from './integrations-page';
-import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } from './governance-pages';
+import { AuditPage, NotificationsPage, SocConsolePage } from './governance-pages';
 import { TargetsPage } from './targets-page';
 import { VectorLibraryPage } from './vector-library-page';
 import { ScanDetailView } from './scan-detail-view';
@@ -45,7 +45,7 @@ type RouteViewProps = {
   data: PortalData;
   config: PortalConfig;
   session: Session;
-  onRefresh: () => Promise<void>;
+  onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
   hydrating: boolean;
 };
 
@@ -94,9 +94,8 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
     return <NotificationsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (route === 'audit') return <AuditPage data={data} session={session} config={config} onRefresh={onRefresh} />;
-  if (route === 'release-evidence') return <ReleaseEvidencePage data={data} session={session} />;
   if (route === 'support') return <SupportPage data={data} session={session} config={config} />;
-  if (route === 'subscription') return <SubscriptionPage data={data} config={config} />;
+  if (route === 'subscription') return <SubscriptionPage data={data} config={config} session={session} />;
   if (route === 'internal-soc') {
     return (
       <SocConsolePage

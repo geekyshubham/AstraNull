@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Eye, SearchX, TriangleAlert } from 'lucide-react';
+import { Eye, SearchX, TriangleAlert } from 'lucide-react';
 import { Badge } from '../../components/ui/badge';
 import { AnchorButton, Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -9,13 +9,28 @@ import { usePublishInspectorSequence, type InspectorSequenceItem } from '../../c
 import { readFindingRemediationFields } from '../../lib/finding-detail';
 import { findingGroupCheckId } from '../../lib/findings-query.mjs';
 import { useProgressiveFindings } from '../../components/findings/use-server-findings';
+import { RiskAcceptanceDialog, type RiskAcceptanceInput } from '../../components/findings/risk-acceptance-dialog';
+import { DetailBackLink } from '../../components/layout/detail-back-link';
+import { useEntityDocumentTitle } from '../../components/layout/app-shell';
+import { ConfirmModal } from '../../lib/crud-ui';
+import { requestJson } from '../../lib/api';
+import { apiErrorMessage } from '../../lib/error-messages';
+import { sessionHasPermission } from '../../lib/dataset-access.mjs';
+import { FINDING_STATUS_DESCRIPTIONS, FINDING_STATUS_LABELS } from '../../lib/findings-query.mjs';
 import {
   assetHasLifecycle,
   assetMembersInLifecycle,
+  bulkFindingResultSummary,
+  bulkSelectionMembers,
   findGroupByKey,
+  findingDecisionNote,
+  findingNoteSections,
   groupFindings,
   groupSlaSummary,
+  planBulkFindingAction,
+  type BulkFindingAction,
   type FindingGroupAsset,
+  type FindingGroupAssetMember,
   type FindingStatusBucket
 } from '../../lib/finding-groups.mjs';
 import { formatVectorFamilyLabel, summarizeFindingStatuses } from '../../lib/findings-helpers';
@@ -36,15 +51,22 @@ export interface FindingGroupDetailPageProps {
   onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }
 
-type AssetFilter = Exclude<FindingStatusBucket, 'other'> | 'all';
+type AssetFilter = FindingStatusBucket | 'all';
 
 // Lifecycle buckets over the members read so far; each names the exact statuses it includes.
 const ASSET_FILTERS: Array<{ id: AssetFilter; label: string; statuses: string }> = [
   { id: 'all', label: 'All', statuses: 'every status' },
-  { id: 'open', label: 'Open', statuses: 'open' },
-  { id: 'accepted', label: 'Accepted', statuses: 'accepted risk or accepted' },
-  { id: 'closed', label: 'Closed', statuses: 'resolved or closed' }
+  { id: 'open', label: 'Active', statuses: 'open or in progress' },
+  { id: 'accepted', label: 'Risk decisions', statuses: 'accepted risk or accepted' },
+  { id: 'closed', label: 'Closed', statuses: 'resolved, closed or false positive' },
+  { id: 'other', label: 'Other', statuses: 'in a status this portal does not recognise' }
 ];
+
+const CLOSE_OUTCOMES = ['resolved', 'false_positive', 'closed'] as const;
+type CloseOutcome = (typeof CLOSE_OUTCOMES)[number];
+type BulkDialog = 'assign' | 'accept_risk' | 'close' | null;
+type BulkRowResult = { findingId: string; assetLabel: string; outcome: 'updated' | 'skipped' | 'failed'; message: string };
+type BulkRun = { counts: { updated: number; skipped: number; failed: number }; rows: BulkRowResult[] };
 
 const FINDINGS_HREF = '#findings';
 
@@ -54,8 +76,8 @@ function readGroupKey() {
   return index >= 0 ? new URLSearchParams(hash.slice(index + 1)).get('key') ?? '' : '';
 }
 
-function textOf(value: unknown) {
-  return typeof value === 'string' ? value.trim() : '';
+function memberAssetLabel(assets: FindingGroupAsset[], findingId: string) {
+  return assets.find((asset) => asset.members.some((member) => member.findingId === findingId))?.label ?? findingId;
 }
 
 export function FindingGroupDetailPage({ data, config, session, onRefresh }: FindingGroupDetailPageProps) {
@@ -65,6 +87,14 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
   const [assetFilter, setAssetFilter] = useState<AssetFilter>('all');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [bulkDialog, setBulkDialog] = useState<BulkDialog>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkRun, setBulkRun] = useState<BulkRun | null>(null);
+  const [assignee, setAssignee] = useState('');
+  const [closeOutcome, setCloseOutcome] = useState<CloseOutcome>('resolved');
+  const canTriage = sessionHasPermission(session, 'finding:write');
+  const canAcceptRisk = sessionHasPermission(session, 'finding:accept_risk');
 
   useEffect(() => {
     const onHashChange = () => setGroupKey(readGroupKey());
@@ -74,7 +104,12 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
 
   useEffect(() => {
     setAssetFilter('all');
+    setBulkRun(null);
   }, [groupKey]);
+
+  useEffect(() => {
+    setSelectedKeys(new Set());
+  }, [groupKey, assetFilter]);
 
   // Members come from the server's exact check predicate across every status, read in pages and
   // narrowed to this group's issue identity. A group without a check id cannot be filtered on the
@@ -87,16 +122,17 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
     [members.items, data.targets, data.checks]
   );
   const group = findGroupByKey(groups, groupKey);
+  useEntityDocumentTitle(group?.title);
   const complete = members.complete;
   const loadError = members.state === 'error' ? members.error : '';
   const loading = Boolean(groupKey) && members.state === 'loading';
   const unread = members.envelope?.total !== null && members.envelope?.total !== undefined ? Math.max(0, members.envelope.total - members.items.length) : null;
 
   const assetCounts = useMemo(() => {
-    const counts: Record<AssetFilter, number> = { all: group?.assets.length ?? 0, open: 0, accepted: 0, closed: 0 };
+    const counts: Record<AssetFilter, number> = { all: group?.assets.length ?? 0, open: 0, accepted: 0, closed: 0, other: 0 };
     // An asset counts toward every lifecycle one of its member findings is in.
     group?.assets.forEach((asset) => {
-      (['open', 'accepted', 'closed'] as const).forEach((bucket) => {
+      (['open', 'accepted', 'closed', 'other'] as const).forEach((bucket) => {
         if (assetHasLifecycle(asset, bucket)) counts[bucket] += 1;
       });
     });
@@ -107,6 +143,13 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
     () => (group?.assets ?? []).filter((asset) => assetHasLifecycle(asset, assetFilter)),
     [group, assetFilter]
   );
+  const shownFilters = ASSET_FILTERS.filter((filter) => filter.id !== 'other' || assetCounts.other > 0 || assetFilter === 'other');
+  const selectedMembers = useMemo(
+    () => bulkSelectionMembers(visibleAssets, selectedKeys, assetFilter),
+    [visibleAssets, selectedKeys, assetFilter]
+  );
+  const allShownSelected = visibleAssets.length > 0 && visibleAssets.every((asset) => selectedKeys.has(asset.key));
+  const someShownSelected = visibleAssets.some((asset) => selectedKeys.has(asset.key));
 
   // Every member finding under the active lifecycle filter, in table order. Each opens its own
   // original evidence; the inspector steps through them without wrapping or borrowing proof.
@@ -123,6 +166,57 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
 
   function inspectMember(findingId: string, targetId: string) {
     openInspector({ entry: 'group_member', finding_id: findingId, target_id: targetId || undefined }, `member-${findingId}`);
+  }
+
+  function toggleAsset(assetKey: string, checked: boolean) {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (checked) next.add(assetKey);
+      else next.delete(assetKey);
+      return next;
+    });
+  }
+
+  function toggleAllShown(checked: boolean) {
+    setSelectedKeys(checked ? new Set(visibleAssets.map((asset) => asset.key)) : new Set());
+  }
+
+  function bulkBody(member: FindingGroupAssetMember, action: BulkFindingAction, extra: { reason?: string; risk?: RiskAcceptanceInput }) {
+    if (action.kind === 'assign') return { assignee: action.assignee };
+    if (action.kind === 'accept_risk') return { status: 'accepted_risk', risk_acceptance: extra.risk };
+    const record = group?.findings.find((finding) => String(finding.id ?? '') === member.findingId);
+    const label = FINDING_STATUS_LABELS[action.status as CloseOutcome] ?? 'Closed';
+    return { status: action.status, notes: findingDecisionNote(record?.notes, label, extra.reason ?? '') };
+  }
+
+  /** One PATCH per member, in order, so each finding keeps its own evidence, result and audit record. */
+  async function runBulk(action: BulkFindingAction, extra: { reason?: string; risk?: RiskAcceptanceInput } = {}) {
+    if (!canTriage || bulkBusy || !group) return;
+    if (action.kind === 'accept_risk' && !canAcceptRisk) return;
+    const { apply, skip } = planBulkFindingAction(selectedMembers, action);
+    const assets = group.assets;
+    const rows: BulkRowResult[] = skip.map((member) => ({ findingId: member.findingId, assetLabel: memberAssetLabel(assets, member.findingId), outcome: 'skipped', message: 'Already in that state' }));
+    setBulkBusy(true);
+    setBulkRun(null);
+    for (const member of apply) {
+      try {
+        await requestJson(config, session, `/v1/findings/${encodeURIComponent(member.findingId)}`, { method: 'PATCH', body: bulkBody(member, action, extra) });
+        rows.push({ findingId: member.findingId, assetLabel: memberAssetLabel(assets, member.findingId), outcome: 'updated', message: '' });
+      } catch (err) {
+        rows.push({ findingId: member.findingId, assetLabel: memberAssetLabel(assets, member.findingId), outcome: 'failed', message: apiErrorMessage(err, 'Update failed.') });
+      }
+    }
+    const counts = {
+      updated: rows.filter((row) => row.outcome === 'updated').length,
+      skipped: rows.filter((row) => row.outcome === 'skipped').length,
+      failed: rows.filter((row) => row.outcome === 'failed').length
+    };
+    setBulkRun({ counts, rows });
+    setBulkDialog(null);
+    setBulkBusy(false);
+    setSelectedKeys(new Set());
+    setAssignee('');
+    if (counts.updated > 0) await refresh();
   }
 
   async function refresh() {
@@ -142,7 +236,7 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
   // wafActionItems is not a dataset on this route, so remediation comes from the finding record only.
   const remediation = representative ? readFindingRemediationFields(representative, data.wafActionItems ?? []) : null;
   const verdictMeaning = group ? plainVerdictDescription(group.verdict) : '';
-  const notes = representative ? textOf(representative.notes) : '';
+  const noteSections = representative ? findingNoteSections(representative) : [];
   const sla = group ? groupSlaSummary(group) : null;
   const slaHint = !sla
     ? ''
@@ -151,7 +245,41 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
         sla.undatedOpenCount > 0 ? `${sla.undatedOpenCount} open ${pluralize(sla.undatedOpenCount, 'finding')} not dated` : ''
       ].filter(Boolean).join(', ');
 
+  const bulkRowsByFinding = new Map((bulkRun?.rows ?? []).map((row) => [row.findingId, row]));
+  const selectAllShown = (placement: 'header' | 'toolbar') => (
+    <label className={`rf-bulk-check rf-bulk-select-all rf-bulk-select-all--${placement}`}>
+      <input
+        type="checkbox"
+        checked={allShownSelected}
+        ref={(node) => { if (node) node.indeterminate = someShownSelected && !allShownSelected; }}
+        disabled={bulkBusy || visibleAssets.length === 0}
+        onChange={(event) => toggleAllShown(event.target.checked)}
+      />
+      <span className={placement === 'header' ? 'sr-only' : undefined}>Select all shown</span>
+    </label>
+  );
+  const selectColumn: TableColumn<FindingGroupAsset> = {
+    key: 'select',
+    label: 'Select',
+    header: selectAllShown('header'),
+    render: (asset) => {
+      const count = assetMembersInLifecycle(asset, assetFilter).filter((member) => member.findingId).length;
+      return (
+        <label className="rf-bulk-check">
+          <input
+            type="checkbox"
+            checked={selectedKeys.has(asset.key)}
+            disabled={bulkBusy || count === 0}
+            onChange={(event) => toggleAsset(asset.key, event.target.checked)}
+          />
+          <span className="sr-only">Select {count} {pluralize(count, 'finding')} on {asset.label}</span>
+        </label>
+      );
+    }
+  };
+
   const assetColumns: TableColumn<FindingGroupAsset>[] = [
+    ...(canTriage ? [selectColumn] : []),
     {
       key: 'asset',
       label: 'Target',
@@ -172,6 +300,11 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
           <FindingStatusBadge status={asset.status} />
           {asset.members.length > 1 ? <small>{asset.members.length} findings: {summarizeFindingStatuses(asset.statusBreakdown)}</small> : null}
           {asset.owners.length > 1 ? <small>Owners: {asset.owners.join(', ')}</small> : null}
+          {asset.members.some((member) => bulkRowsByFinding.has(member.findingId)) ? (
+            <small>
+              Last bulk change: {asset.members.map((member) => bulkRowsByFinding.get(member.findingId)).filter(Boolean).map((row) => row?.outcome).join(', ')}
+            </small>
+          ) : null}
         </span>
       )
     },
@@ -238,10 +371,7 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
 
   return (
     <div className="content refined rf-finding-group">
-      <a className="rf-back-link" href={FINDINGS_HREF}>
-        <ArrowLeft size={16} aria-hidden="true" />
-        Back to findings
-      </a>
+      <DetailBackLink route="finding-group-detail" />
 
       <header className="rf-header">
         <div className="rf-header-copy">
@@ -304,9 +434,9 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
               <span className="rf-stat-hint">{group.findingIds.length} {pluralize(group.findingIds.length, 'finding')}{complete ? '' : ' read so far'}</span>
             </div>
             <div className="rf-stat">
-              <span className="rf-stat-label">Open</span>
+              <span className="rf-stat-label">Active</span>
               <span className="rf-stat-value">{group.openCount}{complete ? '' : '+'}</span>
-              <span className="rf-stat-hint">{group.openAssetCount} {pluralize(group.openAssetCount, 'target')} with an open finding</span>
+              <span className="rf-stat-hint">{group.openAssetCount} {pluralize(group.openAssetCount, 'target')} with an active finding</span>
             </div>
             <div className="rf-stat" data-tone={sla?.state === 'breached' ? 'danger' : undefined}>
               <span className="rf-stat-label">SLA</span>
@@ -319,7 +449,7 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
             <div className="rf-stat">
               <span className="rf-stat-label">First opened</span>
               <span className="rf-stat-value rf-stat-date">{formatDate(group.earliestOpenedAt)}</span>
-              <span className="rf-stat-hint">Last observed {formatDate(group.lastObservedAt)}</span>
+              <span className="rf-stat-hint">{group.lastObservedAt ? `Last observed ${formatDate(group.lastObservedAt)}` : `First observed ${formatDate(group.firstObservedAt ?? group.earliestOpenedAt)}`}</span>
             </div>
             <div className="rf-stat">
               <span className="rf-stat-label">Owners</span>
@@ -364,12 +494,15 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
                     )}
                   </dd>
                 </div>
-                {notes ? (
-                  <div>
-                    <dt>Triage notes</dt>
-                    <dd>{notes}</dd>
+                {noteSections.map((section) => (
+                  <div key={section.id} data-note-section={section.id}>
+                    <dt>{section.label}</dt>
+                    <dd className="rf-note-text">
+                      {section.text}
+                      <span className="rf-cell-muted">{section.id === 'recorded' ? ' Recorded by the server for the example finding.' : ' Written by your team on the example finding.'}</span>
+                    </dd>
                   </div>
-                ) : null}
+                ))}
               </dl>
             </div>
           </section>
@@ -378,9 +511,9 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
             <div className="rf-section-head">
               <h2 id="rf-group-assets">Affected targets</h2>
               <div className="rf-segmented" role="group" aria-label="Affected target status filter">
-                {ASSET_FILTERS.map((filter) => (
+                {shownFilters.map((filter) => (
                   <button key={filter.id} type="button" aria-pressed={assetFilter === filter.id} title={`Targets with a finding that is ${filter.statuses}`} onClick={() => setAssetFilter(filter.id)}>
-                    {filter.label}
+                    {filter.label}{' '}
                     <span className="rf-tab-count tabular-nums">{assetCounts[filter.id]}</span>
                   </button>
                 ))}
@@ -389,6 +522,24 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
             <p className="rf-result-count">
               {ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.label} counts targets with a finding that is {ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.statuses}{complete ? '' : ', among members read so far'}. View evidence opens each target's own original proof beside this list; Previous and Next step through the targets shown. A pass on one target never resolves another.
             </p>
+            {canTriage && visibleAssets.length > 0 ? (
+              <div className="rf-bulk-toolbar">
+                {selectAllShown('toolbar')}
+                <span className="rf-cell-muted">Selecting a target selects its findings in the {ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.label.toLowerCase()} filter.</span>
+              </div>
+            ) : null}
+            {bulkRun ? (
+              <div className="rf-bulk-result" role="status">
+                <p>{bulkFindingResultSummary(bulkRun.counts)}.</p>
+                {bulkRun.counts.failed > 0 ? (
+                  <ul aria-label="Findings that failed to update">
+                    {bulkRun.rows.filter((row) => row.outcome === 'failed').map((row) => (
+                      <li key={row.findingId}><span className="rf-mono">{row.findingId}</span> on {row.assetLabel}: {row.message}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
             <div className="rf-panel rf-panel-flush rf-findings-table rf-stack-table">
               <DataTable
                 columns={assetColumns}
@@ -398,13 +549,77 @@ export function FindingGroupDetailPage({ data, config, session, onRefresh }: Fin
                 empty={(
                   <EmptyState
                     icon={SearchX}
-                    title={`No ${assetFilter === 'all' ? '' : `${assetFilter} `}targets in this group`}
+                    title={`No ${assetFilter === 'all' ? '' : `${ASSET_FILTERS.find((filter) => filter.id === assetFilter)?.label.toLowerCase()} `}targets in this group`}
                     body="Choose another status to see the remaining affected targets."
                   />
                 )}
               />
             </div>
+            {canTriage && selectedMembers.length > 0 ? (
+              <div className="rf-bulk-bar" role="region" aria-label="Bulk triage">
+                <p className="rf-bulk-count">
+                  <strong className="tabular-nums">{selectedMembers.length}</strong> {pluralize(selectedMembers.length, 'finding')} selected. Each keeps its own evidence and audit record.
+                </p>
+                <div className="rf-bulk-actions">
+                  <Button size="sm" variant="secondary" disabled={bulkBusy} onClick={() => setBulkDialog('assign')}>Assign owner…</Button>
+                  {canAcceptRisk ? <Button size="sm" variant="secondary" className="rf-bulk-accept-risk" disabled={bulkBusy} onClick={() => setBulkDialog('accept_risk')}>Accept risk…</Button> : null}
+                  <Button size="sm" variant="secondary" disabled={bulkBusy} onClick={() => setBulkDialog('close')}>Close…</Button>
+                  <Button size="sm" variant="ghost" disabled={bulkBusy} onClick={() => setSelectedKeys(new Set())}>Clear selection</Button>
+                </div>
+              </div>
+            ) : null}
           </section>
+          {canTriage ? (
+            <>
+              <ConfirmModal
+                open={bulkDialog === 'assign'}
+                title={`Assign an owner to ${selectedMembers.length} ${pluralize(selectedMembers.length, 'finding')}`}
+                confirmLabel="Assign owner"
+                confirmTone="default"
+                busy={bulkBusy}
+                confirmDisabled={!assignee.trim()}
+                onCancel={() => { setBulkDialog(null); setAssignee(''); }}
+                onConfirm={() => void runBulk({ kind: 'assign', assignee: assignee.trim() })}
+                description={(
+                  <div className="stack-tight">
+                    <p>Each selected finding gets this owner in its own update. Findings that already have it are skipped.</p>
+                    <label className="field full">
+                      <span>Owner</span>
+                      <input className="input" value={assignee} required aria-required="true" disabled={bulkBusy} onChange={(event) => setAssignee(event.target.value)} placeholder="team or user" />
+                    </label>
+                  </div>
+                )}
+              />
+              <ConfirmModal
+                open={bulkDialog === 'close'}
+                title={`Close ${selectedMembers.length} ${pluralize(selectedMembers.length, 'finding')}`}
+                confirmLabel="Record outcome"
+                confirmTone="danger"
+                busy={bulkBusy}
+                reason={{ label: 'Reason for this outcome', required: true, placeholder: 'Recorded in each finding\'s triage notes.' }}
+                onCancel={() => setBulkDialog(null)}
+                onConfirm={(reason) => void runBulk({ kind: 'close', status: closeOutcome }, { reason: reason ?? '' })}
+                description={(
+                  <div className="stack-tight">
+                    <label className="field full">
+                      <span>Outcome</span>
+                      <select className="input" value={closeOutcome} disabled={bulkBusy} onChange={(event) => setCloseOutcome(event.target.value as CloseOutcome)}>
+                        {CLOSE_OUTCOMES.map((status) => <option key={status} value={status}>{FINDING_STATUS_LABELS[status]}</option>)}
+                      </select>
+                    </label>
+                    <p className="muted small">{FINDING_STATUS_DESCRIPTIONS[closeOutcome]}. Closure is a recorded status change, not proof of a fix; findings already in this state are skipped.</p>
+                  </div>
+                )}
+              />
+              <RiskAcceptanceDialog
+                open={bulkDialog === 'accept_risk' && canAcceptRisk}
+                busy={bulkBusy}
+                findingCount={selectedMembers.length}
+                onCancel={() => setBulkDialog(null)}
+                onConfirm={(risk) => void runBulk({ kind: 'accept_risk' }, { risk })}
+              />
+            </>
+          ) : null}
         </>
       )}
     </div>

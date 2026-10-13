@@ -3,7 +3,13 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { loadRuntimeConfig, resolvePersistenceMode, resolveAuthMode } from '../../src/config.mjs';
+import {
+  loadRuntimeConfig,
+  resolvePersistenceMode,
+  resolveAuthMode,
+  resolvePublicSupportContact,
+} from '../../src/config.mjs';
+import { getPublicSiteConfig } from '../../src/services/publicSite.mjs';
 import { mintSignedSessionToken, verifySignedSessionToken } from '../../src/context.mjs';
 
 const TEST_SECRET = 'test-session-secret-at-least-32-chars!!';
@@ -539,5 +545,92 @@ describe('signed session tokens', () => {
       .digest('base64url');
     const token = `asn1.${payloadB64}.${sig}`;
     assert.equal(verifySignedSessionToken(token, TEST_SECRET).error, 'invalid_role');
+  });
+});
+
+describe('public support contact config', () => {
+  const collect = () => {
+    const warnings = [];
+    return { warnings, warn: (message) => warnings.push(message) };
+  };
+
+  it('parses a valid support email and https or same-origin support URL', () => {
+    const { warnings, warn } = collect();
+    assert.deepEqual(
+      resolvePublicSupportContact({
+        NODE_ENV: 'test',
+        ASTRANULL_PUBLIC_SUPPORT_EMAIL: ' support@example.com ',
+        ASTRANULL_PUBLIC_SUPPORT_URL: 'https://help.example.com/astranull',
+      }, { warn }),
+      { supportEmail: 'support@example.com', supportUrl: 'https://help.example.com/astranull' },
+    );
+    assert.deepEqual(
+      resolvePublicSupportContact({ NODE_ENV: 'test', ASTRANULL_PUBLIC_SUPPORT_URL: '/support' }, { warn }),
+      { supportEmail: null, supportUrl: '/support' },
+    );
+    assert.deepEqual(resolvePublicSupportContact({ NODE_ENV: 'test' }, { warn }), { supportEmail: null, supportUrl: null });
+    assert.deepEqual(warnings, []);
+  });
+
+  it('rejects malformed emails and non-https or script support URLs', () => {
+    for (const email of ['not-an-email', 'a@b', 'x@y.com, z@w.com', 'a b@example.com']) {
+      assert.throws(
+        () => resolvePublicSupportContact({ NODE_ENV: 'test', ASTRANULL_PUBLIC_SUPPORT_EMAIL: email }),
+        /ASTRANULL_PUBLIC_SUPPORT_EMAIL/,
+        email,
+      );
+    }
+    for (const url of [
+      'http://help.example.com',
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      'data:text/html,hi',
+      '//evil.example.com',
+      '/\\evil.example.com',
+      'https://user:pass@help.example.com',
+      'help.example.com',
+    ]) {
+      assert.throws(
+        () => resolvePublicSupportContact({ NODE_ENV: 'test', ASTRANULL_PUBLIC_SUPPORT_URL: url }),
+        /ASTRANULL_PUBLIC_SUPPORT_URL/,
+        url,
+      );
+    }
+  });
+
+  it('warns only when a production deployment accepts signups without a support contact', () => {
+    let sink = collect();
+    resolvePublicSupportContact({ NODE_ENV: 'production' }, { warn: sink.warn });
+    assert.equal(sink.warnings.length, 1);
+    assert.match(sink.warnings[0], /ASTRANULL_PUBLIC_SUPPORT_EMAIL/);
+
+    sink = collect();
+    resolvePublicSupportContact({ NODE_ENV: 'test', ASTRANULL_DEPLOYMENT_PROFILE: 'production' }, { warn: sink.warn });
+    assert.equal(sink.warnings.length, 1);
+
+    sink = collect();
+    resolvePublicSupportContact({ NODE_ENV: 'production', ASTRANULL_PUBLIC_SIGNUP_ENABLED: '0' }, { warn: sink.warn });
+    resolvePublicSupportContact(
+      { NODE_ENV: 'production', ASTRANULL_PUBLIC_SUPPORT_EMAIL: 'support@example.com' },
+      { warn: sink.warn },
+    );
+    resolvePublicSupportContact({ NODE_ENV: 'test' }, { warn: sink.warn });
+    assert.deepEqual(sink.warnings, []);
+  });
+
+  it('publishes the configured contact through getPublicSiteConfig and null otherwise', () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.ASTRANULL_AUTH_MODE;
+    process.env.ASTRANULL_PUBLIC_SUPPORT_EMAIL = 'support@example.com';
+    process.env.ASTRANULL_PUBLIC_SUPPORT_URL = '/support';
+    const configured = getPublicSiteConfig(loadRuntimeConfig());
+    assert.equal(configured.support_email, 'support@example.com');
+    assert.equal(configured.support_url, '/support');
+
+    delete process.env.ASTRANULL_PUBLIC_SUPPORT_EMAIL;
+    delete process.env.ASTRANULL_PUBLIC_SUPPORT_URL;
+    const unset = getPublicSiteConfig(loadRuntimeConfig());
+    assert.equal(unset.support_email, null);
+    assert.equal(unset.support_url, null);
   });
 });

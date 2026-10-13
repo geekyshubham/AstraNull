@@ -248,6 +248,13 @@
 /* The dashboard's tables have three columns; the shared 780px table minimum would clip them beside a
    docked inspector. They keep their own scroll region below this width. */
 .an-dash-grid .data-table { min-width: 32rem; }
+/* Phone width (shared tables stack into cards at 700px): verdict cells stay on screen; long names and run IDs wrap. */
+@media (max-width: 700px) {
+  body .an-dash-grid .table-wrap .data-table { min-width: 0; }
+}
+body .dash-area-activity .posture-target .link-button { white-space: normal; overflow-wrap: anywhere; text-align: start; }
+body .dash-area-activity .posture-target small { overflow-wrap: anywhere; }
+body .dash-area-activity .table-wrap .data-table .posture-target small.mono { white-space: normal; }
 .dash-area-readiness { grid-area: readiness; }
 .dash-area-targets { grid-area: targets; }
 .dash-area-fixes { grid-area: fixes; }
@@ -398,6 +405,16 @@
 .fix-copy strong { font-size: 0.9375rem; overflow-wrap: anywhere; }
 .fix-copy span { font-size: 0.8125rem; color: var(--fg-2); overflow-wrap: anywhere; }
 
+/* Finding evidence status and the first-run setup sequence. */
+.fix-evidence { display: flex; margin-top: var(--space-1); }
+.fix-rank[data-state='done'] { color: var(--success); }
+.fix-rank[data-state='upcoming'] { color: var(--fg-2); box-shadow: none; background: transparent; border: 1px dashed var(--border-strong); }
+.setup-row[data-state='current'] .fix-rank { color: var(--fg); }
+.setup-row:not([data-state='current']) { grid-template-columns: auto minmax(0, 1fr); }
+.fix-copy.setup-muted span { color: var(--fg-2); font-size: var(--text-sm); }
+.setup-row[data-locked='true'] { grid-template-columns: auto minmax(0, 1fr); }
+.fix-copy .setup-role-note { margin-top: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
+
 /* ---- Target posture table cell (targets-first) ---- */
 .dash-posture-table .verify-chip { white-space: normal; line-height: 1.35; }
 .posture-target {
@@ -418,7 +435,7 @@
 }
 .posture-tag {
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-xs);
   color: var(--fg-2);
   padding: 1px var(--space-1-5);
   border-radius: var(--radius-sm);
@@ -427,6 +444,8 @@
   white-space: nowrap;
 }
 .posture-tags-empty { color: var(--fg-2); font-size: 0.75rem; }
+.posture-target small { color: var(--fg-2); font-size: var(--text-xs); }
+.posture-target small.mono { font-size: var(--text-xs); }
 .posture-verdict { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .posture-verdict-note { color: var(--fg-2); font-size: 0.75rem; }
 
@@ -481,6 +500,49 @@
   color: var(--fg-2);
   line-height: 1.4;
 }
+body .factor-row[data-kind='penalty'] .factor-score { color: var(--fg-2); }
+body .factor-row[data-kind='penalty'][data-deducted] .factor-score { color: var(--danger); font-weight: 600; }
+body .factor-row[data-kind='context'] .factor-score { color: var(--fg-2); font-family: var(--font-body); font-size: var(--text-xs); }
+.factor-context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+.factor-context-title {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.factor-gates {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  color: var(--fg);
+}
+.factor-gates li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); overflow-wrap: anywhere; }
+.factor-gates a { color: var(--fg); text-underline-offset: 3px; white-space: nowrap; }
+@media (pointer: coarse) { .factor-gates li { align-items: center; } .factor-gates a { display: inline-flex; align-items: center; min-height: var(--touch-target); } }
+.factor-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+.factor-total strong { font-family: var(--font-mono); color: var(--fg); }
 
 /* ---- Risk trends layout ---- */
 .risk-trends {

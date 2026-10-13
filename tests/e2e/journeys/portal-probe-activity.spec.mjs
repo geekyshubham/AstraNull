@@ -110,7 +110,7 @@ test('recorded requests, omitted attempts, details, search, pause, and standalon
   await expect(panel).toContainText('No recorded events match these filters');
   await panel.getByRole('searchbox', { name: 'Search execution activity' }).fill('');
   await panel.getByRole('combobox', { name: 'Activity severity' }).selectOption('warning');
-  await expect(panel).toContainText('outside request budget');
+  await expect(panel).toContainText(/outside request budget/i);
   await expect(panel).not.toContainText('HTTP 418');
   await panel.getByRole('combobox', { name: 'Activity severity' }).selectOption('all');
   await panel.getByRole('button', { name: 'Pause updates' }).click();
@@ -126,6 +126,32 @@ test('recorded requests, omitted attempts, details, search, pause, and standalon
   await expect.poll(() => state.cancels.length).toBe(1);
   expect(state.cancels[0].reason).toBe('Stopped from target execution activity');
   await expect(page.getByRole('button', { name: 'Stop current check', exact: true })).toHaveCount(0);
+});
+
+test('only one Stop is offered for the run the Inspector is already showing', async ({ page }) => {
+  await fixture(page);
+  const activity = page.locator('.td-validate .probe-activity');
+  await expect(activity.getByRole('button', { name: /^Stop/ })).toHaveCount(1);
+  await mockContext(page);
+  await page.evaluate(({ target, check, run }) => { const params = new URLSearchParams(location.hash.split('?')[1]); params.set('inspect', 'check_result'); params.set('ev_target', target); params.set('ev_check', check); params.set('ev_run', run); location.hash = `target-detail?${params}`; }, { target: TARGET, check: CHECK, run: RUN });
+  await expect(page.locator('.inspector-panel .ei-execution')).toBeVisible();
+  await expect(activity.getByRole('button', { name: /^Stop/ })).toHaveCount(0);
+  await expect(page.locator('.inspector-panel').getByRole('button', { name: 'Stop check', exact: true })).toHaveCount(1);
+});
+
+test('the Validate tab shows no activity console until a check is selected or running', async ({ page }) => {
+  await page.route('**/v1/validation-scans?*', (route) => route.fulfill({ json: { items: [], count: 0, meta: {} } }));
+  await page.route('**/v1/test-runs?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('target_id') !== TARGET) return route.continue();
+    await route.fulfill({ json: { items: [{ id: 'run_idle_past', target_id: TARGET, check_id: CHECK, status: 'completed', created_at: AT }], count: 1, meta: {} } });
+  });
+  await injectPortalDevHeadersSession(page);
+  await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl(), { entityIds: { 'target-detail': TARGET } });
+  await page.getByRole('tab', { name: /Validate/ }).click();
+  await expect(page.locator('.td-checks')).toBeVisible();
+  await expect(page.locator('.td-start-bar')).toContainText('No check selected');
+  await expect(page.locator('.td-validate .probe-activity')).toHaveCount(0);
+  await expect(page.locator('.td-scan-terminal')).toHaveCount(0);
 });
 
 test('a read-only viewer can inspect logs but has no Stop controls', async ({ page }) => {
@@ -169,7 +195,7 @@ test('a pause on an older run cannot leave the next active run with an empty liv
     run_id: next, check_id: CHECK, target_id: TARGET, status: 'collecting', telemetry_recorded: true,
     items: [{ id: 'next_log', stage: 'request_started', method: 'GET', phase: 'replacement', at: AT, source: 'signed_worker' }], count: 1,
   } }));
-  await expect(panel).toContainText('replacement', { timeout: 12000 });
+  await expect(panel).toContainText(/replacement/i, { timeout: 12000 });
   await expect(panel.getByRole('button', { name: 'Pause updates' })).toBeVisible();
 });
 
@@ -236,7 +262,8 @@ test('reviewed Play opens and focuses the exact returned run, including fast com
   await expect(inspector).not.toContainText('run_old_capped_list');
   await expect(inspector).toContainText(`evt_${accepted}_result`, { timeout: 12000 });
   await expect(inspector).toContainText('Recorded blocked response for run exact accepted');
-  await expect(inspector.locator('.probe-activity-status')).toContainText('1 attested operations');
+  await expect(inspector.locator('.probe-activity-status')).toContainText('1 requests sent (recorded)');
+  await expect(inspector.locator('.probe-activity-status')).not.toContainText('attested operations');
   expect(bodies).toEqual([{ target_id: TARGET, check_id: CHECK }]);
   const executionUrl = page.url();
   await inspector.getByRole('button', { name: 'Close Check result' }).click();
@@ -376,23 +403,23 @@ test('assessment follows only its own active child, pinning holds, and child Sto
   await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}`);
   const inspector = page.locator('.inspector-panel');
   await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
-  await inspector.getByRole('button', { name: 'Pin this check', exact: true }).click(); active = second;
+  await inspector.getByRole('button', { name: 'Keep showing this check', exact: true }).click(); active = second;
   await page.waitForTimeout(2800);
   await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
-  await expect(inspector).toContainText('Pinned child');
+  await expect(inspector).toContainText('This check only · stays here when the next check starts');
   await inspector.getByRole('button', { name: 'Follow active check', exact: true }).first().click();
   await expect(inspector.locator('.probe-activity-run')).toHaveText(second);
   await inspector.getByRole('button', { name: 'Stop check', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: 'Stop this exact check?' });
-  await expect(confirm).toContainText('Other checks in the assessment may continue');
+  await expect(confirm).toContainText('Other checks in the scan may continue');
   active = first; await page.waitForTimeout(2800);
   await page.evaluate((id) => { const params = new URLSearchParams(location.hash.split('?')[1]); params.set('ev_display', 'pinned'); params.set('ev_pin', id); location.hash = `target-detail?${params}`; }, first);
   await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
   await expect(confirm).toBeVisible();
   await confirm.getByRole('button', { name: 'Stop check', exact: true }).click();
   await expect.poll(() => cancelled).toEqual([second]);
-  await inspector.getByRole('button', { name: 'Stop assessment', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Stop this assessment?' }).getByRole('button', { name: 'Stop assessment', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Stop scan', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Stop this scan?' }).getByRole('button', { name: 'Stop scan', exact: true }).click();
   await expect.poll(() => cancelled).toEqual([second, scanId]);
 });
 
@@ -415,14 +442,14 @@ test('assessment A restores pinned A1 on reload despite active A2 and newer B, t
   await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}`);
   const inspector = page.locator('.inspector-panel');
   await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
-  await inspector.getByRole('button', { name: 'Pin this check', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Keep showing this check', exact: true }).click();
   active = second;
   await expect(page).toHaveURL(/ev_display=pinned.*ev_pin=run_pin_restore_a1/);
-  await expect(inspector.getByRole('combobox', { name: 'Inspect a recorded child' }).locator('option[value="run_pin_restore_a2"]')).toHaveCount(1);
+  await expect(inspector.getByRole('combobox', { name: 'Show another check from this scan' }).locator('option[value="run_pin_restore_a2"]')).toHaveCount(1);
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}.*ev_display=pinned.*ev_pin=${first}`));
   await expect(inspector.locator('.probe-activity-run')).toHaveText(first);
-  await expect(inspector).toContainText('Pinned child');
+  await expect(inspector).toContainText('This check only · stays here when the next check starts');
   await expect(inspector).not.toContainText(newer);
   await expect(inspector).toContainText(`evt_${first}_result`);
   await inspector.getByRole('button', { name: 'Follow active check', exact: true }).first().click();
@@ -459,7 +486,7 @@ for (const invalid of ['missing', 'unrelated', 'other-target', 'malformed', 'for
     const pinParam = invalid === 'missing' ? '' : `&ev_pin=${invalid === 'malformed' ? 'bad%20pin' : pinned}`;
     await page.goto(`${getPortalPlaywrightBaseUrl()}/app#target-detail?id=${TARGET}&tab=validate&inspect=validation_scan&ev_target=${TARGET}&ev_scan=${scanId}&ev_display=pinned${pinParam}`);
     const inspector = page.locator('.inspector-panel');
-    await expect(inspector).toContainText('Pinned child unavailable');
+    await expect(inspector).toContainText('Selected check unavailable');
     await expect(inspector.locator('.probe-activity-run')).toHaveCount(0);
     await expect(inspector).not.toContainText(`evt_${active}_result`);
     await expect(inspector.getByRole('button', { name: 'Stop check', exact: true })).toHaveCount(0);
@@ -490,7 +517,7 @@ test('restored pin revalidates membership after role, tenant and session changes
   await page.getByRole('option', { name: /viewer/i }).click();
   await expect.poll(() => scanScopes.some(([, , role]) => role === 'viewer')).toBe(true);
   release();
-  await expect(page.locator('.inspector-panel')).toContainText('Pinned child unavailable');
+  await expect(page.locator('.inspector-panel')).toContainText('Selected check unavailable');
   expect(childReads).toEqual([]);
   await page.evaluate(() => {
     sessionStorage.setItem('astranull.portal.session.v1', JSON.stringify({ mode: 'dev-headers', principal: 'customer', role: 'viewer', tenant_id: 'ten_foreign_pin', user_id: 'usr_foreign_pin' }));
@@ -500,7 +527,7 @@ test('restored pin revalidates membership after role, tenant and session changes
   // Same-document navigation keeps the replacement session; a reload would rerun the owner init script.
   await page.evaluate((hash) => { location.hash = hash; }, new URL(href).hash);
   await expect.poll(() => scanScopes.some(([tenant, user]) => tenant === 'ten_foreign_pin' && user === 'usr_foreign_pin')).toBe(true);
-  await expect(page.locator('.inspector-panel')).toContainText('Pinned child unavailable');
+  await expect(page.locator('.inspector-panel')).toContainText('Selected check unavailable');
   expect(childReads).toEqual([]);
 });
 
@@ -590,7 +617,7 @@ test('reviewed run-all opens and passively reconnects/reloads the exact accepted
   await expect(review).toContainText('The server re-checks ownership'); expect(bodies).toEqual([]);
   await review.getByRole('button', { name: 'Start all checks', exact: true }).click();
   const inspector = page.locator('.inspector-panel');
-  await expect(inspector.getByRole('heading', { name: 'Assessment execution', exact: true })).toBeFocused();
+  await expect(inspector.getByRole('heading', { name: 'Validation scan', exact: true })).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`ev_scan=${scanId}`));
   await expect(inspector.locator('.probe-activity-run')).toHaveText(child);
   await expect(inspector).not.toContainText('scan_stale_latest');
@@ -739,7 +766,7 @@ test('connected reviewed Play observes real loopback HTTP through signed worker 
   const inspector = page.locator('.inspector-panel');
   await expect(inspector.locator('.probe-activity-table')).toContainText('GET', { timeout: 15000 });
   await expect(inspector.locator('.probe-activity-table')).toContainText('HTTP 403');
-  await expect(inspector.locator('.probe-activity-status')).toContainText(`${wireCalls.length} attested operations`);
+  await expect(inspector.locator('.probe-activity-status')).toContainText(`${wireCalls.length} requests sent (recorded)`);
   const activity = await fetch(`${apiBase}/v1/test-runs/${run.id}/activity?limit=256`, { headers: { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' } }).then((response) => response.json());
   expect(JSON.stringify(activity)).not.toMatch(/local-customer-secret-123|private-response-password/);
   const payload = activity.items.find((item) => item.response_payload_preview?.includes('local-wire-observed')); expect(payload).toBeTruthy();

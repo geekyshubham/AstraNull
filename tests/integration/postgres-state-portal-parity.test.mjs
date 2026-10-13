@@ -117,7 +117,8 @@ function devStore() {
 }
 
 function assertPortalStateShape(payload) {
-  assert.deepEqual(payload.readiness.posture, { pass: 0, review: payload.readiness.coverage.applicable_count, gap: 0, total: payload.readiness.coverage.applicable_count }, 'legacy E2 verdicts never earn current protection or exposure credit');
+  const { applicable_count: applicable, not_run_count: notRun } = payload.readiness.coverage;
+  assert.deepEqual(payload.readiness.posture, { pass: 0, review: applicable - notRun, gap: 0, not_run: notRun, total: applicable }, 'legacy E2 verdicts never earn current protection or exposure credit');
   assert.deepEqual(
     payload.recent_runs.map((run) => run.id),
     ['run_state_3', 'run_state_4', 'run_state_5', 'run_state_6', 'run_state_7'],

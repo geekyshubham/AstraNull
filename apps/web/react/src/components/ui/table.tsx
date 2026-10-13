@@ -6,6 +6,7 @@ import './primitives.css';
 export type TableColumn<T> = {
   key: string;
   label: string;
+  header?: ReactNode;
   render: (item: T) => ReactNode;
 };
 
@@ -71,7 +72,7 @@ function TableHeaderRow<T>({ columns }: { columns: TableColumn<T>[] }) {
       <tr>
         {columns.map((column) => (
           <th key={column.key} scope="col">
-            {column.label}
+            {column.header ?? column.label}
           </th>
         ))}
       </tr>

@@ -144,6 +144,33 @@ describe('reports and report detail (TF-12)', () => {
     assert.match(reportsPage, /It is not a certification or a statement of compliance/);
   });
 
+  it('treats internal audit as a framework mapping and describes every framework', () => {
+    const audiences = between(pageComponents, 'const REPORT_AUDIENCE_KINDS', 'const REPORT_FRAMEWORK_DESCRIPTIONS');
+    assert.doesNotMatch(audiences, /internal_audit/);
+    assert.match(audiences, /Evidence pack for internal or external auditors: run and test IDs, timestamps, approval artifacts, and custody hashes\./);
+    assert.match(pageComponents, /const REPORT_FRAMEWORK_KINDS = new Set\(Object\.keys\(REPORT_FRAMEWORK_DESCRIPTIONS\)\);/);
+    for (const text of ['Maps evidence to SOC 2 Trust Services Criteria.', 'Maps evidence to ISO/IEC 27001 Annex A controls.', 'Maps evidence to DORA ICT risk and resilience articles.', 'Maps evidence to NIS2 Article 21 security measures.', 'internal-audit control set']) {
+      assert.ok(pageComponents.includes(text), text);
+    }
+    assert.doesNotMatch(reportsPage, /<small>Control mapping<\/small>/);
+  });
+
+  it('lists generated reports before the builder and brings a new snapshot into view', () => {
+    const order = ['ref={previewRef}', 'title="Generated reports"', 'title="New report"', '<ProtectionValidationReportPanel'];
+    const positions = order.map((marker) => reportsPage.indexOf(marker));
+    assert.ok(positions.every((value, index) => value >= 0 && (index === 0 || value > positions[index - 1])), positions.join(','));
+    assert.match(reportsPage, /Choose an audience below to generate the first snapshot\./);
+    assert.match(reportsPage, /preview\.scrollIntoView\(\{ block: 'start', behavior: prefersReducedMotion\(\) \? 'auto' : 'smooth' \}\);/);
+    assert.match(reportsPage, /preview\.focus\(\{ preventScroll: true \}\);/);
+    assert.match(reportsPage, /Review the snapshot at the top of this page, then export if you need a file\./);
+    assert.match(pageComponents, /Declared targets in scope, every finding open at generation, closed findings and recorded runs inside the period\./);
+    assert.match(pageComponents, /Findings in this snapshot/);
+    assert.match(pageComponents, /Open at generation \(any opened date\)/);
+    assert.match(reportsPage, /label: 'Generated', render: \(item\) => <span className="mono">\{formatTimestamp\(/);
+    assert.match(pageComponents, /downloaded \$\{formatTimestamp\(record\.exportedAt\)\}/);
+    assert.match(pageComponents, /Snapshot frozen \$\{getString\(summary \?\? \{\}, \['as_of'\], ''\) \? formatTimestamp\(/);
+  });
+
   it('keeps one export menu, verifies custody only on an explicit action, and separates live status', () => {
     assert.equal((reportDetail.match(/<ReportExportMenu/g) ?? []).length, 1);
     assert.doesNotMatch(reportDetail, /Export JSON<\/Button>/);
@@ -208,9 +235,48 @@ describe('support (TF-14)', () => {
     assert.doesNotMatch(supportPage, /href="#runs"/);
   });
 
-  it('falls back to the workspace administrator and refuses to copy credential-like notes', () => {
+  it('falls back to the workspace administrator for members only and refuses to copy credential-like notes', () => {
     assert.match(supportPage, /No support channel is configured for this deployment/);
     assert.match(supportPage, /looks like it contains a credential/);
+  });
+
+  it('never sends an owner back to a workspace or deployment administrator they already are', () => {
+    const ownerBranch = between(supportPage, ') : ownerView ? (', ') : (');
+    assert.match(ownerBranch, /No support channel is published for this deployment\. Ask the team that operates this AstraNull deployment to publish a support contact/);
+    assert.doesNotMatch(ownerBranch, /workspace administrator|deployment administrator/);
+    const noSubscription = between(subscriptionPage, '{ownerView ? (', ') : (');
+    assert.match(noSubscription, /Plans are provisioned by the AstraNull operator for this deployment, not from this portal\./);
+    assert.match(noSubscription, /actionLabel=\{supportContact \? 'Contact support' : undefined\}/);
+    assert.doesNotMatch(noSubscription, /#support|workspace administrator|deployment administrator/);
+    const planChange = between(subscriptionPage, 'title="Change your plan or limits"', '</Card>');
+    assert.match(planChange, /Contact your AstraNull account team/);
+    assert.doesNotMatch(planChange, /workspace administrator|deployment administrator/);
+    const users = between(settingsPage, '<CardTitle>Users and sign-in</CardTitle>', '</Card>');
+    assert.match(users, /Inviting users, changing roles, and SSO mapping are handled by your AstraNull account team\./);
+    assert.match(users, />Contact support</);
+    assert.doesNotMatch(users, /workspace administrator|deployment administrator/);
+    assert.match(subscriptionPage, /session\?: Session/);
+  });
+
+  it('reads a published https or email support channel and never hard-codes a vendor address', () => {
+    const resolver = between(pageComponents, 'export function configuredSupportUri(', 'function isWorkspaceOwnerRole(');
+    for (const key of ['support_uri', 'support_url', 'contact_url', 'support_email', 'support_contact_email', 'contact_email']) {
+      assert.ok(pageComponents.includes(`'${key}'`), key);
+    }
+    assert.match(resolver, /parsed\.protocol === 'https:'/);
+    assert.doesNotMatch(resolver, /http:'/);
+    assert.match(resolver, /href: `mailto:\$\{candidate\}`/);
+    assert.doesNotMatch(pageComponents, /support@astranull|@checkred\./i);
+  });
+
+  it('publishes probe traffic facts for SOC and WAF teams without hard-coded addresses', () => {
+    assert.match(supportPage, /title="Probe traffic"/);
+    assert.match(supportPage, /AstraNull signed public probe workers/);
+    assert.match(supportPage, /User-Agent containing "AstraNull", but some check phases vary or omit headers/);
+    assert.match(supportPage, /config\.siteConfig\?\.probe_source_ranges/);
+    assert.match(supportPage, /ask your AstraNull operator/);
+    assert.match(supportPage, />\s*Copy probe traffic facts\s*</);
+    assert.doesNotMatch(supportPage, /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
   });
 
   it('shows the recorded event time with its source and never treats a legacy alias as authoritative silently', () => {
@@ -226,7 +292,25 @@ describe('notifications and channels (TF-11)', () => {
     assert.match(notificationsPage, /#integrations\?focus=\$\{encodeURIComponent\(getString\(selected\.rule, \['id'\], ''\)\)\}/);
     assert.match(channels, /get\('focus'\)/);
     assert.match(notificationsPage, /replaceRouteParams\(\{ focus: selectedAttemptKey \|\| null \}\)/);
-    assert.match(notificationsPage, /Rule removed or not recorded/);
+    assert.match(notificationsPage, /Channel removed or not recorded/);
+  });
+
+  it('treats a channel and its routing as one object and only adds events to an existing channel', () => {
+    assert.match(governance, /from '\.\.\/lib\/notification-channels\.mjs'/);
+    assert.doesNotMatch(governance, /const NOTIFICATION_TRIGGERS = \[|NOTIFICATION_TRIGGER_LABELS|NOTIFICATION_CHANNEL_OPTIONS/);
+    assert.match(notificationsPage, /\{NOTIFICATION_TRIGGER_OPTIONS\.map\(\(option\) => \(/);
+    assert.doesNotMatch(notificationsPage, /trigger !== 'high_scale\.state_change'/);
+    assert.doesNotMatch(notificationsPage, /New destination|ruleMode|method: 'POST',\s*body: \{ channel/);
+    assert.match(notificationsPage, /method: 'PATCH',\s*body: \{ triggers: merged, enabled: ruleEnabled \}/);
+    assert.match(notificationsPage, /Choose events for a channel/);
+    assert.match(notificationsPage, />Add events</);
+    assert.match(notificationsPage, /Set up a channel in Integrations/);
+    assert.match(notificationsPage, /title="Channels" description="Each channel receives the events chosen for it\. Set up, turn on or off, and remove channels in Integrations\."/);
+    assert.match(notificationsPage, /title="No channels yet\."/);
+    assert.match(notificationsPage, /canWrite && \(events\.length > 0 \|\| eventsUnavailable\)/);
+    assert.match(channels, /Event routing for existing channels and failed deliveries are on <a href="#notifications">Notifications<\/a>\./);
+    assert.match(channels, /id: 'in_app',\s*label: 'In-app'/);
+    assert.match(channels, /body: \{ channel: IN_APP_CHANNEL\.id, destination: '', triggers: triggerCheck\.triggers, enabled \}/);
   });
 
   it('requires a preview before an explicit retry and never retries scheduled or unknown attempts', () => {
@@ -248,7 +332,10 @@ describe('integrations (TF-10)', () => {
     assert.match(integrations, /Check configuration/);
     assert.match(integrations, /Does not contact the provider/);
     assert.match(integrations, /bounded read-only requests were sent with the stored credential/);
-    assert.match(integrations, /Manual metadata connectors never poll/);
+    assert.match(integrations, /\{canWriteConnectors && canPoll \? \(/);
+    assert.match(integrations, /\{canWriteConnectors && !canPoll \? \(/);
+    assert.match(integrations, /onClick=\{\(\) => openManualSnapshot\(id\)\}/);
+    assert.match(integrations, />\s*Add snapshot\s*</);
     assert.doesNotMatch(integrations, /Deliveries through it will stop/);
     assert.match(integrations, /label: 'Last successful sync'/);
   });
@@ -259,6 +346,16 @@ describe('integrations (TF-10)', () => {
     assert.match(column, /Date\.parse\(failure\) > Date\.parse\(success\)/);
     assert.match(between(integrations, "key: 'last_success'", "key: 'actions'"), /if \(!connectorHasCredentialPoll\(item\)\) return <span className="muted">Not applicable<\/span>;/);
     assert.doesNotMatch(column, /updated_at|last_poll_requested_at|last_polled_at|last_poll_at/);
+  });
+
+  it('labels provider cards by connector mode and derives manual snapshot hashes when blank', () => {
+    assert.match(integrations, /`\$\{formatNumber\(total\)\} configured · manual`/);
+    assert.match(integrations, /`\$\{formatNumber\(total\)\} configured · \$\{formatNumber\(manual\)\} manual`/);
+    assert.match(integrations, /<Badge tone="muted">\{providerConfiguredLabel\(provider\)\}<\/Badge>/);
+    assert.match(integrations, /Advanced: supply your own hashes/);
+    assert.match(integrations, /\.\.\.\(resourceRefHash \? \{ resource_ref_hash: resourceRefHash \} : \{\}\)/);
+    assert.match(integrations, /Display ref is required for a metadata snapshot\./);
+    assert.doesNotMatch(integrations, /name="resource_ref_hash" placeholder="res_hash_1" required|name="config_hash" placeholder="cfg_hash_1" required/);
   });
 
   it('guards dirty setup dialogs and never keeps typed credentials', () => {
@@ -283,6 +380,40 @@ describe('settings (TF-15)', () => {
     assert.match(settingsPage, /must be a whole number of days from/);
     assert.match(settingsPage, /retentionReductions/);
     assert.match(settingsPage, /Deleted records cannot be recovered/);
+  });
+
+  it('describes exactly what each retention period purges and warns only for purging rows', () => {
+    assert.match(settingsPage, /Deletes events, evidence vault entries, notification history, and connector poll data older than this\./);
+    assert.match(settingsPage, /Generated report snapshots are kept for this period or the metadata period, whichever is longer\./);
+    assert.match(settingsPage, /Recorded as your retention policy\. Audit logs are never purged automatically\./);
+    assert.match(settingsPage, /Recorded as your retention policy\. SOC authorization packs are never purged automatically\./);
+    assert.match(settingsPage, /Only metadata and reports are purged by these settings\. Audit logs, findings, test runs, and SOC authorization artifacts are always kept\./);
+    assert.match(settingsPage, /audit_log_days, purges: false/);
+    assert.match(settingsPage, /change\.purges && change\.before !== null/);
+    assert.doesNotMatch(settingsPage, /separate production retention gates|applies to events, evidence vault, reports/);
+  });
+
+  it('picks service-account scopes from the role contract instead of free text', () => {
+    assert.match(pageComponents, /from '\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/src\/contracts\/roles\.mjs'/);
+    assert.match(pageComponents, /const EXCLUDED_SCOPE_PREFIXES = \['target_group:', 'environment:'\];/);
+    assert.match(pageComponents, /const DEFAULT_SERVICE_ACCOUNT_SCOPES = \['tenant:read', 'evidence:read'\];/);
+    assert.match(settingsPage, /Only permissions the selected role holds are listed\. Grant the fewest needed\./);
+    assert.match(settingsPage, /Select at least one scope\./);
+    assert.match(settingsPage, /Create high-privilege service account\?/);
+    assert.match(settingsPage, /type="checkbox" name="scopes"/);
+    assert.doesNotMatch(settingsPage, /\[a-z_\]\+:\[a-z_\]\+|\['tenant:read'\];|Comma-separated resource:action/);
+  });
+
+  it('shows the sign-in method in plain words and hides deployment internals from customers', () => {
+    for (const label of ['Single sign-on (OIDC)', 'Developer validation (non-production)', 'Managed by your deployment administrator', 'Sign-in method']) {
+      assert.ok(pageComponents.includes(label), label);
+    }
+    assert.match(settingsPage, /\{oidcPosture\.issuerHost \? </);
+    assert.match(settingsPage, /\{showSignInInternals \? <div><span>Login URL<\/span>/);
+    assert.match(settingsPage, /Read-only sign-in configuration for this workspace\./);
+    assert.doesNotMatch(settingsPage, /Not exposed on public readiness endpoints|`oidc-jwt`|`auth_mode`|>Auth mode</);
+    assert.match(settingsPage, /Append-only, hash-chained security history lives on the Audit page/);
+    assert.doesNotMatch(settingsPage, /Immutable security-relevant history/);
   });
 });
 
@@ -316,6 +447,161 @@ describe('SOC console without an execution tenant', () => {
     assert.match(socPage, /<Badge tone="muted">Tenant not selected<\/Badge>/);
     assert.match(socPage, /getString\(data\.state\?\.kill_switch as DataItem, \['reason'\], ''\)/);
     assert.doesNotMatch(governance, /tenant-scoped emergency stop'\)/);
+    assert.match(socPage, /Select an execution tenant to compute pre-flight gates\./);
+  });
+});
+
+describe('SOC console kill switch', () => {
+  const socPage = between(governance, 'export function SocConsolePage(');
+
+  it('uses Active and Clear everywhere and never Armed or Inactive', () => {
+    assert.doesNotMatch(governance, /'Armed'|'Inactive'/);
+    assert.match(socPage, /<KpiCell label="Kill switch" value=\{killSwitchActive \? 'Active' : 'Clear'\}/);
+    assert.match(governance, /\{active \? 'Active' : 'Clear'\}<\/Badge>/);
+    assert.match(governance, /status: context\.killSwitchActive \? 'Active' : 'Clear'/);
+  });
+
+  it('requires a typed reason, names the tenant and running requests, and sends the reviewer text', () => {
+    assert.match(socPage, /Reason \(recorded in audit and shown to the tenant\)/);
+    assert.match(governance, /const KILL_SWITCH_REASON_MIN = 8;/);
+    assert.match(socPage, /maxLength=\{KILL_SWITCH_REASON_MAX\}/);
+    assert.match(socPage, /title: `Activate kill switch for \$\{tenantLabel\}`/);
+    assert.match(socPage, /title: `Clear kill switch for \$\{tenantLabel\}`/);
+    assert.match(socPage, /running high-scale \$\{pluralize\(runningCount, 'request'\)\} will be stopped/);
+    assert.match(socPage, /Reason: \$\{reason\}/);
+    assert.match(socPage, /body: \{ active, reason \}/);
+    assert.doesNotMatch(governance, /SOC console activation|SOC console cleared/);
+    assert.match(socPage, /setKillSwitchReasonDraft\(''\);/);
+  });
+
+  it('gives Activate full danger weight and keeps Clear small and secondary', () => {
+    assert.match(socPage, /<Button\s+variant="danger"\s+loading=\{busy === 'kill-on'\}[\s\S]*?>Activate kill switch<\/Button>/);
+    assert.match(socPage, /<Button\s+size="sm"\s+variant="secondary"\s+loading=\{busy === 'kill-off'\}[\s\S]*?>Clear<\/Button>/);
+  });
+
+  it('reports what activation stopped and explains the sequence in plain labels', () => {
+    assert.match(governance, /Kill switch engaged by \$\{operator\} at \$\{at\}\. Stopped/);
+    assert.match(governance, /killSwitchIdList\(item, 'stopped_request_ids'\)/);
+    assert.match(governance, /killSwitchIdList\(item, 'cancelled_run_ids'\)/);
+    assert.match(socPage, /buildDetailHref\('queue-detail', id, effectiveSocTenant \? \{ tenantId: effectiveSocTenant \} : \{\}\)/);
+    assert.match(socPage, /What activation does · \{KILL_SWITCH_SEQUENCE\.length\} steps/);
+    assert.match(governance, /probe_fleet_stops_leasing: 'Probe fleet stops leasing work'/);
+    assert.match(socPage, /<strong title=\{step\}>\{KILL_SWITCH_STEP_LABELS\[step\]\}<\/strong>/);
+    assert.doesNotMatch(governance, /Validated emergency-stop sequence|custody-recorded/);
+  });
+
+  it('puts the staff tenant controls first and lets a cross-tenant row pick or stop a tenant', () => {
+    const order = ['<CardTitle>Execution tenant</CardTitle>', '{staffSocSurface ? controls : null}', '<div className="kpi-row"', '<PageContextSummary>'];
+    const positions = order.map((marker) => socPage.indexOf(marker));
+    assert.ok(positions.every((value, index) => value >= 0 && (index === 0 || value > positions[index - 1])), positions.join(','));
+    assert.match(socPage, /Choose a tenant here, or use Work on tenant on a row in Cross-tenant execution\./);
+    assert.match(socPage, /aria-label=\{`Engage kill switch for \$\{tenantLabel\}`\}/);
+    assert.match(socPage, />\s*Work on tenant\s*</);
+    assert.match(socPage, /!effectiveSocTenant && crossTenantIds\.length === 1/);
+    assert.match(socPage, /onClick=\{\(\) => void applyExecutionTenant\(suggestedExecutionTenant\)\}/);
+    assert.doesNotMatch(socPage, /useEffect\(\(\) => \{\s*if \(!staffSocSurface \|\| !isSoc \|\| effectiveSocTenant/);
+  });
+
+  it('never carries a kill switch reason from one execution tenant to another', () => {
+    assert.match(socPage, /if \(nextTenant !== effectiveSocTenant\) setKillSwitchReasonDraft\(''\);/);
+    assert.match(socPage, /useEffect\(\(\) => \{\s*setKillSwitchReasonDraft\(''\);\s*\}, \[effectiveSocTenant\]\);/);
+    assert.doesNotMatch(socPage, /key: 'kind', label: 'Kind'/);
+    assert.match(governance, /<Badge tone="warn">Window passed<\/Badge>/);
+  });
+
+  it('offers quick approval only for reviewable requests and names what is approved', () => {
+    assert.match(socPage, /const reviewable = \['submitted', 'under_review'\]\.includes\(state\);/);
+    assert.match(socPage, /short: 'Pack not accepted'/);
+    assert.match(socPage, /short: 'Select a tenant'/);
+    assert.match(socPage, /for tenant \$\{tenantDisplayName\(tenantId\)\} and move it to approved/);
+    assert.doesNotMatch(socPage, /schedule: `Schedule high-scale request|start: `Start high-scale execution/);
+    assert.match(governance, /governedLimitDisplay,[\s\S]*requestDomainDisplay,[\s\S]*scheduledWindowState[\s\S]*from '\.\.\/lib\/high-scale'/);
+    assert.doesNotMatch(governance, /function governedLimitDisplay|function requestDomainDisplay/);
+  });
+
+  it('labels Go/No-Go gates honestly and states a verdict', () => {
+    assert.match(governance, /kill: 'Tenant kill switch'/);
+    assert.match(governance, /execution: 'Running governed tests'/);
+    assert.match(governance, /'Go for scheduled requests'/);
+    assert.match(governance, /`No-Go · \$\{reasons\}`/);
+  });
+});
+
+describe('schedule creation expected verdicts', () => {
+  it('uses the plain expected-verdict wording and limits observation-only checks to manual review', () => {
+    assert.match(pageComponents, /const POLICY_VERDICT_OPTIONS: SelectOption\[\] = Object\.entries\(EXPECTED_VERDICT_LABELS as Record<string, string>\)/);
+    assert.match(pageComponents, /\.map\(\(\[value, label\]\) => \(\{ value, label, description: value \}\)\);/);
+    assert.match(policyPage, /const policyCheckObservationOnly = isObservationOnlyCheck\(selectedPolicyCheck\);/);
+    assert.match(policyPage, /option\.value === OBSERVATION_ONLY_VERDICT/);
+    assert.doesNotMatch(policyPage, /description: `\$\{option\.value\} · /);
+    assert.match(policyPage, /setPolicyExpectedVerdict\(OBSERVATION_ONLY_VERDICT\)/);
+    assert.match(policyPage, /useState\('pass'\)/);
+    assert.match(policyPage, /verdictOptions: policyVerdictOptions,/);
+    assert.match(policyPage, /`Created \$\{successes\.length\} of \$\{policyTargetIds\.length\} schedules\. `/);
+    assert.doesNotMatch(policyPage, /policies\. `/);
+  });
+});
+
+describe('staff admin console decisions', () => {
+  const staffPage = between(pageComponents, 'export function StaffSurfacePage(');
+
+  it('records the reviewer reason and names what is approved or rejected', () => {
+    assert.doesNotMatch(pageComponents, /React staff console/);
+    assert.match(staffPage, /const \{ confirm, confirmWithReason \} = useConfirmModal\(\);/);
+    assert.match(staffPage, /Approve signup for \$\{organization\} \(requested plan: \$\{plan\}\)\? A tenant account will be provisioned\./);
+    assert.match(staffPage, /title: `Reject signup for \$\{organization\}\?`/);
+    assert.match(staffPage, /label: 'Reason \(shown to the applicant\)', required: true/);
+    assert.match(staffPage, /title: `Approve \$\{kind\} request for tenant \$\{tenant\}\?`/);
+    assert.match(staffPage, /body: \{ decision, reason \}/);
+    assert.match(staffPage, /onClick=\{\(\) => void approveSignup\(item\)\}/);
+    assert.match(staffPage, /onClick=\{\(\) => void decideApproval\(item, 'reject'\)\}/);
+    assert.match(staffPage, /name="support_owner_reason"/);
+    assert.match(staffPage, /body: \{ support_owner: owner, reason \}/);
+  });
+
+  it('names the tenant on entitlement grants and uses one selected-tenant control', () => {
+    assert.match(staffPage, /title: `Grant \$\{featureLabel\} to \$\{tenantName\}\?`/);
+    assert.match(staffPage, /\$\{tenantName\} \(\$\{entitlementTenantId\}\) gets this access immediately\./);
+    assert.match(staffPage, /title: `Revoke \$\{featureLabel\} from \$\{tenantName\}\?`/);
+    assert.equal((staffPage.match(/options=\{internalTenantOptions\}/g) ?? []).length, 1);
+    assert.match(staffPage, /label="Selected tenant"/);
+    assert.match(pageComponents, /export const ENTITLEMENT_FEATURE_LABELS/);
+  });
+
+  it('keeps the admin tab in the address and avoids repeating the overview KPIs', () => {
+    assert.match(staffPage, /useState\(\(\) => getHashQueryParam\('tab'\) \|\| 'overview'\)/);
+    assert.match(staffPage, /replaceRouteParams\(\{ tab: next === 'overview' \? null : next \}\)/);
+    assert.match(staffPage, /onChange=\{selectAdminTab\}/);
+    assert.match(staffPage, /\{isStaff && activeAdminTab !== 'overview' \? \(\s*<PageContextSummary>/);
+    assert.match(staffPage, /formatAuditAction\(getString\(item, \['action'\], ''\), 'Unknown action', item\.metadata\)/);
+    assert.match(staffPage, /plainCodeLabel\(getString\(item, \['lifecycle_state'\], ''\), 'Not recorded'\)/);
+    assert.match(staffPage, /plainCodeLabel\(getString\(item, \['kind'\], ''\), 'Not recorded'\)/);
+  });
+});
+
+describe('audit log filters and export', () => {
+  it('maps typed labels back to stored keys and offers labelled options', () => {
+    assert.match(governance, /export function resolveAuditFilterKey\(typed: string, labels: ReadonlyMap<string, string>\)/);
+    assert.match(governance, /if \(!value \|\| value\.includes\('\.'\)\) return value;/);
+    assert.match(auditPage, /action: resolveAuditFilterKey\(next\.action, actionLabelKeys\)/);
+    assert.match(auditPage, /resource: resolveAuditFilterKey\(next\.resource, resourceLabelKeys\)/);
+    assert.match(auditPage, /AUDIT_ACTIONS\.map\(\(entry\) => entry\.value\)/);
+    assert.match(auditPage, /<option key=\{value\} value=\{value\} label=\{formatAuditAction\(value\)\} \/>/);
+    assert.match(auditPage, /placeholder="Choose or type an action"/);
+    assert.match(auditPage, /<span>Actor \(user ID\)<\/span>/);
+    assert.match(auditPage, /Type the action or resource as shown, or its key; filters match exactly\./);
+    for (const label of ['Filter to this actor', 'Filter to this action', 'Filter to this resource']) assert.ok(auditPage.includes(label), label);
+    assert.match(auditPage, /formatAuditAction\(getString\(item, \['action'\]\), 'Unknown action', item\.metadata\)/);
+    assert.match(auditPage, /formatAuditAction\(getString\(selectedEntry, \['action'\]\), 'Unknown action', selectedEntry\.metadata\)/);
+  });
+
+  it('exports the filtered events with their hashes and states what the page does not verify', () => {
+    assert.match(governance, /return `\/v1\/audit-log\/export\$\{query \? `\?\$\{query\}` : ''\}`;/);
+    assert.match(governance, /`audit-log-\$\{filters\.since \|\| 'start'\}-\$\{filters\.until \|\| 'now'\}-\$\{digest8\}\.json`/);
+    assert.match(auditPage, /downloadJsonFile\(auditExportFilename\(applied, digest\), payload\)/);
+    assert.match(auditPage, />\s*Export filtered events\s*</);
+    assert.match(auditPage, /No events match the applied filters, so there is nothing to export\./);
+    assert.match(auditPage, /Entries are append-only and hash-chained\. Each export includes every entry's hash and previous hash so the chain can be checked offline\./);
   });
 });
 

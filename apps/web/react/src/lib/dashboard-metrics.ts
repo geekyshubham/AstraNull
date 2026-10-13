@@ -61,6 +61,14 @@ const PENDING_VERDICTS = new Set(['', 'pending', 'planned', 'running', 'collecti
 
 export type EvidenceStatus = 'pass' | 'review' | 'gap' | 'none';
 
+/** Badge tone per evidence status, shared by the dashboard posture table and the targets list. */
+export const EVIDENCE_STATUS_TONE: Readonly<Record<EvidenceStatus, 'success' | 'warn' | 'danger' | 'muted'>> = {
+  pass: 'success',
+  review: 'warn',
+  gap: 'danger',
+  none: 'muted'
+};
+
 /** Verification state string for a target, tolerant of nested `verification.state` or flat fields. */
 export function targetVerificationState(target: DataItem): string {
   const nested = target.verification;
@@ -127,6 +135,38 @@ function runFinished(run: DataItem): boolean {
   return ['completed', 'verdicted', 'finalized'].includes(getString(run, ['status']).toLowerCase());
 }
 
+const EVIDENCE_STATUS_LABEL: Record<EvidenceStatus, string> = {
+  pass: 'Pass',
+  review: 'Review',
+  gap: 'Gap',
+  none: 'No result'
+};
+
+/** Newest evidence-backed run per `target_id`; a target never inherits a sibling's run. */
+export function latestEvidenceRunByTarget(runs: DataItem[]): Map<string, DataItem> {
+  const latest = new Map<string, DataItem>();
+  for (const run of runs) {
+    const targetId = getString(run, ['target_id']);
+    if (!targetId || !evidenceBacked(run)) continue;
+    const prev = latest.get(targetId);
+    if (!prev || runTimestamp(run).localeCompare(runTimestamp(prev)) >= 0) latest.set(targetId, run);
+  }
+  return latest;
+}
+
+/** Verdict status and label of a target's newest evidence-backed run, as the dashboard posture table shows it. */
+export function latestRunVerdict(run: DataItem | null | undefined): { status: EvidenceStatus; label: string; verdict: string; completedAt: string } | null {
+  if (!run) return null;
+  const verdict = runVerdictString(run);
+  const status = classifyVerdict(verdict);
+  return {
+    status,
+    verdict,
+    label: status === 'none' ? 'Not recorded' : EVIDENCE_STATUS_LABEL[status],
+    completedAt: String(run.completed_at ?? run.updated_at ?? '')
+  };
+}
+
 export type TargetPostureRow = {
   id: string;
   value: string;
@@ -162,19 +202,13 @@ export function buildTargetPostureRows(
     openCounts?: ReadonlyMap<string, number>;
   } = {}
 ): TargetPostureRow[] {
-  const latestByTarget = new Map<string, DataItem>();
+  const latestByTarget = latestEvidenceRunByTarget(data.runs);
   const newestFinishedByTarget = new Map<string, DataItem>();
   for (const run of data.runs) {
     const targetId = getString(run, ['target_id']);
-    if (!targetId) continue;
-    const stamp = runTimestamp(run);
-    if (runFinished(run) || evidenceBacked(run)) {
-      const newest = newestFinishedByTarget.get(targetId);
-      if (!newest || stamp.localeCompare(runTimestamp(newest)) >= 0) newestFinishedByTarget.set(targetId, run);
-    }
-    if (!evidenceBacked(run)) continue;
-    const prev = latestByTarget.get(targetId);
-    if (!prev || stamp.localeCompare(runTimestamp(prev)) >= 0) latestByTarget.set(targetId, run);
+    if (!targetId || !(runFinished(run) || evidenceBacked(run))) continue;
+    const newest = newestFinishedByTarget.get(targetId);
+    if (!newest || runTimestamp(run).localeCompare(runTimestamp(newest)) >= 0) newestFinishedByTarget.set(targetId, run);
   }
 
   const openFindingsByTarget = new Map<string, number>();
@@ -444,4 +478,79 @@ export function severityDistributionFromCounts(counts: Record<SeverityKey, numbe
       share: total > 0 ? Math.round(((counts[key] ?? 0) / total) * 100) : 0
     }))
   };
+}
+
+/* ---------- First-run setup sequence (declare, prove ownership, run) ---------- */
+
+export type SetupStepState = 'done' | 'current' | 'upcoming';
+
+export type SetupStep = {
+  key: 'declare-target' | 'verify-ownership' | 'first-run';
+  title: string;
+  detail: string;
+  state: SetupStepState;
+  /** Present only on the current step: steps that are not yet possible carry no link. */
+  href?: string;
+  ctaLabel?: string;
+};
+
+const defaultDetailHref = (route: string, id: string) => `#${route}?id=${encodeURIComponent(id)}`;
+
+function activeDeclaredTargets(targets: DataItem[]) {
+  return targets.filter((target) => !target.archived_at && !target.deleted_at);
+}
+
+/**
+ * The three setup steps in order, with exactly one `current` step until evidence exists. The run
+ * step only links once a target is ownership-verified, so it never points at an empty filter.
+ * Returns no steps when the target inventory failed to load, since progress would be a guess.
+ */
+export function buildSetupSteps(
+  data: Pick<PortalData, 'targets' | 'loadErrors'>,
+  hasEvidence: boolean,
+  detailHref: (route: string, id: string) => string = defaultDetailHref
+): SetupStep[] {
+  if (data.loadErrors.targets) return [];
+  const targets = activeDeclaredTargets(data.targets);
+  const verifiedTarget = targets.find(isTargetVerified) ?? null;
+  const unverifiedTarget = targets.find((target) => !isTargetVerified(target)) ?? null;
+  const done = {
+    'declare-target': hasEvidence || targets.length > 0,
+    'verify-ownership': hasEvidence || verifiedTarget !== null,
+    'first-run': hasEvidence
+  };
+  const unverifiedId = unverifiedTarget ? getString(unverifiedTarget, ['id', 'target_id']) : '';
+  const verifiedId = verifiedTarget ? getString(verifiedTarget, ['id', 'target_id']) : '';
+  const steps: Omit<SetupStep, 'state'>[] = [
+    {
+      key: 'declare-target',
+      title: 'Declare the first target to protect',
+      detail: 'Add a domain, hostname, IP, or URL before any check can run.',
+      href: '#targets?add=1',
+      ctaLabel: 'Add target'
+    },
+    {
+      key: 'verify-ownership',
+      title: 'Prove ownership on a declared target',
+      detail: 'Ownership must be DNS-verified before AstraNull sends any probe.',
+      href: unverifiedId ? detailHref('target-detail', unverifiedId) : '#targets?verification=unverified',
+      ctaLabel: 'Prove ownership'
+    },
+    {
+      key: 'first-run',
+      title: 'Run the first bounded check',
+      detail: 'Pick a compatible check on a verified target and start it to record the first evidence.',
+      href: verifiedId ? `${detailHref('target-detail', verifiedId)}&tab=validate` : verifiedTarget ? '#targets?verification=verified' : undefined,
+      ctaLabel: 'Run first check'
+    }
+  ];
+  let currentAssigned = false;
+  return steps.map((step) => {
+    if (done[step.key]) return { key: step.key, title: step.title, detail: step.detail, state: 'done' as const };
+    if (!currentAssigned && step.href) {
+      currentAssigned = true;
+      return { ...step, state: 'current' as const };
+    }
+    return { key: step.key, title: step.title, detail: step.detail, state: 'upcoming' as const };
+  });
 }

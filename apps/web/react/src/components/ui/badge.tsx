@@ -21,7 +21,7 @@ const badgeVariants = cva('badge', {
 
 export type BadgeProps = React.HTMLAttributes<HTMLSpanElement> &
   VariantProps<typeof badgeVariants> & {
-    /** Keeps the existing API; all shared chips use the mono uppercase foundation. */
+    /** Kept for API compatibility; every chip uses the mono uppercase foundation (DESIGN.md). */
     mono?: boolean;
     /**
      * Leading status dot in the tone's ink. Decorative only: the label text still
@@ -30,12 +30,12 @@ export type BadgeProps = React.HTMLAttributes<HTMLSpanElement> &
     dot?: boolean;
   };
 
-export function Badge({ className, tone, mono = false, dot = false, children, ...props }: BadgeProps) {
+export function Badge({ className, tone, mono: _mono, dot = false, children, ...props }: BadgeProps) {
   return (
     <span
       data-ui="badge"
       data-tone={tone ?? 'default'}
-      className={cn(badgeVariants({ tone }), !mono && 'badge-sans', className)}
+      className={cn(badgeVariants({ tone }), className)}
       {...props}
     >
       {dot ? <span className="badge-dot" aria-hidden="true" /> : null}

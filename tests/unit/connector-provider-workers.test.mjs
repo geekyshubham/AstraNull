@@ -1481,6 +1481,34 @@ describe('wafPosture pollConnector outbound slice', () => {
     assert.equal(getStore().wafConnectors[0].last_success_at, '2026-07-01T12:00:00.000Z');
   });
 
+  it('derives stable resource and config hashes when a manual snapshot sends only display_ref and summary', async () => {
+    freshStore();
+    process.env.ASTRANULL_WAF_POSTURE_ENABLED = '1';
+    const connector = seedConnector({ secret_id: 'sec_cf_1' });
+    const snapshot = () => ({
+      snapshot_kind: 'waf_policy',
+      display_ref: 'manual-zone',
+      summary: { hostnames: ['manual.example.com'], policy_mode: 'block', rule_count: 4 },
+    });
+    const first = await wafPosture.pollConnector(demoCtx(), connector.id, { snapshots: [snapshot()] });
+    const second = await wafPosture.pollConnector(demoCtx(), connector.id, { snapshots: [snapshot()] });
+    assert.equal(first.error, undefined);
+    assert.equal(second.error, undefined);
+    const [a] = first.snapshots;
+    const [b] = second.snapshots;
+    assert.match(a.resource_ref_hash, /^[a-f0-9]{32}$/);
+    assert.match(a.config_hash, /^[a-f0-9]{32}$/);
+    assert.equal(a.resource_ref_hash, hashRef('cloudflare:manual-zone'));
+    assert.equal(b.resource_ref_hash, a.resource_ref_hash);
+    assert.equal(b.config_hash, a.config_hash);
+
+    const missing = await wafPosture.pollConnector(demoCtx(), connector.id, {
+      snapshots: [{ snapshot_kind: 'waf_policy', summary: { rule_count: 1 } }],
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.message, 'snapshot_kind and display_ref are required.');
+  });
+
   it('validate exposes outbound_polling when secret_id is configured', () => {
     freshStore();
     const connector = seedConnector();

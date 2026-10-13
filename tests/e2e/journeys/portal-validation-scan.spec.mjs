@@ -183,7 +183,14 @@ test.describe('validation scans (FT-SCAN-01)', () => {
 
     await expect(page.getByRole('heading', { level: 1, name: scanId })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('Domain checkout.acme.com')).toBeVisible();
+    const targetHref = new RegExp(`#target-detail\\?id=${PORTAL_BASELINE_IDS.targetId}&tab=validate$`);
+    await expect(page.getByRole('link', { name: 'Back to checkout.acme.com' })).toHaveAttribute('href', targetHref);
+    await expect(page.getByRole('link', { name: 'Open target', exact: true })).toHaveAttribute('href', targetHref);
+    await expect(page.getByRole('link', { name: 'Test runs', exact: true })).toHaveCount(0);
     await expect(stepRows(page)).toHaveCount(expectedChecks, { timeout: 20_000 });
+    await expect(stepRows(page).first().getByRole('link', { name: 'checkout.acme.com', exact: true }))
+      .toHaveAttribute('href', new RegExp(`#target-detail\\?id=${PORTAL_BASELINE_IDS.targetId}&tab=validate&check=`));
+    await expect(page.locator('.scan-steps thead th')).toHaveText(['#', 'Check', 'Verdict', 'Status', 'Target', 'Probe request', 'Response', 'Requests sent']);
     await expect(page.locator('.scan-live-region')).toContainText(/Scan running\. Refreshing every \d+ seconds?\./);
     await expect(page.getByRole('button', { name: `Stop scan ${scanId}` })).toBeVisible();
 
@@ -216,6 +223,8 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     const verdictedRow = stepRows(page).filter({ hasText: 'Verdicted' }).first();
     await expect(verdictedRow).toContainText(/Blocked|Connected|Filtered|Rate limited|Unknown/);
     await expect(verdictedRow).toContainText('Inconclusive');
+    await expect(verdictedRow).toContainText('Not enough evidence');
+    await expect(verdictedRow).not.toContainText('Fqdn');
     await expect(verdictedRow.getByRole('link', { name: /^Open run run_/ })).toBeVisible();
     await expect(page.getByRole('progressbar', { name: /Scan progress/ })).toBeVisible();
 
@@ -495,6 +504,9 @@ test.describe('validation scans (FT-SCAN-01)', () => {
 
     await gotoPortalRoute(page, 'scan-detail', sourceBaseUrl, { entityIds: { 'scan-detail': PORTAL_BASELINE_IDS.scanId } });
     await expect(page.getByRole('heading', { level: 1, name: 'Checkout baseline scan' })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('link', { name: /^Back to / })).toHaveAttribute('href', new RegExp(`#target-detail\\?id=${PORTAL_BASELINE_IDS.targetId}&tab=validate$`));
+    await expect(page.getByRole('link', { name: 'Test runs', exact: true })).toHaveCount(0);
+    await expect(page.locator('.page-context-summary')).not.toContainText('usr_');
     await expect(page.getByRole('note').filter({ hasText: 'Read-only view' })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Stop scan/ })).toHaveCount(0);
     await expect(stepRows(page)).toHaveCount(1);

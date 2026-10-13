@@ -13,6 +13,7 @@ export type CheckRow = {
   description: string;
   verdictLogic: string;
   tier: string;
+  readinessCapable: boolean;
   probeKind: string;
   maxRequests: number | null;
   timeoutMs: number | null;
@@ -84,6 +85,9 @@ export function declarationOnlyChecks(checks: DataItem[], target: DataItem | nul
 export function latestRunByCheck(runs: DataItem[]): Map<string, DataItem>;
 export function buildCheckRows(input: { checks: DataItem[]; scan?: DataItem | null; runs?: DataItem[] }): CheckRow[];
 export function countRowStatuses(rows: CheckRow[]): Record<RowStatus, number>;
+export function recommendedStarterRow(rows: CheckRow[]): CheckRow | null;
+export type WafCheckBlocking = { stopped: number; allowed: number; inconclusive: number; notRun: number; applicable: number; lastAt: string };
+export function wafCheckBlocking(rows: CheckRow[]): WafCheckBlocking | null;
 export function groupRowsByCategory(rows: CheckRow[]): CategoryGroup[];
 export function rowProgress(rows: CheckRow[]): { total: number; done: number; percent: number };
 export function assessEdgeEfficacy(input: { rows?: CheckRow[]; edge?: DataItem | null }): { waf: LayerEfficacy; cdn: LayerEfficacy; originExposed: boolean };

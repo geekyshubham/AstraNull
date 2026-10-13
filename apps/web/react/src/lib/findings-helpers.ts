@@ -1,4 +1,9 @@
-import { findingStatus as normalizeFindingStatus, isFindingOpen as lifecycleIsFindingOpen } from './finding-lifecycle.mjs';
+import {
+  SLA_ACTIVE_STATUSES,
+  findingStatus as normalizeFindingStatus,
+  isFindingOpen as lifecycleIsFindingOpen,
+  isFindingSlaActive
+} from './finding-lifecycle.mjs';
 import { plainCheckName, plainFindingTitle, plainVerdictLabel } from './plain-language.mjs';
 import type { DataItem } from './types';
 
@@ -35,6 +40,22 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
 
 export function findingStatus(finding: DataItem) {
   return normalizeFindingStatus(finding);
+}
+
+/**
+ * Machine-recorded verdict text for parsers (reason codes, posture status). Reads
+ * system_summary; legacy rows written before it existed fall back to notes.
+ */
+export function findingRecordedSummary(finding: DataItem | null | undefined) {
+  if (!finding) return '';
+  const summary = finding.system_summary;
+  if (summary !== undefined && summary !== null) return String(summary);
+  return typeof finding.notes === 'string' ? finding.notes : '';
+}
+
+/** Copy of a finding whose `notes` carry only the recorded summary, so human notes never read as evidence. */
+export function findingForEvidenceParsers(finding: DataItem): DataItem {
+  return { ...finding, notes: findingRecordedSummary(finding) };
 }
 
 export function formatVectorFamilyLabel(family: string) {
@@ -78,14 +99,20 @@ export function isFindingOpen(finding: DataItem) {
   return lifecycleIsFindingOpen(finding);
 }
 
-export function findingSlaDueAt(finding: DataItem) {
-  const created = parseFindingTimestamp(finding.created_at);
-  if (created === null) return null;
-  return created + findingSlaHours(getString(finding, ['severity'], 'low')) * 60 * 60 * 1000;
+/** Recorded opening of a finding: created_at, else opened_at. */
+export function findingOpenedAt(finding: DataItem) {
+  return parseFindingTimestamp(finding.created_at ?? finding.opened_at);
 }
 
+export function findingSlaDueAt(finding: DataItem) {
+  const opened = findingOpenedAt(finding);
+  if (opened === null) return null;
+  return opened + findingSlaHours(getString(finding, ['severity'], 'low')) * 60 * 60 * 1000;
+}
+
+/** Open and in-progress findings keep their severity SLA clock; decided or closed ones do not. */
 export function isFindingSlaBreach(finding: DataItem, now = Date.now()) {
-  if (!isFindingOpen(finding)) return false;
+  if (!isFindingSlaActive(finding)) return false;
   const dueAt = findingSlaDueAt(finding);
   return dueAt !== null && now > dueAt;
 }
@@ -313,13 +340,17 @@ export function findingAssetLabel(finding: DataItem, targets: DataItem[] = [], t
   return findingAssetIdentity(finding, targets, targetGroups).label;
 }
 
-/** Latest recorded observation: last_observed_at, else updated_at (set on re-observation), else opened. */
+/**
+ * Latest recorded probe observation (last_observed_at). Edits such as triage notes move
+ * updated_at, so it is never read as an observation time; null when none was recorded.
+ */
 export function findingObservedAt(finding: DataItem) {
-  return parseFindingTimestamp(finding.last_observed_at ?? finding.updated_at ?? finding.created_at ?? finding.opened_at);
+  return parseFindingTimestamp(finding.last_observed_at);
 }
 
-function findingOpenedAt(finding: DataItem) {
-  return parseFindingTimestamp(finding.created_at ?? finding.opened_at);
+/** Which observation a finding's date describes: the last recorded probe observation, else its opening. */
+export function findingObservationLabel(finding: DataItem): 'Last observed' | 'First observed' {
+  return findingObservedAt(finding) !== null ? 'Last observed' : 'First observed';
 }
 
 export type FindingRuleAsset = { key: string; label: string };
@@ -348,13 +379,13 @@ export type FindingRuleGroup = {
    * when none recorded one; never derived from observation or update time.
    */
   lastClosedAt: number | null;
-  /** Earliest SLA due time among open members, null when none is open or dated. */
+  /** Earliest SLA due time among open or in-progress members, null when none is active or dated. */
   earliestOpenSlaDueAt: number | null;
 };
 
 const CLOSED_STATUSES = ['closed', 'resolved'];
 const ACCEPTED_STATUSES = ['accepted', 'accepted_risk'];
-const ACTIVE_SLA_STATUSES = ['open', 'remediation_pending'];
+const ACTIVE_SLA_STATUSES: readonly string[] = SLA_ACTIVE_STATUSES;
 
 /** Recorded closure event time for a closed or resolved finding; null for any other lifecycle. */
 export function findingClosedAt(finding: DataItem) {
@@ -419,7 +450,7 @@ export function groupFindingsByRule(
       if (memberCheck) checkIds.add(memberCheck);
       const observed = findingObservedAt(member);
       if (observed !== null && (lastObservedAt === null || observed > lastObservedAt)) lastObservedAt = observed;
-      if (isFindingOpen(member)) {
+      if (isFindingSlaActive(member)) {
         const due = findingSlaDueAt(member);
         if (due !== null && (earliestOpenSlaDueAt === null || due < earliestOpenSlaDueAt)) earliestOpenSlaDueAt = due;
       }
@@ -453,7 +484,7 @@ export type FindingRuleSlaMeta = {
 };
 
 /**
- * SLA cell for a rule. Open members carry an SLA from recorded severity and created_at; a
+ * SLA cell for a rule. Open and in-progress members carry an SLA from recorded severity and opening; a
  * rule with none open has no active SLA, and its wording follows the recorded lifecycle:
  * accepted risk is never presented as closure, and a closure date appears only when a
  * closed or resolved member recorded one. `formatDate` is injected so this stays pure.

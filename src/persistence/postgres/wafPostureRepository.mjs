@@ -21,7 +21,7 @@ const WAF_COVERAGE_DAILY_ROLLUP_COLUMNS = `id, tenant_id, rollup_date, total_ass
   edge_protected, underprotected, unprotected, unknown, excluded, coverage_ratio, created_at`;
 
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
-  status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
+  status, evidence_ids, notes, system_summary, remediation_template, verdict_id, last_verdict_id, assignee,
   created_at, updated_at`;
 
 const WAF_DRIFT_EVENT_COLUMNS = `id, tenant_id, waf_asset_id, baseline_id, drift_type, severity,
@@ -152,6 +152,7 @@ export function mapWafPostureFindingRow(row) {
     status: row.status,
     evidence_ids: asStringArray(row.evidence_ids),
     notes: row.notes ?? null,
+    system_summary: row.system_summary ?? null,
     remediation_template: row.remediation_template ?? null,
     verdict_id: row.verdict_id ?? null,
     last_verdict_id: row.last_verdict_id ?? null,
@@ -832,7 +833,7 @@ export function createWafPostureRepository(pool, options = {}) {
                  severity = $4,
                  test_run_id = $5,
                  evidence_ids = $6,
-                 notes = $7,
+                 system_summary = $7,
                  remediation_template = $8,
                  last_verdict_id = NULL,
                  updated_at = $9::timestamptz
@@ -845,7 +846,7 @@ export function createWafPostureRepository(pool, options = {}) {
               record.severity,
               record.test_run_id ?? null,
               evidenceIds,
-              record.notes ?? null,
+              record.system_summary ?? null,
               record.remediation_template ?? null,
               updatedAt,
             ],
@@ -856,11 +857,11 @@ export function createWafPostureRepository(pool, options = {}) {
         const { rows } = await client.query(
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
-             status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
+             status, evidence_ids, notes, system_summary, remediation_template, verdict_id, last_verdict_id,
              assignee, created_at, updated_at
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, $14, $15,
              $16::timestamptz, $17::timestamptz
            )
            RETURNING ${FINDING_COLUMNS}`,
@@ -875,7 +876,7 @@ export function createWafPostureRepository(pool, options = {}) {
             record.severity,
             record.status ?? 'open',
             evidenceIds,
-            record.notes ?? null,
+            record.system_summary ?? null,
             record.remediation_template ?? null,
             record.verdict_id ?? null,
             null,

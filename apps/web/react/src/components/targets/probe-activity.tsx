@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { sessionIdentity } from '../../lib/api';
 import { activityIsLive, captureWarnings, stopStateLabel, type RecordedActivityState } from '../../lib/recorded-activity.mjs';
+import { activityRequestLimitLabel, activityRequestsSentLabel, activityValueLabel } from '../../lib/activity-labels.mjs';
 import { useRecordedActivity } from '../evidence/use-recorded-activity';
 import { apiErrorMessage } from '../../lib/error-messages';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
@@ -12,7 +13,7 @@ import './probe-activity.css';
 const LABELS: Record<string, string> = {
   job_started: 'Worker started', attempt_started: 'Attempt started', request_started: 'Request started',
   response_received: 'Response received', attempt_failed: 'Request failed', request_not_sent: 'Not sent',
-  probe_completed: 'Probe finished', result_received: 'Result recorded',
+  probe_completed: 'Probe finished', result_received: 'Probe result received',
   run_started: 'Run started', run_stopped: 'Cancellation recorded',
   run_created: 'Run created',
   phase_completed: 'Phase finished',
@@ -23,6 +24,13 @@ function time(value: unknown) {
   const at = new Date(text(value));
   return Number.isNaN(at.getTime()) ? 'Not recorded' : at.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
 }
+function valueText(value: unknown) { return activityValueLabel(value).text; }
+function ActivityValue({ value }: { value: unknown }) {
+  const label = activityValueLabel(value);
+  return label.code ? <span className="mono">{label.text}</span> : <>{label.text}</>;
+}
+function vectorParts(item: DataItem) { return [item.vector_family, item.marker_class, item.phase].filter(Boolean); }
+function stageLabel(item: DataItem) { return LABELS[text(item.stage)] ?? valueText(item.stage); }
 function severity(item: DataItem) {
   if (item.stage === 'attempt_failed' || item.error_class) return 'error';
   if (item.stage === 'request_not_sent') return 'warning';
@@ -30,15 +38,15 @@ function severity(item: DataItem) {
 }
 
 function describe(item: DataItem) {
-  const vector = [item.vector_family, item.marker_class, item.phase].filter(Boolean).map((value) => String(value).replaceAll('_', ' ')).join(' / ');
+  const vector = vectorParts(item).map(valueText).join(' / ');
   const identity = vector ? ` Vector: ${vector}.` : '';
   if (item.stage === 'request_started') return `The worker started ${text(item.method) || 'a protocol request'}${item.url ? ` to ${text(item.url)}` : ''}.${identity} ${item.body_bytes != null ? `The request body contained ${String(item.body_bytes)} bytes. ` : ''}The captured query and payload preview are listed below.`;
   if (item.stage === 'response_received') return `The target returned ${item.status_code != null ? `HTTP ${String(item.status_code)}` : 'a response with no recorded HTTP status'}.${identity} ${item.response_content_type ? `Recorded format: ${text(item.response_content_type)}. ` : 'The response format was not recorded. '}${item.duration_ms != null ? `Observed request duration: ${String(item.duration_ms)} ms.` : ''}`;
   if (item.response_payload_available === false) return `This check used the recorded response headers and did not consume the response body.${identity} The HTTP status and declared format remain visible; no response payload is invented.`;
   if (item.stage === 'response_payload' || item.stage === 'response_body_completed') return `The worker ${item.stage === 'response_body_completed' ? 'finished reading the bounded response body' : 'captured response bytes while reading the body'}.${identity} ${item.response_content_type ? `Format: ${text(item.response_content_type)}. ` : ''}${item.response_bytes_observed != null ? `${String(item.response_bytes_observed)} bytes observed. ` : ''}${item.response_payload_truncated ? 'The preview is partial.' : 'The captured preview is shown below with sensitive values redacted.'}`;
-  if (item.stage === 'request_not_sent') return `This operation was not sent.${identity} Recorded reason: ${text(item.reason).replaceAll('_', ' ') || 'not recorded'}.`;
+  if (item.stage === 'request_not_sent') return `This operation was not sent.${identity} Recorded reason: ${valueText(item.reason) || 'not recorded'}.`;
   if (item.stage === 'attempt_failed') return `The attempted operation failed.${identity} Recorded error: ${text(item.error_class) || 'not recorded'}.`;
-  return `${LABELS[text(item.stage)] || text(item.stage).replaceAll('_', ' ')}.${identity} The fields below are the recorded facts for this event.`;
+  return `${stageLabel(item)}.${identity} The fields below are the recorded facts for this event.`;
 }
 
 type ActivityProps = {
@@ -91,9 +99,9 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
       </div>
       <div className="probe-activity-status" role="status" aria-live="polite">
         <span>{snapshot ? `${items.length} shown · ${Array.isArray(snapshot.items) ? snapshot.items.length : 0} recorded events retained` : notSent ? 'Recorded execution decision · no request dispatched' : runId ? 'Waiting for recorded worker activity' : 'No check selected'}</span>
-        <span>{paused ? 'Updates paused; execution continues' : error ? 'Disconnected · recorded view may be stale' : running ? 'Live updates · every 2.5s' : text(snapshot?.status).replaceAll('_', ' ') || 'No execution recorded'}</span>
-        {snapshot?.requests_sent != null ? <span>{String(snapshot.requests_sent)} attested operations</span> : <span>Operation count not recorded</span>}
-        {maxRequests != null ? <span>Planned probe maximum: {maxRequests} · not operations sent</span> : null}
+        <span>{paused ? 'Updates paused; execution continues' : error ? 'Disconnected · recorded view may be stale' : running ? 'Live updates · every 2.5s' : valueText(snapshot?.status) || 'No execution recorded'}</span>
+        <span>{activityRequestsSentLabel(snapshot?.requests_sent)}</span>
+        {activityRequestLimitLabel(maxRequests) ? <span>{activityRequestLimitLabel(maxRequests)}</span> : null}
         <span>{lastUpdated ? <>Last successful update <time dateTime={lastUpdated} title={lastUpdated}>{time(lastUpdated)}</time>{updating && !paused ? ' · refreshing' : ''}</> : 'No successful update yet'}</span>
       </div>
       {stopLabel ? <p className="probe-activity-note" role="status">{stopLabel}. Database cancellation is not proof that the worker stopped.</p> : ['cancelled', 'canceled'].includes(text(snapshot?.status)) ? <p className="probe-activity-note">Cancellation recorded; worker acknowledgment was not recorded. An in-flight bounded request may have finished.</p> : null}
@@ -114,10 +122,10 @@ export function ProbeActivityView({ runId, checkName, running: fallbackRunning, 
               const level = severity(item);
               return <Fragment key={id}>
                 <tr role="row" data-severity={level}>
-                  <td role="cell" data-label="Event"><Badge tone={level === 'error' ? 'danger' : level === 'warning' ? 'warn' : 'default'}>{LABELS[text(item.stage)] ?? text(item.stage).replaceAll('_', ' ')}</Badge>{item.source === 'simulation' ? <small>Simulation · no target traffic</small> : null}</td>
+                  <td role="cell" data-label="Event"><Badge tone={level === 'error' ? 'danger' : level === 'warning' ? 'warn' : 'default'}>{stageLabel(item)}</Badge>{item.source === 'simulation' ? <small>Simulation · no target traffic</small> : null}</td>
                   <td role="cell" data-label="Time"><time dateTime={text(item.at)} title={text(item.at)}>{time(item.at)}</time></td>
-                  <td role="cell" data-label="Request"><span className="probe-activity-operation">{text(item.method) || text(item.operation).replaceAll('_', ' ') || 'Not recorded'}</span>{item.url ? <code>{text(item.url)}</code> : null}<small>{[item.vector_family, item.marker_class, item.phase].filter(Boolean).map((value) => String(value).replaceAll('_', ' ')).join(' · ')}</small></td>
-                  <td role="cell" data-label="Response">{item.status_code != null ? <strong>HTTP {String(item.status_code)}</strong> : text(item.error_class) || text(item.outcome) || text(item.reason).replaceAll('_', ' ') || '—'}{item.response_content_type ? <small>{text(item.response_content_type)}</small> : null}{item.duration_ms != null ? <small>{String(item.duration_ms)} ms</small> : null}</td>
+                  <td role="cell" data-label="Request"><span className="probe-activity-operation">{text(item.method) || (item.operation ? <ActivityValue value={item.operation} /> : 'Not recorded')}</span>{item.url ? <code>{text(item.url)}</code> : null}<small>{vectorParts(item).map((value, index) => <Fragment key={`${String(value)}-${index}`}>{index ? ' · ' : ''}<ActivityValue value={value} /></Fragment>)}</small></td>
+                  <td role="cell" data-label="Response">{item.stage === 'result_received' && running ? <><span>Probe response: {valueText(item.outcome) || (item.status_code != null ? `HTTP ${String(item.status_code)}` : 'not recorded')}</span><small>Not a verdict · correlating</small></> : item.status_code != null ? <strong>HTTP {String(item.status_code)}</strong> : text(item.error_class) || valueText(item.outcome) || valueText(item.reason) || '—'}{item.response_content_type ? <small>{text(item.response_content_type)}</small> : null}{item.duration_ms != null ? <small>{String(item.duration_ms)} ms</small> : null}</td>
                   <td role="cell" data-label="Details"><button className="probe-activity-expand" aria-label={`Details for event ${id}`} aria-expanded={open} onClick={() => setExpanded(open ? null : id)}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button></td>
                 </tr>
                 {open ? <tr role="row" className="probe-activity-detail"><td role="cell" colSpan={5}><p className="probe-activity-description">{describe(item)}</p><dl>{Object.entries(item).filter(([key, value]) => !['id', 'sequence', 'stage'].includes(key) && !(value && typeof value === 'object' && !Object.keys(value).length)).map(([key, value]) => <div key={key} data-payload={key.includes('preview') || undefined}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : value && typeof value === 'object' ? JSON.stringify(value, null, 2) : value === '' ? '(empty)' : String(value ?? 'Not recorded')}</dd></div>)}</dl></td></tr> : null}

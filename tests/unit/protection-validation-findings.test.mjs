@@ -484,7 +484,8 @@ describe('protection finding lifecycle planning', () => {
     assert.equal(findingRow.source, 'protection_validation');
     assert.equal(findingRow.target_id, 'tgt_alt');
     assert.equal(findingRow.check_id, 'waf.marker.sqli');
-    assert.equal(findingRow.notes, bypass.summary);
+    assert.equal(findingRow.system_summary, bypass.summary);
+    assert.equal(findingRow.notes, null);
     assert.equal(findingSeverityClass(findingRow.severity), 'critical');
     assert.equal(findingRow.protection_validation.dedupe_key, bypass.dedupe_key);
     assert.equal(findingRow.protection_validation.title, undefined);

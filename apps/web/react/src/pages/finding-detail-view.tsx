@@ -1,22 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { HTMLAttributes, MouseEvent as ReactMouseEvent } from 'react';
+import type { HTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Check, Eye, FileCheck2, TriangleAlert, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { FindingDetectionHistory } from '../components/findings/finding-detection-history';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { readFindingLineage } from '../lib/finding-lineage.mjs';
 import { useProgressiveFindings } from '../components/findings/use-server-findings';
-import { VerifyChip } from '../lib/verify-chip';
+import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { requestJson } from '../lib/api';
 import { apiErrorMessage } from '../lib/error-messages';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { formatDate, formatSeverityLabel, triggerJsonDownload } from '../lib/utils';
+import { formatAuditAction, formatDate, formatSeverityLabel, formatTimestamp, triggerJsonDownload } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
+import { Toast } from '../components/ui/toast';
+import { RiskAcceptanceDialog, type RiskAcceptanceInput } from '../components/findings/risk-acceptance-dialog';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 // @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
 import { plainCheckName, plainCodeLabel, plainEmptyReason, plainFindingTitle, plainVerdictLabel } from '../lib/plain-language.mjs';
@@ -26,7 +28,9 @@ import {
   FINDING_RULE_ASSETS_FOCUS,
   countFindingAssets,
   findingAssetLabel,
+  findingObservationLabel,
   findingObservedAt,
+  findingOpenedAt,
   findingRuleSiblings,
   findingRuleTitle,
   findingSlaDueAt,
@@ -35,6 +39,7 @@ import {
   resolveFindingRetestAction
 } from '../lib/findings-helpers';
 import '../components/findings/findings-groups.css';
+import './finding-detail-view.css';
 import { ConfirmModal, useConfirmModal } from '../lib/crud-ui';
 import { useInspectorRef, useOpenInspector } from '../components/evidence/use-inspector';
 import { getRouteParam, replaceRouteParams } from '../lib/route-params';
@@ -42,6 +47,9 @@ import { findingStatusTone } from '../lib/status-tone';
 import { severityTone } from '../lib/severity-tone';
 import { FindingStatusBadge } from './refined/findings-refined';
 import { DetailBackLink } from '../components/layout/detail-back-link';
+import { useEntityDocumentTitle } from '../components/layout/app-shell';
+import { FINDING_STATUS_DESCRIPTIONS, FINDING_STATUS_LABELS, findingStatusTransitions, type FindingStatus } from '../lib/findings-query.mjs';
+import { findingDecisionNote, findingStatusBucket } from '../lib/finding-groups.mjs';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -65,7 +73,24 @@ const findingDetailStyles = `
 .finding-detail-page .finding-summary-fact dd small { display: block; margin-top: 2px; color: var(--fg-2); }
 .finding-detail-page .finding-lineage { display: grid; margin-top: var(--space-4); }
 .finding-detail-page .finding-lineage-item { display: grid; align-content: start; gap: var(--space-1); min-width: 0; padding: var(--space-3) 0; border-top: 1px solid var(--border-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.finding-detail-page .finding-lineage-label { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.finding-detail-page .finding-lineage-label { color: var(--fg-2); font-size: var(--text-sm); font-weight: 600; }
+.finding-detail-page .finding-risk-reason { color: var(--fg-2); white-space: pre-wrap; }
+.finding-detail-page .finding-triage-group { display: grid; gap: var(--space-2); }
+.finding-detail-page .finding-triage-group-label { color: var(--fg); font-size: var(--text-sm); font-weight: 600; margin: 0; }
+.finding-detail-page .finding-decision-group { display: grid; gap: var(--space-3); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-soft); }
+.finding-detail-page .finding-decision-current { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--fg-2); font-size: var(--text-sm); }
+.finding-detail-page .finding-decision-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.finding-detail-page .finding-recorded-explanation { display: grid; gap: var(--space-1); margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface-sunk); font-size: var(--text-sm); }
+.finding-detail-page .finding-recorded-explanation p { margin: 0; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.finding-detail-page .finding-recorded-explanation small { color: var(--fg-2); }
+.finding-detail-page .finding-triage-readonly .finding-notes-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.finding-detail-page .finding-decision-history { display: grid; gap: var(--space-2); margin: var(--space-4) 0 0; padding: var(--space-4) 0 0; border-top: 1px solid var(--border-soft); }
+.finding-detail-page .finding-decision-history h3 { margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.finding-detail-page .finding-decision-history ol { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.finding-detail-page .finding-decision-history li { display: grid; gap: var(--space-1); padding: var(--space-2) 0; border-top: 1px solid var(--border-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.finding-detail-page .finding-decision-history li:first-child { border-top: 0; }
+.finding-detail-page .finding-decision-history .finding-history-meta { color: var(--fg-2); font-size: var(--text-xs); }
+.finding-detail-page .finding-decision-history .finding-history-notes { color: var(--fg-2); white-space: pre-wrap; }
 .finding-detail-page .rule-assets-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }
 .finding-detail-page .finding-lineage-runs { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 .finding-detail-page .finding-lineage-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
@@ -79,7 +104,9 @@ const findingDetailStyles = `
 }
 @media (max-width: 640px) {
   .finding-detail-page .product-form--compact .row-actions.action-bar-compact { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: start; align-items: stretch; }
-  .finding-detail-page .product-form--compact .row-actions.action-bar-compact .btn { width: 100%; }
+  .finding-detail-page .product-form--compact .row-actions.action-bar-compact .btn,
+  .finding-detail-page .finding-decision-actions .btn { width: 100%; min-height: 44px; }
+  .finding-detail-page .finding-decision-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
 }
 `;
 
@@ -93,18 +120,61 @@ function ensureFindingDetailStyles() {
 
 type FindingDecisionStep = { id: string; label: string; done: boolean; meta: string };
 
+const DECISION_STATUSES = ['accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive'];
+const CLOSED_OUTCOMES = ['resolved', 'closed', 'false_positive'];
+const REASONED_OUTCOMES: Partial<Record<FindingStatus, { title: string; confirmLabel: string; noteLabel: string }>> = {
+  resolved: { title: 'Mark this finding resolved', confirmLabel: 'Mark resolved', noteLabel: 'Resolved' },
+  false_positive: { title: 'Mark this finding a false positive', confirmLabel: 'Mark false positive', noteLabel: 'Marked false positive' },
+  closed: { title: 'Close this finding', confirmLabel: 'Close finding', noteLabel: 'Closed' },
+  open: { title: 'Reopen this finding', confirmLabel: 'Reopen', noteLabel: 'Reopened' },
+};
+
+type RiskAcceptanceRecord = { reason: string; review_at: string; accepted_by: string; accepted_at: string };
+type TriageValues = { assignee: string; notes: string };
+type AuditHistoryState = { state: 'idle' | 'loading' | 'ready' | 'error'; items: DataItem[]; error: string };
+
+function formatDay(value: unknown) {
+  if (!value) return 'Not recorded';
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function readRiskAcceptance(entity: DataItem): RiskAcceptanceRecord | null {
+  const value = entity.risk_acceptance;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as DataItem;
+  return {
+    reason: getString(record, ['reason'], ''),
+    review_at: getString(record, ['review_at'], ''),
+    accepted_by: getString(record, ['accepted_by'], ''),
+    accepted_at: getString(record, ['accepted_at'], ''),
+  };
+}
+
+/** Recorded target verification: verification_state, then a verification object's state, then a plain string. */
+function targetVerificationState(item: DataItem) {
+  const direct = getString(item, ['verification_state'], '');
+  if (direct) return direct;
+  const verification = item.verification;
+  if (verification && typeof verification === 'object' && !Array.isArray(verification)) return getString(verification as DataItem, ['state'], '');
+  return typeof verification === 'string' ? verification.trim() : '';
+}
+
 /** Describe progress only from persisted finding/remediation facts; no unsupported status mutation is implied. */
-function buildFindingDecisionSteps(status: string, owner: string, remState: string, hasPlaybook: boolean): FindingDecisionStep[] {
+function buildFindingDecisionSteps(status: string, owner: string, remState: string, hasPlaybook: boolean, riskReviewAt = ''): FindingDecisionStep[] {
   const normalizedStatus = status.trim().toLowerCase();
   const normalizedOwner = owner.trim().toLowerCase();
   const ownerAssigned = Boolean(normalizedOwner && normalizedOwner !== 'unassigned' && normalizedOwner !== 'not reported');
-  const remediationTracked = hasPlaybook;
-  const decisionRecorded = ['accepted_risk', 'closed'].includes(normalizedStatus);
+  const decisionRecorded = DECISION_STATUSES.includes(normalizedStatus);
+  const decisionMeta = normalizedStatus === 'accepted_risk'
+    ? (riskReviewAt ? `Risk accepted, review by ${formatDay(riskReviewAt)}` : 'Risk accepted')
+    : FINDING_STATUS_LABELS[normalizedStatus as FindingStatus] ?? formatFindingLabel(status);
   return [
     { id: 'opened', label: 'Finding opened', done: true, meta: `Recorded status: ${formatFindingLabel(status, 'Open')}` },
     { id: 'owned', label: 'Owner assigned', done: ownerAssigned, meta: ownerAssigned ? owner : 'No assignee recorded.' },
-    { id: 'remediation', label: 'Remediation linked', done: remediationTracked, meta: remediationTracked ? formatFindingLabel(remState, 'Playbook linked') : 'No playbook or progressed remediation state.' },
-    { id: 'decision', label: 'Decision recorded', done: decisionRecorded, meta: decisionRecorded ? formatFindingLabel(status) : 'Accept risk or close after review.' },
+    ...(hasPlaybook ? [{ id: 'remediation', label: 'Remediation linked', done: true, meta: formatFindingLabel(remState, 'Playbook linked') }] : []),
+    { id: 'decision', label: 'Decision recorded', done: decisionRecorded, meta: decisionRecorded ? decisionMeta : 'Accept risk, resolve, or mark false positive after review.' },
   ];
 }
 
@@ -172,17 +242,12 @@ function evidenceRowNavProps(artifactId: string, inspect: (artifactId: string) =
   };
 }
 
-function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
-  return (
-    <>
-      {loadError ? <div className="form-banner error" role="alert">{loadError}</div> : null}
-      {(message || error) && !loadError ? (
-        <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>
-          {error || message}
-        </div>
-      ) : null}
-    </>
-  );
+function DetailStatusBanners({ loadError }: { loadError: string }) {
+  return loadError ? <div className="form-banner error" role="alert">{loadError}</div> : null;
+}
+
+function ReadOnlyField({ label, field, children }: { label: string; field: string; children: ReactNode }) {
+  return <div data-field={field}><span>{label}</span><strong>{children}</strong></div>;
 }
 
 export function FindingDetailView({
@@ -206,8 +271,13 @@ export function FindingDetailView({
 }) {
   ensureFindingDetailStyles();
 
-  const { confirm } = useConfirmModal();
+  const { confirm, confirmWithReason } = useConfirmModal();
   const [busy, setBusy] = useState('');
+  const [feedbackKey, setFeedbackKey] = useState(0);
+  const [riskDialog, setRiskDialog] = useState<TriageValues | null>(null);
+  const [decisionHistory, setDecisionHistory] = useState<AuditHistoryState>({ state: 'idle', items: [], error: '' });
+  const [historyReloadToken, setHistoryReloadToken] = useState(0);
+  const triageFormRef = useRef<HTMLFormElement | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [evidence, setEvidence] = useState<Awaited<ReturnType<typeof populateFindingEvidence>> | null>(null);
@@ -223,6 +293,8 @@ export function FindingDetailView({
 
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
   const canWriteFinding = sessionHasPermission(session, 'finding:write');
+  const canAcceptRisk = sessionHasPermission(session, 'finding:accept_risk');
+  const canReadAudit = sessionHasPermission(session, 'audit:read');
   const canStartFindingRetest = sessionHasPermission(session, 'test_run:start');
   const remSteps = remediation.remSteps.split('|').map((step) => step.trim()).filter(Boolean);
   const hasRemediationPlaybook = Boolean(
@@ -232,9 +304,15 @@ export function FindingDetailView({
     remediation.actionItemId
   );
   const title = plainFindingTitle(entity, [...data.targets, ...affectedTargets], data.checks);
+  useEntityDocumentTitle(loading ? undefined : title);
   const slaDueAt = findingSlaDueAt(entity);
   const severity = getString(entity, ['severity'], 'unknown');
   const findingStatus = readFindingStatus(entity);
+  const normalizedStatus = findingStatus.trim().toLowerCase();
+  const riskAcceptance = readRiskAcceptance(entity);
+  const systemSummary = getString(entity, ['system_summary'], '').trim();
+  const humanNotes = getString(entity, ['notes'], '');
+  const statusTransitions = findingStatusTransitions(normalizedStatus);
   const owner = getString(entity, ['assignee', 'rem_owner'], 'unassigned');
   const targetId = getString(entity, ['target_id'], '');
   const targetDisplay = targetId ? (getString(data.targets?.find((t) => t.id === targetId), ['value', 'hostname'], '') || getString(entity, ['target_hostname', 'target_value'], targetId)) : '';
@@ -246,6 +324,7 @@ export function FindingDetailView({
   const originalVerdictId = getString(entity, ['verdict_id'], '');
   const laterVerdictId = getString(entity, ['last_verdict_id'], '');
   const hasLaterVerdict = Boolean(laterVerdictId) && laterVerdictId !== originalVerdictId;
+  const closedAt = lineage.closedAt || getString(entity, ['closed_at'], '');
   const retestAction = resolveFindingRetestAction(entity);
   const retestCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? null;
   const retestBound = Number((retestCheck?.probe_profile as DataItem | undefined)?.max_requests);
@@ -272,7 +351,7 @@ export function FindingDetailView({
     replaceRouteParams({ retest: null });
   }
 
-  const decisionSteps = buildFindingDecisionSteps(findingStatus, owner, remediation.remState, hasRemediationPlaybook);
+  const decisionSteps = buildFindingDecisionSteps(findingStatus, owner, remediation.remState, hasRemediationPlaybook, riskAcceptance?.review_at ?? '');
   // Every loaded finding that shares this finding's rule (same recorded outcome), this one included.
   // Rule siblings come from the server's exact check predicate across every status, read in pages.
   // A finding without a check id can only be compared with the loaded page, and says so.
@@ -285,10 +364,7 @@ export function FindingDetailView({
   );
   const ruleTitle = findingRuleTitle(entity, data.checks);
   const ruleAssetsRef = useRef<HTMLElement | null>(null);
-  const ruleOpenCount = ruleSiblings.filter((item) => {
-    const status = readFindingStatus(item).toLowerCase();
-    return status === 'open' || status === 'remediation_pending';
-  }).length;
+  const ruleActiveCount = ruleSiblings.filter((item) => findingStatusBucket(item) === 'open').length;
   const ruleAssetCount = countFindingAssets(ruleSiblings, data.targets ?? []);
   const ruleHasSiblings = ruleSiblings.length > 1;
   const findingsListError = data.loadErrors?.findings ?? '';
@@ -338,8 +414,21 @@ export function FindingDetailView({
     requestJson(config, session, `/v1/targets/${encodeURIComponent(targetId)}`)
       .then((payload) => {
         if (cancelled) return;
-        const target = (payload as DataItem).target as DataItem | undefined;
-        setAffectedTargets(target && getString(target, ['id'], '') === targetId ? [target] : []);
+        const record = (payload ?? {}) as DataItem;
+        const target = record.target as DataItem | undefined;
+        const verification = record.verification && typeof record.verification === 'object' && !Array.isArray(record.verification)
+          ? record.verification as DataItem
+          : null;
+        if (!target || getString(target, ['id'], '') !== targetId) {
+          setAffectedTargets([]);
+          return;
+        }
+        const verificationState = getString(verification, ['state'], getString(target, ['verification_state'], ''));
+        setAffectedTargets([{
+          ...target,
+          verification_state: verificationState,
+          verification_title: resolveTargetVerificationProvenance(target, verification)
+        }]);
       })
       .catch((err) => {
         if (!cancelled) setAffectedTargetsError(err instanceof Error ? err.message : 'Could not load affected targets.');
@@ -350,30 +439,136 @@ export function FindingDetailView({
     return () => { cancelled = true; };
   }, [config, session, entityId, entity, affectedTargetsReloadToken]);
 
-  async function runAction(label: string, action: () => Promise<unknown>, success: string) {
+  useEffect(() => {
+    if (!canReadAudit) {
+      setDecisionHistory({ state: 'idle', items: [], error: '' });
+      return undefined;
+    }
+    let cancelled = false;
+    setDecisionHistory((current) => ({ ...current, state: 'loading', error: '' }));
+    requestJson(config, session, `/v1/audit-log?resource=${encodeURIComponent(entityId)}&limit=50`)
+      .then((payload) => {
+        if (cancelled) return;
+        const items = coerceItemArray((payload as DataItem | null)?.items) ?? [];
+        const stamp = (item: DataItem) => Date.parse(getString(item, ['ts', 'created_at', 'at'], '')) || 0;
+        setDecisionHistory({ state: 'ready', items: [...items].sort((left, right) => stamp(right) - stamp(left)), error: '' });
+      })
+      .catch((err) => {
+        if (!cancelled) setDecisionHistory({ state: 'error', items: [], error: apiErrorMessage(err, 'Decision history could not load.') });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, entityId, canReadAudit, historyReloadToken]);
+
+  function reportError(text: string) {
+    setMessage('');
+    setError(text);
+    setFeedbackKey((value) => value + 1);
+  }
+
+  async function runAction(label: string, action: () => Promise<unknown>, success: string, onSuccess?: () => void) {
     setBusy(label);
     setError('');
     setMessage('');
     try {
       await action();
       setMessage(success);
+      setFeedbackKey((value) => value + 1);
+      onSuccess?.();
       await onRefresh();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Action failed.'));
+      reportError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
   }
 
-  async function patchFinding(body: Record<string, unknown>, success: string, action = 'update') {
+  async function patchFinding(body: Record<string, unknown>, success: string, action = 'update', onSuccess?: () => void) {
     if (!canWriteFinding) return;
-    await runAction(`finding-${action}-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }), success);
+    await runAction(
+      `finding-${action}-${entityId}`,
+      () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }),
+      success,
+      () => {
+        setHistoryReloadToken((value) => value + 1);
+        onSuccess?.();
+      }
+    );
+  }
+
+  /** Assignee and notes as typed in the triage form, read before any dialog awaits so nothing typed is lost. */
+  function readTriageValues(form: HTMLFormElement | null): TriageValues {
+    const source = form ?? triageFormRef.current;
+    if (!source) return { assignee: getString(entity, ['assignee'], ''), notes: humanNotes };
+    const values = new FormData(source);
+    return { assignee: String(values.get('assignee') ?? '').trim(), notes: String(values.get('notes') ?? '').trim() };
+  }
+
+  function retestContext(): ReactNode {
+    const latest = lineage.latest;
+    if (!latest || latest.pending || latest.finalized !== true) return null;
+    return <p className="muted small">Most recent retest: <span className="mono">{latest.testRunId}</span>, finished {latest.completedAt ? formatTimestamp(latest.completedAt) : 'at an unrecorded time'}.</p>;
+  }
+
+  async function changeStatus(next: FindingStatus, form: HTMLFormElement | null) {
+    if (!canWriteFinding) return;
+    const triage = readTriageValues(form);
+    const label = FINDING_STATUS_LABELS[next];
+    if (next === 'accepted_risk') {
+      if (!canAcceptRisk) return;
+      setRiskDialog(triage);
+      return;
+    }
+    if (next === 'in_progress') {
+      const accepted = await confirm({
+        title: 'Start work on this finding',
+        description: 'Mark this finding as in progress? Its severity SLA clock keeps running until it is resolved, closed, marked a false positive, or risk-accepted.',
+        confirmLabel: 'Start work',
+        confirmTone: 'default'
+      });
+      if (!accepted) return;
+      await patchFinding({ status: next, assignee: triage.assignee, notes: triage.notes }, 'Finding marked in progress.', `status-${next}`);
+      return;
+    }
+    const outcome = REASONED_OUTCOMES[next];
+    if (!outcome) return;
+    const closing = CLOSED_OUTCOMES.includes(next);
+    const reason = await confirmWithReason({
+      title: outcome.title,
+      description: (
+        <div className="stack-tight">
+          <p>{FINDING_STATUS_DESCRIPTIONS[next]}.</p>
+          {closing ? retestContext() : null}
+          {closing
+            ? <p>Closure is a recorded status change, not proof of a fix. Findings on other targets are not changed.</p>
+            : <p>Reopening returns the finding to active work and restarts nothing on the target.</p>}
+        </div>
+      ),
+      confirmLabel: outcome.confirmLabel,
+      confirmTone: closing ? 'danger' : 'default',
+      reason: { label: closing ? 'Reason for this outcome' : 'Reason for reopening', required: true, placeholder: 'Recorded with this decision in the triage notes.' }
+    });
+    if (!reason) return;
+    await patchFinding(
+      { status: next, assignee: triage.assignee, notes: findingDecisionNote(triage.notes, outcome.noteLabel, reason) },
+      `Finding status changed to ${label.toLowerCase()}.`,
+      `status-${next}`
+    );
+  }
+
+  async function acceptRisk(input: RiskAcceptanceInput) {
+    const triage = riskDialog ?? readTriageValues(null);
+    await patchFinding(
+      { status: 'accepted_risk', risk_acceptance: input, assignee: triage.assignee, notes: triage.notes },
+      `Risk accepted. Review by ${formatDay(input.review_at)}.`,
+      'status-accepted_risk',
+      () => setRiskDialog(null)
+    );
   }
 
   async function markDelivered() {
     if (!canWriteFinding) return;
     if (!remediation.actionItemId) {
-      setError('No remediation action item is linked to this finding.');
+      reportError('No remediation action item is linked to this finding.');
       return;
     }
     await runAction(`deliver-${entityId}`, () => requestJson(config, session, `/v1/waf/action-items/${encodeURIComponent(remediation.actionItemId)}/deliver`, { method: 'POST' }), 'Remediation marked delivered.');
@@ -430,16 +625,25 @@ export function FindingDetailView({
     {
       key: 'verification',
       label: 'Verification',
-      render: (item) => <VerifyChip state={getString(item, ['verification_state', 'verification'], 'unverified')} provenance={getString(item, ['verification_title'], 'Recorded target verification state.')} />
+      render: (item) => {
+        const state = targetVerificationState(item);
+        if (!state) {
+          const id = getString(item, ['id'], '');
+          return id
+            ? <a className="detail-entity-link muted" href={buildDetailHref('target-detail', id)} aria-label={`Verification not reported; open target ${getString(item, ['value', 'id'], id)}`}>Not reported</a>
+            : <span className="muted">Not reported</span>;
+        }
+        return <VerifyChip state={state} provenance={getString(item, ['verification_title'], 'Recorded target verification state.')} />;
+      }
     },
     { key: 'eligibility', label: 'Eligibility', render: (item) => plainCodeLabel(getString(item, ['eligibility'], ''), 'Not reported') },
-    { key: 'verdict', label: 'Last verdict', render: (item) => { const verdict = getString(item, ['last_verdict'], ''); return verdict ? plainVerdictLabel(verdict) : 'No result yet'; } }
+    { key: 'verdict', label: 'Last verdict', render: (item) => { const verdict = getString(item, ['last_verdict'], ''); return verdict ? plainVerdictLabel(verdict) : <span className="muted">Not reported</span>; } }
   ];
 
   const ruleAssetColumns: TableColumn<DataItem>[] = [
     {
       key: 'asset',
-      label: 'Asset',
+      label: 'Target',
       render: (item) => {
         const siblingId = getString(item, ['id'], '');
         const label = findingAssetLabel(item, data.targets);
@@ -482,10 +686,12 @@ export function FindingDetailView({
     },
     {
       key: 'observed',
-      label: 'Last observed',
+      label: 'Observed',
       render: (item) => {
-        const observed = findingObservedAt(item);
-        return observed ? formatDate(observed) : <span className="rule-asset-meta">Not reported</span>;
+        const observed = findingObservedAt(item) ?? findingOpenedAt(item);
+        return observed !== null
+          ? <span className="rule-asset-stack"><span>{findingObservationLabel(item)}</span><small>{formatDate(observed)}</small></span>
+          : <span className="rule-asset-meta">Not reported</span>;
       }
     },
     {
@@ -534,11 +740,11 @@ export function FindingDetailView({
       label: 'Run',
       render: (item) => {
         const runId = getString(item, ['run_id'], '');
-        return runId ? <span className="mono">{runId}</span> : <span className="rule-asset-meta">Not reported</span>;
+        return runId ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', runId)}>{runId}</a> : <span className="rule-asset-meta">Not reported</span>;
       }
     },
     { key: 'sha', label: 'Recorded digest', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], 'Not reported')}>{getString(item, ['sha256', 'content_sha256'], 'Not reported')}</span> },
-    { key: 'sealed', label: 'Sealed', render: (item) => formatDate(item.sealed_at) },
+    { key: 'sealed', label: 'Sealed', render: (item) => formatTimestamp(item.sealed_at) },
     { key: 'size', label: 'Size', render: (item) => <span className="num">{formatBytes(item.size_bytes)}</span> },
     {
       key: 'inspect',
@@ -590,7 +796,9 @@ export function FindingDetailView({
       </div>
 
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
-      <DetailStatusBanners loadError={loadError} message={message} error={error} />
+      <DetailStatusBanners loadError={loadError} />
+      {error ? <Toast key={`finding-error-${feedbackKey}`} message={error} tone="error" duration={0} onDismiss={() => setError('')} /> : null}
+      {message && !error ? <Toast key={`finding-message-${feedbackKey}`} message={message} tone="success" duration={5000} onDismiss={() => setMessage('')} /> : null}
 
       {!loading ? (
         <>
@@ -600,12 +808,10 @@ export function FindingDetailView({
         </CardHeader>
         <CardContent>
           <dl className="finding-summary-facts">
-            <div className="finding-summary-fact"><dt>Finding ID</dt><dd className="mono">{entityId}</dd></div>
             <div className="finding-summary-fact"><dt>SLA due</dt><dd>{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' · breached' : ''}</dd></div>
             {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd><span>{plainCheckName(getString(data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? {}, ['name', 'title'], checkId))}</span><small className="mono">{checkId}</small></dd></div> : null}
             {vectorFamily ? <div className="finding-summary-fact"><dt>Vector</dt><dd>{formatFindingLabel(vectorFamily)}</dd></div> : null}
             {targetId ? <div className="finding-summary-fact"><dt>Target ID</dt><dd className="mono">{targetId}</dd></div> : null}
-            {testRunId ? <div className="finding-summary-fact"><dt>Source run</dt><dd className="mono">{testRunId}</dd></div> : null}
             {entity.created_at ? <div className="finding-summary-fact"><dt>Opened</dt><dd>{formatDate(entity.created_at)}</dd></div> : null}
             {entity.updated_at ? <div className="finding-summary-fact"><dt>Updated</dt><dd>{formatDate(entity.updated_at)}</dd></div> : null}
           </dl>
@@ -617,7 +823,7 @@ export function FindingDetailView({
           <section className="finding-lineage" aria-label="Original evidence and later results">
             <div className="finding-lineage-item">
               <span className="finding-lineage-label">Original evidence</span>
-              <span>{originalRunId ? <>Recorded execution <span className="mono">{originalRunId}</span></> : 'Originating execution not recorded'}{originalVerdictId ? <> · verdict <span className="mono">{originalVerdictId}</span></> : null}</span>
+              <span>{originalRunId ? <>Recorded execution <a className="detail-entity-link mono" href={buildDetailHref('run-detail', originalRunId)}>{originalRunId}</a></> : 'Originating execution not recorded'}{originalVerdictId ? <> · verdict <span className="mono">{originalVerdictId}</span></> : null}</span>
               <span className="muted small">The observation that opened this finding. It is kept even after later results.</span>
             </div>
             <div className="finding-lineage-item">
@@ -661,7 +867,24 @@ export function FindingDetailView({
             </div>
             <div className="finding-lineage-item">
               <span className="finding-lineage-label">Closure</span>
-              {lineage.closedAt ? <span>Closed {formatDate(lineage.closedAt)}</span> : <span className="muted">Not closed.</span>}
+              {normalizedStatus === 'accepted_risk' ? (
+                <>
+                  <span>
+                    Risk accepted{riskAcceptance?.accepted_by ? <> by <span className="mono">{riskAcceptance.accepted_by}</span></> : ''}
+                    {riskAcceptance?.accepted_at ? ` on ${formatDay(riskAcceptance.accepted_at)}` : ''}
+                    {riskAcceptance?.review_at ? `, review by ${formatDay(riskAcceptance.review_at)}` : ''}
+                    {riskAcceptance ? '' : ' (no reason or review date recorded)'}
+                  </span>
+                  {riskAcceptance?.reason ? <span className="finding-risk-reason">{riskAcceptance.reason}</span> : null}
+                </>
+              ) : CLOSED_OUTCOMES.includes(normalizedStatus) ? (
+                <span>
+                  {closedAt ? `Closed ${formatTimestamp(closedAt)}` : 'Closed; closure time not recorded'}
+                  {normalizedStatus === 'closed' ? '' : ` · ${FINDING_STATUS_LABELS[normalizedStatus as FindingStatus]}`}
+                </span>
+              ) : normalizedStatus === 'accepted' ? (
+                <span>Accepted (older status set through the API){closedAt ? ` ${formatTimestamp(closedAt)}` : ''}</span>
+              ) : <span className="muted">Not closed.</span>}
               <span className="muted small">Closure is a recorded status change, not proof of a fix. Findings on other targets are never closed with this one.</span>
             </div>
           </section>
@@ -669,18 +892,10 @@ export function FindingDetailView({
       </Card>
 
       <div className="dash-grid">
-        <Card>
-          <CardHeader>
-            <CardTitle>Verdict explanation</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <FindingExplanationPanel finding={entity} config={config} session={session} />
-          </CardContent>
-        </Card>
-        <Card>
+        <Card className="finding-triage-card">
           <CardHeader>
             <CardTitle>Triage</CardTitle>
-            <CardDescription>Assign an owner, record notes, and move the finding state.</CardDescription>
+            <CardDescription>{canWriteFinding ? 'Assign an owner, record notes, and record a decision.' : 'Owner, notes, and recorded decision for this finding.'}</CardDescription>
           </CardHeader>
           <CardContent>
             <ol className="verify-ladder finding-decision-ladder" aria-label="Finding decision status">
@@ -694,45 +909,123 @@ export function FindingDetailView({
                 );
               })}
             </ol>
-            {canWriteFinding ? null : (
-              <div className="kv-list">
-                <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'Unassigned')}</strong></div>
+            {systemSummary ? (
+              <div className="finding-recorded-explanation">
+                <span className="finding-triage-group-label">Recorded explanation</span>
+                <p>{systemSummary}</p>
+                <small>Written by the server from the verdict that opened this finding. It cannot be edited, and triage notes never replace it.</small>
               </div>
-            )}
+            ) : null}
             {canWriteFinding ? (
-            <form className="product-form product-form--compact" onSubmit={(event) => {
-              event.preventDefault();
-              const form = new FormData(event.currentTarget);
-              void patchFinding({ assignee: String(form.get('assignee') ?? '').trim(), notes: String(form.get('notes') ?? '').trim() }, 'Triage updated.', 'triage');
-            }}>
+            <form
+              key={`triage-${entityId}-${getString(entity, ['updated_at'], '')}`}
+              ref={triageFormRef}
+              className="product-form product-form--compact"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const triage = readTriageValues(event.currentTarget);
+                void patchFinding({ assignee: triage.assignee, notes: triage.notes }, 'Triage saved.', 'triage');
+              }}
+            >
               <label className="full"><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
-              <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={getString(entity, ['notes'], '')} /></label>
-              <div className="row-actions action-bar-compact full">
+              <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={humanNotes} placeholder="Your team's triage notes. The recorded explanation above is kept separately." /></label>
+              <div className="row-actions action-bar-compact full" role="group" aria-label="Triage actions">
                 <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-triage-${entityId}`} disabled={busy !== ''}>Save triage</Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  loading={busy === `finding-accept-risk-${entityId}`}
-                  disabled={busy !== '' || ['accepted_risk', 'closed'].includes(findingStatus.toLowerCase())}
-                  onClick={async () => {
-                    if (!await confirm({ title: 'Accept finding risk', description: 'Accept this finding as risk? This records a terminal risk decision.', confirmLabel: 'Accept risk' })) return;
-                    await patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.', 'accept-risk');
-                  }}
-                >Accept risk</Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  loading={busy === `finding-close-${entityId}`}
-                  disabled={busy !== '' || findingStatus.toLowerCase() === 'closed'}
-                  onClick={async () => {
-                    if (!await confirm({ title: 'Close finding', description: 'Close this finding after reviewing its evidence and remediation state?', confirmLabel: 'Close finding' })) return;
-                    await patchFinding({ status: 'closed' }, 'Finding closed.', 'close');
-                  }}
-                >Close finding</Button>
                 <Button size="sm" variant="secondary" disabled={busy !== '' || !canStartFindingRetest || !retestAction} title={!retestAction ? 'Retest details are missing from this finding.' : undefined} onClick={() => setRetestReview(true)}>Review retest</Button>
               </div>
+              <div className="finding-decision-group full" role="group" aria-labelledby={`finding-decision-${entityId}`}>
+                <p className="finding-triage-group-label" id={`finding-decision-${entityId}`}>Decision</p>
+                <div className="finding-decision-current">
+                  <span>Current status</span>
+                  <FindingStatusBadge status={findingStatus} title={FINDING_STATUS_DESCRIPTIONS[normalizedStatus as FindingStatus] ?? `Recorded status: ${formatFindingLabel(findingStatus)}`} />
+                </div>
+                <div className="finding-decision-actions" role="group" aria-label="Change status">
+                  {statusTransitions.map((transition) => {
+                    const acceptBlocked = transition.status === 'accepted_risk' && !canAcceptRisk;
+                    return (
+                      <Button
+                        key={transition.status}
+                        size="sm"
+                        variant="secondary"
+                        className={transition.status === 'accepted_risk' ? 'finding-accept-risk-btn' : undefined}
+                        title={acceptBlocked ? 'Accepting risk needs the owner or admin role.' : FINDING_STATUS_DESCRIPTIONS[transition.status]}
+                        aria-describedby={acceptBlocked ? `finding-accept-note-${entityId}` : undefined}
+                        loading={busy === `finding-status-${transition.status}-${entityId}`}
+                        disabled={busy !== '' || acceptBlocked}
+                        onClick={(event) => {
+                          const form = event.currentTarget.form;
+                          void changeStatus(transition.status, form);
+                        }}
+                      >
+                        {transition.status === 'accepted_risk' ? 'Accept risk…' : transition.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                {statusTransitions.some((transition) => transition.status === 'accepted_risk') && !canAcceptRisk ? (
+                  <p className="muted small" id={`finding-accept-note-${entityId}`}>Accepting risk needs the owner or admin role. Ask one of them to record the decision.</p>
+                ) : null}
+              </div>
             </form>
-            ) : <RoleRestrictedCard title="Finding triage is read-only for your role." />}
+            ) : (
+              <>
+                <div className="kv-list finding-triage-readonly">
+                  <ReadOnlyField label="Status" field="status">{FINDING_STATUS_LABELS[normalizedStatus as FindingStatus] ?? formatFindingLabel(findingStatus)}</ReadOnlyField>
+                  <ReadOnlyField label="Assignee" field="assignee">{getString(entity, ['assignee'], 'Unassigned')}</ReadOnlyField>
+                  <ReadOnlyField label="Notes" field="notes"><span className="finding-notes-value">{humanNotes.trim() || 'No triage notes recorded.'}</span></ReadOnlyField>
+                  <ReadOnlyField label="Decided" field="decided">{closedAt ? formatTimestamp(closedAt) : 'No decision recorded'}</ReadOnlyField>
+                  {riskAcceptance ? (
+                    <ReadOnlyField label="Risk acceptance" field="risk-acceptance">
+                      <span className="finding-notes-value">
+                        {riskAcceptance.reason || 'No reason recorded'}
+                        {riskAcceptance.accepted_by ? ` · accepted by ${riskAcceptance.accepted_by}` : ''}
+                        {riskAcceptance.review_at ? ` · review by ${formatDay(riskAcceptance.review_at)}` : ''}
+                      </span>
+                    </ReadOnlyField>
+                  ) : null}
+                  <ReadOnlyField label="Last updated" field="updated">{entity.updated_at ? formatTimestamp(entity.updated_at) : 'Not recorded'}</ReadOnlyField>
+                </div>
+                <p className="muted small" data-role-restricted="true">Finding triage is read-only for your role. Changes need finding:write.</p>
+              </>
+            )}
+            <section className="finding-decision-history" aria-labelledby={`finding-history-${entityId}`}>
+              <h3 id={`finding-history-${entityId}`}>Decision history</h3>
+              {!canReadAudit ? (
+                <p className="muted small">Decision history is visible to audit readers.</p>
+              ) : decisionHistory.state === 'loading' && decisionHistory.items.length === 0 ? (
+                <p className="muted small" role="status">Loading decision history…</p>
+              ) : decisionHistory.state === 'error' ? (
+                <div className="form-banner error" role="alert">
+                  Decision history could not load: {decisionHistory.error}{' '}
+                  <Button size="sm" variant="ghost" onClick={() => setHistoryReloadToken((value) => value + 1)}>Retry</Button>
+                </div>
+              ) : decisionHistory.items.length === 0 ? (
+                <p className="muted small">No decisions recorded yet.</p>
+              ) : (
+                <ol aria-label="Recorded decisions, newest first">
+                  {decisionHistory.items.map((item, index) => {
+                    const eventId = getString(item, ['id'], '');
+                    const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata) ? item.metadata as DataItem : null;
+                    const notes = getString(metadata, ['notes'], '').trim();
+                    const riskRecord = metadata?.risk_acceptance && typeof metadata.risk_acceptance === 'object' ? metadata.risk_acceptance as DataItem : null;
+                    const riskReason = getString(riskRecord, ['reason'], '').trim();
+                    const actor = getString(item, ['actor_user_id'], 'Unknown actor');
+                    const role = getString(item, ['actor_role'], '');
+                    return (
+                      <li key={eventId || `history-${index}`}>
+                        <strong>{formatAuditAction(getString(item, ['action'], ''), 'Recorded change', metadata ?? undefined)}</strong>
+                        <span className="finding-history-meta">
+                          {formatTimestamp(getString(item, ['ts', 'created_at', 'at'], ''))} · <span className="mono">{actor}</span>{role ? ` (${formatFindingLabel(role)})` : ''}
+                        </span>
+                        {riskReason ? <span className="finding-history-notes">Risk reason: {riskReason}</span> : null}
+                        {notes ? <span className="finding-history-notes">Notes: {notes}</span> : null}
+                        {eventId ? <a className="detail-entity-link small" href={`#audit?event=${encodeURIComponent(eventId)}`}>View in audit log</a> : null}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </section>
             <ConfirmModal
               open={retestReview && canStartFindingRetest && Boolean(retestAction)}
               title="Review this retest"
@@ -774,6 +1067,20 @@ export function FindingDetailView({
                   closeRetestReview();
                 }, 'Retest started. Its result appears as a later result; the original evidence is unchanged.')}
             />
+            <RiskAcceptanceDialog
+              open={Boolean(riskDialog) && canAcceptRisk}
+              busy={busy === `finding-status-accepted_risk-${entityId}`}
+              onCancel={() => setRiskDialog(null)}
+              onConfirm={(input) => void acceptRisk(input)}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Verdict explanation</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FindingExplanationPanel finding={entity} config={config} session={session} />
           </CardContent>
         </Card>
       </div>
@@ -799,9 +1106,9 @@ export function FindingDetailView({
         }}
       />
 
-      <Card>
+      <Card className="finding-affected-targets">
         <CardHeader>
-          <div><CardTitle>Affected targets</CardTitle><CardDescription>Embedded finding links first; the recorded target is the fallback.</CardDescription></div>
+          <div><CardTitle>Affected targets</CardTitle><CardDescription>Declared targets where this finding was recorded.</CardDescription></div>
         </CardHeader>
         <CardContent>
           {affectedTargetsLoading ? <PortalLoadingSkeleton rows={2} /> : affectedTargetsError ? (
@@ -839,25 +1146,25 @@ export function FindingDetailView({
       <Card className="rule-assets-card">
         <CardHeader>
           <div>
-            <CardTitle id="rule-assets-title">Affected assets for this rule</CardTitle>
-            <CardDescription>Every loaded finding that recorded &ldquo;{ruleTitle}&rdquo;. Open an asset for its own explanation, remediation, retest, and custody export.</CardDescription>
+            <CardTitle id="rule-assets-title">Other targets with this finding</CardTitle>
+            <CardDescription>Other targets where &ldquo;{ruleTitle}&rdquo; was recorded. Open one to see its own evidence and fix.</CardDescription>
           </div>
         </CardHeader>
         <CardContent>
           {findingsListError ? (
             <div className="form-banner error" role="alert">
-              Could not load the finding list, so other assets for this rule may be missing: {findingsListError}
+              Could not load the finding list, so other targets with this finding may be missing: {findingsListError}
             </div>
           ) : null}
 
           <p className="rule-assets-summary">
             {ruleHasSiblings ? (
               <>
-                <span className="tabular-nums">{ruleSiblings.length}</span> findings on <span className="tabular-nums">{ruleAssetCount}</span> {ruleAssetCount === 1 ? 'asset' : 'assets'}, <span className="tabular-nums">{ruleOpenCount}</span> open{ruleComplete ? '' : ', among findings read so far'}
+                <span className="tabular-nums">{ruleSiblings.length}</span> findings on <span className="tabular-nums">{ruleAssetCount}</span> {ruleAssetCount === 1 ? 'target' : 'targets'}, <span className="tabular-nums">{ruleActiveCount}</span> active{ruleComplete ? '' : ', among findings read so far'}
               </>
             ) : ruleComplete
-              ? 'No other finding records this outcome. When validation records it on another asset, that asset is listed here.'
-              : 'No other finding read so far records this outcome.'}
+              ? 'No other target has this finding.'
+              : 'No other target read so far has this finding.'}
           </p>
           {checkId && !ruleComplete && ruleSource.state === 'ready' && ruleSource.envelope?.total !== null && ruleSource.envelope?.total !== undefined ? (
             <div className="rule-assets-more">
@@ -875,7 +1182,7 @@ export function FindingDetailView({
               items={ruleSiblings}
               getRowId={(item, index) => getString(item, ['id'], String(index))}
               getRowProps={(item) => (getString(item, ['id'], '') === entityId ? { className: 'is-current-asset', 'aria-current': 'true' } : {})}
-              empty={<span className="muted">No findings recorded for this rule.</span>}
+              empty={<span className="muted">No findings recorded for this finding group.</span>}
             />
           ) : null}
         </CardContent>

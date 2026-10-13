@@ -451,6 +451,59 @@ function assertProductionPersistence(env, persistenceMode) {
   }
 }
 
+const SUPPORT_EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
+const SUPPORT_URL_PATH_BASE = 'https://astranull.invalid';
+
+function parsePublicSupportEmail(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value) return null;
+  if (value.length > 254 || !SUPPORT_EMAIL_RE.test(value)) {
+    throw new Error('Invalid ASTRANULL_PUBLIC_SUPPORT_EMAIL: expected a single email address such as support@example.com.');
+  }
+  return value;
+}
+
+function parsePublicSupportUrl(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value) return null;
+  const invalid = () => new Error(
+    'Invalid ASTRANULL_PUBLIC_SUPPORT_URL: expected an https:// URL or a same-origin path starting with "/".',
+  );
+  if (value.length > 2048 || /[\s\\]/.test(value)) throw invalid();
+  const isPath = value.startsWith('/');
+  let parsed;
+  try {
+    parsed = isPath ? new URL(value, SUPPORT_URL_PATH_BASE) : new URL(value);
+  } catch {
+    throw invalid();
+  }
+  if (isPath) {
+    if (value.startsWith('//') || parsed.origin !== SUPPORT_URL_PATH_BASE) throw invalid();
+    return value;
+  }
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) throw invalid();
+  return parsed.toString();
+}
+
+/**
+ * Support contact published to anonymous visitors (signup status, set-password) so a lost request ID
+ * or expired invitation has a next step. Warns when a production deployment accepts signups without one.
+ */
+export function resolvePublicSupportContact(env = process.env, { warn = (message) => console.warn(message) } = {}) {
+  const supportEmail = parsePublicSupportEmail(env.ASTRANULL_PUBLIC_SUPPORT_EMAIL);
+  const supportUrl = parsePublicSupportUrl(env.ASTRANULL_PUBLIC_SUPPORT_URL);
+  const nodeEnv = env.NODE_ENV ?? 'development';
+  const production = nodeEnv === 'production' || resolveDeploymentProfile(env) === 'production';
+  const signupEnabled = env.ASTRANULL_PUBLIC_SIGNUP_ENABLED !== '0';
+  if (production && signupEnabled && !supportEmail && !supportUrl) {
+    warn(
+      '[astranull] WARNING: public signup is enabled but neither ASTRANULL_PUBLIC_SUPPORT_EMAIL nor '
+      + 'ASTRANULL_PUBLIC_SUPPORT_URL is set; requesters who lose their request ID or invitation have no published contact.',
+    );
+  }
+  return { supportEmail, supportUrl };
+}
+
 export function loadRuntimeConfig(env = process.env) {
   applyBundledStagingOidcEnvDefaults(env);
   // Deployment config pins issuer/audience/JWKS, so nothing above reads the signing key.
@@ -783,6 +836,7 @@ export function loadRuntimeConfig(env = process.env) {
     ?? (bundledStagingOidc ? '/login' : '/app')
   ).trim() || (bundledStagingOidc ? '/login' : '/app');
   const publicSignupEnabled = env.ASTRANULL_PUBLIC_SIGNUP_ENABLED !== '0';
+  const publicSupportContact = resolvePublicSupportContact(env);
   const staffLoginPath = (
     String(env.ASTRANULL_STAFF_LOGIN_PATH ?? '/internal/admin/login').trim() || '/internal/admin/login'
   );
@@ -807,6 +861,8 @@ export function loadRuntimeConfig(env = process.env) {
     publicSite: {
       loginUrl: publicLoginUrl,
       signupEnabled: publicSignupEnabled,
+      supportEmail: publicSupportContact.supportEmail,
+      supportUrl: publicSupportContact.supportUrl,
     },
     staffLoginPath,
     internalAdminPath,

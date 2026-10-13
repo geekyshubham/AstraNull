@@ -70,7 +70,9 @@ test.describe('password login challenges', () => {
     await page.getByRole('button', { name: 'Continue to portal' }).click();
     const code = page.getByLabel('Authenticator code');
     await expect(code).toBeVisible();
-    await expect(page.getByRole('alert')).toContainText('Enter the 6-digit code');
+    await expect(page.getByRole('status').filter({ hasText: 'Enter the 6-digit code' })).toContainText('Password accepted.');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(code).toBeFocused();
     expect(posts).toHaveLength(1);
     expect(posts[0]).toEqual({ email: SYNTHETIC_EMAIL, password: SYNTHETIC_PASSWORD });
 
@@ -97,7 +99,7 @@ test.describe('password login challenges', () => {
 
   test('a required workspace ID is validated locally before resubmitting credentials', async ({ page }) => {
     const browser = await collectPortalBrowserFailures(page, baseUrl, {
-      allowResponse: (response) => new URL(response.url()).pathname === '/v1/auth/login' && response.status() === 409,
+      allowResponse: (response) => new URL(response.url()).pathname === '/v1/auth/login' && response.status() === 400,
     });
     await discovery(page, { ready: { status: 200, json: { status: 'ready', auth_mode: 'oidc-jwt' } }, site: { status: 200, json: PASSWORD_LANE } });
     const posts = recordPosts(page, '/v1/auth/login');
@@ -106,7 +108,7 @@ test.describe('password login challenges', () => {
       if (body.tenant_id === 'ten_synthetic') {
         return route.fulfill({ status: 200, json: { access_token: 'synthetic.jwt.value', principal: 'customer', tenant_id: 'ten_synthetic', user_id: 'usr_synthetic', role: 'viewer', expires_in: 600 } });
       }
-      return route.fulfill({ status: 409, json: { error: 'tenant_required' } });
+      return route.fulfill({ status: 400, json: { error: 'tenant_required' } });
     });
 
     await page.goto(`${baseUrl}/login`);
@@ -115,6 +117,9 @@ test.describe('password login challenges', () => {
     await page.getByRole('button', { name: 'Continue to portal' }).click();
     const workspace = page.getByLabel('Workspace ID');
     await expect(workspace).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Choose which workspace to open.' })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(workspace).toBeFocused();
     expect(posts).toHaveLength(1);
 
     await page.getByRole('button', { name: 'Continue to portal' }).click();
@@ -132,6 +137,53 @@ test.describe('password login challenges', () => {
     expect(session).toMatchObject({ principal: 'customer', tenant_id: 'ten_synthetic', role: 'viewer' });
     expect(await storageText(page)).not.toContain(SYNTHETIC_PASSWORD);
   });
+
+  test('a password that opens several workspaces offers only those workspaces by name', async ({ page }) => {
+    const browser = await collectPortalBrowserFailures(page, baseUrl, {
+      allowResponse: (response) => new URL(response.url()).pathname === '/v1/auth/login' && response.status() === 400,
+    });
+    await discovery(page, { ready: { status: 200, json: { status: 'ready', auth_mode: 'oidc-jwt' } }, site: { status: 200, json: PASSWORD_LANE } });
+    const posts = recordPosts(page, '/v1/auth/login');
+    await page.route('**/v1/auth/login', (route) => {
+      const body = route.request().postDataJSON();
+      if (body.tenant_id === 'ten_beta') {
+        return route.fulfill({ status: 200, json: { access_token: 'synthetic.jwt.value', principal: 'customer', tenant_id: 'ten_beta', user_id: 'usr_synthetic', role: 'viewer', expires_in: 600 } });
+      }
+      return route.fulfill({
+        status: 400,
+        json: {
+          error: 'tenant_required',
+          workspaces: [
+            { tenant_id: 'ten_alpha', name: 'Synthetic Alpha' },
+            { tenant_id: 'ten_beta', name: 'Synthetic Beta' },
+          ],
+        },
+      });
+    });
+
+    await page.goto(`${baseUrl}/login`);
+    await page.getByLabel('Work email').fill(SYNTHETIC_EMAIL);
+    await page.locator('#login-password').fill(SYNTHETIC_PASSWORD);
+    await page.getByRole('button', { name: 'Continue to portal' }).click();
+    const group = page.getByRole('group', { name: 'Choose a workspace' });
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('radio')).toHaveCount(2);
+    await expect(group).toContainText('ten_alpha');
+    await expect(page.getByLabel('Workspace ID')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(group.getByRole('radio').first()).toBeFocused();
+
+    await page.getByRole('button', { name: 'Continue to portal' }).click();
+    await expect(group.getByText('Choose the workspace you want to open.')).toBeVisible();
+    expect(posts).toHaveLength(1);
+
+    await group.getByRole('radio', { name: /Synthetic Beta/ }).check();
+    await page.getByRole('button', { name: 'Continue to portal' }).click();
+    await page.waitForURL((url) => url.pathname.startsWith('/app'));
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual({ email: SYNTHETIC_EMAIL, password: SYNTHETIC_PASSWORD, tenant_id: 'ten_beta' });
+    browser.assertClean();
+  });
 });
 
 test.describe('staff sign-in', () => {
@@ -143,6 +195,7 @@ test.describe('staff sign-in', () => {
     const posts = recordPosts(page, '/v1/auth/bundled-staging-login');
     await page.goto(`${baseUrl}/internal/admin/login`);
     await expect(page.getByRole('alert')).toContainText('We could not confirm how this deployment signs staff in.');
+    await expect(page.getByRole('heading', { level: 1, name: 'Staff sign-in' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
     await expect(page.getByLabel('Staff ID')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Continue to internal admin' })).toHaveCount(0);
@@ -184,6 +237,54 @@ test.describe('staff sign-in', () => {
     await expect.poll(() => posts.length).toBe(2);
     await expect(submit).toBeEnabled();
     expect(await page.evaluate((key) => sessionStorage.getItem(key), SESSION_KEY)).toBeNull();
+    browser.assertClean();
+  });
+
+  test('the call to action names the SOC console for SOC roles', async ({ page }) => {
+    await discovery(page, {
+      ready: { status: 200, json: { status: 'ready', auth_mode: 'oidc-jwt' } },
+      site: { status: 200, json: { ...PASSWORD_LANE, password_login_enabled: false, bundled_staging_login_enabled: true } },
+    });
+    await page.goto(`${baseUrl}/internal/admin/login`);
+    await expect(page.getByText('Staff only. Customer accounts do not grant access here.')).toBeVisible();
+    await expect(page.getByText('Staging only: no password is checked. Production staff sign-in uses your identity provider.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue to internal admin' })).toBeVisible();
+    await page.getByRole('button', { name: 'Staging staff role', exact: true }).click();
+    await page.getByRole('listbox', { name: 'Staging staff role', exact: true }).getByRole('option', { name: 'SOC analyst', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Continue to SOC console' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue to internal admin' })).toHaveCount(0);
+  });
+
+  test('an empty staff ID is caught inline and focused without posting', async ({ page }) => {
+    await discovery(page, {
+      ready: { status: 200, json: { status: 'ready', auth_mode: 'oidc-jwt' } },
+      site: { status: 200, json: { ...PASSWORD_LANE, password_login_enabled: false, bundled_staging_login_enabled: true } },
+    });
+    const posts = recordPosts(page, '/v1/auth/bundled-staging-login');
+    await page.goto(`${baseUrl}/internal/admin/login`);
+    await page.getByRole('button', { name: 'Continue to internal admin' }).click();
+    const staffId = page.getByLabel('Staff ID');
+    await expect(page.locator('#staff-login-id-error')).toHaveText('Enter your staff ID.');
+    await expect(staffId).toHaveAttribute('aria-invalid', 'true');
+    await expect(staffId).toHaveAttribute('aria-describedby', 'staff-login-id-error');
+    await expect(staffId).toBeFocused();
+    expect(posts).toHaveLength(0);
+  });
+
+  test('staff SSO without a sign-in link is an informational notice, not an error', async ({ page }) => {
+    const browser = await collectPortalBrowserFailures(page, baseUrl);
+    await discovery(page, {
+      ready: { status: 200, json: { status: 'ready', auth_mode: 'oidc-jwt' } },
+      site: { status: 200, json: { ...PASSWORD_LANE, password_login_enabled: false, bundled_staging_login_enabled: false } },
+    });
+    const posts = recordPosts(page, '/v1/auth/bundled-staging-login');
+    await page.goto(`${baseUrl}/internal/admin/login`);
+    await expect(page.getByText('Staff sign-in uses your organization identity provider.')).toBeVisible();
+    await expect(page.getByText('This deployment has no staff sign-in link configured', { exact: false })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByLabel('Staff ID')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Continue to/ })).toHaveCount(0);
+    expect(posts).toHaveLength(0);
     browser.assertClean();
   });
 });

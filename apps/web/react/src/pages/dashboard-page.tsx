@@ -4,6 +4,7 @@ import { familyCoverageBuckets, inventoryUnits } from '../lib/domain-checks.mjs'
 import { useOpenInspector } from '../components/evidence/use-inspector';
 import {
   Activity,
+  Check,
   ChevronRight,
   Eye,
   ListChecks,
@@ -26,24 +27,29 @@ import { VerifyChip } from '../lib/verify-chip';
 import { useFindingTotals, useFindingsPage, useOpenFindingOverview } from '../components/findings/use-server-findings';
 import { FINDINGS_LIMIT_MAX, findingsComplete } from '../lib/findings-query.mjs';
 import {
+  buildSetupSteps,
   buildTargetPostureRows,
   classifyVerdict,
+  EVIDENCE_STATUS_TONE,
+  isTargetVerified,
   resolveRecentRuns,
   severityDistributionFromCounts,
   severityShortLabel,
   type EvidenceStatus,
+  type SetupStep,
   type TargetPostureRow
 } from '../lib/dashboard-metrics';
+import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { isFindingOpen } from '../lib/findings-helpers';
 // @ts-ignore Plain ESM keeps run-start role parity testable with node:test.
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import { routeTabs } from '../lib/prototype-manifest';
 import type { BadgeTone, DataItem, PortalConfig, PortalData, ReadinessFactor, Session } from '../lib/types';
-import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone, tailTruncateId } from '../lib/utils';
+import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
 import { severityCountTone, severityTone } from '../lib/severity-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { dashboardReadinessMessage, plainCheckName, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
 import { PageContextSummary, PageHeader } from './page-components';
 import './dashboard-page.css';
 
@@ -87,12 +93,7 @@ function persistDashboardTab(tab: DashboardTabId) {
   window.history.replaceState(null, '', `${base}?tab=${encodeURIComponent(tab)}`);
 }
 
-const STATUS_TONE: Record<EvidenceStatus, UiBadgeTone> = {
-  pass: 'success',
-  review: 'warn',
-  gap: 'danger',
-  none: 'muted'
-};
+const STATUS_TONE: Readonly<Record<EvidenceStatus, UiBadgeTone>> = EVIDENCE_STATUS_TONE;
 
 function formatShortRelative(iso: string) {
   const ts = Date.parse(iso);
@@ -114,7 +115,18 @@ const FINDING_PRIORITY: Record<string, number> = {
   s1: 0, critical: 0, s2: 1, high: 1, s3: 2, medium: 2, s4: 3, low: 3
 };
 
-type NextStep = { key: string; title: string; detail: string; href: string; tone: UiBadgeTone; findingId?: string; targetId?: string; checkId?: string };
+type NextStep = {
+  kind: 'finding' | 'setup';
+  key: string;
+  title: string;
+  detail: string;
+  href: string;
+  tone: UiBadgeTone;
+  hasEvidence: boolean;
+  findingId?: string;
+  targetId?: string;
+  checkId?: string;
+};
 
 function fixTitle(finding: DataItem, targets: DataItem[], checks: DataItem[]) {
   const context = [
@@ -134,82 +146,141 @@ function fixTitle(finding: DataItem, targets: DataItem[], checks: DataItem[]) {
   return `Review ${plainFindingTitle(finding, targets, checks)}`;
 }
 
-/** `priority` is the server's most severe open findings; `findingsUnavailable` when their read failed. */
+function listValues(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Finding rows only: `priority` is the server's most severe open findings; `findingsUnavailable` when their read failed. */
 function buildNextSteps(data: PortalData, priority: DataItem[], findingsUnavailable: boolean): NextStep[] {
-  const steps: NextStep[] = [];
-  const activeTargets = data.targets.filter((target) => !target.archived_at && !target.deleted_at);
-  const hasEvidence = data.runs.some((run) => {
-    const status = getString(run, ['status']).toLowerCase();
-    const verdict = typeof run.verdict === 'string' ? run.verdict : getString(run.verdict as DataItem, ['verdict', 'status']);
-    return ['completed', 'verdicted', 'finalized'].includes(status) && classifyVerdict(verdict) !== 'none';
-  });
+  if (findingsUnavailable) return [];
   const openFindings = priority
     .filter(isFindingOpen)
     .sort((left, right) => (FINDING_PRIORITY[getString(left, ['severity']).toLowerCase()] ?? 9) - (FINDING_PRIORITY[getString(right, ['severity']).toLowerCase()] ?? 9));
-
-  if (!findingsUnavailable) {
-    for (const finding of openFindings.slice(0, 3)) {
-      const id = getString(finding, ['id']);
-      const severity = getString(finding, ['severity'], 'unknown');
-      const title = fixTitle(finding, data.targets, data.checks);
-      const plainTitle = plainFindingTitle(finding, data.targets, data.checks);
-      const severityText = `${severityShortLabel(severity)} severity`;
-      steps.push({
-        key: `finding-${id || steps.length}`,
-        title,
-        // The fallback title already repeats the finding name; only add it when it adds information.
-        detail: title === `Review ${plainTitle}` ? `${severityText} open finding` : `${severityText}: ${plainTitle}`,
-        href: id ? buildDetailHref('finding-detail', id) : '#findings?status=open',
-        tone: ['s1', 'critical', 's2', 'high'].includes(severity.toLowerCase()) ? 'danger' : 'warn',
-        findingId: id || undefined,
-        targetId: getString(finding, ['target_id']) || undefined,
-        checkId: getString(finding, ['check_id']) || undefined
-      });
-    }
-  }
-  if (steps.length < 3 && !data.loadErrors.targets && data.targets.length === 0) {
-    steps.push({
-      key: 'declare-target',
-      title: 'Declare the first target to protect',
-      detail: 'Add a domain, hostname, IP, or CIDR before any check can run.',
-      href: '#targets',
-      tone: 'info'
-    });
-  }
-  if (steps.length < 3 && !data.loadErrors.targets && data.targets.length > 0 && data.targets.every((target) => !isTargetVerified(target))) {
-    steps.push({
-      key: 'verify-ownership',
-      title: 'Prove ownership on a declared target',
-      detail: 'Ownership must reach DNS-verified before AstraNull sends live probes.',
-      href: '#targets?verification=unverified',
-      tone: 'info'
-    });
-  }
-  if (steps.length < 3 && !data.loadErrors.runs && !hasEvidence && activeTargets.length > 0) {
-    steps.push({
-      key: 'first-run',
-      title: 'Run the first bounded check on a target',
-      detail: 'Open a verified target, review a compatible check and start it to create evidence.',
-      href: '#targets?verification=verified',
-      tone: 'info'
-    });
-  }
-  return steps.slice(0, 3);
-}
-
-function isTargetVerified(target: DataItem) {
-  const nested = target.verification;
-  const state = nested && typeof nested === 'object' && !Array.isArray(nested)
-    ? getString(nested as DataItem, ['state'])
-    : getString(target, ['verification_state']);
-  return ['dns_verified', 'provider_verified', 'user_confirmed', 'verified'].includes(state.toLowerCase());
+  return openFindings.slice(0, 3).map((finding, index) => {
+    const id = getString(finding, ['id']);
+    const severity = getString(finding, ['severity'], 'unknown');
+    const title = fixTitle(finding, data.targets, data.checks);
+    const plainTitle = plainFindingTitle(finding, data.targets, data.checks);
+    const severityText = `${severityShortLabel(severity)} severity`;
+    return {
+      kind: 'finding',
+      key: `finding-${id || index}`,
+      title,
+      detail: title === `Review ${plainTitle}` ? `${severityText} open finding` : `${severityText}: ${plainTitle}`,
+      href: id ? buildDetailHref('finding-detail', id) : '#findings?status=open',
+      tone: ['s1', 'critical', 's2', 'high'].includes(severity.toLowerCase()) ? 'danger' : 'warn',
+      hasEvidence: listValues(finding.evidence_ids).filter(Boolean).length > 0,
+      findingId: id || undefined,
+      targetId: getString(finding, ['target_id']) || undefined,
+      checkId: getString(finding, ['check_id']) || undefined
+    };
+  });
 }
 
 /* ---------- Weighted readiness factors (compact) ---------- */
 
 const READINESS_SCALE = 100;
 
-function WeightedFactors({ factors }: { factors: ReadinessFactor[] }) {
+type FactorKind = 'scored' | 'penalty' | 'context';
+
+type PendingGate = { requestId: string; label: string; missingArtifacts: number; approvals: number; packComplete: boolean };
+
+function classifyFactor(factor: ReadinessFactor): FactorKind {
+  const weight = factor.weight;
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight > 0) return 'scored';
+  if (Number(factor.score) < 0) return 'penalty';
+  return 'context';
+}
+
+function readPendingGates(state: PortalData['state']): PendingGate[] {
+  const readiness = (state?.readiness ?? null) as DataItem | null;
+  const governance = readiness?.governance && typeof readiness.governance === 'object' ? readiness.governance as DataItem : null;
+  return listValues(governance?.pending_gates).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const gate = entry as DataItem;
+    const requestId = getString(gate, ['requestId', 'request_id']);
+    if (!requestId) return [];
+    const approvals = Number.isFinite(Number(gate.approvals)) ? Number(gate.approvals) : 0;
+    const missingArtifacts = listValues(gate.missing_artifacts).length;
+    const approvalGaps = approvals < 2 ? 1 : 0;
+    return [{
+      requestId,
+      label: getString(gate, ['label'], 'High-scale request'),
+      missingArtifacts,
+      approvals,
+      packComplete: typeof gate.pack_complete === 'boolean'
+        ? gate.pack_complete
+        : missingArtifacts === 0 && listValues(gate.missing).length <= approvalGaps
+    }];
+  });
+}
+
+function PendingGateLines({ gates }: { gates: PendingGate[] }) {
+  if (gates.length === 0) return null;
+  return (
+    <ul className="factor-gates" aria-label="Pending high-scale gates">
+      {gates.map((gate) => {
+        const parts = [
+          gate.missingArtifacts > 0
+            ? `${formatNumber(gate.missingArtifacts)} authorization ${pluralize(gate.missingArtifacts, 'artifact')} missing`
+            : gate.packComplete ? '' : 'Authorization pack incomplete',
+          `SOC approvals ${gate.approvals}/2`
+        ].filter(Boolean);
+        return (
+          <li key={gate.requestId}>
+            <span>{`High-scale request "${gate.label}": ${parts.join(' · ')}`}</span>
+            <a href={buildDetailHref('queue-detail', gate.requestId)} aria-label={`Review high-scale request ${gate.label}`}>Review request</a>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function FactorRow({ factor, gates }: { factor: ReadinessFactor; gates: PendingGate[] }) {
+  const key = getString(factor as DataItem, ['key']);
+  const label = plainInlineText(getString(factor as DataItem, ['label', 'key'], 'Factor'));
+  const score = Number(factor.score);
+  const kind = classifyFactor(factor);
+  const detail = plainInlineText(getString(factor as DataItem, ['detail', 'reason']));
+  const extra = key === 'soc_readiness' ? <PendingGateLines gates={gates} /> : null;
+  if (kind === 'scored') {
+    const scale = typeof factor.weight === 'number' && Number.isFinite(factor.weight) && factor.weight > 0 ? factor.weight : READINESS_SCALE;
+    const share = Math.min(100, Math.max(0, (score / scale) * 100));
+    return (
+      <div className="factor-row" data-kind="scored" data-testid="readiness-factor-row">
+        <span className="factor-name" title={`${label}: ${score} of ${scale} points, from GET /v1/state readiness.factors`}>{label}</span>
+        <span className="factor-score">{score}/{scale}</span>
+        <span className="factor-track" role="img" aria-label={`${label} scored ${score} of ${scale} points`}>
+          <span className="factor-fill" data-tone={scoreTone(share)} style={{ '--factor-share': share / 100 } as CSSProperties} />
+        </span>
+        {detail ? <p className="factor-detail">{detail}</p> : null}
+        {extra}
+      </div>
+    );
+  }
+  if (kind === 'penalty') {
+    const points = Math.abs(score);
+    return (
+      <div className="factor-row" data-kind="penalty" data-deducted="true" data-testid="readiness-factor-row">
+        <span className="factor-name">{label}</span>
+        <span className="factor-score" role="img" aria-label={`${label}: penalty of ${points} points`}>{`\u2212${points} pts`}</span>
+        {detail ? <p className="factor-detail">{detail}</p> : null}
+        {extra}
+      </div>
+    );
+  }
+  return (
+    <div className="factor-row" data-kind="context" data-testid="readiness-factor-row">
+      <span className="factor-name">{label}</span>
+      <span className="factor-score">Not scored</span>
+      {detail ? <p className="factor-detail">{detail}</p> : null}
+      {extra}
+    </div>
+  );
+}
+
+function WeightedFactors({ factors, publishedScore, gates }: { factors: ReadinessFactor[]; publishedScore: number | null; gates: PendingGate[] }) {
   const rows = factors.filter((factor) => typeof factor?.score === 'number' && Number.isFinite(factor.score));
   if (rows.length === 0) {
     return (
@@ -220,27 +291,23 @@ function WeightedFactors({ factors }: { factors: ReadinessFactor[] }) {
       />
     );
   }
+  const scoring = rows.filter((factor) => classifyFactor(factor) !== 'context');
+  const context = rows.filter((factor) => classifyFactor(factor) === 'context');
   return (
     <div className="an-factor-list" data-testid="readiness-factors">
-      {rows.map((factor, index) => {
-        const key = getString(factor as DataItem, ['key']);
-        const label = plainInlineText(getString(factor as DataItem, ['label', 'key'], 'Factor'));
-        const score = Number(factor.score);
-        const scale = typeof factor.weight === 'number' && Number.isFinite(factor.weight) && factor.weight > 0 ? factor.weight : READINESS_SCALE;
-        const share = Math.min(100, Math.max(0, (score / scale) * 100));
-        const detail = plainInlineText(getString(factor as DataItem, ['detail', 'reason']));
-        const provenance = `${label}: ${score} of ${scale} points, from GET /v1/state readiness.factors`;
-        return (
-          <div className="factor-row" key={key || `${label}-${index}`} data-testid="readiness-factor-row">
-            <span className="factor-name" title={provenance}>{label}</span>
-            <span className="factor-score">{score}/{scale}</span>
-            <span className="factor-track" role="img" aria-label={`${label} scored ${score} of ${scale} points`}>
-              <span className="factor-fill" data-tone={scoreTone(share)} style={{ '--factor-share': share / 100 } as CSSProperties} />
-            </span>
-            {detail ? <p className="factor-detail">{detail}</p> : null}
-          </div>
-        );
-      })}
+      {scoring.map((factor, index) => <FactorRow key={getString(factor as DataItem, ['key']) || `scoring-${index}`} factor={factor} gates={gates} />)}
+      {context.length > 0 ? (
+        <section className="factor-context" aria-labelledby="dash-factor-context-title">
+          <h4 className="factor-context-title" id="dash-factor-context-title">Context (not part of the score)</h4>
+          {context.map((factor, index) => <FactorRow key={getString(factor as DataItem, ['key']) || `context-${index}`} factor={factor} gates={gates} />)}
+        </section>
+      ) : null}
+      {publishedScore !== null ? (
+        <p className="factor-total" data-testid="readiness-published-score">
+          <span>Published score</span>
+          <strong className="tabular-nums">{publishedScore}/100</strong>
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -364,7 +431,7 @@ function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; resu
         <li className="coverage-legend-group">
           <span className="coverage-swatch" data-segment="unmeasured" aria-hidden="true" />
           <span className="coverage-legend-group-body">
-            <span className="coverage-legend-group-label">Unknown or not checked <span className="tabular-nums">{formatNumber(buckets.unmeasured)}</span>:</span>
+            <span className="coverage-legend-group-label">Unknown or not checked{'\u00a0'}<span className="tabular-nums">{formatNumber(buckets.unmeasured)}</span>:</span>
             {unmeasuredParts.map((part, index) => (
               <span key={part.key} className="coverage-legend-sub">
                 {index > 0 ? <span className="coverage-legend-sep" aria-hidden="true">·</span> : null}
@@ -477,7 +544,9 @@ export function DashboardPage({
     }
   }
 
-  const score = typeof data.state?.readiness?.score === 'number' ? data.state.readiness.score : null;
+  const publishedScore = typeof data.state?.readiness?.score === 'number' ? data.state.readiness.score : null;
+  const scoreStatus = getString((data.state?.readiness ?? null) as DataItem | null, ['score_status']);
+  const pendingGates = readPendingGates(data.state);
   const readinessFactors = Array.isArray(data.state?.readiness?.factors) ? data.state!.readiness!.factors! : [];
   const openInspector = useOpenInspector();
   // Finding counts on this page are server predicates, never the shell's first loaded page.
@@ -508,7 +577,7 @@ export function DashboardPage({
   const units = inventoryUnits(data.targets);
   const recentRuns = resolveRecentRuns(data, 6);
   const postureRows = buildTargetPostureRows(data, 6, { openFindings: sampleRows, openCounts });
-  const nextSteps = buildNextSteps(data, openOverview.priority, countsUnavailable || (openOverview.state === 'error' && openOverview.priority.length === 0));
+  const findingSteps = buildNextSteps(data, openOverview.priority, countsUnavailable || (openOverview.state === 'error' && openOverview.priority.length === 0));
   const severity = openOverview.severity && openOverview.total !== null
     ? { critical: openOverview.severity.critical, high: openOverview.severity.high, other: openOverview.severity.medium + openOverview.severity.low + openOverview.severity.unrecorded, total: openOverview.total }
     : { critical: 0, high: 0, other: 0, total: 0 };
@@ -539,23 +608,45 @@ export function DashboardPage({
   const coverageUnavailable = targetsUnavailable || Boolean(data.loadErrors.runs);
   const coveragePercent = coverageUnavailable || declaredTargets === 0 ? null : Math.round((targetsWithEvidence / declaredTargets) * 100);
 
+  // No score is shown without an evidence-backed verdict or while the server marks its inputs incomplete.
+  const evidenceMissing = !coverageUnavailable && targetsWithEvidence === 0;
+  const noEvidence = evidenceMissing || scoreStatus === 'not_applicable' || scoreStatus === 'incomplete_inputs';
+  const score = noEvidence ? null : publishedScore;
+  const setupSteps: SetupStep[] = data.loadErrors.runs ? [] : buildSetupSteps(data, !evidenceMissing, buildDetailHref);
+  const currentSetupIndex = setupSteps.findIndex((step) => step.state === 'current');
+  const priorityFixesUnavailable = countsUnavailable || (openOverview.state === 'error' && severity.total > 0);
+  const showSetup = findingSteps.length === 0 && currentSetupIndex >= 0 && !priorityFixesUnavailable;
+  const findingBadgeTone: UiBadgeTone = findingSteps.some((step) => step.tone === 'danger') ? 'danger' : 'warn';
+  const canWriteTargets = sessionHasPermission(session, 'target_group:write');
+  const canRunChecks = canStartRun(session.role);
+  const setupStepAllowed: Record<SetupStep['key'], boolean> = {
+    'declare-target': canWriteTargets,
+    'verify-ownership': canRunChecks,
+    'first-run': canRunChecks
+  };
+  const needsFirstTarget = !targetsUnavailable && declaredTargets === 0;
+
   const lastValidationIso = getString(data.state ?? {}, ['last_validation_at'])
     || (recentRuns[0] ? String(recentRuns[0].completed_at ?? recentRuns[0].started_at ?? recentRuns[0].created_at ?? '') : '');
   const lastValidationLabel = data.loadErrors.runs ? UNAVAILABLE : lastValidationIso ? formatShortRelative(lastValidationIso) : 'Never';
 
   const highPriorityOpen = severity.critical + severity.high;
   const executive = dashboardReadinessMessage({
-    score,
+    score: noEvidence ? 0 : score,
     highPriorityFindings: highPriorityOpen,
     coveragePercent,
-    dataUnavailable: Boolean(data.error || data.loadErrors.targets || data.loadErrors.runs || data.loadErrors.evidence || countsUnavailable)
+    dataUnavailable: Boolean(data.error || data.loadErrors.targets || data.loadErrors.runs || data.loadErrors.evidence || countsUnavailable),
+    hasEvidence: !noEvidence
   });
 
   const tenantId = getString(data.tenant ?? {}, ['id', 'tenant_id']) || getString((data.state ?? {}) as DataItem, ['tenant_id']);
-  const tenantContext = tenantId ? `Tenant · ${tenantId}` : undefined;
+  const tenantName = getString(data.tenant ?? {}, ['name', 'display_name']);
+  const tenantContext = tenantName || tenantId
+    ? <span title={tenantId || undefined}>{`Tenant · ${tenantName || tenantId}`}</span>
+    : undefined;
 
   const killSwitch = data.state?.kill_switch ?? null;
-  const killSwitchArmed = killSwitch?.active === true;
+  const killSwitchActive = killSwitch?.active === true;
   const killSwitchReason = getString((killSwitch ?? {}) as DataItem, ['reason']);
   const killSwitchUpdatedAt = getString((killSwitch ?? {}) as DataItem, ['updated_at']);
 
@@ -580,11 +671,6 @@ export function DashboardPage({
       )
     },
     {
-      key: 'verification',
-      label: 'Ownership',
-      render: (row) => <VerifyChip state={row.verificationState} />
-    },
-    {
       key: 'verdict',
       label: 'Recorded verdict',
       render: (row) => (
@@ -604,15 +690,28 @@ export function DashboardPage({
           {row.verdictBasis === 'earlier' ? <span className="posture-verdict-note">Earlier run; newest has no recorded verdict</span> : null}
         </span>
       )
+    },
+    {
+      key: 'verification',
+      label: 'Ownership',
+      render: (row) => <VerifyChip state={row.verificationState} />
     }
   ];
+
+  const targetById = new Map(data.targets.map((target) => [getString(target, ['id', 'target_id']), target] as const));
+  const checkById = new Map(data.checks.map((check) => [getString(check, ['check_id', 'id']), check] as const));
 
   const runColumns: TableColumn<DataItem>[] = [
     {
       key: 'run',
       label: 'Run',
       render: (item) => {
-        const name = getString(item, ['target_hostname', 'target_value'], getString(item, ['check_id'], 'Validation run'));
+        const checkId = getString(item, ['check_id']);
+        const check = checkById.get(checkId);
+        const checkName = plainCheckName(getString(check ?? null, ['name'], checkId)) || 'Validation run';
+        const target = targetById.get(getString(item, ['target_id']));
+        const targetName = getString(target ?? null, ['value', 'hostname'], getString(item, ['target_hostname', 'target_value'], 'Target not reported'));
+        const runId = getString(item, ['id']);
         const inspect = runInspector(item);
         return (
           <span className="posture-target">
@@ -622,17 +721,18 @@ export function DashboardPage({
                   type="button"
                   className="link-button"
                   data-focus-key={inspect.focusKey}
-                  aria-label={`View evidence for ${name} check ${getString(item, ['check_id'])}`}
+                  aria-label={`View evidence for ${checkName} on ${targetName}`}
                   onClick={(event) => {
                     event.stopPropagation();
                     inspect.open();
                   }}
                 >
-                  {name}
+                  {checkName}
                 </button>
-              ) : name}
+              ) : checkName}
             </strong>
-            <small className="mono" title={getString(item, ['id']) || undefined}>{tailTruncateId(getString(item, ['id'], UNAVAILABLE))}</small>
+            <small className="run-target" title={targetName}>{targetName}</small>
+            <small className="mono run-id" title={runId ? `Run ${runId}` : undefined}>{runId || 'Run ID not recorded'}</small>
           </span>
         );
       }
@@ -643,7 +743,7 @@ export function DashboardPage({
       render: (item) => {
         const raw = typeof item.verdict === 'string' ? item.verdict : getString(item.verdict as DataItem, ['verdict', 'status', 'result']);
         const status = classifyVerdict(raw);
-        return <Badge tone={STATUS_TONE[status]} title={raw || 'No verdict'}>{raw ? plainVerdictLabel(raw) : 'No result yet'}</Badge>;
+        return <Badge tone={STATUS_TONE[status]} title={raw ? plainVerdictLabel(raw) : 'No verdict recorded'}>{raw ? plainVerdictShortLabel(raw) : 'No result yet'}</Badge>;
       }
     },
     {
@@ -681,7 +781,6 @@ export function DashboardPage({
     return { style: { cursor: 'pointer' as const }, onClick: inspect.open };
   }
 
-  // Oldest first by recorded open date; findings without a date sort last, never as "oldest".
   // Oldest open findings: the server's last pages of status=open, oldest first.
   const agingFindings = openOverview.oldest.filter(isFindingOpen);
 
@@ -704,7 +803,9 @@ export function DashboardPage({
             <Button type="button" variant="secondary" size="sm" loading={refreshing} onClick={() => void handleRefresh()}>
               <RefreshCw size={15} aria-hidden="true" /> Refresh
             </Button>
-            {canStartRun(session.role) ? (
+            {needsFirstTarget ? (
+              canWriteTargets ? <AnchorButton href="#targets?add=1" variant="default" size="sm">Add target</AnchorButton> : null
+            ) : canStartRun(session.role) ? (
               <AnchorButton href="#targets" variant="default" size="sm">Validate a target</AnchorButton>
             ) : null}
           </>
@@ -728,11 +829,12 @@ export function DashboardPage({
         getPanelId={(id) => `dashboard-sections-panel-${id}`}
       />
 
-      {killSwitchArmed ? (
+      {killSwitchActive ? (
         <div className="form-banner error stack-tight" role="alert">
-          <strong>SOC kill switch is armed</strong>
-          {killSwitchReason ? <span title="Kill switch reason from GET /v1/state kill_switch.reason">{killSwitchReason}</span> : null}
-          {killSwitchUpdatedAt ? <span title="Kill switch updated_at from GET /v1/state kill_switch.updated_at">Armed {formatDate(killSwitchUpdatedAt)}</span> : null}
+          <strong>AstraNull SOC has paused testing for this workspace</strong>
+          <span>New validation runs and scans are blocked, and runs in progress were cancelled. Contact support for status.</span>
+          {killSwitchReason ? <span title="Kill switch reason from GET /v1/state kill_switch.reason">{`Reason: ${killSwitchReason}`}</span> : null}
+          {killSwitchUpdatedAt ? <span title="Kill switch updated_at from GET /v1/state kill_switch.updated_at">Paused {formatDate(killSwitchUpdatedAt)}</span> : null}
         </div>
       ) : null}
 
@@ -741,8 +843,10 @@ export function DashboardPage({
           <div className="dashboard-kpis" role="group" aria-label="Readiness key metrics">
             <KpiCard
               label="Readiness"
-              value={<><span className="dashboard-kpi-score">{score ?? UNAVAILABLE}</span>{score !== null ? <span className="unit">/100</span> : null}</>}
-              sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">Published workspace score from evidence in the last 30 days. Not a protection guarantee.</span></>}
+              value={score !== null
+                ? <><span className="dashboard-kpi-score">{score}</span><span className="unit">/100</span></>
+                : <span className="dashboard-kpi-score"><span aria-hidden="true">—</span><span className="sr-only">No published score</span></span>}
+              sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">{score === null ? executive.detail : 'Published workspace score from evidence in the last 30 days. Not a protection guarantee.'}</span></>}
               onActivate={() => {
                 handleTabChange('risk-trends');
                 // The KPI unmounts with the overview panel; hand focus to the tab it opened.
@@ -792,17 +896,25 @@ export function DashboardPage({
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="readiness-split">
-                  <section className="readiness-split-pane" aria-labelledby="dash-posture-breakdown-title">
-                    <h3 className="dash-subhead" id="dash-posture-breakdown-title">Check verdicts</h3>
-                    <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
-                  </section>
-                  <section className="readiness-split-pane" aria-labelledby="dash-weighted-factors-title">
-                    <h3 className="dash-subhead" id="dash-weighted-factors-title">Weighted factors</h3>
-                    <p className="dash-subhead-note">Each factor contributes its points to the published readiness score.</p>
-                    <WeightedFactors factors={readinessFactors} />
-                  </section>
-                </div>
+                {noEvidence ? (
+                  <EmptyState
+                    icon={Activity}
+                    title="No evidence-backed verdicts yet."
+                    body="Check verdicts and weighted factors appear after the first bounded check publishes a verdict."
+                  />
+                ) : (
+                  <div className="readiness-split">
+                    <section className="readiness-split-pane" aria-labelledby="dash-posture-breakdown-title">
+                      <h3 className="dash-subhead" id="dash-posture-breakdown-title">Check verdicts</h3>
+                      <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
+                    </section>
+                    <section className="readiness-split-pane" aria-labelledby="dash-weighted-factors-title">
+                      <h3 className="dash-subhead" id="dash-weighted-factors-title">Weighted factors</h3>
+                      <p className="dash-subhead-note">Scored factors add points and penalties subtract them; context factors are shown for transparency and do not change the score.</p>
+                      <WeightedFactors factors={readinessFactors} publishedScore={publishedScore} gates={pendingGates} />
+                    </section>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -833,7 +945,7 @@ export function DashboardPage({
                   onRetry={() => void onRefresh()}
                   getRowId={(row) => row.id}
                   getRowProps={(row) => rowProps('target-detail', row.id)}
-                  empty={<EmptyState icon={Target} title="No targets declared yet." body="Declare a domain, hostname, IP, or CIDR to start validating readiness." actionHref="#targets" actionLabel="Declare a target" />}
+                  empty={<EmptyState icon={Target} title="No targets declared yet." body="Declare a domain, hostname, IP, or URL to start validating readiness." actionHref={canWriteTargets ? '#targets?add=1' : '#targets'} actionLabel={canWriteTargets ? 'Add target' : 'Open targets'} />}
                 />
                 {!targetsUnavailable && !data.loadErrors.runs && declaredTargets > postureRows.length ? (
                   <p className="posture-more">
@@ -852,20 +964,31 @@ export function DashboardPage({
             <Card className="dash-area-fixes">
               <CardHeader>
                 <div>
-                  <CardTitle>What to fix first</CardTitle>
-                  <CardDescription>Highest-severity open findings first. View evidence shows the proof that opened each one.</CardDescription>
+                  <CardTitle>{showSetup ? 'Get started' : 'What to fix first'}</CardTitle>
+                  <CardDescription>
+                    {showSetup
+                      ? 'Three steps before AstraNull has evidence: declare a target, prove ownership, run a bounded check.'
+                      : 'Highest-severity open findings first. View evidence shows what was recorded for each one.'}
+                  </CardDescription>
                 </div>
-                {nextSteps.length > 0 ? <Badge tone="warn">{`${formatNumber(nextSteps.length)} to review`}</Badge> : null}
+                {findingSteps.length > 0
+                  ? <Badge tone={findingBadgeTone}>{`${formatNumber(findingSteps.length)} open`}</Badge>
+                  : showSetup ? <Badge tone="muted">{`Step ${currentSetupIndex + 1} of ${setupSteps.length}`}</Badge> : null}
               </CardHeader>
               <CardContent>
-                {nextSteps.length > 0 ? (
+                {findingSteps.length > 0 ? (
                   <ol className="fix-list">
-                    {nextSteps.map((step, index) => (
+                    {findingSteps.map((step, index) => (
                       <li className="fix-row" key={step.key}>
                         <span className="fix-rank" data-tone={step.tone} aria-hidden="true">{index + 1}</span>
                         <span className="fix-copy">
                           <strong>{step.title}</strong>
                           <span>{step.detail}</span>
+                          <span className="fix-evidence">
+                            {step.hasEvidence
+                              ? <Badge tone="muted">Evidence attached</Badge>
+                              : <Badge tone="warn">No evidence recorded</Badge>}
+                          </span>
                         </span>
                         {step.findingId ? (
                           <span className="fix-actions">
@@ -881,12 +1004,38 @@ export function DashboardPage({
                             <AnchorButton href={step.href} variant="ghost" size="sm" aria-label={`Open finding for ${step.title}`}>Finding</AnchorButton>
                           </span>
                         ) : (
-                          <AnchorButton href={step.href} variant="secondary" size="sm">Review</AnchorButton>
+                          <AnchorButton href={step.href} variant="secondary" size="sm" aria-label={`Open ${step.title}`}>Open</AnchorButton>
                         )}
                       </li>
                     ))}
                   </ol>
-                ) : countsUnavailable || (openOverview.state === 'error' && severity.total > 0) ? (
+                ) : showSetup ? (
+                  <ol className="fix-list setup-list" aria-label="Setup steps">
+                    {setupSteps.map((step, index) => (
+                      <li className="fix-row setup-row" data-state={step.state} data-locked={step.state === 'current' && !setupStepAllowed[step.key] ? 'true' : undefined} key={step.key} aria-current={step.state === 'current' ? 'step' : undefined}>
+                        <span className="fix-rank" data-state={step.state} aria-hidden="true">
+                          {step.state === 'done' ? <Check size={14} /> : index + 1}
+                        </span>
+                        {step.state === 'current' ? (
+                          <>
+                            <span className="fix-copy">
+                              <strong>{step.title}</strong>
+                              <span>{step.detail}</span>
+                              {setupStepAllowed[step.key] ? null : (
+                                <span className="setup-role-note" data-testid="setup-step-role-note">Your role cannot do this step. Ask a workspace admin to complete it.</span>
+                              )}
+                            </span>
+                            {setupStepAllowed[step.key] ? <AnchorButton href={step.href} variant="default" size="sm">{step.ctaLabel}</AnchorButton> : null}
+                          </>
+                        ) : (
+                          <span className="fix-copy setup-muted">
+                            <span>{step.state === 'done' ? `Done: ${step.title}` : `Then: ${step.title}`}</span>
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                ) : priorityFixesUnavailable ? (
                   <EmptyState icon={TriangleAlert} title="Priority fixes unavailable." body="Findings did not load, so AstraNull cannot rank what to fix first." actionLabel="Retry" onAction={() => setFindingsReload((value) => value + 1)} />
                 ) : (
                   <EmptyState icon={ListChecks} title="No open finding needs a fix." body="Keep scheduled validation current so new evidence-backed gaps surface here first." />

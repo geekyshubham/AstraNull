@@ -42,6 +42,11 @@ function credentialFor(store, user) {
   ) ?? null;
 }
 
+function tenantNameFor(store, tenantId) {
+  const tenant = (store.tenants ?? []).find((row) => row.id === tenantId);
+  return typeof tenant?.name === 'string' && tenant.name.trim() ? tenant.name : null;
+}
+
 function sessionGeneration(credential) {
   const value = Number(credential?.session_generation ?? 1);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -87,7 +92,11 @@ export function createDevPasswordAuthRepository() {
           String(user.email ?? '').trim().toLowerCase() === email
           && (!tenantId || user.tenant_id === tenantId)
         ))
-        .map((user) => ({ ...user, credential: credentialFor(store, user) }));
+        .map((user) => ({
+          ...user,
+          tenant_name: tenantNameFor(store, user.tenant_id),
+          credential: credentialFor(store, user),
+        }));
     },
 
     async recordLoginFailure(tenantId, userId, {

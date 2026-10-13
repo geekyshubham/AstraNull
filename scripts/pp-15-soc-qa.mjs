@@ -265,6 +265,16 @@ async function l2BackendLogic(targetGroupId) {
     fail('L2', 'stop', `status ${stop.status} state=${stop.body?.state}`);
   }
 
+  const reportBefore = await api(`/internal/soc/high-scale/${requestId}/post-test-report`);
+  if (reportBefore.status !== 404) {
+    fail('L2', 'post-test-report before attach', `expected 404 (no report yet, so the request detail shows the attach form), got ${reportBefore.status}`);
+  }
+
+  const closeBeforeReport = await api(`/internal/soc/high-scale/${requestId}/close`, { method: 'POST', body: '{}' });
+  if (closeBeforeReport.status !== 409 || closeBeforeReport.body?.error !== 'post_test_report_required') {
+    fail('L2', 'close before report', `expected 409 post_test_report_required, got ${closeBeforeReport.status} ${closeBeforeReport.body?.error ?? ''}`);
+  }
+
   const report = await api(`/internal/soc/high-scale/${requestId}/post-test-report`, {
     method: 'POST',
     body: JSON.stringify({

@@ -53,10 +53,12 @@ Omitted runs outside the window are excluded and counted (`run_capture.excluded_
 
 - `as_of`, `source: findings_at_generation`, `lifecycle: status_at_generation`
 - `predicate`: `scope_and_period`, or `scope_and_explicit_run_ids_and_period` when `run_ids` were sent
-- `total`, `included`, `excluded`, `excluded_by_period`, `open_total`, `complete`, `total_status`
+- `total`, `included`, `excluded`, `excluded_by_period`, `open_total`, `opened_in_period`, `complete`, `total_status`
 - `items[]`: `id`, `target_id`, `target_group_id`, `test_run_id`, `check_id`, `title`, `severity`, `status`, `evidence_ids`, `created_at`, `updated_at`
 
 `summary.open_findings` is that full open count, not the length of the capped item list. `open_findings_semantics` repeats `total`, `predicate`, `source`, and `total_status`.
+
+`open_total` and `summary.open_findings` count every in-scope finding whose status is `open` at generation, regardless of when it was opened: an old finding that is still open counts in every later report. `opened_in_period` is reported separately and counts only open findings whose opened date falls inside the report period. The period still bounds the captured `items` and `excluded_by_period`.
 
 `summary.runs_snapshot` and `summary.verdicts_snapshot` are the included rows at generation. Verdict explanations are scrubbed at capture. `placement_confidence` is not stored. `summary.evidence_summaries.items` are `id`, `test_run_id`, `label`, `created_at` from `evidence_vault` with no metadata. `summary.declaration_snapshot.items` use the stored declaration (`purpose`, roles, owner, criticality) when members were loaded. `summary.sections.protection_profile` is `not_included` / `no_frozen_protection_profile_on_declared_target`.
 

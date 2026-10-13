@@ -15,7 +15,10 @@ import {
   inspectorWorkspaceKey,
   limitationLabel,
   normalizeEvidenceContext,
+  openEvidenceInspector,
+  ORIGINATING_RUN_ARTIFACT,
   parseInspectorRef,
+  relationshipLabel,
   replaceEvidenceInspector,
   type EvidenceContextModel,
   type EvidenceInspectorRef,
@@ -25,7 +28,7 @@ import {
 import { canAccessRoute } from '../../lib/route-access';
 import { canStartRun } from '../../lib/run-permissions.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
-import { formatDate } from '../../lib/utils';
+import { formatTimestamp } from '../../lib/utils';
 import { plainCheckName, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { providerName } from '../../lib/domain-checks.mjs';
 import { Badge } from '../ui/badge';
@@ -42,7 +45,7 @@ const ENTRY_TITLE: Record<EvidenceInspectorRef['entry'], string> = {
   finding: 'Finding evidence',
   group_member: 'Affected target evidence',
   check_result: 'Check result',
-  validation_scan: 'Assessment execution',
+  validation_scan: 'Validation scan',
   provider: 'How this was identified',
   artifact: 'Evidence artifact',
   report: 'Report snapshot',
@@ -132,15 +135,21 @@ function SummaryFields({ fields, empty }: { fields: Array<{ key: string; value: 
 /** Integrity wording follows the recorded state; a digest or verification is never implied. */
 function integrityText(integrity: NonNullable<InspectorObservation['integrity']>) {
   const status = integrity.status.toLowerCase();
-  if (status === 'verified' && integrity.verifiedAt) return `Verified ${formatDate(integrity.verifiedAt)}${integrity.method ? ` (${integrity.method})` : ''}`;
+  if (status === 'verified' && integrity.verifiedAt) return `Verified ${formatTimestamp(integrity.verifiedAt)}${integrity.method ? ` (${integrity.method})` : ''}`;
   if (status === 'verified') return 'Reported verified, but no verification time is recorded. Treat as not verified.';
-  if (status === 'failed' || status === 'verification_failed') return `Verification failed${integrity.verifiedAt ? ` ${formatDate(integrity.verifiedAt)}` : ''}.`;
+  if (status === 'failed' || status === 'verification_failed') return `Verification failed${integrity.verifiedAt ? ` ${formatTimestamp(integrity.verifiedAt)}` : ''}.`;
   if (status === 'partial') return 'Some referenced records are verified and some are not; see each record.';
   if (status === 'recorded_digest') return 'Digest recorded. Not independently verified.';
   return 'No integrity record for these references.';
 }
 
-function ObservationBlock({ title, note, observation, missingIds = [] }: { title: string; note: string; observation: InspectorObservation; missingIds?: string[] }) {
+function ObservationBlock({ title, note, observation, missingIds = [], onViewArtifact }: {
+  title: string;
+  note: string;
+  observation: InspectorObservation;
+  missingIds?: string[];
+  onViewArtifact?: (evidenceId: string, testRunId: string) => void;
+}) {
   const integrity = observation.integrity;
   return (
     <section className="ei-observation" aria-label={title}>
@@ -149,7 +158,7 @@ function ObservationBlock({ title, note, observation, missingIds = [] }: { title
         <span className="ei-note">{note}</span>
       </header>
       <dl className="ei-kv">
-        <div><dt>Observed</dt><dd>{observation.observedAt ? formatDate(observation.observedAt) : <NotRecorded />}</dd></div>
+        <div><dt>Observed</dt><dd>{observation.observedAt ? formatTimestamp(observation.observedAt) : <NotRecorded />}</dd></div>
         <div><dt>Recorded execution</dt><dd className="mono">{observation.testRunId || <NotRecorded />}</dd></div>
         {observation.verdictId ? <div><dt>Verdict record</dt><dd className="mono">{observation.verdictId}</dd></div> : null}
         <div>
@@ -161,6 +170,9 @@ function ObservationBlock({ title, note, observation, missingIds = [] }: { title
                   <li key={id}>
                     <a className="mono" href={`#evidence-detail?id=${encodeURIComponent(id)}`}>{id}</a>
                     {missingIds.includes(id) ? <span className="ei-note"> referenced, record not loadable</span> : null}
+                    {onViewArtifact ? (
+                      <Button size="sm" variant="ghost" aria-label={`View artifact ${id}`} onClick={() => onViewArtifact(id, observation.testRunId)}>View</Button>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -179,7 +191,18 @@ function ObservationBlock({ title, note, observation, missingIds = [] }: { title
   );
 }
 
-function StateNotice({ state, permission, onRetry, entry }: { state: InspectorState; permission: string; onRetry: () => void; entry: string }) {
+function StateNotice({ state, permission, onRetry, entry, runArtifacts = 0 }: { state: InspectorState; permission: string; onRetry: () => void; entry: string; runArtifacts?: number }) {
+  if (state === 'pending') {
+    return (
+      <div className="ei-state" data-state="pending" role="note">
+        <CircleDashed size={18} aria-hidden="true" />
+        <div>
+          <strong>Collecting — verdict not yet correlated</strong>
+          <p>Probe responses below are observations, not a verdict. Evidence is attached when the verdict is published.</p>
+        </div>
+      </div>
+    );
+  }
   if (state === 'denied') {
     return (
       <div className="ei-state" data-state="denied" role="note">
@@ -226,7 +249,9 @@ function StateNotice({ state, permission, onRetry, entry }: { state: InspectorSt
       ? { title: 'No observation recorded for this layer', body: 'Nothing has identified this layer on this target yet. It is shown as unknown, not as absent.' }
       : entry === 'report'
         ? { title: 'No snapshot references captured', body: 'This report did not record which results it used, so none are shown. Live results are not substituted.' }
-        : { title: 'Supporting evidence not recorded for this result', body: 'The record exists, but it cites no evidence reference. Recorded fields are shown below.' };
+        : (entry === 'finding' || entry === 'group_member') && runArtifacts > 0
+          ? { title: 'Supporting evidence not cited by this finding', body: `This finding cites no evidence reference. ${runArtifacts === 1 ? '1 artifact was recorded for its originating run and is' : `${runArtifacts} artifacts were recorded for its originating run and are`} listed below.` }
+          : { title: 'Supporting evidence not recorded for this result', body: 'The record exists, but it cites no evidence reference. Recorded fields are shown below.' };
     return (
       <div className="ei-state" data-state="no_refs" role="note">
         <CircleDashed size={18} aria-hidden="true" />
@@ -408,6 +433,16 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
     closeEvidenceInspector();
   }, []);
 
+  const findingIdForArtifacts = ref?.finding_id ?? '';
+  const viewRunArtifact = useCallback((evidenceId: string, testRunId: string) => {
+    openEvidenceInspector({
+      entry: 'artifact',
+      evidence_id: evidenceId,
+      ...(testRunId ? { test_run_id: testRunId } : {}),
+      ...(findingIdForArtifacts ? { finding_id: findingIdForArtifacts } : {}),
+    });
+  }, [findingIdForArtifacts]);
+
   const view = useMemo(() => {
     if (!ref) return null;
     // A committed model is readable only for the exact scope and ref it was read for.
@@ -456,10 +491,10 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       {ref.entry === 'audit' && subject.action ? <div><dt>Action</dt><dd className="mono">{subject.action}</dd></div> : null}
       {ref.entry === 'audit' && (subject.actor_user_id || subject.actor_role) ? <div><dt>Actor</dt><dd>{[subject.actor_user_id, subject.actor_role].filter(Boolean).join(' · ')}</dd></div> : null}
       {ref.entry === 'audit' && subject.resource_type ? <div><dt>Resource</dt><dd className="mono">{subject.resource_type}{subject.resource_id ? ` ${subject.resource_id}` : ''}</dd></div> : null}
-      {ref.entry === 'audit' && subject.timestamp ? <div><dt>Recorded</dt><dd>{formatDate(subject.timestamp)}</dd></div> : null}
-      {model?.primary?.observedAt ? <div><dt>Observed</dt><dd>{formatDate(model.primary.observedAt)}</dd></div> : null}
+      {ref.entry === 'audit' && subject.timestamp ? <div><dt>Recorded</dt><dd>{formatTimestamp(subject.timestamp)}</dd></div> : null}
+      {model?.primary?.observedAt ? <div><dt>Observed</dt><dd>{formatTimestamp(model.primary.observedAt)}</dd></div> : null}
       {ref.test_run_id ? <div><dt>Exact run</dt><dd className="mono">{ref.test_run_id}</dd></div> : null}
-      {ref.scan_id ? <div><dt>Exact assessment</dt><dd className="mono">{ref.scan_id}</dd></div> : null}
+      {ref.scan_id ? <div><dt>Scan</dt><dd className="mono">{ref.scan_id}</dd></div> : null}
       <div><dt>Scope</dt><dd>External probes only</dd></div>
     </dl>
   );
@@ -484,6 +519,12 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
   if (canRetest) {
     actions.push(
       <AnchorButton key="retest" size="sm" variant="ghost" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id!)}&retest=review`}>Review retest</AnchorButton>,
+    );
+  }
+  const onSameRun = window.location.hash.startsWith('#run-detail') && hashParams.get('id') === ref.test_run_id;
+  if (ref.test_run_id && !onSameRun) {
+    actions.push(
+      <AnchorButton key="run" size="sm" variant="ghost" href={`#run-detail?id=${encodeURIComponent(ref.test_run_id)}`}>Open full run</AnchorButton>,
     );
   }
   if (ref.entry === 'artifact' && ref.evidence_id) {
@@ -547,13 +588,13 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
         <div className="ei-state" data-state="auth" role="note"><Lock size={18} aria-hidden="true" /><div><strong>Sign in again</strong><p>Your session ended. Sign in to load this evidence.</p></div></div>
       ) : null}
 
-      <StateNotice state={state} permission={load.key === loadKey ? load.permission : ''} entry={ref.entry} onRetry={() => setReload((value) => value + 1)} />
+      <StateNotice state={state} permission={load.key === loadKey ? load.permission : ''} entry={ref.entry} runArtifacts={model?.runArtifacts ?? 0} onRetry={() => setReload((value) => value + 1)} />
 
       {(ref.entry === 'check_result' || ref.entry === 'validation_scan') && !['denied', 'auth', 'not_found', 'unbound', 'expired'].includes(state) ? (
         <ExecutionInspector key={workspaceKey} config={config} session={session} reference={ref} checks={data.checks} onEvidenceUpdate={refreshExecutionEvidence} />
       ) : null}
 
-      {load.key === loadKey && load.fallback && model && state !== 'no_refs' ? (
+      {load.key === loadKey && load.fallback && model && state !== 'no_refs' && state !== 'pending' ? (
         <p className="ei-partial" role="note">
           Partial view from the exact {ref.entry === 'provider' ? 'target record' : ref.entry === 'check_result' ? 'execution record' : 'record'}.
           The evidence summary service did not answer, so request and response details are shown as not recorded here.
@@ -570,7 +611,7 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
                 {ref.entry === 'provider' && ref.family ? <span className="ei-outcome-scope">{FAMILY_LABEL[ref.family]} only. Other layers are reported separately.</span> : null}
               </p>
             ) : (
-              <p className="ei-outcome"><NotRecorded>Outcome not recorded</NotRecorded></p>
+              <p className="ei-outcome"><NotRecorded>{state === 'pending' ? 'Verdict pending' : 'Outcome not recorded'}</NotRecorded></p>
             )}
             {answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
             {(ref.entry === 'finding' || ref.entry === 'group_member') && outcomeTone(outcome) === 'success' && ['open', 'remediation_pending'].includes((subject.lifecycle ?? '').toLowerCase()) ? (
@@ -646,10 +687,12 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
             ) : model.originating && (model.originating.testRunId || model.originating.verdictId) ? (
               <ObservationBlock
                 title="Original evidence"
-                note="The record that opened this finding. It cites no evidence reference, so no artifact is shown."
+                note={model.runArtifacts > 0
+                  ? 'The record that opened this finding. It cites no evidence reference; artifacts recorded for its run are listed under related records.'
+                  : 'The record that opened this finding. It cites no evidence reference.'}
                 observation={model.originating}
               />
-            ) : state !== 'no_refs' && ref.entry !== 'audit' ? <NotRecorded>No originating observation recorded</NotRecorded> : null}
+            ) : state !== 'no_refs' && state !== 'pending' && ref.entry !== 'audit' ? <NotRecorded>No originating observation recorded</NotRecorded> : null}
             {model.later ? (
               <ObservationBlock
                 title="Later result, same target and check"
@@ -658,10 +701,16 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
               />
             ) : null}
             {model.alternatives.length ? (
-              <details className="ei-alternatives">
+              <details className="ei-alternatives" open={model.runArtifacts > 0 || undefined}>
                 <summary>{model.alternatives.length} related record{model.alternatives.length === 1 ? '' : 's'}</summary>
                 {model.alternatives.map((alt, index) => (
-                  <ObservationBlock key={`${alt.testRunId}-${index}`} title="Related record" note={humanize(alt.relationship)} observation={alt} />
+                  <ObservationBlock
+                    key={`${alt.testRunId}-${index}`}
+                    title={alt.relationship === ORIGINATING_RUN_ARTIFACT ? 'Run artifact' : 'Related record'}
+                    note={relationshipLabel(alt.relationship)}
+                    observation={alt}
+                    onViewArtifact={alt.relationship === ORIGINATING_RUN_ARTIFACT ? viewRunArtifact : undefined}
+                  />
                 ))}
               </details>
             ) : null}

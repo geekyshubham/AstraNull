@@ -1,6 +1,7 @@
 import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   VALIDATION_EVIDENCE_REPOSITORY_METHODS,
@@ -16,6 +17,8 @@ import {
   resolveRemediationTemplate,
   summarizeExternalProbeEvidence,
   trafficHopState,
+  TRUTH_TABLE_ROWS,
+  truthTableRows,
 } from '../../apps/web/react/src/lib/verdict-explanation.ts';
 import {
   plainVerdictLabel,
@@ -962,5 +965,46 @@ describe('verdict-explanation (React portal)', () => {
     // It must never read as a pass and must carry a non-pass (warn) traffic-path tone.
     assert.notEqual(plainVerdictLabel('misplaced_agent'), plainVerdictLabel('protected'));
     assert.equal(trafficHopState('origin', 'misplaced_agent'), 'warn');
+  });
+});
+describe('verdict truth table', () => {
+  function emittedCorrelationVerdicts() {
+    const source = readFileSync(new URL('../../src/services/correlation.mjs', import.meta.url), 'utf8');
+    const verdicts = new Set();
+    for (const match of source.matchAll(/verdict:\s*(?:configured\s*\?\s*)?'([a-z_]+)'(?:\s*:\s*'([a-z_]+)')?/g)) {
+      verdicts.add(match[1]);
+      if (match[2]) verdicts.add(match[2]);
+    }
+    return verdicts;
+  }
+
+  it('has a row for every verdict the correlation engine emits', () => {
+    const emitted = emittedCorrelationVerdicts();
+    assert.ok(emitted.size >= 6, `expected the correlation engine verdict vocabulary, saw ${[...emitted].join(', ')}`);
+    const keys = new Set(TRUTH_TABLE_ROWS.map((row) => row.key));
+    for (const verdict of emitted) assert.ok(keys.has(verdict), `truth table is missing ${verdict}`);
+    for (const key of keys) assert.ok(emitted.has(key), `truth table lists ${key}, which correlation never emits`);
+  });
+
+  it('does not list generic outcomes the engine never produces', () => {
+    const keys = TRUTH_TABLE_ROWS.map((row) => row.key);
+    assert.equal(keys.includes('bypassable'), false);
+    assert.equal(keys.includes('penetrated'), false);
+    for (const row of TRUTH_TABLE_ROWS) assert.doesNotMatch(row.description, /attack traffic/i);
+  });
+
+  it('appends a row for a recorded verdict the table does not list', () => {
+    const rows = truthTableRows('misplaced_agent');
+    assert.equal(rows.length, TRUTH_TABLE_ROWS.length + 1);
+    const appended = rows.at(-1);
+    assert.equal(appended.key, 'misplaced_agent');
+    assert.equal(appended.recorded, true);
+    assert.equal(appended.description, plainVerdictDescription('misplaced_agent'));
+    assert.equal(truthTableRows('legacy_unknown_outcome').at(-1).description, 'Recorded verdict');
+  });
+
+  it('does not duplicate a listed verdict or add a row when there is no result', () => {
+    assert.equal(truthTableRows('edge_exposed').length, TRUTH_TABLE_ROWS.length);
+    assert.equal(truthTableRows('').length, TRUTH_TABLE_ROWS.length);
   });
 });

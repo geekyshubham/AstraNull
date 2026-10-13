@@ -251,7 +251,7 @@ export function TargetCohortList({
       render: (item) => {
         const members = finite(rec(item.analytics)?.member_count) ?? 1;
         if (hostUnit && members > 1) return <span className="muted small">Per declared target</span>;
-        if (!Object.hasOwn(item, 'last_validation_at')) return <span className="muted small">Not available in inventory</span>;
+        if (!Object.hasOwn(item, 'last_validation_at')) return <span className="muted small">Unavailable</span>;
         return item.last_validation_at ? <span className="mono small">{formatDate(item.last_validation_at)}</span> : <span className="muted small">Not checked</span>;
       },
     },

@@ -32,6 +32,20 @@ export function formatDate(value: unknown) {
   });
 }
 
+export function formatTimestamp(value: unknown) {
+  if (!value) return 'Not recorded';
+  const date = new Date(typeof value === 'number' ? value : String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  });
+}
+
 export function asArray<T = Record<string, unknown>>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
   if (value && typeof value === 'object' && Array.isArray((value as { items?: unknown }).items)) {
@@ -51,10 +65,10 @@ export function clamp(value: number, min = 0, max = 100) {
 }
 
 const SEVERITY_LABELS: Record<string, string> = {
-  s1: 'Severity 1 · Critical',
-  s2: 'Severity 2 · High',
-  s3: 'Severity 3 · Medium',
-  s4: 'Severity 4 · Low',
+  s1: 'Critical',
+  s2: 'High',
+  s3: 'Medium',
+  s4: 'Low',
   critical: 'Critical',
   high: 'High',
   medium: 'Medium',
@@ -68,7 +82,7 @@ export function formatSeverityLabel(severity: string, fallback = 'Unknown') {
   return SEVERITY_LABELS[key] ?? severity.replace(/_/g, ' ');
 }
 
-const AUDIT_ACTION_LABELS: Record<string, string> = {
+export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'rbac.denied': 'Access denied (missing permission)',
   'auth.login.succeeded': 'Signed in',
   'auth.login.failed': 'Sign-in failed',
@@ -79,9 +93,12 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'test_run.verdicted': 'Validation result published',
   'kill_switch.activated': 'Emergency stop activated',
   'kill_switch.deactivated': 'Emergency stop cleared',
+  'finding.created': 'Finding opened',
 };
 
-const RESOURCE_TYPE_LABELS: Record<string, string> = {
+export const AUDIT_ACTIONS = Object.entries(AUDIT_ACTION_LABELS).map(([value, label]) => ({ value, label }));
+
+export const RESOURCE_TYPE_LABELS: Record<string, string> = {
   api: 'Access control',
   test_run: 'Validation run',
   target_group: 'Retained execution policy',
@@ -100,10 +117,47 @@ function sentenceCase(value: string) {
   return words ? `${words[0].toUpperCase()}${words.slice(1)}` : words;
 }
 
-export function formatAuditAction(action: string, fallback = 'Unknown action') {
+const FINDING_STATUS_ACTION_LABELS: Record<string, string> = {
+  accepted_risk: 'Risk accepted',
+  closed: 'Finding closed',
+  resolved: 'Finding closed',
+  false_positive: 'Marked false positive',
+  open: 'Finding reopened',
+  in_progress: 'Finding in progress'
+};
+
+function findingUpdateLabel(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 'Finding updated';
+  const record = metadata as Record<string, unknown>;
+  const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  if (status) return FINDING_STATUS_ACTION_LABELS[status] ?? 'Finding updated';
+  if (record.assignee !== undefined) return 'Owner assigned';
+  return 'Finding updated';
+}
+
+export function formatAuditAction(action: string, fallback = 'Unknown action', metadata?: unknown) {
   const key = action.trim();
   if (!key) return fallback;
+  if (key.toLowerCase() === 'finding.updated') return findingUpdateLabel(metadata);
   return AUDIT_ACTION_LABELS[key.toLowerCase()] ?? sentenceCase(key.replace(/^target_group(?=[.:_]|$)/, 'target_policy'));
+}
+
+const TARGET_KIND_LABELS: Record<string, string> = {
+  fqdn: 'Domain name',
+  hostname: 'Domain name',
+  domain: 'Domain name',
+  url: 'URL',
+  cidr: 'CIDR range',
+  tcp: 'TCP service',
+  dns_zone: 'DNS zone',
+  canary: 'Canary endpoint'
+};
+
+export function formatTargetKind(kind: unknown, value = '') {
+  const key = String(kind ?? '').trim().toLowerCase();
+  if (!key) return 'Kind not recorded';
+  if (key === 'ip') return String(value ?? '').includes(':') ? 'IPv6 address' : 'IPv4 address';
+  return TARGET_KIND_LABELS[key] ?? sentenceCase(key);
 }
 
 export function formatResourceTypeLabel(resourceType: string, fallback = 'Record') {

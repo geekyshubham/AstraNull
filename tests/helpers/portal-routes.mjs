@@ -32,10 +32,8 @@ export const NAV_ROUTE_IDS = Object.freeze([
   'subscription',
 ]);
 
-/** Auditor-narrowed customer routes (`route-access.ts` ROUTE_CUSTOMER_ROLES). */
-export const AUDITOR_NAV_ROUTE_IDS = Object.freeze([
-  'release-evidence',
-]);
+/** Auditor-only customer routes. Release evidence left the portal (docs/ux/14 §3.1); auditor read is API-only. */
+export const AUDITOR_NAV_ROUTE_IDS = Object.freeze([]);
 
 /** Staff sidebar routes from `navigation.ts` NAV_ITEMS. */
 export const STAFF_NAV_ROUTE_IDS = Object.freeze([

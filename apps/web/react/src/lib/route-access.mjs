@@ -14,7 +14,8 @@ const ROUTE_PERMISSION = Object.freeze({
 
 /** Routes narrowed below their backend permission (docs/ux/14 §3.1). Keep in sync with route-access.ts. */
 const ROUTE_CUSTOMER_ROLES = Object.freeze({
-  'release-evidence': Object.freeze(['auditor']),
+  // Customer surface deleted (docs/ux/14 §3.1); auditor read is API-only via release_evidence:read.
+  'release-evidence': Object.freeze([]),
 });
 
 const STAFF_ONLY_ROUTES = new Set(['admin', 'tenant-detail']);
