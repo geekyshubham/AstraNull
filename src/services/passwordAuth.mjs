@@ -182,11 +182,11 @@ function earliestLockExpiry(rows) {
     .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
 }
 
-async function recordInvalidCredentials(repository, candidates, now) {
+async function recordInvalidCredentials(repository, candidates, now, { countTowardLockout = true } = {}) {
   const lockedNow = [];
   let credentialed = 0;
   for (const user of candidates) {
-    if (!user.credential) {
+    if (!user.credential || !countTowardLockout) {
       await auditKnownLogin(repository, user, 'auth.password_login.failed', 'invalid_credentials', now);
       continue;
     }
@@ -330,18 +330,29 @@ export async function loginWithPassword(body, {
     if (row?.credential && passwordMatches) matches.push(row);
   }
 
-  if (!matches.length) return recordInvalidCredentials(repository, verifiable, nowDate);
+  // An unscoped guess must not lock every workspace sharing the email; the email and client limiters still apply.
+  if (!matches.length) {
+    return recordInvalidCredentials(repository, verifiable, nowDate, {
+      countTowardLockout: Boolean(normalized.tenantId) || verifiable.length <= 1,
+    });
+  }
 
   const activeMatches = matches.filter((row) => row.status === 'active');
   if (activeMatches.length > 1) {
+    // Workspace names are withheld while any match still needs a second factor.
+    const listable = activeMatches.every((row) => !row.credential?.mfa_enrolled_at);
     return {
       error: 'tenant_required',
       status: 400,
-      message: 'This email and password open more than one workspace; choose one.',
-      workspaces: activeMatches.map((row) => ({
-        tenant_id: row.tenant_id,
-        name: row.tenant_name ?? row.tenant_id,
-      })),
+      message: listable
+        ? 'This email and password open more than one workspace; choose one.'
+        : 'This email and password open more than one workspace; enter the workspace ID.',
+      ...(listable ? {
+        workspaces: activeMatches.map((row) => ({
+          tenant_id: row.tenant_id,
+          name: row.tenant_name ?? row.tenant_id,
+        })),
+      } : {}),
     };
   }
   const user = activeMatches[0] ?? matches[0];

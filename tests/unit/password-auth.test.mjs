@@ -289,14 +289,35 @@ describe('password login', () => {
     assert.equal(chosen.tenant_id, 'ten_c');
   });
 
-  it('records a failure against every workspace credential when a multi-workspace password is wrong', async () => {
+  it('does not count an unscoped wrong password toward any shared-email workspace lockout', async () => {
     const repository = seed(multiTenantSeed());
     const result = await loginWithPassword(
       { email: 'shared@example.com', password: 'WrongPass9!Zz' },
       { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-wrong', now: NOW },
     );
     assert.deepEqual(result, INVALID_CREDENTIALS);
-    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [1, 1, 1]);
+    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [0, 0, 0]);
+    assert.equal(getStore().auditLog.filter((entry) => entry.action === 'auth.password_login.failed').length, 3);
+
+    resetPasswordAuthRateLimitsForTests();
+    const scoped = await loginWithPassword(
+      { email: 'shared@example.com', password: 'WrongPass9!Zz', tenant_id: 'ten_b' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-wrong-scoped', now: NOW },
+    );
+    assert.deepEqual(scoped, INVALID_CREDENTIALS);
+    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [0, 1, 0]);
+  });
+
+  it('withholds the workspace list when a matching workspace still requires MFA', async () => {
+    const repository = seed(multiTenantSeed({ matching: ['ten_a', 'ten_c'] }));
+    getStore().userCredentials[2].mfa_enrolled_at = NOW.toISOString();
+    const result = await loginWithPassword(
+      { email: 'shared@example.com', password: PASSWORD },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-mfa', now: NOW },
+    );
+    assert.equal(result.error, 'tenant_required');
+    assert.equal(result.status, 400);
+    assert.equal(Object.hasOwn(result, 'workspaces'), false);
   });
 
   it('rate limits repeated attempts by normalized email', async () => {
