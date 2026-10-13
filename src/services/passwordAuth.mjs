@@ -182,11 +182,11 @@ function earliestLockExpiry(rows) {
     .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
 }
 
-async function recordInvalidCredentials(repository, candidates, now, { countTowardLockout = true } = {}) {
+async function recordInvalidCredentials(repository, candidates, now) {
   const lockedNow = [];
   let credentialed = 0;
   for (const user of candidates) {
-    if (!user.credential || !countTowardLockout) {
+    if (!user.credential) {
       await auditKnownLogin(repository, user, 'auth.password_login.failed', 'invalid_credentials', now);
       continue;
     }
@@ -330,12 +330,7 @@ export async function loginWithPassword(body, {
     if (row?.credential && passwordMatches) matches.push(row);
   }
 
-  // An unscoped guess must not lock every workspace sharing the email; the email and client limiters still apply.
-  if (!matches.length) {
-    return recordInvalidCredentials(repository, verifiable, nowDate, {
-      countTowardLockout: Boolean(normalized.tenantId) || verifiable.length <= 1,
-    });
-  }
+  if (!matches.length) return recordInvalidCredentials(repository, verifiable, nowDate);
 
   const activeMatches = matches.filter((row) => row.status === 'active');
   if (activeMatches.length > 1) {

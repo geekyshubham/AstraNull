@@ -289,23 +289,14 @@ describe('password login', () => {
     assert.equal(chosen.tenant_id, 'ten_c');
   });
 
-  it('does not count an unscoped wrong password toward any shared-email workspace lockout', async () => {
+  it('records a failure against every workspace credential when a multi-workspace password is wrong', async () => {
     const repository = seed(multiTenantSeed());
     const result = await loginWithPassword(
       { email: 'shared@example.com', password: 'WrongPass9!Zz' },
       { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-wrong', now: NOW },
     );
     assert.deepEqual(result, INVALID_CREDENTIALS);
-    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [0, 0, 0]);
-    assert.equal(getStore().auditLog.filter((entry) => entry.action === 'auth.password_login.failed').length, 3);
-
-    resetPasswordAuthRateLimitsForTests();
-    const scoped = await loginWithPassword(
-      { email: 'shared@example.com', password: 'WrongPass9!Zz', tenant_id: 'ten_b' },
-      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'multi-wrong-scoped', now: NOW },
-    );
-    assert.deepEqual(scoped, INVALID_CREDENTIALS);
-    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [0, 1, 0]);
+    assert.deepEqual(getStore().userCredentials.map((row) => row.failed_attempts), [1, 1, 1]);
   });
 
   it('withholds the workspace list when a matching workspace still requires MFA', async () => {
