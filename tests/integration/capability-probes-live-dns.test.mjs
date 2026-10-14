@@ -31,7 +31,7 @@ const runPublicDns = process.env.ASTRANULL_RUN_PUBLIC_DNS === '1';
 describe('capability probes live public DNS (unaided I/O)', () => {
   it('signs coherent authoritative AXFR operation caps', () => {
     const job = signedAxfrJob('example.com');
-    assert.equal(job.probe_profile.max_requests, 2);
+    assert.equal(job.probe_profile.max_requests, 5);
     assert.equal(job.constraints.max_probe_requests, 2);
     assert.equal(job.constraints.min_destination_resolver_attempts, 2);
     assert.equal(job.constraints.max_destination_resolver_attempts, 4);
