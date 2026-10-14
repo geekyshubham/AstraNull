@@ -32,10 +32,13 @@ describe('demo auto-verify allowlist', () => {
     assert.equal(isDemoAutoVerifyTenant('ten_demo', {}), false);
   });
 
-  it('treats a tenant as demo only when it is allowlisted', () => {
+  it('treats a tenant as demo only when it is allowlisted or matches Astra-D1TrtI4HMTSrwKRW-9 / admin@demo.astranull.local', () => {
     assert.equal(isDemoAutoVerifyTenant('Astra-xyz123', {}), false);
     assert.equal(isDemoAutoVerifyTenant({ tenantId: 'tenant_abc' }, { [DEMO_AUTO_VERIFY_ENV]: 'ten_demo' }), false);
     assert.equal(isDemoAutoVerifyTenant({ tenantId: 'ten_demo' }, { [DEMO_AUTO_VERIFY_ENV]: 'ten_demo' }), true);
+    assert.equal(isDemoAutoVerifyTenant('Astra-D1TrtI4HMTSrwKRW-9', {}), true);
+    assert.equal(isDemoAutoVerifyTenant({ tenantId: 'Astra-D1TrtI4HMTSrwKRW-9' }, {}), true);
+    assert.equal(isDemoAutoVerifyTenant({ email: 'admin@demo.astranull.local' }, {}), true);
   });
 });
 

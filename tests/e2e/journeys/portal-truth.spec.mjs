@@ -65,7 +65,7 @@ test.describe('portal truth surfaces', () => {
 
     await openCheck(page, 'l3.forbidden_tcp_port.safe');
     await expect(page.getByText('Bounded live probe', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('1 probe operation + up to two DNS destination-vetting resolver operations per hostname destination', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Up to 2 probe operations + up to two DNS destination-vetting resolver operations per hostname destination', { exact: true }).first()).toBeVisible();
 
     await openCheck(page, 'waf.offensive_sqli.soc');
     await expect(page.getByText('Request only', { exact: true }).first()).toBeVisible();

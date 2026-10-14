@@ -14,6 +14,7 @@ import {
   listTargets,
   patchTargetById,
 } from '../../src/services/targetGroups.mjs';
+import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
@@ -181,5 +182,22 @@ describe('PATCH /v1/targets/:id (dev store)', () => {
     const result = patchTargetById(ctx, 'target_missing', { tags: ['x'] });
     assert.equal(result.error, 'not_found');
     assert.equal(result.status, 404);
+  });
+
+  it('preserves stored control_declarations on a metadata-only patch', () => {
+    freshStore();
+    const created = createTargetDirect(ctx, {
+      kind: 'fqdn',
+      value: 'decl.example.com',
+      metadata: { region: 'us' },
+    });
+    const storeTarget = getStore().targets.find((row) => row.id === created.id);
+    storeTarget.metadata = {
+      ...(storeTarget.metadata ?? {}),
+      control_declarations: { version: 1, waf: { expected_action: 'challenge' } },
+    };
+    const patched = patchTargetById(ctx, created.id, { metadata: { region: 'eu' } });
+    assert.equal(patched.metadata.region, 'eu');
+    assert.deepEqual(patched.metadata.control_declarations, { version: 1, waf: { expected_action: 'challenge' } });
   });
 });

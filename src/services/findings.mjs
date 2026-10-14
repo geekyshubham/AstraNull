@@ -5,7 +5,8 @@ import {
   findingMatchesListQuery,
   parseFindingListQuery,
 } from '../lib/findingList.mjs';
-import { planFindingPatch } from '../lib/findingLifecycle.mjs';
+import { planFindingPatch, planFixVerifiedFromRetest, computeDenyRulesDigest } from '../lib/findingLifecycle.mjs';
+import { controlDeclarationsFromTarget } from '../contracts/controlDeclarations.mjs';
 import { newId } from '../lib/ids.mjs';
 import { scrubFindingForCustomer } from '../lib/outsideInEvidence.mjs';
 import { getStore, persistStore } from '../store.mjs';
@@ -17,10 +18,12 @@ import {
   deriveProtectionFindingCandidates,
   isProtectionValidationFinding,
   planProtectionFindingUpsert,
+  protectionFindingClosureSignal,
+  protectionRetestRunScopeMatches,
   toProtectionFindingRow,
 } from '../lib/protectionValidationFindings.mjs';
 
-export { FINDING_LIFECYCLE, authorizeFindingWrite, planFindingPatch } from '../lib/findingLifecycle.mjs';
+export { FINDING_LIFECYCLE, authorizeFindingWrite, planFindingPatch, planFixVerifiedFromRetest } from '../lib/findingLifecycle.mjs';
 export { applyProtectionFindingPatch } from '../lib/protectionValidationFindings.mjs';
 
 export function upsertFindingFromVerdict(ctx, verdict, run, target) {
@@ -55,6 +58,9 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
     target_group_id: run.target_group_id,
     target_id: target.id,
     check_id: run.check_id,
+    check_version: run.check_version ?? verdict.check_version ?? null,
+    grading_version: verdict.grading_version ?? run.grading_version ?? run.provenance_json?.grading_version ?? null,
+    source_perspective: verdict.source_perspective ?? run.source_perspective ?? run.probe_metadata?.source_perspective ?? null,
     test_run_id: run.id,
     verdict_id: verdict.id,
     title: `Finding: ${verdict.verdict} on ${target.value}`,
@@ -64,6 +70,8 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
     notes: null,
     system_summary: verdict.explanation ?? null,
     evidence_ids: verdict.evidence_ids,
+    declaration_digest: computeDenyRulesDigest(controlDeclarationsFromTarget(target)),
+    declared_deny_ports: run?.probe_metadata?.declared_deny_ports ?? run?.probe_metadata?.ports_probed ?? (run?.probe_metadata?.port != null ? [Number(run.probe_metadata.port)] : []),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -88,9 +96,53 @@ export function upsertFindingFromVerdict(ctx, verdict, run, target) {
   return finding;
 }
 
+function stampFrom(run, verdict) {
+  return {
+    check_version: run?.check_version ?? verdict?.check_version ?? null,
+    grading_version: verdict?.grading_version ?? run?.grading_version ?? run?.provenance_json?.grading_version ?? null,
+  };
+}
+
+/** Complete passing retest closes matching open/in_progress findings. Partial or inconclusive never close. */
+export function applyPassingRetestToFindings(ctx, { verdict, run, target = null, now = new Date() } = {}) {
+  const store = getStore();
+  const at = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const closed = [];
+  const targetId = target?.id ?? run?.target_id ?? verdict?.target_id ?? null;
+  const decls = controlDeclarationsFromTarget(target);
+  for (const finding of store.findings ?? []) {
+    if (finding.tenant_id !== ctx.tenantId) continue;
+    if (!['open', 'in_progress'].includes(finding.status)) continue;
+    if (finding.check_id !== run?.check_id) continue;
+    if (finding.target_id && targetId && finding.target_id !== targetId) continue;
+    if (isProtectionValidationFinding(finding) && !protectionRetestRunScopeMatches(finding, run)) continue;
+    const plan = planFixVerifiedFromRetest({ finding, run, verdict, declarations: decls, now });
+    if (plan.action !== 'fix_verified') continue;
+    Object.assign(finding, plan.patch, stampFrom(run, verdict));
+    finding.updated_at = at;
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId ?? 'system',
+      actor_role: ctx.role ?? 'system',
+      action: 'finding.fix_verified',
+      resource_type: 'finding',
+      resource_id: finding.id,
+      metadata: {
+        verifying_run_id: run?.id ?? null,
+        verdict_id: verdict?.id ?? null,
+        check_id: run?.check_id ?? null,
+        ...(plan.verification_basis ? { verification_basis: plan.verification_basis } : {}),
+      },
+    });
+    closed.push(finding.id);
+  }
+  if (closed.length) persistStore();
+  return { closed };
+}
+
 /**
  * Derive deduplicated findings from a recorded, digest-verified comparison evaluation.
- * Passing items only produce observations; nothing here closes a finding or its siblings.
+ * A complete passing retest of the same scope and versions moves open findings to fix_verified.
  */
 export function upsertProtectionFindingsFromEvaluation(ctx, evaluation, {
   entryPaths = [],
@@ -154,8 +206,41 @@ export function upsertProtectionFindingsFromEvaluation(ctx, evaluation, {
       });
     }
   }
-  if (created.length || updated.length || retained.length) persistStore();
-  return { ok: true, error: null, created, updated, retained, passing: derived.passing.length, skipped: derived.skipped.length };
+  const verified = [];
+  for (const observation of derived.passing ?? []) {
+    for (const row of store.findings.filter((finding) => finding.tenant_id === ctx.tenantId && isProtectionValidationFinding(finding))) {
+      const signal = protectionFindingClosureSignal({ finding: row, passingObservation: observation });
+      if (signal.action !== 'fix_verified' || !signal.finding_id) continue;
+      const index = store.findings.findIndex((finding) => finding.id === signal.finding_id && finding.tenant_id === ctx.tenantId);
+      if (index < 0) continue;
+      const current = store.findings[index];
+      if (!['open', 'in_progress'].includes(current.status)) continue;
+      store.findings[index] = {
+        ...current,
+        status: 'fix_verified',
+        closed_at: current.closed_at ?? at,
+        verifying_run_id: signal.verifying_run_id ?? observation.test_run_id ?? null,
+        updated_at: at,
+      };
+      verified.push(signal.finding_id);
+      audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId ?? 'system',
+        actor_role: ctx.role ?? 'system',
+        action: 'finding.fix_verified',
+        resource_type: 'finding',
+        resource_id: signal.finding_id,
+        metadata: {
+          source: 'protection_validation',
+          dedupe_key: observation.dedupe_key,
+          verifying_run_id: signal.verifying_run_id ?? observation.test_run_id ?? null,
+          evaluation_id: observation.evaluation_id,
+        },
+      });
+    }
+  }
+  if (created.length || updated.length || retained.length || verified.length) persistStore();
+  return { ok: true, error: null, created, updated, retained, verified, passing: derived.passing.length, skipped: derived.skipped.length };
 }
 
 function groupMemberIds(tenantId, groupId) {
@@ -239,6 +324,9 @@ export function patchFinding(ctx, id, body) {
   if (planned.patch.risk_acceptance !== undefined) f.risk_acceptance = planned.patch.risk_acceptance;
   if (planned.patch.closed_at === null) f.closed_at = null;
   else if (planned.patch.closed_at && !f.closed_at) f.closed_at = planned.patch.closed_at;
+  if (planned.patch.status === 'open' || planned.patch.status === 'in_progress') {
+    f.verification_basis = null;
+  }
   if (body.assignee !== undefined) f.assignee = body.assignee;
   if (body.notes !== undefined) f.notes = body.notes;
   f.updated_at = new Date().toISOString();

@@ -11,12 +11,17 @@ function ensureVault() {
 export function recordEvidence(ctx, body) {
   const vault = ensureVault();
   const id = body.evidence_id ?? newId('evidence');
+  const metadata = redactObject(body.metadata ?? {});
+  const rawFeatures = body.response_features ?? metadata.response_features ?? body.metadata?.response_features;
+  const response_features = rawFeatures == null ? null : redactObject(rawFeatures);
+  if (response_features != null && metadata.response_features == null) metadata.response_features = response_features;
   const record = {
     id,
     tenant_id: ctx.tenantId,
     test_run_id: body.test_run_id ?? null,
     label: body.label ?? 'metadata_evidence',
-    metadata: redactObject(body.metadata ?? {}),
+    metadata,
+    ...(response_features != null ? { response_features } : {}),
     related_event_id: body.related_event_id ?? null,
     created_at: new Date().toISOString(),
   };

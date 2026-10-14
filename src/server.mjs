@@ -1,6 +1,11 @@
 import http from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isConnectorsEnabledForTenant, loadRuntimeConfig } from './config.mjs';
+import {
+  connectorsEnabledFor,
+  externalDiscoveryEnabledFor,
+  wafPostureEnabledFor,
+} from './lib/tenantFeatureAccess.mjs';
 import { getBundledStagingJwksDocument, isBundledStagingOidcEnabled } from './lib/bundledStagingOidc.mjs';
 import { resolveHumanApiAuth } from './context.mjs';
 import {
@@ -20,6 +25,7 @@ import { createPasswordAuthService } from './services/passwordAuth.mjs';
 import { createDevPasswordAuthRepository } from './services/passwordAuthRepository.mjs';
 import { exchangeGuardianBotDastSession } from './services/guardianbotDastSession.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
+import { isExplicitDemoTenant, warnIfDemoAutoVerifyWildcard } from './lib/demoAutoVerify.mjs';
 import { readArtifactUploadBody } from './lib/authorizationArtifactLedger.mjs';
 import {
   HttpBodyError,
@@ -43,7 +49,19 @@ import {
 import { requirePermission } from './rbac.mjs';
 import { bindDeclaredTargetInput, presentTargetSelection } from './lib/targetScopeInput.mjs';
 import { seedIfEmpty } from './seed.mjs';
-import { getStore } from './store.mjs';
+import { getStore, persistStore } from './store.mjs';
+import {
+  ControlDeclarationsValidationError,
+  CONTROL_DECLARATIONS_METADATA_KEY,
+  controlDeclarationsFromTarget,
+  controlDeclarationsEtag,
+  controlDeclarationsIfMatch,
+  controlDeclarationsRevision,
+  emptyControlDeclarations,
+  normalizeControlDeclarations,
+  summarizeControlDeclarationsForAudit,
+} from './contracts/controlDeclarations.mjs';
+import { listProbePerspectives, loadProbePerspectivesFromEnv } from './lib/probePerspectiveRegistry.mjs';
 import * as highScale from './services/highScale.mjs';
 import * as reports from './services/reports.mjs';
 import * as targetGroups from './services/targetGroups.mjs';
@@ -75,6 +93,7 @@ import {
 } from './services/targetHistory.mjs';
 import {
   archiveOriginBinding,
+  bindingRecordsFromStore,
   createOriginBinding,
   getOriginBinding,
   listOriginBindings,
@@ -82,6 +101,8 @@ import {
 import { FindingListQueryError, parseFindingListQuery } from './lib/findingList.mjs';
 import { ownershipProofFromStates } from './lib/ownershipPolicy.mjs';
 import { getCheckById } from './contracts/checks.mjs';
+import { catalogRuleCoverage } from './contracts/ruleCoverage.mjs';
+import { targetRuleCoverage } from './services/ruleCoverage.mjs';
 import { withCheckSection } from './contracts/validationScanManagement.mjs';
 import * as findings from './services/findings.mjs';
 import * as tenants from './services/tenants.mjs';
@@ -283,9 +304,12 @@ function isWafCorePostureRoute(path) {
   return true;
 }
 
-function blockWafFeatureDisabled(runtimeConfig, path, res) {
+function blockWafFeatureDisabled(runtimeConfig, ctxOrPath, pathOrRes, resOrUndefined) {
+  const ctx = typeof pathOrRes === 'string' ? ctxOrPath : null;
+  const path = typeof pathOrRes === 'string' ? pathOrRes : ctxOrPath;
+  const res = typeof pathOrRes === 'string' ? resOrUndefined : pathOrRes;
   if (!isWafPostureRoute(path) && !isConnectorRoute(path)) return false;
-  if (runtimeConfig.featureFlags.wafPostureEnabled === true) return false;
+  if (wafPostureEnabledFor(runtimeConfig, ctx?.tenantId)) return false;
   json(res, 404, { error: 'waf_feature_disabled' });
   return true;
 }
@@ -295,8 +319,8 @@ export async function reconcileConnectorFeatureProjection(runtimeConfig, service
   const waf = serviceDeps.wafPosture;
   if (typeof waf?.isConnectorFeatureEnabled !== 'function'
     || typeof waf?.setConnectorFeatureState !== 'function') return;
-  const desired = isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId);
-  // Best-effort projection sync only. The authoritative gate is isConnectorsEnabledForTenant on the
+  const desired = connectorsEnabledFor(runtimeConfig, ctx.tenantId);
+  // Best-effort projection sync only. The authoritative gate is connectorsEnabledFor on the
   // in-memory runtimeConfig (see blockConnectorFeatureDisabled), so a transient database failure
   // here must not 500 every connector request. Log and move on; the next request retries the sync.
   try {
@@ -312,7 +336,7 @@ export async function reconcileConnectorFeatureProjection(runtimeConfig, service
 
 function blockConnectorFeatureDisabled(runtimeConfig, ctx, path, res) {
   if (!isConnectorRoute(path)) return false;
-  if (isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId)) return false;
+  if (connectorsEnabledFor(runtimeConfig, ctx?.tenantId)) return false;
   json(res, 404, { error: 'connector_feature_disabled' });
   return true;
 }
@@ -321,9 +345,12 @@ function isDiscoveryRoute(path) {
   return path.startsWith('/v1/discovery/');
 }
 
-function blockDiscoveryFeatureDisabled(runtimeConfig, path, res) {
+function blockDiscoveryFeatureDisabled(runtimeConfig, ctxOrPath, pathOrRes, resOrUndefined) {
+  const ctx = typeof pathOrRes === 'string' ? ctxOrPath : null;
+  const path = typeof pathOrRes === 'string' ? pathOrRes : ctxOrPath;
+  const res = typeof pathOrRes === 'string' ? resOrUndefined : pathOrRes;
   if (!isDiscoveryRoute(path)) return false;
-  if (runtimeConfig.featureFlags.externalDiscoveryEnabled === true) return false;
+  if (externalDiscoveryEnabledFor(runtimeConfig, ctx?.tenantId)) return false;
   json(res, 404, { error: 'discovery_feature_disabled' });
   return true;
 }
@@ -338,7 +365,7 @@ function blockPostgresWafOrchestratorRoute(runtimeConfig, serviceDeps, path, res
 
 function blockPostgresWafPostureRoute(runtimeConfig, serviceDeps, path, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
-  if (!isWafCorePostureRoute(path)) return false;
+  if (!isWafCorePostureRoute(path) && !isConnectorRoute(path)) return false;
   if (serviceDeps.wafPosture) return false;
   respondPostgresRouteNotWired(res);
   return true;
@@ -871,7 +898,7 @@ function subdomainServiceDeps(ctx, runtimeConfig, serviceDeps) {
     recordAudit,
     readCohort: (query) => readDeclaredHostCohortForRequest(ctx, runtimeConfig, serviceDeps, query, 'target'),
     config: runtimeConfig.subdomainDiscovery,
-    detectionEnabled: runtimeConfig.featureFlags?.wafPostureEnabled === true,
+    detectionEnabled: wafPostureEnabledFor(runtimeConfig, ctx?.tenantId),
     fetchFn: serviceDeps.subdomainFetch,
   };
 }
@@ -1223,10 +1250,117 @@ function isPasswordRecoveryPublicRoute(pathname, method) {
     && (pathname === '/v1/auth/request-password-reset' || pathname === '/v1/auth/reset-password');
 }
 
+function isActiveTenantTarget(row, ctx, targetId) {
+  return row?.id === targetId
+    && row.tenant_id === ctx.tenantId
+    && !row.deleted_at
+    && !row.archived_at;
+}
+
+function readDevControlDeclarations(ctx, targetId) {
+  const target = getStore().targets.find((row) => isActiveTenantTarget(row, ctx, targetId));
+  if (!target) return null;
+  return { target, declarations: controlDeclarationsFromTarget(target) ?? emptyControlDeclarations() };
+}
+
+function withDeclarationsRevision(declarations) {
+  const doc = declarations ?? emptyControlDeclarations();
+  return { ...doc, revision: controlDeclarationsRevision(doc) };
+}
+
+function declarationsResponse(res, status, declarations) {
+  const body = withDeclarationsRevision(declarations);
+  res.setHeader('ETag', controlDeclarationsEtag(body.revision));
+  return json(res, status, body);
+}
+
+function declarationsConflict(res, current) {
+  const revision = controlDeclarationsRevision(current);
+  res.setHeader('ETag', controlDeclarationsEtag(revision));
+  return json(res, 412, {
+    error: 'declarations_conflict',
+    message: 'The control declarations changed since you loaded them. Reload, re-apply your edit and save again.',
+    revision,
+    etag: controlDeclarationsEtag(revision),
+  });
+}
+
+async function readTargetDeclarationsForChecks(ctx, runtimeConfig, serviceDeps, targetId) {
+  if (runtimeConfig.persistenceMode !== 'postgres') return readDevControlDeclarations(ctx, targetId)?.declarations ?? null;
+  const readFn = serviceDeps.targetGroups?.getTargetControlDeclarations;
+  return typeof readFn === 'function' ? (await readFn(ctx, targetId)) ?? null : null;
+}
+
+async function readTargetOriginBindingsForChecks(ctx, runtimeConfig, serviceDeps, targetId) {
+  if (runtimeConfig.persistenceMode === 'postgres') {
+    const loadFn = serviceDeps.validationEvidence?.loadOriginLockdownBindings
+      ?? historyMethod(serviceDeps, 'loadOriginLockdownBindings')
+      ?? serviceDeps.loadOriginLockdownBindings;
+    if (typeof loadFn === 'function') {
+      try {
+        const loaded = await loadFn(ctx, targetId);
+        if (loaded && typeof loaded === 'object') return loaded;
+      } catch {}
+    }
+  } else {
+    const store = getStore();
+    const targetBindings = (store.originBindings ?? []).filter((row) =>
+      row.tenant_id === ctx.tenantId && row.status === 'active'
+      && (row.protected_target_id === targetId || row.origin_target_id === targetId)
+    );
+    const bindingRecords = bindingRecordsFromStore(store, ctx.tenantId);
+    return { bindings: targetBindings, records: bindingRecords };
+  }
+  const listFn = historyMethod(serviceDeps, 'listOriginBindings') ?? listOriginBindings;
+  if (typeof listFn === 'function') {
+    try {
+      const res = await listFn(ctx, { status: 'active' });
+      if (Array.isArray(res?.items)) {
+        return {
+          bindings: res.items.filter((row) => row.protected_target_id === targetId || row.origin_target_id === targetId),
+          records: null,
+        };
+      }
+    } catch {}
+  }
+  return { bindings: [], records: null };
+}
+
+function writeDevControlDeclarations(ctx, targetId, declarations, { ifMatch } = {}) {
+  const target = getStore().targets.find((row) => isActiveTenantTarget(row, ctx, targetId));
+  if (!target) return null;
+  const before = controlDeclarationsFromTarget(target);
+  const currentRevision = controlDeclarationsRevision(before);
+  if (!controlDeclarationsIfMatch(ifMatch, currentRevision)) {
+    return { error: 'declarations_conflict', status: 412, current: before ?? emptyControlDeclarations() };
+  }
+  const next = { ...declarations, revision: currentRevision + 1 };
+  target.metadata = { ...(target.metadata ?? {}), [CONTROL_DECLARATIONS_METADATA_KEY]: next };
+  persistStore();
+  return { target, before, declarations: next };
+}
+
+function controlDeclarationsAuditEntry(ctx, targetId, before, after) {
+  return {
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action: 'target.control_declarations_updated',
+    resource_type: 'target',
+    resource_id: targetId,
+    metadata: {
+      before: summarizeControlDeclarationsForAudit(before),
+      after: summarizeControlDeclarationsForAudit(after),
+    },
+  };
+}
+
 export function createServer(options = {}) {
   const env = options.env ?? process.env;
   const runtimeConfig =
     options.runtimeConfig ?? loadRuntimeConfig(env);
+  loadProbePerspectivesFromEnv(env);
+  warnIfDemoAutoVerifyWildcard(env);
   const serviceDeps = buildServiceDeps(runtimeConfig, options.services);
   const runtimeHealth = options.runtimeHealth ?? options.persistenceRuntime?.health;
   if (runtimeConfig.persistenceMode !== 'postgres') {
@@ -1539,6 +1673,7 @@ export function createServer(options = {}) {
         const auth = await resolveHumanApiAuth(req.headers, url.pathname, req.method, runtimeConfig, {
           bodyText: probeBodyText,
           services: serviceDeps,
+          env,
         });
         if (!auth.ok) {
           json(res, auth.status, auth.body);
@@ -1576,6 +1711,7 @@ export function createServer(options = {}) {
         await handleApi(req, res, url, ctx, runtimeConfig, {
           probeBodyText,
           services: serviceDeps,
+          env,
         });
         return;
       }
@@ -1664,6 +1800,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   const path = url.pathname;
   const method = req.method;
   const serviceDeps = options.services ?? defaultServiceDeps();
+  const env = options.env ?? process.env;
   incMetric('http_requests_total');
 
   if (method === 'GET' && path === '/v1/observability') {
@@ -1804,9 +1941,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 201, result);
   }
 
-  if (blockDiscoveryFeatureDisabled(runtimeConfig, path, res)) return;
+  if (blockDiscoveryFeatureDisabled(runtimeConfig, ctx, path, res)) return;
   if (blockPostgresDiscoveryRoute(runtimeConfig, serviceDeps, path, res)) return;
   const discoverySvc = resolveExternalDiscoveryService(runtimeConfig, serviceDeps);
+  if (isDiscoveryRoute(path) && !discoverySvc) return respondPostgresRouteNotWired(res);
 
   if (method === 'GET' && path === '/v1/discovery/entities') {
     const gate = requirePermission(ctx, 'discovery:read');
@@ -1888,7 +2026,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, result);
   }
 
-  if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+  if (blockWafFeatureDisabled(runtimeConfig, ctx, path, res)) return;
   if (isConnectorRoute(path)) await reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx);
   if (blockConnectorFeatureDisabled(runtimeConfig, ctx, path, res)) return;
   if (blockPostgresWafOrchestratorRoute(runtimeConfig, serviceDeps, path, res)) return;
@@ -2810,6 +2948,97 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (created && created.error) return json(res, created.status ?? 400, created);
     return json(res, 201, created);
   }
+  if (path === '/v1/probe-perspectives' && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const items = listProbePerspectives(env);
+    return json(res, 200, { items, count: items.length });
+  }
+  if (path === '/v1/rule-coverage' && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    return json(res, 200, catalogRuleCoverage());
+  }
+  const targetRuleCoverageMatch = path.match(/^\/v1\/targets\/([^/]+)\/rule-coverage$/);
+  if (targetRuleCoverageMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const targetId = decodeURIComponent(targetRuleCoverageMatch[1]);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    if (!owned.target) return json(res, 404, { error: 'not_found' });
+    let coverage;
+    if (runtimeConfig.persistenceMode === 'postgres') {
+      const coverageFn = serviceDeps.testRuns?.getTargetRuleCoverage;
+      if (typeof coverageFn !== 'function') return respondPostgresRouteNotWired(res);
+      coverage = await coverageFn(ctx, targetId, { env });
+      if (coverage?.error) return json(res, coverage.status ?? 503, coverage);
+    } else {
+      coverage = targetRuleCoverage(ctx, targetId, { env });
+    }
+    if (!coverage) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, coverage);
+  }
+  const targetControlDeclarationsMatch = path.match(/^\/v1\/targets\/([^/]+)\/control-declarations$/);
+  if (targetControlDeclarationsMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const targetId = decodeURIComponent(targetControlDeclarationsMatch[1]);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    if (!owned.target) return json(res, 404, { error: 'not_found' });
+    if (runtimeConfig.persistenceMode === 'postgres') {
+      const readFn = serviceDeps.targetGroups?.getTargetControlDeclarations;
+      if (typeof readFn !== 'function') return respondPostgresRouteNotWired(res);
+      const stored = await readFn(ctx, targetId);
+      if (stored === null) return json(res, 404, { error: 'not_found' });
+      return declarationsResponse(res, 200, stored);
+    }
+    const local = readDevControlDeclarations(ctx, targetId);
+    if (!local) return json(res, 404, { error: 'not_found' });
+    return declarationsResponse(res, 200, local.declarations);
+  }
+  if (targetControlDeclarationsMatch && method === 'PUT') {
+    const gate = requirePermission(ctx, 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const targetId = decodeURIComponent(targetControlDeclarationsMatch[1]);
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    if (!owned.target) return json(res, 404, { error: 'not_found' });
+    const ifMatch = req.headers['if-match'];
+    if (typeof ifMatch !== 'string' || !ifMatch.trim()) {
+      return json(res, 428, {
+        error: 'precondition_required',
+        message: 'Send If-Match with the ETag from GET /v1/targets/:id/control-declarations so concurrent saves are not overwritten.',
+      });
+    }
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    let normalized;
+    try {
+      normalized = normalizeControlDeclarations(body, { target: owned.target, env });
+    } catch (error) {
+      if (error instanceof ControlDeclarationsValidationError) return json(res, 400, error.toResponse());
+      throw error;
+    }
+    normalized.updated_at = new Date().toISOString();
+    normalized.updated_by = ctx.userId ?? null;
+    if (runtimeConfig.persistenceMode === 'postgres') {
+      const putFn = serviceDeps.targetGroups?.putTargetControlDeclarations;
+      const recordAudit = serviceDeps.audit?.appendAuditEvent?.bind(serviceDeps.audit);
+      if (typeof putFn !== 'function' || typeof recordAudit !== 'function') return respondPostgresRouteNotWired(res);
+      const result = await putFn(ctx, targetId, normalized, { ifMatch });
+      if (result === null) return json(res, 404, { error: 'not_found' });
+      if (result?.error === 'declarations_conflict') return declarationsConflict(res, result.current);
+      if (result?.error) return json(res, result.status ?? 400, result);
+      await recordAudit(controlDeclarationsAuditEntry(ctx, targetId, result.before, result.declarations));
+      return declarationsResponse(res, 200, result.declarations);
+    }
+    const written = writeDevControlDeclarations(ctx, targetId, normalized, { ifMatch });
+    if (!written) return json(res, 404, { error: 'not_found' });
+    if (written.error === 'declarations_conflict') return declarationsConflict(res, written.current);
+    appendDevAudit(controlDeclarationsAuditEntry(ctx, targetId, written.before, written.declarations));
+    return declarationsResponse(res, 200, written.declarations);
+  }
   const targetByIdMatch = path.match(/^\/v1\/targets\/([^/]+)$/);
   if (targetByIdMatch && method === 'PATCH') {
     const gate = requirePermission(ctx, 'target_group:write');
@@ -3004,7 +3233,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (blockPostgresPortalRevampRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     if (body?.connector_id) {
-      if (!isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId)) {
+      if (!connectorsEnabledFor(runtimeConfig, ctx.tenantId)) {
         return json(res, 404, { error: 'connector_feature_disabled' });
       }
       await reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx);
@@ -3529,7 +3758,15 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (path === '/v1/checks' && method === 'GET') {
     const gate = requirePermission(ctx, 'check:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope: url.searchParams.get('scope') === 'all' ? 'all' : 'selectable' }) });
+    const scope = url.searchParams.get('scope') === 'all' ? 'all' : 'selectable';
+    const targetId = url.searchParams.get('target_id');
+    if (!targetId) return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope, tenantId: ctx.tenantId }) });
+    const owned = await readOwnTarget(ctx, runtimeConfig, serviceDeps, targetId);
+    if (owned.missing) return respondPostgresRouteNotWired(res);
+    if (!owned.target) return json(res, 404, { error: 'not_found' });
+    const declarations = await readTargetDeclarationsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
+    const originBindings = await readTargetOriginBindingsForChecks(ctx, runtimeConfig, serviceDeps, targetId);
+    return json(res, 200, { items: await serviceDeps.testRuns.listChecks({ scope, target: owned.target, declarations, originBindings, tenantId: ctx.tenantId }), target_id: targetId });
   }
   const checkByIdMatch = path.match(/^\/v1\/checks\/([^/]+)$/);
   if (checkByIdMatch && method === 'GET') {
@@ -3693,6 +3930,15 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const run = await serviceDeps.testRuns.getTestRun(ctx, runMatch[1]);
     if (!run) return json(res, 404, { error: 'not_found' });
     return json(res, 200, run);
+  }
+  const runVerdictReplay = path.match(/^\/v1\/test-runs\/([^/]+)\/verdict-replay$/);
+  if (runVerdictReplay && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof serviceDeps.testRuns?.getVerdictReplay !== 'function') return respondPostgresRouteNotWired(res);
+    const replay = await serviceDeps.testRuns.getVerdictReplay(ctx, decodeURIComponent(runVerdictReplay[1]));
+    if (!replay) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, replay);
   }
   const runEvents = path.match(/^\/v1\/test-runs\/([^/]+)\/events$/);
   const runActivity = path.match(/^\/v1\/test-runs\/([^/]+)\/activity$/);
@@ -4186,6 +4432,28 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const result = await wafOffensiveSvc.transitionOffensiveRequest(ctx, wofSocStart[1], 'start');
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 409, result);
+    return json(res, 200, result);
+  }
+  const wofCanarySinkPlan = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/canary-sink-body\/plan$/);
+  if (wofCanarySinkPlan && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await wafOffensiveSvc.planCanarySinkBody(ctx, wofCanarySinkPlan[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, result);
+  }
+  const wofCanarySinkObs = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/canary-sink-body\/observations$/);
+  if (wofCanarySinkObs && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await wafOffensiveSvc.recordCanarySinkBodyObservations(ctx, wofCanarySinkObs[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
   }
   for (const action of ['approve', 'schedule', 'stop', 'close', 'reject']) {

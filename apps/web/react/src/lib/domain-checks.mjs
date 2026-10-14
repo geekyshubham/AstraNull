@@ -7,12 +7,17 @@
  * declaration-only (E1) checks perform no network I/O and are not part of "run all".
  */
 import { checkExclusionReason, checkSupportsTarget } from './check-picker.mjs';
+import { checkPrerequisite, needsTargetAnswer } from './control-declarations.mjs';
 import { MAX_SCAN_CHECKS } from './validation-scan.mjs';
+import { requiredInputMissing } from './missing-input.mjs';
 import { plainCheckName, plainVerdictShortLabel } from './plain-language.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS } from '../../../../../src/lib/probeEvidenceTiers.mjs';
 
 export const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
+export const ORIGIN_LOCKDOWN_CHECK_ID = 'nfw.origin_lockdown.safe';
+const ORIGIN_LOCKDOWN_CHECK_IDS = new Set([ORIGIN_LOCKDOWN_CHECK_ID, 'origin.direct_reachability.safe']);
 const DECLARATION_ONLY_KIND = 'metadata_marker';
+const VIOLATION_FAMILIES = new Set(['l3_l4', 'reflection', 'amplification']);
 
 /** Vector family → category. `layer` decides which efficacy (WAF or CDN) a verdict feeds. */
 export const CHECK_CATEGORIES = Object.freeze({
@@ -43,6 +48,7 @@ export const ROW_STATUS_META = Object.freeze({
   passed: { label: plainVerdictShortLabel('protected'), tone: 'success' },
   failed: { label: plainVerdictShortLabel('gap'), tone: 'danger' },
   inconclusive: { label: 'Inconclusive', tone: 'warn' },
+  not_tested: { label: 'Not tested', tone: 'muted' },
   observed: { label: 'Observed', tone: 'muted' },
   running: { label: 'Running', tone: 'info' },
   queued: { label: 'Queued', tone: 'muted' },
@@ -52,7 +58,7 @@ export const ROW_STATUS_META = Object.freeze({
   cancelled: { label: 'Cancelled', tone: 'muted' },
   not_run: { label: 'Not run yet', tone: 'muted' },
 });
-export const ROW_STATUS_ORDER = ['failed', 'running', 'waiting', 'queued', 'inconclusive', 'blocked', 'passed', 'observed', 'skipped', 'cancelled', 'not_run'];
+export const ROW_STATUS_ORDER = ['failed', 'running', 'waiting', 'queued', 'inconclusive', 'not_tested', 'blocked', 'passed', 'observed', 'skipped', 'cancelled', 'not_run'];
 
 function text(value) {
   return String(value ?? '').trim();
@@ -104,29 +110,61 @@ function runOrder(check) {
   return tierOf(check) === 'E3' ? 2 : 3;
 }
 
+function serverRunnableAnswer(check, context) {
+  const index = context?.serverRunnableIndex;
+  if (!(index instanceof Map)) return null;
+  const value = index.get(text(check?.check_id));
+  if (typeof value === 'boolean') return value;
+  return typeof record(value)?.runnable === 'boolean' ? value.runnable : null;
+}
+
+// When the server supplies every input itself (ADR-0016 amendment), its per-target answer decides; it never guesses inputs here.
+function serverSuppliedRunnable(check, context) {
+  return context?.serverSuppliesInput === true && serverRunnableAnswer(check, context) === true;
+}
+
 // Older/full catalog projections may omit the server's input flag. Known setup-input
 // protocols still cannot enter an automatic assessment or infer authorization from metadata.
-function requiresDedicatedCheckInput(check) {
+function requiresDedicatedCheckInput(check, context = null) {
+  if (serverSuppliedRunnable(check, context)) return false;
+  if (text(check?.check_id) === ORIGIN_LOCKDOWN_CHECK_ID) return check?.requires_additional_input === true;
+  // Target-dependent requirements are answered per target by the server; without that answer the check waits.
+  if (needsTargetAnswer(check)) return check?.requires_additional_input !== false;
   return check?.requires_additional_input === true
     || ['host_sni_bypass', 'alert_webhook_ping'].includes(check?.probe_profile?.kind)
     || list(check?.required_customer_setup).some((value) => typeof value === 'string'
       && value.startsWith('declared_') && value.endsWith('_probe_path'));
 }
 
+/** Adds checks the server lists as runnable on this target only; when the server supplies inputs, every check it lists as runnable. */
+export function withTargetRunnableChecks(checks, targetCatalog, { serverSuppliesInput = false } = {}) {
+  const base = list(checks);
+  const known = new Set(base.map((check) => text(check?.check_id)));
+  const extra = list(targetCatalog).filter((check) => check?.requires_additional_input === false
+    && (needsTargetAnswer(check) || (serverSuppliesInput === true && !text(check?.additional_input_reason)))
+    && !known.has(text(check?.check_id)));
+  return extra.length ? [...base, ...extra] : base;
+}
+
 /** Customer-runnable network checks, including observations, available individually. */
-export function individualChecks(checks, target) {
+export function individualChecks(checks, target, context = null) {
   const eligible = list(checks).filter((check) => text(check?.check_id)
     && !checkExclusionReason(check)
     && checkSupportsTarget(check, target)
-    && !requiresDedicatedCheckInput(check)
+    && !requiresDedicatedCheckInput(check, context)
     && check.probe_profile?.kind !== 'ops_readiness'
     && !isDeclarationOnlyCheck(check));
   return [...new Map(eligible.map((check) => [text(check.check_id), check])).values()];
 }
 
-/** Complete bounded network assessment, including observation checks, without changing scoring. */
-export function assessmentChecks(checks, target) {
-  return individualChecks(checks, target)
+function prerequisitesMet(check, target, context) {
+  return !context || checkPrerequisite(check, { ...context, target }).state === 'ready';
+}
+
+/** Complete bounded network assessment; with a prerequisite context, checks awaiting a port or declaration are left out. */
+export function assessmentChecks(checks, target, context = null) {
+  return individualChecks(checks, target, context)
+    .filter((check) => prerequisitesMet(check, target, context))
     .map((check, index) => ({ check, index }))
     .sort((left, right) => runOrder(left.check) - runOrder(right.check) || left.index - right.index)
     .slice(0, MAX_SCAN_CHECKS)
@@ -134,20 +172,23 @@ export function assessmentChecks(checks, target) {
 }
 
 /** Explanation for catalog entries outside this target's automatic network assessment. */
-export function targetCheckRequirement(check, target) {
+export function targetCheckRequirement(check, target, context = null) {
+  const prerequisite = checkPrerequisite(check, { ...(context ?? {}), target });
+  if (prerequisite.reason || ['needs_port', 'needs_deny_or_port', 'needs_perspectives', 'checking'].includes(prerequisite.state)) return prerequisite.detail;
   const restriction = checkExclusionReason(check);
   if (restriction === 'soc_gated') return 'Requires SOC approval and a governed execution workflow.';
   if (restriction) return 'Requires a dedicated workflow; direct customer execution is unavailable.';
   if (!checkSupportsTarget(check, target)) return `Declare a compatible endpoint (${list(check.supported_targets).join(', ')}).`;
-  if (check.probe_profile?.kind === 'alert_webhook_ping') return 'Requires approved signed alert-webhook scope and its dedicated workflow; no callback is inferred from catalog metadata.';
-  if (requiresDedicatedCheckInput(check)) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
+  if (check.probe_profile?.kind === 'alert_webhook_ping' && !serverSuppliedRunnable(check, context)) return 'Requires approved signed alert-webhook scope and its dedicated workflow; no callback is inferred from catalog metadata.';
+  if (requiresDedicatedCheckInput(check, context)) return 'Declare the origin binding or application probe path before using its dedicated workflow.';
   if (isDeclarationOnlyCheck(check) || check.probe_profile?.kind === 'ops_readiness') return 'Declaration or operational evidence only; sends no external traffic.';
   return '';
 }
 
 /** Readiness checks ordered with origin exposure first, capped at the scan contract limit. */
-export function runAllChecks(checks, target) {
-  return individualChecks(checks, target)
+export function runAllChecks(checks, target, context = null) {
+  return individualChecks(checks, target, context)
+    .filter((check) => prerequisitesMet(check, target, context))
     .filter((check) => tierOf(check) !== 'E2'
       && !OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind))
     .map((check, index) => ({ check, index }))
@@ -175,9 +216,19 @@ function verdictEvidenceIds(run) {
   return [...own, ...nested].map(text).filter(Boolean);
 }
 
+/** Network-firewall and origin checks that can report a declared-rule violation but never a pass. */
+export function isViolationOnlyCheck(check) {
+  const id = text(check?.check_id);
+  const family = text(check?.vector_family);
+  return id.startsWith('nfw.') || VIOLATION_FAMILIES.has(family) || ORIGIN_LOCKDOWN_CHECK_IDS.has(id);
+}
+
 function classifyVerdict(verdict, check) {
-  // Retained legacy grades cannot turn a currently observational check into protection credit.
-  if (tierOf(check) === 'E2' || OBSERVATION_ONLY_PROBE_KINDS.includes(check?.probe_profile?.kind)) return 'observed';
+  // Retained legacy grades cannot turn a currently observational check into protection credit,
+  // but a violation-only check may still report the exposure it was built to find.
+  if (tierOf(check) === 'E2' || OBSERVATION_ONLY_PROBE_KINDS.includes(check?.probe_profile?.kind)) {
+    return isViolationOnlyCheck(check) && FAIL_VERDICTS.has(verdict.toLowerCase()) ? 'failed' : 'observed';
+  }
   if (isDeclarationOnlyCheck(check)) return 'inconclusive';
   const key = verdict.toLowerCase();
   if (PASS_VERDICTS.has(key)) return 'passed';
@@ -205,12 +256,14 @@ function rowFromStep(step, check) {
   const status = text(step.status);
   const verdict = record(step.verdict);
   const verdictText = verdictValue(verdict);
+  const missingInput = status === 'verdicted' ? requiredInputMissing(step) : null;
   let rowStatus = STEP_STATUS[status] ?? 'queued';
-  if (status === 'verdicted') rowStatus = verdictText ? classifyVerdict(verdictText, check) : 'inconclusive';
+  if (status === 'verdicted') rowStatus = missingInput ? 'not_tested' : verdictText ? classifyVerdict(verdictText, check) : 'inconclusive';
   return {
     status: rowStatus,
     verdict: verdictText,
-    explanation: text(verdict?.explanation),
+    explanation: missingInput ? missingInput.message : text(verdict?.explanation),
+    missingInput,
     expectedBehavior: text(step.expected_behavior ?? check.default_expected_behavior),
     reason: text(step.error_code) || text(step.skip_reason),
     eligibleAt: text(step.eligible_at),
@@ -229,16 +282,19 @@ function rowFromRun(run, check) {
   const runStatus = text(run.status).toLowerCase();
   const verdictText = verdictValue(run.verdict);
   const published = verdictText && !['unknown', 'pending', 'none'].includes(verdictText.toLowerCase());
+  const missingInput = ACTIVE_RUN_STATUSES.has(runStatus) || runStatus === 'cancelled' ? null : requiredInputMissing(run);
   let rowStatus;
   if (ACTIVE_RUN_STATUSES.has(runStatus)) rowStatus = 'running';
   else if (runStatus === 'cancelled') rowStatus = 'cancelled';
+  else if (missingInput) rowStatus = 'not_tested';
   // A verdict without cited evidence is not a result (same rule as the run tables).
   else if (published && verdictEvidenceIds(run).length > 0) rowStatus = classifyVerdict(verdictText, check);
   else rowStatus = tierOf(check) === 'E2' ? 'observed' : 'inconclusive';
   return {
     status: rowStatus,
     verdict: published ? verdictText : '',
-    explanation: text(record(run.verdict)?.explanation),
+    explanation: missingInput ? missingInput.message : text(record(run.verdict)?.explanation),
+    missingInput,
     expectedBehavior: text(run.expected_behavior ?? check.default_expected_behavior),
     reason: '',
     eligibleAt: '',
@@ -255,7 +311,7 @@ function rowFromRun(run, check) {
 
 function emptyRow() {
   return {
-    status: 'not_run', verdict: '', explanation: '', expectedBehavior: '', reason: '', eligibleAt: '', runId: '', startedAt: '', finishedAt: '',
+    status: 'not_run', verdict: '', explanation: '', missingInput: null, expectedBehavior: '', reason: '', eligibleAt: '', runId: '', startedAt: '', finishedAt: '',
     request: null, response: null, requestsSent: null, requestsSimulated: false, source: 'none',
   };
 }
@@ -285,6 +341,8 @@ export function buildCheckRows({ checks, scan = null, runs = [] }) {
       tier: tierOf(check),
       readinessCapable: isReadinessCapable(check),
       probeKind: text(check.probe_profile?.kind),
+      markerClass: text(check.probe_profile?.marker_class),
+      assuranceScope: text(check.probe_profile?.assurance_scope),
       maxRequests: Number.isFinite(Number(check.probe_profile?.max_requests)) ? Number(check.probe_profile.max_requests) : null,
       timeoutMs: Number.isFinite(Number(check.probe_profile?.timeout_ms)) ? Number(check.probe_profile.timeout_ms) : null,
       category: categoryForCheck(check),
@@ -298,8 +356,8 @@ const RECORDED_RESULT_STATUSES = new Set(['passed', 'failed', 'inconclusive']);
 const STARTER_PROBE_KIND = 'waf_class_marker_probe';
 
 /**
- * First verdict-capable check to suggest before anything has a recorded result. Rate-limit and
- * observation checks are never suggested because they cannot produce a readiness verdict.
+ * First verdict-capable check to suggest before anything has a recorded result. Rate-limit
+ * canaries and observation checks are never suggested as the starter.
  */
 export function recommendedStarterRow(rows) {
   const all = list(rows);
@@ -308,38 +366,6 @@ export function recommendedStarterRow(rows) {
     && row.status === 'not_run'
     && !/rate_limit/.test(text(row.probeKind)));
   return candidates.find((row) => row.probeKind === STARTER_PROBE_KIND) ?? candidates[0] ?? null;
-}
-
-const WAF_MARKER_CHECK = /^waf\.(.+_marker|evasion_.+)\.safe$/;
-const WAF_MARKER_EXCLUDED = new Set([EDGE_DETECTION_CHECK_ID, 'waf.low_rate_limit.safe', 'waf.enforcement.safe']);
-
-/**
- * Recorded outcomes of the benign WAF marker checks on this target, counted only from graded rows.
- * Returns null when none has a recorded result, so nothing is claimed from detection alone.
- */
-export function wafCheckBlocking(rows) {
-  const markers = list(rows).filter((row) => row?.readinessCapable === true
-    && row.category?.id === 'waf'
-    && WAF_MARKER_CHECK.test(text(row.checkId))
-    && !WAF_MARKER_EXCLUDED.has(text(row.checkId)));
-  const stopped = markers.filter((row) => row.status === 'passed').length;
-  const allowed = markers.filter((row) => row.status === 'failed').length;
-  const inconclusive = markers.filter((row) => row.status === 'inconclusive').length;
-  if (stopped + allowed + inconclusive === 0) return null;
-  const lastAt = markers
-    .filter((row) => RECORDED_RESULT_STATUSES.has(row.status))
-    .map((row) => text(row.finishedAt || row.startedAt))
-    .filter(Boolean)
-    .sort()
-    .at(-1) ?? '';
-  return {
-    stopped,
-    allowed,
-    inconclusive,
-    notRun: markers.length - stopped - allowed - inconclusive,
-    applicable: markers.length,
-    lastAt,
-  };
 }
 
 export function countRowStatuses(rows) {
@@ -377,45 +403,241 @@ export function rowProgress(rows) {
   return { total, done, percent: Math.round((done / total) * 100) };
 }
 
+const DEFAULT_FRESHNESS_MS = 7 * 24 * 60 * 60 * 1000;
+/** A layer is "Protecting" only with at least this much fresh, concluded evidence. */
+export const EFFICACY_MINIMUM = Object.freeze({ concluded: 3, ruleCategories: 2 });
+const CDN_EFFICACY_CATEGORIES = new Set(['l7', 'protocol', 'tls', 'path']);
+const MANAGED_SCOPE = 'managed_rule_marker';
+
+function freshnessWindowMs(coverage) {
+  const value = Number(record(record(coverage)?.freshness_policy)?.max_age_ms);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_FRESHNESS_MS;
+}
+
+const PAIR_INDEX_CACHE = new WeakMap();
+
+function pairIndex(coverage) {
+  const source = record(coverage);
+  if (source && PAIR_INDEX_CACHE.has(source)) return PAIR_INDEX_CACHE.get(source);
+  const direct = new Map();
+  const members = new Map();
+  for (const pair of list(record(coverage)?.pairs)) {
+    if (record(pair) && pair.custom_canary_rollup !== true) direct.set(text(pair.check_id), pair);
+  }
+  // A custom-canary rollup row keeps the worst member's state; its members carry the server's own freshness answer.
+  const rollups = [...list(record(coverage)?.custom_canary_rollups), ...list(record(coverage)?.pairs).filter((pair) => record(pair)?.custom_canary_rollup === true)];
+  for (const rollup of rollups) {
+    for (const member of list(record(rollup)?.rolled_up_pairs)) {
+      const id = text(record(member)?.check_id);
+      if (!id) continue;
+      const known = members.get(id) ?? [];
+      if (!known.some((entry) => text(entry.last_run_id) === text(member.last_run_id))) known.push(member);
+      members.set(id, known);
+    }
+  }
+  const index = { direct, members };
+  if (source) PAIR_INDEX_CACHE.set(source, index);
+  return index;
+}
+
+/** Whether a recorded pass/fail still counts: server pair or rolled-up member state, else the row's age. */
+export function rowEvidenceState(row, { coverage = null, nowMs = Date.now() } = {}) {
+  if (!['passed', 'failed'].includes(row?.status)) return 'none';
+  const index = pairIndex(coverage);
+  const pair = index.direct.get(text(row.checkId));
+  if (pair && (!text(pair.last_run_id) || text(pair.last_run_id) === text(row.runId))) {
+    const state = text(pair.state);
+    if (state === 'conclusive') return 'fresh';
+    if (state === 'stale') return 'stale';
+    if (state === 'partial' || state === 'unknown') return 'version_gap';
+  }
+  // A member speaks for the run the server graded; another run of the same check falls back to its own age.
+  const candidates = index.members.get(text(row.checkId)) ?? [];
+  const member = candidates.find((entry) => text(entry.last_run_id) && text(entry.last_run_id) === text(row.runId))
+    ?? candidates.find((entry) => !text(entry.last_run_id));
+  if (member) {
+    const state = text(member.state);
+    if (text(member.version_gap) || state === 'partial' || state === 'unknown') return 'version_gap';
+    if (member.fresh !== true || state === 'stale') return 'stale';
+    return 'fresh';
+  }
+  const finished = Date.parse(text(row.finishedAt) || text(row.startedAt));
+  if (!Number.isFinite(finished)) return 'version_gap';
+  return nowMs - finished > freshnessWindowMs(coverage) ? 'stale' : 'fresh';
+}
+
+const MEMBER_STATE_COPY = Object.freeze({
+  fresh: Object.freeze({ label: 'Current, counted' }),
+  stale: Object.freeze({ label: 'Stale, not counted' }),
+  version_gap: Object.freeze({ label: 'Older check version, not counted' }),
+});
+
+/** Managed-rule markers that older coverage data may still roll into a custom-canary rollup. */
+const MANAGED_MARKER_CHECK_IDS = Object.freeze(['waf.scanner_signature_marker.safe']);
+
+function isManagedMarker(entry) {
+  const item = record(entry);
+  if (!item) return false;
+  const scope = text(item.assuranceScope ?? item.assurance_scope ?? record(item.probe_profile)?.assurance_scope);
+  return scope === MANAGED_SCOPE || text(item.rule_family ?? item.ruleFamily) === 'managed';
+}
+
+/** Custom canary rule members the server rolled up, each with its own freshness answer and the run it graded; managed markers are never members. */
+export function customCanaryMembers(coverage, { checks = [] } = {}) {
+  const managed = new Set(MANAGED_MARKER_CHECK_IDS);
+  for (const check of list(checks)) {
+    if (isManagedMarker(check)) managed.add(text(record(check)?.checkId ?? record(check)?.check_id));
+  }
+  const out = [];
+  const seen = new Set();
+  const rollups = [...list(record(coverage)?.custom_canary_rollups), ...list(record(coverage)?.pairs).filter((pair) => record(pair)?.custom_canary_rollup === true)];
+  for (const rollup of rollups) {
+    for (const raw of list(record(rollup)?.rolled_up_pairs)) {
+      const member = record(raw);
+      const checkId = text(member?.check_id);
+      const runId = text(member?.last_run_id);
+      const key = `${checkId}|${runId}`;
+      if (!checkId || seen.has(key) || managed.has(checkId) || isManagedMarker(member)) continue;
+      seen.add(key);
+      const state = text(member.state);
+      const evidence = text(member.version_gap) || state === 'partial' || state === 'unknown' ? 'version_gap' : member.fresh !== true || state === 'stale' ? 'stale' : 'fresh';
+      out.push({ checkId, runId, verdict: text(member.verdict), observedAt: text(member.observed_at), evidence, ...MEMBER_STATE_COPY[evidence] });
+    }
+  }
+  return out.sort((left, right) => left.checkId.localeCompare(right.checkId));
+}
+
+function ruleCategoryOf(row) {
+  if (row.probeKind === 'waf_class_marker_probe') return row.assuranceScope === MANAGED_SCOPE ? `managed:${row.markerClass || row.checkId}` : 'custom_canary';
+  if (row.probeKind === 'waf_evasion_marker_probe') return 'encoding_evasion';
+  if (/rate_limit/.test(row.probeKind)) return 'rate_limiting';
+  if (/method_policy/.test(row.probeKind)) return 'http_method_policy';
+  return `${row.category?.id ?? 'other'}:${row.probeKind || row.checkId}`;
+}
+
+function emptyTally() {
+  return { enforced: 0, notEnforced: 0, inconclusive: 0, ignored: 0, notRun: 0, total: 0 };
+}
+
+/** Roll marker rows up by distinct rule (marker class), so one rule never counts twice. */
+function tallyRules(rows, keyOf, options) {
+  const rules = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!rules.has(key)) rules.set(key, []);
+    rules.get(key).push(row);
+  }
+  const tally = emptyTally();
+  for (const members of rules.values()) {
+    tally.total += 1;
+    const states = members.map((row) => ({ row, evidence: rowEvidenceState(row, options) }));
+    const fresh = states.filter((entry) => entry.evidence === 'fresh');
+    if (fresh.some((entry) => entry.row.status === 'failed')) tally.notEnforced += 1;
+    else if (fresh.some((entry) => entry.row.status === 'passed')) tally.enforced += 1;
+    else if (states.some((entry) => ['stale', 'version_gap'].includes(entry.evidence))) tally.ignored += 1;
+    else if (members.some((row) => row.status === 'inconclusive')) tally.inconclusive += 1;
+    else tally.notRun += 1;
+  }
+  return { ...tally, tested: tally.enforced + tally.notEnforced };
+}
+
+/** WAF marker results split into managed rule markers, custom canary rules and evasion; null when nothing is recorded. */
+export function wafRuleEnforcement(rows, options = {}) {
+  const markers = list(rows).filter((row) => row?.readinessCapable === true && row.category?.id === 'waf');
+  const managed = markers.filter((row) => row.probeKind === 'waf_class_marker_probe' && row.assuranceScope === MANAGED_SCOPE);
+  const custom = markers.filter((row) => row.probeKind === 'waf_class_marker_probe' && row.assuranceScope !== MANAGED_SCOPE);
+  const evasion = markers.filter((row) => row.probeKind === 'waf_evasion_marker_probe');
+  const recorded = [...managed, ...custom, ...evasion].some((row) => RECORDED_RESULT_STATUSES.has(row.status));
+  if (!recorded) return null;
+  const lastAt = [...managed, ...custom, ...evasion]
+    .filter((row) => RECORDED_RESULT_STATUSES.has(row.status))
+    .map((row) => text(row.finishedAt || row.startedAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? '';
+  return {
+    managed: tallyRules(managed, (row) => row.markerClass || row.checkId, options),
+    custom: tallyRules(custom, (row) => row.markerClass || row.checkId, options),
+    evasion: tallyRules(evasion, (row) => row.checkId, options),
+    lastAt,
+  };
+}
+
+function shareSuffix(tally) {
+  const parts = [];
+  parts.push(`${tally.inconclusive} inconclusive`);
+  if (tally.ignored) parts.push(`${tally.ignored} not counted (stale or older check version)`);
+  if (tally.notRun) parts.push(`${tally.notRun} not run`);
+  return parts.join(' · ');
+}
+
+/** "Managed rules enforced: 3 of 4 markers · 1 inconclusive" and the custom canary equivalent. */
+export function wafRuleSentences(enforcement) {
+  if (!enforcement) return [];
+  const lines = [];
+  const { managed, custom, evasion } = enforcement;
+  if (managed.total) lines.push({ id: 'managed', label: 'Managed rules enforced', ratio: `${managed.enforced} of ${managed.tested} ${managed.tested === 1 ? 'marker' : 'markers'}`, detail: shareSuffix(managed), tally: managed });
+  if (custom.total) lines.push({ id: 'custom', label: 'Custom canary rules enforced', ratio: `${custom.enforced} of ${custom.tested}`, detail: shareSuffix(custom), tally: custom });
+  if (evasion.total && evasion.total - evasion.notRun > 0) lines.push({ id: 'evasion', label: 'Encoding tricks blocked', ratio: `${evasion.enforced} of ${evasion.tested}`, detail: shareSuffix(evasion), tally: evasion });
+  return lines;
+}
+
 const EFFICACY_META = Object.freeze({
   protecting: { label: 'Protecting', tone: 'success' },
   partial: { label: 'Partially protecting', tone: 'warn' },
   mostly_exposed: { label: 'Mostly not protecting', tone: 'danger' },
   not_protecting: { label: 'Not protecting', tone: 'danger' },
   bypassable: { label: 'Bypassable via origin', tone: 'danger' },
+  insufficient: { label: 'Not enough evidence', tone: 'muted' },
   present_unmeasured: { label: 'Detected · not measured yet', tone: 'info' },
   absent: { label: 'Not detected', tone: 'warn' },
   unknown: { label: 'Not evaluated yet', tone: 'muted' },
 });
 
-function originExposed(rows, edge) {
-  if (list(rows).some((row) => row.category?.layer === 'origin' && row.status === 'failed')) return true;
-  return text(record(record(edge?.network_firewall)?.direct_origin_reachability)?.status) === 'exposed';
+/** Only a fresh `exposed` verdict from an origin-lockdown check proves traffic can skip the edge. */
+function originExposed(rows, options) {
+  return list(rows).some((row) => ORIGIN_LOCKDOWN_CHECK_IDS.has(text(row?.checkId))
+    && text(row.verdict).toLowerCase() === 'exposed'
+    && rowEvidenceState(row, options) === 'fresh');
 }
 
-function layerEfficacy(layer, rows, edge, exposed) {
+function inLayer(row, layer) {
+  if (row?.readinessCapable !== true) return false;
+  if (layer === 'waf') return row.category?.layer === 'waf';
+  return row.category?.layer === 'cdn' && CDN_EFFICACY_CATEGORIES.has(row.category?.id);
+}
+
+function layerEfficacy(layer, rows, edge, exposed, options) {
   const family = record(edge?.[layer]);
   const familyStatus = text(family?.status);
-  const scored = list(rows).filter((row) => row.category?.layer === layer && ['passed', 'failed'].includes(row.status));
-  let passed = scored.filter((row) => row.status === 'passed').length;
-  let failed = scored.length - passed;
+  const layerRows = list(rows).filter((row) => inLayer(row, layer));
+  const graded = layerRows.map((row) => ({ row, evidence: rowEvidenceState(row, options) }));
+  const fresh = graded.filter((entry) => entry.evidence === 'fresh').map((entry) => entry.row);
+  const ignored = graded.filter((entry) => ['stale', 'version_gap'].includes(entry.evidence)).length;
+  const inconclusive = layerRows.filter((row) => row.status === 'inconclusive').length;
+  let passed = fresh.filter((row) => row.status === 'passed').length;
+  let failed = fresh.length - passed;
   let basis = 'checks';
+  const ruleCategories = new Set(fresh.map(ruleCategoryOf)).size;
   const effectiveness = record(edge?.effectiveness);
-  if (layer === 'waf' && scored.length === 0 && Number(effectiveness?.tested_count) > 0) {
-    // Before a full run, the fingerprint scan's own benign marker probes are the only evidence.
+  if (layer === 'waf' && fresh.length === 0 && Number(effectiveness?.tested_count) > 0) {
+    // The fingerprint scan's own markers are context only; they can never make a layer "Protecting".
     passed = Number(effectiveness.blocked_count) || 0;
     failed = Number(effectiveness.passed_count) || 0;
     basis = 'fingerprint_markers';
   }
   const tested = passed + failed;
   let status;
-  if (tested === 0) status = familyStatus === 'detected' ? 'present_unmeasured' : familyStatus === 'not_detected' ? 'absent' : 'unknown';
-  else if (failed === 0) status = exposed ? 'bypassable' : 'protecting';
-  else if (passed === 0) status = 'not_protecting';
-  else if (exposed) status = 'bypassable';
+  if (basis === 'fingerprint_markers') status = 'insufficient';
+  else if (tested === 0) {
+    if (inconclusive || ignored) status = 'insufficient';
+    else status = familyStatus === 'detected' ? 'present_unmeasured' : familyStatus === 'not_detected' ? 'absent' : 'unknown';
+  } else if (exposed) status = 'bypassable';
+  else if (failed > 0 && passed === 0) status = 'not_protecting';
   // Blocking a minority of what was tested is not "partial" protection in any useful sense.
-  else status = passed / tested < 0.5 ? 'mostly_exposed' : 'partial';
-  const inconclusive = list(rows).filter((row) => row.category?.layer === layer && row.status === 'inconclusive').length;
+  else if (failed > 0) status = passed / tested < 0.5 ? 'mostly_exposed' : 'partial';
+  else if (tested < EFFICACY_MINIMUM.concluded || ruleCategories < EFFICACY_MINIMUM.ruleCategories) status = 'insufficient';
+  else status = 'protecting';
   return {
     layer,
     status,
@@ -426,29 +648,42 @@ function layerEfficacy(layer, rows, edge, exposed) {
     failed,
     tested,
     inconclusive,
-    score: tested ? Math.round((passed / tested) * 100) : null,
+    ignored,
+    ruleCategories: basis === 'checks' ? ruleCategories : 0,
+    score: tested && basis === 'checks' ? Math.round((passed / tested) * 100) : null,
     basis,
     originExposed: exposed,
-    exposedChecks: scored.filter((row) => row.status === 'failed').map((row) => row.name),
+    exposedChecks: fresh.filter((row) => row.status === 'failed').map((row) => row.name),
   };
 }
 
-/** WAF and CDN efficacy: does the observed evidence show each layer actually protecting? */
-export function assessEdgeEfficacy({ rows = [], edge = null } = {}) {
-  const exposed = originExposed(rows, edge);
-  return { waf: layerEfficacy('waf', rows, edge, exposed), cdn: layerEfficacy('cdn', rows, edge, exposed), originExposed: exposed };
+/** WAF and CDN efficacy from fresh, current-version verdicts only; DNS and network results never count toward the CDN. */
+export function assessEdgeEfficacy({ rows = [], edge = null, coverage = null, nowMs = Date.now() } = {}) {
+  const options = { coverage, nowMs };
+  const exposed = originExposed(rows, options);
+  return { waf: layerEfficacy('waf', rows, edge, exposed, options), cdn: layerEfficacy('cdn', rows, edge, exposed, options), originExposed: exposed };
+}
+
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 export function efficacySentence(efficacy) {
-  const thing = efficacy.layer === 'waf' ? 'attack classes' : 'edge checks';
-  const basis = efficacy.basis === 'fingerprint_markers' ? 'fingerprint scan markers' : thing;
-  if (efficacy.status === 'unknown') return 'No evidence yet. Run all checks to measure it.';
+  const thing = efficacy.layer === 'waf' ? 'WAF checks' : 'edge checks';
+  const share = [`${efficacy.inconclusive} inconclusive`, efficacy.ignored ? `${efficacy.ignored} not counted (stale or older check version)` : ''].filter(Boolean).join(' · ');
+  if (efficacy.status === 'unknown') return 'No evidence yet. Run the checks to measure it.';
   if (efficacy.status === 'absent') return `No ${efficacy.layer === 'waf' ? 'WAF' : 'CDN'} was detected in front of this domain, and no check has measured blocking yet.`;
-  if (efficacy.status === 'present_unmeasured') return 'Detected in front of this domain, but no check has tested whether it blocks anything. Run all checks to measure it.';
-  const ratio = `Blocked ${efficacy.passed} of ${efficacy.tested} tested ${basis}`;
-  if (efficacy.status === 'bypassable') return `${ratio}, but your origin is reachable directly, so traffic can go around the edge.`;
+  if (efficacy.status === 'present_unmeasured') return 'Detected in front of this domain, but no check has tested whether it blocks anything. Run the checks to measure it.';
+  if (efficacy.basis === 'fingerprint_markers') {
+    return `Only the fingerprint scan has run: ${efficacy.passed} of ${efficacy.tested} of its markers were blocked. That is context, not proof. Run the WAF checks to measure enforcement.`;
+  }
+  if (efficacy.status === 'insufficient') {
+    return `Not enough evidence: ${plural(efficacy.tested, 'fresh concluded check', 'fresh concluded checks')} across ${plural(efficacy.ruleCategories, 'rule category', 'rule categories')}; at least ${EFFICACY_MINIMUM.concluded} across ${EFFICACY_MINIMUM.ruleCategories} are needed. ${share}.`;
+  }
+  const ratio = `Held on ${efficacy.passed} of ${efficacy.tested} fresh concluded ${thing} · ${share}`;
+  if (efficacy.status === 'bypassable') return `${ratio}. A fresh origin-lockdown check found your origin answering directly, so traffic can go around the edge.`;
   if (efficacy.status === 'protecting') return `${ratio}.`;
-  return `${ratio}. ${efficacy.failed} reached your application.`;
+  return `${ratio}. ${plural(efficacy.failed, 'check', 'checks')} reached your application.`;
 }
 
 const SOURCE_COPY = Object.freeze({
@@ -747,6 +982,10 @@ const TAB_ALIASES = Object.freeze({
   history: 'history',
   changes: 'history',
   runs: 'history',
+  controls: 'controls',
+  declarations: 'controls',
+  coverage: 'coverage',
+  'rule-coverage': 'coverage',
 });
 
 /** Unified target tabs; legacy names (protection, edge, runs, checks) keep resolving. */

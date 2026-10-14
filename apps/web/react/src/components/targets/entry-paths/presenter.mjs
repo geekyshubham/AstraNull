@@ -191,6 +191,25 @@ export const COMPATIBILITY_REASON_LABELS = Object.freeze({
   candidate_stale: 'Post-change evidence outside the freshness window',
 });
 
+const FIREWALL_ITEM_REASON_LABELS = Object.freeze({
+  closed_port_not_control_specific: 'A closed port does not show which control closed it, so it stays inconclusive',
+  local_error: 'The probe hit a local error before getting an answer, so it stays inconclusive',
+});
+
+/** Item reasons that keep a firewall-change result inconclusive whatever status was recorded. */
+export const FIREWALL_INCONCLUSIVE_REASONS = Object.freeze(['closed_port_not_control_specific', 'local_error']);
+
+export function firewallItemStatus(item) {
+  const reasons = list(item?.reasons).map(text);
+  if (reasons.some((reason) => FIREWALL_INCONCLUSIVE_REASONS.includes(reason)) || item?.local_error === true) return 'inconclusive';
+  return text(item?.status);
+}
+
+export function firewallReasonLabel(reason) {
+  const key = text(reason);
+  return FIREWALL_ITEM_REASON_LABELS[key] ?? COMPATIBILITY_REASON_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
 export const FINALIZED_RUN_STATUSES = Object.freeze(['verdicted', 'completed']);
 export const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'queued', 'running', 'collecting']);
 

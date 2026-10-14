@@ -1,4 +1,5 @@
 import { loadRuntimeConfig } from '../../config.mjs';
+import { wafPostureEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { buildCoverageRollupRecord } from '../../services/wafCoverageRollupWorker.mjs';
 import { validCoverageRollupDate } from '../../services/wafCoverageService.mjs';
@@ -29,8 +30,8 @@ function assertWafCoverageRollupRepositories(repositories) {
   }
 }
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(ctx) {
+  const enabled = wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
   if (!enabled) return { skipped: true, reason: 'waf_feature_disabled' };
   return null;
 }
@@ -53,7 +54,7 @@ export function createPostgresWafCoverageRollupServices(repositories) {
 
   return {
     async runCoverageRollup(ctx) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
 
       const tenantId = ctx.tenantId;
@@ -119,7 +120,7 @@ export function createPostgresWafCoverageRollupServices(repositories) {
     },
 
     async runScheduledCoverageRollups(ctx = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
 
       const scope = resolveScheduledTenantIds(ctx, { label: 'WAF coverage rollup runner' });

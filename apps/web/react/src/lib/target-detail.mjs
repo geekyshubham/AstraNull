@@ -156,6 +156,11 @@ export function uniqueVerificationHistory(items) {
   })));
 }
 
+/** Demo tenant (ADR-0016) only on an explicit server flag: a `demo_tenant` deployment feature or the demo auto-verify ownership record. */
+export function demoTenantSignal({ verification = null, deploymentFeatures = null } = {}) {
+  return asRecord(deploymentFeatures)?.demo_tenant === true || asRecord(asRecord(verification)?.source_ref)?.demo === true;
+}
+
 export function ownershipMethodLabel(verification) {
   const record = asRecord(verification) ?? {};
   const sourceKind = normalize(record.source_kind ?? record.method ?? record.ownership_method);

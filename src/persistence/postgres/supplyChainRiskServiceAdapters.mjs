@@ -1,4 +1,5 @@
 import { loadRuntimeConfig } from '../../config.mjs';
+import { wafPostureEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import {
   createSupplyChainRisk as buildSupplyChainRisk,
   validateRiskItem,
@@ -42,8 +43,8 @@ function contractError(err, fallbackStatus = 400) {
   };
 }
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(ctx) {
+  const enabled = wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
   if (!enabled) return { error: 'waf_feature_disabled' };
   return null;
 }
@@ -125,14 +126,14 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
 
   return {
     async listSupplyChainRisks(ctx) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       const items = await riskRepo.listRisks(ctx);
       return items.map((entry) => formatRisk(entry));
     },
 
     async getSupplyChainRisk(ctx, id) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
 
       const record = await riskRepo.getRisk(ctx, id);
@@ -143,7 +144,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async createSupplyChainRisk(ctx, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -200,7 +201,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async patchRiskState(ctx, id, state, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -255,7 +256,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async createRemediationTicket(ctx, riskId, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -310,7 +311,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async assessDanglingCname(ctx, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -388,7 +389,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async assessVendorDependency(ctx, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -474,7 +475,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async assessDanglingDependency(ctx, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -557,7 +558,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async getPhaseAuthorizations(ctx, riskId) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
 
       const record = await riskRepo.getRisk(ctx, riskId);
@@ -573,7 +574,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async submitPhaseAuthorization(ctx, riskId, body = {}) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         rejectProhibitedAcquisition(body);
@@ -644,7 +645,7 @@ export function createPostgresSupplyChainRiskServices(pool, options = {}) {
     },
 
     async ingestSupplyChainSignals(ctx, source, records) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(ctx);
       if (gate) return gate;
       try {
         const parsedRecords = parseSupplyChainSourceRecords(source, records);

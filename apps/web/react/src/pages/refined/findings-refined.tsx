@@ -38,7 +38,7 @@ import {
   type FindingStatus
 } from '../../lib/findings-query.mjs';
 import { useFindingStatusTotals, useFindingsPage, useProgressiveFindings, type StatusTotals } from '../../components/findings/use-server-findings';
-import { findingStatus } from '../../lib/finding-lifecycle.mjs';
+import { findingStatus, fixVerifiedBasisHint } from '../../lib/finding-lifecycle.mjs';
 import { computeFindingKpis, findingAssetLabel, summarizeFindingStatuses } from '../../lib/findings-helpers';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate, formatNumber, formatSeverityLabel, pluralize } from '../../lib/utils';
@@ -472,12 +472,15 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     {
       key: 'status',
       label: 'Status',
-      render: (group) => (
-        <span className="rf-cell-stack">
-          <FindingStatusBadge status={findingStatus(group.findings[0] ?? {})} />
-          {group.findings.length > 1 ? <small>{summarizeFindingStatuses(group.statusBreakdown)}</small> : null}
-        </span>
-      )
+      render: (group) => {
+        const note = group.findings.length > 1 ? summarizeFindingStatuses(group.statusBreakdown) : fixVerifiedBasisHint(group.findings[0]);
+        return (
+          <span className="rf-cell-stack">
+            <FindingStatusBadge status={findingStatus(group.findings[0] ?? {})} />
+            {note ? <small>{note}</small> : null}
+          </span>
+        );
+      }
     },
     {
       key: 'sla',
@@ -524,7 +527,12 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     {
       key: 'status',
       label: 'Status',
-      render: (finding) => <FindingStatusBadge status={findingStatus(finding)} />
+      render: (finding) => {
+        const basis = fixVerifiedBasisHint(finding);
+        return basis
+          ? <span className="rf-cell-stack"><FindingStatusBadge status={findingStatus(finding)} /><small>{basis}</small></span>
+          : <FindingStatusBadge status={findingStatus(finding)} />;
+      }
     },
     {
       key: 'sla',
@@ -598,7 +606,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
     const value = estateTotals.totals[status];
     return typeof value === 'number' ? value : null;
   };
-  const closedTotal = ['resolved', 'closed', 'false_positive'].reduce<number | null>((sum, status) => (sum === null || total(status) === null ? null : sum + (total(status) as number)), 0);
+  const closedTotal = ['fix_verified', 'resolved', 'closed', 'false_positive'].reduce<number | null>((sum, status) => (sum === null || total(status) === null ? null : sum + (total(status) as number)), 0);
   const statValue = (value: number | null) => (estateTotals.state === 'error' ? 'Unavailable' : value === null ? (estateTotals.state === 'loading' ? '...' : 'Not reported') : formatNumber(value));
   const sampleNote = openComplete ? '' : openEnvelope?.total ? ` Based on the newest ${formatNumber(openRows.length)} of ${formatNumber(openEnvelope.total)} open findings.` : '';
   const slaSampleNote = slaComplete
@@ -642,12 +650,12 @@ export function FindingsRefined(props: FindingsRefinedProps) {
         <div className="rf-stat rf-stat--wide-only">
           <span className="rf-stat-label">Accepted risk</span>
           <span className="rf-stat-value">{statValue(total('accepted_risk'))}</span>
-          <span className="rf-stat-hint">{legacyAccepted ? `Plus ${formatNumber(legacyAccepted)} with the older Accepted status` : 'Risk acceptance on record'}</span>
+          <span className="rf-stat-hint">{legacyAccepted ? `Plus ${formatNumber(legacyAccepted)} with the older Accepted status` : 'Not counted as open risk'}</span>
         </div>
         <div className="rf-stat rf-stat--wide-only">
           <span className="rf-stat-label">Closed</span>
           <span className="rf-stat-value">{statValue(closedTotal)}</span>
-          <span className="rf-stat-hint">Resolved, closed and false positive</span>
+          <span className="rf-stat-hint">{total('fix_verified') ? `${formatNumber(total('fix_verified') as number)} fix verified by a passing re-check` : 'Fix verified, resolved, closed and false positive'}</span>
         </div>
         <div className="rf-stat rf-stat--sla" data-tone={slaSamplesState === 'ready' && slaBreachCount > 0 ? 'danger' : undefined}>
           <span className="rf-stat-label">SLA breached</span>

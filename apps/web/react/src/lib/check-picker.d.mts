@@ -17,7 +17,9 @@ export type SelectionSummary = {
   targetCount: number;
 };
 
+export function awaitsTargetPort(check: DataItem | null | undefined): boolean;
 export function checkExclusionReason(check: DataItem | null | undefined): CheckExclusionReason | null;
+export function withTargetDependentChecks(checks: DataItem[], catalogs: Array<DataItem[] | null | undefined>): DataItem[];
 export function selectableChecks(checks: DataItem[]): {
   checks: DataItem[];
   excluded: { soc_gated: number; monitor_only: number; not_customer_runnable: number; unsupported_delivery: number; total: number };

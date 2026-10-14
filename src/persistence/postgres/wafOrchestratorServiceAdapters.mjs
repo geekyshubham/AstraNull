@@ -1,9 +1,10 @@
-import { getCheckById, WAF_SAFE_CHECK_IDS } from '../../contracts/checks.mjs';
+import { getCheckById, isCustomerRunnable, WAF_SAFE_CHECK_IDS } from '../../contracts/checks.mjs';
 import {
   computeRetestVerdict,
   createBaselineApproval,
   createRetestRequest,
   createValidationPlan as normalizeValidationPlan,
+  SCENARIO_TO_CHECK,
   validateOrchestratorPlan,
 } from '../../contracts/wafOrchestrator.mjs';
 import { newId } from '../../lib/ids.mjs';
@@ -58,17 +59,7 @@ export const POSTGRES_WAF_ORCHESTRATOR_SERVICE_METHODS = Object.freeze([
 const CANCELLABLE_STATES = new Set(['draft', 'scheduled', 'running']);
 const BASELINE_APPROVABLE_STATES = new Set(['proposed', 'draft']);
 
-const SCENARIO_TO_CHECK = Object.freeze({
-  marker: 'waf.marker_rule.safe',
-  fingerprint: 'waf.fingerprint.safe',
-  sqli_marker: 'waf.marker_rule.safe',
-  xss_marker: 'waf.marker_rule.safe',
-  rce_marker: 'waf.marker_rule.safe',
-  path_traversal_marker: 'waf.marker_rule.safe',
-  rate_limit_marker: 'waf.low_rate_limit.safe',
-  origin_bypass: 'waf.origin_bypass.safe',
-});
-
+const SOC_ORCHESTRATOR_CHECK_IDS = new Set(['waf.offensive_rce.soc']);
 const WAF_SAFE_CHECK_ID_SET = new Set(WAF_SAFE_CHECK_IDS);
 
 const EXECUTION_LEASE_SAFETY_BUFFER_MS = 30_000;
@@ -114,14 +105,23 @@ function workItemKey(assetId, scenario) {
   return `${assetId}::${scenario}`;
 }
 
-function validateWorkItemPreflight({ asset, scenario }, targets) {
+function validateWorkItemPreflight({ asset, scenario }, targets, ctx = null) {
   const checkId = scenarioCheckId(scenario);
   const check = checkId ? getCheckById(checkId) : null;
-  if (!check || !WAF_SAFE_CHECK_ID_SET.has(check.check_id)) {
+  if (!check || !(WAF_SAFE_CHECK_ID_SET.has(check.check_id) || SOC_ORCHESTRATOR_CHECK_IDS.has(check.check_id))) {
     return {
       error: 'validation_plan_execution_failed',
       status: 422,
       message: 'Scenario does not map to an allowed safe WAF check.',
+    };
+  }
+  if (!isCustomerRunnable(check, ctx)) {
+    return {
+      error: 'soc_gated_check',
+      status: 403,
+      check_id: check.check_id,
+      scenario,
+      message: `Scenario '${scenario}' maps to SOC-only check ${check.check_id}; request it through the SOC offensive validation workflow instead of a self-serve plan.`,
     };
   }
 
@@ -138,9 +138,9 @@ function validateWorkItemPreflight({ asset, scenario }, targets) {
   return { check };
 }
 
-function preflightWorkItems(pendingItems, targets) {
+function preflightWorkItems(pendingItems, targets, ctx = null) {
   for (const item of pendingItems) {
-    const preflight = validateWorkItemPreflight(item, targets);
+    const preflight = validateWorkItemPreflight(item, targets, ctx);
     if (preflight.error) {
       return preflight;
     }
@@ -412,7 +412,7 @@ async function delegatePendingWorkItems({
   nowFn,
 }) {
   const itemsToDelegate = pendingItems.slice(0, 1);
-  const preflightError = preflightWorkItems(itemsToDelegate, targets);
+  const preflightError = preflightWorkItems(itemsToDelegate, targets, ctx);
   if (preflightError) {
     return preflightError;
   }
@@ -422,7 +422,7 @@ async function delegatePendingWorkItems({
   let workingDelegatedJobs = [...(existingDelegatedJobs ?? [])];
 
   for (const { asset, scenario } of itemsToDelegate) {
-    const { check } = validateWorkItemPreflight({ asset, scenario }, targets);
+    const { check } = validateWorkItemPreflight({ asset, scenario }, targets, ctx);
     const targetId = asset.target_id;
     const now = nowFn().toISOString();
     const reservationId = newIdFn('res');
@@ -896,8 +896,19 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
         };
       }
 
-      const planPreflightError = preflightWorkItems(workQueue, targets);
+      const planPreflightError = preflightWorkItems(workQueue, targets, ctx);
       if (planPreflightError) {
+        if (planPreflightError.error === 'soc_gated_check') {
+          await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'waf.validation_plan.blocked_soc_gated',
+            resource_type: 'waf_validation_plan',
+            resource_id: plan.id,
+            metadata: { check_id: planPreflightError.check_id, scenario: planPreflightError.scenario },
+          });
+        }
         return planPreflightError;
       }
 
@@ -1143,7 +1154,7 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
 
       const workQueue = retestPlan.map((scenario) => ({ asset, scenario }));
 
-      const retestPreflightError = preflightWorkItems(workQueue, targets);
+      const retestPreflightError = preflightWorkItems(workQueue, targets, ctx);
       if (retestPreflightError) {
         return retestPreflightError;
       }

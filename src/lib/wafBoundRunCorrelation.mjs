@@ -3,6 +3,7 @@ import {
   metadataConfirmsOriginLockdown,
   originObservationOf,
 } from './externalObservationOutcomes.mjs';
+import { isObservationOnlyProbeKind } from './probeEvidenceTiers.mjs';
 import { isTrustedProducerEvent } from './trustedEventProvenance.mjs';
 
 export const EXTERNAL_WAF_PASS = new Set([
@@ -83,6 +84,7 @@ export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
     hasExternalProbeEvidence = true;
 
     const nonce = probe.nonce_hash ?? null;
+    const probeKind = probe.metadata?.probe_kind ?? probe.metadata?.profile_kind ?? null;
 
     // Direct-origin results are origin evidence only; they never count as edge WAF blocks or marker failures.
     if (isDirectOriginProbe(probe.metadata)) {
@@ -108,6 +110,8 @@ export function deriveWafSignalsFromBoundEvents({ probes = [] } = {}) {
       });
       continue;
     }
+
+    if (isObservationOnlyProbeKind(probeKind)) continue;
 
     let passed = null;
     let observed_action = 'inconclusive';

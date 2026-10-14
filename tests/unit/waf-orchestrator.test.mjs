@@ -449,13 +449,13 @@ describe('WAF orchestrator service', () => {
 
     const run = getStore().testRuns.find((r) => r.id === delegatedRunId);
     run.status = 'verdicted';
-    run.check_id = 'waf.marker_rule.safe';
+    run.check_id = 'waf.http_method_policy_marker.safe';
     run.probe_job_id = executed.delegated_jobs[0].probe_job_id;
     getStore().verdicts.push({
       id: 'ver_retest_1',
       tenant_id: 'ten_demo',
       test_run_id: delegatedRunId,
-      check_id: 'waf.marker_rule.safe',
+      check_id: 'waf.http_method_policy_marker.safe',
       verdict: 'protected',
       confidence: 'medium',
       created_at: new Date().toISOString(),

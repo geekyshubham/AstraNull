@@ -13,6 +13,7 @@ import {
 } from '../lib/edgeDetection.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import { projectEdgeDetection, isPartialProviderObservation } from '../lib/edgeDetectionProjection.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 'collecting']);
 const SUCCESSFUL_TERMINAL_RUN_STATUSES = new Set(['completed', 'verdicted']);
@@ -32,8 +33,8 @@ function resolvedRuntimeConfig(runtimeConfig) {
   return runtimeConfig ?? loadRuntimeConfig();
 }
 
-function featureGate(runtimeConfig) {
-  if (runtimeConfig?.featureFlags?.wafPostureEnabled === true) return null;
+function featureGate(runtimeConfig, ctx) {
+  if (wafPostureEnabledFor(resolvedRuntimeConfig(runtimeConfig), ctx?.tenantId)) return null;
   return { skipped: true, reason: 'waf_feature_disabled' };
 }
 
@@ -146,7 +147,7 @@ function projectWorkerResult(run, events) {
 /** Queue `waf.fingerprint.safe` for an existing tenant-bound target. */
 export async function runEdgeDetection(ctx, input = {}, deps = {}) {
   const runtimeConfig = resolvedRuntimeConfig(deps.runtimeConfig);
-  const gate = featureGate(runtimeConfig);
+  const gate = featureGate(runtimeConfig, ctx);
   if (gate) return gate;
 
   const validated = validateEdgeDetectionRequest(input);
@@ -189,7 +190,7 @@ export async function runEdgeDetection(ctx, input = {}, deps = {}) {
 /** Read a metadata-only status projection for one tenant-scoped edge-detection run. */
 export async function getEdgeDetection(ctx, id, deps = {}) {
   const runtimeConfig = resolvedRuntimeConfig(deps.runtimeConfig);
-  const gate = featureGate(runtimeConfig);
+  const gate = featureGate(runtimeConfig, ctx);
   if (gate) return gate;
   if (!OPAQUE_ID_PATTERN.test(String(id ?? ''))) return notFound();
   if (

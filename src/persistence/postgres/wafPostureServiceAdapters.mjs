@@ -1,3 +1,5 @@
+import { loadRuntimeConfig } from '../../config.mjs';
+import { connectorsEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import { normalizeStoredProtectionConfig } from '../../lib/connectorProviders/common.mjs';
 import {
   assertNoRawWafEvidence,
@@ -1792,6 +1794,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async isConnectorFeatureEnabled(ctx) {
+      if (connectorsEnabledFor(loadRuntimeConfig(), ctx?.tenantId)) return true;
       return wafRepo.isConnectorFeatureEnabled(ctx);
     },
 
@@ -1839,7 +1842,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async createConnector(ctx, body, options = {}) {
-      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+      if (!connectorsEnabledFor(loadRuntimeConfig(), ctx?.tenantId) && !await wafRepo.isConnectorFeatureEnabled(ctx)) {
         return { error: 'connectors_feature_disabled', status: 404 };
       }
       try {
@@ -1903,7 +1906,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async validateConnector(ctx, id) {
-      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+      if (!connectorsEnabledFor(loadRuntimeConfig(), ctx?.tenantId) && !await wafRepo.isConnectorFeatureEnabled(ctx)) {
         return { error: 'connectors_feature_disabled', status: 404 };
       }
       const connector = await wafRepo.getConnector(ctx, id);
@@ -1962,7 +1965,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async pollConnector(ctx, id, body = {}, pollOptions = {}) {
-      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+      if (!connectorsEnabledFor(loadRuntimeConfig(), ctx?.tenantId) && !await wafRepo.isConnectorFeatureEnabled(ctx)) {
         return { error: 'connectors_feature_disabled', status: 404 };
       }
       const connector = await wafRepo.getConnector(ctx, id);

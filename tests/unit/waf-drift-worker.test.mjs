@@ -295,6 +295,10 @@ describe('tenant drift scan', () => {
       { status: 'underprotected', reason_codes: ['monitor_only_behavior'], expected: 'mode_downgrade' },
     ];
 
+    const nowMs = Date.now();
+    const prevDate = new Date(nowMs - 2 * 86400000).toISOString();
+    const currDate = new Date(nowMs - 3600000).toISOString();
+
     for (const [index, testCase] of cases.entries()) {
       freshStore();
       const asset = seedWafAsset({ id: `waf_edge_${index}` });
@@ -306,7 +310,7 @@ describe('tenant drift scan', () => {
           status: 'edge_protected',
           reason_codes: [],
           detected_vendor: 'cloudflare',
-          created_at: '2026-05-01T00:00:00.000Z',
+          created_at: prevDate,
           is_current: false,
         },
         {
@@ -316,7 +320,7 @@ describe('tenant drift scan', () => {
           status: testCase.status,
           reason_codes: testCase.reason_codes,
           detected_vendor: 'cloudflare',
-          created_at: '2026-10-07T00:00:00.000Z',
+          created_at: currDate,
           is_current: true,
         },
       ].map(comparablePosture));
@@ -329,6 +333,9 @@ describe('tenant drift scan', () => {
   it('emits one critical fingerprint-loss drift for edge-to-unprotected vendor loss', () => {
     Object.assign(process.env, wafEnabledEnv());
     freshStore();
+    const nowMs = Date.now();
+    const prevDate = new Date(nowMs - 2 * 86400000).toISOString();
+    const currDate = new Date(nowMs - 3600000).toISOString();
     const asset = seedWafAsset();
     seedPostureSnapshots([
       {
@@ -338,7 +345,7 @@ describe('tenant drift scan', () => {
         status: 'edge_protected',
         reason_codes: [],
         detected_vendor: 'cloudflare',
-        created_at: '2026-05-01T00:00:00.000Z',
+        created_at: prevDate,
         is_current: false,
       },
       {
@@ -348,7 +355,7 @@ describe('tenant drift scan', () => {
         status: 'unprotected',
         reason_codes: [],
         detected_vendor: null,
-        created_at: '2026-10-07T00:00:00.000Z',
+        created_at: currDate,
         is_current: true,
       },
     ].map(comparablePosture));

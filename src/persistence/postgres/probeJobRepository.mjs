@@ -304,6 +304,10 @@ export function createProbeJobRepository(pool) {
                )
                AND ${reciprocalOwnershipJobBindingSql('candidate')}
                AND (
+                 NULLIF(candidate.constraints_json->>'required_perspective_id', '') IS NULL
+                 OR candidate.constraints_json->>'required_perspective_id' = $9::text
+               )
+               AND (
                  (candidate.ownership_verification_id IS NULL AND EXISTS (
                    SELECT 1
                    FROM test_runs tr
@@ -354,6 +358,7 @@ export function createProbeJobRepository(pool) {
             LEASE_TTL_DEFAULT_PER_JOB_SECONDS,
             LEASE_TTL_BATCH_FACTOR,
             LEASE_TTL_OVERHEAD_SECONDS,
+            typeof options.perspectiveId === 'string' && options.perspectiveId ? options.perspectiveId : null,
           ],
         );
 

@@ -24,6 +24,18 @@ export function inconclusiveReason({ probeKind, externalResult, metadata = {} } 
         : 'A complete blocked-baseline comparison was not recorded. Evasion or inspection-limit resistance remains unassessed.',
     };
   }
+  if (
+    metadata.inconclusive_reason === 'required_input_missing'
+    || metadata.error_class === 'required_input_missing'
+    || metadata.explanation_reason === 'required_input_missing'
+  ) {
+    return {
+      reason: 'required_input_missing',
+      label: 'Required input missing',
+      next_step: 'Declare the required port, policy rule, or origin binding on the target before rerunning it.',
+      explanation: metadata.missing_message || metadata.explanation || 'Required input is missing for this check; no traffic was sent.',
+    };
+  }
   if (['unsupported_target', 'resolver_not_routable', 'missing_webhook_url'].includes(metadata.error_class)) {
     return {
       reason: 'endpoint_setup_required', label: 'Endpoint details required',

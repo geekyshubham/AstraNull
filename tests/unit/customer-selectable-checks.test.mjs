@@ -21,6 +21,18 @@ const INPUT_REQUIRING = [
   'l7.export_abuse.validation',
   'l7.oauth_token_abuse.validation',
   'l7.signup_registration_abuse.validation',
+  'l3.forbidden_tcp_port.safe',
+  'l3.forbidden_udp_port.safe',
+  'l3.basic_deny_rule.safe',
+  'l3.tcp_flag_anomaly.readiness',
+  'l3.tcp_connection_flood.readiness',
+  'reflect.tcp_middlebox_exposure.safe',
+  'nfw.perspective_allowlist.safe',
+  'waf.rate_limit_canary.validation',
+  'nfw.declared_deny_tcp.safe',
+  'nfw.declared_deny_udp.safe',
+  'nfw.connection_limit.safe',
+  'nfw.origin_lockdown.safe',
 ];
 
 test('checkRequiresAdditionalInput flags origin, declared probe-path and approved callback-scope checks', () => {

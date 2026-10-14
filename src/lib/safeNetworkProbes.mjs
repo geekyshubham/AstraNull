@@ -9,7 +9,26 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { pinnedFetch, pinnedWebSocketUpgrade, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 import { startProbeIoAttempt } from './probeAttempt.mjs';
-import { reflectorPayloadForProfile } from './reflectorPayloads.mjs';
+import { payloadProfilesForJob, reflectorPayloadForProfile } from './reflectorPayloads.mjs';
+import {
+  addressFamilyNumber,
+  classifyTcpErrno,
+  classifyUdpErrno,
+  declaredDenyPortPlan,
+  declaredDenyPorts,
+  familyParity,
+  MAX_TCP_UDP_SAMPLES,
+  noPortDeclaredResult,
+  peerIsCdn,
+  requestedAddressFamily,
+  resolveDeclaredNetworkPort,
+  SAMPLE_GAP_MS,
+  sampleAgreement,
+  selectFamilyAddresses,
+  sleepMs,
+  stampSourcePerspective,
+  validNetworkPort,
+} from './networkProbeOutcomes.mjs';
 
 const SAFE_UDP_PAYLOAD_PREFIX = 'ASTRANULL:udp:';
 const SAFE_ALERT_PAYLOAD_TYPE = 'astranull_alert_workflow_ping';
@@ -68,10 +87,12 @@ function resolvePortForJob(job, fallback = 443) {
   return parseNetworkEndpoint(job)?.port ?? fallback;
 }
 
-function withProfileKind(job, metadata) {
+function withProfileKind(job, metadata, deps = {}) {
   const profileKind = job.probe_profile?.kind ?? metadata.probe_kind ?? null;
-  return { profile_kind: profileKind, ...metadata, classifier_version: 'protocol-identity-v3',
-    observation_only: true, readiness_conclusion: false, evidence_tier: 'E2' };
+  return stampSourcePerspective({
+    profile_kind: profileKind, ...metadata, classifier_version: 'protocol-identity-v3',
+    observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
+  }, deps);
 }
 
 function safeUdpPayload(job) {
@@ -161,19 +182,38 @@ function sendUdpDatagram(socket, payload, port, host, timeoutMs, { captureRespon
       response_size_class: 'none',
     }), Math.max(1, Number(timeoutMs) || 5000));
 
-    try {
-      socket.send(payload, port, host, (error) => {
-        if (error) settle(null, error);
-      });
-    } catch (error) {
-      settle(null, error);
+    const onSendError = (error) => { if (error) settle(null, error); };
+    const sendUnconnected = () => {
+      try {
+        socket.send(payload, port, host, onSendError);
+      } catch (error) {
+        settle(null, error);
+      }
+    };
+    const sendConnected = () => {
+      try {
+        socket.send(payload, onSendError);
+      } catch (error) {
+        settle(null, error);
+      }
+    };
+
+    // Native dgram: connect so ICMP port-unreachable surfaces (F19), then 1-arg send.
+    // Delivery fixtures wrap send as (packet, port, host, cb); 1-arg send never reaches the peer.
+    // Unit fakes implement their own connect. Wrapped native sockets keep 4-arg unconnected send.
+    const nativeConnect = socket.connect === dgram.Socket.prototype.connect;
+    const nativeSend = socket.send === dgram.Socket.prototype.send;
+    const fakeConnect = typeof socket.connect === 'function' && !nativeConnect;
+    if ((nativeConnect && nativeSend) || fakeConnect) {
+      try {
+        socket.connect(port, host, sendConnected);
+      } catch (error) {
+        settle(null, error);
+      }
+    } else {
+      sendUnconnected();
     }
   });
-}
-
-function validNetworkPort(value) {
-  const port = Number(value);
-  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
 function reflectionEndpoint(job, payloadProfile) {
@@ -248,16 +288,17 @@ function sendTcpPayload(connectFn, payload, endpoint, timeoutMs, deps, onReserve
   });
 }
 
-function reflectionFailure(job, metadata, externalResult, requestsSent, started) {
+function reflectionFailure(job, metadata, externalResult, requestsSent, started, deps = {}) {
   const durationMs = Date.now() - started;
   return {
     external_result: externalResult,
-    metadata: {
+    metadata: stampSourcePerspective({
       probe_kind: 'reflection_service_probe',
+      profile_kind: 'reflection_service_probe',
       ...metadata,
       classifier_version: 'protocol-identity-v3', observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
       duration_ms: durationMs,
-    },
+    }, deps),
     requests_sent: requestsSent,
     duration_ms: durationMs,
   };
@@ -279,18 +320,68 @@ export async function networkProbeNoDeliveryOutcome(job, deps = {}) {
   return null;
 }
 
-export async function probeReflectionService(job, deps = {}) {
-  const profileName = job.probe_profile?.payload_profile ?? 'generic_probe';
-  const payloadProfile = reflectorPayloadForProfile(profileName);
-  if (!payloadProfile || payloadProfile.execution_supported === false) {
-    return reflectionFailure(job, { payload_profile: profileName, delivery_supported: false, not_run_reason: 'unsupported_or_unapproved_protocol_request', reflector_confirmed: false }, 'not_run', 0, Date.now());
+function classifyReflectionReply(payloadProfile, payload, response) {
+  const classification = payloadProfile.classify(
+    payload,
+    response.response_complete === true ? response.response_payload ?? null : null,
+    response.response_received,
+  );
+  if (!response.response_received) {
+    return { ...classification, udp_outcome: 'silent', service_validated: false };
   }
-  const endpoint = reflectionEndpoint(job, payloadProfile);
+  if (classification.protocol_identity_confirmed) {
+    return { ...classification, udp_outcome: 'validated_reply', service_validated: true };
+  }
+  return { ...classification, udp_outcome: 'unvalidated_reply', service_validated: false, unvalidated_reply: true };
+}
+
+async function sendOneReflection(job, deps, payloadProfile, endpoint, pinned, timeoutMs, onAttempt) {
+  const payload = payloadProfile.build({
+    nonceHash: job.nonce_hash ?? job.nonce,
+    queryName: job.target?.metadata?.query_name,
+  });
+  if (payloadProfile.transport === 'tcp') {
+    const response = await sendTcpPayload(
+      deps.connectFn ?? net.connect,
+      payload,
+      { host: pinned.address, port: endpoint.port },
+      timeoutMs,
+      deps,
+      onAttempt,
+    );
+    return { payload, response, port: endpoint.port };
+  }
+  const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
+  const socket = startProbeIoAttempt(
+    deps,
+    'reflection_udp',
+    () => createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4'),
+    onAttempt,
+  );
+  const response = await sendUdpDatagram(
+    socket,
+    payload,
+    endpoint.port,
+    pinned.address,
+    timeoutMs,
+    { captureResponse: true, signal: deps.jobDeadlineSignal },
+  );
+  return { payload, response, port: endpoint.port };
+}
+
+export async function probeReflectionService(job, deps = {}) {
+  const profileNames = payloadProfilesForJob(job);
+  const primaryName = profileNames[0] ?? job.probe_profile?.payload_profile ?? 'generic_probe';
+  const primaryProfile = reflectorPayloadForProfile(primaryName);
+  if (!primaryProfile || primaryProfile.execution_supported === false) {
+    return reflectionFailure(job, { payload_profile: primaryName, delivery_supported: false, not_run_reason: 'unsupported_or_unapproved_protocol_request', reflector_confirmed: false }, 'not_run', 0, Date.now(), deps);
+  }
+  const endpoint = reflectionEndpoint(job, primaryProfile);
   const started = Date.now();
   if (!endpoint) {
     return reflectionFailure(job, {
       target_port: null,
-      payload_profile: payloadProfile.id,
+      payload_profile: primaryProfile.id,
       request_bytes: 0,
       response_received: false,
       response_bytes: 0,
@@ -298,101 +389,317 @@ export async function probeReflectionService(job, deps = {}) {
       amplification_ratio: null,
       reflector_confirmed: false,
       error_class: 'unsupported_target',
-    }, 'error', 0, started);
+    }, 'error', 0, started, deps);
   }
 
   const timeoutMs = Math.max(1, Number(job.constraints?.timeout_ms) || 5000);
-  const maxRequests = Math.min(2, Math.max(1, Number(job.constraints?.max_requests) || 1));
-  const payload = payloadProfile.build({
-    nonceHash: job.nonce_hash ?? job.nonce,
-    queryName: job.target?.metadata?.query_name,
-  });
+  const requested = requestBudget(job, 1);
+  const isComposite = profileNames.length > 1;
+  const hardCap = isComposite ? 4 : 2;
+  const maxRequests = Math.min(hardCap, requested);
+  const sendList = isComposite ? profileNames.slice(0, maxRequests) : [primaryName];
+  const perProfileTimeout = isComposite
+    ? Math.max(1, Math.floor(timeoutMs / sendList.length))
+    : timeoutMs;
   let requestsSent = 0;
   const baseMetadata = {
     target_port: endpoint.port,
-    payload_profile: payloadProfile.id,
-    request_bytes: payload.length,
+    payload_profile: primaryProfile.id,
+    payload_profiles_declared: sendList,
   };
 
   try {
-    const pinned = await resolvePinnedDestination(endpoint.host, deps);
-    let response = { response_received: false, response_bytes: 0 };
-    if (payloadProfile.transport === 'tcp') {
-      response = await sendTcpPayload(
-        deps.connectFn ?? net.connect,
-        payload,
-        { host: pinned.address, port: endpoint.port },
-        timeoutMs,
-        deps,
-        () => { requestsSent = 1; },
-      );
-    } else {
-      const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
-      for (let attempt = 0; attempt < maxRequests; attempt += 1) {
-        const remainingMs = timeoutMs - (Date.now() - started);
-        if (remainingMs <= 0) break;
-        const attemptsRemaining = maxRequests - attempt;
-        const attemptTimeoutMs = Math.max(1, Math.floor(remainingMs / attemptsRemaining));
-        const socket = startProbeIoAttempt(
+    const familyPref = requestedAddressFamily(job);
+    const pinned = await resolvePinnedDestination(endpoint.host, { ...deps, addressFamily: familyPref === 'both' ? undefined : familyPref });
+    const protocolResults = [];
+    let last = null;
+    for (const name of sendList) {
+      const spec = reflectorPayloadForProfile(name);
+      if (!spec || spec.execution_supported === false) continue;
+      const remainingMs = timeoutMs - (Date.now() - started);
+      if (remainingMs <= 0 || requestsSent >= maxRequests) break;
+      const customerPort = validNetworkPort(job.target?.port)
+        ?? validNetworkPort(parseNetworkEndpoint(job)?.port)
+        ?? validNetworkPort(job.probe_profile?.service_port);
+      const port = customerPort ?? validNetworkPort(spec.default_port) ?? endpoint.port;
+      try {
+        last = await sendOneReflection(
+          job,
           deps,
-          'reflection_udp',
-          () => createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4'),
+          spec,
+          { host: endpoint.host, port },
+          pinned,
+          Math.max(1, Math.min(perProfileTimeout, remainingMs)),
           () => { requestsSent += 1; },
         );
-        response = await sendUdpDatagram(
-          socket,
-          payload,
-          endpoint.port,
-          pinned.address,
-          attemptTimeoutMs,
-          { captureResponse: true, signal: deps.jobDeadlineSignal },
-        );
-        if (response.response_received) break;
+        const classified = classifyReflectionReply(spec, last.payload, last.response);
+        protocolResults.push({
+          payload_profile: spec.id,
+          protocol: spec.transport,
+          port,
+          udp_outcome: classified.udp_outcome,
+          service_validated: classified.service_validated,
+          response_received: last.response.response_received === true,
+          protocol_identity_confirmed: classified.protocol_identity_confirmed === true,
+        });
+        if (sendList.length === 1 && !last.response.response_received && requestsSent < maxRequests) {
+          const retryRemaining = timeoutMs - (Date.now() - started);
+          if (retryRemaining > 0) {
+            last = await sendOneReflection(job, deps, spec, { host: endpoint.host, port }, pinned, retryRemaining, () => { requestsSent += 1; });
+            const retried = classifyReflectionReply(spec, last.payload, last.response);
+            protocolResults[0] = {
+              payload_profile: spec.id,
+              protocol: spec.transport,
+              port,
+              udp_outcome: retried.udp_outcome,
+              service_validated: retried.service_validated,
+              response_received: last.response.response_received === true,
+              protocol_identity_confirmed: retried.protocol_identity_confirmed === true,
+            };
+          }
+        }
+      } catch (error) {
+        const classified = classifyUdpErrno(error?.code ?? '');
+        protocolResults.push({
+          payload_profile: spec.id,
+          protocol: spec.transport,
+          port,
+          udp_outcome: classified.udp_outcome,
+          icmp: classified.icmp,
+          service_validated: false,
+          response_received: false,
+          error_class: error?.code ?? 'reflection_probe_failed',
+        });
+        last = { payload: spec.build({ nonceHash: job.nonce_hash ?? job.nonce }), response: { response_received: false, response_bytes: 0 }, error };
       }
     }
 
-    const classification = payloadProfile.classify(
-      payload,
-      response.response_complete === true ? response.response_payload ?? null : null,
-      response.response_received,
-    );
-    if (!response.response_received) {
-      return reflectionFailure(job, {
-        ...baseMetadata,
-        response_received: false,
-        response_bytes: 0,
-        ...classification,
-        error_class: 'no_reflection_response',
-      }, 'timeout', requestsSent, started);
-    }
+    const primaryResult = protocolResults[0] ?? null;
+    const lastResponse = last?.response ?? { response_received: false, response_bytes: 0 };
+    const lastPayload = last?.payload ?? Buffer.alloc(0);
+    const lastSpec = reflectorPayloadForProfile(primaryResult?.payload_profile ?? primaryName) ?? primaryProfile;
+    const classification = last?.error
+      ? { amplification_ratio: null, response_size_class: 'none', protocol_identity_confirmed: false, reflector_confirmed: false }
+      : classifyReflectionReply(lastSpec, lastPayload, lastResponse);
+    const anyValidated = protocolResults.some((row) => row.service_validated);
+    const anyReply = protocolResults.some((row) => row.response_received);
+    const icmp = primaryResult?.icmp ?? (last?.error ? classifyUdpErrno(last.error.code).icmp : null);
+    const udpOutcome = anyValidated
+      ? 'validated_reply'
+      : anyReply
+        ? 'unvalidated_reply'
+        : (primaryResult?.udp_outcome ?? classification.udp_outcome ?? 'silent');
+    const externalResult = anyValidated
+      ? 'connected'
+      : anyReply
+        ? 'not_run'
+        : udpOutcome === 'rejected_icmp'
+          ? 'blocked'
+          : udpOutcome === 'port_unreachable' || udpOutcome === 'silent'
+            ? 'timeout'
+            : last?.error && requestsSent === 0
+              ? 'error'
+              : 'timeout';
     return reflectionFailure(job, {
       ...baseMetadata,
-      response_received: true,
-      response_bytes: response.response_bytes,
+      request_bytes: lastPayload.length,
+      response_received: anyReply,
+      response_bytes: lastResponse.response_bytes ?? 0,
       ...classification,
-      response_complete: response.response_complete === true,
-      identity_supported: payloadProfile.identity_supported === true,
+      udp_outcome: udpOutcome,
+      service_validated: anyValidated,
+      protocol_identity_confirmed: anyValidated,
+      reflector_confirmed: anyValidated,
+      icmp,
+      peer_is_cdn: peerIsCdn(pinned.address),
+      address: pinned.address,
+      address_family: addressFamilyNumber(pinned.address),
+      protocol: lastSpec.transport,
+      port: endpoint.port,
+      protocol_results: protocolResults,
+      payload_profiles_sent: protocolResults.map((row) => row.payload_profile),
+      response_complete: lastResponse.response_complete === true,
+      identity_supported: lastSpec.identity_supported === true || anyValidated,
       response_body_retained: false,
-    }, classification.protocol_identity_confirmed ? 'connected' : 'not_run', requestsSent, started);
+      ...(externalResult === 'timeout' ? { error_class: 'no_reflection_response' } : {}),
+    }, externalResult, requestsSent, started, deps);
   } catch (error) {
     const code = error?.code ?? '';
+    const classified = classifyUdpErrno(code);
     const externalResult = requestsSent === 0
       ? 'error'
-      : (code === 'ETIMEOUT'
-        ? 'timeout'
-        : (['EACCES', 'EPERM', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EDESTINATION'].includes(code)
-          ? 'error'
-          : 'error'));
+      : (code === 'ETIMEOUT' ? 'timeout' : classified.udp_outcome === 'rejected_icmp' ? 'blocked' : classified.udp_outcome === 'port_unreachable' ? 'timeout' : 'error');
     return reflectionFailure(job, {
       ...baseMetadata,
+      request_bytes: 0,
       response_received: false,
       response_bytes: 0,
       response_size_class: 'none',
       amplification_ratio: null,
       reflector_confirmed: false,
+      udp_outcome: classified.udp_outcome,
+      icmp: classified.icmp,
+      service_validated: false,
       error_class: code || 'reflection_probe_failed',
-    }, externalResult, requestsSent, started);
+    }, externalResult, requestsSent, started, deps);
   }
+}
+
+function requestBudget(job, fallback = 1) {
+  const n = Number(job.constraints?.max_requests ?? job.probe_profile?.max_requests ?? fallback);
+  return Number.isSafeInteger(n) && n > 0 ? n : fallback;
+}
+
+function udpExternalResult(outcome) {
+  if (outcome === 'validated_reply' || outcome === 'unvalidated_reply') return 'connected';
+  if (outcome === 'rejected_icmp') return 'blocked';
+  if (outcome === 'port_unreachable' || outcome === 'silent') return 'timeout';
+  return 'error';
+}
+
+function tcpExternalResult(outcome) {
+  if (outcome === 'handshake') return 'connected';
+  if (outcome === 'refused_rst' || outcome === 'rejected_icmp') return 'blocked';
+  if (outcome === 'timeout') return 'timeout';
+  return 'error';
+}
+
+async function sendOneUdp(job, deps, address, port, timeoutMs, onAttempt) {
+  const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
+  const payload = safeUdpPayload(job);
+  const socket = startProbeIoAttempt(
+    deps,
+    'udp_datagram',
+    () => createSocket(net.isIP(address) === 6 ? 'udp6' : 'udp4'),
+    onAttempt,
+  );
+  const attemptStarted = Date.now();
+  try {
+    const response = await sendUdpDatagram(socket, payload, port, address, timeoutMs, {
+      signal: deps.jobDeadlineSignal,
+    });
+    const durationMs = Math.max(0, Date.now() - attemptStarted);
+    const udp_outcome = response.response_received ? 'unvalidated_reply' : 'silent';
+    return {
+      udp_outcome,
+      icmp: null,
+      service_validated: false,
+      response_received: response.response_received === true,
+      response_bytes: response.response_bytes ?? 0,
+      response_size_class: response.response_size_class,
+      datagram_bytes: payload.length,
+      address,
+      address_family: addressFamilyNumber(address),
+      peer_is_cdn: peerIsCdn(address),
+      duration_ms: durationMs,
+      elapsed_ms: durationMs,
+    };
+  } catch (err) {
+    const durationMs = Math.max(0, Date.now() - attemptStarted);
+    const classified = classifyUdpErrno(err?.code ?? '');
+    return {
+      ...classified,
+      service_validated: false,
+      response_received: false,
+      response_bytes: 0,
+      response_size_class: 'none',
+      datagram_bytes: payload.length,
+      address,
+      address_family: addressFamilyNumber(address),
+      peer_is_cdn: peerIsCdn(address),
+      duration_ms: durationMs,
+      elapsed_ms: durationMs,
+      error_class: err?.code || 'udp_send_failed',
+    };
+  }
+}
+
+async function probeDeclaredDenyPorts(job, deps, { protocol, ports, selected, familyKeys, pinned, budget, timeoutMs, started, sampleOnce, onRequest }) {
+  let requestsSent = 0;
+  const onReserved = () => { requestsSent += 1; onRequest?.(); };
+  const outcomeKey = protocol === 'udp' ? 'udp_outcome' : 'tcp_outcome';
+  const portResults = [];
+  for (let index = 0; index < ports.length; index += 1) {
+    if (requestsSent >= budget || deps.jobDeadlineSignal?.aborted) break;
+    const timeLeft = timeoutMs - (Date.now() - started);
+    if (timeLeft <= 0) break;
+    const port = ports[index];
+    const portBudget = Math.max(1, Math.floor((budget - requestsSent) / (ports.length - index)));
+    const portDeadline = Date.now() + Math.max(1, Math.floor(timeLeft / (ports.length - index)));
+    const samplesPerFamily = familyKeys.length === 1 && portBudget >= MAX_TCP_UDP_SAMPLES ? MAX_TCP_UDP_SAMPLES : 1;
+    const plannedSamples = Math.min(portBudget, samplesPerFamily * familyKeys.length);
+    let portRequests = 0;
+    const families = {};
+    const portSamples = [];
+    for (const key of familyKeys) {
+      const samples = [];
+      for (let i = 0; i < samplesPerFamily && portRequests < portBudget && requestsSent < budget; i += 1) {
+        if (i > 0) {
+          const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
+          if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
+        }
+        const samplesLeft = Math.max(1, plannedSamples - portRequests);
+        const remaining = Math.max(1, Math.floor((portDeadline - Date.now()) / samplesLeft));
+        const before = requestsSent;
+        const sample = await sampleOnce(selected[key], port, remaining, onReserved);
+        portRequests += requestsSent - before;
+        samples.push(sample);
+        portSamples.push(sample);
+      }
+      if (samples.length) families[key] = { ...samples[0], samples, sample_agreement: sampleAgreement(samples) };
+    }
+    if (!portSamples.length) break;
+    const first = portSamples[0];
+    portResults.push({
+      protocol,
+      port,
+      address: first.address,
+      address_family: first.address_family,
+      [outcomeKey]: first[outcomeKey],
+      icmp: first.icmp ?? null,
+      service_validated: first.service_validated === true,
+      peer_is_cdn: first.peer_is_cdn ?? null,
+      families,
+      parity: familyParity(families),
+      samples: portSamples,
+      sample_agreement: sampleAgreement(portSamples),
+    });
+  }
+  const violating = protocol === 'udp' ? 'validated_reply' : 'handshake';
+  const primary = portResults.find((row) => row[outcomeKey] === violating) ?? portResults[0] ?? {};
+  const probed = portResults.map((row) => row.port);
+  const declared = declaredDenyPorts(job, { protocol });
+  const durationMs = Date.now() - started;
+  const outcome = primary[outcomeKey] ?? 'error';
+  return {
+    external_result: protocol === 'udp' ? udpExternalResult(outcome) : tcpExternalResult(outcome),
+    metadata: withProfileKind(job, {
+      probe_kind: protocol === 'udp' ? 'udp_probe' : 'tcp_connect',
+      protocol,
+      port: primary.port ?? ports[0],
+      address: primary.address ?? pinned.address,
+      address_family: primary.address_family ?? addressFamilyNumber(pinned.address),
+      [outcomeKey]: outcome,
+      icmp: primary.icmp ?? null,
+      service_validated: primary.service_validated === true,
+      peer_is_cdn: primary.peer_is_cdn ?? peerIsCdn(pinned.address),
+      families: primary.families ?? {},
+      parity: primary.parity ?? 'single_family',
+      samples: primary.samples ?? [],
+      sample_agreement: primary.sample_agreement ?? 'single',
+      port_results: portResults,
+      declared_deny_ports: declared,
+      ports_probed: probed,
+      unprobed_deny_ports: declared.filter((port) => !probed.includes(port)),
+      duration_ms: durationMs,
+      target_port: primary.port ?? ports[0],
+      observation_complete: requestsSent >= 1,
+      pinned_address: primary.address ?? pinned.address,
+      ...(outcome !== violating && primary.error_class ? { error_class: primary.error_class } : {}),
+    }, deps),
+    requests_sent: requestsSent,
+    duration_ms: durationMs,
+  };
 }
 
 /**
@@ -400,102 +707,320 @@ export async function probeReflectionService(job, deps = {}) {
  * @param {{ createSocket?: typeof dgram.createSocket }} deps
  */
 export async function probeUdpDatagram(job, deps = {}) {
-  const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
-  const endpoint = parseNetworkEndpoint(job);
-  if (!endpoint) {
+  const host = resolveHostForJob(job);
+  const port = resolveDeclaredNetworkPort(job, { protocol: 'udp' })
+    ?? parseNetworkEndpoint(job)?.port
+    ?? null;
+  if (!host || !port) {
     return {
-      external_result: 'error',
+      ...noPortDeclaredResult('udp_probe'),
       metadata: withProfileKind(job, {
         probe_kind: 'udp_probe',
         error_class: 'unsupported_target',
-      }),
-      requests_sent: 0,
-      duration_ms: 0,
+        reason: 'no_port_declared',
+      }, deps),
     };
   }
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+  const budget = requestBudget(job);
   let requestsSent = 0;
   try {
-    const pinned = await resolvePinnedDestination(endpoint.host, deps);
-    const payload = safeUdpPayload(job);
-    const socket = startProbeIoAttempt(
-      deps,
-      'udp_datagram',
-      () => createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4'),
-      () => { requestsSent = 1; },
-    );
-    const response = await sendUdpDatagram(
-      socket,
-      payload,
-      endpoint.port,
-      pinned.address,
-      timeoutMs,
-    );
+    const familyPref = requestedAddressFamily(job);
+    const pinned = await resolvePinnedDestination(host, {
+      ...deps,
+      addressFamily: familyPref === 'both' ? undefined : familyPref,
+    });
+    const selected = selectFamilyAddresses(pinned, familyPref);
+    const familyKeys = Object.entries(selected).filter(([, address]) => address).map(([key]) => key);
+    if (familyKeys.length === 0) {
+      return {
+        external_result: 'error',
+        metadata: withProfileKind(job, {
+          probe_kind: 'udp_probe',
+          error_class: 'unsupported_target',
+          reason: 'no_port_declared',
+          target_port: port,
+        }, deps),
+        requests_sent: 0,
+        duration_ms: Date.now() - started,
+      };
+    }
+    const denyPorts = declaredDenyPortPlan(job, { protocol: 'udp', budget });
+    if (denyPorts) {
+      return await probeDeclaredDenyPorts(job, deps, {
+        protocol: 'udp', ports: denyPorts, selected, familyKeys, pinned, budget, timeoutMs, started, onRequest: () => { requestsSent += 1; },
+        sampleOnce: (address, samplePort, remaining, onReserved) => sendOneUdp(job, deps, address, samplePort, remaining, onReserved),
+      });
+    }
+    const samplesPerFamily = familyKeys.length === 1 && budget >= MAX_TCP_UDP_SAMPLES
+      ? MAX_TCP_UDP_SAMPLES
+      : 1;
+    const families = {};
+    const allSamples = [];
+    for (const key of familyKeys) {
+      if (requestsSent >= budget) break;
+      const address = selected[key];
+      const samples = [];
+      for (let i = 0; i < samplesPerFamily && requestsSent < budget; i += 1) {
+        if (i > 0) {
+          const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
+          if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
+        }
+        const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+        const sample = await sendOneUdp(job, deps, address, port, remaining, () => { requestsSent += 1; });
+        samples.push(sample);
+        allSamples.push(sample);
+      }
+      families[key] = {
+        ...samples[0],
+        samples,
+        sample_agreement: sampleAgreement(samples),
+      };
+    }
+    const primary = allSamples[0] ?? {};
     const durationMs = Date.now() - started;
+    const udp_outcome = primary.udp_outcome ?? 'error';
     return {
-      external_result: response.response_received ? 'connected' : 'timeout',
+      external_result: udpExternalResult(udp_outcome),
       metadata: withProfileKind(job, {
         probe_kind: 'udp_probe',
-        ...(!response.response_received ? { error_class: 'no_udp_response' } : {}),
+        protocol: 'udp',
+        port,
+        address: primary.address ?? pinned.address,
+        address_family: primary.address_family ?? addressFamilyNumber(pinned.address),
+        udp_outcome,
+        icmp: primary.icmp ?? null,
+        service_validated: primary.service_validated === true,
+        peer_is_cdn: primary.peer_is_cdn ?? peerIsCdn(pinned.address),
+        families,
+        parity: familyParity(families),
+        samples: allSamples,
+        sample_agreement: sampleAgreement(allSamples),
+        ...(!primary.response_received && udp_outcome === 'silent' ? { error_class: 'no_udp_response' } : {}),
+        ...(primary.error_class && udp_outcome === 'error' ? { error_class: primary.error_class } : {}),
         duration_ms: durationMs,
-        target_port: endpoint.port,
-        datagram_bytes: payload.length,
-        observation_complete: requestsSent === 1,
-        pinned_address: pinned.address,
-        response_received: response.response_received,
-        response_bytes: response.response_bytes,
-        response_size_class: response.response_size_class,
-      }),
+        target_port: port,
+        datagram_bytes: primary.datagram_bytes,
+        observation_complete: requestsSent >= 1,
+        pinned_address: primary.address ?? pinned.address,
+        response_received: primary.response_received === true,
+        response_bytes: primary.response_bytes ?? 0,
+        response_size_class: primary.response_size_class ?? 'none',
+      }, deps),
       requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
     const durationMs = Date.now() - started;
     const code = err?.code ?? '';
-    if (code === 'ETIMEOUT') {
-      return {
-        external_result: requestsSent > 0 ? 'timeout' : 'error',
-        metadata: withProfileKind(job, {
-          probe_kind: 'udp_probe',
-          error_class: 'timeout',
-          duration_ms: durationMs,
-          target_port: endpoint.port,
-          observation_complete: requestsSent === 1,
-        }),
-        requests_sent: requestsSent,
+    const classified = classifyUdpErrno(code);
+    const external = code === 'ETIMEOUT'
+      ? (requestsSent > 0 ? 'timeout' : 'error')
+      : udpExternalResult(classified.udp_outcome);
+    return {
+      external_result: external,
+      metadata: withProfileKind(job, {
+        probe_kind: 'udp_probe',
+        protocol: 'udp',
+        port,
+        udp_outcome: classified.udp_outcome,
+        icmp: classified.icmp,
+        service_validated: false,
+        error_class: code === 'ETIMEOUT' ? 'timeout' : (code || 'udp_send_failed'),
         duration_ms: durationMs,
-      };
-    }
-    if (
-      code === 'EACCES'
-      || code === 'EPERM'
-      || code === 'EHOSTUNREACH'
-      || code === 'ENETUNREACH'
-      || code === 'ENOTFOUND'
-      || code === 'EDESTINATION'
-    ) {
+        target_port: port,
+        observation_complete: requestsSent === 1,
+      }, deps),
+      requests_sent: requestsSent,
+      duration_ms: durationMs,
+    };
+  }
+}
+
+function openTcpOnce(connectFn, address, port, timeoutMs, deps, onReserved) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = startProbeIoAttempt(
+      deps,
+      'tcp_connect',
+      () => connectFn({ host: address, port }),
+      onReserved,
+    );
+    const attemptStarted = Date.now();
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch { /* already closed */ }
+      const durationMs = result.duration_ms ?? Math.max(0, Date.now() - attemptStarted);
+      const elapsedMs = result.elapsed_ms ?? durationMs;
+      resolve({ ...result, duration_ms: durationMs, elapsed_ms: elapsedMs });
+    };
+    const timer = setTimeout(() => finish({
+      tcp_outcome: 'timeout',
+      icmp: null,
+      error_class: 'timeout',
+    }), Math.max(1, timeoutMs));
+    socket.once?.('connect', () => {
+      clearTimeout(timer);
+      finish({ tcp_outcome: 'handshake', icmp: null });
+    });
+    socket.setTimeout?.(Math.max(1, timeoutMs), () => {
+      clearTimeout(timer);
+      finish({ tcp_outcome: 'timeout', icmp: null, error_class: 'timeout' });
+    });
+    socket.on?.('timeout', () => {
+      clearTimeout(timer);
+      finish({ tcp_outcome: 'timeout', icmp: null, error_class: 'timeout' });
+    });
+    socket.on?.('error', (err) => {
+      clearTimeout(timer);
+      const elapsedMs = Math.max(0, Date.now() - attemptStarted);
+      const classified = classifyTcpErrno(err?.code ?? '');
+      finish({ ...classified, duration_ms: elapsedMs, elapsed_ms: elapsedMs, error_class: err?.code || 'connect_failed' });
+    });
+  });
+}
+
+export async function probeTcpConnect(job, deps = {}) {
+  const host = resolveHostForJob(job);
+  const port = resolveDeclaredNetworkPort(job, { protocol: 'tcp' })
+    ?? parseNetworkEndpoint(job)?.port
+    ?? null;
+  if (!host || !port) {
+    return {
+      ...noPortDeclaredResult('tcp_connect'),
+      metadata: withProfileKind(job, {
+        probe_kind: 'tcp_connect',
+        error_class: 'unsupported_target',
+        reason: 'no_port_declared',
+      }, deps),
+    };
+  }
+
+  const timeoutMs = job.constraints?.timeout_ms ?? 5000;
+  const started = Date.now();
+  const budget = requestBudget(job);
+  const connectFn = deps.connectFn ?? net.connect;
+  let requestsSent = 0;
+  try {
+    const familyPref = requestedAddressFamily(job);
+    const pinned = await resolvePinnedDestination(host, {
+      ...deps,
+      addressFamily: familyPref === 'both' ? undefined : familyPref,
+    });
+    const selected = selectFamilyAddresses(pinned, familyPref);
+    const familyKeys = Object.entries(selected).filter(([, address]) => address).map(([key]) => key);
+    if (familyKeys.length === 0) {
       return {
         external_result: 'error',
         metadata: withProfileKind(job, {
-          probe_kind: 'udp_probe',
-          error_class: code,
-          duration_ms: durationMs,
-          target_port: endpoint.port,
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
+          probe_kind: 'tcp_connect',
+          error_class: 'destination_unresolved',
+          target_port: port,
+        }, deps),
+        requests_sent: 0,
+        duration_ms: Date.now() - started,
       };
     }
+    const denyPorts = declaredDenyPortPlan(job, { protocol: 'tcp', budget });
+    if (denyPorts) {
+      return await probeDeclaredDenyPorts(job, deps, {
+        protocol: 'tcp', ports: denyPorts, selected, familyKeys, pinned, budget, timeoutMs, started, onRequest: () => { requestsSent += 1; },
+        sampleOnce: async (address, samplePort, remaining, onReserved) => {
+          const sample = await openTcpOnce(connectFn, address, samplePort, remaining, deps, onReserved);
+          return {
+            ...sample,
+            protocol: 'tcp',
+            port: samplePort,
+            address,
+            address_family: addressFamilyNumber(address),
+            peer_is_cdn: peerIsCdn(address),
+            service_validated: sample.tcp_outcome === 'handshake',
+          };
+        },
+      });
+    }
+    const samplesPerFamily = familyKeys.length === 1 && budget >= MAX_TCP_UDP_SAMPLES
+      ? MAX_TCP_UDP_SAMPLES
+      : 1;
+    const families = {};
+    const allSamples = [];
+    for (const key of familyKeys) {
+      if (requestsSent >= budget) break;
+      const address = selected[key];
+      const samples = [];
+      for (let i = 0; i < samplesPerFamily && requestsSent < budget; i += 1) {
+        if (i > 0) {
+          const gap = deps.sampleGapMs ?? SAMPLE_GAP_MS;
+          if (gap > 0) await sleepMs(gap, deps.jobDeadlineSignal);
+        }
+        const remaining = Math.max(1, timeoutMs - (Date.now() - started));
+        const sample = await openTcpOnce(
+          connectFn,
+          address,
+          port,
+          remaining,
+          deps,
+          () => { requestsSent += 1; },
+        );
+        const row = {
+          ...sample,
+          protocol: 'tcp',
+          port,
+          address,
+          address_family: addressFamilyNumber(address),
+          peer_is_cdn: peerIsCdn(address),
+          service_validated: sample.tcp_outcome === 'handshake',
+        };
+        samples.push(row);
+        allSamples.push(row);
+      }
+      families[key] = {
+        ...samples[0],
+        samples,
+        sample_agreement: sampleAgreement(samples),
+      };
+    }
+    const primary = allSamples[0] ?? {};
+    const durationMs = Date.now() - started;
+    return {
+      external_result: tcpExternalResult(primary.tcp_outcome),
+      metadata: withProfileKind(job, {
+        probe_kind: 'tcp_connect',
+        protocol: 'tcp',
+        port,
+        address: primary.address ?? pinned.address,
+        address_family: primary.address_family ?? addressFamilyNumber(pinned.address),
+        tcp_outcome: primary.tcp_outcome,
+        icmp: primary.icmp ?? null,
+        service_validated: primary.service_validated === true,
+        peer_is_cdn: primary.peer_is_cdn ?? peerIsCdn(pinned.address),
+        families,
+        parity: familyParity(families),
+        samples: allSamples,
+        sample_agreement: sampleAgreement(allSamples),
+        duration_ms: durationMs,
+        target_port: port,
+        observation_complete: requestsSent >= 1,
+        pinned_address: primary.address ?? pinned.address,
+        ...(primary.tcp_outcome !== 'handshake' ? { error_class: primary.error_class ?? primary.tcp_outcome } : {}),
+      }, deps),
+      requests_sent: requestsSent,
+      duration_ms: durationMs,
+    };
+  } catch (error) {
+    const durationMs = Date.now() - started;
+    const code = error?.code ?? '';
     return {
       external_result: 'error',
       metadata: withProfileKind(job, {
-        probe_kind: 'udp_probe',
-        error_class: code || 'udp_send_failed',
+        probe_kind: 'tcp_connect',
+        error_class: code === 'ENOTFOUND' ? 'destination_unresolved' : 'destination_not_routable',
+        target_port: port,
         duration_ms: durationMs,
-        target_port: endpoint.port,
-      }),
+      }, deps),
       requests_sent: requestsSent,
       duration_ms: durationMs,
     };

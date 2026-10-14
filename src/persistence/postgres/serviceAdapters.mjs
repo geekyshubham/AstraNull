@@ -179,6 +179,12 @@ export function createPostgresCatalogServices(repositories) {
   if (typeof coreCatalog.importTargets === 'function') {
     targetGroups.importTargets = (...args) => coreCatalog.importTargets(...args);
   }
+  if (typeof coreCatalog.getTargetControlDeclarations === 'function') {
+    targetGroups.getTargetControlDeclarations = (...args) => coreCatalog.getTargetControlDeclarations(...args);
+  }
+  if (typeof coreCatalog.putTargetControlDeclarations === 'function') {
+    targetGroups.putTargetControlDeclarations = (...args) => coreCatalog.putTargetControlDeclarations(...args);
+  }
 
   return { tenants, targetGroups };
 }

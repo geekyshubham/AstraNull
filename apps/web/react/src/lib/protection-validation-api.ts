@@ -101,6 +101,7 @@ export type ProtectionReport = {
   unknown_reasons: Record<string, number>;
   not_tested_paths: CoverageIds;
   untested_firewall_expectations: CoverageIds;
+  origin_lockdown: { status: string; display: string; reason: string } | null;
   conclusions: ProtectionConclusion[];
 };
 
@@ -499,6 +500,7 @@ export function parseProtectionReport(value: unknown): ProtectionReport {
     unknown_reasons: Object.fromEntries(Object.entries(rec(unknowns.by_reason) ?? {}).filter(([, count]) => typeof count === 'number' && Number.isFinite(count) && count >= 0)) as Record<string, number>,
     not_tested_paths: coverageIds(incomplete.not_tested_paths),
     untested_firewall_expectations: coverageIds(incomplete.untested_firewall_expectations),
+    origin_lockdown: rec(payload.origin_lockdown) ? { status: str(rec(payload.origin_lockdown)?.status), display: str(rec(payload.origin_lockdown)?.display), reason: str(rec(payload.origin_lockdown)?.reason) } : null,
     conclusions: records(payload.conclusions).map((item) => ({
       id: str(item.id), subject: Object.fromEntries(Object.entries(rec(item.subject) ?? {}).filter(([, value]) => typeof value === 'string')) as Record<string, string>,
       comparison_kind: str(item.comparison_kind), scenario: str(item.scenario), result: str(item.result),

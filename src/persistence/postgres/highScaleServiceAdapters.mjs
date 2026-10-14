@@ -1,4 +1,5 @@
 import { validateArtifactUploadBody } from '../../lib/authorizationArtifactLedger.mjs';
+import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { redactObject, redactString } from '../../lib/redact.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
@@ -729,7 +730,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
       }
 
       if (action === 'start') {
-        if (distinctSocApprovalCount(req) < 2) {
+        if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
           await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
             reason: 'insufficient_soc_approvals',
           });

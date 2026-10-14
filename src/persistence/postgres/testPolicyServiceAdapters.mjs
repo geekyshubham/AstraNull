@@ -161,7 +161,7 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
       const checkId = String(body.check_id ?? '').trim();
       const check = getCheckById(checkId);
       if (!check) return { error: 'unknown_check', status: 400 };
-      if (!isCustomerRunnable(check)) {
+      if (!isCustomerRunnable(check, ctx)) {
         return {
           error: 'soc_gated_check',
           status: 403,

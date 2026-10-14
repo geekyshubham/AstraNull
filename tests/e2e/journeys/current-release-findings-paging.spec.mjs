@@ -248,7 +248,7 @@ test.describe('current-release findings paging against the real API', () => {
     await expect(statusChip(page, 'In progress')).toHaveAttribute('aria-pressed', 'true');
     await expect(resultCount).toContainText(`${expected.inProgress} matching findings`);
     await expect(page.locator('.rf-findings-table tbody tr').first()).toContainText('in progress');
-    expect(reads.every((query) => !query.status || ['open', 'in_progress', 'accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive'].includes(query.status))).toBe(true);
+    expect(reads.every((query) => !query.status || ['open', 'in_progress', 'accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed', 'false_positive'].includes(query.status))).toBe(true);
     expect(reads.every((query) => !query.limit || Number(query.limit) <= 200)).toBe(true);
     expect(writes).toEqual([]);
   });

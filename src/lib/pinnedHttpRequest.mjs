@@ -9,6 +9,27 @@ import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { emitProbeActivity, activityUrl } from './probeActivity.mjs';
 import { previewRequest, previewContentType, captureResponsePayload } from './probePayloadPreview.mjs';
 
+export const ASTRANULL_PROBE_USER_AGENT = 'AstraNull-Probe/1.0 (+https://astranull.io/probe)';
+
+export const PINNED_HTTP_METHODS = Object.freeze(['GET', 'HEAD', 'OPTIONS', 'POST']);
+export const METHOD_POLICY_ONLY_HTTP_METHODS = Object.freeze(['TRACE', 'ASTRANULLPROBE']);
+export const METHOD_POLICY_PROBE_KIND = 'waf_method_policy_probe';
+
+export function assertPinnedHttpMethod(method, { probeKind = null, body = null } = {}) {
+  const normalized = String(method ?? 'GET').toUpperCase();
+  const hasBody = body != null;
+  if (METHOD_POLICY_ONLY_HTTP_METHODS.includes(normalized)) {
+    if (probeKind !== METHOD_POLICY_PROBE_KIND || hasBody) {
+      throw Object.assign(new Error('HTTP method not permitted for this probe'), { code: 'EHTTP_METHOD' });
+    }
+    return normalized;
+  }
+  if (!PINNED_HTTP_METHODS.includes(normalized)) {
+    throw Object.assign(new Error('HTTP method not permitted'), { code: 'EHTTP_METHOD' });
+  }
+  return normalized;
+}
+
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5000;
 const MAX_TRANSPORT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024;
@@ -95,27 +116,53 @@ export async function resolvePinnedDestination(host, deps = {}) {
   const policy = deps.destinationPolicy ?? { allowPrivate: false, allowLoopback: false };
   const injected = readInjectedDestination(deps, policy);
 
+  const familyPref = deps.addressFamily === 'ipv4' || deps.addressFamily === 'ipv6'
+    ? deps.addressFamily
+    : 'both';
+  const byFamily = (list) => {
+    const ipv4 = list.filter((value) => net.isIP(value) === 4);
+    const ipv6 = list.filter((value) => net.isIP(value) === 6);
+    return { ipv4, ipv6 };
+  };
+  const pickAddresses = (ipv4, ipv6) => (
+    familyPref === 'ipv4' ? ipv4 : familyPref === 'ipv6' ? ipv6 : [...ipv4, ...ipv6]
+  );
+
   // Same logical host: consume the exact preflight set and do not touch DNS. A
   // genuinely different redirect/discovered host is resolved and classified below.
   if (injected && canonicalHost(candidate) === injected.host) {
+    const split = byFamily(injected.addresses);
+    const addresses = pickAddresses(split.ipv4, split.ipv6);
+    if (addresses.length === 0) {
+      throw Object.assign(new Error('destination did not resolve'), { code: 'ENOTFOUND' });
+    }
     return {
       host: candidate,
-      address: injected.addresses[0],
-      addresses: [...injected.addresses],
+      address: addresses[0],
+      addresses: [...addresses],
+      families: split,
     };
   }
 
-  const addresses = net.isIP(candidate) !== 0
-    ? [candidate]
-    : [...new Set((await Promise.all([
-      resolveOrEmpty(deps.resolve4Fn ?? dns.resolve4, candidate),
-      resolveOrEmpty(deps.resolve6Fn ?? dns.resolve6, candidate),
-    ])).flat())];
+  let ipv4 = [];
+  let ipv6 = [];
+  if (net.isIP(candidate) === 4) ipv4 = [candidate];
+  else if (net.isIP(candidate) === 6) ipv6 = [candidate];
+  else {
+    const v4Task = familyPref === 'ipv6'
+      ? Promise.resolve([])
+      : resolveOrEmpty(deps.resolve4Fn ?? dns.resolve4, candidate);
+    const v6Task = familyPref === 'ipv4'
+      ? Promise.resolve([])
+      : resolveOrEmpty(deps.resolve6Fn ?? dns.resolve6, candidate);
+    [ipv4, ipv6] = await Promise.all([v4Task, v6Task]);
+  }
+  const addresses = [...new Set(pickAddresses(ipv4, ipv6))];
   if (addresses.length === 0) {
     throw Object.assign(new Error('destination did not resolve'), { code: 'ENOTFOUND' });
   }
   assertAllowedAddresses(addresses, policy);
-  return { host: candidate, address: addresses[0], addresses };
+  return { host: candidate, address: addresses[0], addresses, families: { ipv4, ipv6 } };
 }
 
 function responseHeaders(headers) {
@@ -223,6 +270,9 @@ function http1RequestOptions(url, pinned, headers, options) {
 function headersWithHost(url, input = {}) {
   const headers = { ...input };
   if (!Object.keys(headers).some((name) => name.toLowerCase() === 'host')) headers.Host = url.host;
+  if (!Object.keys(headers).some((name) => name.toLowerCase() === 'user-agent')) {
+    headers['User-Agent'] = ASTRANULL_PROBE_USER_AGENT;
+  }
   return headers;
 }
 
@@ -232,6 +282,10 @@ function headersWithHost(url, input = {}) {
  */
 export async function pinnedFetch(urlValue, options = {}, deps = {}) {
   const startedAt = Date.now();
+  const method = assertPinnedHttpMethod(options.method ?? 'GET', {
+    probeKind: options.probeKind ?? options.probe_kind ?? null,
+    body: options.body,
+  });
   const url = assertHttpUrl(urlValue, ['http:', 'https:']);
   const pinned = await resolvePinnedWithinBounds(logicalHostname(url), deps, {
     signal: options.signal,
@@ -241,7 +295,8 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     ? (deps.httpsRequestFn ?? https.request)
     : (deps.httpRequestFn ?? http.request);
   const headers = headersWithHost(url, options.headers);
-  const commonActivity = { operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue),
+  const requestOptions = { ...options, method };
+  const commonActivity = { operation: 'http_request', method, url: activityUrl(urlValue),
     ...(options.activity_phase ? { phase: options.activity_phase } : {}) };
 
   return new Promise((resolve, reject) => {
@@ -249,10 +304,10 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
     const finishReject = (error) => {
       if (settled) return;
       settled = true;
-      emitProbeActivity(deps, { stage: 'attempt_failed', operation: 'http_request', method: options.method ?? 'GET', url: activityUrl(urlValue), error_class: String(error?.code ?? error?.name ?? 'request_failed'), duration_ms: Date.now() - startedAt });
+      emitProbeActivity(deps, { stage: 'attempt_failed', operation: 'http_request', method, url: activityUrl(urlValue), error_class: String(error?.code ?? error?.name ?? 'request_failed'), duration_ms: Date.now() - startedAt });
       reject(error);
     };
-    const req = requestFn(http1RequestOptions(url, pinned, headers, options), (res) => {
+    const req = requestFn(http1RequestOptions(url, pinned, headers, requestOptions), (res) => {
       if (settled) {
         res.destroy();
         return;
@@ -393,6 +448,9 @@ function http2RequestHeaders(url, options) {
     ':scheme': 'https',
     ':authority': url.host,
   };
+  if (!Object.keys(options.headers ?? {}).some((name) => name.toLowerCase() === 'user-agent')) {
+    headers['user-agent'] = ASTRANULL_PROBE_USER_AGENT;
+  }
 
   for (const [name, rawValue] of Object.entries(options.headers ?? {})) {
     const lower = name.toLowerCase();

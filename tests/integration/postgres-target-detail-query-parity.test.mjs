@@ -137,6 +137,7 @@ describe('postgres target-detail query parity', () => {
         state: 'open',
         opened_at: '2026-01-02T00:00:00.000Z',
         owner_group: 'unassigned',
+        verification_basis: null,
       });
       assert.deepEqual(postgresPayload.counts, {
         runs_total: RUN_COUNT,

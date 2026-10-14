@@ -3,7 +3,7 @@ import { CHECK_CATALOG } from '../contracts/checks.mjs';
 import { coverageFrom, summarizePairs, COVERAGE_FRESHNESS_POLICY } from './protectionCoverage.mjs';
 import { REQUIRED_ARTIFACT_TYPES, authorizationPackComplete, distinctSocApprovalCount } from './highScalePolicy.mjs';
 
-export const READINESS_ASSESSMENT_VERSION = 'readiness-assessment.v2';
+export const READINESS_ASSESSMENT_VERSION = 'readiness-assessment.v3';
 export const FINDING_SEVERITY_PENALTIES = Object.freeze({ critical: 20, high: 10, medium: 5, low: 1, informational: 0, info: 0, unknown: 5 });
 const rows = (value) => Array.isArray(value) ? value : [];
 const ts = (value) => { const ms = value == null ? NaN : new Date(value).getTime(); return Number.isFinite(ms) ? ms : null; };
@@ -159,14 +159,30 @@ export function projectReadiness(input = {}) {
     && findingCounts.every((row) => Number.isSafeInteger(row.count) && row.count >= 0 && ts(row.created_at) != null && ts(row.created_at) <= nowMs);
   const complete = input.input_complete === true && completeCounts;
   const activeTargetIds = new Set(targets.map((target) => target.id));
-  const qualifiedFinding = (finding) => sameTenant(finding, tenantId) && ['open', 'in_progress', 'accepted_risk'].includes(finding.status ?? finding.state) && (!finding.target_id || activeTargetIds.has(finding.target_id)) && (finding.created_at == null || available(finding, nowMs));
-  const findings = hasGroupedCounts ? [] : rows(input.findings).filter(qualifiedFinding);
-  const counts = completeCounts ? findingCounts.filter(qualifiedFinding) : [];
+  const acceptanceExpired = (finding) => {
+    if (finding.acceptance_expired === true) return true;
+    const review = ts(finding.risk_acceptance?.review_at ?? finding.review_at);
+    return review != null && review <= nowMs;
+  };
+  const inScopeFinding = (finding) => sameTenant(finding, tenantId) && (!finding.target_id || activeTargetIds.has(finding.target_id)) && (finding.created_at == null || available(finding, nowMs));
+  const penalizedFinding = (finding) => {
+    if (!inScopeFinding(finding)) return false;
+    const status = finding.status ?? finding.state;
+    if (status === 'open' || status === 'in_progress') return true;
+    return status === 'accepted_risk' && acceptanceExpired(finding);
+  };
+  const acceptedRiskFinding = (finding) => inScopeFinding(finding) && (finding.status ?? finding.state) === 'accepted_risk' && !acceptanceExpired(finding);
+  const findings = hasGroupedCounts ? [] : rows(input.findings).filter((finding) => penalizedFinding(finding) || acceptedRiskFinding(finding));
+  const counts = completeCounts ? findingCounts.filter((finding) => penalizedFinding(finding) || acceptedRiskFinding(finding)) : [];
   const severityCounts = {};
-  let severityPenalty = 0, unresolvedCount = 0;
+  let severityPenalty = 0, unresolvedCount = 0, acceptedRiskCount = 0;
   for (const finding of [...findings.map((finding) => ({ finding, count: 1 })), ...counts.map((finding) => ({ finding, count: finding.count }))]) {
     const count = finding.count;
     const row = finding.finding;
+    if (acceptedRiskFinding(row)) {
+      acceptedRiskCount += count;
+      continue;
+    }
     unresolvedCount += count;
     const severity = String(row.severity ?? 'unknown').toLowerCase();
     severityCounts[severity] = (severityCounts[severity] ?? 0) + count;
@@ -190,7 +206,7 @@ export function projectReadiness(input = {}) {
     ],
     posture: { pass: passed, gap: coverage.gap_count, not_run: coverage.not_run_count, review: coverage.applicable_count - passed - coverage.gap_count - coverage.not_run_count, total: coverage.applicable_count },
     coverage: { ...coverage, observation_only_count: pairs.reduce((count, pair) => count + (pair.exclusion_reason === 'observation_only' ? weightOf(pair) : 0), 0), unit: 'target_check_pair', target_count: targets.length, observed_target_count: new Set(pairs.filter((pair) => pair.state === 'conclusive').map((pair) => pair.target_id)).size, shared_mechanism_count: new Set(pairs.filter((pair) => pair.state !== 'excluded').map((pair) => pair.mechanism)).size, mechanism_coverage_claim: 'reused_profiles_not_independent_defenses', freshness_policy: COVERAGE_FRESHNESS_POLICY },
-    findings: { unresolved_count: unresolvedCount, severity_counts: severityCounts, severity_penalty: severityPenalty },
+    findings: { unresolved_count: unresolvedCount, accepted_risk_count: acceptedRiskCount, severity_counts: severityCounts, severity_penalty: severityPenalty },
     governance,
     current_assurance: { status: !complete ? 'incomplete_inputs' : retestPairs.length ? 'retest_required' : passed ? 'tested_scenarios_only' : 'not_established', retest_required_count: retestPairs.length, reasons: [...new Set(retestPairs.map((pair) => pair.pair_reason))].sort() },
     ...(legacy && legacy.assessment_version !== READINESS_ASSESSMENT_VERSION ? { legacy_snapshot: { label: 'legacy_unversioned', authoritative: false, snapshot: legacy } } : {}),

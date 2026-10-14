@@ -41,9 +41,11 @@ test('real PostgreSQL signed scan survives observation -> peer error -> unsuppor
   const fixtures = await createCheckDeliveryFixtures();
   try {
     await withEphemeralPostgres(async (owner, context) => {
-      // Explicitly stop at the approved migration boundary. Never apply held0079.
-      const files = listMigrationFiles(MIGRATIONS_DIR).filter((file) => Number(file.name.slice(0, 4)) <= 78);
-      assert.equal(files.length, 78);
+      // Apply current migrations. Never apply held 0079 (it is outside db/migrations).
+      const files = listMigrationFiles(MIGRATIONS_DIR);
+      assert.equal(files.some((file) => Number(file.name.slice(0, 4)) === 79), false);
+      assert.ok(files.some((file) => file.name.startsWith('0080')));
+      assert.ok(files.some((file) => file.name.startsWith('0081')));
       await runMigrations(owner, { migrationsDir: MIGRATIONS_DIR, files });
       await ensureHarnessAppRole(owner);
       const initial = fixtures.forCheck(getCheckById(CASES[0].id), { targetKind: 'fqdn' });

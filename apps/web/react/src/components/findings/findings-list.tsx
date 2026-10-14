@@ -7,7 +7,7 @@ import { EmptyState } from '../ui/empty-state';
 import { Select } from '../ui/select';
 import { DataTable, type TableColumn } from '../ui/table';
 import type { DataItem } from '../../lib/types';
-import { findingStatus } from '../../lib/finding-lifecycle.mjs';
+import { findingStatus, fixVerifiedBasisHint } from '../../lib/finding-lifecycle.mjs';
 import { findingStatusTone as statusTone } from '../../lib/status-tone';
 import { severityTone } from '../../lib/severity-tone';
 import {
@@ -72,7 +72,7 @@ function statusMatches(finding: DataItem, filter: StatusFilter) {
   const status = findingStatus(finding);
   if (filter === 'all') return true;
   if (filter === 'open') return status === 'open';
-  if (filter === 'closed') return status === 'closed' || status === 'resolved';
+  if (filter === 'closed') return status === 'closed' || status === 'resolved' || status === 'fix_verified';
   if (filter === 'accepted') return status === 'accepted' || status === 'accepted_risk';
   return true;
 }
@@ -230,6 +230,8 @@ export function FindingsListView({
         const statuses = Object.keys(group.statusCounts);
         const lead = findingStatus(group.members[0] ?? {});
         if (group.members.length === 1 || statuses.length === 1) {
+          const basis = group.members.length === 1 ? fixVerifiedBasisHint(group.members[0]) : '';
+          if (basis) return <span className="finding-cell-stack"><Badge tone={statusTone(lead)}>{lead.replaceAll('_', ' ')}</Badge><small>{basis}</small></span>;
           return group.members.length === 1
             ? <Badge tone={statusTone(lead)}>{lead.replaceAll('_', ' ')}</Badge>
             : <Badge tone={statusTone(lead)}>{summarizeFindingStatuses(group.statusCounts)}</Badge>;

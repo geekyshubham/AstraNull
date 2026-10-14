@@ -25,15 +25,19 @@ import {
   probeHttp2Settings,
   probeQuicReachability,
   probeReflectionService,
+  probeTcpConnect,
   probeTlsSession,
   probeUdpDatagram,
   probeWebsocketUpgradePosture,
   resolveAlertWebhookUrl,
 } from '../src/lib/safeNetworkProbes.mjs';
+import { sourcePerspectiveFromEnv } from '../src/lib/probeSourcePerspective.mjs';
 import { probeDnsWireQuery } from '../src/lib/dnsWireQuery.mjs';
 import { resolveDeploymentProfile } from '../src/lib/deploymentProfile.mjs';
 import {
   initialDestinationResolverAttemptsForJob,
+  isValidPerspectiveId,
+  jobClaimableByPerspective,
   maxDestinationResolverAttemptsForJob,
   probeAuthority,
 } from '../src/lib/probeJobs.mjs';
@@ -46,6 +50,7 @@ import {
   probeWorkerAuthHeaders,
   verifyProbeJobSignature,
 } from '../src/services/probeCoordinator.mjs';
+import { RESPONSE_FEATURE_HEADER_ALLOWLIST } from '../src/lib/vectorProbes/wafProbeSupport.mjs';
 
 export const WORKER_VERSION = '0.1.0';
 const POLL_INTERVAL_MIN_MS = 1000;
@@ -61,9 +66,9 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 
 const HTTP_VECTOR_FAMILIES = new Set(['origin', 'l7', 'path', 'tls', 'protocol']);
 
-export function redactSecrets(text, secret) {
-  if (!text || !secret) return text;
-  return String(text).split(secret).join('[redacted]');
+export function redactSecrets(text, ...secrets) {
+  if (!text) return text;
+  return secrets.filter(Boolean).reduce((out, secret) => out.split(secret).join('[redacted]'), String(text));
 }
 
 function parseFlag(argv, name) {
@@ -158,6 +163,19 @@ export function parseWorkerConfig(argv = process.argv.slice(2), env = process.en
   if (env.ASTRANULL_REVIEWED_SAFE_EXECUTION_ENABLED === '1') {
     throw new Error('Reviewed operation execution remains unavailable.');
   }
+  const perspectiveId = sourcePerspectiveFromEnv(env).id;
+  if (!isValidPerspectiveId(perspectiveId)) {
+    throw new Error('ASTRANULL_PROBE_PERSPECTIVE_ID must match [a-z0-9-]{1,32}.');
+  }
+  let perspectiveSecret = null;
+  const rawPerspectiveSecret = env.ASTRANULL_PROBE_PERSPECTIVE_SECRET;
+  if (rawPerspectiveSecret != null && String(rawPerspectiveSecret).trim() !== '') {
+    const validatedPerspectiveSecret = validateHmacSecretEntropy(String(rawPerspectiveSecret));
+    if (!validatedPerspectiveSecret.ok) {
+      throw new Error(`Probe perspective secret failed entropy validation (${validatedPerspectiveSecret.error}).`);
+    }
+    perspectiveSecret = validatedPerspectiveSecret.secret;
+  }
   return {
     apiUrl: apiUrl.replace(/\/$/, ''),
     workerId: String(workerId),
@@ -165,6 +183,8 @@ export function parseWorkerConfig(argv = process.argv.slice(2), env = process.en
     once,
     pollIntervalMs,
     tenantId: tenantIdStr,
+    perspectiveId,
+    perspectiveSecret,
     heartbeatFile: String(env.ASTRANULL_WORKER_HEARTBEAT_FILE ?? '').trim() || null,
   };
 }
@@ -180,8 +200,8 @@ async function signedFetch(config, method, path, body, options = {}) {
   const headers = {
     ...probeWorkerAuthHeaders(
       config.workerId,
-      { method, path: fullPath, bodyText, tenantId: config.tenantId },
-      config.secret,
+      { method, path: fullPath, bodyText, tenantId: config.tenantId, perspectiveId: config.perspectiveId },
+      config.perspectiveSecret ?? config.secret,
     ),
     accept: 'application/json',
   };
@@ -325,6 +345,14 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'open_ports',
   'filtered_ports',
   'closed_ports',
+  'rejected_ports',
+  'ports_scanned',
+  'samples',
+  'protocol_results',
+  'payload_profiles_declared',
+  'payload_profiles_sent',
+  'nameserver_results',
+  'risky_admin_ports_open',
   'origin_observation.limitations',
   'origin_observation.supporting_signals',
   'edge_signature.layers',
@@ -341,16 +369,257 @@ const METADATA_ALLOWED_ARRAY_PATHS = new Set([
   'edge_signature.wafw00f.all_matches',
 ]);
 
-function sanitizeMetadataScalar(value) {
-  if (typeof value === 'string') return value.slice(0, METADATA_ARRAY_STRING_MAX);
+const METADATA_TOTAL_KEYS_MAX = 128;
+const METADATA_STRING_MAX = 256;
+export const STRUCTURED_IDENTIFIER_MAX = 128;
+
+export function isStructuredIdentifier(key, path = '') {
+  const normalizedKey = String(key ?? '').toLowerCase();
+  if (normalizedKey === 'signature_id') return true;
+  if (/(?:^id$|_id$|_hash|_token|_secret|_key|_digest|_version|_chain|signature|cname|address|hostname|fqdn|url)$/i.test(normalizedKey)) return true;
+  const normalizedPath = String(path || key).toLowerCase();
+  return /dns_cname_chain|dns_resolved_ips|asn_dataset_version|signature_id/i.test(normalizedPath);
+}
+
+export const BOOLEAN_SCHEMA_FIELDS = Object.freeze(new Set([
+  'location_changed',
+  'redirected',
+  'local_error',
+  'source_penalized',
+  'cache_buster',
+  'comparison_complete',
+  'readiness_conclusion',
+  'origin_rejected',
+  'service_validated',
+  'peer_is_cdn',
+  'validated',
+  'transport_error',
+  'live_verified',
+  'challenge',
+  'blocked',
+  'allowed',
+  'challenged',
+  'inconclusive',
+  'createsFinding',
+  'creates_finding',
+  'digest_verified',
+  'live_evidence_verified',
+]));
+
+export function coerceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  return undefined;
+}
+
+function sanitizeMetadataScalar(value, path = '') {
+  const lastKey = path.split('.').pop() ?? path;
+  if (BOOLEAN_SCHEMA_FIELDS.has(lastKey)) {
+    return coerceBoolean(value);
+  }
+  if (typeof value === 'string') {
+    return isStructuredIdentifier(lastKey, path) ? value.slice(0, STRUCTURED_IDENTIFIER_MAX) : value.slice(0, METADATA_STRING_MAX);
+  }
   if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
   return undefined;
+}
+
+const STRUCTURED_ARRAY_ITEMS_MAX = 32;
+const STRUCTURED_STRING_MAX = 256;
+const SCALAR = 'scalar';
+const HEADER_MAP = 'header_map';
+const listOf = (item) => ({ list: item });
+const RESPONSE_FEATURE_DENIED_HEADERS = new Set(['cookie', 'set-cookie', 'authorization', 'proxy-authorization']);
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9a-z]{1,64}$/;
+const HEADER_ALLOWLIST = new Set(RESPONSE_FEATURE_HEADER_ALLOWLIST);
+const PLACEMENT_SCHEMA = {
+  placement: SCALAR, outcome: SCALAR, status_code: SCALAR, signature_id: SCALAR,
+  cache_status: SCALAR, location_changed: SCALAR, inconclusive_reason: SCALAR, matched_vendor: SCALAR,
+};
+const TRAILING_CONTROL_SCHEMA = { outcome: SCALAR, status_code: SCALAR, signature_id: SCALAR, reason: SCALAR };
+const ICMP_SCHEMA = { kind: SCALAR, errno: SCALAR };
+const NETWORK_SAMPLE_SCHEMA = {
+  protocol: SCALAR, port: SCALAR, address: SCALAR, address_family: SCALAR,
+  tcp_outcome: SCALAR, udp_outcome: SCALAR, icmp: ICMP_SCHEMA, service_validated: SCALAR,
+  peer_is_cdn: SCALAR, response_received: SCALAR, response_bytes: SCALAR, response_size_class: SCALAR,
+  datagram_bytes: SCALAR, error_class: SCALAR, duration_ms: SCALAR, validated: SCALAR, local_error: SCALAR,
+};
+const NETWORK_FAMILY_SCHEMA = {
+  ...NETWORK_SAMPLE_SCHEMA,
+  samples: listOf(NETWORK_SAMPLE_SCHEMA),
+  sample_agreement: SCALAR,
+  open_ports: listOf(SCALAR),
+  closed_ports: listOf(SCALAR),
+  rejected_ports: listOf(SCALAR),
+  filtered_ports: listOf(SCALAR),
+  ports_sampled: listOf(SCALAR),
+  not_sampled: SCALAR,
+  local_error_ports: listOf(SCALAR),
+};
+const SIGNATURE_BASIS_SCHEMA = { kind: SCALAR, id: SCALAR };
+const BASELINE_FEATURE_SCHEMA = {
+  placement: SCALAR, status_code: SCALAR, header_subset: HEADER_MAP,
+  body_length_bucket: SCALAR, signature_id: SCALAR, path: SCALAR,
+  signature_basis: SIGNATURE_BASIS_SCHEMA,
+  declaration_digest: SCALAR,
+  location_changed: SCALAR,
+  redirected: SCALAR,
+};
+const STRUCTURED_METADATA_SCHEMAS = Object.freeze({
+  baseline: BASELINE_FEATURE_SCHEMA,
+  permitted_baseline: {
+    ...BASELINE_FEATURE_SCHEMA,
+    health: SCALAR,
+    denial_signature: { id: SCALAR, kind: SCALAR },
+  },
+  placements: listOf(PLACEMENT_SCHEMA),
+  trailing_control: TRAILING_CONTROL_SCHEMA,
+  response_features: listOf({
+    placement: SCALAR, status_code: SCALAR, header_subset: HEADER_MAP,
+    body_length_bucket: SCALAR, signature_id: SCALAR, path: SCALAR,
+    signature_basis: SIGNATURE_BASIS_SCHEMA,
+    declaration_digest: SCALAR,
+    location_changed: SCALAR,
+    redirected: SCALAR,
+  }),
+  paths: listOf({
+    path: SCALAR, posture: SCALAR, posture_status: SCALAR, enforcement: SCALAR,
+    source_penalized: SCALAR, placements: listOf(PLACEMENT_SCHEMA), trailing_control: TRAILING_CONTROL_SCHEMA,
+    baseline: BASELINE_FEATURE_SCHEMA,
+  }),
+  leg_order: listOf(SCALAR),
+  method_results: listOf({
+    method: SCALAR, outcome: SCALAR, status_code: SCALAR, signature_id: SCALAR,
+    reason: SCALAR, origin_rejected: SCALAR, inconclusive_reason: SCALAR, matched_vendor: SCALAR,
+  }),
+  families: { ipv4: NETWORK_FAMILY_SCHEMA, ipv6: NETWORK_FAMILY_SCHEMA },
+  port_results: listOf({
+    ...NETWORK_SAMPLE_SCHEMA,
+    families: { ipv4: NETWORK_FAMILY_SCHEMA, ipv6: NETWORK_FAMILY_SCHEMA },
+    parity: SCALAR,
+    samples: listOf(NETWORK_SAMPLE_SCHEMA),
+    sample_agreement: SCALAR,
+  }),
+  declared_deny_ports: listOf(SCALAR),
+  ports_probed: listOf(SCALAR),
+  unprobed_deny_ports: listOf(SCALAR),
+  source_perspective: { id: SCALAR, label: SCALAR },
+  requests_sent: SCALAR,
+  allowed_before_limit: SCALAR,
+  matched_vendor: SCALAR,
+  inconclusive_reason: SCALAR,
+  ports_sampled: listOf(SCALAR),
+  not_sampled: SCALAR,
+  parity_ports: listOf(SCALAR),
+  parity_mismatch_ports: listOf(SCALAR),
+  parity_reason: SCALAR,
+  unqueried_nameservers: listOf(SCALAR),
+  local_error: SCALAR,
+  local_error_ports: listOf(SCALAR),
+});
+
+function sanitizeStructuredScalar(value, schemaKey = '') {
+  if (BOOLEAN_SCHEMA_FIELDS.has(schemaKey)) {
+    return coerceBoolean(value);
+  }
+  if (typeof value === 'string') {
+    return isStructuredIdentifier(schemaKey)
+      ? value.slice(0, STRUCTURED_IDENTIFIER_MAX)
+      : value.slice(0, STRUCTURED_STRING_MAX);
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean' || value === null) return value;
+  return undefined;
+}
+
+function sanitizeHeaderMap(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out = {};
+  for (const [rawName, rawValue] of Object.entries(value).slice(0, STRUCTURED_ARRAY_ITEMS_MAX)) {
+    const name = String(rawName).toLowerCase();
+    if (!HEADER_ALLOWLIST.has(name) || !HEADER_NAME.test(name) || RESPONSE_FEATURE_DENIED_HEADERS.has(name)) continue;
+    if (typeof rawValue !== 'string' && typeof rawValue !== 'number') continue;
+    out[name] = String(rawValue).slice(0, STRUCTURED_STRING_MAX);
+  }
+  return out;
+}
+
+function sanitizeStructured(value, schema, parentKey = '') {
+  if (BOOLEAN_SCHEMA_FIELDS.has(parentKey)) {
+    return coerceBoolean(value);
+  }
+  if (schema === SIGNATURE_BASIS_SCHEMA && value === null) {
+    return null;
+  }
+  if (schema === SCALAR) return sanitizeStructuredScalar(value, parentKey);
+  if (schema === HEADER_MAP) return sanitizeHeaderMap(value);
+  if (schema?.list) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    for (const item of value.slice(0, STRUCTURED_ARRAY_ITEMS_MAX)) {
+      const cleaned = sanitizeStructured(item, schema.list, parentKey);
+      if (cleaned !== undefined) out.push(cleaned);
+    }
+    return out;
+  }
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out = {};
+  for (const [key, childSchema] of Object.entries(schema)) {
+    if (!Object.hasOwn(value, key) || METADATA_DENY_KEYS.has(key)) continue;
+    if (BOOLEAN_SCHEMA_FIELDS.has(key)) {
+      const coerced = coerceBoolean(value[key]);
+      if (coerced !== undefined) out[key] = coerced;
+      continue;
+    }
+    const cleaned = sanitizeStructured(value[key], childSchema, key);
+    if (cleaned !== undefined) out[key] = cleaned;
+  }
+  return out;
+}
+
+export const SERIALIZED_METADATA_CAP_BYTES = 64 * 1024;
+
+export function capSerializedMetadata(obj) {
+  if (obj == null || typeof obj !== 'object') return obj;
+  let json = JSON.stringify(obj);
+  if (Buffer.byteLength(json, 'utf8') <= SERIALIZED_METADATA_CAP_BYTES) {
+    return obj;
+  }
+  const root = JSON.parse(json);
+
+  while (Buffer.byteLength(JSON.stringify(root), 'utf8') > SERIALIZED_METADATA_CAP_BYTES) {
+    const arrays = [];
+    function collectArrays(curr) {
+      if (!curr || typeof curr !== 'object') return;
+      if (Array.isArray(curr)) {
+        if (curr.length > 0) arrays.push(curr);
+        for (const item of curr) collectArrays(item);
+      } else {
+        for (const val of Object.values(curr)) collectArrays(val);
+      }
+    }
+    collectArrays(root);
+    if (arrays.length === 0) break;
+
+    arrays.sort((a, b) => {
+      const lenA = Buffer.byteLength(JSON.stringify(a), 'utf8');
+      const lenB = Buffer.byteLength(JSON.stringify(b), 'utf8');
+      return lenB - lenA;
+    });
+
+    const largest = arrays[0];
+    if (largest.length === 0) break;
+    largest.pop();
+  }
+  return root;
 }
 
 export function sanitizeProbeMetadata(metadata) {
   if (metadata == null || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return {};
   }
+  let topLevelKeys = 0;
   function walkArray(values, path) {
     const out = [];
     for (const item of values.slice(0, METADATA_ARRAY_ITEMS_MAX)) {
@@ -360,7 +629,7 @@ export function sanitizeProbeMetadata(metadata) {
         if (Object.keys(nested).length > 0) out.push(nested);
         continue;
       }
-      const scalar = sanitizeMetadataScalar(item);
+      const scalar = sanitizeMetadataScalar(item, path);
       if (scalar !== undefined) out.push(scalar);
     }
     return out;
@@ -368,22 +637,48 @@ export function sanitizeProbeMetadata(metadata) {
   function walk(value, path = '') {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
+      if (!path && topLevelKeys >= METADATA_TOTAL_KEYS_MAX) break;
       if (METADATA_DENY_KEYS.has(key)) continue;
+      if (BOOLEAN_SCHEMA_FIELDS.has(key)) {
+        const coerced = coerceBoolean(child);
+        if (coerced !== undefined) {
+          out[key] = coerced;
+          if (!path) topLevelKeys += 1;
+        }
+        continue;
+      }
+      if (!path && Object.hasOwn(STRUCTURED_METADATA_SCHEMAS, key)) {
+        const cleaned = sanitizeStructured(child, STRUCTURED_METADATA_SCHEMAS[key], key);
+        if (cleaned !== undefined) {
+          out[key] = cleaned;
+          topLevelKeys += 1;
+        }
+        continue;
+      }
       const childPath = path ? `${path}.${key}` : key;
       if (child != null && typeof child === 'object') {
         if (Array.isArray(child)) {
-          if (METADATA_ALLOWED_ARRAY_PATHS.has(childPath)) out[key] = walkArray(child, childPath);
+          if (METADATA_ALLOWED_ARRAY_PATHS.has(childPath)) {
+            out[key] = walkArray(child, childPath);
+            if (!path) topLevelKeys += 1;
+          }
           continue;
         }
         const nested = walk(child, childPath);
-        if (Object.keys(nested).length > 0) out[key] = nested;
+        if (Object.keys(nested).length > 0) {
+          out[key] = nested;
+          if (!path) topLevelKeys += 1;
+        }
       } else {
-        out[key] = child;
+        const isIdent = isStructuredIdentifier(key, childPath);
+        out[key] = typeof child === 'string' ? (isIdent ? child.slice(0, STRUCTURED_IDENTIFIER_MAX) : child.slice(0, METADATA_STRING_MAX)) : child;
+        if (!path) topLevelKeys += 1;
       }
     }
     return out;
   }
-  return walk(metadata);
+  const cleaned = walk(metadata);
+  return capSerializedMetadata(cleaned);
 }
 
 function profileKindForJob(job, metadata = {}) {
@@ -953,115 +1248,7 @@ export async function probeDns(job, deps = {}) {
   }
 }
 
-export async function probeTcpConnect(job, deps = {}) {
-  const connectFn = deps.connectFn ?? net.connect;
-  const endpoint = parseTcpEndpoint(job);
-  if (!endpoint) {
-    return {
-      external_result: 'error',
-      metadata: withProfileKind(job, {
-        probe_kind: 'tcp_connect',
-        error_class: 'unsupported_target',
-      }),
-      requests_sent: 0,
-      duration_ms: 0,
-    };
-  }
-
-  const timeoutMs = job.constraints?.timeout_ms ?? 5000;
-  const started = Date.now();
-  let pinned;
-  try {
-    pinned = await resolvePinnedDestination(endpoint.host, deps);
-  } catch (error) {
-    return {
-      external_result: 'error',
-      metadata: withProfileKind(job, {
-        probe_kind: 'tcp_connect',
-        error_class: error?.code === 'ENOTFOUND'
-          ? 'destination_unresolved'
-          : 'destination_not_routable',
-      }),
-      requests_sent: 0,
-      duration_ms: Date.now() - started,
-    };
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let requestsSent = 0;
-    const socket = startProbeIoAttempt(
-      deps,
-      'tcp_connect',
-      () => connectFn(
-        { host: pinned.address, port: endpoint.port },
-        () => {
-          if (settled) return;
-          settled = true;
-          const durationMs = Date.now() - started;
-          socket.destroy();
-          resolve({
-            external_result: 'connected',
-            metadata: withProfileKind(job, {
-              probe_kind: 'tcp_connect',
-              duration_ms: durationMs,
-              target_port: endpoint.port,
-              observation_complete: requestsSent === 1,
-              pinned_address: pinned.address,
-            }),
-            requests_sent: requestsSent,
-            duration_ms: durationMs,
-          });
-        },
-      ),
-      () => { requestsSent = 1; },
-    );
-
-    socket.setTimeout(timeoutMs);
-    socket.on('timeout', () => {
-      if (settled) return;
-      settled = true;
-      const durationMs = Date.now() - started;
-      socket.destroy();
-      resolve({
-        external_result: 'timeout',
-        metadata: withProfileKind(job, {
-          probe_kind: 'tcp_connect',
-          error_class: 'timeout',
-          duration_ms: durationMs,
-          target_port: endpoint.port,
-          observation_complete: requestsSent === 1,
-          pinned_address: pinned.address,
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
-      });
-    });
-    socket.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      const durationMs = Date.now() - started;
-      const code = err?.code ?? '';
-      const external =
-        code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH'
-          ? 'blocked'
-          : 'error';
-      resolve({
-        external_result: external,
-        metadata: withProfileKind(job, {
-          probe_kind: 'tcp_connect',
-          error_class: code || 'connect_failed',
-          duration_ms: durationMs,
-          target_port: endpoint.port,
-          observation_complete: requestsSent === 1,
-          pinned_address: pinned.address,
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
-      });
-    });
-  });
-}
+export { probeTcpConnect };
 
 export function probeMetadataMarker(job) {
   const marker = job.probe_profile?.marker ?? 'astranull-safe-marker';
@@ -1247,6 +1434,7 @@ function finalizeProbeOutcome(outcome, timing, accounting) {
     metadata: {
       ...metadata,
       duration_ms: durationMs,
+      source_perspective: metadata.source_perspective ?? sourcePerspectiveFromEnv(),
       request_counting_basis: 'logical_operations',
       request_accounting: {
         ...(metadata.request_accounting ?? {}),
@@ -1552,7 +1740,7 @@ export async function pollAndProcessOnce(config) {
   const listed = await signedFetch(config, 'GET', '/internal/probe/jobs');
   if (listed.status !== 200) {
     throw new Error(
-      `Probe job poll failed (${listed.status}): ${redactSecrets(listed.text?.slice(0, 200), config.secret)}`,
+      `Probe job poll failed (${listed.status}): ${redactSecrets(listed.text?.slice(0, 200), config.secret, config.perspectiveSecret)}`,
     );
   }
   const jobs = listed.json?.jobs ?? [];
@@ -1560,6 +1748,9 @@ export async function pollAndProcessOnce(config) {
     const reviewed = Object.hasOwn(job?.constraints ?? {}, 'reviewed_operation_binding');
     if (reviewed) {
       return { job_id: job.id, external_result: 'not_run', reason: 'reviewed_operation_execution_unavailable' };
+    }
+    if (!jobClaimableByPerspective(job, config.perspectiveId)) {
+      return { job_id: job.id, external_result: 'not_run', reason: 'probe_perspective_mismatch' };
     }
     const cancellation = new AbortController();
     const authority = probeAuthority(job);
@@ -1590,7 +1781,7 @@ export async function pollAndProcessOnce(config) {
     const resultPath = `/internal/probe/jobs/${job.id}/result`;
     const posted = await signedFetch(config, 'POST', resultPath, body);
     if (isPermanentResultRejection(posted.status)) {
-      console.error(`Probe result rejected (${posted.status}) for ${job.id}: ${redactSecrets(posted.text?.slice(0, 200), config.secret)}`);
+      console.error(`Probe result rejected (${posted.status}) for ${job.id}: ${redactSecrets(posted.text?.slice(0, 200), config.secret, config.perspectiveSecret)}`);
       return { job_id: job.id, external_result: body.external_result, rejected: posted.status };
     }
     if (posted.status !== 201) {
@@ -1598,6 +1789,7 @@ export async function pollAndProcessOnce(config) {
         `Probe result post failed (${posted.status}) for ${job.id}: ${redactSecrets(
           posted.text?.slice(0, 200),
           config.secret,
+          config.perspectiveSecret,
         )}`,
       );
     }
@@ -1643,8 +1835,7 @@ if (invokedAsMain) {
     const config = parseWorkerConfig();
     await runProbeWorker(config);
   } catch (err) {
-    const secret = process.env.ASTRANULL_PROBE_WORKER_SECRET;
-    console.error(redactSecrets(err?.message ?? String(err), secret));
+    console.error(redactSecrets(err?.message ?? String(err), process.env.ASTRANULL_PROBE_WORKER_SECRET, process.env.ASTRANULL_PROBE_PERSPECTIVE_SECRET));
     process.exit(1);
   }
 }

@@ -2,6 +2,7 @@ import { json, readJsonBody } from '../lib/http.mjs';
 import { bindDeclaredTargetInput } from '../lib/targetScopeInput.mjs';
 import { requirePermission } from '../rbac.mjs';
 import * as wafEdgeDetection from '../services/wafEdgeDetection.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 
 const BASE_PATH = '/v1/waf/edge-detection';
 const DETAIL_PATH = /^\/v1\/waf\/edge-detection\/([^/]+)$/;
@@ -19,7 +20,7 @@ export async function tryHandleWafEdgeDetectionRoutes(req, res, url, ctx, runtim
   const method = req.method ?? 'GET';
   if (!isWafEdgeDetectionRoute(url.pathname)) return false;
 
-  if (runtimeConfig.featureFlags?.wafPostureEnabled !== true) {
+  if (!wafPostureEnabledFor(runtimeConfig, ctx?.tenantId)) {
     json(res, 404, { error: 'waf_feature_disabled' });
     return true;
   }

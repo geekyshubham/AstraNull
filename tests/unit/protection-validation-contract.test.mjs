@@ -539,17 +539,18 @@ describe('classifyFirewallComparisonItem', () => {
   const allow = { expected: 'allow' };
   const deny = { expected: 'deny' };
   const ok = { comparable: true, stale: false, reasons: [] };
+  const denied = ['explicit_denial_observed', 'explicit_denial_observed'];
 
   it('matched, regression, and improvement require compatible evidence', () => {
     assert.equal(classifyFirewallComparisonItem({ expectation: allow, baseline: ['service_response_observed'], candidate: ['service_response_observed'], compatibility: ok }).status, 'matched');
-    const reach = classifyFirewallComparisonItem({ expectation: deny, baseline: ['explicit_denial_observed'], candidate: ['service_response_observed'], compatibility: ok });
+    const reach = classifyFirewallComparisonItem({ expectation: deny, baseline: denied, candidate: ['service_response_observed'], compatibility: ok });
     assert.equal(reach.status, 'regression');
     assert.equal(reach.gap_kind, 'forbidden_service_newly_reachable');
     assert.equal(reach.expectation_met, false);
     const gone = classifyFirewallComparisonItem({ expectation: allow, baseline: ['service_response_observed'], candidate: ['no_response', 'no_response'], compatibility: ok });
     assert.equal(gone.status, 'regression');
     assert.equal(gone.gap_kind, 'required_service_newly_unavailable');
-    const fixed = classifyFirewallComparisonItem({ expectation: deny, baseline: ['reachable_transport_only'], candidate: ['explicit_denial_observed'], compatibility: ok });
+    const fixed = classifyFirewallComparisonItem({ expectation: deny, baseline: ['reachable_transport_only'], candidate: denied, compatibility: ok });
     assert.equal(fixed.status, 'improvement');
     assert.equal(fixed.expectation_met, true);
   });
@@ -557,7 +558,7 @@ describe('classifyFirewallComparisonItem', () => {
   it('keeps ambiguous observations inconclusive', () => {
     const single = classifyFirewallComparisonItem({ expectation: allow, baseline: ['service_response_observed'], candidate: ['no_response'], compatibility: ok });
     assert.equal(single.status, 'inconclusive');
-    const udp = classifyFirewallComparisonItem({ expectation: deny, baseline: ['explicit_denial_observed'], candidate: ['udp_silence', 'udp_silence'], compatibility: ok });
+    const udp = classifyFirewallComparisonItem({ expectation: deny, baseline: denied, candidate: ['udp_silence', 'udp_silence'], compatibility: ok });
     assert.equal(udp.status, 'inconclusive');
     assert.ok(udp.limitations.includes('udp_silence_ambiguous'));
     const timeoutDeny = classifyFirewallComparisonItem({ expectation: deny, baseline: ['no_response'], candidate: ['no_response'], compatibility: ok });
@@ -572,8 +573,15 @@ describe('classifyFirewallComparisonItem', () => {
     assert.equal(noPre.expectation_met, true);
   });
 
+  it('a single explicit-denial sample does not satisfy a deny expectation', () => {
+    const single = classifyFirewallComparisonItem({ expectation: deny, baseline: ['explicit_denial_observed'], candidate: ['explicit_denial_observed'], compatibility: ok });
+    assert.equal(single.status, 'inconclusive');
+    assert.equal(single.pre_state, 'unverified');
+    assert.equal(single.post_state, 'unverified');
+  });
+
   it('a mixed deny sample with any reachable response is a violation', () => {
-    const result = classifyFirewallComparisonItem({ expectation: deny, baseline: ['explicit_denial_observed'], candidate: ['explicit_denial_observed', 'reachable_transport_only'], compatibility: ok });
+    const result = classifyFirewallComparisonItem({ expectation: deny, baseline: denied, candidate: ['explicit_denial_observed', 'reachable_transport_only'], compatibility: ok });
     assert.equal(result.status, 'regression');
     assert.equal(result.gap_kind, 'forbidden_service_newly_reachable');
   });
@@ -797,7 +805,7 @@ describe('provider-neutral workflow', () => {
     const candidate = firewallSet(expectation, { captured_at: '2026-10-02T00:00:00.000Z', references: [ref({ test_run_id: 'run_9' })] });
     const compatibility = assessComparisonCompatibility(capture.entries[0], candidate);
     assert.equal(compatibility.comparable, true);
-    const item = classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed'], candidate: ['explicit_denial_observed'], compatibility });
+    const item = classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed', 'explicit_denial_observed'], candidate: ['explicit_denial_observed', 'explicit_denial_observed'], compatibility });
     const result = normalizeComparisonEvaluation({
       kind: 'firewall_change',
       tenant_id: TENANT,

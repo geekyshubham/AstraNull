@@ -331,4 +331,29 @@ describe('explicit domain sets preserve each target execution policy', () => {
     assert.equal(getStore().testRuns.length, 0);
     assert.equal(getStore().validationScans.length, 0);
   });
+
+  it('projects demo required_input_missing step with verdict explanation_reason and required_input', () => {
+    const scan = createValidationScan(CTX, { target_group_id: 'tg_1', target_id: 'tgt_1', check_ids: [CHECKS[0]] }, RUNTIME);
+    const step = scan.steps[0];
+    const run = getStore().testRuns.find((r) => r.id === step.test_run_id);
+    run.status = 'verdicted';
+    run.summary = { requests_sent: 0, required_input_missing: 'declared_tcp_deny_required' };
+    getStore().verdicts.push({
+      id: 'vrd_demo_dev',
+      tenant_id: CTX.tenantId,
+      test_run_id: run.id,
+      target_id: 'tgt_1',
+      check_id: CHECKS[0],
+      verdict: 'inconclusive',
+      confidence: 'external_only',
+      explanation: 'No denied port is declared, so there was nothing to probe.',
+      explanation_reason: 'required_input_missing',
+      required_input: 'declared_tcp_deny_required',
+      severity: 'info',
+    });
+    const projected = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME });
+    assert.equal(projected.steps[0].verdict.verdict, 'inconclusive');
+    assert.equal(projected.steps[0].verdict.explanation_reason, 'required_input_missing');
+    assert.equal(projected.steps[0].verdict.required_input, 'declared_tcp_deny_required');
+  });
 });

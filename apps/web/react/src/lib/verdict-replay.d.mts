@@ -1,0 +1,21 @@
+export type VerdictReplayState = 'unchanged' | 'changed' | 'no_stored' | 'no_evidence';
+export type VerdictReplayModel = {
+  state: VerdictReplayState;
+  storedVerdict: string;
+  storedLabel: string;
+  nowVerdict: string;
+  nowLabel: string;
+  explanation: string;
+  declarationsApplied: boolean;
+  evidenceAvailable: boolean;
+  versionGap: { code: string; label: string } | null;
+  storedVersions: string;
+  currentVersions: string;
+  regrade: RegradeModel | null;
+};
+export type RegradeModel = { regraded: boolean; reason: string; label: string; note: string };
+export const REGRADED_LABEL: string;
+export const REGRADE_UNAVAILABLE_COPY: Readonly<Record<'missing_response_features' | 'insufficient_feature_data' | 'baseline_not_recorded', string>>;
+export function regradeModel(payload: unknown): RegradeModel | null;
+export function verdictReplayModel(payload: unknown): VerdictReplayModel | null;
+export function verdictReplayErrorMessage(error: unknown): string;

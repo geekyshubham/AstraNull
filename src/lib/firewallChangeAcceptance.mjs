@@ -21,11 +21,15 @@ import {
 } from '../contracts/protectionValidation.mjs';
 import { evidenceTierForProbeKind } from './probeEvidenceTiers.mjs';
 import { originObservationOf } from './externalObservationOutcomes.mjs';
+import { REJECT_ICMP_MIN_ELAPSED_MS } from './networkProbeOutcomes.mjs';
 
-export const FIREWALL_ACCEPTANCE_CLASSIFIER_VERSION = 'firewall-acceptance-v3';
+export const FIREWALL_ACCEPTANCE_CLASSIFIER_VERSION = 'firewall-acceptance-v4';
 
-/** A TCP refusal indicates a closed service, not firewall enforcement. */
-export const FIREWALL_DENIAL_BASES = Object.freeze(['icmp_admin_prohibited']);
+/** Only explicit remote filter evidence (ICMP admin-prohibited, host/net unreachable) is a firewall deny. RST, UDP port-unreachable and local socket errors are not. */
+export const FIREWALL_DENIAL_BASES = Object.freeze(['icmp_admin_prohibited', 'rejected_icmp']);
+const CLOSED_PORT_BASIS = 'port_unreachable';
+const LOCAL_ERROR_BASIS = 'local_probe_error';
+const LOCAL_ERRNOS = new Set(['EACCES', 'EPERM']);
 
 export const MAX_SAMPLES_PER_SIDE = 64;
 export const MAX_REFERENCES_PER_SIDE = MAX_EVIDENCE_REFERENCES;
@@ -58,8 +62,14 @@ export const FIREWALL_ITEM_REASONS = Object.freeze([
   'post_change_not_sampled',
   'no_supported_evidence_for_endpoint',
   'icmp_admin_prohibited',
+  'rejected_icmp',
+  'port_unreachable',
+  'consistent_with_new_deny_rule',
+  'udp_reply_after_silence',
   'rst_after_change',
   'rst_without_open_baseline',
+  'closed_port_not_control_specific',
+  'local_probe_error',
 ]);
 
 const TRUSTED_PRODUCER = 'signed_probe';
@@ -70,10 +80,19 @@ const NO_ATTEMPT_ERRORS = new Set([
   'live_probe_not_authorized',
   'probe_not_authorized',
 ]);
-const SILENT_TCP_CLASSES = new Set(['no_response', 'transport_error']);
+const SILENT_DROP_CLASSES = new Set(['no_response', 'udp_silence']);
 const REFUSED_ERROR_PATTERN = /ECONNREFUSED|ECONNRESET|connection_refused/i;
 const DENY_REACHABLE = new Set(['service_response_observed', 'reachable_transport_only']);
 const CLASS_SET = new Set(FIREWALL_OBSERVATION_CLASSES);
+const TCP_HANDSHAKE = new Set(['handshake']);
+const UDP_REPLY = new Set(['validated_reply', 'unvalidated_reply']);
+
+/** Registered perspective id from a string or `{id,label}` stamp. */
+export function perspectiveId(value) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id.trim()) return value.id.trim();
+  return null;
+}
 
 function validPort(value) {
   const port = Number(value);
@@ -133,7 +152,7 @@ export function firewallSampleFromProbeEvent({ event, run, target = null, verdic
     external_result: metadata.external_result ?? null,
     metadata,
     worker_id: typeof metadata.probe_worker_id === 'string' && metadata.probe_worker_id ? metadata.probe_worker_id : null,
-    source_perspective: sourcePerspective,
+    source_perspective: perspectiveId(sourcePerspective) ?? (typeof sourcePerspective === 'string' ? sourcePerspective : null),
     declared_port: declaredTargetPort(target),
     origin_scope_port: validPort(originScope?.port),
     destination_fingerprint: shortFingerprint(metadata.pinned_address ?? metadata.scan_host ?? null),
@@ -202,7 +221,29 @@ function hostSniClass(metadata) {
 }
 
 function icmpAdminProhibited(metadata) {
-  return metadata?.icmp_admin_prohibited === true || (Number(metadata?.icmp_type) === 3 && Number(metadata?.icmp_code) === 13);
+  return metadata?.icmp_admin_prohibited === true
+    || metadata?.icmp?.kind === 'admin_prohibited'
+    || (Number(metadata?.icmp_type) === 3 && Number(metadata?.icmp_code) === 13);
+}
+
+function localProbeError(metadata) {
+  const rows = [metadata, ...(Array.isArray(metadata?.samples) ? metadata.samples : []),
+    ...Object.values(metadata?.families && typeof metadata.families === 'object' ? metadata.families : {})];
+  return rows.some((row) => row && (row.local_error === true || LOCAL_ERRNOS.has(row.icmp?.errno) || LOCAL_ERRNOS.has(row.error_class)));
+}
+
+function firewallRejectClass(metadata) {
+  if (localProbeError(metadata)) return { observation_class: 'transport_error', denial_basis: LOCAL_ERROR_BASIS };
+  if (icmpAdminProhibited(metadata)) {
+    return { observation_class: 'explicit_denial_observed', denial_basis: 'icmp_admin_prohibited' };
+  }
+  if (metadata?.tcp_outcome === 'rejected_icmp' || metadata?.udp_outcome === 'rejected_icmp') {
+    return { observation_class: 'explicit_denial_observed', denial_basis: 'rejected_icmp' };
+  }
+  if (metadata?.udp_outcome === 'port_unreachable') {
+    return { observation_class: 'transport_error', denial_basis: CLOSED_PORT_BASIS };
+  }
+  return null;
 }
 
 function refusalBasis(metadata) {
@@ -241,19 +282,22 @@ export function classifyFirewallSample(expectation, sample) {
   }
 
   if (samplePort(sample, profile) !== wantedPort) return notApplicable('endpoint_mismatch');
-  if (sample.probe_kind !== 'tls_audit' && sample.probe_kind !== 'host_sni_bypass' && icmpAdminProhibited(metadata)) {
-    return applicable(sample, 'explicit_denial_observed', { denial_basis: 'icmp_admin_prohibited' });
+  if (sample.probe_kind !== 'tls_audit' && sample.probe_kind !== 'host_sni_bypass') {
+    const reject = firewallRejectClass(metadata);
+    if (reject) return applicable(sample, reject.observation_class, { denial_basis: reject.denial_basis });
   }
 
   switch (sample.probe_kind) {
     case 'tcp_connect':
-      if (result === 'connected') return applicable(sample, 'reachable_transport_only');
-      if (result === 'timeout') return applicable(sample, 'no_response');
+      if (TCP_HANDSHAKE.has(metadata.tcp_outcome) || result === 'connected') return applicable(sample, 'reachable_transport_only');
+      if (metadata.tcp_outcome === 'timeout' || result === 'timeout') return applicable(sample, 'no_response');
       return applicable(sample, 'transport_error', refusalBasis(metadata));
     case 'udp_probe':
     case 'reflection_service_probe':
-      if (result === 'connected' && metadata.response_received !== false) return applicable(sample, 'reachable_transport_only');
-      if (result === 'timeout') return applicable(sample, 'udp_silence');
+      if (UDP_REPLY.has(metadata.udp_outcome) || (result === 'connected' && metadata.response_received !== false)) {
+        return applicable(sample, 'reachable_transport_only');
+      }
+      if (metadata.udp_outcome === 'silent' || result === 'timeout') return applicable(sample, 'udp_silence');
       return applicable(sample, 'transport_error');
     case 'tls_audit':
       if (typeof metadata.tls_protocol === 'string' && metadata.tls_protocol && !metadata.error_class) return applicable(sample, 'service_response_observed');
@@ -341,7 +385,12 @@ export function buildFirewallSideEvidence({ expectation, samples = [], targetId 
       worker_id: sample.worker_id,
       destination_fingerprint: sample.destination_fingerprint ?? null,
       observed_at: sample.observed_at,
+      address_family: sample.metadata?.address_family ?? sample.address_family ?? null,
+      elapsed_ms: sample.metadata?.elapsed_ms ?? sample.elapsed_ms ?? null,
+      duration_ms: sample.metadata?.duration_ms ?? sample.metadata?.safety_attestation?.duration_ms ?? sample.duration_ms ?? null,
       ...(verdict.denial_basis ? { denial_basis: verdict.denial_basis } : {}),
+      ...(verdict.local_error || sample.metadata?.local_error ? { local_error: true } : {}),
+      ...(verdict.reason || sample.metadata?.reason ? { reason: verdict.reason ?? sample.metadata?.reason } : {}),
     }))
     .sort((a, b) => `${a.test_run_id}|${a.evidence_id}`.localeCompare(`${b.test_run_id}|${b.evidence_id}`));
   const overLimit = references.length > MAX_REFERENCES_PER_SIDE
@@ -361,6 +410,7 @@ export function buildFirewallSideEvidence({ expectation, samples = [], targetId 
 const OBSERVATION_FIELDS = Object.freeze([
   'evidence_id', 'test_run_id', 'check_id', 'observation_class', 'evidence_tier',
   'source_perspective', 'worker_id', 'destination_fingerprint', 'observed_at', 'denial_basis',
+  'address_family', 'elapsed_ms', 'local_error',
 ]);
 
 export const MAX_ENCODED_OBSERVATIONS_BYTES = 12_288;
@@ -379,6 +429,9 @@ export function decodeFirewallObservations(encoded = []) {
     if (!Array.isArray(row)) return { ...row };
     const decoded = Object.fromEntries(OBSERVATION_FIELDS.map((field, index) => [field, row[index] ?? null]));
     if (decoded.denial_basis == null) delete decoded.denial_basis;
+    if (decoded.address_family == null) delete decoded.address_family;
+    if (decoded.elapsed_ms == null) delete decoded.elapsed_ms;
+    if (decoded.local_error == null || decoded.local_error === false) delete decoded.local_error;
     return decoded;
   });
 }
@@ -452,9 +505,14 @@ export function assessFirewallEntryCompatibility({ baselineEntry, candidateSet, 
     reasons.add('expectation_mismatch');
   } else {
     if (expectationDigest(expectation) !== expectation.digest) reasons.add('expectation_digest_mismatch');
-    const source = expectation.source_perspective;
+    const source = perspectiveId(expectation.source_perspective);
     const refs = [...(base.references ?? []), ...(candidateSet?.references ?? [])];
-    if (refs.some((ref) => ref.source_perspective && ref.source_perspective !== source)) reasons.add('source_mismatch');
+    if (refs.some((ref) => perspectiveId(ref.source_perspective) && perspectiveId(ref.source_perspective) !== source)) {
+      reasons.add('source_mismatch');
+    }
+    const preIds = new Set((storedObservations ?? []).map((obs) => perspectiveId(obs.source_perspective)).filter(Boolean));
+    const postIds = new Set(candidateObservations.map((obs) => perspectiveId(obs.source_perspective)).filter(Boolean));
+    if (preIds.size && postIds.size && [...postIds].some((id) => !preIds.has(id))) reasons.add('source_mismatch');
   }
   const sameTarget = candidateSet && base.target_id === candidateSet.target_id;
   if (sameTarget && !base.destination_mapping) {
@@ -465,21 +523,38 @@ export function assessFirewallEntryCompatibility({ baselineEntry, candidateSet, 
   return finish(reasons);
 }
 
-function sideClasses(observations = []) {
-  return observations.map((obs) => obs.observation_class).filter((value) => CLASS_SET.has(value));
+/** Stored v4 rows recorded UDP port-unreachable as a denial; re-read them as a closed port without editing the record. */
+function currentObservation(obs) {
+  if (obs?.observation_class === 'rejected_icmp') {
+    return { ...obs, observation_class: 'explicit_denial_observed', denial_basis: 'rejected_icmp' };
+  }
+  if (obs?.denial_basis === CLOSED_PORT_BASIS && obs.observation_class === 'explicit_denial_observed') {
+    return { ...obs, observation_class: 'transport_error' };
+  }
+  return obs;
 }
 
-/** Contract side state, refined so repeated TCP/service silence on a deny expectation is "not observed", never "satisfied". */
-export function firewallObservedSideState(expected, aggregate, protocol) {
+function currentObservations(observations = []) {
+  return (Array.isArray(observations) ? observations : []).map(currentObservation);
+}
+
+function sideClasses(observations = []) {
+  return currentObservations(observations).map((obs) => obs.observation_class).filter((value) => CLASS_SET.has(value));
+}
+
+/** Deny satisfaction needs ≥2 samples. Repeated silent drops are "not observed"; RST stays unverified. */
+export function firewallObservedSideState(expected, aggregate, _protocol) {
   const state = firewallSideState(expected, aggregate);
-  if (expected !== 'deny' || state !== 'unverified' || protocol === 'udp') return state;
+  const samples = aggregate?.samples ?? 0;
+  if (expected === 'deny' && state === 'satisfied' && samples < MIN_SAMPLES_FOR_UNAVAILABILITY) return 'unverified';
+  if (expected !== 'deny' || state !== 'unverified') return state;
   const classes = aggregate?.classes ?? [aggregate?.observation];
-  const silent = classes.length > 0 && classes.every((cls) => SILENT_TCP_CLASSES.has(cls));
-  return silent && (aggregate?.samples ?? 0) >= MIN_SAMPLES_FOR_UNAVAILABILITY ? 'not_observed' : state;
+  const silent = classes.length > 0 && classes.every((cls) => SILENT_DROP_CLASSES.has(cls));
+  return silent && samples >= MIN_SAMPLES_FOR_UNAVAILABILITY ? 'not_observed' : state;
 }
 
 function testedObservations(observations = []) {
-  return observations.filter((obs) => CLASS_SET.has(obs?.observation_class) && obs.observation_class !== 'not_tested');
+  return currentObservations(observations).filter((obs) => CLASS_SET.has(obs?.observation_class) && obs.observation_class !== 'not_tested');
 }
 
 function allRefused(observations) {
@@ -490,10 +565,14 @@ function allRefused(observations) {
 /** Basis for a control-specific firewall denial on the post side, or null. */
 export function firewallDenialBasis(baselineObservations = [], candidateObservations = []) {
   const post = testedObservations(candidateObservations);
-  if (post.length && post.every((obs) => obs.observation_class === 'explicit_denial_observed' && obs.denial_basis === 'icmp_admin_prohibited')) {
-    return 'icmp_admin_prohibited';
+  if (post.length < MIN_SAMPLES_FOR_UNAVAILABILITY) return null;
+  const perspectives = new Set(post.map((obs) => perspectiveId(obs.source_perspective)).filter(Boolean));
+  if (perspectives.size > 1) return null;
+  if (!post.every((obs) => obs.observation_class === 'explicit_denial_observed' && FIREWALL_DENIAL_BASES.includes(obs.denial_basis))) {
+    return null;
   }
-  return null;
+  const bases = [...new Set(post.map((obs) => obs.denial_basis))];
+  return bases.length === 1 ? bases[0] : 'rejected_icmp';
 }
 
 function unverifiedReasons(expected, aggregate, protocol) {
@@ -506,7 +585,7 @@ function unverifiedReasons(expected, aggregate, protocol) {
     && classes.length && classes.every((cls) => cls === 'no_response' || cls === 'transport_error' || cls === 'udp_silence')) {
     reasons.push('single_sample_not_unavailability');
   }
-  if (expected === 'deny' && protocol !== 'udp' && classes.length && !classes.some((cls) => DENY_REACHABLE.has(cls))) {
+  if (expected === 'deny' && classes.length && !classes.some((cls) => DENY_REACHABLE.has(cls))) {
     reasons.push('control_specific_denial_required');
   }
   return reasons;
@@ -534,18 +613,54 @@ export function classifyFirewallChangeItem({ expectation, baselineObservations =
     return itemResult('not_comparable', limitations, { reasons: ['expectation_missing'], compatibility_reasons: ['expectation_mismatch'] });
   }
   const protocol = expectation.protocol;
-  const post = aggregateFirewallSamples(sideClasses(candidateObservations));
+  const baselines = currentObservations(baselineObservations ?? []).map((o) => (o ? { ...o } : o));
+  const candidates = currentObservations(candidateObservations ?? []).map((o) => (o ? { ...o } : o));
+  const post = aggregateFirewallSamples(sideClasses(candidates));
   if (post.observation === 'not_tested') return itemResult('not_tested', limitations, { reasons: ['post_change_not_sampled'] });
   const failure = compatibilityFailureStatus(compatibility ?? { comparable: false, reasons: ['evidence_missing'] });
   if (failure) return itemResult(failure, limitations, { compatibility_reasons: [...(compatibility?.reasons ?? ['evidence_missing'])] });
-  const pre = aggregateFirewallSamples(sideClasses(baselineObservations));
-  const basis = firewallDenialBasis(baselineObservations, candidateObservations);
+  const allCloned = [...baselines, ...candidates];
+  for (const obs of allCloned) {
+    if (obs?.denial_basis === 'rejected_icmp' || obs?.observation_class === 'rejected_icmp') {
+      const elapsedMs = obs.elapsed_ms;
+      const immediate = elapsedMs == null || elapsedMs < REJECT_ICMP_MIN_ELAPSED_MS;
+      const perspective = perspectiveId(obs.source_perspective);
+      const family = obs.address_family ?? null;
+      const pathProven = allCloned.some((other) => {
+        if (other === obs) return false;
+        if (perspectiveId(other.source_perspective) !== perspective) return false;
+        const otherFamily = other.address_family ?? null;
+        if (otherFamily !== family) return false;
+        return other.observation_class === 'reachable_transport_only' || other.observation_class === 'service_response_observed';
+      });
+      if (immediate || !pathProven) {
+        obs.local_error = true;
+        obs.reason = 'path_not_proven';
+        obs.denial_basis = LOCAL_ERROR_BASIS;
+        obs.observation_class = 'transport_error';
+      }
+    }
+  }
+  const allTested = [...testedObservations(baselines), ...testedObservations(candidates)];
+  const localError = allTested.some((obs) => obs.denial_basis === LOCAL_ERROR_BASIS || obs.local_error === true);
+  if (localError) {
+    const reasons = [LOCAL_ERROR_BASIS, 'observation_unverified'];
+    if (allTested.some((obs) => obs.reason === 'path_not_proven')) {
+      reasons.unshift('path_not_proven');
+    }
+    return itemResult('inconclusive', limitations, { reasons, local_error: true });
+  }
+  const pre = aggregateFirewallSamples(sideClasses(baselines));
+  const basis = firewallDenialBasis(baselines, candidates);
+  const closedPortReasons = testedObservations(candidates).some((obs) => obs.denial_basis === CLOSED_PORT_BASIS)
+    ? ['closed_port_not_control_specific'] : [];
   const preState = firewallObservedSideState(expected, pre, protocol);
   const postState = firewallObservedSideState(expected, post, protocol);
   if ([...(pre.classes ?? []), ...(post.classes ?? [])].includes('udp_silence')) limitations.push('udp_silence_ambiguous');
   let met = null;
   if (postState === 'satisfied') met = true;
   else if (postState === 'violated' || (expected === 'allow' && postState === 'not_observed')) met = false;
+  else if (expected === 'deny' && postState === 'not_observed' && preState === 'violated') met = true;
   const base = { pre_state: preState, post_state: postState, expectation_met: met };
   const basisReasons = basis ? [basis] : [];
   const resolved = (status, extra = {}) => itemResult(status, limitations, {
@@ -553,7 +668,7 @@ export function classifyFirewallChangeItem({ expectation, baselineObservations =
     ...extra,
     reasons: [...new Set([...(extra.reasons ?? []), ...basisReasons])],
   });
-  const unresolved = (reasons) => itemResult('inconclusive', limitations, { ...base, reasons: [...new Set(reasons)] });
+  const unresolved = (reasons) => itemResult('inconclusive', limitations, { ...base, reasons: [...new Set([...reasons, ...closedPortReasons])] });
   const preTested = testedObservations(baselineObservations);
   const refusedWithoutOpenBaseline = !basis && allRefused(candidateObservations)
     ? [preTested.length && preTested.every((obs) => DENY_REACHABLE.has(obs.observation_class)) ? 'rst_after_change' : 'rst_without_open_baseline'] : [];
@@ -577,12 +692,19 @@ export function classifyFirewallChangeItem({ expectation, baselineObservations =
 
   if (postState === 'violated') {
     if (preState === 'violated') return resolved('matched');
-    const reasons = preState === 'not_observed' ? ['baseline_denial_not_control_specific'] : [];
+    const reasons = [];
+    if (preState === 'not_observed') {
+      reasons.push('baseline_denial_not_control_specific');
+      if (protocol === 'udp') reasons.push('udp_reply_after_silence');
+    }
     return resolved('regression', { gap_kind: 'forbidden_service_newly_reachable', reasons });
   }
   if (postState === 'satisfied') {
     if (preState === 'satisfied') return resolved('matched');
     return resolved('improvement');
+  }
+  if (expected === 'deny' && postState === 'not_observed' && preState === 'violated') {
+    return resolved('improvement', { reasons: ['consistent_with_new_deny_rule'] });
   }
   if (preState === 'satisfied') return unresolved(['denial_evidence_no_longer_observed', 'control_specific_denial_required', ...refusedWithoutOpenBaseline]);
   return unresolved(['denial_not_control_specific', 'control_specific_denial_required', ...refusedWithoutOpenBaseline]);
@@ -592,7 +714,7 @@ export function sideObservationSummary(expected, observations, protocol, baselin
   const aggregate = aggregateFirewallSamples(sideClasses(observations));
   const basis = baselineObservations ? firewallDenialBasis(baselineObservations, observations) : null;
   const tiers = [...new Set(observations.map((obs) => obs.evidence_tier).filter(Boolean))].sort();
-  const sources = [...new Set(observations.map((obs) => obs.source_perspective).filter(Boolean))].sort();
+  const sources = [...new Set(observations.map((obs) => perspectiveId(obs.source_perspective)).filter(Boolean))].sort();
   const workers = [...new Set(observations.map((obs) => obs.worker_id).filter(Boolean))].sort();
   return {
     observation: aggregate.observation,
@@ -638,7 +760,7 @@ export function firewallAcceptanceStatement(evaluation, { changeId = null, sourc
     headline: `${scope}: ${verdict}`,
     gaps: gapText.length ? `Observed acceptance gaps: ${gapText.join('; ')}. No rule or root cause is identified.` : null,
     scope: 'Results describe sampled external probes from the approved source perspective to the declared destinations only.',
-    not_established: 'Full rule-table, routing, NAT, egress and east-west equivalence are not established. Appliance traversal and capacity are not established. A port connection shows reachability, not enforcement; UDP silence is ambiguous.',
+    not_established: 'Full rule-table, routing, NAT, egress and east-west equivalence are not established. Appliance traversal and capacity are not established. A port connection shows reachability, not enforcement. An ICMP reject proves a firewall reject, not which rule. Silence after a previously reachable port is consistent with a new deny; silence without that baseline does not prove a deny. UDP silence is ambiguous unless a later validated reply concludes a regression.',
     readiness_effect: 'none',
   };
 }
@@ -675,7 +797,7 @@ export function evaluateFirewallChange({
       });
       continue;
     }
-    if (expectation.source_perspective) sources.add(expectation.source_perspective);
+    if (expectation.source_perspective) sources.add(perspectiveId(expectation.source_perspective) ?? String(expectation.source_perspective));
     const sides = firewallSidesFor(expectation);
     let evidence = buildFirewallSideEvidence({ expectation, samples: candidateSamples, targetId: sides.post_target_id });
     if (!evidence.observations.length && !sides.mapping) {
@@ -766,7 +888,10 @@ export function buildFirewallBaselineEntry({ tenantId, expectationId, expectatio
   if (evidence.over_limit) {
     throw baselineError('invalid_comparison_baseline', 'test_run_ids', `Expectation ${expectationId} exceeds ${MAX_SAMPLES_PER_SIDE} samples or ${MAX_REFERENCES_PER_SIDE} references.`);
   }
-  const mismatched = evidence.references.find((ref) => ref.source_perspective && ref.source_perspective !== expectation.source_perspective);
+  const mismatched = evidence.references.find((ref) => {
+    const observed = perspectiveId(ref.source_perspective);
+    return observed && observed !== perspectiveId(expectation.source_perspective);
+  });
   if (mismatched) {
     throw baselineError('invalid_comparison_baseline', 'test_run_ids', `Run ${mismatched.test_run_id} was not observed from the declared source perspective.`);
   }

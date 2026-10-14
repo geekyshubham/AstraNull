@@ -328,6 +328,7 @@ describeMaybe('target detail findings keyset pagination', () => {
         'severity',
         'state',
         'title',
+        'verification_basis',
       ]);
       const sample = paged.findings[0];
       assert.equal(typeof sample.opened_at, 'string');

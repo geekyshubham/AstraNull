@@ -15,6 +15,7 @@ import { normalizeWafAssetInput } from '../../contracts/wafPosture.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createExternalDiscoveryRepository } from './externalDiscoveryRepository.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
+import { externalDiscoveryEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 
 const INBOX_STATES = new Set(['candidate', 'needs_review']);
 const APPROVABLE_STATES = new Set(['candidate', 'needs_review']);
@@ -28,8 +29,8 @@ function contractError(err, fallbackStatus = 400) {
   };
 }
 
-function discoveryFeatureDisabled() {
-  return loadRuntimeConfig().featureFlags.externalDiscoveryEnabled !== true;
+function discoveryFeatureDisabled(ctx) {
+  return !externalDiscoveryEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
 }
 
 function featureDisabledResponse() {
@@ -144,13 +145,13 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
 
   return {
     async listEntities(ctx) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const items = await discoveryRepo.listEntities(ctx);
       return items.map((entry) => formatEntity(entry));
     },
 
     async createEntity(ctx, body) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       try {
         validateCandidate(body);
         const normalized = normalizeEntity(body);
@@ -192,13 +193,13 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async listCandidates(ctx) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const items = await discoveryRepo.listCandidates(ctx);
       return items.map((entry) => formatCandidate(entry));
     },
 
     async ingestDiscoveryCandidates(ctx, source, records) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       try {
         const parsedRecords = parsePassiveDiscoveryRecords(source, records);
         const now = nowFn().toISOString();
@@ -275,7 +276,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async createCandidate(ctx, body) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       try {
         validateCandidate(body);
         const normalized = normalizeCandidate(body);
@@ -311,7 +312,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async approveCandidateToTarget(ctx, id, body = {}) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const candidate = await discoveryRepo.getCandidate(ctx, id);
       if (!candidate) {
         return { error: 'discovery_candidate_not_found', status: 404 };
@@ -368,7 +369,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async rejectCandidate(ctx, id, body = {}) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const candidate = await discoveryRepo.getCandidate(ctx, id);
       if (!candidate) {
         return { error: 'discovery_candidate_not_found', status: 404 };
@@ -412,7 +413,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async patchCandidateState(ctx, id, state, body = {}) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const nextState = typeof state === 'string' ? state.trim() : '';
       if (!nextState) {
         return { error: 'invalid_request', status: 400, message: 'state is required.' };
@@ -473,7 +474,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async getDiscoveryInbox(ctx) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const items = (await discoveryRepo.listCandidates(ctx))
         .filter((candidate) => INBOX_STATES.has(candidate.state))
         .map((candidate) => formatCandidate(candidate));
@@ -481,7 +482,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async getDiscoveryReportSummary(ctx) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const candidates = await discoveryRepo.listCandidates(ctx);
       return {
         summary: buildDiscoveryReportSummary(candidates, {
@@ -491,7 +492,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
     },
 
     async importCandidateToTargetGroup(ctx, id, body = {}) {
-      if (discoveryFeatureDisabled()) return featureDisabledResponse();
+      if (discoveryFeatureDisabled(ctx)) return featureDisabledResponse();
       const candidate = await discoveryRepo.getCandidate(ctx, id);
       if (!candidate) {
         return { error: 'discovery_candidate_not_found', status: 404 };

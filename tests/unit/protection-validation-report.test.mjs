@@ -142,8 +142,8 @@ function fwItem(expectation, pre, post, compatibility = { comparable: true, stal
 }
 const FW_EVAL = evaluation('firewall_change', 'fwc_1', T2, [
   fwItem(FW[0], ['service_response_observed'], ['service_response_observed'], undefined, 'waf.marker.sqli'),
-  fwItem(FW[1], ['explicit_denial_observed'], ['reachable_transport_only']),
-  { ...fwItem(FW[2], ['explicit_denial_observed'], ['udp_silence'], { comparable: false, stale: false, reasons: ['source_mismatch'] }), evidence_refs: [] },
+  fwItem(FW[1], ['explicit_denial_observed', 'explicit_denial_observed'], ['reachable_transport_only']),
+  { ...fwItem(FW[2], ['explicit_denial_observed', 'explicit_denial_observed'], ['udp_silence'], { comparable: false, stale: false, reasons: ['source_mismatch'] }), evidence_refs: [] },
 ], { baseline_id: 'fwb_1', baseline_digest: 'b'.repeat(64) });
 
 const DETECTIONS = [
@@ -528,7 +528,7 @@ describe('firewall report selection (D11c)', () => {
   it('keeps an earlier sampled firewall result when a later partial comparison never sampled that expectation', () => {
     const later = evaluation('firewall_change', 'fwc_2', NOW, [
       { expectation_id: FW[0].id, status: 'not_tested', gap_kind: null, expectation_met: null, pre_state: null, post_state: null, reasons: ['post_change_not_sampled'], compatibility_reasons: [], limitations: [...REQUIRED_LIMITATIONS.firewall_change], evidence_refs: [] },
-      fwItem(FW[1], ['explicit_denial_observed'], ['explicit_denial_observed']),
+      fwItem(FW[1], ['explicit_denial_observed', 'explicit_denial_observed'], ['explicit_denial_observed', 'explicit_denial_observed']),
     ], { baseline_id: 'fwb_1', baseline_digest: 'b'.repeat(64) });
     const { selected } = selectCurrentFirewallItems([FW_EVAL, later], { tenantId: TENANT });
     assert.equal(selected.get(FW[0].id).evaluation.id, 'fwc_1');

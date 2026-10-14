@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { loadRuntimeConfig } from '../config.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 import {
   createSupplyChainRisk as buildSupplyChainRisk,
   validateRiskItem,
@@ -48,8 +49,8 @@ function contractError(err, fallbackStatus = 400) {
   };
 }
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(ctx) {
+  const enabled = wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
   if (!enabled) return { error: 'waf_feature_disabled' };
   return null;
 }
@@ -134,7 +135,7 @@ function buildRetestLink(risk) {
 }
 
 export function listSupplyChainRisks(ctx) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   return getStore()
@@ -143,7 +144,7 @@ export function listSupplyChainRisks(ctx) {
 }
 
 export function getSupplyChainRisk(ctx, id) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
 
@@ -155,7 +156,7 @@ export function getSupplyChainRisk(ctx, id) {
 }
 
 export function createSupplyChainRisk(ctx, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -212,7 +213,7 @@ export function createSupplyChainRisk(ctx, body = {}) {
 }
 
 export function patchRiskState(ctx, id, state, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -268,7 +269,7 @@ export function patchRiskState(ctx, id, state, body = {}) {
 }
 
 export function createRemediationTicket(ctx, riskId, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -328,7 +329,7 @@ export function createRemediationTicket(ctx, riskId, body = {}) {
 }
 
 export function assessDanglingCname(ctx, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -407,7 +408,7 @@ export function assessDanglingCname(ctx, body = {}) {
 }
 
 function assessVendorDependency(ctx, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -494,7 +495,7 @@ function assessVendorDependency(ctx, body = {}) {
 }
 
 export function assessDanglingDependency(ctx, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -578,7 +579,7 @@ export function assessDanglingDependency(ctx, body = {}) {
 }
 
 export function getPhaseAuthorizations(ctx, riskId) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
 
@@ -595,7 +596,7 @@ export function getPhaseAuthorizations(ctx, riskId) {
 }
 
 export function submitPhaseAuthorization(ctx, riskId, body = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {
@@ -666,7 +667,7 @@ export function submitPhaseAuthorization(ctx, riskId, body = {}) {
 }
 
 export function ingestSupplyChainSignals(ctx, source, records) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
   ensureStoreShape();
   try {

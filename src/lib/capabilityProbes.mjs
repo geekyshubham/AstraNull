@@ -12,19 +12,40 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
-import { pinnedFetch, pinnedHttp2Request, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
+import {
+  ASTRANULL_PROBE_USER_AGENT,
+  METHOD_POLICY_ONLY_HTTP_METHODS,
+  METHOD_POLICY_PROBE_KIND,
+  pinnedFetch,
+  pinnedHttp2Request,
+  resolvePinnedDestination,
+} from './pinnedHttpRequest.mjs';
 import { startProbeIoAttempt } from './probeAttempt.mjs';
 import {
+  BLOCK_SUSPECTED_UNVERIFIED_SIGNATURE,
   CANARY_NONCE_REQUEST_HEADER,
   classifyDirectOriginObservation,
   matchControlDenialSignature,
+  matchSuspectedVendorSignature,
 } from './externalObservationOutcomes.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS } from './probeEvidenceTiers.mjs';
 import { probeQuicReachability } from './safeNetworkProbes.mjs';
 import {
   API_DOC_PATHS,
+  MAX_DECLARED_SCAN_PORTS,
   RISKY_ADMIN_PORTS,
+  VETTED_SCAN_PORT_SET,
+  VETTED_SCAN_PORTS,
 } from './probeEndpoint.mjs';
+import { probeConnectionLimit } from './connectionLimitProbe.mjs';
+import {
+  classifyTcpErrno,
+  peerIsCdn,
+  portScanParity,
+  requestedAddressFamily,
+  selectFamilyAddresses,
+  stampSourcePerspective,
+} from './networkProbeOutcomes.mjs';
 import {
   resolveBoundedSequenceBudget,
   resolveProbeRequestBudget,
@@ -55,6 +76,14 @@ import {
   L7_RESOURCE_POSTURE_MAX_REQUESTS,
   probeL7ResourcePosture as runRawL7ResourcePostureProbe,
 } from './vectorProbes/l7ResourceProbes.mjs';
+import {
+  WAF_METHOD_POLICY_MAX_REQUESTS,
+  runWafMethodPolicyProbe as runRawWafMethodPolicyProbe,
+} from './vectorProbes/methodPolicyProbes.mjs';
+import {
+  RATE_LIMIT_CANARY_MAX_REQUESTS,
+  runRateLimitCanaryProbe as runRawRateLimitCanaryProbe,
+} from './vectorProbes/rateLimitCanaryProbes.mjs';
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
@@ -64,7 +93,8 @@ export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
 // cycle-free; re-exported here so existing importers keep working. These must be
 // imported (above) as well as re-exported — `export ... from` alone would leave the
 // names unbound inside this module.
-export { API_DOC_PATHS, RISKY_ADMIN_PORTS };
+export { API_DOC_PATHS, RISKY_ADMIN_PORTS, VETTED_SCAN_PORTS, ASTRANULL_PROBE_USER_AGENT };
+export { probeConnectionLimit };
 
 const WEAK_TLS_PROTOCOLS = new Set(['TLSv1', 'TLSv1.1', 'SSLv3']);
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
@@ -130,6 +160,14 @@ function observedProbeDurationMs(deps, startedMs = Date.now()) {
     return deps.observedJobDurationMs();
   }
   return Math.ceil(Date.now() - startedMs);
+}
+
+function jobDeadlineElapsed(deps = {}) {
+  const signal = deps.jobDeadlineSignal;
+  if (!signal?.aborted) return false;
+  if (signal.reason?.code === 'probe_job_deadline_exceeded') return true;
+  if (signal.reason?.code) return false;
+  return typeof deps.remainingJobTimeoutMs === 'function' && Number(deps.remainingJobTimeoutMs()) <= 0;
 }
 
 function probeDeadlineError() {
@@ -242,13 +280,13 @@ function deadlineOutcome(job, kind, deps, requestsSent, metadata = {}) {
 }
 
 export const CAPABILITY_OBSERVATION_VERSION = 'capability-observation-v3';
-function withKind(job, kind, metadata) {
+function withKind(job, kind, metadata, deps = {}) {
   const observationOnly = OBSERVATION_ONLY_PROBE_KINDS.includes(kind) || Boolean(metadata?.error_class);
-  return { profile_kind: kind, probe_kind: kind, classifier_version: CAPABILITY_OBSERVATION_VERSION,
+  return stampSourcePerspective({ profile_kind: kind, probe_kind: kind, classifier_version: CAPABILITY_OBSERVATION_VERSION,
     ...metadata, ...(observationOnly ? {
       observation_only: true, readiness_conclusion: false, evidence_tier: 'E2',
       assurance_limits: 'Bounded external observations; no capacity, exploit mitigation or policy assurance.',
-    } : {}) };
+    } : {}) }, deps);
 }
 
 
@@ -651,7 +689,7 @@ async function vetProbeDestinationHost(host, deps = {}, options = {}) {
       { constraints: { timeout_ms: DEFAULT_PROBE_TIMEOUT_MS } },
       deps,
     );
-    return { ok: true, host: pinned.host, addresses: pinned.addresses };
+    return { ok: true, host: pinned.host, addresses: pinned.addresses, families: pinned.families };
   } catch (error) {
     if (isProbeDeadlineError(error, deps) || error?.code === 'signed_operation_budget_exceeded') {
       throw error;
@@ -698,7 +736,9 @@ function tcpConnectProbe(host, port, timeoutMs, connectFn = net.connect, deps = 
       clearTimeout(timer);
       const code = err?.code ?? '';
       if (code === 'ECONNREFUSED') resolve('closed');
-      else if (code === 'ETIMEOUT') resolve('timeout');
+      else if (code === 'ETIMEOUT' || code === 'ETIMEDOUT') resolve('timeout');
+      else if (classifyTcpErrno(code).local_error === true) resolve('local_error');
+      else if (classifyTcpErrno(code).tcp_outcome === 'rejected_icmp') resolve('rejected');
       else resolve('filtered');
     });
   });
@@ -1041,8 +1081,24 @@ export function portConnectTimeoutMs(remainingJobMs, portsLeft) {
   return Math.min(PORT_CONNECT_TIMEOUT_MAX_MS, Math.floor(usable / Math.max(1, portsLeft)));
 }
 
+function resolveScanPortList(profile, budget) {
+  const declared = Array.isArray(profile?.declared_ports) ? profile.declared_ports : null;
+  if (declared) {
+    const vetted = [];
+    const rejected = [];
+    for (const value of declared.slice(0, MAX_DECLARED_SCAN_PORTS)) {
+      const port = Number(value);
+      if (!Number.isInteger(port) || !VETTED_SCAN_PORT_SET.has(port)) rejected.push(port);
+      else if (!vetted.includes(port)) vetted.push(port);
+    }
+    return { ports: vetted.slice(0, budget), declared_port_list_used: true, rejected_declared_ports: rejected };
+  }
+  const legacy = Array.isArray(profile?.ports) ? profile.ports : RISKY_ADMIN_PORTS;
+  return { ports: legacy.slice(0, budget), declared_port_list_used: false, rejected_declared_ports: [] };
+}
+
 /**
- * P0 — Firewall exposure: bounded risky-port scan (one connect per port).
+ * P0 — Firewall exposure: bounded risky-port scan (one connect per port, silent retry).
  */
 export async function probePortScanBounded(job, deps = {}) {
   const kind = 'port_scan_bounded';
@@ -1058,13 +1114,15 @@ export async function probePortScanBounded(job, deps = {}) {
 
   deps = ensureProbeDeadline(job, deps);
   const budget = resolveProbeRequestBudget(job);
-  const ports = (job.probe_profile?.ports ?? RISKY_ADMIN_PORTS).slice(0, budget);
+  const { ports, declared_port_list_used, rejected_declared_ports } = resolveScanPortList(job.probe_profile, budget);
   const open_ports = [];
   const filtered_ports = [];
   const closed_ports = [];
+  const rejected_ports = [];
   let requestsSent = 0;
 
-  const destination = await vetProbeDestinationHost(host, deps);
+  const familyPref = requestedAddressFamily(job);
+  const destination = await vetProbeDestinationHost(host, { ...deps, addressFamily: familyPref === 'both' ? undefined : familyPref });
   if (remainingProbeTimeoutMs(job, deps) <= 0) {
     return deadlineOutcome(job, kind, deps, requestsSent, {
       scan_host: host,
@@ -1085,40 +1143,88 @@ export async function probePortScanBounded(job, deps = {}) {
       duration_ms: observedProbeDurationMs(deps),
     };
   }
-  const resolvedHost = destination.addresses[0];
+  const selected = selectFamilyAddresses(
+    { addresses: destination.addresses, families: destination.families },
+    familyPref,
+  );
+  const familyKeys = Object.entries(selected).filter(([, address]) => address).map(([key]) => key);
+  const resolvedHost = selected[familyKeys[0]] ?? destination.addresses[0];
+  const families = {};
+  const silent = [];
 
-  for (const [index, port] of ports.entries()) {
-    if (requestsSent >= budget) break;
-    const remainingMs = portConnectTimeoutMs(remainingProbeTimeoutMs(job, deps), Math.min(ports.length, budget) - index);
-    if (remainingMs <= 0) {
-      return deadlineOutcome(job, kind, deps, requestsSent, {
-        scan_host: resolvedHost,
-        open_ports,
-        filtered_ports,
-      });
-    }
-    const state = await tcpConnectProbe(
-      resolvedHost,
+  async function scanPortOn(address, port, portsLeft) {
+    const remainingMs = portConnectTimeoutMs(remainingProbeTimeoutMs(job, deps), portsLeft);
+    if (remainingMs <= 0 || requestsSent >= budget) return 'timeout';
+    return tcpConnectProbe(
+      address,
       port,
       remainingMs,
       deps.connectFn,
       deps,
       () => { requestsSent += 1; },
     );
-    if (state === 'open') open_ports.push(port);
-    else if (state === 'filtered' || state === 'timeout') filtered_ports.push(port);
-    else if (state === 'closed') closed_ports.push(port);
-    if (remainingProbeTimeoutMs(job, deps) <= 0 && requestsSent < ports.length) {
-      return deadlineOutcome(job, kind, deps, requestsSent, {
-        scan_host: resolvedHost,
-        open_ports,
-        filtered_ports,
-      });
+  }
+
+  const recordState = (bucket, port, state) => {
+    if (state === 'open') bucket.open_ports.push(port);
+    else if (state === 'closed') bucket.closed_ports.push(port);
+    else if (state === 'rejected') bucket.rejected_ports.push(port);
+    else if (state === 'local_error') (bucket.local_error_ports ??= []).push(port);
+    else bucket.filtered_ports.push(port);
+  };
+
+  const scanKeys = familyKeys.length ? familyKeys : ['ipv4'];
+  for (const key of scanKeys) {
+    families[key] = { open_ports: [], closed_ports: [], rejected_ports: [], filtered_ports: [], ports_sampled: [] };
+  }
+  const totalOperations = ports.length * scanKeys.length;
+  let operationsDone = 0;
+  for (const port of ports) {
+    if (requestsSent >= budget) break;
+    for (const key of scanKeys) {
+      if (requestsSent >= budget) break;
+      const address = selected[key] ?? resolvedHost;
+      const bucket = families[key];
+      const state = await scanPortOn(address, port, Math.max(1, totalOperations - operationsDone));
+      operationsDone += 1;
+      bucket.ports_sampled.push(port);
+      if (state === 'timeout' || state === 'filtered') silent.push({ address, port, key });
+      else recordState(bucket, port, state);
+      if (remainingProbeTimeoutMs(job, deps) <= 0 && operationsDone < totalOperations) {
+        return deadlineOutcome(job, kind, deps, requestsSent, {
+          scan_host: resolvedHost,
+          open_ports: [...new Set(Object.values(families).flatMap((row) => row.open_ports))],
+          filtered_ports: [...new Set(Object.values(families).flatMap((row) => row.filtered_ports))],
+        });
+      }
     }
+  }
+  for (const bucket of Object.values(families)) {
+    for (const port of bucket.open_ports) if (!open_ports.includes(port)) open_ports.push(port);
+    for (const port of bucket.closed_ports) if (!closed_ports.includes(port)) closed_ports.push(port);
+    for (const port of bucket.rejected_ports) if (!rejected_ports.includes(port)) rejected_ports.push(port);
+  }
+
+  for (const item of silent) {
+    const bucket = families[item.key] ?? families[familyKeys[0]];
+    if (requestsSent >= budget) {
+      recordState(bucket, item.port, 'filtered');
+      if (!filtered_ports.includes(item.port)) filtered_ports.push(item.port);
+      continue;
+    }
+    const state = await scanPortOn(item.address, item.port, silent.length);
+    recordState(bucket, item.port, state === 'timeout' ? 'filtered' : state);
+    if (state === 'open' && !open_ports.includes(item.port)) open_ports.push(item.port);
+    else if (state === 'closed' && !closed_ports.includes(item.port)) closed_ports.push(item.port);
+    else if (state === 'rejected' && !rejected_ports.includes(item.port)) rejected_ports.push(item.port);
+    else if ((state === 'filtered' || state === 'timeout') && !filtered_ports.includes(item.port)) filtered_ports.push(item.port);
   }
 
   const durationMs = observedProbeDurationMs(deps);
   const risky_open = open_ports.filter((p) => [22, 23, 3389, 5432, 6379, 445].includes(p));
+  const ports_scanned = [...new Set([
+    ...open_ports, ...closed_ports, ...rejected_ports, ...filtered_ports,
+  ])];
   return {
     external_result: open_ports.length ? 'connected' : 'blocked',
     metadata: withKind(job, kind, {
@@ -1127,10 +1233,18 @@ export async function probePortScanBounded(job, deps = {}) {
       open_ports,
       filtered_ports,
       closed_ports,
+      rejected_ports,
+      ports_scanned,
+      declared_port_list_used,
+      rejected_declared_ports,
+      families: Object.fromEntries(Object.entries(families).map(([key, bucket]) => [
+        key, bucket.ports_sampled.length ? bucket : { ...bucket, not_sampled: true },
+      ])),
+      ...portScanParity(families),
+      peer_is_cdn: peerIsCdn(resolvedHost),
       risky_admin_ports_open: risky_open,
       exposure_count: open_ports.length,
-      observation_complete: ports.length > 0 && requestsSent === ports.length
-        && open_ports.length + filtered_ports.length + closed_ports.length === ports.length,
+      observation_complete: ports.length > 0 && ports_scanned.length === ports.length,
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -1203,6 +1317,10 @@ export function classifyMarkerResponse(res, { baselineStatus = null, declared = 
   if (UNSIGNED_MARKER_STATUS_REASONS[status]) return out({ inconclusive: true, reason: UNSIGNED_MARKER_STATUS_REASONS[status] });
   if (status >= 500) return out({ inconclusive: true, reason: 'error_not_attributable' });
   if (status >= 200 && status < 400) return out({ allowed: true });
+  const suspected = matchSuspectedVendorSignature({ statusCode: status, headers: res, bodyText });
+  if (suspected) {
+    return out({ inconclusive: true, block_suspected: true, reason: BLOCK_SUSPECTED_UNVERIFIED_SIGNATURE, matched_vendor: suspected.vendor });
+  }
   const differs = Number.isInteger(baselineStatus) && baselineStatus >= 200 && baselineStatus < 400 && baselineStatus !== status;
   return out({ inconclusive: true, block_suspected: differs, reason: differs ? 'unattributed_denial' : 'baseline_not_available' });
 }
@@ -2077,6 +2195,7 @@ export async function probeWafEnforcement(job, deps = {}) {
       denial_signature: graded.denial_signature,
       ...(graded.denial_signature?.vendor ? { waf_product_hint: graded.denial_signature.vendor } : {}),
       ...(graded.inconclusive ? { inconclusive_reason: graded.reason, block_suspected: graded.block_suspected } : {}),
+      ...(graded.matched_vendor ? { matched_vendor: graded.matched_vendor } : {}),
       duration_ms: durationMs,
     }),
     requests_sent: 1,
@@ -2140,7 +2259,7 @@ export async function probeDnssecPosture(job, deps = {}) {
 }
 
 /**
- * P1 — AXFR leak: single TCP-53 AXFR attempt against first NS.
+ * P1 — AXFR leak: TCP-53 AXFR against every listed NS (all resolved addresses) within budget.
  */
 export async function probeAxfrLeak(job, deps = {}) {
   const kind = 'dns_axfr_leak';
@@ -2156,6 +2275,7 @@ export async function probeAxfrLeak(job, deps = {}) {
   const budgetFailure = mandatoryBudgetFailure(job, kind);
   if (budgetFailure) return budgetFailure;
 
+  const budget = resolveProbeRequestBudget(job);
   let requestsSent = 0;
   let resolverAttempts = 0;
   let transportAttempts = 0;
@@ -2186,6 +2306,7 @@ export async function probeAxfrLeak(job, deps = {}) {
         observation_only: true, readiness_conclusion: false,
         reason: 'no_nameservers',
         zone,
+        nameserver_results: [],
         resolver_attempts: resolverAttempts,
         transport_attempts: transportAttempts,
         request_counting_basis: 'logical_operations',
@@ -2196,19 +2317,90 @@ export async function probeAxfrLeak(job, deps = {}) {
     };
   }
 
-  const nsHost = nameservers[0];
+  const nameserver_results = [];
+  let firstTcp = null;
+  let firstVetFailure = null;
 
-  // The nameserver is discovered mid-probe, so the worker chokepoint never saw it.
-  const nsVerdict = await vetProbeDestinationHost(nsHost, deps);
-  if (remainingProbeTimeoutMs(job, deps) <= 0) {
-    return deadlineOutcome(job, kind, deps, requestsSent, {
-      zone,
-      nameserver: nsHost,
-      resolver_attempts: resolverAttempts,
-    });
+  for (const nsHost of nameservers) {
+    if (remainingProbeTimeoutMs(job, deps) <= 0) {
+      if (!firstTcp && nameserver_results.length === 0) {
+        return deadlineOutcome(job, kind, deps, requestsSent, {
+          zone,
+          nameserver: nsHost,
+          resolver_attempts: resolverAttempts,
+        });
+      }
+      break;
+    }
+    if (requestsSent >= budget) break;
+
+    const nsVerdict = await vetProbeDestinationHost(nsHost, deps);
+    if (remainingProbeTimeoutMs(job, deps) <= 0) {
+      if (!firstTcp) {
+        return deadlineOutcome(job, kind, deps, requestsSent, {
+          zone,
+          nameserver: nsHost,
+          resolver_attempts: resolverAttempts,
+        });
+      }
+      break;
+    }
+    if (!nsVerdict.ok || nsVerdict.addresses.length === 0) {
+      nameserver_results.push({
+        nameserver: nsHost,
+        queried: false,
+        axfr_refused: false,
+        axfr_leak: false,
+        error_class: nsVerdict.error_class ?? 'resolver_not_routable',
+        blocked_address: nsVerdict.blocked_address ?? null,
+        reason: nsVerdict.reason ?? 'no_resolved_addresses',
+      });
+      if (!firstVetFailure) firstVetFailure = { nsHost, nsVerdict };
+      continue;
+    }
+
+    for (const address of nsVerdict.addresses) {
+      if (requestsSent >= budget || remainingProbeTimeoutMs(job, deps) <= 0) break;
+      const outcome = await runDnsTcpAxfrQuery({
+        nsHost: address,
+        zone,
+        timeoutMs: remainingProbeTimeoutMs(job, deps),
+        connectFn: deps.connectFn,
+        transactionId: deps.axfrTransactionId,
+        transactionIdFn: deps.axfrTransactionIdFn,
+        beforeProbeIoAttempt: deps.beforeProbeIoAttempt,
+        recordProbeLogicalAttempt: deps.recordProbeLogicalAttempt,
+        signal: deps.jobDeadlineSignal,
+        onAttempt: () => {
+          requestsSent += 1;
+          transportAttempts += 1;
+        },
+      });
+      nameserver_results.push({
+        nameserver: nsHost,
+        address,
+        queried: true,
+        axfr_refused: outcome.axfr_refused === true,
+        axfr_leak: outcome.axfr_leak === true,
+        rcode: outcome.rcode ?? null,
+        reason: outcome.reason ?? null,
+      });
+      if (!firstTcp) {
+        firstTcp = {
+          nsHost,
+          outcome,
+          destinationVetting: net.isIP(nsHost) === 0 ? 2 : 0,
+        };
+      }
+    }
   }
-  if (!nsVerdict.ok || nsVerdict.addresses.length === 0) {
-    const durationMs = observedProbeDurationMs(deps);
+
+  const durationMs = observedProbeDurationMs(deps);
+  if (!firstTcp) {
+    const { nsHost, nsVerdict } = firstVetFailure ?? {
+      nsHost: nameservers[0],
+      nsVerdict: { error_class: 'resolver_not_routable', reason: 'no_resolved_addresses' },
+    };
     return {
       external_result: 'error',
       metadata: withKind(job, kind, {
@@ -2217,6 +2409,7 @@ export async function probeAxfrLeak(job, deps = {}) {
         nameserver: nsHost,
         blocked_address: nsVerdict.blocked_address ?? null,
         reason: nsVerdict.reason ?? 'no_resolved_addresses',
+        nameserver_results,
         resolver_attempts: resolverAttempts,
         destination_vetting_resolver_attempts: net.isIP(nsHost) === 0 ? 2 : 0,
         transport_attempts: transportAttempts,
@@ -2228,35 +2421,38 @@ export async function probeAxfrLeak(job, deps = {}) {
     };
   }
 
-  const outcome = await runDnsTcpAxfrQuery({
-    nsHost: nsVerdict.addresses[0],
-    zone,
-    timeoutMs: remainingProbeTimeoutMs(job, deps),
-    connectFn: deps.connectFn,
-    transactionId: deps.axfrTransactionId,
-    transactionIdFn: deps.axfrTransactionIdFn,
-    beforeProbeIoAttempt: deps.beforeProbeIoAttempt,
-    recordProbeLogicalAttempt: deps.recordProbeLogicalAttempt,
-    signal: deps.jobDeadlineSignal,
-    onAttempt: () => {
-      requestsSent += 1;
-      transportAttempts += 1;
-    },
-  });
-
-  const durationMs = observedProbeDurationMs(deps);
-  const leaked = outcome.axfr_leak === true;
+  const queriedHosts = new Set(nameserver_results.filter((row) => row.queried).map((row) => row.nameserver));
+  const allNsQueried = nameservers.every((ns) => queriedHosts.has(ns));
+  const queriedRows = nameserver_results.filter((row) => row.queried);
+  const anyLeak = queriedRows.some((row) => row.axfr_leak === true);
+  const anyAllowed = anyLeak || queriedRows.some((row) => row.axfr_refused !== true && row.rcode === 0);
+  const queriedAllRefused = queriedRows.length > 0 && queriedRows.every((row) => row.axfr_refused === true);
+  const everyRefused = allNsQueried && queriedAllRefused;
+  const unqueriedNameservers = nameservers.filter((ns) => !queriedHosts.has(ns));
+  const enforcement = anyAllowed ? 'not_enforced' : everyRefused ? 'enforced' : queriedAllRefused ? 'partial' : 'unknown';
+  const outcome = firstTcp.outcome;
+  const leaked = anyLeak;
+  const deadlineCanceled = jobDeadlineElapsed(deps);
+  const anyTimeout = queriedRows.length > 0 && queriedRows.every((row) => row.reason === 'timeout'
+    || (row.reason === 'probe_canceled' && deadlineCanceled));
   return {
-    external_result: leaked ? 'connected' : outcome.axfr_refused === true ? 'blocked' : outcome.error_class === 'timeout' ? 'timeout' : 'not_run',
+    external_result: leaked ? 'connected' : everyRefused ? 'blocked' : anyTimeout ? 'timeout' : 'not_run',
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       zone,
-      nameserver: nsHost,
+      nameserver: firstTcp.nsHost,
       ...outcome,
-      observation_only: !leaked && outcome.axfr_refused !== true,
-      readiness_conclusion: leaked || outcome.axfr_refused === true,
+      axfr_leak: leaked,
+      axfr_refused: everyRefused,
+      nameserver_results,
+      nameservers_total: nameservers.length,
+      nameservers_queried: queriedHosts.size,
+      unqueried_nameservers: unqueriedNameservers,
+      enforcement,
+      observation_only: !leaked && !everyRefused,
+      readiness_conclusion: leaked || everyRefused,
       resolver_attempts: resolverAttempts,
-      destination_vetting_resolver_attempts: net.isIP(nsHost) === 0 ? 2 : 0,
+      destination_vetting_resolver_attempts: firstTcp.destinationVetting,
       transport_attempts: transportAttempts,
       request_counting_basis: 'logical_operations',
     }),
@@ -2846,6 +3042,7 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
 }
 
 const DELEGATED_SAFE_HTTP_METHODS = new Set(['GET', 'HEAD']);
+const DELEGATED_METHOD_POLICY_METHODS = new Set(['TRACE', 'ASTRANULLPROBE']);
 const DELEGATED_MAX_ACTUAL_BODY_BYTES = 4096;
 const DELEGATED_FORBIDDEN_HEADERS = new Set([
   'connection',
@@ -2907,9 +3104,12 @@ function createDelegatedHttpTransport(job, deps, state) {
     const bodyBytes = delegatedBodyBytes(init.body);
     const hasForbiddenHeader = delegatedHeaderNames(init.headers)
       .some((name) => DELEGATED_FORBIDDEN_HEADERS.has(name));
+    const methodPolicy = job?.probe_profile?.kind === METHOD_POLICY_PROBE_KIND
+      && DELEGATED_METHOD_POLICY_METHODS.has(method)
+      && init.body == null;
     if (
-      !DELEGATED_SAFE_HTTP_METHODS.has(method)
-      || (['GET', 'HEAD'].includes(method) && init.body != null)
+      !(DELEGATED_SAFE_HTTP_METHODS.has(method) || methodPolicy)
+      || (['GET', 'HEAD', ...METHOD_POLICY_ONLY_HTTP_METHODS].includes(method) && init.body != null)
       || bodyBytes > DELEGATED_MAX_ACTUAL_BODY_BYTES
       || hasForbiddenHeader
     ) {
@@ -2925,6 +3125,7 @@ function createDelegatedHttpTransport(job, deps, state) {
         ...init,
         method,
         redirect: 'manual',
+        probeKind: job?.probe_profile?.kind,
       },
     }, deps);
     if (outcome.attempted) state.requestsSent += 1;
@@ -2987,6 +3188,10 @@ export async function probeWafClassMarker(job, deps = {}) {
     timeout_ms: remainingProbeTimeoutMs(job, deps),
     fetchFn: transport.request,
     declared_block_signature: job.probe_profile?.declared_block_signature ?? null,
+    declarations: job.probe_profile?.declarations,
+    nonce: job.nonce,
+    rng: deps.rng,
+    probe_profile: job.probe_profile,
     ...(job.probe_profile?.entry_path_scenario ? {
       entry_path_scenario: job.probe_profile.entry_path_scenario,
       expected_nonce: job.nonce ?? null,
@@ -3048,13 +3253,20 @@ export async function probeWafEvasionMarker(job, deps = {}) {
   const budget = Math.min(resolveProbeRequestBudget(job), MAX_WAF_EVASION_MARKER_REQUESTS);
   const raw = await (deps.wafEvasionProbeFn ?? runRawWafEvasionMarkerProbe)({
     ...job,
+    nonce: job.nonce,
     target: { ...job.target, value: transport.targetUrl },
     constraints: { ...job.constraints, max_requests: budget },
-    probe_profile: { ...job.probe_profile, max_requests: budget },
+    probe_profile: {
+      ...job.probe_profile,
+      max_requests: budget,
+      declarations: job.probe_profile?.declarations,
+    },
   }, {
     ...deps,
     fetchFn: transport.request,
     signal: deps.jobDeadlineSignal,
+    rng: deps.rng,
+    nonce: job.nonce,
   });
   const failure = delegatedFailureOutcome(job, kind, deps, state, raw?.metadata);
   if (failure) return failure;
@@ -3133,6 +3345,110 @@ export async function probeDelegatedL7ResourcePosture(job, deps = {}) {
   };
 }
 
+export async function probeWafMethodPolicy(job, deps = {}) {
+  const kind = 'waf_method_policy_probe';
+  const authorizationFailure = capabilityProbeAuthorizationFailure(job, kind, deps);
+  if (authorizationFailure) return authorizationFailure;
+  deps = ensureProbeDeadline(job, deps);
+  const state = { requestsSent: 0, error: null };
+  const transport = createDelegatedHttpTransport(job, deps, state);
+  if (!transport.request) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, { error_class: 'unsupported_target' }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+  const budget = Math.min(resolveProbeRequestBudget(job), WAF_METHOD_POLICY_MAX_REQUESTS);
+  const raw = await (deps.wafMethodPolicyProbeFn ?? runRawWafMethodPolicyProbe)({
+    url: transport.targetUrl,
+    max_requests: budget,
+    timeout_ms: remainingProbeTimeoutMs(job, deps),
+    fetchFn: transport.request,
+    declared_block_signature: job.probe_profile?.declared_block_signature ?? null,
+    nonce: job.nonce,
+  });
+  const failure = delegatedFailureOutcome(job, kind, deps, state, raw);
+  if (failure) return failure;
+  const rawMetadata = { ...(raw ?? {}) };
+  delete rawMetadata.requests_sent;
+  const originRejected = Array.isArray(raw?.method_results)
+    && raw.method_results.length > 0
+    && raw.method_results.every((row) => row.origin_rejected === true);
+  const comparisonComplete = raw?.comparison_complete === true && raw.baseline_health === 'healthy';
+  const externalResult = raw?.error_class
+    ? 'error'
+    : originRejected
+      ? 'not_run'
+      : comparisonComplete && raw.posture === 'protected'
+        ? 'blocked'
+        : comparisonComplete && raw.posture === 'exposed'
+          ? 'connected'
+          : 'not_run';
+  const durationMs = observedProbeDurationMs(deps);
+  return {
+    external_result: externalResult,
+    metadata: withKind(job, kind, {
+      ...rawMetadata,
+      max_requests: budget,
+      duration_ms: durationMs,
+      request_counting_basis: 'logical_operations',
+    }),
+    requests_sent: state.requestsSent,
+    duration_ms: durationMs,
+  };
+}
+
+export async function probeRateLimitCanary(job, deps = {}) {
+  const kind = 'rate_limit_canary_probe';
+  const authorizationFailure = capabilityProbeAuthorizationFailure(job, kind, deps);
+  if (authorizationFailure) return authorizationFailure;
+  deps = ensureProbeDeadline(job, deps);
+  const state = { requestsSent: 0, error: null };
+  const transport = createDelegatedHttpTransport(job, deps, state);
+  if (!transport.request) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, { error_class: 'unsupported_target', requests_sent: 0 }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+  const budget = Math.min(resolveProbeRequestBudget(job), RATE_LIMIT_CANARY_MAX_REQUESTS);
+  const raw = await (deps.rateLimitCanaryProbeFn ?? runRawRateLimitCanaryProbe)({
+    url: transport.targetUrl,
+    max_requests: budget,
+    timeout_ms: remainingProbeTimeoutMs(job, deps),
+    fetchFn: transport.request,
+    declared_block_signature: job.probe_profile?.declared_block_signature ?? null,
+    probe_profile: job.probe_profile,
+  });
+  const failure = delegatedFailureOutcome(job, kind, deps, state, raw);
+  if (failure) return failure;
+  const rawMetadata = { ...(raw ?? {}) };
+  const limited = raw?.first_limited_at != null || ['blocked', 'challenged', 'rate_limited'].includes(raw?.limited_outcome);
+  const externalResult = raw?.error_class
+    ? 'error'
+    : limited
+      ? 'blocked'
+      : raw?.requests_sent > 0
+        ? 'connected'
+        : 'error';
+  const durationMs = observedProbeDurationMs(deps);
+  return {
+    external_result: externalResult,
+    metadata: withKind(job, kind, {
+      ...rawMetadata,
+      max_requests: budget,
+      duration_ms: durationMs,
+      request_counting_basis: 'logical_operations',
+    }),
+    requests_sent: state.requestsSent,
+    duration_ms: durationMs,
+  };
+}
+
 /** Existing metadata-only refusals must precede destination resolution. Never run an injected producer here. */
 export async function capabilityProbeNoDeliveryOutcome(job, deps = {}) {
   const profile = job.probe_profile ?? {};
@@ -3166,6 +3482,7 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   dns_open_recursion: probeOpenRecursion,
   dns_failover_posture: probeDnsFailoverPosture,
   dns_axfr_leak: probeAxfrLeak,
+  connection_limit_probe: probeConnectionLimit,
   tls_audit: probeTlsAudit,
   cache_abuse_probe: probeCacheAbuse,
   api_surface_scan: probeApiSurfaceScan,
@@ -3176,6 +3493,8 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   waf_evasion_marker_probe: probeWafEvasionMarker,
   l7_resource_posture_probe: probeDelegatedL7ResourcePosture,
   waf_class_marker_probe: probeWafClassMarker,
+  waf_method_policy_probe: probeWafMethodPolicy,
+  rate_limit_canary_probe: probeRateLimitCanary,
 });
 
 const GRPC_HEALTH_PATH = '/grpc.health.v1.Health/Check';

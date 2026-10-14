@@ -1,27 +1,24 @@
-import { isConnectorsEnabledForTenant, isProtectionValidationEnabledForTenant } from '../config.mjs';
-import { isDemoAutoVerifyTenant } from '../lib/demoAutoVerify.mjs';
+import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
+import {
+  connectorsEnabledFor,
+  externalDiscoveryEnabledFor,
+  protectionValidationEnabledFor,
+  wafPostureEnabledFor,
+} from '../lib/tenantFeatureAccess.mjs';
 
-/**
- * Tenant-scoped deployment feature flags for authenticated portal UI.
- * @param {{ tenantId?: string | null }} ctx
- * @param {import('../config.mjs').RuntimeConfig} runtimeConfig
- */
+// Tenant-scoped deployment feature flags for authenticated portal UI.
 export function getTenantDeploymentFeatures(ctx, runtimeConfig) {
-  const isDemo = isDemoAutoVerifyTenant(ctx?.tenantId);
+  const isDemo = isExplicitDemoTenant(ctx?.tenantId);
   return {
-    waf_posture: isDemo || runtimeConfig.featureFlags?.wafPostureEnabled === true,
-    external_discovery: isDemo || runtimeConfig.featureFlags?.externalDiscoveryEnabled === true,
-    connectors: isDemo || isConnectorsEnabledForTenant(runtimeConfig, ctx?.tenantId),
-    protection_validation: isProtectionValidationEnabled(ctx, runtimeConfig),
+    demo_tenant: isDemo,
+    waf_posture: wafPostureEnabledFor(runtimeConfig, ctx?.tenantId),
+    external_discovery: externalDiscoveryEnabledFor(runtimeConfig, ctx?.tenantId),
+    connectors: connectorsEnabledFor(runtimeConfig, ctx?.tenantId),
+    protection_validation: protectionValidationEnabledFor(runtimeConfig, ctx?.tenantId),
   };
 }
 
-/** Entry-path validation and firewall change acceptance; the global off switch also covers demo tenants. */
+// Entry-path validation and firewall change acceptance; the global off switch also covers demo tenants.
 export function isProtectionValidationEnabled(ctx, runtimeConfig) {
-  if (runtimeConfig?.featureFlags?.protectionValidationEnabled === false) return false;
-  const tenantId = String(ctx?.tenantId ?? '').trim();
-  if (Object.hasOwn(runtimeConfig?.featureFlags?.protectionValidationEnabledTenants ?? {}, tenantId)) {
-    return isProtectionValidationEnabledForTenant(runtimeConfig, tenantId);
-  }
-  return isDemoAutoVerifyTenant(ctx?.tenantId) || isProtectionValidationEnabledForTenant(runtimeConfig, ctx?.tenantId);
+  return protectionValidationEnabledFor(runtimeConfig, ctx?.tenantId);
 }

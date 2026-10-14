@@ -4,6 +4,7 @@ import {
   dedupeProtectionFindingCandidates,
   deriveProtectionFindingCandidates,
   planProtectionFindingUpsert,
+  protectionFindingClosureSignal,
   toProtectionFindingRow,
 } from '../../lib/protectionValidationFindings.mjs';
 import { newId } from '../../lib/ids.mjs';
@@ -28,6 +29,8 @@ function mapExisting(row) {
     priority: row.priority,
     protection_validation: asObject(row.protection_validation_json),
     created_at: row.created_at,
+    check_version: row.check_version ?? null,
+    grading_version: row.grading_version ?? null,
   };
 }
 
@@ -66,29 +69,32 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null,
       now = new Date(),
     } = {}) {
       const derived = deriveProtectionFindingCandidates({ evaluation, entryPaths, expectations, baseline });
-      if (!derived.ok) return { ok: false, error: derived.error, created: [], updated: [], retained: [] };
+      if (!derived.ok) return { ok: false, error: derived.error, created: [], updated: [], retained: [], verified: [] };
       const candidates = dedupeProtectionFindingCandidates(derived.candidates).filter((row) => row.tenant_id === ctx.tenantId);
-      if (!candidates.length) return { ok: true, error: null, created: [], updated: [], retained: [] };
+      const passing = derived.passing ?? [];
+      const keys = [...new Set([...candidates.map((row) => row.dedupe_key), ...passing.map((row) => row.dedupe_key)])].filter(Boolean).sort();
+      if (!keys.length) return { ok: true, error: null, created: [], updated: [], retained: [], verified: [] };
       const at = new Date(now).toISOString();
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
         // Serialize absent rows too: FOR UPDATE alone cannot lock a finding that has not been inserted yet.
-        for (const key of [...new Set(candidates.map((row) => row.dedupe_key))].sort()) {
+        for (const key of keys) {
           await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`protection_finding:${ctx.tenantId}:${key}`]);
         }
         const { rows } = await client.query(
           `SELECT id, tenant_id, status, severity, title, source, dedupe_key, finding_class, priority,
-                  protection_validation_json, created_at::text AS created_at
+                  protection_validation_json, created_at::text AS created_at, check_version, grading_version
            FROM findings
            WHERE tenant_id = $1 AND source = 'protection_validation' AND dedupe_key = ANY($2::text[])
            ORDER BY created_at DESC, id
            FOR UPDATE`,
-          [ctx.tenantId, candidates.map((row) => row.dedupe_key)],
+          [ctx.tenantId, keys],
         );
         const existing = rows.map(mapExisting);
         const created = [];
         const updated = [];
         const retained = [];
+        const verified = [];
         for (const candidate of candidates) {
           const plan = planProtectionFindingUpsert({ existingFindings: existing, candidate });
           const metadata = {
@@ -104,15 +110,16 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null,
               `INSERT INTO findings (
                  id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity, status,
                  evidence_ids, notes, system_summary, verdict_id, assignee, created_at, updated_at,
-                 source, dedupe_key, finding_class, priority, protection_validation_json
+                 source, dedupe_key, finding_class, priority, protection_validation_json, check_version, grading_version
                ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'open', $8::text[], NULL, $9, $10, NULL,
-                 $11::timestamptz, $11::timestamptz, 'protection_validation', $12, $13, $14, $15::jsonb)
+                 $11::timestamptz, $11::timestamptz, 'protection_validation', $12, $13, $14, $15::jsonb, $16, $17)
                ON CONFLICT DO NOTHING
                RETURNING id`,
               [
                 row.id, ctx.tenantId, row.target_id ?? null, row.test_run_id ?? null, row.check_id ?? null,
                 row.title, row.severity, row.evidence_ids ?? [], row.system_summary ?? null, row.verdict_id ?? null,
                 at, row.dedupe_key, row.finding_class, row.priority, JSON.stringify(row.protection_validation),
+                row.check_version ?? null, row.grading_version ?? null,
               ],
             );
             if (!inserted.rows[0]) continue;
@@ -142,7 +149,29 @@ export function createPostgresProtectionFindingsRepository(pool, { audit = null,
           await appendAudit(client, ctx, 'finding.updated', plan.finding_id, metadata);
           if (plan.action === 'escalate' || severityIncreased) await enqueueHighSeverity(ctx, next, evaluation);
         }
-        return { ok: true, error: null, created, updated, retained, passing: derived.passing.length, skipped: derived.skipped.length };
+        for (const observation of passing) {
+          for (const row of existing) {
+            const signal = protectionFindingClosureSignal({ finding: row, passingObservation: observation });
+            if (signal.action !== 'fix_verified' || !signal.finding_id) continue;
+            if (!['open', 'in_progress'].includes(row.status)) continue;
+            await client.query(
+              `UPDATE findings
+               SET status = 'fix_verified', closed_at = COALESCE(closed_at, $3::timestamptz),
+                   verifying_run_id = $4, updated_at = $3::timestamptz
+               WHERE tenant_id = $1 AND id = $2 AND status IN ('open', 'in_progress')`,
+              [ctx.tenantId, signal.finding_id, at, signal.verifying_run_id ?? observation.test_run_id ?? null],
+            );
+            row.status = 'fix_verified';
+            verified.push(signal.finding_id);
+            await appendAudit(client, ctx, 'finding.fix_verified', signal.finding_id, {
+              source: 'protection_validation',
+              dedupe_key: observation.dedupe_key,
+              verifying_run_id: signal.verifying_run_id ?? observation.test_run_id ?? null,
+              evaluation_id: observation.evaluation_id,
+            });
+          }
+        }
+        return { ok: true, error: null, created, updated, retained, verified, passing: derived.passing.length, skipped: derived.skipped.length };
       });
     },
   };

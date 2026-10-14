@@ -230,10 +230,10 @@ export function OriginRelations({
     <section className="td-origin-relations" aria-labelledby="td-origin-relations-title">
       <header className="td-section-head">
         <div>
-          <h2 id="td-origin-relations-title">Origin relations</h2>
+          <h2 id="td-origin-relations-title" tabIndex={-1}>Origin relations</h2>
           <p>
             {role === 'protected'
-              ? 'Which of your verified origin targets serves this hostname. A relation fixes the exact scope an origin check may use. It does not test anything and is not an origin lockdown.'
+              ? 'Which of your verified origin targets serves this hostname. A relation fixes the exact scope an origin check may use. It does not test anything on its own; the origin-lockdown check needs exactly one active relation here plus origin lockdown declared on the Controls tab.'
               : 'Hostnames that declare this address as their origin. An origin check runs only under one of these relations, with its recorded host, SNI, port and path.'}
           </p>
         </div>

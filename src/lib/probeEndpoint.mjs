@@ -12,6 +12,14 @@ export const RISKY_ADMIN_PORTS = Object.freeze([
   21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 3389, 5432, 6379, 8080, 8443,
 ]);
 
+export const VETTED_SCAN_PORTS = Object.freeze([
+  ...RISKY_ADMIN_PORTS,
+  3306, 1433, 1521, 27017, 9200, 6443, 10250, 2379, 2375, 5900, 5985, 389, 636, 139, 2049,
+]);
+
+export const VETTED_SCAN_PORT_SET = new Set(VETTED_SCAN_PORTS);
+export const MAX_DECLARED_SCAN_PORTS = 15;
+
 export const API_DOC_PATHS = Object.freeze([
   '/swagger.json',
   '/openapi.json',
@@ -52,7 +60,7 @@ function parseIpv4Octets(ip) {
 }
 
 function ipv4IsUnspecified(octets) {
-  return octets.every((o) => o === 0);
+  return octets[0] === 0;
 }
 
 function ipv4IsLoopback(octets) {
@@ -65,6 +73,22 @@ function ipv4IsLinkLocal(octets) {
 
 function ipv4IsMetadata(ip) {
   return ip === '169.254.169.254';
+}
+
+function ipv4IsCgnat(octets) {
+  return octets[0] === 100 && (octets[1] & 0xc0) === 64;
+}
+
+function ipv4IsMulticast(octets) {
+  return octets[0] >= 224 && octets[0] <= 239;
+}
+
+function ipv4IsBroadcast(octets) {
+  return octets.every((o) => o === 255);
+}
+
+function ipv4IsReserved(octets) {
+  return octets[0] >= 240 && octets[0] <= 255;
 }
 
 function ipv4IsPrivate(octets) {
@@ -85,6 +109,20 @@ function parseIpv6Hextets(ip) {
     return { kind: 'mapped', octets, embedded: mapped[2] };
   }
 
+  const siit = lower.match(/^(::ffff:0:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (siit) {
+    const octets = parseIpv4Octets(siit[2]);
+    if (!octets) return null;
+    return { kind: 'mapped', octets, embedded: siit[2] };
+  }
+
+  const compat = lower.match(/^(::)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (compat) {
+    const octets = parseIpv4Octets(compat[2]);
+    if (!octets) return null;
+    return { kind: 'mapped', octets, embedded: compat[2] };
+  }
+
   let head = [];
   let tail = [];
   if (lower.includes('::')) {
@@ -103,6 +141,14 @@ function parseIpv6Hextets(ip) {
       const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
       return { kind: 'mapped', octets, embedded: octets.join('.') };
     }
+    if (hextets.slice(0, 4).every((n) => n === 0) && hextets[4] === 0xffff && hextets[5] === 0) {
+      const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+      return { kind: 'mapped', octets, embedded: octets.join('.') };
+    }
+    if (hextets.slice(0, 6).every((n) => n === 0) && !(hextets[6] === 0 && (hextets[7] === 0 || hextets[7] === 1))) {
+      const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+      return { kind: 'mapped', octets, embedded: octets.join('.') };
+    }
     return { kind: 'hextets', hextets };
   }
 
@@ -111,6 +157,14 @@ function parseIpv6Hextets(ip) {
   const hextets = segments.map((s) => parseInt(s, 16));
   if (hextets.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
   if (hextets.slice(0, 5).every((n) => n === 0) && hextets[5] === 0xffff) {
+    const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+    return { kind: 'mapped', octets, embedded: octets.join('.') };
+  }
+  if (hextets.slice(0, 4).every((n) => n === 0) && hextets[4] === 0xffff && hextets[5] === 0) {
+    const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+    return { kind: 'mapped', octets, embedded: octets.join('.') };
+  }
+  if (hextets.slice(0, 6).every((n) => n === 0) && !(hextets[6] === 0 && (hextets[7] === 0 || hextets[7] === 1))) {
     const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
     return { kind: 'mapped', octets, embedded: octets.join('.') };
   }
@@ -139,6 +193,34 @@ function ipv6IsUla(parsed) {
   return (parsed.hextets[0] & 0xfe00) === 0xfc00;
 }
 
+function ipv6IsMulticast(parsed) {
+  if (parsed.kind === 'mapped') return false;
+  return (parsed.hextets[0] & 0xff00) === 0xff00;
+}
+
+function ipv6IsSiteLocal(parsed) {
+  if (parsed.kind === 'mapped') return false;
+  return (parsed.hextets[0] & 0xffc0) === 0xfec0;
+}
+
+function ipv6IsTeredo(parsed) {
+  if (parsed.kind === 'mapped') return false;
+  return parsed.hextets[0] === 0x2001 && parsed.hextets[1] === 0x0000;
+}
+
+function ipv6Is6to4(parsed) {
+  if (parsed.kind === 'mapped') return false;
+  return parsed.hextets[0] === 0x2002;
+}
+
+function ipv6IsNat64(parsed) {
+  if (parsed.kind === 'mapped') return false;
+  const isPrefix96 = parsed.hextets[0] === 0x0064 && parsed.hextets[1] === 0xff9b
+    && parsed.hextets[2] === 0 && parsed.hextets[3] === 0 && parsed.hextets[4] === 0 && parsed.hextets[5] === 0;
+  const isLocal48 = parsed.hextets[0] === 0x0064 && parsed.hextets[1] === 0xff9b && parsed.hextets[2] === 0x0001;
+  return isPrefix96 || isLocal48;
+}
+
 function classifyRoutableIp(ip, allowPrivate) {
   const version = isIP(ip);
   if (version === 0) {
@@ -153,6 +235,18 @@ function classifyRoutableIp(ip, allowPrivate) {
     }
     if (ipv4IsLoopback(octets)) {
       return { ok: false, message: 'loopback IPv4 address' };
+    }
+    if (ipv4IsBroadcast(octets)) {
+      return { ok: false, message: 'broadcast IPv4 address' };
+    }
+    if (ipv4IsReserved(octets)) {
+      return { ok: false, message: 'reserved IPv4 address' };
+    }
+    if (ipv4IsMulticast(octets)) {
+      return { ok: false, message: 'multicast IPv4 address' };
+    }
+    if (ipv4IsCgnat(octets)) {
+      return { ok: false, message: 'cgnat IPv4 address' };
     }
     if (ipv4IsMetadata(ip)) {
       return { ok: false, message: 'cloud metadata IPv4 address' };
@@ -178,6 +272,21 @@ function classifyRoutableIp(ip, allowPrivate) {
   }
   if (ipv6IsLoopback(parsed)) {
     return { ok: false, message: 'loopback IPv6 address' };
+  }
+  if (ipv6IsMulticast(parsed)) {
+    return { ok: false, message: 'multicast IPv6 address' };
+  }
+  if (ipv6IsSiteLocal(parsed)) {
+    return { ok: false, message: 'site-local IPv6 address' };
+  }
+  if (ipv6IsTeredo(parsed)) {
+    return { ok: false, message: 'teredo IPv6 address' };
+  }
+  if (ipv6Is6to4(parsed)) {
+    return { ok: false, message: '6to4 IPv6 address' };
+  }
+  if (ipv6IsNat64(parsed)) {
+    return { ok: false, message: 'nat64 IPv6 address' };
   }
   if (ipv6IsLinkLocal(parsed)) {
     return { ok: false, message: 'link-local IPv6 address' };

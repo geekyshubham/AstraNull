@@ -216,6 +216,43 @@ describe('validation scan contract: projections', () => {
     assert.equal(simulated.verdict, null);
   });
 
+  it('projects verdict.explanation_reason and verdict.required_input when present for demo required_input_missing steps', () => {
+    const check = getCheckById('nfw.declared_deny_tcp.safe');
+    const step = {
+      id: 'step_demo_1',
+      position: 0,
+      status: 'verdicted',
+      check_id: check.check_id,
+      target_id: 'tgt_fqdn',
+      test_run_id: 'run_demo_1',
+      request_snapshot: requestSnapshotForCheck(check),
+    };
+    const run = {
+      id: 'run_demo_1',
+      status: 'verdicted',
+      probe_external_result: 'unsupported_target',
+      summary: { requests_sent: 0, required_input_missing: 'declared_tcp_deny_required' },
+    };
+    const verdict = {
+      verdict: 'inconclusive',
+      confidence: 'external_only',
+      explanation: 'No denied port is declared, so there was nothing to probe.',
+      explanation_reason: 'required_input_missing',
+      required_input: 'declared_tcp_deny_required',
+      severity: 'info',
+    };
+    const projected = projectScanStep({
+      step,
+      check,
+      target: FQDN_TARGET,
+      run,
+      verdict,
+    });
+    assert.equal(projected.verdict.verdict, 'inconclusive');
+    assert.equal(projected.verdict.explanation_reason, 'required_input_missing');
+    assert.equal(projected.verdict.required_input, 'declared_tcp_deny_required');
+  });
+
   it('merges scan audit entries and child run events into one chronological metadata-only feed', () => {
     const steps = [{ id: 'step_1', check_id: 'origin.leak_scan.safe', test_run_id: 'run_1' }];
     const items = buildActivityItems({

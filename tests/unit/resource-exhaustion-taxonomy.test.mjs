@@ -144,7 +144,7 @@ describe('resource-exhaustion taxonomy', () => {
         pending: summary.pending,
         total: summary.total,
       },
-      { implemented: 8, partial: 152, soc_only: 89, pending: 0, total: 249 },
+      { implemented: 9, partial: 151, soc_only: 89, pending: 0, total: 249 },
     );
     const validation = validateResourceExhaustionTaxonomy();
     assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 64.3);

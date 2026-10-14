@@ -2,7 +2,7 @@ import { withStandaloneTenantContext, withTenantContext } from './tenantContext.
 import { mapProbeJobRow } from './probeJobRepository.mjs';
 import { canonicalJsonStringify } from '../../lib/custody.mjs';
 import { getSubscriptionPlan } from '../../contracts/subscriptions.mjs';
-import { isWithinSafeTestWindow } from '../../lib/safeTestGuards.mjs';
+import { isWithinSafeTestWindowRaw } from '../../lib/safeTestGuards.mjs';
 
 const clock = (column) => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 const millis = (value) => typeof value === 'string' ? value.replace(/(\.\d{3})000Z$/, '$1Z') : value;
@@ -38,7 +38,7 @@ export function createReviewedSafeExecutionRepository(pool, { audit, authority, 
           metadata: { reason: denied.error } }, { client });
         return denied;
       }
-      if (!isWithinSafeTestWindow(snapshot.targetGroup,Date.now())) return { error: 'safe_window_closed', status: 429 };
+      if (!isWithinSafeTestWindowRaw(snapshot.targetGroup,Date.now())) return { error: 'safe_window_closed', status: 429 };
       return callback(snapshot);
     }, { client })),
     withTransaction: (ctx, jobId, callback) => withStandaloneTenantContext(pool, ctx.tenantId, async (client) => {
@@ -66,7 +66,7 @@ export function createReviewedSafeExecutionRepository(pool, { audit, authority, 
         withAuthority: (fn) => authority.withCurrentAuthority(ctx, { mode: 'compare', targetId: job.target_id,
           checkId: job.check_id, binding: job.constraints.reviewed_operation_binding }, async (snapshot) => {
           const denied = await tenantGate(client,ctx); if (denied) return denied;
-          if (!isWithinSafeTestWindow(snapshot.targetGroup,Date.parse(await at()))) return { error: 'safe_window_closed', status: 429 };
+          if (!isWithinSafeTestWindowRaw(snapshot.targetGroup,Date.parse(await at()))) return { error: 'safe_window_closed', status: 429 };
           return fn(snapshot);
         }, { client }),
         async reserve(reservation) {

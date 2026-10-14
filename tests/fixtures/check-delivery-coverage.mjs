@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { CHECK_CATALOG, ALLOWED_PROBE_PROFILE_KINDS, isCustomerRunnable } from '../../src/contracts/checks.mjs';
+import { CHECK_CATALOG, ALLOWED_PROBE_PROFILE_KINDS, PENDING_T7_PROBE_KINDS, isCustomerRunnable } from '../../src/contracts/checks.mjs';
 import { buildVectorTargetMatrix } from '../../src/contracts/vectorTargetMatrix.mjs';
 import { canonicalJsonStringify } from '../../src/lib/custody.mjs';
 import { deriveCheckDefinitionVersion } from '../../src/lib/checkDefinitionVersion.mjs';
@@ -18,7 +18,22 @@ export function deliveryDisposition(check) {
   if (!isCustomerRunnable(check)) return { disposition: 'soc_request_only', reason: 'soc_gated_check', execution: 'none' };
   if (p.kind === 'metadata_marker') return { disposition: 'declaration_only', reason: 'metadata_only_check_has_no_executable_probe', execution: 'metadata' };
   if (p.kind === 'ops_readiness') return { disposition: 'governance_inline', reason: p.scenario, execution: 'inline' };
-  if (p.kind === 'host_sni_bypass') return { disposition: 'additional_target_input', reason: 'missing_target_bound_direct_address', execution: 'admission_refusal' };
+  if (p.kind === 'host_sni_bypass') {
+    const reason = check.check_id === 'nfw.origin_lockdown.safe' ? 'declared_origin_lockdown_required' : 'missing_target_bound_direct_address';
+    return { disposition: 'additional_target_input', reason, execution: 'admission_refusal' };
+  }
+  if (PENDING_T7_PROBE_KINDS.includes(p.kind) && !executorNameForProbeKind(p.kind)) {
+    return { disposition: 'additional_target_input', reason: 't7_probe_module_pending', execution: 'admission_refusal' };
+  }
+  if ((check.runnable_requires ?? []).includes('two_perspectives')) return { disposition: 'additional_target_input', reason: 'two_perspectives_required', execution: 'admission_refusal' };
+  if ((check.runnable_requires ?? []).includes('declared_tcp_deny')) return { disposition: 'additional_target_input', reason: 'declared_tcp_deny_required', execution: 'admission_refusal' };
+  if ((check.runnable_requires ?? []).includes('declared_udp_deny')) return { disposition: 'additional_target_input', reason: 'declared_udp_deny_required', execution: 'admission_refusal' };
+  if ((check.runnable_requires ?? []).includes('port_or_declared_tcp_deny') || (check.runnable_requires ?? []).includes('port_or_declared_udp_deny')) {
+    return { disposition: 'additional_target_input', reason: 'port_or_declared_deny_required', execution: 'admission_refusal' };
+  }
+  if ((check.runnable_requires ?? []).includes('port') && !Number.isInteger(p.default_port) && !Number.isInteger(p.service_port) && !Number.isInteger(p.port)) {
+    return { disposition: 'additional_target_input', reason: 'port_required', execution: 'admission_refusal' };
+  }
   if (p.kind === 'alert_webhook_ping') return { disposition: 'additional_signed_scope', reason: 'approved_signed_callback_scope_required', execution: 'worker_refusal' };
   if (p.kind === 'waf_evasion_marker_probe' && !supportedTransforms.has(p.evasion_transform)) return { disposition: 'unsupported_delivery', reason: 'unsupported_evasion_delivery', execution: 'worker_refusal' };
   if (p.kind === 'reflection_service_probe' && p.payload_profile === 'ipp_get_printer_attributes') return { disposition: 'unsupported_delivery', reason: 'unsupported_or_unapproved_protocol_request', execution: 'worker_refusal' };
@@ -83,6 +98,7 @@ export function buildCheckDeliveryInventory(catalog = CHECK_CATALOG) {
 // these obligations but retain their own default definition invocations.
 export const DELIVERY_BRANCH_POLICIES = Object.freeze({
   origin_leak_scan: ['peer_error', 'timeout', 'cancel'],
+  host_sni_bypass: ['peer_error', 'timeout', 'cancel'],
   port_scan_bounded: ['peer_refused', 'timeout', 'cancel'],
   http_head: ['peer_error', 'timeout', 'cancel'],
   tcp_connect: ['peer_refused', 'timeout', 'cancel'],
@@ -115,6 +131,9 @@ export const DELIVERY_BRANCH_POLICIES = Object.freeze({
   waf_class_marker_probe: ['permitted_unhealthy', 'unsigned_denial', 'peer_error', 'timeout', 'cancel'],
   waf_evasion_marker_probe: ['permitted_unhealthy', 'variant_allowed', 'partial', 'unsigned_denial', 'peer_error', 'timeout', 'cancel'],
   l7_resource_posture_probe: ['peer_error', 'timeout', 'cancel'],
+  connection_limit_probe: ['peer_refused', 'timeout', 'cancel'],
+  waf_method_policy_probe: ['peer_error', 'timeout', 'cancel'],
+  rate_limit_canary_probe: ['peer_error', 'timeout', 'cancel'],
 });
 
 export function buildDeliveryBranchObligations(inventory) {

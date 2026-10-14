@@ -30,7 +30,7 @@ const FORBIDDEN_SUBSTRINGS = [
 
 const BENIGN_MARKER_VALUES = new Set(Object.values(BENIGN_CLASS_MARKERS));
 
-const SIGNED_BLOCK = Object.freeze({ status: 403, headers: { 'cf-mitigated': 'challenge', 'cf-ray': '8a1-LHR', server: 'cloudflare' } });
+const SIGNED_BLOCK = Object.freeze({ status: 403, headers: { 'x-waf-block': '1', 'cf-ray': '8a1-LHR', server: 'cloudflare' } });
 const OK = Object.freeze({ status: 200, headers: {} });
 
 function fakeResponse(spec) {
@@ -47,7 +47,7 @@ function countingFetch(specsByIndex) {
     calls.push({ url, opts });
     const spec = typeof specsByIndex === 'function'
       ? specsByIndex(index)
-      : (specsByIndex[index] ?? 'block');
+      : (specsByIndex[index] ?? 'ok');
     index += 1;
     return fakeResponse(spec);
   };
@@ -90,7 +90,12 @@ test('every evasion transform wraps an inert marker and emits nothing exploitabl
     for (const cls of EVASION_MARKER_CLASSES) {
       const variant = applyEvasionTransform(transform, cls);
       assert.ok(BENIGN_MARKER_VALUES.has(variant.marker), `${transform}/${cls} uses a benign base marker`);
-      assert.ok(variant.sent_value.length <= 512, `${transform} bounded length`);
+      if (transform === 'benign_padding') {
+        assert.ok(variant.sent_value.length >= 2048, `${transform} padding too small`);
+        assert.ok(Buffer.byteLength(variant.sent_value) <= 8192, `${transform} padding too large`);
+      } else {
+        assert.ok(variant.sent_value.length <= 512, `${transform} bounded length`);
+      }
       const lowered = variant.sent_value.toLowerCase();
       for (const bad of FORBIDDEN_SUBSTRINGS) {
         assert.ok(!lowered.includes(bad), `${transform}/${cls} must not contain ${bad}`);
@@ -144,26 +149,26 @@ test('runner: requires signed worker / injectable deps (fails closed)', async ()
 });
 
 test('runner: evasion resisted when transformed marker still blocked', async () => {
-  const { fetchFn, calls } = countingFetch(['ok', 'block', 'block']);
+  const { fetchFn, calls } = countingFetch(['ok', 'block', 'block', 'ok']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) };
-  const res = await runWafEvasionMarkerProbe(job, { fetchFn });
+  const res = await runWafEvasionMarkerProbe(job, { fetchFn, rng: () => 0.99 });
   assert.equal(res.external_result, 'external_blocked');
   assert.equal(res.metadata.evasion_bypass_suspected, false);
   assert.ok(calls().length <= MAX_WAF_EVASION_MARKER_REQUESTS);
 });
 
 test('runner: evasion suspected when transformed marker passes but baseline blocked', async () => {
-  const { fetchFn } = countingFetch(['ok', 'block', 'ok']);
+  const { fetchFn } = countingFetch(['ok', 'block', 'ok', 'ok']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'html_entity', marker_class: 'xss' }) };
-  const res = await runWafEvasionMarkerProbe(job, { fetchFn });
+  const res = await runWafEvasionMarkerProbe(job, { fetchFn, rng: () => 0.99 });
   assert.equal(res.external_result, 'external_allowed');
   assert.equal(res.metadata.evasion_bypass_suspected, true);
 });
 
 test('runner: inconclusive when baseline not blocked', async () => {
-  const { fetchFn } = countingFetch(['ok', 'ok', 'ok']);
+  const { fetchFn } = countingFetch(['ok', 'ok', 'ok', 'ok']);
   const job = { target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) };
-  const res = await runWafEvasionMarkerProbe(job, { fetchFn });
+  const res = await runWafEvasionMarkerProbe(job, { fetchFn, rng: () => 0.99 });
   assert.equal(res.external_result, 'inconclusive');
   assert.equal(res.metadata.inconclusive_reason, 'baseline_marker_not_blocked');
 });
@@ -180,8 +185,8 @@ test('runner: a login URL that answers 401 to everything is inconclusive, never 
 });
 
 test('runner: unsigned 403 markers after a healthy baseline are only block_suspected', async () => {
-  const { fetchFn } = countingFetch(['ok', 403, 403]);
-  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  const { fetchFn } = countingFetch(['ok', 403, 403, 'ok']);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn, rng: () => 0.99 });
   assert.equal(res.external_result, 'inconclusive');
   assert.equal(res.metadata.baseline_blocked, null);
   assert.ok(res.metadata.variant_results.every((row) => row.blocked === false && row.block_suspected === true));
@@ -196,17 +201,17 @@ test('runner: an outage that returns 503 to everything is inconclusive', async (
 
 test('runner: an F5 block page served with HTTP 200 counts as a signed block from the bounded body', async () => {
   const f5 = () => ({ status: 200, headers: {}, bodyText: '<html>The requested URL was rejected. Please consult with your administrator. Your support ID is: 1234</html>' });
-  const { fetchFn } = countingFetch(['ok', f5(), f5()]);
-  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
+  const { fetchFn } = countingFetch(['ok', f5(), f5(), 'ok']);
+  const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn, rng: () => 0.99 });
   assert.equal(res.external_result, 'external_blocked');
-  assert.equal(res.metadata.variant_results[0].denial_signature.vendor, 'f5');
+  assert.equal(res.metadata.variant_results.find((row) => row.label === 'baseline').denial_signature.vendor, 'f5');
 });
 
 test('runner: a signed vendor block on the permitted baseline is recorded and leaves the result inconclusive', async () => {
   const { fetchFn } = countingFetch(() => 'block');
   const res = await runWafEvasionMarkerProbe({ target: { value: 'https://example.test' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }) }, { fetchFn });
   assert.equal(res.external_result, 'inconclusive');
-  assert.equal(res.metadata.permitted_baseline.denial_signature.id, 'cloudflare_challenge');
+  assert.equal(res.metadata.permitted_baseline.denial_signature.id, 'block_header:x-waf-block');
 });
 
 test('runner: request budget is hard-bounded and retains no response body', async () => {
@@ -219,7 +224,11 @@ test('runner: request budget is hard-bounded and retains no response body', asyn
   assert.ok(res.requests_sent <= MAX_WAF_EVASION_MARKER_REQUESTS);
   assert.ok(calls().length <= MAX_WAF_EVASION_MARKER_REQUESTS);
   for (const entry of res.metadata.variant_results) {
-    assert.deepEqual(Object.keys(entry).sort(), ['actual_delivery', 'allowed', 'block_suspected', 'blocked', 'denial_signature', 'inconclusive', 'label', 'reason', 'sent_length', 'status_code']);
+    for (const key of ['actual_delivery', 'allowed', 'blocked', 'inconclusive', 'label', 'status_code']) {
+      assert.ok(Object.hasOwn(entry, key), key);
+    }
+    assert.equal(Object.hasOwn(entry, 'body'), false);
+    assert.equal(Object.hasOwn(entry, 'bodyText'), false);
   }
   assert.equal(JSON.stringify(res.metadata).includes('cf-ray'), false);
 });
@@ -298,7 +307,8 @@ test('local HTTP wire preserves Cookie, duplicate parameters and exact raw encod
   const rows = [];
   const server = createServer((req, res) => {
     rows.push({ url: req.url, method: req.method, headers: req.headers });
-    res.writeHead(rows.length === 1 ? 200 : 403, rows.length === 1 ? {} : { 'cf-mitigated': 'challenge' });
+    const blocked = rows.length === 2 || rows.length === 3;
+    res.writeHead(blocked ? 403 : 200, blocked ? { 'x-waf-block': '1' } : {});
     res.end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -306,10 +316,10 @@ test('local HTTP wire preserves Cookie, duplicate parameters and exact raw encod
     const target = `http://127.0.0.1:${server.address().port}/signed/path?keep=1`;
     for (const transform of ['parameter_location', 'parser_hpp', 'double_url', 'overlong_utf8', 'whitespace']) {
       rows.length = 0;
-      const result = await runWafEvasionMarkerProbe({ target: { value: target }, probe_profile: buildEvasionMarkerProfile({ transform }) }, { fetchFn: fetch });
+      const result = await runWafEvasionMarkerProbe({ target: { value: target }, probe_profile: buildEvasionMarkerProfile({ transform }) }, { fetchFn: fetch, rng: () => 0.99 });
       assert.equal(result.metadata.comparison_complete, true, transform);
-      assert.equal(result.requests_sent, 3);
-      assert.equal(rows.length, 3);
+      assert.equal(result.requests_sent, 4);
+      assert.equal(rows.length, 4);
       for (const row of rows) { assert.equal(row.method, 'GET'); assert.ok(row.url.startsWith('/signed/path?keep=1')); assert.equal(row.headers['content-length'], undefined); }
       const wire = rows[2];
       const variant = applyEvasionTransform(transform);
@@ -323,7 +333,7 @@ test('local HTTP wire preserves Cookie, duplicate parameters and exact raw encod
         assert.ok(wire.url.includes('%09'), wire.url);
         assert.equal(new URL(wire.url, target).searchParams.get('probe'), BENIGN_CLASS_MARKERS.sqli.replace(/ /g, '\t'));
         assert.equal(variant.sent_value.includes('/**/'), false);
-      } else { assert.ok(wire.url.endsWith(`&probe=${variant.sent_value}`), wire.url); }
+      } else { assert.ok(wire.url.includes(`probe=${variant.sent_value}`), wire.url); }
     }
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });

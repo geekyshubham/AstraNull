@@ -1,4 +1,5 @@
 import { buildFindingRemediationPlan, remediationDisposition, REMEDIATION_STATES } from '../../lib/remediationPlan.mjs';
+import { connectorsEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import { randomBytes } from 'node:crypto';
 import { dnsOwnershipDomain, dnsOwnershipTargetBinding, dnsOwnershipChallengeMatchesTarget } from '../../lib/dnsOwnershipTarget.mjs';
 import { normalizeTargetInput, targetDedupeKey } from '../../contracts/targetManagement.mjs';
@@ -701,8 +702,9 @@ export function createPostgresPortalRevampServices(deps) {
       let trustedConnector = null;
       let connectorInventoryEvidence = new Map();
       if (body.connector_id) {
-        if (typeof repositories.wafPosture?.isConnectorFeatureEnabled !== 'function'
-          || !await repositories.wafPosture.isConnectorFeatureEnabled(ctx)) {
+        if (!connectorsEnabledFor(null, ctx?.tenantId)
+          && (typeof repositories.wafPosture?.isConnectorFeatureEnabled !== 'function'
+            || !await repositories.wafPosture.isConnectorFeatureEnabled(ctx))) {
           return { error: 'connectors_feature_disabled', status: 404 };
         }
         const inventory = await loadConnectorInventory(repositories, ctx, String(body.connector_id));

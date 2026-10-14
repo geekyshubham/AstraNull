@@ -1,4 +1,5 @@
 import { audit } from '../audit.mjs';
+import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import {
   buildAuthorizationArtifactLedgerEntry,
   ensureAuthorizationArtifactLedger,
@@ -634,7 +635,7 @@ export function transitionHighScale(ctx, id, action, metadata = {}) {
         return { error: loaAuthorization.error, status: 409 };
       }
     }
-    if (distinctSocApprovalCount(req) < 2) {
+    if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
       auditStartGateDenied(ctx, req, 'insufficient_soc_approvals');
       return { error: 'insufficient_soc_approvals', status: 409 };
     }

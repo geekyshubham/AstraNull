@@ -190,9 +190,84 @@ export function validateReflectionResponse(profile, request, response) {
       return headers.get('st')?.toLowerCase() === 'upnp:rootdevice'
         && /^uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}::upnp:rootdevice$/i.test(headers.get('usn') ?? '');
     }
-    // WS-Discovery XML requires a complete namespace-aware message parser.
-    // A substring/regex match is not a supported message identity contract.
-    // Protocols lacking validated message identity remain unsupported observations.
+    if (profile === 'cldap_root_dse') {
+      const sequence = berElement(response);
+      if (!sequence || sequence.tag !== 0x30) return false;
+      const messageId = berElement(sequence.value);
+      if (!messageId || messageId.tag !== 0x02) return false;
+      const op = berElement(sequence.value, messageId.end);
+      return Boolean(op && [0x64, 0x65, 0x73].includes(op.tag));
+    }
+    if (profile === 'chargen_trigger') {
+      if (response.length < 2 || response.length > 512) return false;
+      if (!response.includes(10) && !response.includes(13)) return false;
+      return response.every((byte) => (byte >= 32 && byte <= 126) || byte === 9 || byte === 10 || byte === 13);
+    }
+    if (profile === 'tftp_read_request') {
+      if (response.length < 4) return false;
+      const opcode = response.readUInt16BE(0);
+      if (opcode === 3) return true;
+      if (opcode === 5) return response.length >= 5 && response[response.length - 1] === 0;
+      return opcode === 4 && response.length === 4;
+    }
+    if (profile === 'mssql_resolution_request') {
+      if (response.length < 3 || response[0] !== 0x05) return false;
+      const length = response.readUInt16LE(1);
+      return length > 0 && response.length >= 3 + Math.min(length, response.length - 3);
+    }
+    if (profile === 'jenkins_discovery') {
+      const text = response.toString('utf8');
+      if (!/^[\x20-\x7e\n\r]+$/.test(text) || text.length < 3) return false;
+      return /\d/.test(text) && (/https?:\/\//i.test(text) || /^[\d.]+ /.test(text) || text.startsWith('d'));
+    }
+    if (profile === 'ws_discovery_probe') {
+      const text = response.toString('utf8');
+      if ((!text.startsWith('<?xml') && !text.startsWith('<')) || text.length > 65536) return false;
+      if (!/<(?:\w+:)?Envelope[\s>]/.test(text) || !/<(?:\w+:)?ProbeMatches[\s>]/.test(text)) return false;
+      if (!text.includes('http://schemas.xmlsoap.org/ws/2005/04/discovery')) return false;
+      const requestId = /<(?:\w+:)?MessageID>([^<]+)</.exec(request.toString('utf8'));
+      if (requestId) {
+        const relates = /<(?:\w+:)?RelatesTo>([^<]+)</.exec(text);
+        if (!relates || relates[1] !== requestId[1]) return false;
+      }
+      return /<\/(?:\w+:)?Envelope>/.test(text);
+    }
+    if (profile === 'ipmi_rmcp_ping') {
+      return response.length >= 12
+        && response[0] === 0x06
+        && response[3] === 0x06
+        && response.readUInt32BE(4) === 0x000011be
+        && response[8] === 0x40;
+    }
+    if (profile === 'openvpn_reset') {
+      if (response.length < 14) return false;
+      const opcode = response[0] >> 3;
+      return opcode === 8 || opcode === 6;
+    }
+    if (profile === 'tp240_status_request') {
+      if (response.length < 4) return false;
+      if (request.length >= 6 && response.length >= 6 && response.subarray(4, 6).equals(request.subarray(4, 6))) return true;
+      return response.readUInt32BE(0) === 0;
+    }
+    if (profile === 'l2tp_sccrq') {
+      if (response.length < 20 || (response.readUInt16BE(0) & 0xc80f) !== 0xc802) return false;
+      if (response.readUInt16BE(2) !== response.length) return false;
+      const avpType = response.readUInt16BE(16);
+      if (avpType !== 0) return false;
+      const messageType = response.readUInt16BE(18);
+      return messageType === 2 || messageType === 4;
+    }
+    if (profile === 'sip_options') {
+      return /^SIP\/2\.0 \d{3} /.test(response.toString('ascii').slice(0, 24));
+    }
+    if (profile === 'rdp_udp_syn') {
+      if (response.length < 8) return false;
+      return response.readUInt32BE(0) === 0xffffffff || (response.readUInt16LE(4) & 0x0001) === 0x0001;
+    }
+    if (profile === 'dtls_client_hello') {
+      return response.length >= 13 && response[0] === 0x16
+        && [0xfeff, 0xfefd, 0xfefc].includes(response.readUInt16BE(1));
+    }
     return false;
   } catch { return false; }
 }
@@ -302,7 +377,13 @@ function entry(id, transport, defaultPort, build) {
     default_port: defaultPort,
     build: boundedPayload(build),
     classify: (request, response, received) => classifyReflection(id, request, response, received),
-    identity_supported: ['ssdp_msearch', 'snmp_v2c_get_sysdescr', 'mdns_ptr_query', 'netbios_nbstat', 'coap_get_wellknown', 'stun_binding_request', 'memcached_udp_stats', 'portmap_dump', 'ntp_mode6_readvar'].includes(id),
+    identity_supported: [
+      'ssdp_msearch', 'snmp_v2c_get_sysdescr', 'mdns_ptr_query', 'netbios_nbstat', 'coap_get_wellknown',
+      'stun_binding_request', 'memcached_udp_stats', 'portmap_dump', 'ntp_mode6_readvar',
+      'cldap_root_dse', 'chargen_trigger', 'tftp_read_request', 'mssql_resolution_request',
+      'jenkins_discovery', 'ws_discovery_probe', 'ipmi_rmcp_ping', 'openvpn_reset',
+      'dtls_client_hello', 'sip_options', 'rdp_udp_syn',
+    ].includes(id),
   });
 }
 
@@ -378,8 +459,59 @@ export const REFLECTOR_PAYLOADS = Object.freeze({
     `ASTRANULL:udp:${String(ctx.nonceHash ?? 'probe').slice(0, 16)}`,
     'utf8',
   )),
+  sip_options: entry('sip_options', 'udp', 5060, (ctx) => Buffer.from(
+    'OPTIONS sip:astranull.invalid SIP/2.0\r\n'
+      + 'Via: SIP/2.0/UDP 0.0.0.0:9;branch=z9hG4bK'
+      + stableIdentifier(ctx.nonceHash, 6).toString('hex')
+      + '\r\nFrom: <sip:astranull.invalid>;tag=an1\r\nTo: <sip:astranull.invalid>\r\n'
+      + 'Call-ID: ' + stableIdentifier(ctx.nonceHash, 8).toString('hex') + '\r\n'
+      + 'CSeq: 1 OPTIONS\r\nMax-Forwards: 1\r\nContent-Length: 0\r\n\r\n',
+    'ascii',
+  )),
+  rdp_udp_syn: entry('rdp_udp_syn', 'udp', 3389, () => {
+    const payload = Buffer.alloc(16, 0);
+    payload.writeUInt32BE(0xffffffff, 0);
+    payload.writeUInt16LE(0x0001, 4);
+    return payload;
+  }),
 });
 
+export const COMPOSITE_PAYLOAD_PROFILES = Object.freeze({
+  mdns_netbios_wsdiscovery: Object.freeze(['mdns_ptr_query', 'netbios_nbstat', 'ws_discovery_probe']),
+  dtls_sip_rdp_tftp: Object.freeze(['dtls_client_hello', 'sip_options', 'rdp_udp_syn', 'tftp_read_request']),
+});
+
+const COMPOSITE_BY_CHECK_ID = Object.freeze({
+  'reflect.mdns_netbios_wsdiscovery_exposure.safe': 'mdns_netbios_wsdiscovery',
+  'reflect.dtls_sip_rdp_tftp_exposure.safe': 'dtls_sip_rdp_tftp',
+});
+
+const EXTRA_IDENTITY_PROFILES = new Set(['tp240_status_request', 'l2tp_sccrq']);
+
+export function payloadProfilesForJob(job) {
+  const profile = job?.probe_profile ?? {};
+  if (Array.isArray(profile.payload_profiles) && profile.payload_profiles.length > 0) {
+    return profile.payload_profiles.filter((id) => typeof id === 'string');
+  }
+  const composite = COMPOSITE_BY_CHECK_ID[job?.check_id]
+    ?? (COMPOSITE_PAYLOAD_PROFILES[profile.payload_profile] ? profile.payload_profile : null);
+  if (composite) {
+    const list = [...COMPOSITE_PAYLOAD_PROFILES[composite]];
+    const named = profile.payload_profile;
+    if (named && list.includes(named)) return [named, ...list.filter((id) => id !== named)];
+    return list;
+  }
+  return [profile.payload_profile ?? 'generic_probe'];
+}
+
 export function reflectorPayloadForProfile(profile = 'generic_probe') {
-  return REFLECTOR_PAYLOADS[profile] ?? extraReflectorPayloadForProfile(profile) ?? null;
+  if (REFLECTOR_PAYLOADS[profile]) return REFLECTOR_PAYLOADS[profile];
+  const extra = extraReflectorPayloadForProfile(profile);
+  if (!extra) return null;
+  if (!EXTRA_IDENTITY_PROFILES.has(profile)) return extra;
+  return Object.freeze({
+    ...extra,
+    identity_supported: true,
+    classify: (request, response, received) => classifyReflection(profile, request, response, received),
+  });
 }

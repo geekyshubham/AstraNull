@@ -1,4 +1,10 @@
 import { assertNoRawWafEvidence } from './wafPosture.mjs';
+import {
+  gradeCanarySinkBodyResults,
+  planCanarySinkBodyTests,
+} from '../lib/vectorProbes/canarySinkBodyPlan.mjs';
+
+export { gradeCanarySinkBodyResults, planCanarySinkBodyTests };
 
 /** SOC-gated offensive WAF validation — curated suites only; no customer self-service execution. */
 

@@ -1,4 +1,5 @@
 import { roleHasPermission } from './contracts/roles.mjs';
+import { isExplicitDemoTenant } from './lib/demoAutoVerify.mjs';
 import { audit } from './audit.mjs';
 
 function deny(ctx, permission, meta, message) {
@@ -28,7 +29,11 @@ function deny(ctx, permission, meta, message) {
 
 export function requirePermission(ctx, permission, meta = {}) {
   if (!roleHasPermission(ctx.role, permission)) {
-    return deny(ctx, permission, meta, 'Role lacks required permission.');
+    if (isExplicitDemoTenant(ctx) && (ctx.role === 'admin' || ctx.role === 'owner') && permission.startsWith('soc:')) {
+      // Demo admin/owner bypasses SOC permission gates
+    } else {
+      return deny(ctx, permission, meta, 'Role lacks required permission.');
+    }
   }
   if (Array.isArray(ctx.scopes)) {
     const scopeOk = ctx.scopes.includes('*') || ctx.scopes.includes(permission);

@@ -11,11 +11,11 @@ const rows = new Map(CHECK_DELIVERY_INVENTORY.rows.map((row) => [row.check_id, r
 describe('live catalog delivery accounting', () => {
   it('reconciles all definitions, vectors, default IDs, metadata declarations and kinds', () => {
     assert.deepEqual(CHECK_DELIVERY_INVENTORY.summary, {
-      definitions: 251, vectors: 721, default_fqdn_safe_ids: 161, allowed_kinds: 41,
-      distinct_delivery_fingerprints: 243,
-      dispositions: { additional_target_input: 4, supported_observation: 94, additional_signed_scope: 1, governance_inline: 2, supported_semantic_safe: 30, soc_request_only: 17, declaration_only: 72, unsupported_delivery: 31 },
+      definitions: 273, vectors: 721, default_fqdn_safe_ids: 167, allowed_kinds: 44,
+      distinct_delivery_fingerprints: 264,
+      dispositions: { additional_target_input: 14, supported_observation: 92, additional_signed_scope: 1, governance_inline: 2, supported_semantic_safe: 39, soc_request_only: 22, declaration_only: 72, unsupported_delivery: 31 },
     });
-    assert.equal(new Set(CHECK_DELIVERY_INVENTORY.rows.map((row) => row.check_id)).size, 251);
+    assert.equal(new Set(CHECK_DELIVERY_INVENTORY.rows.map((row) => row.check_id)).size, 273);
     for (const row of rows.values()) {
       assert.ok(row.delivery_material.supported_targets.length > 0);
       assert.ok(row.check_version && row.definition_digest && row.delivery_fingerprint);
@@ -44,14 +44,14 @@ describe('live catalog delivery accounting', () => {
   it('missing supported proof is an explicit failing gap, never default unsupported', () => {
     const missing = accountDeliveryReceipts([]);
     assert.equal(missing.complete, false);
-    assert.equal(missing.gaps.length, 251);
-    assert.equal(missing.gaps.filter((row) => row.disposition.startsWith('supported_')).length, 124);
+    assert.equal(missing.gaps.length, 273);
+    assert.equal(missing.gaps.filter((row) => row.disposition.startsWith('supported_')).length, 131);
   });
 });
 
 // Every catalog definition has its OWN signed invocation or actual admission call.
 // A shared complete delivery fingerprint never licenses copying another receipt.
-describe('every shipped catalog definition: actual bounded delivery or exact existing refusal', () => {
+describe('every shipped catalog definition: actual bounded delivery or exact existing refusal', { concurrency: false }, () => {
   let fixtures;
   const receipts = [];
   before(async () => { fixtures = await createCheckDeliveryFixtures(); });
@@ -139,8 +139,8 @@ describe('every shipped catalog definition: actual bounded delivery or exact exi
     assert.equal(full.complete, false);
     assert.equal(full.branch_gaps.length, CHECK_DELIVERY_INVENTORY.branch_obligations.length);
     assert.equal(result.complete, true, JSON.stringify({ errors: result.errors, gaps: result.gaps }));
-    assert.equal(result.invoked_definitions, 251);
-    assert.equal(new Set(receipts.map((receipt) => receipt.invocation_id)).size, 251);
+    assert.equal(result.invoked_definitions, 273);
+    assert.equal(new Set(receipts.map((receipt) => receipt.invocation_id)).size, 273);
     // Mutations of ACTUAL receipts must not be admitted as current proof.
     const duplicate = accountDeliveryReceipts([...receipts, receipts[0]]);
     assert.ok(duplicate.errors.some((error) => error.startsWith('duplicate_definition_invocation:')));

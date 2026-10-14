@@ -108,3 +108,6 @@ export function splitEntryPathsByAnchor<T extends { anchor_target_id: string }>(
 export function authorizationView(path: unknown): { authorized: boolean | null; label: string; tone: Tone };
 
 export function findingExclusionView(item: unknown, inferFromEvidence?: boolean): { excluded: boolean; reason: string };
+export const FIREWALL_INCONCLUSIVE_REASONS: readonly string[];
+export function firewallItemStatus(item: { status?: unknown; reasons?: unknown; local_error?: unknown } | null | undefined): string;
+export function firewallReasonLabel(reason: unknown): string;

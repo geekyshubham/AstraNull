@@ -398,6 +398,8 @@ function buildCandidate({ evaluation, item, index, relation, expectation, baseli
     target_id: targetId,
     check_id: newest?.check_id ?? checkIds[0] ?? null,
     check_ids: checkIds,
+    check_version: newest?.check_version ?? null,
+    grading_version: newest?.grading_version ?? null,
     test_run_id: newest?.test_run_id ?? null,
     verdict_id: newest?.verdict_id ?? null,
     evidence_ids: evidenceIds,
@@ -450,13 +452,19 @@ export function deriveProtectionFindingCandidates({
     }
     if (isPassing(kind, item)) {
       const { dedupe_key: dedupeKey } = protectionFindingDedupeKey({ kind, tenantId, relation, expectation, item });
+      const newest = latestRef(Array.isArray(item.evidence_refs) ? item.evidence_refs : []);
+      const incomplete = item.complete === false || item.comparison_complete === false
+        || item.observation_only === true || evaluation.comparison_complete === false;
       passing.push({
         dedupe_key: dedupeKey,
         evaluation_id: evaluation.id,
         item_index: index,
         observation: kind === 'firewall_change' ? item.status : item.outcome,
         evaluated_at: evaluation.evaluated_at,
-        closes_findings: false,
+        closes_findings: !incomplete,
+        test_run_id: newest?.test_run_id ?? null,
+        check_version: newest?.check_version ?? null,
+        grading_version: newest?.grading_version ?? null,
       });
       return;
     }
@@ -596,10 +604,36 @@ export function applyProtectionFindingPatch(row, patch = {}, now = new Date().to
   return next;
 }
 
+function versionsAlign(finding, passingObservation) {
+  const findingCheck = finding?.check_version ?? finding?.protection_validation?.check_version ?? null;
+  const observationCheck = passingObservation?.check_version ?? null;
+  if (findingCheck && observationCheck && findingCheck !== observationCheck) return false;
+  const findingGrading = finding?.grading_version ?? finding?.protection_validation?.grading_version ?? null;
+  const observationGrading = passingObservation?.grading_version ?? null;
+  if (findingGrading && observationGrading && findingGrading !== observationGrading) return false;
+  return true;
+}
+
 export function protectionFindingClosureSignal({ finding, passingObservation = null, externalTicket = null } = {}) {
   const signals = [];
   if (passingObservation && findingDedupeKey(finding) === passingObservation.dedupe_key) signals.push('newer_passing_observation');
   if (externalTicket && ['closed', 'resolved', 'done'].includes(String(externalTicket.status ?? '').toLowerCase())) signals.push('external_ticket_closed');
+  const open = OPEN_STATUSES.has(rowStatus(finding));
+  if (passingObservation?.closes_findings === true
+    && findingDedupeKey(finding) === passingObservation.dedupe_key
+    && open
+    && versionsAlign(finding, passingObservation)) {
+    return {
+      finding_id: finding?.id ?? null,
+      action: 'fix_verified',
+      close: true,
+      sibling_closure: false,
+      can_advance_remediation: true,
+      requires_explicit_lifecycle_action: false,
+      verifying_run_id: passingObservation.test_run_id ?? null,
+      signals,
+    };
+  }
   return {
     finding_id: finding?.id ?? null,
     action: 'none',
@@ -622,6 +656,8 @@ export function toProtectionFindingRow(candidate, { id, now = new Date(), upsert
     target_group_id: null,
     target_id: targetId,
     check_id: checkId,
+    check_version: candidate.check_version ?? null,
+    grading_version: candidate.grading_version ?? null,
     test_run_id: testRunId,
     verdict_id: verdictId,
     title,

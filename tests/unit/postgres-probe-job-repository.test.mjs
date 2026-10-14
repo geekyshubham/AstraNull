@@ -280,7 +280,9 @@ describe('postgres probe job repository', () => {
     // Concurrency protection must survive the widened predicate.
     assert.match(leaseSql, /FOR UPDATE SKIP LOCKED/);
     // Every TTL tunable is a bound parameter, never interpolated.
-    assert.equal(leaseParams.length, 8);
+    assert.equal(leaseParams.length, 9);
+    assert.equal(leaseParams[8], null);
+    assert.match(leaseSql, /constraints_json->>'required_perspective_id' = \$9::text/);
     assert.match(leaseSql, /\$5::numeric/);
     assert.match(leaseSql, /\$6::numeric/);
     assert.match(leaseSql, /\$7::numeric/);

@@ -486,6 +486,7 @@ export const TARGET_DETAIL_SHAPE = {
       policy_binding: 'string',
     }],
     ...HISTORY_READ_FIELDS,
+    'custom_canary_rollups?': ['array', 'null'],
   },
   'edge_detection_request?': [{
     test_run_id: 'string',
@@ -514,7 +515,15 @@ export const TARGET_DETAIL_SHAPE = {
     started_at: 'string',
     completed_at: ['string', 'null'],
   }],
-  findings: [{ id: 'string', severity: 'string', title: 'string', state: 'string', opened_at: 'string', owner_group: 'string' }],
+  findings: [{
+    id: 'string',
+    severity: 'string',
+    title: 'string',
+    state: 'string',
+    opened_at: 'string',
+    owner_group: 'string',
+    'verification_basis?': ['string', 'null'],
+  }],
   loa: ['object', 'null'],
   counts: { runs_total: 'number', findings_open: 'number', findings_closed: 'number' },
   'meta?': {

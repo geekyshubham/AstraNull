@@ -3,13 +3,14 @@
  * the predicate, the paging and the totals; nothing here filters or counts rows in the browser.
  */
 
-export const FINDING_STATUSES = Object.freeze(['open', 'in_progress', 'accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive']);
+export const FINDING_STATUSES = Object.freeze(['open', 'in_progress', 'accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed', 'false_positive']);
 
 export const FINDING_STATUS_LABELS = Object.freeze({
   open: 'Open',
   in_progress: 'In progress',
   accepted_risk: 'Accepted risk',
   accepted: 'Accepted',
+  fix_verified: 'Fix verified',
   resolved: 'Resolved',
   closed: 'Closed',
   false_positive: 'False positive',
@@ -21,13 +22,14 @@ export const FINDING_STATUS_DESCRIPTIONS = Object.freeze({
   in_progress: 'Remediation underway',
   accepted_risk: 'Risk formally accepted by the customer',
   accepted: 'Accepted (older status set through the API)',
-  resolved: 'Fixed and confirmed by a later probe',
+  fix_verified: 'A later passing check of the same scope and check version confirmed the fix',
+  resolved: 'Marked fixed by a person; no passing re-check confirmed it yet',
   closed: 'Closed without a fix',
   false_positive: 'Evidence did not hold',
 });
 
 /** Statuses that end active work on a finding; reopening moves it back to open. */
-export const FINDING_CLOSURE_STATUSES = Object.freeze(['accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive']);
+export const FINDING_CLOSURE_STATUSES = Object.freeze(['accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed', 'false_positive']);
 
 const START_WORK = Object.freeze({ status: 'in_progress', label: 'Start work' });
 const REOPEN = Object.freeze({ status: 'open', label: 'Reopen' });
@@ -55,7 +57,7 @@ export function findingStatusTransitions(current) {
 export const FINDING_STATUS_GROUPS = Object.freeze([
   Object.freeze({ id: 'active', label: 'Active', statuses: Object.freeze(['open', 'in_progress']) }),
   Object.freeze({ id: 'decided', label: 'Risk decisions', statuses: Object.freeze(['accepted_risk', 'accepted']) }),
-  Object.freeze({ id: 'closed', label: 'Closed', statuses: Object.freeze(['resolved', 'closed', 'false_positive']) }),
+  Object.freeze({ id: 'closed', label: 'Closed', statuses: Object.freeze(['fix_verified', 'resolved', 'closed', 'false_positive']) }),
 ]);
 
 export const FINDINGS_LIMIT_MAX = 200;

@@ -1,11 +1,12 @@
 import { loadRuntimeConfig } from '../config.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 import { computeWafCoverageSummaryRow } from '../lib/wafCoverageSummary.mjs';
 import { newId } from '../lib/ids.mjs';
 import { computeCoverageDailyRollup, validCoverageRollupDate } from './wafCoverageService.mjs';
 import { getStore, persistStore } from '../store.mjs';
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(ctx) {
+  const enabled = wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
   if (!enabled) return { skipped: true, reason: 'waf_feature_disabled' };
   return null;
 }
@@ -118,7 +119,7 @@ export function summarizeTenantCoverageRollupScope(tenantId, rollupDate, store) 
  * }} ctx
  */
 export function runCoverageRollup(ctx) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   const store = ensureStoreShape();
@@ -187,7 +188,7 @@ export function runCoverageRollup(ctx) {
  * }} [ctx]
  */
 export function runScheduledCoverageRollups(ctx = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   const store = ensureStoreShape();

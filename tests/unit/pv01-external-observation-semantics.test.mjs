@@ -58,7 +58,7 @@ function edgeFetch({ baselineStatus = 200, server = 'cloudflare' } = {}) {
     const isBaseline = url === EDGE_URL && init?.headers?.['User-Agent'] && init?.method !== 'POST';
     if (isBaseline) return mockResponse(baselineStatus, { server, 'cf-ray': '1',
       'x-astranull-canary-echo': init?.headers?.['x-astranull-nonce'] });
-    return mockResponse(403, { server, 'cf-ray': '1', 'cf-mitigated': 'challenge', __body: 'Cloudflare' });
+    return mockResponse(403, { server, 'cf-ray': '1', 'x-waf-block': '1', __body: 'Cloudflare' });
   };
 }
 
@@ -362,7 +362,13 @@ describe('PV-01 declared lockdown signature is the only lockdown basis', () => {
       originBypassFn: async () => ({ res: mockResponse(403, { server: 'origin-nginx', 'x-origin-lockdown': 'cdn-only' }), error: null }),
     });
     assert.equal(outcome.origin_observation.outcome, 'explicit_denial_observed');
-    assert.deepEqual(outcome.origin_observation.denial_signature, { kind: 'declared', id: 'declared_response', vendor: null });
+    assert.deepEqual(outcome.origin_observation.denial_signature, {
+      kind: 'declared',
+      id: 'declared_response',
+      vendor: null,
+      basis: 'declared_header',
+      declaration_digest: '6396d99cf61b8fed4eb5ec3fbb21679904fc5be693719b61d0ce6a36aadd4a94',
+    });
     assert.equal(outcome.origin_lockdown_confirmed, true);
     assert.equal(outcome.posture_label, 'Protected');
     assert.equal(outcome.origin_observation.control_identified, false);
@@ -621,7 +627,7 @@ it('redirected nonce echoes never acquire the original direct-origin baseline sc
         return baselineCalls === 1 ? mockResponse(302, { location: '/different' })
           : mockResponse(200, { 'x-astranull-canary-echo': NONCE });
       }
-      return mockResponse(403, { 'cf-mitigated': 'challenge' });
+      return mockResponse(403, { 'x-waf-block': '1' });
     },
     originBypassFn: async () => ({ res: mockResponse(403, { 'x-origin-policy': 'cdn-only' }), error: null }),
     declaredOriginLockdown: { status_code: 403, header: { name: 'x-origin-policy', value: 'cdn-only' } },

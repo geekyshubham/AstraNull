@@ -14,6 +14,7 @@ describe('correlateExternalOnlyVerdict', () => {
   it('edge_protected when blocked with attested probe I/O and external_only confidence', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'blocked',
+      probeKind: 'outside_in_waf_scan',
       probeIoObserved: true,
       expectedBehavior: 'must_block_before_origin',
     });
@@ -25,6 +26,7 @@ describe('correlateExternalOnlyVerdict', () => {
   it('edge_exposed when connected with external_only confidence', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'connected',
+      probeKind: 'outside_in_waf_scan',
       expectedBehavior: 'must_block_before_origin',
     });
     assert.equal(r.verdict, 'edge_exposed');
@@ -48,6 +50,7 @@ describe('correlateExternalOnlyVerdict', () => {
   it('keeps blocked claims inconclusive without attested probe I/O', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'blocked',
+      probeKind: 'outside_in_waf_scan',
       expectedBehavior: 'must_block_before_origin',
     });
     assert.equal(r.verdict, 'inconclusive');
@@ -57,6 +60,7 @@ describe('correlateExternalOnlyVerdict', () => {
   it('inconclusive for unknown external result', () => {
     const r = correlateExternalOnlyVerdict({
       externalResult: 'weird',
+      probeKind: 'outside_in_waf_scan',
       expectedBehavior: 'must_block_before_origin',
     });
     assert.equal(r.verdict, 'inconclusive');
@@ -68,7 +72,7 @@ describe('correlateExternalOnlyVerdict', () => {
       const r = correlateExternalOnlyVerdict({
         externalResult,
         expectedBehavior: 'must_block_before_origin',
-        probeKind: 'http_head',
+        probeKind: 'outside_in_waf_scan',
         probeIoObserved: true,
       });
       assert.doesNotMatch(r.explanation, /simulat/i, externalResult);

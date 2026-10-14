@@ -144,11 +144,11 @@ function firewallEvaluation(id = 'fwc_1') {
     baseline_digest: 'b'.repeat(64),
     evaluated_at: T2,
     items: [
-      fwItem(FW_DENY, ['explicit_denial_observed'], ['reachable_transport_only']),
+      fwItem(FW_DENY, ['explicit_denial_observed', 'explicit_denial_observed'], ['reachable_transport_only']),
       fwItem(FW_ALLOW, ['service_response_observed'], ['no_response', 'no_response']),
       fwItem(FW_STILL, ['service_response_observed'], ['service_response_observed']),
-      fwItem(FW_IMPROVED, ['service_response_observed'], ['explicit_denial_observed']),
-      { ...fwItem(FW_MISMATCH, ['explicit_denial_observed'], ['udp_silence'], { comparable: false, stale: false, reasons: ['source_mismatch'] }), evidence_refs: [] },
+      fwItem(FW_IMPROVED, ['service_response_observed'], ['explicit_denial_observed', 'explicit_denial_observed']),
+      { ...fwItem(FW_MISMATCH, ['explicit_denial_observed', 'explicit_denial_observed'], ['udp_silence'], { comparable: false, stale: false, reasons: ['source_mismatch'] }), evidence_refs: [] },
     ],
   });
   return { ...evaluation, id };
@@ -195,7 +195,7 @@ describe('protection finding candidates from path evaluations', () => {
     assert.equal(byPath(derived.candidates, 'ep_primary'), undefined);
     assert.equal(byPath(derived.candidates, 'ep_api'), undefined);
     assert.deepEqual(derived.passing.map((row) => row.observation).sort(), ['consistent_enforcement', 'intentional_public_access']);
-    assert.ok(derived.passing.every((row) => row.closes_findings === false));
+    assert.ok(derived.passing.every((row) => row.closes_findings === true));
     for (const candidate of derived.candidates) assert.ok(PROTECTION_FINDING_CLASSES.includes(candidate.finding_class));
     assert.equal(PROTECTION_FINDING_CLASSES.includes('unavailable_evidence'), false);
     assert.deepEqual(LEGACY_PROTECTION_FINDING_CLASSES, ['unavailable_evidence']);
@@ -340,7 +340,7 @@ it('binds a firewall migration finding and its retest to the mapped post-change 
     verdict_id: 'vrd_mapped_post', evidence_ids: ['evt_mapped_post'], target_id: 'tgt_post', observed_at: T2, run_status: 'verdicted',
     source_perspective: 'public-worker-eu', worker_id: 'worker_1' };
   const evaluation = { ...normalizeComparisonEvaluation({ kind: 'firewall_change', tenant_id: TENANT, evaluated_at: T2,
-    items: [{ expectation_id: expectation.id, ...classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed'], candidate: ['reachable_transport_only'], compatibility: { comparable: true, reasons: [] } }), evidence_refs: [reference] }],
+    items: [{ expectation_id: expectation.id, ...classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed', 'explicit_denial_observed'], candidate: ['reachable_transport_only'], compatibility: { comparable: true, reasons: [] } }), evidence_refs: [reference] }],
   }), id: 'fwc_mapped' };
   const derived = deriveProtectionFindingCandidates({ evaluation, expectations: [expectation] });
   assert.equal(derived.candidates[0].target_id, 'tgt_post');

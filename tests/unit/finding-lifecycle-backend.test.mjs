@@ -12,7 +12,7 @@ import { buildWafPostureFindingSummary, extractFindingRemediationContext } from 
 import { roleHasPermission } from '../../src/contracts/roles.mjs';
 import { planFindingPatch, validateRiskAcceptance } from '../../src/lib/findingLifecycle.mjs';
 import { scrubFindingForCustomer } from '../../src/lib/outsideInEvidence.mjs';
-import { toProtectionFindingRow } from '../../src/lib/protectionValidationFindings.mjs';
+import { deriveProtectionFindingCandidates, toProtectionFindingRow } from '../../src/lib/protectionValidationFindings.mjs';
 import { getEvidenceContext } from '../../src/services/evidenceContext.mjs';
 import { exportFinding } from '../../src/services/reports.mjs';
 import { createPostgresProtectionFindingsRepository } from '../../src/persistence/postgres/protectionFindingsRepository.mjs';
@@ -429,6 +429,57 @@ describe('Postgres creators write system_summary and keep human notes', () => {
     assert.match(insert.text, /notes, system_summary/);
     assert.match(insert.text, /'open', \$8::text\[\], NULL, \$9/);
     assert.match(insert.params[8], /nonce-bound application response/);
+  });
+
+  it('moves an open protection finding to fix_verified on a complete passing retest', async () => {
+    const tenantId = 'ten_demo';
+    const relation = (id, body) => ({ ...normalizeEntryPathDeclaration(body, { tenantId, anchorTargetId: 'tgt_app', declarationVersion: 1 }), id });
+    const primary = relation('ep_primary', { entry_target_id: 'tgt_app', relation_kind: 'primary_route', owner: 'App Team', purpose: 'Main site', expected_behavior: 'must_be_protected_by_layers', required_layers: ['waf'] });
+    const ref = {
+      test_run_id: 'run_retest', check_id: 'waf.marker.sqli', check_version: '1.1.0', scenario_version: 's1',
+      verdict_id: 'vrd_retest', evidence_ids: ['ev_retest'], target_id: 'tgt_app', observed_at: NOW.toISOString(),
+      run_status: 'verdicted', source_perspective: 'public-worker-eu', worker_id: 'worker_eu_1',
+    };
+    const evaluation = {
+      ...normalizeComparisonEvaluation({
+        kind: 'path_validation', tenant_id: tenantId, evaluated_at: NOW.toISOString(),
+        items: [{
+          entry_path_id: primary.id, scenario: 'waf.sqli.marker',
+          ...classifyPathValidationItem({ relation: primary, primaryBaselineHealth: 'healthy', primaryEnforcement: 'enforced', observation: 'explicit_denial_observed', enforcement: 'enforced' }),
+          evidence_refs: [ref],
+        }],
+      }),
+      id: 'pvc_pass', anchor_target_id: 'tgt_app', primary_entry_path_id: 'ep_primary', reviewed_plan_digest: 'a'.repeat(64),
+    };
+    const derived = deriveProtectionFindingCandidates({ evaluation, entryPaths: [primary] });
+    assert.equal(derived.passing.length, 1);
+    assert.equal(derived.passing[0].closes_findings, true);
+    const key = derived.passing[0].dedupe_key;
+    const pool = recordingPool((sql) => {
+      if (/FROM findings/i.test(sql) && /FOR UPDATE/i.test(sql)) {
+        return {
+          rows: [{
+            id: 'fnd_open', tenant_id: tenantId, status: 'open', severity: 'high', title: 'gap',
+            source: 'protection_validation', dedupe_key: key, finding_class: 'confirmed_exposure',
+            priority: 'p1', protection_validation_json: {}, created_at: NOW.toISOString(),
+            check_version: '1.1.0', grading_version: null,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const audits = [];
+    const result = await createPostgresProtectionFindingsRepository(pool, {
+      audit: { appendAuditEvent: async (event) => { audits.push(event); } },
+    }).upsertProtectionFindingsFromEvaluation(ctx('admin'), evaluation, { entryPaths: [primary], now: NOW });
+    assert.deepEqual(result.verified, ['fnd_open']);
+    const update = pool.client.queries.find((query) => /status = 'fix_verified'/.test(query.text));
+    assert.ok(update);
+    assert.equal(update.params[1], 'fnd_open');
+    assert.equal(update.params[3], 'run_retest');
+    assert.equal(audits[0].action, 'finding.fix_verified');
+    assert.equal(audits[0].resource_id, 'fnd_open');
+    assert.equal(audits[0].metadata.verifying_run_id, 'run_retest');
   });
 
   it('carries the recorded summary into the finding evidence export', () => {

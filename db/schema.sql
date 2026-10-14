@@ -4946,3 +4946,12 @@ ALTER TABLE findings ADD CONSTRAINT findings_risk_acceptance_shape_check CHECK (
     AND char_length(risk_acceptance->>'reason') BETWEEN 20 AND 2000
   )
 );
+
+-- Additive sync of db/migrations/0081_finding_fix_verified.sql.
+ALTER TABLE findings ADD COLUMN verifying_run_id TEXT;
+ALTER TABLE findings ADD COLUMN check_version TEXT;
+ALTER TABLE findings ADD COLUMN grading_version TEXT;
+
+-- Additive sync of db/migrations/0082_finding_verification_basis.sql.
+ALTER TABLE findings ADD COLUMN verification_basis TEXT;
+

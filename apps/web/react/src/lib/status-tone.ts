@@ -31,7 +31,7 @@ export function runStatusTone(status: string): StatusTone {
 /** Finding lifecycle tone: resolved states read green, open work amber, dismissed states muted. */
 export function findingStatusTone(status: string | null | undefined): StatusTone {
   const key = statusKey(status);
-  if (['closed', 'resolved'].includes(key)) return 'success';
+  if (['closed', 'resolved', 'fix_verified'].includes(key)) return 'success';
   if (['open', 'in_progress', 'remediation_pending', 'reopened'].includes(key)) return 'warn';
   return 'muted';
 }

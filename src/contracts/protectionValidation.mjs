@@ -1104,7 +1104,9 @@ export function firewallSideState(expected, aggregate) {
   }
   if (expected === 'deny') {
     if (classes.some((cls) => REACHABLE_CLASSES.has(cls))) return 'violated';
-    if (observation === 'explicit_denial_observed') return 'satisfied';
+    if (observation === 'explicit_denial_observed') {
+      return samples >= MIN_SAMPLES_FOR_UNAVAILABILITY ? 'satisfied' : 'unverified';
+    }
     return 'unverified';
   }
   return 'unverified';

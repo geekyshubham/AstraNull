@@ -4,6 +4,7 @@ import { CHECK_CATALOG, customerSelectableChecks, isCustomerRunnable } from '../
 import { withCheckSection } from '../../src/contracts/validationScanManagement.mjs';
 import {
   OTHER_SECTION_LABEL,
+  awaitsTargetPort,
   checkExclusionReason,
   checkProbeSummary,
   checkTargetCoverage,
@@ -121,7 +122,8 @@ it('does not advertise mechanisms with explicit unsupported transport or executi
   for (const flag of flags) assert.equal(checkExclusionReason({ ...safeAny, ...flag }), 'unsupported_delivery');
   const unsupported = CHECK_CATALOG.filter((check) => check.mechanism_supported === false || check.probe_profile?.delivery_supported === false || check.probe_profile?.execution_supported === false);
   assert.ok(unsupported.length > 0);
-  assert.deepEqual(selectableChecks(unsupported).checks, []);
+  assert.deepEqual(selectableChecks(unsupported).checks.map((check) => check.check_id), unsupported.filter(awaitsTargetPort).map((check) => check.check_id), 'only port-less transport checks wait for a target port instead of being unsupported');
+  assert.ok(unsupported.filter(awaitsTargetPort).every((check) => check.runnable_requires.includes('port')));
   assert.equal(checkExclusionReason(CHECK_CATALOG.find((check) => check.check_id === 'reflect.ipp_callback_exposure.safe')), 'unsupported_delivery');
   assert.equal(checkExclusionReason(safeAny), null, 'legacy omission alone does not establish unsupported delivery');
 });

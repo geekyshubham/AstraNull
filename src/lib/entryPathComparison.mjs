@@ -168,11 +168,11 @@ export function selectEntryPathCheck({ relation, entryTarget, scenario, catalog 
     ? check?.probe_profile?.kind === ORIGIN_PROBE_KIND
     : check?.probe_profile?.kind !== ORIGIN_PROBE_KIND
       && checkMatchesScenario(check, scenario)
-      && !checkRequiresAdditionalInput(check)));
+      && !checkRequiresAdditionalInput(check, { target: entryTarget })));
   if (preferredEntryScenario) {
     const variants = catalog.filter((check) => check?.probe_profile?.entry_path_scenario === preferredEntryScenario
       && !candidates.includes(check)
-      && !checkRequiresAdditionalInput(check)
+      && !checkRequiresAdditionalInput(check, { target: entryTarget })
       && entryPathVariantMatches(check, scenario, candidates));
     candidates = [...variants, ...candidates];
   }
@@ -449,13 +449,17 @@ export function evidenceReferenceForAttempt(attempt) {
 function markerEnforcement(entries, metadata) {
   if (!Array.isArray(entries) || !entries.length || metadata?.comparison_complete !== true
     || metadata?.planned_marker_legs !== metadata?.completed_marker_legs) return 'unknown';
-  const graded = (entries ?? []).filter((row) => row && !row.inconclusive && !row.block_suspected && !row.error_class && !row.transport_error);
+  const graded = (entries ?? []).filter((row) => row && !row.inconclusive && !row.block_suspected
+    && !row.error_class && !row.transport_error && row.redirected !== true);
   const blocked = graded.filter((row) => row.blocked === true).length;
-  const allowed = graded.filter((row) => row.allowed === true || (row.blocked === false && row.allowed == null)).length;
-  if (blocked + allowed === 0) return 'unknown';
-  if (allowed === 0) return graded.length === entries.length ? 'enforced' : 'unknown';
-  if (blocked === 0) return 'not_enforced';
-  return 'partial';
+  const allowed = graded.filter((row) => row.allowed === true || (row.blocked === false && row.allowed == null && row.challenged !== true)).length;
+  const challenged = graded.filter((row) => row.challenged === true && row.blocked !== true).length;
+  if (graded.length === 0) return 'unknown';
+  if (blocked === graded.length) return 'enforced';
+  if (blocked > 0) return 'partial';
+  if (allowed > 0) return 'not_enforced';
+  if (challenged > 0) return 'challenged';
+  return 'unknown';
 }
 
 /** Why an ungraded marker leg is inconclusive, from the excluded rows (G4). */
@@ -481,7 +485,7 @@ function permittedBaselineStatus(kind, metadata) {
   return null;
 }
 
-const RECORDED_ENFORCEMENT = new Set(['enforced', 'partial', 'not_enforced', 'unknown']);
+const RECORDED_ENFORCEMENT = new Set(['enforced', 'partial', 'not_enforced', 'challenged', 'unknown']);
 
 /** Control-specific signature on the permitted (no-marker) baseline of a marker probe, or null. */
 function permittedBaselineSignature(metadata) {
@@ -569,7 +573,7 @@ export function deriveAttemptObservation(attempt) {
 
   const baselineSignature = permittedBaselineSignature(metadata);
   if (baselineSignature) {
-    return finish('explicit_denial_observed', 'unknown', 'unhealthy', ['permitted_baseline_signed_denial'], { denial_signature: baselineSignature });
+    return finish(null, 'unknown', 'unhealthy', ['permitted_baseline_signed_denial'], { denial_signature: baselineSignature });
   }
   let legReason = null;
   if (baselineStatus != null) {

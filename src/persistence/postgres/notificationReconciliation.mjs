@@ -111,7 +111,9 @@ function toIso(value) {
  * validationServiceAdapters.mjs). A finding created by any other verdict (edge_exposed -> medium)
  * and later raised to high by another run's verdict never got a live alert, so it is not owed.
  */
-const HIGH_SEVERITY_CREATING_VERDICTS = Object.freeze(['bypassable', 'penetrated']);
+const HIGH_SEVERITY_CREATING_VERDICTS = Object.freeze(['bypassable', 'penetrated', 'exposed']);
+/** Verdicts whose finding severity is set per result; owed only when that verdict itself recorded a high/critical finding. */
+const SEVERITY_RECORDED_CREATING_VERDICTS = Object.freeze(['exposed']);
 
 /**
  * Rules that were live, enabled, and subscribed to $2 when the record at `timeExpr` committed, as
@@ -249,6 +251,11 @@ export function createNotificationReconciliationRepository(pool) {
            WHERE f.tenant_id = $1
              AND f.severity IN ('high', 'critical')
              AND v.verdict = ANY($8::text[])
+             AND (
+               NOT (v.verdict = ANY($9::text[]))
+               OR (v.placement_confidence_json->>'creates_finding' = 'true'
+                   AND v.placement_confidence_json->>'finding_severity' IN ('high', 'critical'))
+             )
              AND r.status = 'verdicted'
              AND f.created_at >= $3::timestamptz AND f.created_at <= $4::timestamptz
              AND NOT EXISTS (
@@ -268,6 +275,7 @@ export function createNotificationReconciliationRepository(pool) {
             HIGH_SEVERITY_KEY_PREFIX,
             HIGH_SEVERITY_KEY_VERDICT_SEP,
             [...HIGH_SEVERITY_CREATING_VERDICTS],
+            [...SEVERITY_RECORDED_CREATING_VERDICTS],
           ],
         );
         return rows.map((row) => ({

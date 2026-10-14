@@ -161,28 +161,28 @@ describe('721-vector library contract', () => {
     assert.deepEqual([...rowRunnableIds].sort(), matrix.runnable_safe_check_ids);
     assert.equal(matrix.summary.runnable_safe_check_count, matrix.runnable_safe_check_ids.length);
     assert.deepEqual(matrix.summary.evidence_capabilities, {
-      semantic_safe: 71,
-      soc_governed: 269,
+      semantic_safe: 97,
+      soc_governed: 245,
       declaration_only: 102,
-      transport_only: 230,
+      transport_only: 228,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.execution_dispositions, {
-      safe_validation_available: 367,
-      not_currently_runnable: 36,
-      soc_gated_only: 269,
+      safe_validation_available: 383,
+      not_currently_runnable: 44,
+      soc_gated_only: 245,
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.evidence_execution_matrix, {
-      semantic_safe: { safe_validation_available: 71 },
-      soc_governed: { soc_gated_only: 269 },
+      semantic_safe: { safe_validation_available: 97 },
+      soc_governed: { soc_gated_only: 245 },
       declaration_only: { safe_validation_available: 102 },
-      transport_only: { safe_validation_available: 194, not_currently_runnable: 36 },
+      transport_only: { safe_validation_available: 184, not_currently_runnable: 44 },
       monitor_only: { monitor_only: 49 },
     });
-    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 357, additional_input_required: 10,
-      target_incompatible: 0, soc_gated: 269, monitor_only: 49, not_runnable: 36 });
-    assert.equal(matrix.summary.runnable_safe_check_count, 161);
+    assert.deepEqual(matrix.summary.dispositions, { safe_runnable: 373, additional_input_required: 10,
+      target_incompatible: 0, soc_gated: 245, monitor_only: 49, not_runnable: 44 });
+    assert.equal(matrix.summary.runnable_safe_check_count, 167);
     for (const vectorId of ['APP-003', 'NET-016']) {
       const row = matrix.rows.find((candidate) => candidate.vector_id === vectorId);
       assert.equal(row?.target_disposition, 'soc_gated', vectorId);

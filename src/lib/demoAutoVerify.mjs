@@ -11,6 +11,26 @@ export const DEMO_AUTO_VERIFY_STATE = 'user_confirmed';
 export const DEMO_AUTO_VERIFY_SOURCE_KIND = 'manual_override';
 export const DEMO_AUTO_VERIFY_AUDIT_ACTION = 'target.ownership_demo_auto_verified';
 
+export const DEMO_ACCOUNT_TENANT_ID = 'Astra-D1TrtI4HMTSrwKRW-9';
+export const DEMO_ADMIN_EMAIL = 'admin@demo.astranull.local';
+
+export function matchesDemoAccount(tenantOrCtx) {
+  if (!tenantOrCtx) return false;
+  if (typeof tenantOrCtx === 'string') {
+    const s = tenantOrCtx.trim();
+    return s === DEMO_ACCOUNT_TENANT_ID || s === DEMO_ADMIN_EMAIL;
+  }
+  if (typeof tenantOrCtx === 'object') {
+    const tid = String(tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '').trim();
+    if (tid === DEMO_ACCOUNT_TENANT_ID) return true;
+    const uid = String(tenantOrCtx.userId ?? tenantOrCtx.user_id ?? '').trim();
+    if (uid === DEMO_ADMIN_EMAIL || uid === DEMO_ACCOUNT_TENANT_ID) return true;
+    const email = String(tenantOrCtx.email ?? tenantOrCtx.user?.email ?? tenantOrCtx.principal?.email ?? '').trim();
+    if (email === DEMO_ADMIN_EMAIL) return true;
+  }
+  return false;
+}
+
 export function demoAutoVerifyTenants(env = process.env) {
   return new Set(
     String(env?.[DEMO_AUTO_VERIFY_ENV] ?? '')
@@ -22,6 +42,8 @@ export function demoAutoVerifyTenants(env = process.env) {
 
 export function isDemoAutoVerifyTenant(tenantOrCtx, env = process.env) {
   if (!tenantOrCtx) return false;
+  if (typeof tenantOrCtx === 'number') return false;
+  if (matchesDemoAccount(tenantOrCtx)) return true;
   const tenantId = typeof tenantOrCtx === 'object'
     ? (tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '')
     : tenantOrCtx;
@@ -30,6 +52,29 @@ export function isDemoAutoVerifyTenant(tenantOrCtx, env = process.env) {
   const configured = demoAutoVerifyTenants(env);
   if (configured.has('*') || configured.has('all')) return true;
   return configured.has(tid);
+}
+
+export function isExplicitDemoTenant(tenantOrCtx, env = process.env) {
+  if (!tenantOrCtx) return false;
+  if (typeof tenantOrCtx === 'number') return false;
+  if (matchesDemoAccount(tenantOrCtx)) return true;
+  const tenantId = typeof tenantOrCtx === 'object'
+    ? (tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '')
+    : tenantOrCtx;
+  const tid = String(tenantId ?? '').trim();
+  if (!tid || tid === '*' || tid === 'all') return false;
+  return demoAutoVerifyTenants(env).has(tid);
+}
+
+export function warnIfDemoAutoVerifyWildcard(env = process.env, logger = console) {
+  const configured = demoAutoVerifyTenants(env);
+  if (configured.has('*') || configured.has('all')) {
+    logger?.warn?.(
+      `[demoAutoVerify] Wildcard configured in ${DEMO_AUTO_VERIFY_ENV}; only ownership/subscription bypasses will apply globally, new demo gates require explicit tenant IDs`,
+    );
+    return true;
+  }
+  return false;
 }
 
 export function demoAutoVerifySourceRef() {
@@ -56,3 +101,21 @@ export function demoAutoVerifyAuditEntry(ctx, { targetId, targetGroupId }) {
     },
   };
 }
+
+// Hourly safe-run cap for demo tenants (ADR-0016 amendment - dropped by default).
+export const DEMO_MAX_RUNS_PER_HOUR_ENV = 'ASTRANULL_DEMO_MAX_RUNS_PER_HOUR';
+export const DEFAULT_DEMO_MAX_RUNS_PER_HOUR = Infinity;
+export const MAX_DEMO_MAX_RUNS_PER_HOUR = 5000;
+
+export function demoMaxRunsPerHour(env = process.env) {
+  const raw = env?.[DEMO_MAX_RUNS_PER_HOUR_ENV];
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return DEFAULT_DEMO_MAX_RUNS_PER_HOUR;
+  }
+  const parsed = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_DEMO_MAX_RUNS_PER_HOUR;
+  }
+  return Math.min(parsed, MAX_DEMO_MAX_RUNS_PER_HOUR);
+}
+

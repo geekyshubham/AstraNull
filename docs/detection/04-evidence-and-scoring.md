@@ -1,73 +1,134 @@
 # Evidence and Scoring
 
-## Current outside-in assessment (2026-10-09)
+## Current outside-in assessment
 
-The model below contains historical agent-era examples and legacy weights; it is not the active scoring contract. ADR-0008 forbids customer agents/environments. Current verdict confidence is `external_only`; current scoring is defined by [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md) and `src/lib/readinessProjection.mjs` / `src/lib/protectionCoverage.mjs`.
+Verdict confidence on customer targets is `external_only` ([ADR-0008](../adr/0008-outside-in-only-targets-first.md)). There is no agent-placement factor. Live scoring is `readiness-assessment.v3` in `src/lib/readinessProjection.mjs`, with pair eligibility from `src/lib/protectionCoverage.mjs` (`protection-profile.coverage.v2`).
 
-`readiness-assessment.v2` keys coverage by applicable active target/check pair, including untested pairs in the denominator. Current complete signed compatible proof is eligible for seven days (`protection-profile.coverage.v2`); immutable observation/availability time, scenario/check/classifier version and current scope govern eligibility. Floor(100 × current passing pairs / applicable pairs) is reduced by bounded unresolved severity penalties: critical20/high10/medium5/low1/info0/unknown5. Governance contributes zero protection credit. Incomplete source accounting returns `score: null`, `input_complete: false`; a capped feed does not establish estate coverage. Raw and exact grouped/weighted projections must agree.
-
-Raw responses, customer expectations, attribution, comparison completeness and final assurance remain separate. Unknown is neither protected nor automatically vulnerable. A fingerprint/status/auth wall/timeout, DNSKEY presence or HTTP/2 SETTINGS is not mitigation proof. Complete marker proof requires an independent healthy comparable permitted baseline and all scoped legs. An allowed harmless marker is not exploitability proof. Material scope/version change invalidates current credit without rewriting historical custody. A missing historical snapshot is unknown, not today's posture. Comparison-report 30-day freshness is separately labelled and never extends seven-day readiness. Specific CVE validation has no generic fingerprint fallback.
-
-
-**Timeout guard regression (2026-10-11).** Shared ordinary correlation now makes every `external_result: "timeout"` inconclusive regardless of absent/malformed kind metadata, expected behavior or attested I/O. It never aliases a timeout to blocked and creates no finding or readiness credit. Regression cases cover the declared defaults of all 251 catalog definitions for error/timeout/not-run, malformed/absent kinds, and durable repository-backed verdict publication with one audit and no finding. These are contract/publication fixtures, not 251 independently executed network mechanisms. Historical verdict/custody records stay unchanged.
-
-Current scope uses `assurance-scope.v3`, including separately declared port/protocol and losslessly hashed material target/policy/group declarations. Credential-like text and literal JSON keys cannot be redacted or dropped from authority hashes. Catalog credential-version redaction is separate and unchanged. Stored v1/v2 scopes require retest without changing custody. A complete signed marker comparison may earn scoped `edge_protected` scenario credit only after actual event/vault resolution, matching run correlation nonce, recorded immutable ingestion availability and existing baseline, version, scope and freshness gates. Retained positive verdicts cannot override contradictory actual enforcement; missing outcome proof withholds current credit. Current report classification also binds the actual scenario/expectation and all recorded policy/group definitions, rather than accepting completeness labels alone. An unattributed edge block does not independently validate WAF and CDN. Independent WAF posture projections apply the same conservative positive-outcome rule to every referenced signed event and require a recorded ingestion timestamp. Contradictory or missing actual enforcement yields current `unknown`/`not_established` while preserving the stored historical posture and custody; creation or observation time cannot substitute for ingestion availability.
-
+Related: [ADR-0021](../adr/0021-bounded-execution-and-evidence-based-assurance.md) (bounded execution and pair-based assurance), [ADR-0027](../adr/0027-finding-system-summary-and-risk-acceptance.md) (risk acceptance), [ADR-0029](../adr/0029-violation-only-network-verdicts-and-truthful-waf-grading.md) (WAF grading and NFW violation-only), [rule-coverage.md](rule-coverage.md) (per-category assurance).
 
 ## Evidence model
 
-Every verdict should have an evidence bundle.
+Every customer-target verdict is backed by a signed external bundle. Internal agent observation is not an evidence type.
 
 | Evidence item | Required for |
 |---|---|
 | Test run ID | All verdicts. |
-| Check ID/version | All verdicts. |
-| Target and expected behavior | All verdicts. |
-| Probe event | Most checks. |
-| Probe result | Most checks. |
-| Agent observation/no-observation | Inside/outside proof checks. |
-| Agent health | Agent-based checks. |
-| Correlation decision | All verdicts. |
-| Approval documents | High-scale checks. |
-| SOC notes | High-scale checks. |
-| Health metrics | High-scale and availability checks. |
+| Check ID, `check_version`, definition digest | All scored pairs. |
+| `grading_version`, `signature_corpus_version` | WAF marker/evasion results; stamped on runs via `deriveRunEvidenceStamp`. |
+| Target, expected-behavior snapshot, `assurance-scope.v3` | All verdicts. |
+| Signed `probe_result` event (`producer_kind: signed_probe`) with matching `nonce_hash` | Readiness credit. |
+| Probe metadata (placements, trailing control, enforcement, TCP/UDP outcomes, `source_perspective`) | Kind-specific correlation. |
+| Typed `control_declarations` | NFW deny, origin lockdown, rate-limit canary, declared block signature, perspectives, canary sink. |
+| Approval documents / SOC notes | High-scale and `.soc` checks. |
 
-## Readiness score dimensions
+Simulation (`SAFE_PROBE_SIMULATION`, `producer_kind: internal_simulation`) and manual declarations are recorded history. They do not earn current coverage credit (`provenance` must be `external`).
 
-The live readiness service (`src/services/readiness.mjs`) computes an **evidence-backed** score from in-memory tenant records. Points are not awarded from absence of data (for example, an empty high-scale queue does not imply SOC readiness).
+## What this evidence can prove
 
-| Dimension | Weight | Meaning |
+- A control-specific signature or declared header matched on a comparable healthy baseline.
+- A declared network deny was violated by a handshake or protocol-validated reply.
+- A finding was opened from that violation, later risk-accepted, or moved to `fix_verified` after a complete passing retest.
+
+## What this evidence cannot prove
+
+- Origin receipt of a packet that timed out or was RST at the edge.
+- Enforcement from fingerprints, HTTP/2 SETTINGS, DNSKEY presence, or an unattributed 4xx.
+- Estate coverage from a capped feed (`score: null`, `input_complete: false`).
+- That an accepted-risk finding is remediated (it is a dated decision; see below).
+
+Timeout, error, and not-run remain `inconclusive`. They create no finding and no readiness credit.
+
+## Pair state and freshness
+
+`pairState` keys coverage by applicable **target/check pair** (customer-runnable, kind-compatible, not declaration-only, not observation-only, not missing required setup).
+
+`COVERAGE_FRESHNESS_POLICY`: id `protection-profile.coverage.v2`, **7 days**, unit `target_check_pair`. Age is the earlier of run `completed_at` and immutable observation time. A later completion does not renew an older observation.
+
+| Pair state | Meaning |
+|---|---|
+| `conclusive` / `pass` | Fresh signed compatible proof; passing verdict (`protected`, `pass`, …, or scoped `edge_protected` after a complete marker comparison). |
+| `conclusive` / `gap` | Fresh `exposed` / `edge_exposed` / `bypassable` / `penetrated`. |
+| `inconclusive` | Fresh result that is neither pass nor gap. |
+| `stale` | Older than 7 days; `current_assurance: expired`, `retest_required`. |
+| `partial` | Version, scope, completeness, or positive-outcome gap; `retest_required`. |
+| `unknown` | Unfinalized, no evidence, simulation, missing observation time. |
+| `excluded` | Declaration-only (E1 / `metadata_marker` / `ops_readiness`) or observation-only (E2 / `OBSERVATION_ONLY_PROBE_KINDS`). |
+
+NFW kinds that can emit `exposed` still sit on `OBSERVATION_ONLY_PROBE_KINDS`, so they stay **excluded from the readiness denominator** (ADR-0014). Rule-coverage reports them separately as `violation_only` ([rule-coverage.md](rule-coverage.md)).
+
+Custom-canary checks (`waf.*_marker.safe` except the three managed markers) **roll up to one pair per target** (`rollupCustomCanaryPairs`). Efficacy is by distinct canary rule, not by check count.
+
+## Version gaps
+
+`versionGapFor` withdraws current credit when:
+
+- `check_version` is missing or differs from `deriveCheckDefinitionVersion`.
+- Recorded provenance digest differs (`check_definition_changed`).
+- `scenario_version` is required and missing or mismatched.
+- The run or verdict records a `grading_version` or `signature_corpus_version` that `gradingSignatureVersionGap` rejects.
+
+`gradingSignatureVersionGap` (`src/lib/checkDefinitionVersion.mjs`) compares recorded `grading_version` / `signature_corpus_version` to `waf-grading.v2` and `waf-signatures.2026-10-13.2` (bumped when generic proxy headers stopped grading `blocked`; runs graded under `waf-signatures.2026-10-13` are a `signature_corpus_version_mismatch` gap until re-run). Runs stamp those fields. `versionGapFor` calls it whenever either field is recorded, so a grading or corpus change marks the pair `partial` (`retest_required`); runs that record neither field (non-WAF kinds) are unaffected. Finding `fix_verified` also compares `grading_version` between the open finding and the retest run.
+
+Material `assurance-scope.v3` change, incomplete marker comparison (`marker-comparison-v4` with healthy baseline and all planned legs), and `observation_only` / `readiness_conclusion: false` also force `partial`.
+
+## Positive-outcome (enforcement) credit
+
+A retained `protected` / `pass` / `edge_protected` label earns current credit only when signed result metadata records `enforcement: enforced` (`positiveOutcomeGap` → `actual_positive_outcome_mismatch` otherwise). `allowed_as_expected` additionally requires nonce-canary application identity and `must_reach_canary`.
+
+Class-marker, evasion, method-policy, and AXFR producers emit `enforcement`. AXFR is `enforced` only when every nameserver of the zone was queried and refused; budget-limited coverage is `partial` and earns no credit. Observation-only kinds never qualify.
+
+## Readiness score
+
+`projectReadiness` (`readiness-assessment.v3`):
+
+```
+score = floor(100 × current passing pairs / applicable pairs) − bounded unresolved severity penalty
+```
+
+when `input_complete` is true; otherwise `score: null`.
+
+Severity penalties (open / `in_progress` only): critical 20, high 10, medium 5, low 1, info 0, unknown 5. Cap is the coverage maximum.
+
+| Factor | Weight | Meaning |
 |---|---:|---|
-| Validation coverage | 40 | Distinct declared target groups with a **recent** (≤30 days) completed/verdicted run that has a linked verdict, event, or evidence vault record. |
-| Agent placement & health | 25 | Active non-revoked agents and online health; detail distinguishes registration vs observation evidence. |
-| Open findings impact | 25 | Penalty for open findings; verdict counts separate recent vs stale evidence. |
-| Evidence freshness | 15 | Awarded only when recent evidence-backed validations exist; **stale evidence (>30 days) earns no freshness credit**. |
-| SOC governance posture | 10 | Explicit artifacts: dual SOC approval with accepted authorization pack, governed high-scale lifecycle audit trail, or tenant kill-switch evidence—not pending requests alone. |
+| Tested scenario assurance | 100 | Passing applicable pairs. |
+| Unresolved findings | 0 | Penalty subtracted from the coverage maximum. |
+| Evidence freshness | 0 | 7-day expiry; stale pairs are not current. |
+| SOC governance | 0 | Reported separately; **zero protection credit**. |
 
-Longer-term product dimensions (origin bypass, L3/L4, DNS, L7/API) remain roadmap items; they must also be evidence-backed when implemented.
+### Accepted risk
 
-## Score bands
+`accepted_risk` findings **do not subtract** while their `risk_acceptance.review_at` is in the future. They are counted on `findings.accepted_risk_count`. After the review date they re-enter the penalty set. `fix_verified`, `resolved`, `closed`, and `false_positive` do not penalize.
 
-| Score | Label | Meaning |
-|---:|---|---|
-| 90-100 | Strong | Readiness is well-evidenced. |
-| 75-89 | Good | Minor gaps or stale evidence. |
-| 50-74 | Needs attention | Important gaps exist. |
-| 25-49 | Weak | Multiple critical gaps. |
-| 0-24 | Unknown/critical | Missing evidence or confirmed high-risk exposure. |
+### Score bands (presentation)
 
-## Finding creation logic
+| Score | Label |
+|---:|---|
+| 90–100 | Strong |
+| 75–89 | Good |
+| 50–74 | Needs attention |
+| 25–49 | Weak |
+| 0–24 | Unknown / critical |
+| `null` | Incomplete inputs |
 
-Create finding when:
+Unknown is neither protected nor automatically vulnerable.
 
-- verdict is bypassable/penetrated,
-- required control is missing,
-- high-scale test failed or caused unacceptable degradation,
-- agent placement invalidates readiness evidence,
-- evidence is stale for critical target group.
+## Finding lifecycle
 
-Do not create noisy findings for expected/accepted behaviors unless policy requires it.
+Create a finding when correlation sets `createsFinding: true` (`exposed`, `edge_exposed`, and equivalent gap verdicts).
+
+Do not create findings for observation-only results, timeouts, source-penalized runs, or expected canary allows.
+
+`planFixVerifiedFromRetest` (`src/lib/findingLifecycle.mjs`) moves an **open** / **in_progress** finding to `fix_verified` when a complete passing retest matches check, target, scope, `check_version`, and `grading_version`. Partial or inconclusive retests never close. `verifying_run_id` is stored. `fix_verified` is a recorded retest, not packet-cessation proof.
+
+Risk acceptance remains a dated owner/admin decision (`finding:accept_risk`, reason + `review_at`). It is not proof of a fix ([ADR-0027](../adr/0027-finding-system-summary-and-risk-acceptance.md)).
+
+## Vendor signatures and live verification
+
+`VENDOR_DENIAL_SIGNATURES` carry `live_verified`. Signatures with `live_verified: false` (AWS ALB / API Gateway, Cloud Armor, Azure Front Door, Fastly NGWAF, ModSecurity/Coraza, generic CAPTCHA interstitial) have not been verified on AstraNull-owned staging endpoints. Their `match` grades `blocked` only on a WAF-specific anchor: a block-page phrase or token that only that WAF emits ("Request blocked by AWS WAF", "Cloud Armor", an Azure Front Door/Application Gateway WAF block phrase, a Fastly Next-Gen WAF/Signal Sciences token, the ModSecurity/Coraza block text). Their `suspect` predicate covers generic proxy/CDN headers (`x-azure-ref`, `via: 1.1 google`, `x-served-by`, `x-timer`, `x-amzn-errortype`, `x-amzn-requestid`, a `server` banner) with a 403/406: `matchSuspectedVendorSignature` returns the vendor, and the leg grades `inconclusive` with `inconclusive_reason: 'block_suspected_unverified_signature'` and `matched_vendor`. It never earns protection credit. Cloudflare challenge/block, Akamai reference #18, Imperva incident id, AWS CloudFront, and F5 ASM patterns are marked `live_verified: true`.
+
+A customer-declared block signature (`waf.block_signature` header + optional status codes) is matched first and is the supported path for products without a live-verified vendor pattern.
 
 ## Completion criteria
 
-Scoring is complete when executives can trust the score and engineers can drill from score to evidence to remediation.
+Scoring is complete when executives can read a pair-based score with freshness, version, and enforcement gates, and engineers can drill from that score to the signed probe evidence and the finding lifecycle.

@@ -2,7 +2,7 @@
 import { CHECK_CATALOG, checkRequiresAdditionalInput, isCustomerRunnable } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { evidenceBackedVerdict } from './targetDetailRows.mjs';
-import { approvedScenarioVersion, deriveCheckDefinitionVersion } from './checkDefinitionVersion.mjs';
+import { approvedScenarioVersion, deriveCheckDefinitionVersion, gradingSignatureVersionGap } from './checkDefinitionVersion.mjs';
 import { currentAssuranceGap } from './assuranceScope.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS } from './probeEvidenceTiers.mjs';
 import { inconclusiveReason } from './inconclusiveReasons.mjs';
@@ -16,7 +16,25 @@ const GAP_VERDICTS = new Set(['exposed', 'unprotected', 'gap', 'fail', 'failed',
 const text = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
 const summaryOf = (run) => run?.summary_json ?? run?.summary ?? {};
 function recordedText(run, verdict, key) {
-  return text(run?.[key]) ?? text(summaryOf(run)[key]) ?? text(verdict?.[key]) ?? text((verdict?.metadata_json ?? verdict?.metadata ?? {})[key]);
+  const readinessMetadata = Array.isArray(run?.readiness_result_metadata)
+    ? run.readiness_result_metadata
+    : (run?.readiness_result_metadata && typeof run.readiness_result_metadata === 'object' ? [run.readiness_result_metadata] : []);
+  let readinessVal = null;
+  for (const entry of readinessMetadata) {
+    if (entry && entry[key] != null) {
+      readinessVal = text(entry[key]);
+      if (readinessVal) break;
+    }
+  }
+  return text(run?.probe_metadata?.[key])
+    ?? text(run?.probe_external_result?.metadata?.[key])
+    ?? readinessVal
+    ?? text(verdict?.[key])
+    ?? text((verdict?.metadata_json ?? verdict?.metadata ?? {})[key])
+    ?? text(verdict?.placement_confidence?.[key])
+    ?? text(run?.[key])
+    ?? text(summaryOf(run)[key])
+    ?? text(run?.provenance_json?.[key]);
 }
 
 export function versionGapFor(check, run, verdict) {
@@ -29,6 +47,23 @@ export function versionGapFor(check, run, verdict) {
   const scenario = approvedScenarioVersion(check);
   if (scenario && !recordedText(run, verdict, 'scenario_version')) return 'missing_scenario_version';
   if (scenario && recordedText(run, verdict, 'scenario_version') !== scenario) return 'scenario_version_mismatch';
+  const isWaf = String(check?.check_id ?? run?.check_id ?? '').startsWith('waf.')
+    || check?.vector_family === 'waf'
+    || check?.family === 'waf'
+    || ['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan', 'waf_method_policy_probe'].includes(run?.probe_profile?.kind ?? check?.probe_profile?.kind);
+  const status = String(run?.status ?? '').toLowerCase();
+  const isCompleted = ['completed', 'verdicted'].includes(status) || Boolean(verdict?.verdict);
+  if (isWaf && isCompleted) {
+    const gap = gradingSignatureVersionGap(run, verdict, check);
+    if (gap) return gap;
+  } else {
+    const grading = recordedText(run, verdict, 'grading_version');
+    const corpus = recordedText(run, verdict, 'signature_corpus_version');
+    if (grading || corpus || run?.provenance_json?.grading_version || run?.provenance_json?.signature_corpus_version) {
+      const gap = gradingSignatureVersionGap(run, verdict, check);
+      if (gap) return gap;
+    }
+  }
   return null;
 }
 
@@ -158,7 +193,7 @@ export function coverageFrom({ target, policies = [], targetGroup = null, observ
     if (!check?.check_id || !isCustomerRunnable(check) || targetKindCompatibilityError(check, target)) continue;
     const declarationOnly = check.evidence_tier === 'E1' || ['metadata_marker', 'ops_readiness'].includes(check.probe_profile?.kind);
     const observationOnly = check.evidence_tier === 'E2' || check.observation_only === true || check.readiness_conclusion === false || check.probe_profile?.observation_only === true || check.probe_profile?.readiness_conclusion === false || OBSERVATION_ONLY_PROBE_KINDS.includes(check.probe_profile?.kind);
-    const excluded = declarationOnly || observationOnly || checkRequiresAdditionalInput(check);
+    const excluded = declarationOnly || observationOnly || checkRequiresAdditionalInput(check, { target });
     const exclusionReason = declarationOnly ? 'declaration_only' : observationOnly ? 'observation_only' : 'setup_required';
     const entry = byCheck.get(check.check_id);
     const policy = policyForCheck(policies, target, check.check_id, entry?.run);
@@ -175,8 +210,84 @@ export function coverageFrom({ target, policies = [], targetGroup = null, observ
     }
   }
   pairs.sort((a, b) => a.check_id.localeCompare(b.check_id));
+  const rolled = rollupCustomCanaryPairs(pairs);
   return {
-    coverage: { unit: 'target_check_pair', plan_version: PLAN_VERSION, as_of: new Date(nowMs).toISOString(), freshness_policy: COVERAGE_FRESHNESS_POLICY, runtime_launch_gates: 'not_evaluated', scope: { target_id: target.id, plan_version: PLAN_VERSION }, ...summarizePairs(pairs), observation_only_count: pairs.filter((pair) => pair.exclusion_reason === 'observation_only').length, inconclusive_reasons: [...reasons.values()].sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)), pairs },
-    dimensions: DIMENSIONS.map((id) => { const summary = summarizePairs(pairs.filter((pair) => pair.dimension === id)); return { id, unit: 'target_check_pair', status: dimensionStatus(summary), ...summary, freshness_policy_id: COVERAGE_FRESHNESS_POLICY.id, scope: { target_id: target.id, plan_version: PLAN_VERSION } }; }),
+    coverage: { unit: 'target_check_pair', plan_version: PLAN_VERSION, as_of: new Date(nowMs).toISOString(), freshness_policy: COVERAGE_FRESHNESS_POLICY, runtime_launch_gates: 'not_evaluated', scope: { target_id: target.id, plan_version: PLAN_VERSION }, ...summarizePairs(rolled), observation_only_count: rolled.filter((pair) => pair.exclusion_reason === 'observation_only').length, inconclusive_reasons: [...reasons.values()].sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)), pairs, custom_canary_rollups: rolled.filter((pair) => pair.custom_canary_rollup === true) },
+    dimensions: DIMENSIONS.map((id) => { const summary = summarizePairs(rolled.filter((pair) => pair.dimension === id)); return { id, unit: 'target_check_pair', status: dimensionStatus(summary), ...summary, freshness_policy_id: COVERAGE_FRESHNESS_POLICY.id, scope: { target_id: target.id, plan_version: PLAN_VERSION } }; }),
   };
+}
+
+const MANAGED_MARKER_CHECK_IDS = new Set([
+  'waf.sqli_managed_marker.safe',
+  'waf.xss_managed_marker.safe',
+  'waf.path_traversal_managed_marker.safe',
+  'waf.scanner_signature_marker.safe',
+  ...CHECK_CATALOG.filter((c) =>
+    c.rule_family === 'managed' || c.probe_profile?.assurance_scope === 'managed_rule_marker'
+  ).map((c) => c.check_id),
+]);
+
+export function isCustomCanaryCheckId(checkId) {
+  const id = typeof checkId === 'object' && checkId !== null ? (checkId.check_id ?? checkId.checkId) : checkId;
+  if (typeof id !== 'string') return false;
+  if (MANAGED_MARKER_CHECK_IDS.has(id)) return false;
+  if (/^waf\.test_marker_\d+\.safe$/.test(id)) return false;
+  if (typeof checkId === 'object' && checkId !== null) {
+    if (checkId.rule_family === 'managed') return false;
+    if (checkId.assurance_scope === 'managed_rule_marker' || checkId.probe_profile?.assurance_scope === 'managed_rule_marker') return false;
+  }
+  return /^waf\..+_marker\.safe$/.test(id);
+}
+
+function rollupRank(pair) {
+  if (pair.outcome === 'gap' || pair.state === 'conclusive' && pair.outcome === 'gap') return 0;
+  if (pair.outcome === 'pass' && pair.state === 'conclusive') return 1;
+  if (pair.state === 'stale') return 2;
+  if (pair.state === 'inconclusive') return 3;
+  if (pair.state === 'partial') return 4;
+  return 5;
+}
+
+const VERSION_GAP_REASONS = new Set([
+  'missing_check_version', 'check_version_mismatch', 'check_definition_changed',
+  'missing_scenario_version', 'scenario_version_mismatch', 'missing_grading_version',
+  'grading_version_mismatch', 'missing_signature_corpus_version', 'signature_corpus_version_mismatch',
+]);
+
+/** Server freshness and version-gap answer for one rolled-up member pair. */
+function rolledUpPairSummary(pair) {
+  return {
+    check_id: pair.check_id,
+    last_run_id: pair.last_run_id ?? null,
+    state: pair.state,
+    fresh: pair.freshness === 'current',
+    version_gap: VERSION_GAP_REASONS.has(pair.pair_reason) ? pair.pair_reason : null,
+    verdict: pair.retained?.verdict ?? null,
+    observed_at: pair.observed_at ?? null,
+  };
+}
+
+function rollupCustomCanaryPairs(pairs) {
+  const groups = new Map();
+  const out = [];
+  for (const pair of pairs) {
+    if (pair.exclusion_reason || !isCustomCanaryCheckId(pair.check_id)) {
+      out.push(pair);
+      continue;
+    }
+    const list = groups.get(pair.target_id) ?? [];
+    list.push(pair);
+    groups.set(pair.target_id, list);
+  }
+  for (const list of groups.values()) {
+    const chosen = [...list].sort((a, b) => rollupRank(a) - rollupRank(b) || a.check_id.localeCompare(b.check_id))[0];
+    out.push({
+      ...chosen,
+      rolled_up_check_ids: list.map((pair) => pair.check_id),
+      rolled_up_pairs: list.map(rolledUpPairSummary),
+      custom_canary_rollup: true,
+    });
+  }
+  out.sort((a, b) => a.check_id.localeCompare(b.check_id));
+  return out;
 }

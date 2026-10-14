@@ -31,11 +31,14 @@ import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/type
 import { formatTimestamp } from '../../lib/utils';
 import { plainCheckName, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { providerName } from '../../lib/domain-checks.mjs';
+import { exposedVerdictLabel } from '../../lib/probe-evidence.mjs';
 import { Badge } from '../ui/badge';
 import { AnchorButton, Button } from '../ui/button';
 import { InspectorPanel } from '../ui/inspector-panel';
 import { sequencePosition, useInspectorSequence } from './inspector-sequence';
 import { ExecutionInspector } from './execution-inspector';
+import { NotTestedNote } from '../runs/not-tested-note';
+import { requiredInputMissing } from '../../lib/missing-input.mjs';
 import { useInspectorScopeKey } from './use-inspector';
 import './evidence-inspector.css';
 
@@ -475,8 +478,9 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
     : ENTRY_TITLE[ref.entry];
   const answer = model?.answer ?? null;
   const outcome = answer?.outcome ?? '';
-  const outcomeLabel = outcome
-    ? ref.entry === 'provider' ? humanize(outcome) : plainVerdictLabel(outcome) || humanize(outcome)
+  const notTested = ref.entry === 'provider' || !answer ? null : requiredInputMissing({ explanation_reason: answer.reason, required_input: answer.requiredInput, explanation: answer.explanation });
+  const outcomeLabel = notTested ? notTested.label : outcome
+    ? ref.entry === 'provider' ? humanize(outcome) : exposedVerdictLabel(checkId, outcome) || plainVerdictLabel(outcome) || humanize(outcome)
     : '';
   const canRetest = canStartRun(session.role) && (ref.entry === 'finding' || ref.entry === 'group_member') && Boolean(ref.finding_id);
   const statusText = state === 'loading' ? `Loading ${title.toLowerCase()}` : `${title} ${state.replace('_', ' ')}`;
@@ -588,7 +592,7 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
         <div className="ei-state" data-state="auth" role="note"><Lock size={18} aria-hidden="true" /><div><strong>Sign in again</strong><p>Your session ended. Sign in to load this evidence.</p></div></div>
       ) : null}
 
-      <StateNotice state={state} permission={load.key === loadKey ? load.permission : ''} entry={ref.entry} runArtifacts={model?.runArtifacts ?? 0} onRetry={() => setReload((value) => value + 1)} />
+      <StateNotice state={notTested && state === 'no_refs' ? 'ready' : state} permission={load.key === loadKey ? load.permission : ''} entry={ref.entry} runArtifacts={model?.runArtifacts ?? 0} onRetry={() => setReload((value) => value + 1)} />
 
       {(ref.entry === 'check_result' || ref.entry === 'validation_scan') && !['denied', 'auth', 'not_found', 'unbound', 'expired'].includes(state) ? (
         <ExecutionInspector key={workspaceKey} config={config} session={session} reference={ref} checks={data.checks} onEvidenceUpdate={refreshExecutionEvidence} />
@@ -607,13 +611,13 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
           <section className="ei-answer" aria-label="What happened">
             {outcomeLabel ? (
               <p className="ei-outcome">
-                <Badge tone={ref.entry === 'provider' ? providerTone(outcome) : outcomeTone(outcome)}>{outcomeLabel}</Badge>
+                <Badge tone={notTested ? 'muted' : ref.entry === 'provider' ? providerTone(outcome) : outcomeTone(outcome)}>{outcomeLabel}</Badge>
                 {ref.entry === 'provider' && ref.family ? <span className="ei-outcome-scope">{FAMILY_LABEL[ref.family]} only. Other layers are reported separately.</span> : null}
               </p>
             ) : (
               <p className="ei-outcome"><NotRecorded>{state === 'pending' ? 'Verdict pending' : 'Outcome not recorded'}</NotRecorded></p>
             )}
-            {answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
+            {notTested ? <NotTestedNote info={notTested} targetId={targetId} showLabel={false} /> : answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
             {(ref.entry === 'finding' || ref.entry === 'group_member') && outcomeTone(outcome) === 'success' && ['open', 'remediation_pending'].includes((subject.lifecycle ?? '').toLowerCase()) ? (
               <p className="ei-disagree" role="note">
                 This finding is still open, but its original recorded outcome reads as passing. The records disagree; review the evidence before deciding. No later result was substituted.

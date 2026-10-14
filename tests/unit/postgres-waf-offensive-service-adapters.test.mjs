@@ -80,7 +80,7 @@ function createMemoryHarness() {
     wafPosture: {
       async getWafAsset(ctx, id) {
         if (ctx.tenantId !== 'ten_a' || id !== 'waf_a') return null;
-        return { id: 'waf_a', tenant_id: 'ten_a', target_group_id: 'tg_a' };
+        return { id: 'waf_a', tenant_id: 'ten_a', target_group_id: 'tg_a', target_id: 'tgt_a' };
       },
     },
     coreCatalog: {
@@ -286,5 +286,32 @@ describe('Postgres WAF offensive service adapter', () => {
     assert.equal(denied.status, 409);
     assert.equal(state.validationRuns.length, 0);
     assert.equal(state.requests.find((entry) => entry.id === requestId).state, 'scheduled');
+  });
+
+  it('plans a canary-sink body suite against the stored declaration and records observations without a validation run', async () => {
+    const { service, state } = createMemoryHarness();
+    const requestId = await prepareScheduled(service);
+    state.targetGroup.targets[0].metadata = { control_declarations: { version: 1, canary_sink: { url: 'https://app.example.test/canary' } } };
+    const runsBefore = state.validationRuns.length;
+    const planned = await service.planCanarySinkBody(CTX_SOC_A, requestId, {
+      declared_canary_sink_url: 'https://attacker.example.invalid/sink',
+      variants: ['json'],
+    });
+    assert.ok(planned.plan, JSON.stringify(planned));
+    assert.equal(planned.plan.canary_sink_url, 'https://app.example.test/canary');
+    assert.equal(planned.target_id, 'tgt_a');
+    assert.equal(planned.plan.requests.length, 1);
+    assert.equal(state.validationRuns.length, runsBefore);
+    const observed = await service.recordCanarySinkBodyObservations(CTX_SOC_A, requestId, {
+      observations: [{ id: 'json_marker', blocked: true, status_code: 403 }],
+    });
+    assert.equal(observed.results.variant_results[0].outcome, 'blocked');
+    assert.equal(state.validationRuns.length, runsBefore);
+    const stored = state.requests.find((entry) => entry.id === requestId);
+    const entry = stored.suite_results.find((row) => row.kind === 'canary_sink_body_plan');
+    assert.equal(entry.target_id, 'tgt_a');
+    assert.equal(entry.results.variant_results[0].outcome, 'blocked');
+    assert.ok(state.audit.some((row) => row.action === 'waf.offensive_canary_sink_body.planned'));
+    assert.ok(state.audit.some((row) => row.action === 'waf.offensive_canary_sink_body.observed'));
   });
 });

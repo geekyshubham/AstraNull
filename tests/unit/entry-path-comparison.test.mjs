@@ -732,7 +732,7 @@ describe('declared login/API path scenarios (wafClassProbes)', () => {
       const fetchFn = async (url, init) => {
         calls.push({ url, init });
         const marker = String(url).includes('astranull_') || Boolean(init?.headers?.['x-astranull-marker']);
-        return marker ? okResponse(403, { 'cf-mitigated': 'challenge' }) : okResponse(200);
+        return marker ? okResponse(403, { 'x-waf-block': '1' }) : okResponse(200);
       };
       const result = await runEntryPathMarkerProbe({ url: 'https://app.example/login', entry_path_scenario: scenario, marker_class: 'sqli', fetchFn });
       assert.ok(calls.length <= 8);
@@ -773,7 +773,7 @@ describe('declared login/API path scenarios (wafClassProbes)', () => {
       entry_path_scenario: 'declared_api_path',
       fetchFn: async (url, init) => (String(url).includes('astranull_pad') || init?.headers?.['x-astranull-padding']
         ? okResponse(200)
-        : (String(url).includes('astranull_') || init?.headers?.['x-astranull-marker'] ? okResponse(403, { 'cf-mitigated': 'challenge' }) : okResponse(200))),
+        : (String(url).includes('astranull_') || init?.headers?.['x-astranull-marker'] ? okResponse(403, { 'x-waf-block': '1' }) : okResponse(200))),
     });
     assert.equal(partial.enforcement, 'partial');
     const unhealthy = await runEntryPathMarkerProbe({ url: 'https://app.example/api', entry_path_scenario: 'declared_api_path', fetchFn: async () => okResponse(503) });
@@ -813,21 +813,21 @@ describe('declared login/API path scenarios (wafClassProbes)', () => {
 
 describe('evasion entry-path baseline (evasionProbes)', () => {
   it('adds a permitted baseline and keeps the blocked-baseline prerequisite', async () => {
-    const statuses = [200, 200, 200];
+    const statuses = [200, 200, 200, 200];
     let index = 0;
     const job = { target: { value: 'https://app.example/login' }, probe_profile: buildEvasionMarkerProfile({ transform: 'double_url', entry_path_scenario: 'declared_login_path' }) };
-    const allowed = await runWafEvasionMarkerProbe(job, { fetchFn: async () => okResponse(statuses[index++] ?? 200) });
+    const allowed = await runWafEvasionMarkerProbe(job, { fetchFn: async () => okResponse(statuses[index++] ?? 200), rng: () => 0.99 });
     assert.equal(allowed.external_result, 'inconclusive');
     assert.equal(allowed.metadata.blocked_baseline_prerequisite, 'not_met');
     assert.equal(allowed.metadata.permitted_baseline_health, 'healthy');
-    const sequence = [okResponse(200), okResponse(403, { 'cf-mitigated': 'challenge' }), okResponse(200)];
+    const sequence = [okResponse(200), okResponse(403, { 'x-waf-block': '1' }), okResponse(200), okResponse(200)];
     index = 0;
-    const weaker = await runWafEvasionMarkerProbe(job, { fetchFn: async () => sequence[index++] });
+    const weaker = await runWafEvasionMarkerProbe(job, { fetchFn: async () => sequence[index++], rng: () => 0.99 });
     assert.equal(weaker.external_result, 'external_allowed');
     assert.equal(weaker.metadata.blocked_baseline_prerequisite, 'met');
-    const unsigned = [200, 403, 200];
+    const unsigned = [200, 403, 200, 200];
     index = 0;
-    const bare = await runWafEvasionMarkerProbe(job, { fetchFn: async () => okResponse(unsigned[index++]) });
+    const bare = await runWafEvasionMarkerProbe(job, { fetchFn: async () => okResponse(unsigned[index++]), rng: () => 0.99 });
     assert.equal(bare.external_result, 'inconclusive');
     assert.equal(bare.metadata.blocked_baseline_prerequisite, 'not_observed');
   });

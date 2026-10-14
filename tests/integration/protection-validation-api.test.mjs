@@ -204,7 +204,7 @@ describe('protection validation over the dev HTTP surface', () => {
       headers: admin(), body: { change_id: 'CHG-2001', expectation_ids: [expectation.json.id], test_run_ids: ['run_pv_pre'] },
     });
     assert.equal(baseline.status, 201, JSON.stringify(baseline.json));
-    assert.equal(baseline.json.entries[0].classifier_version, 'firewall-acceptance-v3');
+    assert.equal(baseline.json.entries[0].classifier_version, 'firewall-acceptance-v4');
     assert.ok(baseline.json.entries[0].observations.every((obs) => obs.observation_class === 'service_response_observed'));
     assert.equal(baseline.json.digest_verified, true);
     const replay = await request(baseUrl, 'POST', '/v1/firewall-baselines', {
@@ -222,7 +222,7 @@ describe('protection validation over the dev HTTP surface', () => {
     assert.equal(item.status, 'regression');
     assert.equal(item.gap_kind, 'required_service_newly_unavailable');
     assert.equal(comparison.json.readiness_effect, 'none');
-    assert.equal(comparison.json.classifier_version, 'firewall-acceptance-v3');
+    assert.equal(comparison.json.classifier_version, 'firewall-acceptance-v4');
     assert.match(comparison.json.statement.headline, /sampled public-ingress/i);
     assert.equal(globalThis.fetch, fetchBefore);
 

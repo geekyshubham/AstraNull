@@ -19,6 +19,8 @@ function restoreEnv() {
 function wafEnabledEnv() {
   return {
     ...process.env,
+    NODE_ENV: 'test',
+    ASTRANULL_AUTH_MODE: 'dev-headers',
     ASTRANULL_NO_PERSIST: '1',
     ASTRANULL_WAF_POSTURE_ENABLED: '1',
   };
@@ -211,5 +213,103 @@ describe('waf offensive API', () => {
     });
     assert.equal(closed.status, 200);
     assert.equal(closed.json.offensive_request.state, 'closed');
+  });
+
+  it('lets SOC plan a canary-sink body suite and record observations without a worker job', async () => {
+    const { getStore } = await import('../../src/store.mjs');
+    const asset = await createDemoAsset(baseUrl, adminHeaders);
+    const created = await request(baseUrl, 'POST', '/v1/waf/offensive-requests', {
+      headers: adminHeaders,
+      body: {
+        waf_asset_id: asset.id,
+        objective: 'Plan a canary-sink body suite',
+        requested_suites: ['sqli_offensive'],
+        emergency_contacts: ['ops@example.invalid'],
+        stop_criteria: 'Stop on origin impact',
+        scope_confirmation: true,
+        staging_only: true,
+      },
+    });
+    assert.equal(created.status, 201);
+    const requestId = created.json.offensive_request.id;
+    const jobsBefore = (getStore().probeJobs ?? []).length;
+
+    const beforeApproval = await request(
+      baseUrl,
+      'POST',
+      `/internal/soc/waf-offensive/${requestId}/canary-sink-body/plan`,
+      { headers: socHeadersA, body: { variants: ['json'] } },
+    );
+    assert.equal(beforeApproval.status, 409);
+    assert.equal(beforeApproval.json.error, 'canary_sink_request_not_approved');
+
+    await acceptOffensiveArtifacts(baseUrl, requestId, socHeadersA);
+    for (const headers of [socHeadersA, socHeadersB]) {
+      const approved = await request(baseUrl, 'POST', `/internal/soc/waf-offensive/${requestId}/approve`, { headers });
+      assert.equal(approved.status, 200);
+    }
+    const declared = await request(baseUrl, 'PUT', '/v1/targets/tgt_1/control-declarations', {
+      headers: { ...adminHeaders, 'if-match': '"decl-r0"' },
+      body: { canary_sink: { url: 'https://origin.test/canary' } },
+    });
+    assert.equal(declared.status, 200);
+
+    const engineerPlan = await request(
+      baseUrl,
+      'POST',
+      `/internal/soc/waf-offensive/${requestId}/canary-sink-body/plan`,
+      {
+        headers: demoHeaders('engineer'),
+        body: { canary_sink_url: 'https://waf-offensive.example.com/canary', variants: ['json'] },
+      },
+    );
+    assert.equal(engineerPlan.status, 403);
+
+    const mismatched = await request(
+      baseUrl,
+      'POST',
+      `/internal/soc/waf-offensive/${requestId}/canary-sink-body/plan`,
+      {
+        headers: socHeadersA,
+        body: { canary_sink_url: 'https://waf-offensive.example.com/canary', variants: ['json'] },
+      },
+    );
+    assert.equal(mismatched.status, 400);
+    assert.equal(mismatched.json.error, 'sink_url_mismatch');
+
+    const planned = await request(
+      baseUrl,
+      'POST',
+      `/internal/soc/waf-offensive/${requestId}/canary-sink-body/plan`,
+      {
+        headers: socHeadersA,
+        body: { declared_canary_sink_url: 'https://waf-offensive.example.com/canary', variants: ['json'] },
+      },
+    );
+    assert.equal(planned.status, 200);
+    assert.equal(planned.json.plan.canary_sink_url, 'https://origin.test/canary');
+    assert.equal(planned.json.target_id, 'tgt_1');
+    assert.equal(planned.json.plan.requests.length, 1);
+    assert.equal((getStore().probeJobs ?? []).length, jobsBefore);
+
+    const observed = await request(
+      baseUrl,
+      'POST',
+      `/internal/soc/waf-offensive/${requestId}/canary-sink-body/observations`,
+      {
+        headers: socHeadersA,
+        body: { observations: [{ id: 'json_marker', blocked: true, status_code: 403 }] },
+      },
+    );
+    assert.equal(observed.status, 200);
+    assert.equal(observed.json.results.variant_results[0].outcome, 'blocked');
+    assert.equal((getStore().probeJobs ?? []).length, jobsBefore);
+    assert.equal(
+      (getStore().probeJobs ?? []).filter((job) => job.waf_offensive_request_id === requestId).length,
+      0,
+    );
+    const refusals = getStore().auditLog.filter((row) => row.action === 'waf.offensive_canary_sink_body.refused'
+      && row.resource_id === requestId);
+    assert.deepEqual(refusals.map((row) => row.metadata.reason).sort(), ['canary_sink_request_not_approved', 'sink_url_mismatch']);
   });
 });

@@ -8,6 +8,7 @@ import {
   CircleCheck,
   CircleDashed,
   CircleMinus,
+  CircleSlash,
   CircleX,
   Eye,
   Fingerprint,
@@ -29,25 +30,34 @@ import {
 } from 'lucide-react';
 import type { DataItem } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
-import { plainVerdictLabel } from '../../lib/plain-language.mjs';
+import { plainVerdictLabel, plainVerdictShortLabel } from '../../lib/plain-language.mjs';
+import { verdictTone } from '../../lib/status-tone';
+import { buildDetailHref } from '../../lib/route-params';
 import { formatStepRequest, formatStepResponse, humanizeReason } from '../../lib/validation-scan.mjs';
 import {
   MAX_SCAN_CHECKS,
 } from '../../lib/validation-scan.mjs';
 import {
   ROW_STATUS_META,
+  efficacySentence,
   groupRowsByCategory,
   rowProgress,
+  wafRuleSentences,
   type CategoryIcon,
+  type CustomCanaryMember,
   type CheckRow,
+  type EdgeEfficacy,
   type MarkerEffectiveness,
   type ProviderFamilyRow,
   type RowStatus,
-  type WafCheckBlocking,
+  type WafRuleEnforcement,
 } from '../../lib/domain-checks.mjs';
+import { DECLARATION_KEYS, controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, type CheckPrerequisite } from '../../lib/control-declarations.mjs';
 import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-logs';
 import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
+import { NotTestedNote } from '../runs/not-tested-note';
+import { AnchorButton, Button } from '../ui/button';
+import { CheckClassChips, CheckClassLegend } from '../checks/check-class-chips';
 import { Progress } from '../ui/progress';
 import { ProviderLogo, type ProviderLogoId } from '../integrations/provider-logos';
 import { LiveProbeTerminal } from './live-probe-terminal';
@@ -71,6 +81,7 @@ const STATUS_ICONS: Record<RowStatus, LucideIcon> = {
   passed: CircleCheck,
   failed: CircleX,
   inconclusive: CircleMinus,
+  not_tested: CircleSlash,
   observed: Eye,
   running: LoaderCircle,
   queued: CircleDashed,
@@ -94,6 +105,7 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'failed', label: ROW_STATUS_META.failed.label },
   { id: 'passed', label: ROW_STATUS_META.passed.label },
   { id: 'inconclusive', label: 'Inconclusive' },
+  { id: 'not_tested', label: ROW_STATUS_META.not_tested.label },
   { id: 'observed', label: 'Observed' },
   { id: 'running', label: 'Running' },
   { id: 'waiting', label: 'Waiting' },
@@ -126,13 +138,19 @@ export type ProviderObservationsProps = {
   note?: ReactNode;
   action?: ReactNode;
   onInspect: (row: ProviderFamilyRow) => void;
-  /** Recorded outcomes of this target's benign WAF marker checks; null when none has a result. */
-  checkBlocking?: WafCheckBlocking | null;
+  /** WAF and edge efficacy from fresh, current-version verdicts. */
+  efficacy?: EdgeEfficacy | null;
+  /** Managed-rule versus custom-canary enforcement, rolled up by distinct rule; null when nothing is recorded. */
+  wafRules?: WafRuleEnforcement | null;
+  /** Custom canary rules the server rolled up, each linked to the run it graded. */
+  canaryMembers?: CustomCanaryMember[];
+  checkName?: (checkId: string) => string;
   onOpenChecks?: () => void;
 };
 
 /** Flat, ruled list: one row per family, each from its own recorded source only. */
-export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect, checkBlocking = null, onOpenChecks }: ProviderObservationsProps) {
+export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect, efficacy = null, wafRules = null, canaryMembers = [], checkName, onOpenChecks }: ProviderObservationsProps) {
+  const ruleLines = wafRuleSentences(wafRules);
   const edgeProxyRow = rows.find(
     (r) => (r.family === 'cdn' || r.family === 'waf') && r.status === 'detected'
   );
@@ -235,33 +253,72 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
           <span />
         </li>
       </ul>
-      <div className="td-effectiveness">
-        <span className="td-label">Benign marker blocking</span>
-        {checkBlocking ? (
-          <div className="td-effectiveness-line">
-            <p>
-              From WAF marker checks: <strong className="tabular-nums">{checkBlocking.stopped}</strong> stopped the test traffic ·{' '}
-              <strong className="tabular-nums">{checkBlocking.allowed}</strong> allowed ·{' '}
-              <span className="tabular-nums">{checkBlocking.inconclusive}</span> inconclusive ·{' '}
-              <span className="tabular-nums">{checkBlocking.notRun}</span> not run (of <span className="tabular-nums">{checkBlocking.applicable}</span>)
-              {checkBlocking.lastAt ? <span className="td-muted"> · last result {formatDate(checkBlocking.lastAt)}</span> : null}
-            </p>
-            {onOpenChecks ? <Button size="sm" variant="ghost" onClick={onOpenChecks}>Review WAF checks</Button> : null}
-          </div>
-        ) : null}
-        {effectiveness ? (
-          <p>
-            During the fingerprint scan: <strong className="tabular-nums">{effectiveness.blocked}</strong> blocked ·{' '}
-            <strong className="tabular-nums">{effectiveness.allowed}</strong> allowed ·{' '}
-            <span className="tabular-nums">{effectiveness.inconclusive}</span> inconclusive
-            {effectiveness.percentage !== null
-              ? <> · <span className="tabular-nums">{effectiveness.percentage}%</span> of definitive markers</>
-              : <> · no definitive markers, so no percentage</>}
-          </p>
-        ) : null}
-        {!checkBlocking && !effectiveness ? (
+      <div className="td-efficacy" role="group" aria-labelledby="td-efficacy-title">
+        <div className="td-efficacy-head">
+          <h3 id="td-efficacy-title">Is it working?</h3>
+          {onOpenChecks ? <Button size="sm" variant="ghost" onClick={onOpenChecks}>Review checks</Button> : null}
+        </div>
+        {!effectiveness && !wafRules && (!efficacy || ['unknown', 'absent', 'present_unmeasured'].includes(efficacy.waf.status) && ['unknown', 'absent', 'present_unmeasured'].includes(efficacy.cdn.status)) ? (
           <p className="td-muted">Not measured. Detection alone does not show whether anything is blocked.</p>
         ) : null}
+        {efficacy ? (
+          <dl className="td-efficacy-list">
+            {([['waf', 'Web application firewall'], ['cdn', 'CDN and edge']] as const).map(([layer, title]) => {
+              const value = efficacy[layer];
+              return (
+                <div key={layer} data-layer={layer}>
+                  <dt>{title}</dt>
+                  <dd>
+                    <Badge tone={value.tone}>{value.label}</Badge>
+                    <span className="td-efficacy-sentence">{efficacySentence(value)}</span>
+                    {layer === 'waf' && ruleLines.length ? (
+                      <ul className="td-rule-lines">
+                        {ruleLines.map((line) => (
+                          <li key={line.id}>
+                            <strong>{line.label}:</strong> <span className="tabular-nums">{line.ratio}</span>
+                            <span className="td-muted"> · {line.detail}</span>
+                            {line.id === 'custom' && canaryMembers.length ? (
+                              <details className="td-canary-members">
+                                <summary><ChevronRight size={14} aria-hidden="true" />Custom rules behind this ratio ({canaryMembers.length})</summary>
+                                <ul aria-label="Custom canary rules and the run each result came from">
+                                  {canaryMembers.map((member) => (
+                                    <li key={`${member.checkId}|${member.runId}`}>
+                                      <span className="td-canary-name">{checkName?.(member.checkId) || member.checkId}</span>
+                                      {member.verdict ? <Badge tone={verdictTone(member.verdict)}>{plainVerdictShortLabel(member.verdict)}</Badge> : null}
+                                      <span className="td-muted">{member.label}{member.observedAt ? ` · ${formatDate(member.observedAt)}` : ''}</span>
+                                      {member.runId
+                                        ? <a className="detail-entity-link mono" href={buildDetailHref('run-detail', member.runId)} aria-label={`Run ${member.runId} for ${checkName?.(member.checkId) || member.checkId}`}>{member.runId}</a>
+                                        : <span className="td-muted">No run recorded</span>}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </details>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        ) : null}
+        {effectiveness ? (
+          <p className="td-muted">
+            Fingerprint scan only, not counted above: <span className="tabular-nums">{effectiveness.blocked}</span> markers blocked ·{' '}
+            <span className="tabular-nums">{effectiveness.allowed}</span> allowed · <span className="tabular-nums">{effectiveness.inconclusive}</span> inconclusive.
+          </p>
+        ) : null}
+        <details className="td-efficacy-about">
+          <summary>How this is decided</summary>
+          <p className="td-copy">
+            Only results from the coverage freshness window, recorded with the current check version, count. A layer reads <b>Protecting</b> only with at least 3 fresh concluded checks across 2 rule categories and no failure. A DNS zone-transfer refusal never counts toward the CDN, and <b>Bypassable via origin</b> appears only when an origin-lockdown check finds your origin answering directly.
+          </p>
+          <p className="td-copy">
+            <b>Managed rule markers</b> are harmless strings that common managed rule sets (SQL injection, cross-site scripting, path traversal, scanner detection) recognise. <b>Custom canary rules</b> use AstraNull&apos;s own token, which only a rule you wrote for it will block, so they prove that rule acts, not that the attack class is covered. Each rule is counted once, however many checks use it.
+          </p>
+        </details>
       </div>
     </section>
   );
@@ -287,9 +344,14 @@ function rowResultLine(row: CheckRow) {
   if (row.status === 'running') return 'Awaiting the recorded response.';
   if (row.status === 'queued') return 'Queued. Checks run one at a time.';
   if (row.status === 'not_run') return 'Not run on this target yet.';
+  if (row.status === 'not_tested') return row.missingInput?.message || 'Not tested — this check needs more input, so nothing was sent.';
   if (row.status === 'skipped' || row.status === 'cancelled') return row.reason ? humanizeReason(row.reason) : `${row.label}.`;
   if (row.status === 'observed') return row.explanation || 'Recorded transport behavior. Transport-only checks inform the picture but never decide a verdict.';
   return row.explanation || (row.verdict ? plainVerdictLabel(row.verdict) : row.label);
+}
+
+function checkClassInput(row: CheckRow) {
+  return { check_id: row.checkId, vector_family: row.category.id, probe_profile: { kind: row.probeKind } };
 }
 
 function CheckQueueRow({
@@ -305,6 +367,8 @@ function CheckQueueRow({
   liveNote,
   targetValue,
   runEvents,
+  prerequisite,
+  targetId = '',
 }: {
   row: CheckRow;
   selected: boolean;
@@ -319,8 +383,12 @@ function CheckQueueRow({
   liveNote?: string;
   targetValue?: string;
   runEvents?: DataItem[];
+  prerequisite?: CheckPrerequisite;
+  targetId?: string;
 }) {
   const StatusIcon = STATUS_ICONS[row.status] ?? CircleDashed;
+  const blocked = Boolean(prerequisite && prerequisite.state !== 'ready');
+  const prerequisiteId = `td-prereq-${row.checkId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const sent = rowSentLine(row);
   const resultType = row.readinessCapable ? 'Produces a verdict' : 'Observation only — no verdict';
   return (
@@ -333,9 +401,10 @@ function CheckQueueRow({
               name="target-run-check"
               value={row.checkId}
               checked={included}
-              disabled={!canInclude}
+              disabled={!canInclude || (blocked && !included)}
               onChange={() => onToggleInclude(row.checkId)}
               aria-label={`Include ${row.name} in run`}
+              aria-describedby={blocked ? prerequisiteId : undefined}
             />
           </label>
         ) : <span className="td-check-choice" aria-hidden="true" />}
@@ -346,9 +415,11 @@ function CheckQueueRow({
           <span className="td-check-name">
             <strong>{row.name}</strong>
             <code>{row.checkId}</code>
+            <CheckClassChips check={checkClassInput(row)} />
           </span>
           <span className="td-check-tier">{TIER_COPY[row.tier] ? `${TIER_COPY[row.tier]} · ` : ''}{resultType}</span>
           <Badge tone={liveNote ? 'muted' : row.tone}>{row.label}</Badge>
+          {blocked && prerequisite ? <Badge tone={prerequisiteTone(prerequisite)} title={prerequisite.detail}>{prerequisite.label}</Badge> : null}
           {liveNote ? <Badge tone="warn" title={liveNote}>Not live evidence</Badge> : null}
           <ChevronRight size={16} className="td-chevron" aria-hidden="true" />
         </button>
@@ -356,6 +427,24 @@ function CheckQueueRow({
       {selected ? (
         <div className="td-check-open">
           <dl className="td-check-detail">
+            {blocked && prerequisite ? (
+              <div className="td-prereq">
+                <dt>Before it can run</dt>
+                <dd id={prerequisiteId}>
+                  {prerequisite.detail}
+                  {targetId && prerequisiteSection(prerequisite) ? (
+                    <span className="td-prereq-actions">
+                      <AnchorButton size="sm" variant="secondary" href={controlsHref(targetId, prerequisiteSection(prerequisite))}>{prerequisiteCta(prerequisite)}</AnchorButton>
+                      {prerequisite.missing.slice(1).map((key) => {
+                        const meta = DECLARATION_KEYS[key as keyof typeof DECLARATION_KEYS];
+                        return meta ? <AnchorButton key={key} size="sm" variant="ghost" href={controlsHref(targetId, meta.section)}>{meta.cta}</AnchorButton> : null;
+                      })}
+                    </span>
+                  ) : null}
+                  {prerequisite.state === 'soc_only' ? <span className="td-prereq-actions"><AnchorButton size="sm" variant="secondary" href="#support">Request through SOC</AnchorButton></span> : null}
+                </dd>
+              </div>
+            ) : null}
             <div><dt>How it works</dt><dd>{row.description || row.category.how}</dd></div>
             {row.verdictLogic ? <div><dt>How it decides</dt><dd>{row.verdictLogic}</dd></div> : null}
             <div><dt>Result type</dt><dd>{row.readinessCapable ? 'Produces a readiness verdict' : 'Observation only — no readiness credit'}</dd></div>
@@ -371,6 +460,8 @@ function CheckQueueRow({
                     <strong>Awaiting recorded response</strong>
                     <span className="td-muted">{row.requestsSent != null ? ` · ${row.requestsSent}${row.maxRequests != null ? `/${row.maxRequests}` : ''} requests sent` : ' · Request count not recorded yet'}</span>
                   </span>
+                ) : row.status === 'not_tested' && row.missingInput ? (
+                  <NotTestedNote info={row.missingInput} targetId={blocked ? '' : targetId} showLabel={false} />
                 ) : (
                   rowResultLine(row)
                 )}
@@ -453,6 +544,9 @@ export type CheckQueueProps = {
   onStartRecommended?: (row: CheckRow) => void;
   runSelection?: string[];
   onRunSelectionChange?: (next: string[]) => void;
+  /** Port or declaration still missing per check; unmet checks stay out of run-all and multi-select. */
+  prerequisites?: Record<string, CheckPrerequisite>;
+  targetId?: string;
 };
 
 /** Every compatible check for this target, grouped by category, selectable in place. */
@@ -483,7 +577,11 @@ export function CheckQueue({
   onStartRecommended,
   runSelection = [],
   onRunSelectionChange,
+  prerequisites = {},
+  targetId = '',
 }: CheckQueueProps) {
+  const isReady = (checkId: string) => !prerequisites[checkId] || prerequisites[checkId].state === 'ready';
+  const waitingCount = rows.filter((row) => !isReady(row.checkId)).length;
   const [filter, setFilter] = useState<QueueFilter>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const selection = useMemo(() => new Set(runSelection), [runSelection]);
@@ -497,7 +595,7 @@ export function CheckQueue({
   }, [rows]);
   const matchesFilter = (row: CheckRow) => filter === 'all' || (filter === 'verdict' ? row.readinessCapable : row.status === filter);
   const visibleRows = filter === 'all' ? rows : rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId);
-  const filteredIds = filter === 'all' ? [] : rows.filter(matchesFilter).map((row) => row.checkId);
+  const filteredIds = filter === 'all' ? [] : rows.filter(matchesFilter).map((row) => row.checkId).filter(isReady);
   const rankedGroups = useMemo(() => groupRowsByCategory(visibleRows), [visibleRows]);
   // While a run is live, results arrive row by row. Keep the order captured when it started so a
   // row never moves under the pointer or keyboard focus; the status-first order returns after.
@@ -532,6 +630,7 @@ export function CheckQueue({
     const next = new Set(runSelection.filter((id) => runnable.has(id)));
     for (const id of ids) {
       if (!runnable.has(id)) continue;
+      if (include && !isReady(id)) continue;
       if (include) next.add(id);
       else next.delete(id);
     }
@@ -560,6 +659,7 @@ export function CheckQueue({
               ? `${catalogCount} checks in the catalog. ${rows.length} are runnable on this target, including observation checks.`
               : `${rows.length} checks are runnable on this target, including observation checks.`}
             {' '}Tick checks to run them together, or open one to see what it sends, its last result and its evidence.
+            {waitingCount ? ` ${waitingCount} ${waitingCount === 1 ? 'check needs' : 'checks need'} a port or declaration first and ${waitingCount === 1 ? 'is' : 'are'} left out of run-all.` : ''}
           </p>
         </div>
         {canRun ? (
@@ -645,6 +745,7 @@ export function CheckQueue({
           </Button>
         ) : null}
       </div>
+      {groups.length ? <CheckClassLegend className="td-check-class-legend" /> : null}
       {groups.map((group) => {
         const Icon = CATEGORY_ICONS[group.category.icon] ?? Shield;
         const holdsSelection = group.rows.some((row) => row.checkId === selectedCheckId);
@@ -655,7 +756,7 @@ export function CheckQueue({
         return (
           <div key={group.category.id} className="td-cat-shell" data-selectable={canInclude || undefined}>
           {canInclude ? (
-            <CategorySelect label={group.category.label} ids={group.rows.map((row) => row.checkId)} selection={selection} disabled={!canInclude} onChange={changeSelection} />
+            <CategorySelect label={group.category.label} ids={group.rows.map((row) => row.checkId).filter(isReady)} selection={selection} disabled={!canInclude} onChange={changeSelection} />
           ) : null}
           <details
             className="td-cat"
@@ -675,6 +776,7 @@ export function CheckQueue({
                 {group.counts.failed ? <Badge tone="danger">{`${group.counts.failed} gap${group.counts.failed === 1 ? '' : 's'}`}</Badge> : null}
                 {group.counts.passed ? <Badge tone="success">{`${group.counts.passed} protected`}</Badge> : null}
                 {group.counts.inconclusive ? <Badge tone="muted">{`${group.counts.inconclusive} inconclusive`}</Badge> : null}
+                {group.counts.not_tested ? <Badge tone="muted">{`${group.counts.not_tested} not tested`}</Badge> : null}
                 {group.counts.not_run ? <Badge tone="muted">{`${group.counts.not_run} not run`}</Badge> : null}
                 {group.counts.running ? <Badge tone="warn">Running</Badge> : null}
               </span>
@@ -696,6 +798,8 @@ export function CheckQueue({
                   liveNote={liveNotes[row.checkId]}
                   targetValue={targetValue}
                   runEvents={row.checkId === selectedCheckId ? selectedRunEvents : undefined}
+                  prerequisite={prerequisites[row.checkId]}
+                  targetId={targetId}
                 />
               ))}
             </ul>

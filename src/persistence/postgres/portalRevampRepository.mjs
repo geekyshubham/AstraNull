@@ -1058,6 +1058,7 @@ export function createPortalRevampRepository(pool) {
         // exactly. The Date-typed created_at is still selected for the opened_at output.
         const findingsSql =
           `SELECT f.id, f.severity, f.title, f.status, f.created_at, f.created_at::text AS created_at_cursor,
+                  f.verification_basis,
                   rem.owner_group
              FROM findings f
              LEFT JOIN finding_remediations rem
@@ -1277,6 +1278,7 @@ export function createPortalRevampRepository(pool) {
           state: f.status,
           opened_at: toIso(f.created_at),
           owner_group: remediationOwnerGroup(f.owner_group),
+          verification_basis: f.verification_basis ?? null,
         }));
         const findingsPageLast = findingsPageRows[findingsPageRows.length - 1];
         // Unpaginated callers never received a cursor before, so keep emitting null for

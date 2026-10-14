@@ -1,7 +1,9 @@
 import { newId } from '../../lib/ids.mjs';
+import { probePerspectiveEvidence } from '../../lib/probePerspectiveRegistry.mjs';
 import { executionReservation, probeExecutionReceipt, probeExecutionEvidenceReceipt, normalizeStopAcknowledgment } from '../../lib/probeExecution.mjs';
 import { probeSourceResolverFromEnv } from '../../lib/probeSourcePerspective.mjs';
 import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
+import { jobClaimableByPerspective } from '../../lib/probeJobs.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
@@ -163,6 +165,7 @@ function abortProbeResultMutation(result) {
 function buildProbeEvidenceRecord(job, probeEvent, nowIso, newIdFn) {
   const externalResult = probeEvent?.metadata?.external_result;
   const safetyAttestation = probeEvent?.metadata?.safety_attestation;
+  const responseFeatures = probeEvent?.metadata?.response_features;
   return {
     id: newIdFn('ev'),
     test_run_id: job.test_run_id,
@@ -176,6 +179,7 @@ function buildProbeEvidenceRecord(job, probeEvent, nowIso, newIdFn) {
           : {}),
         vector_family: job.vector_family,
         ...(safetyAttestation == null ? {} : { safety_attestation: safetyAttestation }),
+        ...(responseFeatures != null ? { response_features: responseFeatures } : {}),
       },
       job.check_id,
     ),
@@ -577,7 +581,7 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
       if (await killSwitchActiveForProbeTenant(killSwitch, ctx)) {
         return [];
       }
-      return probeJobs.leasePendingJobsForWorker(ctx, workerId);
+      return probeJobs.leasePendingJobsForWorker(ctx, workerId, { perspectiveId: ctx.perspectiveId ?? null });
     },
 
     async reserveProbeExecution(ctx, jobId, body) {
@@ -588,6 +592,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
       if (!initial || initial.ownership_verification_id) return { error: 'job_not_found', status: 404 };
       if (Object.hasOwn(initial.constraints ?? {}, 'reviewed_operation_binding')) {
         return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
+      if (!jobClaimableByPerspective(initial, ctx.perspectiveId)) {
+        return { error: 'probe_perspective_mismatch', status: 403 };
       }
       return audit.withTenantAuditLock(ctx.tenantId, async ({ client }) => {
         const mutation = await validationEvidence.withRunMutationLock(ctx, initial.test_run_id, async () => {
@@ -689,6 +696,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
       if (!initialJob) return { error: 'job_not_found', status: 404 };
       if (Object.hasOwn(initialJob.constraints ?? {}, 'reviewed_operation_binding')) {
         return { error: 'reviewed_operation_execution_unavailable', status: 409 };
+      }
+      if (!jobClaimableByPerspective(initialJob, ctx.perspectiveId)) {
+        return { error: 'probe_perspective_mismatch', status: 403 };
       }
 
       if (initialJob.ownership_verification_id) {
@@ -1013,6 +1023,7 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
                 profile_kind: job.probe_profile?.kind ?? null,
                 probe_worker_id: workerId,
                 source_perspective: resolveSourcePerspective(workerId),
+                ...probePerspectiveEvidence(ctx),
                 execution_receipt: probeExecutionEvidenceReceipt(leasedJob, workerId, safetyAttestation, externalResult),
                 safety_attestation: safetyAttestation,
               },

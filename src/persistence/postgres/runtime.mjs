@@ -487,6 +487,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         ...(options.passwordRecoveryDeliveryOptions ?? {}),
       }),
       ...validationServices,
+      validationEvidence: repositories.validationEvidence,
       ...reportServices,
       secretVault,
       notifications: notificationServices,

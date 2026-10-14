@@ -152,37 +152,37 @@ describe('full-catalog live evidence generator', () => {
     const artifact = buildArtifact();
     const nonExecutedRows = artifact.rows.filter((row) => row.target_disposition !== 'safe_runnable');
 
-    assert.equal(nonExecutedRows.length, 364);
+    assert.equal(nonExecutedRows.length, 348);
     assert.ok(nonExecutedRows.every((row) => row.check_result_refs.length === 0));
     assert.ok(artifact.rows
       .filter((row) => row.target_disposition === 'safe_runnable')
       .every((row) => row.check_result_refs.length > 0));
   });
 
-  it('preserves the required 721/357/10/269/49/36/161 totals', () => {
+  it('preserves the required 721/373/10/245/49/44/167 totals', () => {
     const artifact = buildArtifact();
 
     assert.equal(artifact.rows.length, 721);
-    assert.equal(artifact.check_results.length, 161);
-    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 161);
+    assert.equal(artifact.check_results.length, 167);
+    assert.equal(new Set(artifact.check_results.map((result) => result.check_id)).size, 167);
     assert.deepEqual(MATRIX.summary.dispositions, {
-      safe_runnable: 357,
+      safe_runnable: 373,
       additional_input_required: 10,
       target_incompatible: 0,
-      soc_gated: 269,
+      soc_gated: 245,
       monitor_only: 49,
-      not_runnable: 36,
+      not_runnable: 44,
     });
     assert.deepEqual(artifact.summary.evaluation_status, {
       additional_input_required: 10,
-      evaluated_bounded: 357,
+      evaluated_bounded: 373,
       monitor_only_not_executed: 49,
-      soc_gated_not_executed: 269,
-      not_runnable: 36,
+      soc_gated_not_executed: 245,
+      not_runnable: 44,
     });
-    assert.equal(artifact.summary.planned_unique_safe_checks, 161);
-    assert.equal(artifact.summary.completed_unique_safe_checks, 161);
-    assert.equal(artifact.summary.check_status.verdicted, 161);
-    assert.equal(artifact.summary.check_confidence.external_only, 161);
+    assert.equal(artifact.summary.planned_unique_safe_checks, 167);
+    assert.equal(artifact.summary.completed_unique_safe_checks, 167);
+    assert.equal(artifact.summary.check_status.verdicted, 167);
+    assert.equal(artifact.summary.check_confidence.external_only, 167);
   });
 });

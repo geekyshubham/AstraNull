@@ -240,6 +240,11 @@ export function ProtectionValidationReportPanel({ config, session }: { config: P
           ) : null}
           {otherIncompleteReasons.length ? <p className="pv-notice pv-break" data-tone="warn">Incomplete coverage: {otherIncompleteReasons.map((value) => labelFrom({}, value)).join(' · ')}</p> : null}
           {Object.keys(report.unknown_reasons).length ? <ul aria-label="Unknown coverage reasons">{Object.entries(report.unknown_reasons).map(([reason, count]) => <li key={reason}>{labelFrom({}, reason)}: {count}</li>)}</ul> : null}
+          {report.origin_lockdown ? (
+            <p className="pv-break"><strong>Origin lockdown</strong>: {report.origin_lockdown.status === 'not_assessable'
+              ? <>Not assessable. {report.origin_lockdown.reason === 'no_origin_declared' ? 'No origin is declared, so nothing can show whether it only accepts CDN traffic. Bind an origin on a target and declare origin lockdown under its Controls tab.' : labelFrom({}, report.origin_lockdown.reason || 'reason_not_recorded')}</>
+              : report.origin_lockdown.display || labelFrom({}, report.origin_lockdown.status)}</p>
+          ) : null}
           {[['Not-tested entry paths', report.not_tested_paths], ['Not-tested firewall expectations', report.untested_firewall_expectations]].map(([label, raw]) => {
             const coverage = raw as ProtectionReport['not_tested_paths'];
             return coverage.ids.length || coverage.total ? <p key={String(label)} className="pv-break"><strong>{String(label)}</strong>: {coverage.ids.join(', ') || 'Identifiers not listed'}{coverage.truncated ? ` (partial identifiers; ${coverage.total ?? 'unknown'} total)` : ''}</p> : null;

@@ -49,7 +49,7 @@ async function seedTenant(pool) {
 }
 
 /** A verdicted run plus its committed verdict at `at`. */
-async function seedVerdictedRun(pool, { runId, verdictId, verdict, at }) {
+async function seedVerdictedRun(pool, { runId, verdictId, verdict, at, placement = {}, checkId = CHECK }) {
   await withTenantContext(pool, TENANT, async (client) => {
     await client.query(
       `INSERT INTO test_runs (
@@ -63,7 +63,7 @@ async function seedVerdictedRun(pool, { runId, verdictId, verdict, at }) {
          jsonb_build_object('nonce_hash', $7::text, 'window_ms', 120000),
          $6::timestamptz, $6::timestamptz, $6::timestamptz, $6::timestamptz
        )`,
-      [runId, TENANT, GROUP, TARGET, CHECK, at, `nonce_${runId}`],
+      [runId, TENANT, GROUP, TARGET, checkId, at, `nonce_${runId}`],
     );
     await client.query(
       `INSERT INTO events (
@@ -71,15 +71,15 @@ async function seedVerdictedRun(pool, { runId, verdictId, verdict, at }) {
          signal_type, producer_kind, nonce_hash, timestamp, metadata_json
        ) VALUES ($1, $2, $3, $4, $5, NULL, 'probe_worker', 'probe_result',
                  'signed_probe', $6, $7::timestamptz, '{"external_result":"connected"}'::jsonb)`,
-      [`evt_${runId}`, TENANT, runId, TARGET, CHECK, `nonce_${runId}`, at],
+      [`evt_${runId}`, TENANT, runId, TARGET, checkId, `nonce_${runId}`, at],
     );
     await client.query(
       `INSERT INTO verdicts (
          id, tenant_id, test_run_id, target_id, check_id, verdict, confidence,
          placement_confidence_json, explanation, evidence_ids, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, 'high', '{}'::jsonb,
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'high', $9::jsonb,
                  'seeded verdict', ARRAY[$7]::text[], $8::timestamptz)`,
-      [verdictId, TENANT, runId, TARGET, CHECK, verdict, `evt_${runId}`, at],
+      [verdictId, TENANT, runId, TARGET, checkId, verdict, `evt_${runId}`, at, JSON.stringify(placement)],
     );
   });
 }
@@ -231,6 +231,33 @@ describe('postgres notification reconciliation eligibility', () => {
       assert.equal(tick.reconciliation.by_trigger['finding.high_severity'].reconciled, 1);
       const alerts = (await readLedger(pool)).events.filter((e) => e.trigger === 'finding.high_severity');
       assert.deepEqual(alerts.map((e) => e.metadata_json.finding_id), ['f_created_high']);
+    });
+  });
+
+  it('back-fills exposed findings only when the exposed verdict itself recorded a high/critical finding', { timeout: 120_000 }, async (t) => {
+    await withHarness(t, async (pool) => {
+      const rt = buildRuntime(pool);
+      await rt.notifications.createNotificationRule(CTX, { channel: 'in_app', triggers: ['finding.high_severity'] });
+      await pause();
+      const at = new Date(Date.now()).toISOString();
+      const high = { creates_finding: true, finding_severity: 'high' };
+      const medium = { creates_finding: true, finding_severity: 'medium' };
+      await seedVerdictedRun(pool, { runId: 'run_exp_high', verdictId: 'v_exp_high', verdict: 'exposed', at, placement: high, checkId: 'nfw.declared_deny_tcp.safe' });
+      await seedVerdictedRun(pool, { runId: 'run_exp_med', verdictId: 'v_exp_med', verdict: 'exposed', at, placement: medium, checkId: 'nfw.declared_deny_udp.safe' });
+      await seedVerdictedRun(pool, { runId: 'run_exp_legacy', verdictId: 'v_exp_legacy', verdict: 'exposed', at, checkId: 'nfw.connection_limit.safe' });
+      await seedFinding(pool, { id: 'f_exp_high', severity: 'high', verdictId: 'v_exp_high', lastVerdictId: 'v_exp_high', runId: 'run_exp_high', at, checkId: 'nfw.declared_deny_tcp.safe' });
+      await seedFinding(pool, { id: 'f_exp_escalated', severity: 'high', verdictId: 'v_exp_med', lastVerdictId: 'v_exp_med', runId: 'run_exp_med', at, checkId: 'nfw.declared_deny_udp.safe' });
+      await seedFinding(pool, { id: 'f_exp_legacy', severity: 'critical', verdictId: 'v_exp_legacy', lastVerdictId: 'v_exp_legacy', runId: 'run_exp_legacy', at, checkId: 'nfw.connection_limit.safe' });
+
+      const repo = createNotificationReconciliationRepository(pool);
+      const rows = await repo.listUnnotifiedHighSeverityFindings(SYSTEM, {
+        from: new Date(Date.now() - 60 * 60_000).toISOString(),
+        to: futureAsOf(),
+        limit: 50,
+      });
+      assert.deepEqual(rows.map((r) => r.id), ['f_exp_high']);
+      const tick = await rt.notifications.processDueNotificationRetries(SYSTEM, { asOf: futureAsOf() });
+      assert.equal(tick.reconciliation.by_trigger['finding.high_severity'].reconciled, 1);
     });
   });
 

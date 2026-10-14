@@ -94,16 +94,8 @@ function urlParts(target) {
   }
 }
 
-export function currentOriginProof(records, tenantId, targetId) {
-  const store = {
-    targets: records?.targets ?? [],
-    targetVerifications: records?.targetVerifications ?? [],
-    wafConnectors: records?.wafConnectors ?? [],
-    wafConnectorSnapshots: records?.wafConnectorSnapshots ?? [],
-  };
-  const verification = effectiveTargetVerifications(store, tenantId, [targetId]).get(targetId);
-  return ownershipProofFromStates({ targetState: verification?.state ?? null });
-}
+export { currentOriginProof, deriveBindingScope } from '../lib/originLockdownResolution.mjs';
+import { currentOriginProof, deriveBindingScope } from '../lib/originLockdownResolution.mjs';
 
 export function bindingRecordsFromStore(store, tenantId) {
   return {
@@ -127,52 +119,6 @@ function oneOf(value) {
   return value == null || value === '' ? undefined : value;
 }
 
-export function deriveBindingScope(protectedTarget, requested = {}) {
-  const host = hostnameOf(protectedTarget);
-  if (!host || targetRole(protectedTarget) !== 'protected') return error('protected_target_not_hostname', 400);
-  const declaration = declarationOf(protectedTarget);
-  const allowed = declaration.allowed_scope && typeof declaration.allowed_scope === 'object'
-    ? declaration.allowed_scope
-    : {};
-  if (Array.isArray(allowed.hosts) && allowed.hosts.length && !allowed.hosts.map((item) => String(item).toLowerCase()).includes(host)) {
-    return error('declaration_scope_invalid', 400, { field: 'host' });
-  }
-  const declaredSni = oneOf(allowed.sni);
-  const sni = declaredSni == null ? host : String(declaredSni).toLowerCase();
-  if (sni !== host) return error('declaration_scope_invalid', 400, { field: 'sni' });
-  const url = urlParts(protectedTarget);
-  const declaredPorts = Array.isArray(allowed.ports)
-    ? allowed.ports.map(Number).filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535)
-    : [];
-  let port = url.port ?? (Number.isInteger(protectedTarget.port) ? protectedTarget.port : null);
-  if (port == null && declaredPorts.length === 1) port = declaredPorts[0];
-  const declaredPaths = Array.isArray(allowed.paths)
-    ? allowed.paths.filter((path) => typeof path === 'string' && path.startsWith('/') && path.length <= 200)
-    : [];
-  let path = url.path;
-  if (path == null && declaredPaths.length === 1) path = declaredPaths[0];
-  if (requested.host != null && String(requested.host).toLowerCase() !== host) return error('scope_mismatch', 400, { field: 'host' });
-  if (requested.sni != null && String(requested.sni).toLowerCase() !== sni) return error('scope_mismatch', 400, { field: 'sni' });
-  if (requested.port != null) {
-    const requestedPort = Number(requested.port);
-    if (!Number.isInteger(requestedPort) || (port != null && requestedPort !== port)) {
-      return error('scope_mismatch', 400, { field: 'port' });
-    }
-    if (port == null && !declaredPorts.includes(requestedPort)) return error('scope_mismatch', 400, { field: 'port' });
-    port = requestedPort;
-  } else if (port == null && declaredPorts.length > 1) {
-    return error('port_unspecified', 400);
-  }
-  if (requested.path != null) {
-    if ((path != null && requested.path !== path) || (path == null && !declaredPaths.includes(requested.path))) {
-      return error('scope_mismatch', 400, { field: 'path' });
-    }
-    path = requested.path;
-  } else if (path == null && declaredPaths.length > 1) {
-    return error('path_unspecified', 400);
-  }
-  return { host, sni, port, path };
-}
 
 /**
  * Run start guard. The run target must be the bound origin IP, the check must be

@@ -36,3 +36,37 @@ The variable is unset by default. It is scoped per tenant, not per user, because
 | No schema change: uses existing `user_confirmed` / `manual_override` values. | Removing a tenant from the variable does not revoke rows already written; remove them or re-verify. |
 
 SOC gating for high-scale tests (ADR-0003) is unchanged.
+
+## Amendment (2026-10-14): Ungated Demo Validation Execution
+
+For demo tenants (`isDemoAutoVerifyTenant`, configured via `ASTRANULL_DEMO_AUTO_VERIFY_TENANTS`), customer-runnable checks run without input requirements, safe windows, or production hourly rate limits.
+
+### Newly Bypassed Gates
+1. **Input Requirements**: Bypasses `port`, `port_or_declared_tcp_deny`, `port_or_declared_udp_deny`, every `declared_*` requirement, `origin_binding`, and `two_perspectives`. Every customer-runnable check reports `requires_additional_input: false` and is selectable, plannable, and scannable.
+2. **Hourly Safe-Run Cap**: The demo tenant's 1,000-runs-per-hour cap is dropped; demo tenants run uncapped by default (`demoMaxRunsPerHour(env)` defaults to `Infinity`). Optional explicit positive values in `ASTRANULL_DEMO_MAX_RUNS_PER_HOUR` remain respected (clamped to 5000).
+3. **Safe Test Windows**: Safe test window closures (`safe_window_closed`, `policy_safe_window_closed`, and scan dispatch denials) do not block demo tenants.
+4. **Minimum Interval**: Demo tenants bypass `min_seconds_between_runs` (forcing interval to 0). When a run occurs within the normal minimum interval that would otherwise block execution, `'min_interval'` is audited in `test_run.demo_gates_bypassed`.
+5. **Feature-Flag Routes**: Route-level feature gates and service-level adapters for WAF posture, connectors, and external discovery evaluate unified per-tenant feature access helpers (`wafPostureEnabledFor`, `connectorsEnabledFor`, `externalDiscoveryEnabledFor`, `protectionValidationEnabledFor` in `src/lib/tenantFeatureAccess.mjs`). Explicit demo tenants access all route families without 404 `*_feature_disabled`.
+6. **Deployment Features Alignment**: `GET /v1/tenant/deployment-features` (`getTenantDeploymentFeatures`) aligns directly to these per-tenant helpers so portal affordances match route authorization; `demo_tenant` reflects the explicit check (`isExplicitDemoTenant`).
+
+Every demo bypass that changes an outcome is audited with action `test_run.demo_gates_bypassed` and `metadata.bypassed: [...]` listing the bypassed gates (`input_requirement:<code>`, `hourly_cap`, `safe_window`, `min_interval`, `soc_gated`).
+
+### Explicit Tenant Scoping vs Wildcards
+Wildcards (`*` or `all` in `ASTRANULL_DEMO_AUTO_VERIFY_TENANTS`) only apply to original ownership, subscription, and auto-verify bypasses. All route-backed feature flags and execution bypasses (input requirements, hourly cap, safe windows, minimum interval, route feature gates, and SOC ungating) require explicit tenant IDs via `isExplicitDemoTenant(tenantId, env)` or matching the demo account (`admin@demo.astranull.local`, `Astra-D1TrtI4HMTSrwKRW-9`), and never return true for a wildcard. If a wildcard is configured, a startup warning is logged.
+
+### Gates Kept for Demo (Safety)
+- **SOC Gating**: Dropped for the demo account (`admin@demo.astranull.local`, `Astra-D1TrtI4HMTSrwKRW-9`, and explicit demo tenants). High-scale and SOC-gated checks are runnable, selectable, and plannable without SOC gate blocks, and high-scale / offensive workflows bypass multi-party SOC approval requirements. Bypassed SOC gating is recorded as `'soc_gated'` in `test_run.demo_gates_bypassed`. Non-demo tenants retain full SOC gating.
+- **Kill Switch**: Active kill switch halts all demo execution (`kill_switch_active`).
+- **Per-Check Safety Caps**: `max_events`, `max_requests`, and per-kind bounds are enforced.
+- **Concurrent Run Blocker**: `concurrent_run_blocked` still prevents overlapping runs on the same target.
+- **Tenant Suspension**: `tenant_suspended` lifecycle state halts execution.
+- **Destination Guard**: Origin lockdown address verification and destination boundaries cannot target arbitrary internal or unauthorized networks. Parity is maintained between check listing and start path.
+
+### Missing Input Handling (`required_input_missing`)
+When a customer-runnable check lacks genuine required input (e.g. no declared deny rules or no service port), the run is created and immediately finalized cleanly as:
+- `status: 'verdicted'`
+- `verdict: 'inconclusive'`
+- `explanation_reason: 'required_input_missing'`
+- `explanation`: Plain message naming the missing requirement (e.g. "No denied port is declared, so there was nothing to probe.")
+- `requests_sent: 0` (zero probe traffic sent; never errors).
+

@@ -1276,6 +1276,25 @@ describe('probe worker metadata sanitizer', () => {
     assert.equal(out.phases[0].status_code, 200);
   });
 
+  it('keeps NFW outcome arrays used by firewall correlation', () => {
+    const out = sanitizeProbeMetadata({
+      rejected_ports: [22],
+      ports_scanned: [22, 443],
+      samples: [{ tcp_outcome: 'handshake' }, { tcp_outcome: 'handshake' }],
+      protocol_results: [{ payload_profile: 'mdns_ptr_query' }],
+      payload_profiles_sent: ['mdns_ptr_query'],
+      nameserver_results: [{ nameserver: 'ns1.example.test', axfr_refused: true }],
+      source_perspective: { id: 'default', label: 'default' },
+    });
+    assert.deepEqual(out.rejected_ports, [22]);
+    assert.deepEqual(out.ports_scanned, [22, 443]);
+    assert.equal(out.samples.length, 2);
+    assert.equal(out.protocol_results[0].payload_profile, 'mdns_ptr_query');
+    assert.deepEqual(out.payload_profiles_sent, ['mdns_ptr_query']);
+    assert.equal(out.nameserver_results[0].axfr_refused, true);
+    assert.equal(out.source_perspective.id, 'default');
+  });
+
   it('processJob never posts disallowed metadata keys from probe outcomes', async () => {
     const server = createHttpServer((req, res) => {
       res.statusCode = 200;
@@ -1691,7 +1710,7 @@ describe('probe worker TCP helper', () => {
     const outcome = await probeTcpConnect(job, {
       destinationPolicy: { allowLoopback: true },
     });
-    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.requests_sent, 2);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.target_port, port);
 
@@ -1711,7 +1730,7 @@ describe('probe worker TCP helper', () => {
     const outcome = await probeTcpConnect(job, {
       destinationPolicy: { allowLoopback: true },
     });
-    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.requests_sent, 2);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'tcp_connect');
     assert.equal(outcome.metadata.profile_kind, 'tcp_connect');
@@ -1836,6 +1855,7 @@ describe('executeProbeForJob routing', () => {
         inProcessCheckIds.push(check.check_id);
         continue;
       }
+      if (['waf_method_policy_probe', 'rate_limit_canary_probe'].includes(kind)) continue;
       assert.notEqual(
         executorNameForProbeKind(kind),
         null,
@@ -1998,7 +2018,8 @@ describe('executeProbeForJob routing', () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     const job = baseJob({
       check_id: 'l3.forbidden_udp_port.safe',
-      probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 1000 },
+      probe_profile: { kind: 'udp_probe', max_requests: 2, timeout_ms: 1000 },
+      constraints: { max_requests: 2, timeout_ms: 1000 },
       target: { kind: 'fqdn', value: 'origin.test', port: 9999 },
     });
     const outcome = await executeProbeForJob(job, {

@@ -5,6 +5,8 @@ import {
   Search
 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
+import { NotTestedBadge } from '../components/runs/not-tested-note';
+import { requiredInputMissing } from '../lib/missing-input.mjs';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -1116,6 +1118,8 @@ export function ValidationSurfacePage({
         key: 'verdict',
         label: 'Verdict',
         render: (item) => {
+          const notTested = requiredInputMissing(item);
+          if (notTested) return <span className="catalog-cell-stack"><NotTestedBadge info={notTested} /><small>Nothing was sent</small></span>;
           const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? getRunVerdictValue(item) : '';
           if (!verdict) return <span className="muted">No result yet</span>;
           const verdictRecord = getNestedItem(item, ['verdict']);

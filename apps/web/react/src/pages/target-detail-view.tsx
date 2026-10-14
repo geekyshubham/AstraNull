@@ -25,6 +25,7 @@ import {
   issueOwnershipChallenge,
   patchTargetDeclaration,
   patchTargetTags,
+  fetchTargetOriginBindings,
   populateTargetDetail,
   verifyOwnershipChallenge,
   type DeclarationDraft,
@@ -33,9 +34,9 @@ import {
   type TargetDetailPayload,
 } from '../lib/target-detail-api';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/run-verdict';
-import { findingStatus, isFindingOpen } from '../lib/finding-lifecycle.mjs';
+import { findingStatus, fixVerifiedBasisHint, isFindingOpen } from '../lib/finding-lifecycle.mjs';
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
-import { addTargetTag, apiErrorCode, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
+import { addTargetTag, apiErrorCode, demoTenantSignal, edgeDetectionReasonExplanation, isActiveDnsChallenge, isTargetRunEligible, ownershipMethodLabel, ownershipStepStatus, removeTargetTag, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref, getRouteParam, replaceRouteParams } from '../lib/route-params';
 import type { AcceptedExecution, DataItem, PortalConfig, Session } from '../lib/types';
@@ -46,6 +47,8 @@ import { EmptyState } from '../components/ui/empty-state';
 import { emptyStateFromApi } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
+import { NotTestedBadge } from '../components/runs/not-tested-note';
+import { requiredInputMissing } from '../lib/missing-input.mjs';
 import { Tabs } from '../components/ui/tabs';
 import { Toast } from '../components/ui/toast';
 import { canStartRun } from '../lib/run-permissions.mjs';
@@ -66,11 +69,14 @@ import {
   originExposureStatus,
   providerFamilyRows,
   recommendedStarterRow,
-  wafCheckBlocking,
+  assessEdgeEfficacy,
+  wafRuleEnforcement,
+  customCanaryMembers,
   retainedCoveragePairs,
   assessmentChecks,
   targetCheckRequirement,
   individualChecks,
+  withTargetRunnableChecks,
   targetTabFromParam,
   validationScansPathForTarget,
   type CheckRow,
@@ -78,6 +84,10 @@ import {
   type TargetTab,
 } from '../lib/domain-checks.mjs';
 import { CheckQueue, ProviderObservations } from '../components/targets/domain-protection';
+import { ControlDeclarations, normalizePerspectives, type OriginRelationSummary, type ProbePerspective } from '../components/targets/control-declarations';
+import { RuleCoveragePanel } from '../components/rule-coverage/rule-coverage';
+import { checkPrerequisite, controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, targetRunnableIndex, type CheckPrerequisite } from '../lib/control-declarations.mjs';
+import { VERSION_GAP_COPY } from '../lib/probe-evidence.mjs';
 import { TargetChangesHistory } from '../components/targets/target-history';
 import { TargetSubdomains } from '../components/targets/target-subdomains';
 import { InitialEdgeStatus } from '../components/targets/initial-edge-status';
@@ -129,6 +139,7 @@ const PAIR_REASON_LABELS: Record<string, string> = {
   customer_declaration: 'Customer declaration',
   no_evidence: 'No evidence cited',
   not_finalized: 'Run not finalized',
+  ...VERSION_GAP_COPY,
 };
 
 const DIMENSION_LABELS: Record<string, string> = {
@@ -139,6 +150,17 @@ const DIMENSION_LABELS: Record<string, string> = {
   operations: 'Operations',
   other: 'Other',
 };
+
+const DIMENSION_NOT_ASSESSABLE: Record<string, string> = {
+  application: 'No check that can pass or fail fits this target kind.',
+  origin: 'Declare an origin binding and origin lockdown first; until then direct reachability is recorded, not scored.',
+  network: 'Network checks can only report a violation of a rule you declared, never a pass, so none is scored here.',
+  dns: 'No DNS check that can pass or fail fits this target kind.',
+  operations: 'Operational readiness is declared, not probed.',
+  other: 'Nothing here can be scored from outside-in evidence.',
+};
+
+type DeclarationsLoad = { scope: string; status: 'loading' | 'ready' | 'error'; doc: DataItem | null; error: string };
 
 const ROLE_LABELS: Record<string, string> = { website: 'Website', api: 'API', login: 'Login', dns: 'DNS service', network: 'Network endpoint' };
 
@@ -418,6 +440,7 @@ export function TargetDetailView({
   checks,
   wafEdgeEnabled = false,
   protectionValidationEnabled = false,
+  deploymentFeatures = null,
   onRefresh,
 }: {
   entityId: string;
@@ -428,6 +451,8 @@ export function TargetDetailView({
   wafEdgeEnabled?: boolean;
   /** Tenant deployment feature `protection_validation`; entry-path and firewall change routes 404 without it. */
   protectionValidationEnabled?: boolean;
+  /** Tenant deployment features as served; a `demo_tenant` flag lets demo tenants follow the server's runnability answer. */
+  deploymentFeatures?: DataItem | null;
   onRefresh: () => Promise<void>;
 }) {
   const executionScope = `${sessionIdentity(session)}|${entityId}`;
@@ -460,6 +485,12 @@ export function TargetDetailView({
   const [ownershipError, setOwnershipError] = useState('');
   const [runSelection, setRunSelection] = useState<string[]>([]);
   const [clock, setClock] = useState(() => Date.now());
+  const [declarationsLoad, setDeclarationsLoad] = useState<DeclarationsLoad>({ scope: '', status: 'loading', doc: null, error: '' });
+  const [perspectives, setPerspectives] = useState<ProbePerspective[]>([]);
+  const [perspectivesError, setPerspectivesError] = useState('');
+  const [controlsReload, setControlsReload] = useState(0);
+  const [coverageReload, setCoverageReload] = useState(0);
+  const controlsDirtyRef = useRef(false);
   const edgeRetriesRef = useRef(0);
   const loadGeneration = useRef(0);
   const openInspector = useOpenInspector();
@@ -504,9 +535,12 @@ export function TargetDetailView({
   }, []);
 
   const setTab = useCallback((next: TargetTab) => {
+    if (controlsDirtyRef.current && next !== 'controls' && !window.confirm('You have unsaved control declarations. Leave without saving?')) return;
+    if (next !== 'controls') controlsDirtyRef.current = false;
     setTabState(next);
-    replaceRouteParams({ tab: next === 'overview' ? null : next });
+    replaceRouteParams({ tab: next === 'overview' ? null : next, section: null });
   }, []);
+  const onControlsDirty = useCallback((dirty: boolean) => { controlsDirtyRef.current = dirty; }, []);
 
   const selectCheck = useCallback((checkId: string) => {
     setSelectedCheckId(checkId);
@@ -549,9 +583,19 @@ export function TargetDetailView({
   const declaration = detail?.declaration ?? null;
   const declared = declarationSummary(declaration);
 
-  const runAll = useMemo(() => (target ? assessmentChecks(checks, target) as DataItem[] : []), [checks, target]);
-  const remainingCatalog = useMemo(() => (fullCatalog ?? []).filter((check) => targetCheckRequirement(check, target)), [fullCatalog, target]);
-  const selectableChecks = useMemo(() => target ? individualChecks(checks, target) as DataItem[] : [], [checks, target]);
+  const declarationsDoc = declarationsLoad.scope === executionScope && declarationsLoad.status === 'ready' ? declarationsLoad.doc : null;
+  const serverRunnableIndex = useMemo(() => targetRunnableIndex(fullCatalog), [fullCatalog]);
+  const demoTenant = demoTenantSignal({ verification, deploymentFeatures });
+  const prerequisiteContext = useMemo(() => ({
+    declarations: declarationsDoc ?? undefined,
+    perspectiveCount: perspectives.length,
+    serverRunnableIndex,
+    serverSuppliesInput: demoTenant,
+  }), [declarationsDoc, perspectives.length, serverRunnableIndex, demoTenant]);
+  const targetChecks = useMemo(() => withTargetRunnableChecks(checks, fullCatalog, { serverSuppliesInput: demoTenant }), [checks, fullCatalog, demoTenant]);
+  const runAll = useMemo(() => (target ? assessmentChecks(targetChecks, target, prerequisiteContext) as DataItem[] : []), [targetChecks, target, prerequisiteContext]);
+  const remainingCatalog = useMemo(() => (fullCatalog ?? []).filter((check) => targetCheckRequirement(check, target, prerequisiteContext)), [fullCatalog, target, prerequisiteContext]);
+  const selectableChecks = useMemo(() => target ? individualChecks(targetChecks, target, prerequisiteContext) as DataItem[] : [], [targetChecks, target, prerequisiteContext]);
   const scopedAcceptedRun = acceptedRun?.scope === executionScope ? acceptedRun : null;
   const checkRows = useMemo(() => {
     const rows = buildCheckRows({ checks: selectableChecks, scan, runs: targetRuns }) as CheckRow[];
@@ -562,14 +606,17 @@ export function TargetDetailView({
     return exact ? rows.map((row) => row.checkId === exact.checkId ? exact : row) : rows;
   }, [selectableChecks, scan, targetRuns, scopedAcceptedRun]);
   const rowCounts = useMemo(() => countRowStatuses(checkRows) as Record<string, number>, [checkRows]);
-  const wafBlocking = useMemo(() => wafCheckBlocking(checkRows), [checkRows]);
-  const recommendedRow = useMemo(() => recommendedStarterRow(checkRows), [checkRows]);
+  const prerequisites = useMemo(() => Object.fromEntries(selectableChecks.map((check) => [
+    getString(check, ['check_id'], ''),
+    checkPrerequisite(check, { ...prerequisiteContext, target }),
+  ])) as Record<string, CheckPrerequisite>, [selectableChecks, prerequisiteContext, target]);
+  const recommendedRow = useMemo(() => recommendedStarterRow(checkRows.filter((row) => prerequisites[row.checkId]?.state === 'ready')), [checkRows, prerequisites]);
   const effectiveSelectedCheckId = checkRows.some((row) => row.checkId === selectedCheckId) ? selectedCheckId : '';
   const selectedCheckMissing = Boolean(selectedCheckId) && !effectiveSelectedCheckId && checkRows.length > 0;
   const selectedRow = checkRows.find((row) => row.checkId === effectiveSelectedCheckId) ?? null;
   const checkNameById = useMemo(
-    () => new Map(checks.map((check) => [getString(check, ['check_id', 'id'], ''), plainCheckName(getString(check, ['name', 'title'], ''))])),
-    [checks],
+    () => new Map(targetChecks.map((check) => [getString(check, ['check_id', 'id'], ''), plainCheckName(getString(check, ['name', 'title'], ''))])),
+    [targetChecks],
   );
   const displayCheckName = (checkId: string) => checkNameById.get(checkId) || checkId || 'Unnamed check';
 
@@ -650,16 +697,59 @@ export function TargetDetailView({
     edgeRetriesRef.current = 0;
   }, [executionScope]);
 
+  const declarationsRevision = declarationsDoc ? Number(declarationsDoc.revision ?? 0) : -1;
   useEffect(() => {
+    if (!entityId) return undefined;
     let stopped = false;
-    setFullCatalog(null); setCatalogError('');
-    void requestJson(config, session, '/v1/checks?scope=all').then((payload) => {
+    setCatalogError('');
+    void requestJson(config, session, `/v1/checks?scope=all&target_id=${encodeURIComponent(entityId)}`).then((payload) => {
       if (!stopped && Array.isArray((payload as DataItem).items)) setFullCatalog((payload as DataItem).items as DataItem[]);
-    }).catch((err) => { if (!stopped) setCatalogError(apiErrorMessage(err, 'The full check catalog could not load.')); });
+    }).catch((err) => { if (!stopped) { setFullCatalog(null); setCatalogError(apiErrorMessage(err, 'The full check catalog could not load.')); } });
     return () => { stopped = true; };
-  }, [config, session]);
+  }, [config, session, entityId, declarationsRevision]);
+  useEffect(() => { setFullCatalog(null); }, [executionScope]);
 
   useEffect(() => { void loadTargetActivity(); }, [loadTargetActivity]);
+
+  useEffect(() => {
+    if (!entityId) return undefined;
+    let stopped = false;
+    const scope = executionScope;
+    setDeclarationsLoad((current) => ({ scope, status: current.scope === scope && current.status === 'ready' ? 'ready' : 'loading', doc: current.scope === scope ? current.doc : null, error: '' }));
+    requestJson(config, session, `/v1/targets/${encodeURIComponent(entityId)}/control-declarations`)
+      .then((payload) => { if (!stopped) setDeclarationsLoad({ scope, status: 'ready', doc: asDataItem(payload) ?? { version: 1 }, error: '' }); })
+      .catch((err) => { if (!stopped) setDeclarationsLoad({ scope, status: 'error', doc: null, error: apiErrorMessage(err, 'Control declarations could not load.') }); });
+    requestJson(config, session, '/v1/probe-perspectives')
+      .then((payload) => { if (!stopped) { setPerspectives(normalizePerspectives(payload)); setPerspectivesError(''); } })
+      .catch((err) => { if (!stopped) { setPerspectives([]); setPerspectivesError(apiErrorMessage(err, 'Probe perspectives could not load.')); } });
+    return () => { stopped = true; };
+  }, [config, session, entityId, executionScope, controlsReload]);
+
+  const [originRelations, setOriginRelations] = useState<OriginRelationSummary>({ state: 'loading', active: 0 });
+  useEffect(() => {
+    if (!entityId || tab !== 'controls') return undefined;
+    const controller = new AbortController();
+    setOriginRelations({ state: 'loading', active: 0 });
+    void fetchTargetOriginBindings(config, session, entityId, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
+      if (result.state !== 'ready') { setOriginRelations({ state: 'unavailable', active: 0 }); return; }
+      const active = result.items.filter((item) => getString(item, ['status'], '') === 'active' && getString(item, ['protected_target_id'], '') === entityId).length;
+      setOriginRelations({ state: 'ready', active });
+    });
+    return () => controller.abort();
+  }, [config, session, entityId, tab, controlsReload]);
+
+  const overviewSection = tab === 'overview' ? getRouteParam('section') : '';
+  useEffect(() => {
+    if (overviewSection !== 'origin-relations') return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const heading = document.getElementById('td-origin-relations-title');
+      if (!heading) return;
+      heading.scrollIntoView({ block: 'start' });
+      heading.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [overviewSection, target]);
 
   useEffect(() => {
     if (scanActive || !activeStandalone) return undefined;
@@ -836,13 +926,16 @@ export function TargetDetailView({
     : activeStandalone
       ? `${activeStandaloneName} is running on this target. Wait for it to finish or stop it before starting another check.`
       : '';
+  const startPrerequisite = startCheckId ? prerequisites[startCheckId] : undefined;
   const singleDisabledReason = !canStartBoundedRun
     ? 'Your role can inspect evidence but cannot start checks.'
     : !targetEligible
       ? OWNERSHIP_LOCKED_REASON
       : !startCheckId
         ? 'Select a check in the list first.'
-        : reviewSlotReason;
+        : startPrerequisite && startPrerequisite.state !== 'ready'
+          ? startPrerequisite.detail
+          : reviewSlotReason;
 
   async function startScan(checkIds: string[], name: string, submittedScope: string) {
     const current = () => scopeRef.current === submittedScope;
@@ -1243,6 +1336,8 @@ export function TargetDetailView({
     .filter((finding) => isFindingOpen(finding))
     .sort((left, right) => (SEVERITY_RANK[getString(right, ['severity'], '').toLowerCase()] ?? 0) - (SEVERITY_RANK[getString(left, ['severity'], '').toLowerCase()] ?? 0));
   const topFinding = openFindings[0] ?? null;
+  const acceptedRiskCount = findings.filter((finding) => ['accepted_risk', 'accepted'].includes(findingStatus(finding))).length;
+  const fixVerifiedCount = findings.filter((finding) => findingStatus(finding) === 'fix_verified').length;
   const recordedResults = (rowCounts.passed ?? 0) + (rowCounts.failed ?? 0) + (rowCounts.inconclusive ?? 0) + (rowCounts.observed ?? 0);
   const coverage = detail.coverage ?? null;
   const coveragePairs = Array.isArray(coverage?.pairs) ? (coverage!.pairs as DataItem[]).filter((pair) => pair && typeof pair === 'object') : [];
@@ -1251,6 +1346,9 @@ export function TargetDetailView({
     getString(pair, ['check_id'], ''),
     (PAIR_REASON_LABELS[getString(pair, ['pair_reason'], '')] ?? formatLabel(getString(pair, ['pair_reason'], 'not_recorded'))).toLowerCase(),
   ]));
+  const efficacy = assessEdgeEfficacy({ rows: checkRows, edge: edgeDetection, coverage, nowMs: clock });
+  const wafRules = wafRuleEnforcement(checkRows, { coverage, nowMs: clock });
+  const canaryMembers = customCanaryMembers(coverage, { checks: checkRows });
   const dimensions = Array.isArray(detail.protection_profile?.dimensions)
     ? (detail.protection_profile!.dimensions as DataItem[]).filter((row) => row && typeof row === 'object')
     : [];
@@ -1399,11 +1497,13 @@ export function TargetDetailView({
                 <tbody>
                   {dimensions.map((dimension) => {
                     const applicableCount = Number(dimension.applicable_count);
+                    const dimensionId = getString(dimension, ['id'], '');
+                    const notAssessableReason = getString(dimension, ['not_assessable_reason', 'reason'], '') || DIMENSION_NOT_ASSESSABLE[dimensionId] || DIMENSION_NOT_ASSESSABLE.other;
                     return (
-                      <tr key={getString(dimension, ['id'], '')}>
-                        <th scope="row">{DIMENSION_LABELS[getString(dimension, ['id'], '')] ?? formatLabel(getString(dimension, ['id'], ''))}</th>
-                        <td>{applicableCount > 0 ? formatLabel(getString(dimension, ['status'], 'not_recorded')) : 'Not applicable'}</td>
-                        <td className="tabular-nums">{applicableCount > 0 ? `${dimension.evaluated_count ?? 0} of ${applicableCount}` : '0 of 0'}</td>
+                      <tr key={dimensionId}>
+                        <th scope="row">{DIMENSION_LABELS[dimensionId] ?? formatLabel(dimensionId)}</th>
+                        <td>{applicableCount > 0 ? formatLabel(getString(dimension, ['status'], 'not_recorded')) : <span className="td-not-assessable"><strong>Not assessable</strong><small>{notAssessableReason}</small></span>}</td>
+                        <td className="tabular-nums">{applicableCount > 0 ? `${dimension.evaluated_count ?? 0} of ${applicableCount}` : 'None scored'}</td>
                         <td className="tabular-nums">{String(dimension.conclusive_count ?? 'Not recorded')}</td>
                         <td className="tabular-nums">{String(dimension.not_run_count ?? 'Not recorded')}</td>
                         <td className="tabular-nums">{dimension.unknown_count === undefined && dimension.partial_count === undefined ? 'Not recorded' : `${dimension.unknown_count ?? 0} / ${dimension.partial_count ?? 0}`}</td>
@@ -1484,6 +1584,8 @@ export function TargetDetailView({
       return <Badge tone={runOutcomeTone(value)} title="Recorded run lifecycle">{formatLabel(value)}</Badge>;
     } },
     { key: 'verdict', label: 'Result', render: (item) => {
+      const notTested = requiredInputMissing(item);
+      if (notTested) return <NotTestedBadge info={notTested} />;
       const value = recentRunVerdict(item);
       const evidenceCount = Array.isArray(item.evidence_ids) ? item.evidence_ids.length : 0;
       return value
@@ -1554,7 +1656,16 @@ export function TargetDetailView({
     {
       key: 'state',
       label: 'Lifecycle',
-      render: (item) => formatLabel(item.state || 'open'),
+      render: (item) => {
+        const state = (item.state || 'open').toLowerCase();
+        if (state === 'fix_verified') {
+          const basis = fixVerifiedBasisHint(item.representative);
+          const badge = <Badge tone="success" title="A later passing check confirmed the fix">Fix verified</Badge>;
+          return basis ? <span className="td-finding-cell-stack">{badge}<small className="td-muted td-basis-hint">{basis}</small></span> : badge;
+        }
+        if (state === 'accepted_risk' || state === 'accepted') return <Badge tone="muted" title="Shown separately; not counted as open risk">Accepted risk</Badge>;
+        return formatLabel(state);
+      },
     },
     {
       key: 'opened',
@@ -1621,6 +1732,8 @@ export function TargetDetailView({
     { id: 'overview' as const, label: 'Overview' },
     { id: 'validate' as const, label: 'Validate', count: checkRows.length },
     { id: 'findings' as const, label: 'Findings', count: openFindings.length },
+    { id: 'controls' as const, label: 'Controls' },
+    { id: 'coverage' as const, label: 'Rule coverage' },
     ...(kind === 'fqdn' ? [{ id: 'subdomains' as const, label: 'Subdomains' }] : []),
     { id: 'history' as const, label: 'Changes & history' },
   ];
@@ -1676,6 +1789,38 @@ export function TargetDetailView({
       />
 
       <div className="td-panel" role="tabpanel" id={`td-panel-${tab}`} aria-labelledby={`td-tab-${tab}`}>
+        {tab === 'controls' && target ? (
+          <ControlDeclarations
+            config={config}
+            session={session}
+            target={target}
+            canWrite={canWrite}
+            declarations={declarationsDoc}
+            loadState={declarationsLoad.scope === executionScope ? declarationsLoad.status : 'loading'}
+            loadError={declarationsLoad.error}
+            perspectives={perspectives}
+            perspectivesError={perspectivesError}
+            focusSection={getRouteParam('section')}
+            originRelations={originRelations}
+            originRelationsHref={`#target-detail?${new URLSearchParams({ id: entityId, tab: 'overview', section: 'origin-relations' }).toString()}`}
+            onReload={() => setControlsReload((value) => value + 1)}
+            onSaved={(next) => {
+              setDeclarationsLoad({ scope: executionScope, status: 'ready', doc: next, error: '' });
+              setCoverageReload((value) => value + 1);
+              setBanner('Control declarations saved and recorded in the audit log.');
+            }}
+            onLatest={(latest) => {
+              setDeclarationsLoad({ scope: executionScope, status: 'ready', doc: latest, error: '' });
+              setCoverageReload((value) => value + 1);
+            }}
+            onDirtyChange={onControlsDirty}
+          />
+        ) : null}
+        {tab === 'coverage' && target ? (
+          <div className="td-rule-coverage">
+            <RuleCoveragePanel config={config} session={session} targetId={entityId} canWrite={canWrite} reloadKey={coverageReload} />
+          </div>
+        ) : null}
         {tab === 'subdomains' && target ? (
           <TargetSubdomains key={entityId} target={target} config={config} session={session} canWrite={canWrite} canStart={canStartBoundedRun} />
         ) : null}
@@ -1691,7 +1836,10 @@ export function TargetDetailView({
               note={edgeNote()}
               action={detectAction}
               onInspect={inspectProvider}
-              checkBlocking={wafBlocking}
+              efficacy={efficacy}
+              wafRules={wafRules}
+              canaryMembers={canaryMembers}
+              checkName={displayCheckName}
               onOpenChecks={() => setTab('validate')}
             />
             {renderCoverage()}
@@ -1779,16 +1927,27 @@ export function TargetDetailView({
               runSelection={selectedRunIds}
               onRunSelectionChange={setRunSelection}
               liveNotes={liveNotes}
+              prerequisites={prerequisites}
+              targetId={entityId}
               footer={<>
                 {catalogError ? <p role="alert">{catalogError}</p> : null}
                 {remainingCatalog.length ? <details className="td-retained td-catalog-requirements">
                   <summary>{remainingCatalog.length} catalog checks not runnable on this target · requirements</summary>
                   <p>Every catalog check is listed here or in the runnable list above. Required setup never counts as passed protection.</p>
-                  <ul>{remainingCatalog.map((check) => <li key={getString(check, ['check_id'], '')}>
-                    <strong>{getString(check, ['name'], '')}</strong> <code>{getString(check, ['check_id'], '')}</code>
-                    <p>{targetCheckRequirement(check, target)}</p>
+                  <ul>{remainingCatalog.map((check) => {
+                    const prerequisite = checkPrerequisite(check, { ...prerequisiteContext, target });
+                    const section = prerequisiteSection(prerequisite);
+                    return <li key={getString(check, ['check_id'], '')}>
+                    <span className="td-requirement-row">
+                      <strong>{getString(check, ['name'], '')}</strong> <code>{getString(check, ['check_id'], '')}</code>
+                      {prerequisite.state !== 'ready' ? <Badge tone={prerequisiteTone(prerequisite)}>{prerequisite.label}</Badge> : null}
+                    </span>
+                    <p>{targetCheckRequirement(check, target, prerequisiteContext)}</p>
+                    {prerequisite.state === 'soc_only' ? <p><a className="td-inline-link" href="#support">Request it through AstraNull SOC</a></p> : null}
+                    {section ? <p><a className="td-inline-link" href={controlsHref(entityId, section)}>{prerequisiteCta(prerequisite)}</a></p> : null}
                     {Array.isArray(check.required_customer_setup) && check.required_customer_setup.length ? <p className="td-muted">Required setup: {(check.required_customer_setup as string[]).map((value) => formatLabel(value)).join(', ')}</p> : null}
-                  </li>)}</ul>
+                  </li>;
+                  })}</ul>
                   <Button size="sm" variant="secondary" onClick={() => setTab('overview')}>Declare origin and entry paths</Button>
                 </details> : null}
               </>}
@@ -1809,7 +1968,7 @@ export function TargetDetailView({
                 {!ownershipDone ? <Button size="sm" variant="ghost" onClick={() => focusOwnership('td-validate-ownership')}>Go to ownership step</Button> : null}
                 <Button
                   data-focus-key={multiSelected ? 'check-start-selected' : `check-start-${startCheckId}`}
-                  disabled={!targetEligible || (!multiSelected && !startCheckId) || busy !== '' || scanActive}
+                  disabled={!targetEligible || (!multiSelected && !startCheckId) || busy !== '' || scanActive || (!multiSelected && Boolean(startPrerequisite && startPrerequisite.state !== 'ready'))}
                   aria-describedby={startReason ? 'td-start-reason' : undefined}
                   onClick={() => setReview(multiSelected ? { mode: 'selected', checkIds: selectedRunIds } : { mode: 'single', checkId: startCheckId })}
                 >
@@ -1833,6 +1992,12 @@ export function TargetDetailView({
                     : ''}{' '}
                   Each opens the full detection history and evidence.
                 </p>
+                {acceptedRiskCount || fixVerifiedCount ? (
+                  <div className="td-findings-split" aria-label="Findings outside open risk">
+                    {acceptedRiskCount ? <Badge tone="muted" title="Risk formally accepted; shown separately and not counted as open risk">{`${acceptedRiskCount} accepted risk · not open risk`}</Badge> : null}
+                    {fixVerifiedCount ? <Badge tone="success" title="A later passing check with the same scope and check version confirmed the fix">{`${fixVerifiedCount} fix verified`}</Badge> : null}
+                  </div>
+                ) : null}
               </div>
             </header>
             <DataTable

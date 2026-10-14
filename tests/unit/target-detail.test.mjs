@@ -247,9 +247,10 @@ describe('target-detail React contract', () => {
 
   it('blocks a single or recommended check while another check holds the execution slot', () => {
     assert.match(DETAIL_SOURCE, /is running on this target\. Wait for it to finish or stop it before starting another check\./);
-    assert.match(DETAIL_SOURCE, /: !startCheckId\s*\? 'Select a check in the list first\.'\s*: reviewSlotReason;/);
+    assert.match(DETAIL_SOURCE, /: !startCheckId\s*\? 'Select a check in the list first\.'\s*: startPrerequisite && startPrerequisite\.state !== 'ready'\s*\? startPrerequisite\.detail\s*: reviewSlotReason;/);
     assert.match(DETAIL_SOURCE, /if \(!ownershipDone\) \{ setReview\(null\); return; \}\s*if \(scanActive \|\| activeStandalone\) \{ setReview\(null\); return; \}\s*if \(review\.mode === 'single'\)/);
     assert.match(DETAIL_SOURCE, /recommendedRow=\{activeStandalone \? null : recommendedRow\}/);
+    assert.match(DETAIL_SOURCE, /recommendedStarterRow\(checkRows\.filter\(\(row\) => prerequisites\[row\.checkId\]\?\.state === 'ready'\)\)/);
     assert.match(DETAIL_SOURCE, /reviewSlotReason \? <p className="td-form-error" role="alert">\{reviewSlotReason\}<\/p>/);
     assert.match(QUEUE_SOURCE, /canRun && !scanActive && !runAllBlockedReason \? \(/);
   });

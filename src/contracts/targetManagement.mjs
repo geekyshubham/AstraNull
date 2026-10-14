@@ -40,6 +40,9 @@ const RESERVED_METADATA_KEYS = new Set([
   // Typed declaration is its own column. Metadata must not set or grant it.
   'declaration',
   'declaration_json',
+  // Typed per-target control declarations (ADR-0028). Written only through
+  // PUT /v1/targets/:id/control-declarations; free-form metadata cannot set it.
+  'control_declarations',
 ]);
 
 function normalizedKey(value) {
@@ -237,7 +240,16 @@ export function normalizeTargetInput(input, { current = null } = {}) {
   // client blob cannot spoof them). Drop the key entirely when there are no tags.
   const metadata = { ...sanitized.metadata };
   delete metadata.tags;
+  delete metadata.control_declarations;
   if (tags.length > 0) metadata.tags = tags;
+  // Typed control declarations survive a metadata-only patch; only the dedicated API writes them.
+  const currentMeta = current?.metadata ?? current?.metadata_json;
+  const storedDeclarations = currentMeta && typeof currentMeta === 'object'
+    ? currentMeta.control_declarations
+    : undefined;
+  if (storedDeclarations && typeof storedDeclarations === 'object' && !Array.isArray(storedDeclarations)) {
+    metadata.control_declarations = storedDeclarations;
+  }
   return {
     kind,
     value,

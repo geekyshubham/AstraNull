@@ -11,14 +11,36 @@
 
 import { BENIGN_CLASS_MARKERS } from '../inertWafMarkers.mjs';
 import {
-  isBlockedOrChallenged,
   markerBaselineHealth,
   markerDenialSignature,
   markerResponseSnapshot,
   readSignatureBody,
 } from '../outsideInWafScanner.mjs';
-import { CANARY_ECHO_RESPONSE_HEADER, CANARY_NONCE_REQUEST_HEADER } from '../externalObservationOutcomes.mjs';
+import {
+  CANARY_ECHO_RESPONSE_HEADER,
+  CANARY_NONCE_REQUEST_HEADER,
+  WAF_GRADING_VERSION,
+  SIGNATURE_CORPUS_VERSION,
+} from '../externalObservationOutcomes.mjs';
 import { blockedBaselinePrerequisite } from './evasionProbes.mjs';
+import {
+  applyCacheBuster,
+  deriveRunNonce,
+  enforcementFromGraded,
+  expectedWafActionOf,
+  extractSignatureBasis,
+  gradeMarkerSnapshot,
+  gradingMeta,
+  isGradedLeg,
+  postureFromEnforcement,
+  redactedResponseFeature,
+  resolveClassMarkerPaths,
+  shuffleWithRng,
+  suspectedVendorSummary,
+  urlWithPath,
+  withSuspectedSignature,
+  worstEnforcement,
+} from './wafProbeSupport.mjs';
 
 export const WAF_CLASS_MARKER_PROBE_KIND = 'waf_class_marker_probe';
 
@@ -64,10 +86,23 @@ export const WAF_CLASS_MARKERS = Object.freeze({
   http_method_policy: 'astranull-method-policy-probe-TRACK-inert',
   session_marker: 'astranull-session-probe-inert',
   cors_marker: 'astranull-cors-marker-inert',
+  scanner_user_agent: 'sqlmap/1.8 (astranull-inert)',
 });
 
 /** Marker classes this probe kind understands. */
 export const WAF_MARKER_CLASSES = Object.freeze(Object.keys(WAF_CLASS_MARKERS));
+
+const MANAGED_RULE_MARKER_CLASSES = Object.freeze(['sqli', 'xss', 'path_traversal', 'scanner_user_agent']);
+const MARKER_PLACEMENTS = Object.freeze(['query', 'path', 'header']);
+const SCANNER_USER_AGENT_PLACEMENTS = Object.freeze(['user_agent']);
+
+function placementsForClass(markerClass) {
+  return markerClass === 'scanner_user_agent' ? SCANNER_USER_AGENT_PLACEMENTS : MARKER_PLACEMENTS;
+}
+
+export function assuranceScopeForMarkerClass(markerClass) {
+  return MANAGED_RULE_MARKER_CLASSES.includes(markerClass) ? 'managed_rule_marker' : 'custom_canary_rule';
+}
 
 /** Subset that maps to gradeable outside-in E3 checks (see waf-class.manifest.mjs). */
 export const WAF_E3_MARKER_CLASSES = Object.freeze([
@@ -164,10 +199,121 @@ function buildProbeUrl(baseUrl, markerClass, marker, placement) {
   return url.href;
 }
 
+function placementRow(placement, snapshot, baseline) {
+  const verdict = gradeMarkerSnapshot(snapshot, baseline);
+  return {
+    placement,
+    phase: `${placement}_marker`,
+    outcome: verdict.outcome,
+    status_code: snapshot.status_code,
+    signature_id: verdict.denial_signature?.id ?? null,
+    cache_status: snapshot.cache_status ?? verdict.cache_status ?? null,
+    location_changed: verdict.location_changed === true,
+    ...verdict,
+  };
+}
+
+function placementProjection(row) {
+  return {
+    placement: row.placement,
+    outcome: row.outcome,
+    status_code: row.status_code,
+    signature_id: row.signature_id ?? null,
+    cache_status: row.cache_status ?? null,
+    location_changed: row.location_changed === true,
+    ...(row.inconclusive_reason ? { inconclusive_reason: row.inconclusive_reason } : {}),
+    ...(row.matched_vendor ? { matched_vendor: row.matched_vendor } : {}),
+  };
+}
+
+function featureFromSnapshot(placement, snapshot, signatureId, path = null, graded = null) {
+  const rowVerdict = graded ?? snapshot;
+  const basis = extractSignatureBasis(snapshot, rowVerdict);
+  return redactedResponseFeature({
+    placement,
+    status_code: snapshot?.status_code,
+    signature_id: signatureId,
+    headerGet: snapshot?._headerGet,
+    body_bytes: snapshot?.body_bytes ?? 0,
+    path,
+    signature_basis: basis,
+    location_changed: rowVerdict?.location_changed === true,
+    redirected: rowVerdict?.redirected === true || rowVerdict?.outcome === 'redirected',
+  });
+}
+
+async function runClassMarkerPath({
+  pathUrl, markerClass, marker, fetchFn, timeoutMs, declared, maxRequests, requestsSent,
+  rng, runNonce, seq,
+}) {
+  const phases = [];
+  const features = [];
+  const grade = async (requestUrl, headers, label) => {
+    const busted = applyCacheBuster(requestUrl, runNonce, seq.value += 1);
+    const snapshot = await fetchGrade(fetchFn, busted, headers, timeoutMs, 'GET', null, declared);
+    phases.push({ phase: label, status_code: snapshot.status_code, path: new URL(pathUrl).pathname });
+    return snapshot;
+  };
+
+  const baseline = await grade(pathUrl, { ...DEFAULT_HEADERS }, 'baseline');
+  let used = 1;
+  if (baseline.transport_error) {
+    return { baseline, markerResults: [], trailingControl: null, sourcePenalized: false, legOrder: [],
+      phases, features, used, declaredMatchesBaseline: false, transportError: true };
+  }
+  const declaredMatchesBaseline = Boolean(declared && baseline.denial_signature?.kind === 'declared');
+  if (declaredMatchesBaseline) {
+    return { baseline, markerResults: [], trailingControl: null, sourcePenalized: false, legOrder: [],
+      phases, features: [featureFromSnapshot('baseline', baseline, baseline.denial_signature?.id, new URL(pathUrl).pathname)], used, declaredMatchesBaseline: true, transportError: false };
+  }
+  features.push(featureFromSnapshot('baseline', baseline, baseline?.denial_signature?.id, new URL(pathUrl).pathname));
+
+  const remaining = maxRequests - requestsSent - used;
+  const canCompleteSequence = remaining >= 2;
+  const markerBudget = canCompleteSequence ? remaining - 1 : 0;
+  const order = shuffleWithRng(placementsForClass(markerClass), rng).slice(0, markerBudget);
+  const markerResults = [];
+  for (const placement of order) {
+    const headers = {
+      ...DEFAULT_HEADERS,
+      ...(placement === 'header' ? { 'x-astranull-marker': marker } : {}),
+      ...(placement === 'user_agent' ? { 'user-agent': marker } : {}),
+    };
+    const requestUrl = placement === 'query' || placement === 'path'
+      ? buildProbeUrl(pathUrl, markerClass, marker, placement)
+      : pathUrl;
+    const snapshot = await grade(requestUrl, headers, `${placement}_marker`);
+    used += 1;
+    const row = placementRow(placement, snapshot, baseline);
+    markerResults.push(row);
+    features.push(featureFromSnapshot(placement, snapshot, row.signature_id, new URL(pathUrl).pathname, row));
+    if (snapshot.transport_error) {
+      return { baseline, markerResults, trailingControl: null, sourcePenalized: false, legOrder: order,
+        phases, features, used, declaredMatchesBaseline: false, transportError: true };
+    }
+  }
+
+  let trailingControl = null;
+  let sourcePenalized = false;
+  if (order.length > 0 && requestsSent + used < maxRequests) {
+    const snapshot = await grade(pathUrl, { ...DEFAULT_HEADERS }, 'trailing_control');
+    used += 1;
+    const graded = gradeMarkerSnapshot(snapshot, baseline);
+    trailingControl = { outcome: graded.outcome, status_code: snapshot.status_code };
+    sourcePenalized = graded.allowed !== true;
+    features.push(featureFromSnapshot('trailing_control', snapshot, graded.denial_signature?.id ?? null, new URL(pathUrl).pathname, graded));
+  }
+
+  return {
+    baseline, markerResults, trailingControl, sourcePenalized, legOrder: order,
+    phases, features, used, declaredMatchesBaseline: false, transportError: false,
+  };
+}
+
 /**
  * Run a bounded marker probe: one baseline request, then the marker placed in a
  * query parameter, path segment, and a benign header — capped at 8 requests total,
- * grading each with the shared isBlockedOrChallenged logic. Network access is fully
+ * grading each with the shared gradeMarkerSnapshot logic. Network access is fully
  * injectable via `fetchFn`; no real socket is opened in tests.
  */
 export async function runWafClassMarkerProbe(options = {}) {
@@ -198,61 +344,123 @@ export async function runWafClassMarkerProbe(options = {}) {
     WAF_CLASS_PROBE_MAX_REQUESTS,
   );
   const declared = options.declared_block_signature ?? null;
-  const grade = (requestUrl, headers) => fetchGrade(fetchFn, requestUrl, headers, timeoutMs, 'GET', null, declared);
-  const placements = [
-    { phase: 'baseline', request: () => grade(url, { ...DEFAULT_HEADERS }) },
-    { phase: 'query_marker', request: () => grade(buildProbeUrl(url, markerClass, marker, 'query'), { ...DEFAULT_HEADERS }) },
-    { phase: 'path_marker', request: () => grade(buildProbeUrl(url, markerClass, marker, 'path'), { ...DEFAULT_HEADERS }) },
-    { phase: 'header_marker', request: () => grade(url, { ...DEFAULT_HEADERS, 'x-astranull-marker': marker }) },
-  ];
+  const expectedAction = expectedWafActionOf(options);
+  const rng = typeof options.rng === 'function' ? options.rng : Math.random;
+  const runNonce = deriveRunNonce(options.nonce ?? options.run_nonce);
+  const seq = { value: 0 };
+  const allPaths = resolveClassMarkerPaths(url, options);
+  const minPerPath = 3;
+  const affordable = Math.max(1, Math.floor(maxRequests / minPerPath));
+  const paths = allPaths.slice(0, affordable);
+  let pathsSkipped = Math.max(0, allPaths.length - paths.length);
 
   const phases = [];
-  const markerResults = [];
+  const pathResults = [];
+  const responseFeatures = [];
+  const combinedPlacements = [];
   let requestsSent = 0;
-  let baseline = null;
+  let sourcePenalized = false;
+  let declaredMatchesBaseline = false;
+  let lastBaseline = null;
+  const legOrder = [];
 
-  for (const step of placements) {
-    if (requestsSent >= maxRequests) break;
-    requestsSent += 1;
-    const snapshot = await step.request();
-    phases.push({ phase: step.phase, status_code: snapshot.status_code });
-    if (snapshot.transport_error) break;
-    if (step.phase === 'baseline') {
-      baseline = snapshot;
-      continue;
+  for (const path of paths) {
+    if (requestsSent >= maxRequests) {
+      break;
     }
-    const verdict = isBlockedOrChallenged(snapshot, baseline);
-    markerResults.push({ phase: step.phase, ...verdict, status_code: snapshot.status_code });
+    const pathUrl = urlWithPath(url, path);
+    const ran = await runClassMarkerPath({
+      pathUrl, markerClass, marker, fetchFn, timeoutMs, declared,
+      maxRequests, requestsSent, rng, runNonce, seq,
+    });
+    requestsSent += ran.used;
+    phases.push(...ran.phases);
+    responseFeatures.push(...ran.features);
+    lastBaseline = ran.baseline;
+    if (ran.declaredMatchesBaseline) declaredMatchesBaseline = true;
+    if (ran.sourcePenalized) sourcePenalized = true;
+    if (ran.legOrder.length) legOrder.push(...ran.legOrder);
+    const graded = ran.markerResults.filter(isGradedLeg);
+    const pathEnforcement = ran.sourcePenalized ? 'unknown' : enforcementFromGraded(graded, { expectedAction });
+    const pathPosture = postureFromEnforcement(pathEnforcement, { sourcePenalized: ran.sourcePenalized });
+    pathResults.push({
+      path,
+      ...pathPosture,
+      placements: ran.markerResults.map(placementProjection),
+      trailing_control: ran.trailingControl,
+      source_penalized: ran.sourcePenalized,
+      baseline: ran.baseline ? featureFromSnapshot('baseline', ran.baseline, ran.baseline?.denial_signature?.id ?? null, path) : null,
+    });
+    combinedPlacements.push(...ran.markerResults);
+    if (ran.transportError || ran.declaredMatchesBaseline || ran.sourcePenalized) {
+      pathsSkipped += Math.max(0, paths.length - pathResults.length);
+      break;
+    }
   }
 
-  const anyAllowed = markerResults.some((r) => r.allowed === true);
-  const comparisonComplete = markerBaselineHealth(baseline) === 'healthy' && markerResults.length === placements.length - 1
-    && markerResults.every((r) => !r.inconclusive && !r.transport_error && !r.error_class);
-  const allBlocked = comparisonComplete && markerResults.every((r) => r.blocked === true);
-  let posture = 'inconclusive';
-  if (comparisonComplete) {
-    if (anyAllowed) posture = 'exposed';
-    else if (allBlocked) posture = 'protected';
+  const graded = combinedPlacements.filter(isGradedLeg);
+  let enforcement = sourcePenalized ? 'unknown' : (pathResults.length > 1
+    ? worstEnforcement(pathResults.map((row) => row.enforcement))
+    : enforcementFromGraded(graded, { expectedAction }));
+  if (declaredMatchesBaseline) enforcement = 'unknown';
+  const mapped = postureFromEnforcement(enforcement, { sourcePenalized });
+  let posture = mapped.posture;
+  let postureStatus = mapped.posture_status;
+  let inconclusiveReason = null;
+  let matchedVendor = null;
+  if (declaredMatchesBaseline) {
+    posture = 'inconclusive';
+    postureStatus = 'inconclusive';
+    inconclusiveReason = 'declared_signature_matches_baseline';
+  } else if (graded.length === 0 && !sourcePenalized) {
+    const suspected = suspectedVendorSummary(combinedPlacements);
+    if (suspected) {
+      inconclusiveReason = suspected.inconclusive_reason;
+      matchedVendor = suspected.matched_vendor;
+    }
   }
+  const health = markerBaselineHealth(lastBaseline);
+  const comparisonComplete = health === 'healthy' && !sourcePenalized && !declaredMatchesBaseline
+    && graded.length >= 1;
+  const planned = graded.length;
+  const completed = graded.length;
 
   return {
     classifier_version: 'marker-comparison-v4',
-    assurance_scope: 'inert_marker_rule_action_only',
-    planned_marker_legs: placements.length - 1,
-    completed_marker_legs: markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length,
+    assurance_scope: assuranceScopeForMarkerClass(markerClass),
+    ...gradingMeta(),
+    planned_marker_legs: planned,
+    completed_marker_legs: completed,
     comparison_complete: comparisonComplete,
-    baseline_health: markerBaselineHealth(baseline),
+    baseline_health: health,
     observation_only: !comparisonComplete,
-    readiness_conclusion: comparisonComplete,
+    readiness_conclusion: comparisonComplete && mapped.posture !== 'inconclusive',
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,
     max_requests: maxRequests,
+    cache_buster: true,
+    source_penalized: sourcePenalized,
+    trailing_control: pathResults[0]?.trailing_control ?? null,
+    leg_order: [...new Set(legOrder)],
+    placements: combinedPlacements.map(placementProjection),
+    paths: pathResults,
+    paths_skipped: pathsSkipped,
+    ...mapped,
     posture,
-    blocked_count: markerResults.filter((r) => r.blocked).length,
-    allowed_count: markerResults.filter((r) => r.allowed).length,
+    posture_status: postureStatus,
+    enforcement: mapped.enforcement,
+    ...(inconclusiveReason ? { inconclusive_reason: inconclusiveReason } : {}),
+    ...(matchedVendor ? { matched_vendor: matchedVendor } : {}),
+    expected_action: expectedAction,
+    blocked_count: combinedPlacements.filter((r) => r.blocked).length,
+    allowed_count: combinedPlacements.filter((r) => r.allowed).length,
     phases,
-    marker_results: markerResults,
+    marker_results: combinedPlacements,
+    response_features: responseFeatures,
+    baseline: pathResults[0]?.baseline ?? (lastBaseline ? featureFromSnapshot('baseline', lastBaseline, lastBaseline?.denial_signature?.id ?? null, pathResults[0]?.path ?? '/') : null),
+    grading_version: WAF_GRADING_VERSION,
+    signature_corpus_version: SIGNATURE_CORPUS_VERSION,
   };
 }
 
@@ -277,8 +485,18 @@ async function fetchGrade(fetchFn, requestUrl, headers, timeoutMs, method = 'GET
       signal: controller.signal,
     });
     if (!res || !Number.isInteger(res.status)) return { ...markerResponseSnapshot(null), transport_error: true };
-    const snapshot = markerResponseSnapshot(res, await readSignatureBody(res, safeMethod), declared);
-    return expectedNonce ? { ...snapshot, canary_echo_matched: canaryEchoMatches(res, expectedNonce) } : snapshot;
+    const bodyText = await readSignatureBody(res, safeMethod);
+    const snapshot = withSuspectedSignature(markerResponseSnapshot(res, bodyText, declared), res, bodyText);
+    const headerGet = (name) => {
+      if (typeof res.headers?.get === 'function') return res.headers.get(name);
+      if (res.headers && typeof res.headers === 'object') {
+        const lower = Object.fromEntries(Object.entries(res.headers).map(([k, v]) => [String(k).toLowerCase(), v]));
+        return lower[String(name).toLowerCase()] ?? null;
+      }
+      return null;
+    };
+    const decorated = { ...snapshot, _headerGet: headerGet };
+    return expectedNonce ? { ...decorated, canary_echo_matched: canaryEchoMatches(res, expectedNonce) } : decorated;
   } catch {
     return { ...markerResponseSnapshot(null), transport_error: true };
   } finally {
@@ -298,18 +516,18 @@ const ENTRY_PATH_VARIATIONS = Object.freeze({
   declared_login_path: Object.freeze([
     Object.freeze({ variation: 'query_marker', method: 'GET', where: 'query', encoding: 'plain' }),
     Object.freeze({ variation: 'query_marker_percent_encoded', method: 'GET', where: 'query', encoding: 'percent', reference: 'query_marker' }),
-    Object.freeze({ variation: 'header_marker', method: 'HEAD', where: 'header', encoding: 'plain' }),
+    Object.freeze({ variation: 'header_marker', method: 'GET', where: 'header', encoding: 'plain' }),
     Object.freeze({ variation: 'query_marker_form_content_type', method: 'GET', where: 'query', encoding: 'plain', content_type: 'application/x-www-form-urlencoded', reference: 'query_marker' }),
     Object.freeze({ variation: 'query_marker_after_padding', method: 'GET', where: 'query', encoding: 'plain', padding_bytes: ENTRY_PATH_QUERY_PADDING_BYTES, reference: 'query_marker' }),
-    Object.freeze({ variation: 'header_marker_after_padding', method: 'HEAD', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, reference: 'header_marker' }),
+    Object.freeze({ variation: 'header_marker_after_padding', method: 'GET', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, reference: 'header_marker' }),
   ]),
   declared_api_path: Object.freeze([
     Object.freeze({ variation: 'query_marker', method: 'GET', where: 'query', encoding: 'plain', accept: 'application/json' }),
     Object.freeze({ variation: 'query_marker_double_encoded', method: 'GET', where: 'query', encoding: 'double_percent', accept: 'application/json', reference: 'query_marker' }),
-    Object.freeze({ variation: 'header_marker', method: 'HEAD', where: 'header', encoding: 'plain', accept: 'application/json' }),
+    Object.freeze({ variation: 'header_marker', method: 'GET', where: 'header', encoding: 'plain', accept: 'application/json' }),
     Object.freeze({ variation: 'query_marker_json_content_type', method: 'GET', where: 'query', encoding: 'plain', content_type: 'application/json', accept: 'application/json', reference: 'query_marker' }),
     Object.freeze({ variation: 'query_marker_after_padding', method: 'GET', where: 'query', encoding: 'plain', padding_bytes: ENTRY_PATH_QUERY_PADDING_BYTES, accept: 'application/json', reference: 'query_marker' }),
-    Object.freeze({ variation: 'header_marker_after_padding', method: 'HEAD', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, accept: 'application/json', reference: 'header_marker' }),
+    Object.freeze({ variation: 'header_marker_after_padding', method: 'GET', where: 'header', encoding: 'plain', padding_bytes: ENTRY_PATH_HEADER_PADDING_BYTES, accept: 'application/json', reference: 'header_marker' }),
   ]),
 });
 
@@ -356,14 +574,8 @@ export function buildEntryPathRequest(baseUrl, markerClass, variation) {
   return { url: url.href, method: variation.method, headers };
 }
 
-function enforcementFromResults(results, plannedCount) {
-  const graded = results.filter((row) => !row.inconclusive && !row.error_class);
-  const blocked = graded.filter((row) => row.blocked).length;
-  const allowed = graded.filter((row) => row.allowed).length;
-  if (blocked + allowed === 0) return 'unknown';
-  if (allowed === 0) return results.length === plannedCount && graded.length === plannedCount && blocked === plannedCount ? 'enforced' : 'unknown';
-  if (blocked === 0) return 'not_enforced';
-  return 'partial';
+function enforcementFromResults(results, expectedAction = 'block') {
+  return enforcementFromGraded((results ?? []).filter(isGradedLeg), { expectedAction });
 }
 
 function referenceBlocked(row) {
@@ -372,13 +584,11 @@ function referenceBlocked(row) {
   return row.allowed === true ? false : null;
 }
 
-/** Evasion and inspection-limit variants grade only after their plain reference marker was blocked. */
+/** Record the plain-reference prerequisite without voiding this leg's own grade. */
 export function gateEntryPathVariation(graded, variation, resultsByVariation) {
   if (!variation?.reference) return { ...graded };
   const prerequisite = blockedBaselinePrerequisite(referenceBlocked(resultsByVariation.get(variation.reference)));
-  const gate = { reference_variation: variation.reference, blocked_baseline_prerequisite: prerequisite };
-  if (prerequisite === 'met') return { ...graded, ...gate };
-  return { ...graded, blocked: false, challenged: false, allowed: false, inconclusive: true, ...gate };
+  return { ...graded, reference_variation: variation.reference, blocked_baseline_prerequisite: prerequisite };
 }
 
 function baselineSignature(snapshot) {
@@ -408,71 +618,94 @@ export async function runEntryPathMarkerProbe(options = {}) {
     Number.isInteger(options.max_requests) && options.max_requests > 0 ? options.max_requests : WAF_CLASS_PROBE_MAX_REQUESTS,
     WAF_CLASS_PROBE_MAX_REQUESTS,
   );
-
-  const phases = [];
-  const markerResults = [];
-  const resultsByVariation = new Map();
-  const baselines = {};
-  let requestsSent = 0;
+  const rng = typeof options.rng === 'function' ? options.rng : Math.random;
+  const runNonce = deriveRunNonce(options.nonce ?? options.run_nonce ?? options.expected_nonce);
+  const seq = { value: 0 };
   const declared = options.declared_block_signature ?? null;
   const expectedNonce = typeof options.expected_nonce === 'string' && options.expected_nonce.trim()
     ? options.expected_nonce.trim()
     : null;
-  const baselineFor = async (method) => {
-    if (!baselines[method]) {
-      requestsSent += 1;
-      baselines[method] = await fetchGrade(fetchFn, url, { ...DEFAULT_HEADERS }, timeoutMs, method, method === 'GET' ? expectedNonce : null, declared);
-      phases.push({ phase: method === 'GET' ? 'baseline' : `baseline_${method.toLowerCase()}`, method, status_code: baselines[method].status_code });
-    }
-    return baselines[method];
-  };
-  const baseline = await baselineFor('GET');
-  const health = baseline.transport_error ? 'unhealthy' : markerBaselineHealth(baseline);
 
-  if (!baseline.transport_error) {
-    for (const variation of variations) {
-      const needsBaseline = !baselines[variation.method];
-      if (requestsSent + (needsBaseline ? 2 : 1) > maxRequests) break;
-      const methodBaseline = await baselineFor(variation.method);
-      if (methodBaseline.transport_error) break;
+  const phases = [];
+  const markerResults = [];
+  const resultsByVariation = new Map();
+  const responseFeatures = [];
+  let requestsSent = 0;
+  const busted = (href) => applyCacheBuster(href, runNonce, seq.value += 1);
+
+  requestsSent += 1;
+  const baseline = await fetchGrade(fetchFn, busted(url), { ...DEFAULT_HEADERS }, timeoutMs, 'GET', expectedNonce, declared);
+  phases.push({ phase: 'baseline', method: 'GET', status_code: baseline.status_code });
+  const health = baseline.transport_error ? 'unhealthy' : markerBaselineHealth(baseline);
+  const declaredMatchesBaseline = Boolean(declared && baseline.denial_signature?.kind === 'declared');
+
+  let sourcePenalized = false;
+  let trailingControl = null;
+  const independent = variations.filter((row) => !row.reference);
+  const dependent = variations.filter((row) => row.reference);
+  const ordered = [...shuffleWithRng(independent, rng), ...shuffleWithRng(dependent, rng)];
+  if (!baseline.transport_error && !declaredMatchesBaseline) {
+    for (const variation of ordered) {
+      if (requestsSent + 2 > maxRequests) break;
       const request = buildEntryPathRequest(url, markerClass, variation);
       requestsSent += 1;
-      const snapshot = await fetchGrade(fetchFn, request.url, request.headers, timeoutMs, request.method, null, declared);
-      phases.push({ phase: variation.variation, method: request.method, status_code: snapshot.status_code });
-      const graded = isBlockedOrChallenged(snapshot, methodBaseline);
+      const snapshot = await fetchGrade(fetchFn, busted(request.url), request.headers, timeoutMs, 'GET', null, declared);
+      phases.push({ phase: variation.variation, method: 'GET', status_code: snapshot.status_code });
+      const graded = gradeMarkerSnapshot(snapshot, baseline);
       const row = {
         phase: variation.variation,
-        method: request.method,
+        placement: variation.where,
+        method: 'GET',
         ...gateEntryPathVariation(graded, variation, resultsByVariation),
         status_code: snapshot.status_code,
+        signature_id: graded.denial_signature?.id ?? null,
+        cache_status: snapshot.cache_status ?? graded.cache_status ?? null,
+        location_changed: graded.location_changed === true,
         ...(snapshot.transport_error ? { error_class: 'transport_error' } : {}),
       };
       resultsByVariation.set(variation.variation, row);
       markerResults.push(row);
+      responseFeatures.push(featureFromSnapshot(variation.variation, snapshot, row.signature_id));
       if (snapshot.transport_error) break;
+    }
+    if (markerResults.length > 0 && requestsSent < maxRequests) {
+      requestsSent += 1;
+      const snapshot = await fetchGrade(fetchFn, busted(url), { ...DEFAULT_HEADERS }, timeoutMs, 'GET', null, declared);
+      const graded = gradeMarkerSnapshot(snapshot, baseline);
+      trailingControl = { outcome: graded.outcome, status_code: snapshot.status_code };
+      sourcePenalized = graded.allowed !== true;
+      phases.push({ phase: 'trailing_control', method: 'GET', status_code: snapshot.status_code });
+      responseFeatures.push(featureFromSnapshot('trailing_control', snapshot, graded.denial_signature?.id ?? null));
     }
   }
 
-  const enforcement = health === 'healthy' ? enforcementFromResults(markerResults, variations.length) : 'unknown';
+  const graded = markerResults.filter(isGradedLeg);
+  const mapped = postureFromEnforcement(
+    health === 'healthy' && !declaredMatchesBaseline ? enforcementFromResults(markerResults, expectedWafActionOf(options)) : 'unknown',
+    { sourcePenalized },
+  );
+  if (declaredMatchesBaseline) {
+    mapped.posture = 'inconclusive';
+    mapped.posture_status = 'inconclusive';
+    mapped.enforcement = 'unknown';
+  }
   const identityConfirmed = health === 'healthy' && baseline.canary_echo_matched === true;
-  const comparisonComplete = health === 'healthy' && markerResults.length === variations.length
-    && markerResults.every((row) => !row.inconclusive && !row.error_class);
-  const posture = !comparisonComplete ? 'inconclusive' : enforcement === 'enforced' ? 'protected'
-    : enforcement === 'not_enforced' || enforcement === 'partial' ? 'exposed'
-      : 'inconclusive';
+  const comparisonComplete = health === 'healthy' && !sourcePenalized && !declaredMatchesBaseline && graded.length >= 1;
   return {
     entry_path_scenario: scenario,
     classifier_version: 'marker-comparison-v4',
-    assurance_scope: 'inert_marker_rule_action_only',
-    planned_marker_legs: variations.length,
-    completed_marker_legs: markerResults.filter((row) => !row.inconclusive && !row.transport_error && !row.error_class).length,
+    assurance_scope: assuranceScopeForMarkerClass(markerClass),
+    ...gradingMeta(),
+    planned_marker_legs: graded.length,
+    completed_marker_legs: graded.length,
     comparison_complete: comparisonComplete,
     observation_only: !comparisonComplete,
-    readiness_conclusion: comparisonComplete,
+    readiness_conclusion: comparisonComplete && mapped.posture !== 'inconclusive',
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,
     max_requests: maxRequests,
+    cache_buster: true,
     methods_used: [...new Set(phases.map((row) => row.method))],
     redirects_followed: false,
     permitted_baseline: {
@@ -486,8 +719,14 @@ export async function runEntryPathMarkerProbe(options = {}) {
       method: identityConfirmed ? 'nonce_canary' : null,
       attempted: Boolean(expectedNonce),
     },
-    enforcement,
-    posture,
+    ...mapped,
+    source_penalized: sourcePenalized,
+    trailing_control: trailingControl,
+    leg_order: markerResults.map((row) => row.phase),
+    placements: markerResults.map((row) => placementProjection({ ...row, placement: row.placement ?? row.phase })),
+    response_features: responseFeatures,
+    baseline: !baseline.transport_error ? featureFromSnapshot('baseline', baseline, baseline?.denial_signature?.id ?? null, new URL(url).pathname) : null,
+    ...(declaredMatchesBaseline ? { inconclusive_reason: 'declared_signature_matches_baseline' } : {}),
     blocked_count: markerResults.filter((row) => row.blocked).length,
     allowed_count: markerResults.filter((row) => row.allowed).length,
     inconclusive_count: markerResults.filter((row) => row.inconclusive).length,

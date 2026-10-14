@@ -1,7 +1,16 @@
 /** Safe check catalog — metadata-only validation; no live attack traffic in developer validation mode. */
 
 import { OBSERVATION_ONLY_PROBE_KINDS, SUPPORTED_EVASION_TRANSFORMS, UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES, evidenceTierForCheck } from '../lib/probeEvidenceTiers.mjs';
+import { listProbePerspectives } from '../lib/probePerspectiveRegistry.mjs';
+import {
+  hasActiveVerifiedOriginBinding,
+  isBindingActiveAndVerified,
+  resolveOriginLockdownBinding,
+  targetLiteralIpAddress,
+} from '../lib/originLockdownResolution.mjs';
+import { controlDeclarationsFromTarget } from './controlDeclarations.mjs';
 import { applyResourceExhaustionMetadata } from './resourceExhaustionTaxonomy.mjs';
+import { isExplicitDemoTenant, matchesDemoAccount } from '../lib/demoAutoVerify.mjs';
 
 export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'http_head',
@@ -45,7 +54,12 @@ export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'waf_class_marker_probe',
   'waf_evasion_marker_probe',
   'l7_resource_posture_probe',
+  'connection_limit_probe',
+  'waf_method_policy_probe',
+  'rate_limit_canary_probe',
 ]);
+
+export const PENDING_T7_PROBE_KINDS = Object.freeze([]);
 
 export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   quic_reachability: 1,
@@ -57,7 +71,7 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   dnssec_posture: 2,
   dns_open_recursion: 1,
   dns_failover_posture: 3,
-  dns_axfr_leak: 2,
+  dns_axfr_leak: 5,
   tls_audit: 1,
   cache_abuse_probe: 3,
   api_surface_scan: 8,
@@ -67,7 +81,7 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   websocket_upgrade_posture: 1,
   outside_in_waf_scan: 16,
   grpc_reflection_probe: 1,
-  reflection_service_probe: 2,
+  reflection_service_probe: 4,
   dns_wire_query: 3,
   http_method_matrix: 2,
   header_size_probe: 2,
@@ -78,6 +92,11 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   waf_class_marker_probe: 8,
   waf_evasion_marker_probe: 8,
   l7_resource_posture_probe: 3,
+  connection_limit_probe: 12,
+  waf_method_policy_probe: 8,
+  rate_limit_canary_probe: 8,
+  tcp_connect: 2,
+  udp_probe: 2,
 });
 
 export function maxProbeRequestsForKind(kind) {
@@ -103,6 +122,8 @@ export const ALLOWED_PAYLOAD_PROFILES = Object.freeze([
   'ipmi_rmcp_ping',
   'mssql_resolution_request',
   'tftp_read_request',
+  'sip_options',
+  'rdp_udp_syn',
   'memcached_udp_stats',
   'dtls_client_hello',
   'portmap_dump',
@@ -210,6 +231,11 @@ export const WAF_SAFE_CHECK_IDS = Object.freeze([
   'waf.marker_rule.safe',
   'waf.origin_bypass.safe',
   'waf.low_rate_limit.safe',
+  'waf.sqli_managed_marker.safe',
+  'waf.xss_managed_marker.safe',
+  'waf.path_traversal_managed_marker.safe',
+  'waf.ssti_marker.safe',
+  'waf.http_method_policy_marker.safe',
 ]);
 
 function applyWafSafeProbeMetadata(profile, meta = {}) {
@@ -273,6 +299,7 @@ export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'recursion_test_name',
   'secondary_nameservers',
   'ports',
+  'declared_ports',
   'paths',
   'graphql_path',
   'grpc_path',
@@ -281,6 +308,8 @@ export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'waf_required',
   'expected_vendor_hint',
   'probe_path',
+  'payload_profiles',
+  'transform',
 ]);
 
 const ENTRY_PATH_SCENARIO_PROFILE_KINDS = new Set(['waf_class_marker_probe', 'waf_evasion_marker_probe']);
@@ -309,6 +338,10 @@ export function buildProbeProfile({
   settings_assertion,
   entry_path_scenario,
   permitted_baseline,
+  default_port,
+  port,
+  address_family,
+  assurance_scope,
   ...capabilityFields
 } = {}) {
   if (!ALLOWED_PROBE_KINDS.has(kind)) {
@@ -334,6 +367,18 @@ export function buildProbeProfile({
   // An explicit customer target.port overrides this canonical service port at execution time.
   if (Number.isInteger(service_port) && service_port >= 1 && service_port <= 65535) {
     profile.service_port = service_port;
+  }
+  if (Number.isInteger(default_port) && default_port >= 1 && default_port <= 65535) {
+    profile.default_port = default_port;
+  }
+  if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+    profile.port = port;
+  }
+  if (typeof address_family === 'string' && ['ipv4', 'ipv6', 'both', 'any'].includes(address_family)) {
+    profile.address_family = address_family;
+  }
+  if (typeof assurance_scope === 'string' && ['custom_canary_rule', 'managed_rule_marker'].includes(assurance_scope)) {
+    profile.assurance_scope = assurance_scope;
   }
   if (typeof payload_profile === 'string' && ALLOWED_PAYLOAD_PROFILE_SET.has(payload_profile)) {
     profile.payload_profile = payload_profile;
@@ -667,9 +712,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate reachability metadata check for a forbidden TCP port (simulated).',
     supported_targets: ['ip', 'fqdn', 'tcp'],
     required_customer_setup: ['declared_forbidden_tcp_port', 'expected_block_behavior'],
+    runnable_requires: ['port_or_declared_tcp_deny'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single TCP connect attempt must be blocked when deny rules are effective.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -682,9 +728,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP datagram to a declared forbidden port (no amplification).',
     supported_targets: ['ip', 'fqdn', 'tcp'],
     required_customer_setup: ['declared_forbidden_udp_port'],
+    runnable_requires: ['port_or_declared_udp_deny'],
     evidence_required: ['probe_result'],
     verdict_logic: 'One labeled UDP datagram must be blocked or filtered when deny rules are effective.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'udp_probe', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -695,11 +742,12 @@ export const CHECK_CATALOG = [
     name: 'Basic Deny-Rule Validation (Safe)',
     vector_family: 'l3_l4',
     description: 'One bounded TCP connect to the declared deny-rule target shows whether the network firewall deny rule actually drops the traffic (external probe evidence only).',
-    supported_targets: ['ip', 'fqdn'],
-    required_customer_setup: ['declared_deny_rule_target'],
+    supported_targets: ['ip', 'fqdn', 'tcp'],
+    required_customer_setup: ['declared_deny_rule_target', 'network_policy'],
+    runnable_requires: ['port_or_declared_tcp_deny'],
     evidence_required: ['probe_result'],
     verdict_logic: 'One bounded TCP connect observes deny rule enforcement (external probe evidence only).',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1013,7 +1061,7 @@ export const CHECK_CATALOG = [
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single bounded TCP connect or metadata marker confirms IPv6 path policy without connection exhaustion.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1078,8 +1126,8 @@ export const CHECK_CATALOG = [
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single bounded AXFR attempt confirms zone transfer is refused or restricted when unauthorized.',
-    probe_profile: { kind: 'dns_axfr_leak', max_requests: 2, timeout_ms: 5000 },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    probe_profile: { kind: 'dns_axfr_leak', max_requests: 5, timeout_ms: 5000 },
+    safety_constraints: { max_events: 5, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -1632,7 +1680,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_sip_port', 'sip_filtering_expectation'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single labeled UDP probe to the declared SIP port must be filtered when VoIP flood protection is effective.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'udp_probe', max_requests: 2, timeout_ms: 5000, default_port: 5060 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1720,9 +1768,10 @@ export const CHECK_CATALOG = [
     description: 'One bounded TCP connect documents closed-port flag behavior (FIN/NULL/Xmas filtering readiness).',
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['flag_anomaly_filtering_declaration'],
+    runnable_requires: ['port'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Bounded connect observes normal handshake/closed-port behavior; anomalous flag handling metadata raises a readiness finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1780,9 +1829,10 @@ export const CHECK_CATALOG = [
     description: 'One bounded TCP connect plus declared concurrent-connection budget documents accept/deny posture (no sustained connections).',
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['concurrent_connection_budget_declaration'],
+    runnable_requires: ['port'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Bounded connect plus declared connection budget validates accept/deny posture; missing budget raises a readiness finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1812,7 +1862,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_smtp_port', 'smtp_limits_declaration'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single bounded connect plus declared per-source connection limits validates SMTP flood posture.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000, default_port: 25 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1827,7 +1877,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_ssh_port', 'ssh_limits_declaration'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single bounded connect plus declared SSH rate/connection limits validates posture; no credentials are ever sent.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000, default_port: 22 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1842,7 +1892,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_ftp_port', 'ftp_limits_declaration'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single bounded connect plus declared FTP connection limits validates posture.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000, default_port: 21 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2018,16 +2068,16 @@ export const CHECK_CATALOG = [
   }),
   safeCheck({
     check_id: 'reflect.mdns_netbios_wsdiscovery_exposure.safe',
-    version: '1.0.0',
-    name: 'mDNS / NetBIOS / WS-Discovery Exposure (Safe)',
+    version: '1.1.0',
+    name: 'mDNS / NetBIOS NBSTAT / WS-Discovery Composite Exposure (Safe)',
     vector_family: 'reflection',
-    description: 'Single bounded UDP fingerprint documents local-discovery responder exposure on the declared host.',
+    description: 'Bounded composite UDP fingerprints send mDNS PTR, NetBIOS NBSTAT and WS-Discovery probes (up to four requests) and record per-protocol replies on the declared host.',
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['declared_mdns_responder_host'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Unexpected local-discovery answers from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 5353, payload_profile: 'mdns_ptr_query', expected_response_shape: 'amplifying_response' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    verdict_logic: 'A protocol-validated reply on any of mDNS, NetBIOS or WS-Discovery raises a reflector-exposure finding. Silence remains observation-only.',
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 4, timeout_ms: 3000, service_port: 5353, payload_profile: 'mdns_ptr_query', payload_profiles: ['mdns_ptr_query', 'netbios_nbstat', 'ws_discovery_probe'], expected_response_shape: 'amplifying_response' },
+    safety_constraints: { max_events: 4, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -2048,16 +2098,16 @@ export const CHECK_CATALOG = [
   }),
   safeCheck({
     check_id: 'reflect.dtls_sip_rdp_tftp_exposure.safe',
-    version: '1.0.0',
-    name: 'DTLS / SIP / RDP / TFTP Responder Exposure (Safe)',
+    version: '1.1.0',
+    name: 'DTLS ClientHello / SIP OPTIONS / RDP-UDP / TFTP Composite Exposure (Safe)',
     vector_family: 'reflection',
-    description: 'Single bounded UDP fingerprint documents session-protocol responder exposure classes on the declared host.',
+    description: 'Bounded composite UDP fingerprints send DTLS ClientHello, SIP OPTIONS, RDP-UDP SYN and TFTP read-request (up to four requests) and record per-protocol replies on the declared host.',
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['declared_tftp_responder_host'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Unexpected session-protocol responses from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 69, payload_profile: 'tftp_read_request', expected_response_shape: 'amplifying_response' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    verdict_logic: 'A protocol-validated reply on any of DTLS, SIP, RDP-UDP or TFTP raises a reflector-exposure finding. Silence remains observation-only.',
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 4, timeout_ms: 3000, service_port: 69, payload_profile: 'tftp_read_request', payload_profiles: ['tftp_read_request', 'dtls_client_hello', 'sip_options', 'rdp_udp_syn'], expected_response_shape: 'amplifying_response' },
+    safety_constraints: { max_events: 4, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -2084,9 +2134,10 @@ export const CHECK_CATALOG = [
     description: 'One bounded TCP connect documents middlebox-generated response metadata on the declared host.',
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['declared_tcp_fingerprint_host'],
+    runnable_requires: ['port'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Intermediary-injected response metadata on closed ports raises a middlebox-reflection finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 3000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2191,7 +2242,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_tcp_fingerprint_host'],
     evidence_required: ['probe_result'],
     verdict_logic: 'An open cache-service port on an Internet-facing host raises an exposure finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 3000, default_port: 6379 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -3260,20 +3311,20 @@ export const CHECK_CATALOG = [
   {"check_id":"reflect.natpmp_amplification_exposure.safe","version":"1.0.0","name":"NAT-PMP Amplification Exposure (Safe)","vector_family":"reflection","description":"One bounded NAT-PMP public-address request on the declared host documents open-gateway reflector exposure via response size class and amplification-ratio metadata.","supported_targets":["fqdn","ip"],"required_customer_setup":["declared_natpmp_responder_host"],"evidence_required":["probe_result"],"verdict_logic":"A NAT-PMP response on an Internet-facing (WAN) interface raises a reflector-exposure finding; NAT-PMP must be answered only on the LAN side.","probe_profile":{"kind":"reflection_service_probe","max_requests":1,"timeout_ms":3000,"service_port":5351,"payload_profile":"natpmp_external_address","expected_response_shape":"amplifying_response"},"safety_constraints":{"max_events":3,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","safety_class":"safe","risk_class":"safe","prerequisites":[],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"remediation_template":"Review edge protection for this vector.","explanation_template":"The bounded probe result is evaluated against the check expected behavior using external probe evidence only."},
   {"check_id":"reflect.ipp_callback_exposure.safe","version":"1.0.0","name":"CUPS/IPP Reflector Exposure (Safe)","vector_family":"reflection","description":"One bounded read-only IPP Get-Printer-Attributes request on the declared host documents exposed CUPS/IPP; the request carries no callback URL, so it cannot trigger callback fan-out to a third party.","supported_targets":["fqdn","ip"],"required_customer_setup":["declared_ipp_responder_host"],"evidence_required":["probe_result"],"verdict_logic":"An IPP attribute response on an Internet-facing host raises a reflector-exposure finding (CVE-2024-47176 class); CUPS/IPP must not be reachable from the Internet.","probe_profile":{"kind":"reflection_service_probe","max_requests":1,"timeout_ms":3000,"service_port":631,"payload_profile":"ipp_get_printer_attributes","expected_response_shape":"amplifying_response"},"safety_constraints":{"max_events":3,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","safety_class":"safe","risk_class":"safe","prerequisites":[],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"remediation_template":"Review edge protection for this vector.","explanation_template":"The bounded probe result is evaluated against the check expected behavior using external probe evidence only."},
   {"check_id":"dns.multi_question_oversized.safe","version":"1.0.0","name":"DNS Multi-Question / Oversized Parser Posture (Safe)","vector_family":"dns","description":"One bounded direct DNS wire query on the declared zone documents multi-question/oversized-message parser handling; a single query, never a query flood.","supported_targets":["fqdn","dns"],"required_customer_setup":["declared_zone_for_parser_posture"],"evidence_required":["probe_result"],"verdict_logic":"One labeled bounded DNS wire query observes how the resolver handles an unusual (multi-question/oversized) message; permissive handling raises a readiness finding.","probe_profile":{"kind":"dns_wire_query","max_requests":1,"timeout_ms":5000,"dns_qtype":"NS","dns_transport":"tcp"},"safety_constraints":{"max_events":3,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","safety_class":"safe","risk_class":"safe","prerequisites":[],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"remediation_template":"Review edge protection for this vector.","explanation_template":"The bounded probe result is evaluated against the check expected behavior using external probe evidence only."},
-  {"check_id":"waf.http_method_policy_marker.safe","version":"1.1.0","name":"WAF HTTP Method/Protocol Policy Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign method/header-policy marker to confirm the WAF flags malformed-request and protocol-policy signatures.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus method/protocol-policy markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"http_method_policy","marker":"astranull-method-policy-probe-TRACK-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable request/protocol-policy and header-policy WAF rules to block malformed-request signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.request_smuggling_marker.safe","version":"1.1.0","name":"WAF Request-Smuggling Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert request-smuggling signature marker (no conflicting CL/TE constructed) to confirm smuggling WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus smuggling-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"request_smuggling","marker":"astranull-smuggle-probe-CL0TE-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable request-smuggling normalization and CL/TE conflict rejection at the edge.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.crlf_injection_marker.safe","version":"1.1.0","name":"WAF CRLF/Response-Splitting Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Encoded CRLF marker injecting a benign header token to confirm CRLF/response-splitting WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus CRLF markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"crlf","marker":"astranull-crlf-probe%0d%0aX-Astranull-Probe:inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable CRLF/header-injection WAF rules and reject encoded newline sequences in inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.open_redirect_marker.safe","version":"1.1.0","name":"WAF Open-Redirect / Parameter-Policy Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign off-host (.invalid) redirect and parameter/path-policy marker to confirm redirect and duplicate-input WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus redirect/parameter markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"open_redirect","marker":"astranull-redirect-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable open-redirect and parameter/path normalization WAF rules; allowlist redirect targets.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.nosql_injection_marker.safe","version":"1.1.0","name":"WAF NoSQL Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert NoSQL operator marker (matches nothing) to confirm NoSQL-operator WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus NoSQL-operator markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"nosql","marker":"$ne:astranull-nosql-probe-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable NoSQL-operator WAF rules and reject query-operator tokens in string inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.xpath_injection_marker.safe","version":"1.1.0","name":"WAF XPath/XML Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign always-false XPath marker to confirm XPath/XML-injection WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus XPath markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"xpath","marker":"astranull-xpath-probe' and '1'='0","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable XPath/XQuery-injection WAF rules for declared XML endpoints.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.jndi_ldap_marker.safe","version":"1.1.0","name":"WAF JNDI/LDAP (Log4Shell) Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert JNDI/LDAP marker pointing at a .invalid sink to confirm Log4Shell/JNDI WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus JNDI markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"ldap","marker":"astranull-ldap-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable JNDI/Log4Shell WAF rules; block ${jndi:} lookup signatures in inputs and headers.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.csv_formula_marker.safe","version":"1.1.0","name":"WAF CSV/Formula & Data-Channel Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert leading-equals formula marker (no function call) to confirm CSV/formula and data-channel WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus formula markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"csv_injection","marker":"astranull-csv-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable formula/CSV-injection and data-channel WAF rules; neutralize leading =,+,-,@ in exports.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.prototype_pollution_marker.safe","version":"1.1.0","name":"WAF Prototype-Pollution Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert __proto__ token string (no nested object assignment) to confirm prototype-pollution WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus __proto__ markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"prototype_pollution","marker":"astranull-prototype-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable prototype-pollution WAF rules; reject __proto__/constructor/prototype property paths.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.deserialization_marker.safe","version":"1.1.0","name":"WAF Unsafe-Deserialization Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert serialized-stream signature marker (not a functional gadget) to confirm deserialization WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus deserialization-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"deserialization","marker":"rO0ABQ-astranull-deser-probe-INERT","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable unsafe-deserialization WAF rules; reject serialized-object magic signatures in inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.ssrf_marker.safe","version":"1.1.0","name":"WAF SSRF Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign SSRF marker pointing at a .invalid sink (never a metadata endpoint) to confirm SSRF WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus SSRF-URL markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"ssrf","marker":"astranull-ssrf-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable SSRF WAF rules and egress allowlists; block internal/metadata URL fetch signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.xxe_marker.safe","version":"1.1.0","name":"WAF XXE Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign DOCTYPE/external-entity marker referencing a .invalid sink to confirm XXE WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus XXE DOCTYPE markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"xxe","marker":"astranull-xxe-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable XXE WAF rules and disable external-entity resolution on declared XML endpoints.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.file_upload_marker.safe","version":"1.1.0","name":"WAF File-Upload Signature Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign upload filename marker (harmless .txt, no code) to confirm the edge flags web-shell upload signatures.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus upload-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"file_upload_marker","marker":"astranull-upload-probe.php.txt","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable file-upload WAF rules; block double-extension and web-shell filename/content signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
-  {"check_id":"waf.jwt_tamper_marker.safe","version":"1.1.0","name":"WAF/API-Gateway JWT Tamper Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert alg:none JWT with no real claims/signature to confirm gateway JWT-tamper rejection rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus alg:none JWT markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"jwt_tamper","marker":"eyJhbGciOiJub25lIiwiYXN0cmFudWxsIjoicCJ9.eyJhc3RyYW51bGwiOiJqd3QtaW5lcnQifQ.astranull-jwt-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enforce JWT signature/alg validation at the API gateway; reject alg:none and unsigned tokens.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.http_method_policy_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF HTTP Method/Protocol Policy Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign method/header-policy marker to confirm the WAF flags malformed-request and protocol-policy signatures.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus method/protocol-policy markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"http_method_policy","marker":"astranull-method-policy-probe-TRACK-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable request/protocol-policy and header-policy WAF rules to block malformed-request signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.request_smuggling_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF Request-Smuggling Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert request-smuggling signature marker (no conflicting CL/TE constructed) to confirm smuggling WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus smuggling-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"request_smuggling","marker":"astranull-smuggle-probe-CL0TE-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable request-smuggling normalization and CL/TE conflict rejection at the edge.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.crlf_injection_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF CRLF/Response-Splitting Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Encoded CRLF marker injecting a benign header token to confirm CRLF/response-splitting WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus CRLF markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"crlf","marker":"astranull-crlf-probe%0d%0aX-Astranull-Probe:inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable CRLF/header-injection WAF rules and reject encoded newline sequences in inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.open_redirect_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF Open-Redirect / Parameter-Policy Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign off-host (.invalid) redirect and parameter/path-policy marker to confirm redirect and duplicate-input WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus redirect/parameter markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"open_redirect","marker":"astranull-redirect-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable open-redirect and parameter/path normalization WAF rules; allowlist redirect targets.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.nosql_injection_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF NoSQL Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert NoSQL operator marker (matches nothing) to confirm NoSQL-operator WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus NoSQL-operator markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"nosql","marker":"$ne:astranull-nosql-probe-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable NoSQL-operator WAF rules and reject query-operator tokens in string inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.xpath_injection_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF XPath/XML Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign always-false XPath marker to confirm XPath/XML-injection WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus XPath markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"xpath","marker":"astranull-xpath-probe' and '1'='0","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable XPath/XQuery-injection WAF rules for declared XML endpoints.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.jndi_ldap_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF JNDI/LDAP (Log4Shell) Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert JNDI/LDAP marker pointing at a .invalid sink to confirm Log4Shell/JNDI WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus JNDI markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"ldap","marker":"astranull-ldap-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable JNDI/Log4Shell WAF rules; block ${jndi:} lookup signatures in inputs and headers.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.csv_formula_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF CSV/Formula & Data-Channel Injection Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert leading-equals formula marker (no function call) to confirm CSV/formula and data-channel WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus formula markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"csv_injection","marker":"astranull-csv-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable formula/CSV-injection and data-channel WAF rules; neutralize leading =,+,-,@ in exports.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.prototype_pollution_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF Prototype-Pollution Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert __proto__ token string (no nested object assignment) to confirm prototype-pollution WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus __proto__ markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"prototype_pollution","marker":"astranull-prototype-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable prototype-pollution WAF rules; reject __proto__/constructor/prototype property paths.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.deserialization_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF Unsafe-Deserialization Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert serialized-stream signature marker (not a functional gadget) to confirm deserialization WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus deserialization-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"deserialization","marker":"rO0ABQ-astranull-deser-probe-INERT","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable unsafe-deserialization WAF rules; reject serialized-object magic signatures in inputs.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.ssrf_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF SSRF Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign SSRF marker pointing at a .invalid sink (never a metadata endpoint) to confirm SSRF WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus SSRF-URL markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"ssrf","marker":"astranull-ssrf-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable SSRF WAF rules and egress allowlists; block internal/metadata URL fetch signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.xxe_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF XXE Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign DOCTYPE/external-entity marker referencing a .invalid sink to confirm XXE WAF rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus XXE DOCTYPE markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"xxe","marker":"astranull-xxe-marker-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable XXE WAF rules and disable external-entity resolution on declared XML endpoints.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.file_upload_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF File-Upload Signature Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Benign upload filename marker (harmless .txt, no code) to confirm the edge flags web-shell upload signatures.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus upload-signature markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"file_upload_marker","marker":"astranull-upload-probe.php.txt","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enable file-upload WAF rules; block double-extension and web-shell filename/content signatures.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
+  {"check_id":"waf.jwt_tamper_marker.safe","version":"1.2.0","rule_family":"custom_canary","name":"WAF/API-Gateway JWT Tamper Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Inert alg:none JWT with no real claims/signature to confirm gateway JWT-tamper rejection rules.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus alg:none JWT markers; blocked/challenged => protected, allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"jwt_tamper","marker":"eyJhbGciOiJub25lIiwiYXN0cmFudWxsIjoicCJ9.eyJhc3RyYW51bGwiOiJqd3QtaW5lcnQifQ.astranull-jwt-inert","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"]},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Enforce JWT signature/alg validation at the API gateway; reject alg:none and unsigned tokens.","explanation_template":"A bounded set of inert benign markers for this WAF attack class was correlated with edge blocking/challenge behaviour. Markers achieve nothing if they reach origin."},
   {"check_id":"waf.entry_path_login_marker.safe","version":"1.0.0","name":"WAF Declared Login Path Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Bounded inert-marker validation of a customer-declared login URL: GET/HEAD only, no request body, no credentials, no account interaction, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, percent-encoded, with a form content type, and after bounded inspection-limit padding.","supported_targets":["url"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe","declared_login_entry_path"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Permitted GET/HEAD baselines, then the inert marker in query and header placements with percent-encoding, form content-type, and 2KB/4KB padding variants (max 8 requests). Healthy permitted baseline required; an unhealthy baseline or an unblocked plain marker leaves dependent variants inconclusive, and inconclusive variants are ignored. All graded variants blocked => protected; any graded variant allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"sqli","marker":"astranull' OR '1'='0","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"],"entry_path_scenario":"declared_login_path"},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Apply the same managed WAF rule set to the declared login path as to the primary route, decode percent-encoded parameters before inspection, and fail closed when query or header inspection limits are exceeded.","explanation_template":"A permitted GET baseline and bounded inert-marker variations on the exact declared login path were graded for edge blocking; encoded, content-type and padded variants count only after the plain marker was blocked. External probe evidence only; markers achieve nothing if they reach origin."},
   {"check_id":"waf.entry_path_api_marker.safe","version":"1.0.0","name":"WAF Declared API Path Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Bounded inert-marker validation of a customer-declared API URL: GET/HEAD only with a JSON Accept header, no request body, no credentials, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, double-encoded, with a JSON content type, and after bounded inspection-limit padding.","supported_targets":["url"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe","declared_api_entry_path"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Permitted GET/HEAD baselines, then the inert marker in query and header placements with double-encoding, JSON content-type, and 2KB/4KB padding variants (max 8 requests). Healthy permitted baseline required; an unhealthy baseline or an unblocked plain marker leaves dependent variants inconclusive, and inconclusive variants are ignored. All graded variants blocked => protected; any graded variant allowed => exposed.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"sqli","marker":"astranull' OR '1'='0","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","marker_probes","posture_status"],"entry_path_scenario":"declared_api_path"},"default_expected_behavior":"must_block_before_origin","probe_simulation_profile":"external_blocked","remediation_template":"Apply the same managed WAF and API protection rules to the declared API path as to the primary route, normalise double-encoded parameters before inspection, and fail closed when query or header inspection limits are exceeded.","explanation_template":"A permitted GET baseline and bounded inert-marker variations on the exact declared API path were graded for edge blocking; encoded, content-type and padded variants count only after the plain marker was blocked. External probe evidence only; markers achieve nothing if they reach origin."},
   {"check_id":"waf.evasion_unicode_normalization.safe","version":"1.1.0","name":"WAF Evasion — Unicode Normalization (Safe)","vector_family":"waf","safety_class":"safe","description":"Bounded probe: wraps the inert sqli marker in a Unicode normalization mismatch transform and checks whether the WAF still blocks it.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline inert marker should be blocked; if the Unicode normalization mismatch variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Enable normalization/canonicalization for Unicode normalization mismatch on the edge WAF so inspection occurs after decoding.","explanation_template":"Bounded inert-marker probe graded WAF normalization (external probe evidence only) of Unicode normalization mismatch.","probe_profile":{"kind":"waf_evasion_marker_probe","max_requests":4,"timeout_ms":5000,"marker":"astranull' OR '1'='0","evasion_transform":"unicode_normalization","marker_class":"sqli","scenario_family":"marker","marker_type":"query","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint","evasion_bypass_suspected"]},"probe_simulation_profile":"external_blocked","risk_class":"safe"},
@@ -3330,6 +3381,230 @@ export const CHECK_CATALOG = [
   {"check_id":"l7.request_parser_size.posture","version":"1.0.0","name":"Request URI / Parameter Size Limit Posture (Safe)","vector_family":"l7","description":"One bounded request carries a benign 1KB URI marker plus a declared-URI-length header. Reads whether the origin enforces a URI / query size limit (414/431/400) before parsing.","safety_class":"safe","risk_class":"safe","prerequisites":[],"supported_targets":["url","fqdn"],"required_customer_setup":["http_endpoint","request_size_limit_declaration"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"verdict_logic":"Origin that rejects an oversize declared URI/query (414/431/400) is protected; one that accepts it for parsing raises a parser-size readiness finding.","probe_profile":{"kind":"l7_resource_posture_probe","max_requests":1,"timeout_ms":5000,"marker_class":"declared_oversize_uri"},"safety_constraints":{"max_events":1,"max_duration_seconds":90,"max_concurrent_runs_per_target_group":1},"default_expected_behavior":"must_block_before_origin","remediation_template":"Enforce URI, query-string, and header size limits at the edge and reject oversize requests before parsing.","explanation_template":"Bounded declared-size acceptance probe correlated with declared request-size limits.","probe_simulation_profile":"external_blocked"},
   {"check_id":"waf.http_routing_trust.posture","version":"1.0.0","name":"WAF HTTP Routing & Proxy-Trust Posture","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Posture-only record for WAF HTTP Routing & Proxy-Trust Posture. Forwarded-header/HTTPoxy/authority trust is an origin-declared config fact not observable by a stateless outside-in marker.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","declared_proxy_trust_boundary"],"evidence_required":["customer_declaration"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":1,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Declare and verify WAF HTTP Routing & Proxy-Trust Posture controls; no safe outside-in probe can establish this fact.","explanation_template":"Declared-configuration posture for WAF HTTP Routing & Proxy-Trust Posture.","probe_profile":{"kind":"metadata_marker","max_requests":1,"timeout_ms":5000,"marker":"astranull-safe-marker"},"probe_simulation_profile":"external_blocked"},
   {"check_id":"waf.jsonp_css_policy.posture","version":"1.0.0","name":"WAF JSONP & CSS-Injection Policy Posture","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Posture-only record for WAF JSONP & CSS-Injection Policy Posture. JSONP-hijack and CSS-injection exposure is governed by declared CSP and content-type headers, not by a reliable outside-in signature.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","declared_content_security_policy"],"evidence_required":["customer_declaration"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":1,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Declare and verify WAF JSONP & CSS-Injection Policy Posture controls; no safe outside-in probe can establish this fact.","explanation_template":"Declared-configuration posture for WAF JSONP & CSS-Injection Policy Posture.","probe_profile":{"kind":"metadata_marker","max_requests":1,"timeout_ms":5000,"marker":"astranull-safe-marker"},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.sqli_managed_marker.safe","version":"1.0.0","name":"WAF Managed-Rule Marker: SQLi (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","rule_family":"managed","description":"Sends the plain inert SQLi marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for SQLi on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus managed SQLi markers; blocked/challenged => protected for this class on this path, allowed => exposed.","default_expected_behavior":"must_block_before_origin","remediation_template":"Enable managed SQLi rules and a declared block signature so a plain SQLi marker is denied at the edge.","explanation_template":"Bounded managed-rule SQLi marker comparison (external probe evidence only).","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"sqli","marker":"astranull' OR '1'='0","assurance_scope":"managed_rule_marker","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint"]},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.xss_managed_marker.safe","version":"1.0.0","name":"WAF Managed-Rule Marker: XSS (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","rule_family":"managed","description":"Sends the plain inert XSS marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for XSS on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus managed XSS markers; blocked/challenged => protected for this class on this path, allowed => exposed.","default_expected_behavior":"must_block_before_origin","remediation_template":"Enable managed XSS rules and a declared block signature so a plain XSS marker is denied at the edge.","explanation_template":"Bounded managed-rule XSS marker comparison (external probe evidence only).","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"xss","marker":"<astranull-xss-probe/>","assurance_scope":"managed_rule_marker","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint"]},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.path_traversal_managed_marker.safe","version":"1.0.0","name":"WAF Managed-Rule Marker: Path Traversal (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","rule_family":"managed","description":"Sends the plain inert path-traversal marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for path traversal on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus managed path-traversal markers; blocked/challenged => protected for this class on this path, allowed => exposed.","default_expected_behavior":"must_block_before_origin","remediation_template":"Enable managed path-traversal / LFI rules and a declared block signature so a plain traversal marker is denied at the edge.","explanation_template":"Bounded managed-rule path-traversal marker comparison (external probe evidence only).","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"path_traversal","marker":"../../astranull-probe","assurance_scope":"managed_rule_marker","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint"]},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.ssti_marker.safe","version":"1.0.0","name":"Custom Canary Rule: SSTI (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","rule_family":"custom_canary","description":"Proves a customer rule written for AstraNull's inert SSTI token. The marker is an opaque string, not a template-evaluation payload. This does not prove attack-class SSTI protection.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"A block proves only that a customer rule matching AstraNull's inert SSTI token is enforced on the probed path.","default_expected_behavior":"must_block_before_origin","remediation_template":"Write an explicit canary rule for the AstraNull SSTI token if you want this check to pass.","explanation_template":"Custom canary rule comparison against an AstraNull opaque SSTI token only.","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"ssti","marker":"astranull-ssti-marker-inert","assurance_scope":"custom_canary_rule","scenario_family":"marker","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint"]},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.scanner_signature_marker.safe","version":"1.0.0","name":"WAF Scanner Signature Marker (Safe)","vector_family":"waf","safety_class":"safe","risk_class":"safe","rule_family":"managed","description":"Sends the inert scanner user-agent that managed bot/scanner rulesets recognise. A block is a scoped protected verdict for that signature on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.","supported_targets":["url","fqdn"],"prerequisites":[],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline plus managed scanner user-agent marker; blocked/challenged => protected for this signature on this path, allowed => exposed.","default_expected_behavior":"must_block_before_origin","remediation_template":"Enable managed scanner/bot user-agent rules and a declared block signature.","explanation_template":"Bounded managed scanner user-agent marker comparison (external probe evidence only).","probe_profile":{"kind":"waf_class_marker_probe","max_requests":8,"timeout_ms":5000,"marker_class":"scanner_user_agent","marker":"sqlmap/1.8 (astranull-inert)","assurance_scope":"managed_rule_marker","scenario_family":"marker","marker_type":"user_agent","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint"]},"probe_simulation_profile":"external_blocked"},
+  {"check_id":"waf.evasion_double_url.safe","version":"1.1.0","name":"WAF Evasion — Double URL (Safe)","vector_family":"waf","safety_class":"safe","description":"Bounded probe: wraps the inert sqli marker in a double-URL-encode transform and checks whether the WAF still blocks it.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline inert marker should be blocked; if the double-URL-encode variant passes while baseline is blocked, a normalization gap is reported. Both blocked = evasion resisted.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Enable normalization/canonicalization for double URL encoding on the edge WAF so inspection occurs after decoding.","explanation_template":"Bounded inert-marker probe graded WAF normalization (external probe evidence only) of double URL encoding.","probe_profile":{"kind":"waf_evasion_marker_probe","max_requests":4,"timeout_ms":5000,"marker":"astranull' OR '1'='0","evasion_transform":"double_url","marker_class":"sqli","scenario_family":"marker","marker_type":"query","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint","evasion_bypass_suspected"]},"probe_simulation_profile":"external_blocked","risk_class":"safe"},
+  {"check_id":"waf.evasion_mixed_url.safe","version":"1.1.0","name":"WAF Evasion — Mixed URL (Safe)","vector_family":"waf","safety_class":"safe","description":"Bounded probe: wraps the inert sqli marker in a mixed URL-encoding transform and checks whether the WAF still blocks it.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline inert marker should be blocked; if the mixed URL-encoding variant passes while baseline is blocked, a normalization gap is reported. Both blocked = evasion resisted.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Enable normalization/canonicalization for mixed URL encoding on the edge WAF so inspection occurs after decoding.","explanation_template":"Bounded inert-marker probe graded WAF normalization (external probe evidence only) of mixed URL encoding.","probe_profile":{"kind":"waf_evasion_marker_probe","max_requests":4,"timeout_ms":5000,"marker":"astranull' OR '1'='0","evasion_transform":"mixed_url","marker_class":"sqli","scenario_family":"marker","marker_type":"query","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint","evasion_bypass_suspected"]},"probe_simulation_profile":"external_blocked","risk_class":"safe"},
+  {"check_id":"waf.evasion_case_fold.safe","version":"1.1.0","name":"WAF Evasion — Case Fold (Safe)","vector_family":"waf","safety_class":"safe","description":"Bounded probe: wraps the inert sqli marker in a case-fold transform and checks whether the WAF still blocks it.","supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","customer_approves_waf_marker_probe"],"evidence_required":["probe_result"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":8,"max_duration_seconds":120,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Baseline inert marker should be blocked; if the case-fold variant passes while baseline is blocked, a normalization gap is reported. Both blocked = evasion resisted.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Enable case-insensitive matching or case-fold normalization on the edge WAF.","explanation_template":"Bounded inert-marker probe graded WAF normalization (external probe evidence only) of case folding.","probe_profile":{"kind":"waf_evasion_marker_probe","max_requests":4,"timeout_ms":5000,"marker":"astranull' OR '1'='0","evasion_transform":"case_fold","marker_class":"sqli","scenario_family":"marker","marker_type":"query","expected_action":"block","nonce_hash_only":true,"collect":["status_code","waf_product_hint","evasion_bypass_suspected"]},"probe_simulation_profile":"external_blocked","risk_class":"safe"},
+  safeCheck({
+    check_id: 'waf.http_method_policy_enforced.safe',
+    version: '1.0.0',
+    name: 'WAF HTTP Method Policy Enforced (Safe)',
+    vector_family: 'waf',
+    description: 'Sends the declared method matrix (GET/HEAD plus one disallowed method) and grades whether the edge denies the disallowed method.',
+    supported_targets: ['url', 'fqdn'],
+    required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_marker_probe'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'A denied disallowed method with a healthy permitted GET/HEAD baseline is protected for method policy on this path. An allowed disallowed method is exposed. Incomplete comparison remains not_run.',
+    probe_profile: { kind: 'waf_method_policy_probe', max_requests: 8, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    safety_constraints: { max_events: 8, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  safeCheck({
+    check_id: 'waf.rate_limit_canary.validation',
+    version: '1.0.0',
+    name: 'WAF Rate-Limit Canary (Safe)',
+    vector_family: 'waf',
+    description: 'Hits a customer-declared low-threshold canary route and grades whether the edge rate-limits within the declared window. Requires waf.rate_limit_canary.',
+    supported_targets: ['url', 'fqdn'],
+    required_customer_setup: ['declared_waf_asset', 'waf.rate_limit_canary'],
+    runnable_requires: ['declared_rate_limit_canary'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'When waf.rate_limit_canary is declared, exceeding the threshold within the window must produce a rate-limit or block. Missing declaration is needs_declaration. Incomplete comparison remains not_run.',
+    probe_profile: { kind: 'rate_limit_canary_probe', max_requests: 8, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    safety_constraints: { max_events: 8, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  socGated({
+    check_id: 'waf.body_json_marker.soc',
+    version: '1.0.0',
+    name: 'WAF JSON Body Marker (SOC Only)',
+    vector_family: 'waf',
+    description: 'SOC-gated JSON request-body marker against a customer-deployed canary sink. Never customer self-serve; no worker sends a body.',
+    required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
+    evidence_required: ['approval_artifact', 'soc_runbook_ack'],
+    stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
+    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'none',
+    planner_profile: { kind: 'canary_sink_body_plan', content_type: 'application/json', padding_kb: 0 },
+  }),
+  socGated({
+    check_id: 'waf.body_form_marker.soc',
+    version: '1.0.0',
+    name: 'WAF Form Body Marker (SOC Only)',
+    vector_family: 'waf',
+    description: 'SOC-gated application/x-www-form-urlencoded body marker against a customer-deployed canary sink. Never customer self-serve.',
+    required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
+    evidence_required: ['approval_artifact', 'soc_runbook_ack'],
+    stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
+    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'none',
+    planner_profile: { kind: 'canary_sink_body_plan', content_type: 'application/x-www-form-urlencoded', padding_kb: 0 },
+  }),
+  socGated({
+    check_id: 'waf.body_multipart_marker.soc',
+    version: '1.0.0',
+    name: 'WAF Multipart Body Marker (SOC Only)',
+    vector_family: 'waf',
+    description: 'SOC-gated multipart/form-data body marker against a customer-deployed canary sink. Never customer self-serve.',
+    required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
+    evidence_required: ['approval_artifact', 'soc_runbook_ack'],
+    stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
+    safety_constraints: { customer_runnable: false, max_requests: 6 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'none',
+    planner_profile: { kind: 'canary_sink_body_plan', content_type: 'multipart/form-data', padding_kb: 0 },
+  }),
+  socGated({
+    check_id: 'waf.body_inspection_limit.soc',
+    version: '1.0.0',
+    name: 'WAF Body Inspection Limit (SOC Only)',
+    vector_family: 'waf',
+    description: 'SOC-gated canary-sink body markers with 8/16/64/128 KB padding to find inspection-limit fail-open. Never customer self-serve; no worker sends a body.',
+    required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
+    evidence_required: ['approval_artifact', 'soc_runbook_ack'],
+    stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
+    safety_constraints: { customer_runnable: false, max_requests: 8 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'none',
+    planner_profile: { kind: 'canary_sink_body_plan', padding_kb: [8, 16, 64, 128] },
+  }),
+  socGated({
+    check_id: 'waf.response_dlp_canary.soc',
+    version: '1.0.0',
+    name: 'WAF Response DLP Canary (SOC Only)',
+    vector_family: 'waf',
+    description: 'SOC-gated response-body DLP canary against a customer-deployed canary sink. Never customer self-serve.',
+    required_customer_setup: ['waf_offensive_authorization_pack', 'declared_waf_asset', 'staging_isolation', 'canary_sink'],
+    evidence_required: ['approval_artifact', 'soc_runbook_ack'],
+    stop_conditions: ['soc_kill_switch', 'abort_criteria_met', 'max_approved_requests'],
+    safety_constraints: { customer_runnable: false, max_requests: 4 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'none',
+    planner_profile: { kind: 'canary_sink_body_plan', inspect: 'response' },
+  }),
+  safeCheck({
+    check_id: 'nfw.declared_deny_tcp.safe',
+    version: '1.0.0',
+    name: 'Declared TCP Deny (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Two bounded TCP connect samples against a customer-declared deny rule. protected is not available from outside-in evidence. exposed requires a typed deny declaration and an unambiguous handshake from a non-CDN address.',
+    supported_targets: ['ip', 'fqdn', 'tcp'],
+    required_customer_setup: ['network_policy'],
+    runnable_requires: ['declared_tcp_deny'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'With a declared TCP deny, a connected or protocol-validated handshake from a non-CDN peer is exposed. Timeout, RST or ICMP reject without a deny declaration stays observation-only. protected is not available from outside-in evidence.',
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
+    safety_constraints: { max_events: 2, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  safeCheck({
+    check_id: 'nfw.declared_deny_udp.safe',
+    version: '1.0.0',
+    name: 'Declared UDP Deny (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Two bounded UDP samples against a customer-declared deny rule. protected is not available from outside-in evidence. exposed requires a typed deny declaration and a protocol-validated reply from a non-CDN address.',
+    supported_targets: ['ip', 'fqdn'],
+    required_customer_setup: ['network_policy'],
+    runnable_requires: ['declared_udp_deny'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'With a declared UDP deny, a protocol-validated reply from a non-CDN peer is exposed. Silence without a deny declaration stays observation-only. protected is not available from outside-in evidence.',
+    probe_profile: { kind: 'udp_probe', max_requests: 2, timeout_ms: 5000 },
+    safety_constraints: { max_events: 2, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  safeCheck({
+    check_id: 'nfw.management_port_exposure.safe',
+    version: '1.0.0',
+    name: 'Management and Database Port Exposure (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Bounded scan of the vetted management/database port list (SSH, RDP, SQL, Kubernetes, Docker, LDAP, VNC). protected is not available from outside-in evidence. exposed requires a declared deny on an open port.',
+    supported_targets: ['fqdn', 'ip'],
+    required_customer_setup: ['declared_scan_host'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'An open management or database port with a matching declared deny is exposed. Open ports without a deny stay observation-only. protected is not available from outside-in evidence.',
+    probe_profile: {
+      kind: 'port_scan_bounded',
+      max_requests: 15,
+      timeout_ms: 5000,
+      ports: [22, 3389, 3306, 1433, 1521, 27017, 5432, 6379, 9200, 6443, 10250, 2379, 2375, 5900, 389],
+    },
+    safety_constraints: { max_events: 15, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_connected',
+  }),
+  safeCheck({
+    check_id: 'nfw.ipv6_parity.safe',
+    version: '1.0.0',
+    name: 'IPv6/IPv4 Policy Parity (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Probes A and AAAA separately within the same two-sample budget and records family parity. protected is not available from outside-in evidence. exposed requires a declared deny that one family violates.',
+    supported_targets: ['fqdn', 'ip'],
+    required_customer_setup: ['declared_ipv6_target', 'network_policy'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'A parity mismatch plus a declared deny that one family violates is exposed. Reachability facts without a deny stay observation-only. protected is not available from outside-in evidence.',
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000, address_family: 'both' },
+    safety_constraints: { max_events: 2, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  safeCheck({
+    check_id: 'nfw.connection_limit.safe',
+    version: '1.0.0',
+    name: 'Per-Source Connection Limit (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Opens a bounded number of concurrent connections (hard cap 12) against a declared connection_limits budget. protected is not available from outside-in evidence. Missing connection_limits is needs_declaration.',
+    supported_targets: ['fqdn', 'ip', 'tcp'],
+    required_customer_setup: ['connection_limits'],
+    runnable_requires: ['declared_connection_limit'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'When connection_limits is declared, exceeding the per-source cap and still being admitted is exposed. Refusal at the cap is recorded; protected remains unavailable from outside-in evidence.',
+    probe_profile: { kind: 'connection_limit_probe', max_requests: 12, timeout_ms: 5000 },
+    safety_constraints: { max_events: 12, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
+  safeCheck({
+    check_id: 'nfw.origin_lockdown.safe',
+    version: '1.0.0',
+    name: 'Origin Lockdown to Declared Binding (Safe)',
+    vector_family: 'origin',
+    description: 'One bounded Host/SNI probe against a declared origin binding. Customer-visible. A direct 2xx from a non-CDN source with origin.lockdown_expected is a scoped exposed result. protected is not available from outside-in evidence.',
+    supported_targets: ['fqdn', 'url', 'ip'],
+    required_customer_setup: ['origin.lockdown_expected', 'origin_binding'],
+    runnable_requires: ['declared_origin_lockdown', 'origin_binding'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'With origin.lockdown_expected, a direct non-CDN 2xx on the declared origin binding is exposed. Missing declaration is needs_declaration. protected is not available from outside-in evidence.',
+    probe_profile: { kind: 'host_sni_bypass', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    safety_constraints: { max_events: 1, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_connected',
+  }),
+  safeCheck({
+    check_id: 'nfw.perspective_allowlist.safe',
+    version: '1.0.0',
+    name: 'Multi-Perspective Allowlist (Safe)',
+    vector_family: 'l3_l4',
+    description: 'Requires at least two registered probe perspectives with published egress IPs. One source cannot distinguish allow-only-from-X from deny-all. protected is not available from outside-in evidence. exposed requires a declared deny that one perspective violates.',
+    supported_targets: ['fqdn', 'ip'],
+    required_customer_setup: ['perspectives', 'network_policy'],
+    runnable_requires: ['two_perspectives', 'declared_perspectives'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'Fewer than two registered perspectives: not runnable (needs two_perspectives). With two perspectives and a declared allow/deny, a handshake from a denied perspective is exposed. protected is not available from outside-in evidence.',
+    probe_profile: { kind: 'tcp_connect', max_requests: 2, timeout_ms: 5000 },
+    safety_constraints: { max_events: 2, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    default_expected_behavior: 'must_block_before_origin',
+    probe_simulation_profile: 'external_blocked',
+  }),
 ];
 
 
@@ -3340,6 +3615,31 @@ const VERSIONED_PROBE_KINDS = new Set([
   ...OBSERVATION_ONLY_PROBE_KINDS.filter((kind) => !['metadata_marker', 'not_run'].includes(kind)),
   'host_sni_bypass', 'dns_axfr_leak', 'outside_in_waf_scan', 'waf_class_marker_probe', 'waf_evasion_marker_probe',
 ]);
+const MANAGED_MARKER_CLASSES = new Set(['sqli', 'xss', 'path_traversal', 'scanner_user_agent']);
+const CUSTOM_CANARY_CLASS_LABELS = Object.freeze({
+  http_method_policy: 'HTTP Method/Protocol Policy',
+  request_smuggling: 'Request Smuggling',
+  crlf: 'CRLF/Response-Splitting',
+  open_redirect: 'Open Redirect / Parameter Policy',
+  nosql: 'NoSQL Injection',
+  xpath: 'XPath/XML Injection',
+  ldap: 'JNDI/LDAP',
+  csv_injection: 'CSV/Formula',
+  prototype_pollution: 'Prototype Pollution',
+  deserialization: 'Unsafe Deserialization',
+  ssrf: 'SSRF',
+  xxe: 'XXE',
+  file_upload_marker: 'File Upload',
+  jwt_tamper: 'JWT Tamper',
+  ssti: 'SSTI',
+  scanner_user_agent: 'Scanner User-Agent',
+});
+const WAVE1_KIND_MIN_REQUESTS = Object.freeze({
+  tcp_connect: 2,
+  udp_probe: 2,
+  reflection_service_probe: 4,
+  dns_axfr_leak: 5,
+});
 for (const check of CHECK_CATALOG) {
   const profile = check.probe_profile;
   if (!profile || !VERSIONED_PROBE_KINDS.has(profile.kind)) continue;
@@ -3349,34 +3649,125 @@ for (const check of CHECK_CATALOG) {
   check.previous_semantics_version = previousVersion;
   check.version = `${parts[0]}.${parts[1]}.${parts[2] + 1}`;
   check.semantics_version = PROBE_CATALOG_SEMANTICS_VERSION;
-  const unsupportedEvasion = profile.kind === 'waf_evasion_marker_probe' && !SUPPORTED_EVASION_TRANSFORMS.includes(profile.evasion_transform);
+  const compositeReflection = profile.kind === 'reflection_service_probe'
+    && Array.isArray(profile.payload_profiles)
+    && profile.payload_profiles.length > 1;
+  const minRequests = profile.kind === 'reflection_service_probe'
+    ? (compositeReflection ? 4 : 0)
+    : (WAVE1_KIND_MIN_REQUESTS[profile.kind] ?? 0);
+  if (minRequests) {
+    profile.max_requests = Math.max(profile.max_requests ?? 1, minRequests);
+    check.safety_constraints = {
+      ...check.safety_constraints,
+      max_events: Math.max(check.safety_constraints?.max_events ?? 0, minRequests),
+    };
+  }
+  const unsupportedEvasion = profile.kind === 'waf_evasion_marker_probe' && !SUPPORTED_EVASION_TRANSFORMS.includes(profile.evasion_transform ?? profile.transform);
   const observationOnly = OBSERVATION_ONLY_PROBE_KINDS.includes(profile.kind) || unsupportedEvasion;
   check.observation_only = profile.observation_only = observationOnly;
   if (observationOnly) check.readiness_conclusion = profile.readiness_conclusion = false;
   check.scenario_version = profile.scenario_version = observationOnly ? 'probe-observation-v3' : 'marker-comparison-v4';
   check.evidence_tier = evidenceTierForCheck(check);
   check.mechanism_id = unsupportedEvasion ? `unsupported:${profile.evasion_transform}` : `${profile.kind}:${profile.evasion_transform ?? profile.entry_path_scenario ?? profile.marker_class ?? profile.payload_profile ?? profile.dns_qtype ?? profile.scenario ?? 'shared'}`;
-  check.mechanism_supported = profile.delivery_supported = !unsupportedEvasion && !(profile.kind === 'reflection_service_probe' && UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES.includes(profile.payload_profile)) && !['waf_inspection_limit_probe'].includes(profile.kind) && !(profile.kind === 'l7_resource_posture_probe' && profile.marker_class === 'declared_content_encoding');
+  const missingPort = ['tcp_connect', 'udp_probe'].includes(profile.kind)
+    && !Number.isInteger(profile.default_port)
+    && !Number.isInteger(profile.service_port)
+    && !Number.isInteger(profile.port)
+    && (check.runnable_requires ?? []).includes('port');
+  check.mechanism_supported = profile.delivery_supported = !unsupportedEvasion && !missingPort && !(profile.kind === 'reflection_service_probe' && UNSUPPORTED_REFLECTION_PAYLOAD_PROFILES.includes(profile.payload_profile)) && !['waf_inspection_limit_probe'].includes(profile.kind) && !(profile.kind === 'l7_resource_posture_probe' && profile.marker_class === 'declared_content_encoding');
   check.coverage_unit = 'check_definition_not_independent_mechanism';
   if (['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan'].includes(profile.kind) && check.mechanism_supported) {
     check.requires_complete_comparison = profile.requires_complete_comparison = true;
   }
-  if (observationOnly) {
-    check.description = `Bounded external observation for ${check.name}. ${check.mechanism_supported ? 'Only the performed transport, response and protocol/configuration facts are recorded.' : 'The advertised mechanism is unsupported by the approved safe transport and is not run.'} No protection, exposure or capacity conclusion is established.`;
-    check.verdict_logic = 'Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.';
-    check.explanation_template = 'External observation only. Unknown is not protected and ordinary public behavior is not a vulnerability. No readiness conclusion.';
+  if (observationOnly && !String(check.check_id).startsWith('nfw.')) {
+    const transportNote = missingPort
+      ? 'Not runnable until a TCP/UDP port is declared on the target or a catalog default_port is set.'
+      : check.mechanism_supported
+        ? 'Only the performed transport, response and protocol/configuration facts are recorded.'
+        : 'The advertised mechanism is unsupported by the approved safe transport and is not run.';
+    check.description = `Bounded external observation for ${check.name}. ${transportNote} No protection, exposure or capacity conclusion is established.`;
+    check.verdict_logic = missingPort
+      ? 'Not runnable without a port: fqdn/ip targets carry none, so the probe sends zero requests. Declare a service port or use a TCP target.'
+      : 'Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.';
+    check.explanation_template = missingPort
+      ? 'This check cannot send a packet until a port is declared. It is excluded from run-all while port-less.'
+      : 'External observation only. Unknown is not protected and ordinary public behavior is not a vulnerability. No readiness conclusion.';
     if (profile.kind === 'alert_webhook_ping') {
       check.required_customer_setup = [...new Set([...check.required_customer_setup, 'approved_signed_alert_webhook_scope'])];
       check.description += ' An exact separately approved signed callback URL is required. Ordinary target metadata is not callback authorization; no approved callback-scope producer is currently established.';
     }
-  } else if (['waf_class_marker_probe', 'waf_evasion_marker_probe'].includes(profile.kind)) {
+  } else if (profile.kind === 'waf_class_marker_probe') {
+    const managed = MANAGED_MARKER_CLASSES.has(profile.marker_class) || profile.assurance_scope === 'managed_rule_marker';
+    profile.assurance_scope = managed ? 'managed_rule_marker' : 'custom_canary_rule';
+    check.rule_family = managed ? 'managed' : 'custom_canary';
+    if (managed) {
+      check.verdict_logic = 'Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.';
+      check.explanation_template = 'Complete bounded managed-rule marker comparison only; no exploit or capacity assurance. Missing legs never count as protected.';
+    } else {
+      const classLabel = CUSTOM_CANARY_CLASS_LABELS[profile.marker_class] ?? String(profile.marker_class ?? 'class').replace(/_/g, ' ');
+      check.name = `Custom Canary Rule: ${classLabel} (Safe)`;
+      check.description = `Proves a customer rule written for AstraNull's inert ${classLabel} token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.`;
+      check.verdict_logic = 'Healthy comparable permitted baseline and a control-specific denial of AstraNull\'s inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.';
+      check.explanation_template = 'Custom canary rule comparison against an AstraNull opaque token only. No class-wide, exploit, or capacity assurance. Missing legs never count as protected.';
+      if (['ssrf', 'xxe', 'ldap', 'csv_injection', 'prototype_pollution', 'open_redirect'].includes(profile.marker_class)) {
+        profile.marker = `astranull-${({ csv_injection: 'csv', prototype_pollution: 'prototype', open_redirect: 'redirect' })[profile.marker_class] ?? profile.marker_class}-marker-inert`;
+      }
+    }
+  } else if (profile.kind === 'waf_evasion_marker_probe') {
     check.verdict_logic = 'Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.';
     check.explanation_template = 'Complete bounded safe marker-rule comparison only; no exploit or capacity assurance. Missing legs never count as protected.';
-    if (profile.kind === 'waf_class_marker_probe' && ['ssrf', 'xxe', 'ldap', 'csv_injection', 'prototype_pollution', 'open_redirect'].includes(profile.marker_class)) {
-      profile.marker = `astranull-${({ csv_injection: 'csv', prototype_pollution: 'prototype', open_redirect: 'redirect' })[profile.marker_class] ?? profile.marker_class}-marker-inert`;
-      check.description = 'An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.';
-    }
   }
+}
+
+const VIOLATION_ONLY_TCP_COPY = Object.freeze({
+  verdict_logic: 'Violation-only. exposed only when network_policy declares a deny for this TCP port and a TCP handshake completes from a non-CDN address with agreeing samples. Refusals, ICMP rejects, timeouts and silence are inconclusive because a deny cannot be proven from outside. Without a declared deny the result is an observation. protected is never available.',
+  explanation_template: 'Violation-only firewall check: a handshake on a declared-deny TCP port is exposed; everything else is inconclusive, never protected.',
+});
+const REFLECTOR_COPY = Object.freeze({
+  verdict_logic: 'Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.',
+  explanation_template: 'Exposure-only reflector check: a protocol-validated reply means an open reflector is reachable from the internet; anything else is inconclusive, never protected.',
+});
+const METHOD_POLICY_COPY = Object.freeze({
+  description: 'After a healthy permitted GET baseline, sends TRACE and one nonstandard token method (ASTRANULLPROBE), each with no request body, then a trailing GET, and grades whether the edge refuses them. Uses no customer declaration.',
+  verdict_logic: 'Verdict-capable. protected when both TRACE and the nonstandard token method are refused at the edge with a control-specific vendor or declared denial while the permitted GET baseline stays healthy and the trailing GET is still allowed. exposed when either method is allowed through the edge. inconclusive when the comparison is incomplete, the source is penalized, a block is only suspected, or only the origin rejects the method (405/501).',
+  explanation_template: 'Bounded method-policy comparison of TRACE and a nonstandard token method with no body. Scoped to this path; no exploit or capacity assurance.',
+});
+const ORIGIN_LOCKDOWN_COPY = Object.freeze({
+  description: 'One bounded Host/SNI request to a declared origin binding. Requires a declared origin binding and origin.lockdown_expected. exposed means the origin answered directly, outside the CDN, as the application for the target hostname: application identity must be confirmed, and a TCP handshake or bare 2xx is not enough. protected is not available from outside-in evidence.',
+  verdict_logic: 'Violation-only. Requires a declared origin binding and origin.lockdown_expected. exposed only when the origin, reached from a non-CDN address, returns a 2xx with confirmed application identity for the target hostname. A TCP handshake alone, unattributed denials, timeouts, refusals and CDN edge answers are inconclusive. A missing binding or declaration is needs_declaration. protected is never available.',
+  explanation_template: 'Origin lockdown is violation-only: exposed needs confirmed application identity on the declared origin binding, never just a TCP handshake.',
+});
+
+function bumpMinorVersion(check) {
+  const parts = String(check.version ?? '1.0.0').split('.').map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isSafeInteger(part))) throw new Error(`invalid check version: ${check.check_id}`);
+  check.version = `${parts[0]}.${parts[1] + 1}.0`;
+}
+
+function plainCheckName(check) {
+  return String(check.name ?? check.check_id).replace(/\s*\(Safe\)\s*$/, '');
+}
+
+for (const check of CHECK_CATALOG) {
+  const kind = check.probe_profile?.kind;
+  const reflectOrAmp = /^(reflect|amp)\./.test(check.check_id);
+  if (check.check_id === 'waf.http_method_policy_enforced.safe') {
+    Object.assign(check, METHOD_POLICY_COPY);
+  } else if (check.check_id === 'nfw.origin_lockdown.safe') {
+    Object.assign(check, ORIGIN_LOCKDOWN_COPY);
+  } else if (reflectOrAmp && kind === 'reflection_service_probe') {
+    check.description = `Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether ${plainCheckName(check)} answers from the internet. A protocol-validated reply is an open reflector; protected is never available.`;
+    Object.assign(check, REFLECTOR_COPY);
+  } else if (((reflectOrAmp && kind === 'tcp_connect') || check.check_id === 'l3.forbidden_tcp_port.safe') && check.mechanism_supported !== false) {
+    check.description = `One bounded TCP connect (two samples) for ${plainCheckName(check)}. Violation-only: exposed needs a declared TCP deny that a handshake violates; protected is never available.`;
+    Object.assign(check, VIOLATION_ONLY_TCP_COPY);
+  } else if (check.check_id === 'l3.basic_deny_rule.safe') {
+    check.description = 'One bounded TCP connect (two samples) against a declared deny rule. Runnable for a tcp host:port target or a target whose network_policy declares a TCP deny; the probe only ever picks a declared deny port, never an allow rule. Violation-only: protected is never available.';
+    Object.assign(check, VIOLATION_ONLY_TCP_COPY);
+  } else {
+    continue;
+  }
+  bumpMinorVersion(check);
 }
 
 for (const check of CHECK_CATALOG) {
@@ -3399,8 +3790,11 @@ export function resolveExpectedBehaviorForCheck(checkId) {
   return getCheckById(checkId)?.default_expected_behavior ?? 'must_block_before_origin';
 }
 
-export function isCustomerRunnable(check) {
+export function isCustomerRunnable(check, contextOrTenant = null) {
   if (!check) return false;
+  if (contextOrTenant && typeof contextOrTenant !== 'number' && matchesDemoAccount(contextOrTenant)) {
+    return true;
+  }
   if (check.risk_class === 'soc_gated') return false;
   if (check.safety_constraints?.customer_runnable === false) return false;
   return true;
@@ -3415,11 +3809,301 @@ export function isCustomerRunnable(check) {
  * check that would immediately error. Definitions remain in CHECK_CATALOG so getCheckById
  * and internal orchestrator delegation (which supply the extra input) still resolve them.
  */
-export function checkRequiresAdditionalInput(check) {
+function validPortNumber(raw) {
+  const port = Number(raw);
+  return Number.isInteger(port) && port > 0 && port <= 65535;
+}
+
+function targetSuppliedPort(target) {
+  if (!target) return false;
+  if (['tcp', 'udp', 'ip'].includes(target?.kind) && validPortNumber(target.port)) return true;
+  if (['tcp', 'udp'].includes(target?.kind)) {
+    const portSuffix = String(target.value ?? '').trim().match(/^(?:\[[^\]]+\]|[^:\s]+):(\d{1,5})$/);
+    return Boolean(portSuffix && validPortNumber(portSuffix[1]));
+  }
+  return false;
+}
+
+function declaredNetworkRules(target, declarations) {
+  const doc = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
+  return Array.isArray(doc?.network_policy) ? doc.network_policy : [];
+}
+
+function checkTransportProtocol(check) {
+  return check?.probe_profile?.kind === 'udp_probe' ? 'udp' : 'tcp';
+}
+
+function catalogProfileHasPort(check) {
+  const profile = check?.probe_profile ?? {};
+  return [profile.default_port, profile.service_port, profile.port].some((value) => Number.isInteger(value));
+}
+
+function targetHasPortOrDeclaredTcpDeny(target, declarations) {
+  if (targetSuppliedPort(target)) return true;
+  return declaredNetworkRules(target, declarations)
+    .some((rule) => rule?.protocol === 'tcp' && rule?.action === 'deny' && validPortNumber(rule?.port));
+}
+
+function targetHasPortOrDeclaredUdpDeny(target, declarations) {
+  if (targetSuppliedPort(target)) return true;
+  return declaredNetworkRules(target, declarations)
+    .some((rule) => rule?.protocol === 'udp' && rule?.action === 'deny' && validPortNumber(rule?.port));
+}
+
+function targetHasServicePort(check, target, declarations) {
+  if (catalogProfileHasPort(check) || targetSuppliedPort(target)) return true;
+  const protocol = checkTransportProtocol(check);
+  return declaredNetworkRules(target, declarations)
+    .some((rule) => (rule?.protocol ?? protocol) === protocol && validPortNumber(rule?.port));
+}
+
+function targetHasDeclaredTcpDeny(target, declarations) {
+  return declaredNetworkRules(target, declarations)
+    .some((rule) => rule?.protocol === 'tcp' && rule?.action === 'deny' && validPortNumber(rule?.port));
+}
+
+function targetHasDeclaredUdpDeny(target, declarations) {
+  return declaredNetworkRules(target, declarations)
+    .some((rule) => rule?.protocol === 'udp' && rule?.action === 'deny' && validPortNumber(rule?.port));
+}
+
+function declaredConnectionLimits(target, declarations) {
+  const doc = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
+  return Array.isArray(doc?.connection_limits) ? doc.connection_limits : [];
+}
+
+function targetHasDeclaredConnectionLimit(target, declarations) {
+  return declaredConnectionLimits(target, declarations)
+    .some((rule) => validPortNumber(rule?.port) && Number(rule?.max_connections_per_source) > 0);
+}
+
+function targetHasDeclaredRateLimitCanary(target, declarations) {
+  const doc = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
+  return Boolean(doc?.waf?.rate_limit_canary);
+}
+
+function targetHasDeclaredOriginLockdown(target, declarations) {
+  const doc = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
+  return doc?.origin?.lockdown_expected === true;
+}
+
+function targetHasDeclaredPerspectives(target, declarations) {
+  const doc = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
+  const denied = doc?.perspectives?.denied_perspective_ids;
+  return Array.isArray(denied) && denied.some((id) => typeof id === 'string' && id.trim().length > 0);
+}
+
+function targetHasActiveVerifiedOriginBinding(target, declarations, originBindings = undefined) {
+  return hasActiveVerifiedOriginBinding(target, declarations, originBindings);
+}
+
+export { isBindingActiveAndVerified, targetHasActiveVerifiedOriginBinding };
+
+
+// Requirements a target can satisfy; with no target in hand they stay unmet and are shown as text.
+export const TARGET_DEPENDENT_REQUIREMENTS = Object.freeze([
+  'port',
+  'port_or_declared_tcp_deny',
+  'port_or_declared_udp_deny',
+  'declared_tcp_deny',
+  'declared_udp_deny',
+  'declared_connection_limit',
+  'declared_rate_limit_canary',
+  'declared_origin_lockdown',
+  'origin_binding',
+  'declared_perspectives',
+]);
+
+const DEMO_KEEP_LIST_ORIGIN_LOCKDOWN_ERRORS = new Set([
+  'origin_destination_not_allowed',
+  'origin_target_not_verified_address',
+  'origin_binding_ambiguous',
+  'scope_mismatch',
+  'origin_binding_unavailable',
+]);
+
+function demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId) {
+  if (check?.check_id !== 'nfw.origin_lockdown.safe') return null;
+  const directList = originBindings
+    ?? target?.origin_bindings ?? target?.bindings
+    ?? (target?.origin_binding ? [target.origin_binding] : null)
+    ?? declarations?.origin_bindings ?? declarations?.bindings
+    ?? (declarations?.origin_binding ? [declarations.origin_binding] : null);
+  const bindings = Array.isArray(directList)
+    ? directList
+    : (Array.isArray(directList?.bindings)
+      ? directList.bindings
+      : (Array.isArray(directList?.items)
+        ? directList.items
+        : []));
+  const records = directList?.records ?? (originBindings?.records ? originBindings.records : null);
+  if (!records) return null;
+  const res = resolveOriginLockdownBinding({
+    check,
+    target,
+    tenantId,
+    bindings,
+    records,
+  });
+  if (res?.error && DEMO_KEEP_LIST_ORIGIN_LOCKDOWN_ERRORS.has(res.error)) {
+    return res;
+  }
+  return null;
+}
+
+// Refusal for the target-dependent requirements; null when this target satisfies them.
+export function targetInputRefusal(check, target, declarations = undefined, { originBindings, tenantId = null, env = process.env } = {}) {
+  const tid = tenantId ?? target?.tenant_id;
+  if (isExplicitDemoTenant(tid, env) && isCustomerRunnable(check, tid)) {
+    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
+      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tid);
+      if (keepRefusal) return keepRefusal;
+    }
+    return null;
+  }
+  return rawTargetInputRefusal(check, target, declarations, { originBindings });
+}
+
+// Underlying target input check without demo tenant bypass.
+export function rawTargetInputRefusal(check, target, declarations = undefined, { originBindings } = {}) {
+  const requires = check?.runnable_requires ?? [];
+  if (requires.includes('port_or_declared_tcp_deny') && !targetHasPortOrDeclaredTcpDeny(target, declarations)) {
+    return {
+      error: 'port_or_declared_deny_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a tcp host:port target or a declared TCP deny rule; it never probes an allow rule.',
+    };
+  }
+  if (requires.includes('port_or_declared_udp_deny') && !targetHasPortOrDeclaredUdpDeny(target, declarations)) {
+    return {
+      error: 'port_or_declared_deny_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a udp host:port target or a declared UDP deny rule; it never probes an allow rule.',
+    };
+  }
+  if (requires.includes('declared_tcp_deny') && !targetHasDeclaredTcpDeny(target, declarations)) {
+    return {
+      error: 'declared_tcp_deny_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a declared TCP deny rule on the target.',
+    };
+  }
+  if (requires.includes('declared_udp_deny') && !targetHasDeclaredUdpDeny(target, declarations)) {
+    return {
+      error: 'declared_udp_deny_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a declared UDP deny rule on the target.',
+    };
+  }
+  if (requires.includes('declared_connection_limit') && !targetHasDeclaredConnectionLimit(target, declarations)) {
+    return {
+      error: 'declared_connection_limit_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a declared connection limit on the target.',
+    };
+  }
+  if (requires.includes('declared_rate_limit_canary') && !targetHasDeclaredRateLimitCanary(target, declarations)) {
+    return {
+      error: 'declared_rate_limit_canary_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs a declared rate-limit canary on the target.',
+    };
+  }
+  if (requires.includes('declared_origin_lockdown') && !targetHasDeclaredOriginLockdown(target, declarations)) {
+    return {
+      error: 'declared_origin_lockdown_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs origin lockdown declared on the target.',
+    };
+  }
+  if ((requires.includes('origin_binding') || check?.check_id === 'nfw.origin_lockdown.safe') && !targetHasActiveVerifiedOriginBinding(target, declarations, originBindings)) {
+    return {
+      error: 'origin_binding_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs exactly one active, verified origin binding for the target.',
+    };
+  }
+  if (requires.includes('declared_perspectives') && !targetHasDeclaredPerspectives(target, declarations)) {
+    return {
+      error: 'declared_perspectives_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs at least one denied perspective declared on the target.',
+    };
+  }
+  if (requires.includes('port') && !targetHasServicePort(check, target, declarations)) {
+    return {
+      error: 'port_required',
+      status: 409,
+      check_id: check.check_id,
+      message: `This check is not runnable without a service port: use a tcp host:port target or declare a ${checkTransportProtocol(check).toUpperCase()} rule with a port on the target.`,
+    };
+  }
+  return null;
+}
+
+export function rawAdditionalInputRefusal(check, env = process.env, { target = null, declarations = undefined, deferTargetRequirements = false, originBindings } = {}) {
+  if (!check) return null;
+  if (PENDING_T7_PROBE_KINDS.includes(check.probe_profile?.kind)) {
+    return {
+      error: 't7_probe_module_pending',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check is catalogued for T7; the worker probe module is not shipped yet.',
+    };
+  }
+  if ((check.runnable_requires ?? []).includes('two_perspectives') && listProbePerspectives(env).length < 2) {
+    return {
+      error: 'two_perspectives_required',
+      status: 409,
+      check_id: check.check_id,
+      message: 'This check needs at least two registered probe perspectives.',
+    };
+  }
+  if (!deferTargetRequirements) return rawTargetInputRefusal(check, target, declarations, { originBindings });
+  return null;
+}
+
+export function additionalInputRefusal(check, env = process.env, { target = null, declarations = undefined, deferTargetRequirements = false, originBindings, tenantId = null } = {}) {
+  if (!check) return null;
+  const tid = tenantId ?? target?.tenant_id;
+  if (isExplicitDemoTenant(tid, env) && isCustomerRunnable(check, tid)) {
+    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
+      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tid);
+      if (keepRefusal) return keepRefusal;
+    }
+    return null;
+  }
+  return rawAdditionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings });
+}
+
+export function checkRequiresAdditionalInput(check, options = {}) {
+  const target = options?.target !== undefined ? options.target : (options?.kind ? options : null);
+  const declarations = options?.declarations;
+  const env = options?.env ?? process.env;
+  const deferTargetRequirements = options?.deferTargetRequirements ?? false;
+  const originBindings = options?.originBindings;
+  const tenantId = options?.tenantId ?? target?.tenant_id;
   if (!check) return false;
+  if (isExplicitDemoTenant(tenantId, env) && isCustomerRunnable(check, tenantId)) {
+    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
+      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId);
+      if (keepRefusal) return true;
+    }
+    return false;
+  }
   if (validateCheckDefinition(check).length) return true;
-  if (check.probe_profile?.kind === 'host_sni_bypass') return true;
+  if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return true;
   if (check.probe_profile?.kind === 'alert_webhook_ping') return true;
+  if (additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId })) return true;
   if (
     (check.required_customer_setup ?? []).some((requirement) => (
       typeof requirement === 'string' && requirement.startsWith('declared_') && requirement.endsWith('_probe_path')
@@ -3430,13 +4114,92 @@ export function checkRequiresAdditionalInput(check) {
   return false;
 }
 
-/**
- * The catalog a customer may browse and select in the portal: everything except checks
- * that would error without additional run-time input/setup.
- */
-export function customerSelectableChecks(catalog) {
+export function checkAdditionalInputReason(check, options = {}) {
+  const target = options?.target !== undefined ? options.target : (options?.kind ? options : null);
+  const declarations = options?.declarations;
+  const env = options?.env ?? process.env;
+  const deferTargetRequirements = options?.deferTargetRequirements ?? false;
+  const originBindings = options?.originBindings;
+  const tenantId = options?.tenantId ?? target?.tenant_id;
+  if (!check) return null;
+  if (isExplicitDemoTenant(tenantId, env) && isCustomerRunnable(check, tenantId)) {
+    if (check?.check_id === 'nfw.origin_lockdown.safe' && originBindings) {
+      const keepRefusal = demoOriginLockdownKeepRefusal(check, target, declarations, originBindings, tenantId);
+      if (keepRefusal?.error) return keepRefusal.error;
+    }
+    return null;
+  }
+  const refusal = additionalInputRefusal(check, env, { target, declarations, deferTargetRequirements, originBindings, tenantId });
+  if (refusal?.error) return refusal.error;
+  if (validateCheckDefinition(check).length) return 'invalid_check_definition';
+  if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') return 'target_bound_direct_address_required';
+  if (check.probe_profile?.kind === 'alert_webhook_ping') return 'alert_webhook_required';
+  if (
+    (check.required_customer_setup ?? []).some((requirement) => (
+      typeof requirement === 'string' && requirement.startsWith('declared_') && requirement.endsWith('_probe_path')
+    ))
+  ) {
+    return 'declared_probe_path_required';
+  }
+  return null;
+}
+
+// The catalog a customer may browse and select in the portal: everything except checks
+// that would error without additional run-time input/setup.
+export function customerSelectableChecks(catalog, { target = null, declarations = undefined, env = process.env, deferTargetRequirements = false, originBindings, tenantId = null } = {}) {
   const source = Array.isArray(catalog) ? catalog : CHECK_CATALOG;
-  return source.filter((check) => !checkRequiresAdditionalInput(check));
+  return source.filter((check) => {
+    return !checkRequiresAdditionalInput(check, { target, declarations, env, deferTargetRequirements, originBindings, tenantId: tenantId ?? target?.tenant_id });
+  });
+}
+
+export function demoMissingInputRefusal(check, { target = null, declarations = undefined, originBindings = null, env = process.env, probeMode = null } = {}) {
+  const resolvedProbeMode = probeMode ?? env.ASTRANULL_PROBE_MODE ?? 'simulation';
+  if (resolvedProbeMode !== 'signed-worker') return null;
+  if (!check || !isCustomerRunnable(check)) return null;
+  const rawRefusal = rawAdditionalInputRefusal(check, env, { target, declarations, originBindings });
+  if (rawRefusal?.error) return rawRefusal;
+  if (check.probe_profile?.kind === 'host_sni_bypass' && check.check_id !== 'nfw.origin_lockdown.safe') {
+    if (!targetLiteralIpAddress(target)) {
+      return {
+        error: 'target_bound_direct_address_required',
+        status: 400,
+        check_id: check.check_id,
+        message: 'Signed-worker Host/SNI checks require the verified target itself to be an IP literal or a URL with an IP-literal host; probe_profile.direct_ip and target metadata direct_origin_ip cannot select another destination.',
+      };
+    }
+  }
+  return null;
+}
+
+export function formatMissingInputMessage(code) {
+  switch (code) {
+    case 'declared_tcp_deny_required':
+    case 'declared_udp_deny_required':
+    case 'port_or_declared_deny_required':
+      return 'No denied port is declared, so there was nothing to probe.';
+    case 'port_required':
+      return 'No service port is declared or configured on the target, so there was nothing to probe.';
+    case 'declared_connection_limit_required':
+      return 'No connection limit is declared on the target, so there was nothing to probe.';
+    case 'declared_rate_limit_canary_required':
+      return 'No rate-limit canary is declared on the target, so there was nothing to probe.';
+    case 'declared_origin_lockdown_required':
+      return 'No origin lockdown is declared on the target, so there was nothing to probe.';
+    case 'origin_binding_required':
+    case 'missing_declared_origin_binding':
+      return 'No active, verified origin binding protects this target, so there was nothing to probe.';
+    case 'target_bound_direct_address_required':
+    case 'missing_target_bound_direct_address':
+      return 'Signed-worker Host/SNI checks require an IP-literal target, so there was nothing to probe.';
+    case 'declared_perspectives_required':
+    case 'two_perspectives_required':
+      return 'No denied perspective is declared on the target, so there was nothing to probe.';
+    case 'declared_probe_path_required':
+      return 'No probe path is declared on the target, so there was nothing to probe.';
+    default:
+      return 'Required input is missing for this check, so there was nothing to probe.';
+  }
 }
 
 /**

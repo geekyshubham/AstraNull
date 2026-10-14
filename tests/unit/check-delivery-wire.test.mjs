@@ -12,7 +12,28 @@ import { DELIVERY_WORKER_SECRET } from '../helpers/check-delivery-fixtures.mjs';
 import { catalogSignedJob, createCheckDeliveryFixtures, executeMemoryDelivery, assertOwnedProtocolReceipt } from '../helpers/check-delivery-fixtures.mjs';
 import { createTlsFixture } from './protocol-transport-socket.fixture.mjs';
 
-describe('actual owned wire boundaries of shipped profile selectors', () => {
+function withoutCacheBuster(url) {
+  const [path, qs] = String(url ?? '').split('?');
+  if (qs == null) return String(url ?? '');
+  const kept = qs.split('&').filter((part) => part && !part.startsWith('an_cb=')).join('&');
+  return kept ? `${path}?${kept}` : path;
+}
+
+function assertEvasionWire(wire, { referenceUrl, transformUrl, cookie } = {}) {
+  assert.equal(wire.length, 4);
+  for (const row of wire) assert.ok(row.url.includes('an_cb='), row.url);
+  const dump = wire.map((row) => row.url).join('\n');
+  const controls = wire.filter((row) => withoutCacheBuster(row.url) === '/signed/path?keep=1' && !row.cookie && !row.marker);
+  assert.equal(controls.length, 2, dump);
+  if (referenceUrl) assert.ok(wire.some((row) => withoutCacheBuster(row.url) === referenceUrl), dump);
+  if (transformUrl) {
+    const hit = wire.find((row) => withoutCacheBuster(row.url) === transformUrl && (cookie ? row.cookie === cookie : true));
+    assert.ok(hit, dump);
+    if (cookie) assert.equal(hit.cookie, cookie);
+  }
+}
+
+describe('actual owned wire boundaries of shipped profile selectors', { concurrency: false }, () => {
   let fixtures;
   before(async () => { fixtures = await createCheckDeliveryFixtures(); });
   after(async () => { await fixtures?.close(); });
@@ -21,6 +42,12 @@ describe('actual owned wire boundaries of shipped profile selectors', () => {
       const fixture = fixtures.forCheck(check, { targetKind: 'url' });
       fixture.target.value = `https://127.0.0.1:${fixture.ports.https}/caller/ignored`;
       fixture.originScope = { host: 'grpc.test', port: fixture.ports.https, path: '/bound/health' };
+      if (check.check_id === 'nfw.origin_lockdown.safe') {
+        fixture.target.metadata_json = {
+          ...(fixture.target.metadata_json ?? {}),
+          control_declarations: { version: 1, origin: { lockdown_expected: true } },
+        };
+      }
       const result = await executeMemoryDelivery(check, fixture);
       assert.equal(result.started.error, undefined);
       assert.deepEqual(result.job.constraints.origin_scope, { host: 'grpc.test', sni: 'grpc.test', port: fixture.ports.https, path: '/bound/health' });
@@ -52,10 +79,12 @@ describe('actual owned wire boundaries of shipped profile selectors', () => {
       const wire = fixture.wire().filter((row) => row.transport === 'http');
       assert.equal(outcome.external_result, 'blocked');
       assert.equal(outcome.metadata.evasion_transform, transform);
-      assert.equal(wire.length, 3);
-      assert.equal(wire[2].url, transform === 'double_url'
-        ? '/signed/path?keep=1&probe=astranull%2527%2520OR%2520%25271%2527%253D%25270'
-        : '/signed/path?keep=1&probe=astranull%27%20OR%20%271%27=%270');
+      assertEvasionWire(wire, {
+        referenceUrl: '/signed/path?keep=1&probe=astranull%27%20OR%20%271%27%3D%270',
+        transformUrl: transform === 'double_url'
+          ? '/signed/path?keep=1&probe=astranull%2527%2520OR%2520%25271%2527%253D%25270'
+          : '/signed/path?keep=1&probe=astranull%27%20OR%20%271%27=%270',
+      });
       assert.equal(outcome.metadata.comparison_complete, true);
       // No fabricated admission, execution receipt, event, verdict or aggregate credit.
     });
@@ -117,17 +146,27 @@ describe('actual owned wire boundaries of shipped profile selectors', () => {
       const check = getCheckById(`waf.evasion_${transform}.safe`);
       const result = await executeMemoryDelivery(check, fixtures.forCheck(check));
       const wire = result.receipt.actual_wire.filter((row) => row.transport === 'http');
-      assert.equal(wire.length, 3);
-      assert.equal(wire[0].url, '/signed/path?keep=1');
-      assert.equal(wire[1].url, '/signed/path?keep=1&probe=astranull%27%20OR%20%271%27%3D%270');
-      assert.equal(wire[2].url, exact.url);
-      if (exact.cookie) assert.equal(wire[2].cookie, exact.cookie);
+      assertEvasionWire(wire, {
+        referenceUrl: '/signed/path?keep=1&probe=astranull%27%20OR%20%271%27%3D%270',
+        transformUrl: exact.url,
+        cookie: exact.cookie,
+      });
       assert.equal(result.outcome.metadata.comparison_complete, true);
       assert.equal(result.outcome.metadata.enforcement, 'enforced');
       assert.equal(result.readiness.coverage.passed_count, 1);
       assert.equal(result.findings.length, 0);
     });
   }
+  it('challenged fixture response grades challenged and is never enforced', async () => {
+    const check = getCheckById('waf.evasion_overlong_utf8.safe');
+    const result = await executeMemoryDelivery(check, fixtures.forCheck(check, { scenario: 'challenged' }));
+    assert.equal(result.outcome.metadata.enforcement, 'challenged');
+    assert.notEqual(result.outcome.metadata.enforcement, 'enforced');
+    assert.equal(result.outcome.metadata.reference_outcome, 'challenged');
+    assert.equal(result.outcome.metadata.transform_outcome, 'challenged');
+    assert.notEqual(result.verdict.verdict, 'edge_protected');
+    assert.equal(result.readiness.coverage.passed_count, 0);
+  });
   for (const check of CHECK_CATALOG.filter((row) => ['http3_control_probe', 'quic_reachability'].includes(row.probe_profile?.kind))) {
     it(`${check.check_id}: HTTP3 remains HEAD Alt-Svc only, never QUIC packets or assurance`, async () => {
       const result = await executeMemoryDelivery(check, fixtures.forCheck(check));
@@ -197,9 +236,36 @@ describe('actual owned wire boundaries of shipped profile selectors', () => {
       assert.ok(Number.isInteger(queries[0].transaction_id));
       assert.equal(queries[0].transport, id === 'dns.authoritative_response.safe' ? 'dns_udp' : 'dns_tcp');
       assert.equal(result.outcome.metadata.protocol_identity_confirmed, true);
-      assert.equal(result.readiness.coverage.passed_count, 0);
+      assert.equal(result.readiness.coverage.passed_count, id === 'dns.zone_transfer_exposure.safe' ? 1 : 0);
     });
   }
+  it('waf.http_method_policy_enforced.safe: TRACE and ASTRANULLPROBE leave the fixture with no body', async () => {
+    const check = getCheckById('waf.http_method_policy_enforced.safe');
+    const result = await executeMemoryDelivery(check, fixtures.forCheck(check));
+    assert.equal(result.started.error, undefined);
+    const methods = result.receipt.actual_wire.map((row) => row.method);
+    assert.ok(methods.includes('GET'));
+    assert.ok(methods.includes('TRACE'));
+    assert.ok(methods.includes('ASTRANULLPROBE'));
+    assert.ok(result.outcome.requests_sent <= 8);
+  });
+  it('waf.rate_limit_canary.validation: declared canary path is hit and capped', async () => {
+    const check = getCheckById('waf.rate_limit_canary.validation');
+    const result = await executeMemoryDelivery(check, fixtures.forCheck(check));
+    assert.equal(result.started.error, undefined);
+    const httpRows = result.receipt.actual_wire.filter((row) => ['http', 'https'].includes(row.transport) && row.method === 'GET');
+    assert.ok(httpRows.length > 0);
+    assert.equal(result.outcome.metadata.threshold, 3);
+    assert.ok(result.outcome.metadata.phases.length <= result.outcome.metadata.threshold + 2);
+    assert.equal(result.outcome.metadata.source_penalized, false);
+  });
+  it('nfw.connection_limit.safe: declared TCP cap produces actual connect attempts', async () => {
+    const check = getCheckById('nfw.connection_limit.safe');
+    const result = await executeMemoryDelivery(check, fixtures.forCheck(check));
+    assert.equal(result.started.error, undefined);
+    assert.ok(result.receipt.actual_wire.some((row) => row.transport === 'tcp_connect'));
+    assert.ok(result.outcome.metadata.attempted <= 12);
+  });
   for (const targetKind of ['url', 'fqdn', 'ip']) {
     it(`waf.fingerprint.safe: actual declared ${targetKind} target class remains observation only`, async () => {
       const check = getCheckById('waf.fingerprint.safe');

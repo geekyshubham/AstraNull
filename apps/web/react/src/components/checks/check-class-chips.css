@@ -1,0 +1,52 @@
+.check-class-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+body .badge.check-class-chip,
+body [data-ui='badge'].check-class-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+body .badge.check-class-chip--control,
+body [data-ui='badge'].check-class-chip--control {
+  border-color: color-mix(in oklab, var(--fg), transparent 55%);
+  color: var(--fg);
+}
+
+.check-class-chip svg {
+  flex: none;
+}
+
+.check-class-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.check-class-legend-term {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.check-class-legend-term b {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--fg);
+}
+
+body .badge.check-class-chip--declaration,
+body [data-ui='badge'].check-class-chip--declaration {
+  border-style: dashed;
+}

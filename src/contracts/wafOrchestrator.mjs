@@ -34,6 +34,17 @@ export const SAFE_SCENARIO_IDS = Object.freeze([
   'origin_bypass',
 ]);
 
+export const SCENARIO_TO_CHECK = Object.freeze({
+  marker: 'waf.http_method_policy_marker.safe',
+  fingerprint: 'waf.fingerprint.safe',
+  sqli_marker: 'waf.sqli_managed_marker.safe',
+  xss_marker: 'waf.xss_managed_marker.safe',
+  rce_marker: 'waf.offensive_rce.soc',
+  path_traversal_marker: 'waf.path_traversal_managed_marker.safe',
+  rate_limit_marker: 'waf.low_rate_limit.safe',
+  origin_bypass: 'waf.origin_bypass.safe',
+});
+
 export const RETEST_PRIORITIES = Object.freeze(['low', 'normal', 'high', 'urgent']);
 
 export const RETEST_VERDICTS = Object.freeze(['resolved', 'persistent', 'inconclusive']);

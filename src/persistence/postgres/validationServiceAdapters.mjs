@@ -2,10 +2,14 @@ import {
   CHECK_CATALOG,
   customerSelectableChecks,
   checkRequiresAdditionalInput,
+  checkAdditionalInputReason,
+  demoMissingInputRefusal,
   evaluateCheckPrerequisites,
+  formatMissingInputMessage,
   getCheckById,
   isCustomerRunnable,
 } from '../../contracts/checks.mjs';
+import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import { validateReviewedOperationSelection } from '../../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
@@ -20,6 +24,9 @@ import {
 import { incMetric } from '../../lib/metrics.mjs';
 import {
   buildSignedProbeJobRecord,
+  isOriginLockdownHostnameCheck,
+  originLockdownProvenance,
+  resolveOriginLockdownBinding,
   validateHostSniTargetBinding,
 } from '../../lib/probeJobs.mjs';
 import { redactObject } from '../../lib/redact.mjs';
@@ -28,8 +35,11 @@ import {
   scrubRunForCustomer,
 } from '../../lib/outsideInEvidence.mjs';
 import {
+  DEFAULT_MAX_RUNS_PER_HOUR,
+  DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
+  isWithinSafeTestWindowRaw,
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
@@ -53,10 +63,12 @@ import {
   findingListQueryFailure,
   parseFindingListQuery,
 } from '../../lib/findingList.mjs';
-import { authorizeFindingWrite, planFindingPatch } from '../../lib/findingLifecycle.mjs';
+import { authorizeFindingWrite, planFindingPatch, planFixVerifiedFromRetest, computeDenyRulesDigest } from '../../lib/findingLifecycle.mjs';
 import { isProtectionValidationFinding, protectionRetestContext, protectionRetestRunScopeMatches } from '../../lib/protectionValidationFindings.mjs';
-import { currentOriginProof, validateOriginBindingForRun } from '../../services/originBindings.mjs';
+import { currentOriginProof, deriveBindingScope, validateOriginBindingForRun } from '../../services/originBindings.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
+import { buildTargetRuleCoverage } from '../../services/ruleCoverage.mjs';
+import { buildVerdictReplay } from '../../lib/verdictReplay.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { isWithinPolicySafeWindow } from '../../contracts/testPolicyManagement.mjs';
 import { normalizeCancelReason, withCheckSection } from '../../contracts/validationScanManagement.mjs';
@@ -287,6 +299,17 @@ export const POSTGRES_VALIDATION_FINDINGS_SERVICE_METHODS = Object.freeze([
 export const POSTGRES_EVENTS_SERVICE_METHODS = Object.freeze(['ingestEvent']);
 
 export const POSTGRES_VALIDATION_ORCHESTRATION_ERROR = 'postgres_validation_orchestration_not_wired';
+
+function hasStoredControlDeclarations(stored) {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
+  return Object.keys(stored).some((key) => key !== 'version');
+}
+
+function runOriginBindingRef(run) {
+  if (run?.origin_binding_id) return { id: run.origin_binding_id, status: 'active' };
+  const lockdownBindingId = run?.provenance_json?.origin_lockdown?.binding_id;
+  return typeof lockdownBindingId === 'string' && lockdownBindingId ? { id: lockdownBindingId, status: 'active' } : null;
+}
 
 function orchestrationNotWired() {
   return { error: POSTGRES_VALIDATION_ORCHESTRATION_ERROR, status: 503 };
@@ -724,10 +747,15 @@ export function createPostgresValidationServices(repositories, options = {}) {
     penetrated: 'high',
     edge_exposed: 'medium',
   });
+  const CORRELATION_FINDING_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
   function findingVerdictSeverity(verdict, run) {
     // Version 2 DNSSEC grades authoritative key presence, rather than origin reachability.
     if (verdict.verdict === 'exposed' && run.check_id === 'dns.dnssec_expensive_query.safe'
       && run.check_version === '2.0.0') return 'medium';
+    const placement = verdict.placement_confidence ?? {};
+    if (placement.creates_finding === true && CORRELATION_FINDING_SEVERITIES.has(placement.finding_severity)) {
+      return placement.finding_severity;
+    }
     return FINDING_VERDICT_SEVERITY[verdict.verdict];
   }
   const VERDICT_PUBLICATION_AUDIT_ACTIONS = Object.freeze([
@@ -737,6 +765,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
   const FINDING_PUBLICATION_AUDIT_ACTIONS = Object.freeze([
     'finding.created',
     'finding.updated',
+    'finding.fix_verified',
   ]);
 
   function assertDurableVerdictRunBinding(verdict, run) {
@@ -763,9 +792,78 @@ export function createPostgresValidationServices(repositories, options = {}) {
     ) ?? null;
   }
 
+  async function lockedFindingClosure(ctx, verdict, run, client) {
+    assertDurableVerdictRunBinding(verdict, run);
+    const existingRows = await validationEvidence.listFindings(ctx, {
+      target_group_id: run.target_group_id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      forUpdate: true,
+      client,
+    });
+    const findings = Array.isArray(existingRows) ? existingRows : [];
+    const nowIso = nowFn().toISOString();
+    const closedFindings = [];
+    if (!run.probe_metadata) {
+      const runEvents = await validationEvidence.listRunEvents(ctx, run.id, { client });
+      const pEvent = findProbeEvent(run, runEvents ?? []);
+      if (pEvent?.metadata || pEvent?.metadata_json) {
+        run.probe_metadata = pEvent.metadata ?? pEvent.metadata_json;
+      }
+    }
+    const declarations = await storedTargetDeclarations(ctx, run.target_id);
+    for (const finding of findings) {
+      let findingForPlan = finding;
+      const runId = finding.test_run_id;
+      let priorVerdict = null;
+      let priorRun = null;
+      if (runId && (!findingForPlan.source_perspective || !findingForPlan.declaration_digest)) {
+        priorVerdict = await validationEvidence.getVerdictForRun(ctx, runId, { client });
+        priorRun = await validationEvidence.getTestRun(ctx, runId, { client });
+      }
+      if (!findingForPlan.source_perspective && priorVerdict) {
+        const persp = priorVerdict?.placement_confidence?.source_perspective
+          ?? priorVerdict?.source_perspective
+          ?? priorRun?.source_perspective
+          ?? priorRun?.probe_metadata?.source_perspective
+          ?? null;
+        if (persp) {
+          findingForPlan = { ...findingForPlan, source_perspective: persp };
+        }
+      }
+      if (!findingForPlan.declaration_digest && priorVerdict) {
+        const dig = priorVerdict?.placement_confidence?.declaration_digest
+          ?? priorVerdict?.metadata?.declaration_digest
+          ?? null;
+        if (dig) {
+          findingForPlan = { ...findingForPlan, declaration_digest: dig };
+        }
+      }
+      const plan = planFixVerifiedFromRetest({ finding: findingForPlan, run, verdict, declarations, now: nowFn() });
+      if (plan.action !== 'fix_verified') continue;
+      const updated = await validationEvidence.patchFinding(ctx, finding.id, {
+        ...plan.patch,
+        check_version: run.check_version ?? verdict.check_version ?? finding.check_version ?? null,
+        grading_version: verdict.grading_version ?? run.grading_version ?? finding.grading_version ?? null,
+        updated_at: nowIso,
+      });
+      closedFindings.push({
+        ...(updated ?? { ...finding, ...plan.patch }),
+        verification_basis: plan.verification_basis ?? plan.patch?.verification_basis ?? null,
+      });
+    }
+    if (!closedFindings.length) return null;
+    return {
+      finding: closedFindings[0],
+      disposition: 'fix_verified',
+      auditAction: 'finding.fix_verified',
+      closedFindings,
+    };
+  }
+
   async function lockedFindingPublication(ctx, verdict, run, client) {
     const severity = findingVerdictSeverity(verdict, run);
-    if (!severity) return null;
+    if (!severity) return lockedFindingClosure(ctx, verdict, run, client);
     assertDurableVerdictRunBinding(verdict, run);
 
     const binding = {
@@ -791,6 +889,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const priorOpen = findings.find((finding) => finding.status === 'open') ?? null;
     const nowIso = nowFn().toISOString();
     const findingId = priorOpen?.id ?? newId('finding');
+    const decls = await storedTargetDeclarations(ctx, run.target_id);
+    const declDigest = computeDenyRulesDigest(decls);
+    const declaredPorts = run?.probe_metadata?.declared_deny_ports
+      ?? run?.probe_metadata?.ports_probed
+      ?? (run?.probe_metadata?.port != null ? [Number(run.probe_metadata.port)] : []);
     const finding = await validationEvidence.upsertOpenFindingFromVerdict(
       ctx,
       {
@@ -799,6 +902,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         target_id: run.target_id,
         test_run_id: run.id,
         check_id: run.check_id,
+        declaration_digest: declDigest,
+        declared_deny_ports: declaredPorts,
         // The target may have been archived after the immutable verdict committed. Use the
         // durable run binding rather than replay input or another currently-active target.
         title: `Finding: ${verdict.verdict} on ${run.target_id}`,
@@ -912,7 +1017,37 @@ export function createPostgresValidationServices(repositories, options = {}) {
         },
       );
 
-      if (findingPublication?.finding && findingPublication.auditAction) {
+      const closedFindings = Array.isArray(findingPublication?.closedFindings)
+        ? findingPublication.closedFindings
+        : (findingPublication?.finding && findingPublication.auditAction ? [findingPublication.finding] : []);
+      if (findingPublication?.auditAction === 'finding.fix_verified') {
+        for (const finding of closedFindings) {
+          await appendAudit(
+            publicationCtx,
+            'finding.fix_verified',
+            'finding',
+            finding.id,
+            {
+              verdict_id: verdict.id,
+              test_run_id: run.id,
+              verdict: verdict.verdict,
+              verifying_run_id: run.id,
+              check_id: run.check_id,
+              ...(finding.verification_basis ? { verification_basis: finding.verification_basis } : {}),
+            },
+            {
+              client,
+              auditLockHeld: true,
+              idempotency: {
+                actions: [...FINDING_PUBLICATION_AUDIT_ACTIONS],
+                resourceType: 'finding',
+                resourceId: finding.id,
+                metadata: { verdict_id: verdict.id },
+              },
+            },
+          );
+        }
+      } else if (findingPublication?.finding && findingPublication.auditAction) {
         await appendAudit(
           publicationCtx,
           findingPublication.auditAction,
@@ -989,6 +1124,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
       confidence: result.confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
+      placement_confidence: {
+        explanation_reason: result.explanation_reason ?? null,
+        reason: result.explanation_reason ?? null,
+      },
       created_at: nowIso,
     };
     const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord, {
@@ -1002,6 +1141,12 @@ export function createPostgresValidationServices(repositories, options = {}) {
     }
 
     return repairVerdictPublication(ctx, verdict, run, options);
+  }
+
+  async function storedTargetDeclarations(ctx, targetId) {
+    if (!targetId || typeof coreCatalog.getTargetControlDeclarations !== 'function') return null;
+    const stored = await coreCatalog.getTargetControlDeclarations(ctx, targetId);
+    return hasStoredControlDeclarations(stored) ? stored : null;
   }
 
   async function finalizeVerdictIfReady(ctx, run, options = {}) {
@@ -1041,8 +1186,31 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const expectedBehavior = verdictExpectedBehaviorForRun(run);
     const probeKind = check?.probe_profile?.kind ?? null;
     const probeIoObserved = probeEventHasProbeIo(probeEvent);
+    const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
+    run.probe_metadata = probeMetadata;
+    const originBinding = runOriginBindingRef(run);
+    const targetDeclarations = await storedTargetDeclarations(ctx, run.target_id);
+    let signedJobDeclarations = null;
+    if (!targetDeclarations && typeof probeJobs?.getProbeJobByTestRun === 'function') {
+      const job = await probeJobs.getProbeJobByTestRun(ctx, run.id, repositoryOptions);
+      signedJobDeclarations = job?.probe_profile?.declarations ?? null;
+    }
+    const declarations = targetDeclarations ?? signedJobDeclarations ?? null;
+    const safeProbeMetadata = { ...probeMetadata };
+    delete safeProbeMetadata.declarations;
+    delete safeProbeMetadata.expected_behavior;
+    delete safeProbeMetadata.declared_limit;
     // ADR-0008: verdicts are produced from external probe evidence only.
-    const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved, probeMetadata: probeEvent?.metadata ?? probeEvent?.metadata_json });
+    const result = correlateExternalOnlyVerdict({
+      externalResult,
+      expectedBehavior,
+      probeKind,
+      probeIoObserved,
+      probeMetadata: safeProbeMetadata,
+      declarations,
+      originBinding,
+      checkId: run.check_id,
+    });
 
     const evidenceIds = events.map((event) => event.id);
 
@@ -1056,6 +1224,25 @@ export function createPostgresValidationServices(repositories, options = {}) {
       confidence: result.confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
+      grading_version: probeMetadata.grading_version ?? null,
+      signature_corpus_version: probeMetadata.signature_corpus_version ?? null,
+      source_perspective: probeMetadata.source_perspective ?? null,
+      ...(result.metadata?.port_results ? { port_results: result.metadata.port_results } : {}),
+      placement_confidence: {
+        explanation_reason: result.explanation_reason ?? null,
+        reason: result.explanation_reason ?? null,
+        grading_version: probeMetadata.grading_version ?? null,
+        signature_corpus_version: probeMetadata.signature_corpus_version ?? null,
+        source_perspective: probeMetadata.source_perspective ?? null,
+        exposure_basis: result.metadata?.exposure_basis ?? null,
+        sample_agreement: probeMetadata.sample_agreement ?? null,
+        ...(Array.isArray(probeMetadata.samples) ? { samples: probeMetadata.samples } : {}),
+        ...(Array.isArray(probeMetadata.unprobed_deny_ports) ? { unprobed_deny_ports: probeMetadata.unprobed_deny_ports } : {}),
+        ...(result.metadata?.port_results ? { port_results: result.metadata.port_results } : {}),
+        creates_finding: result.createsFinding === true,
+        finding_severity: result.createsFinding === true ? (result.severity ?? 'medium') : null,
+        declaration_digest: computeDenyRulesDigest(declarations),
+      },
       created_at: nowIso,
     };
     const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord, {
@@ -1124,8 +1311,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
   const testRuns = {
     listChecks(options = {}) {
-      if (options.scope === 'all') return CHECK_CATALOG.map((check) => ({ ...withCheckSection(check), requires_additional_input: checkRequiresAdditionalInput(check) }));
-      return customerSelectableChecks(CHECK_CATALOG).map(withCheckSection);
+      const tenantId = options.tenantId ?? options.target?.tenant_id;
+      const context = { target: options.target ?? null, declarations: options.declarations, originBindings: options.originBindings, tenantId };
+      if (options.scope === 'all') {
+        return CHECK_CATALOG.map((check) => {
+          const requiresAdditionalInput = checkRequiresAdditionalInput(check, context);
+          return {
+            ...withCheckSection(check),
+            requires_additional_input: requiresAdditionalInput,
+            additional_input_reason: requiresAdditionalInput ? checkAdditionalInputReason(check, context) : null,
+          };
+        });
+      }
+      const selectable = customerSelectableChecks(CHECK_CATALOG, context).map(withCheckSection);
+      if (options.target || options.tenantId) {
+        return selectable.map((check) => ({
+          ...check,
+          requires_additional_input: false,
+          additional_input_reason: null,
+        }));
+      }
+      return selectable;
     },
     registerRunTerminalHook(hook) {
       if (typeof hook !== 'function') throw new TypeError('registerRunTerminalHook requires a function.');
@@ -1277,6 +1483,53 @@ export function createPostgresValidationServices(repositories, options = {}) {
         capture: { ...activity.capture, ...(inputComplete ? {} : { status: 'incomplete' }) } };
     },
 
+    async getVerdictReplay(ctx, id) {
+      const run = await validationEvidence.getTestRun(ctx, id);
+      if (!run) return null;
+      const verdict = await validationEvidence.getVerdictForRun(ctx, id);
+      const events = await validationEvidence.listRunEvents(ctx, id, { limit: 1000 });
+      const probeEvent = findProbeEvent(run, events) ?? null;
+      return buildVerdictReplay({
+        run,
+        storedVerdict: verdict ?? null,
+        probeEvent,
+        declarations: await storedTargetDeclarations(ctx, run.target_id),
+        originBinding: runOriginBindingRef(run),
+      });
+    },
+    async getTargetRuleCoverage(ctx, targetId, options = {}) {
+      if (!ctx?.tenantId || !targetId || typeof coreCatalog.getTargetControlDeclarations !== 'function'
+        || typeof validationEvidence.listLatestRunsPerCheckForTarget !== 'function'
+        || typeof validationEvidence.listVerdictsForRuns !== 'function') {
+        return { error: 'postgres_route_not_wired', status: 503 };
+      }
+      const baseDeclarations = await coreCatalog.getTargetControlDeclarations(ctx, targetId);
+      if (baseDeclarations === null) return null;
+      let declarations = { ...baseDeclarations };
+      if (typeof validationEvidence.loadOriginLockdownBindings === 'function') {
+        try {
+          const loaded = await validationEvidence.loadOriginLockdownBindings(ctx, targetId);
+          if (Array.isArray(loaded?.bindings) && loaded.bindings.length > 0) {
+            declarations.origin_bindings = loaded.bindings;
+            declarations.origin_binding = loaded.bindings[0];
+          }
+        } catch {}
+      }
+      const runs = await validationEvidence.listLatestRunsPerCheckForTarget(ctx, targetId);
+      const byRun = new Map();
+      for (let index = 0; index < runs.length; index += 500) {
+        const batch = runs.slice(index, index + 500).map((run) => run.id);
+        for (const verdict of await validationEvidence.listVerdictsForRuns(ctx, batch)) byRun.set(verdict.test_run_id, verdict);
+      }
+      return buildTargetRuleCoverage({
+        targetId,
+        declarations,
+        runs,
+        verdictForRun: (run) => byRun.get(run.id) ?? null,
+        nowMs: options.nowMs ?? nowFn().getTime(),
+        env: options.env ?? process.env,
+      });
+    },
     async getRunEvents(ctx, id, options = {}) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;
@@ -1309,7 +1562,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       const check = getCheckById(body.check_id);
       if (!check) return { error: 'unknown_check', status: 400 };
-      if (!isCustomerRunnable(check)) {
+      if (!isCustomerRunnable(check, ctx)) {
         await appendAudit(ctx, 'test_run.blocked_soc_gated', 'check', check.check_id);
         return {
           error: 'soc_gated_check',
@@ -1365,8 +1618,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const compatibilityError = targetKindCompatibilityError(check, target);
       if (compatibilityError) return compatibilityError;
 
+      let originLockdown = null;
+      let originBindings = null;
+      if (typeof validationEvidence.loadOriginLockdownBindings === 'function') {
+        try {
+          originBindings = await validationEvidence.loadOriginLockdownBindings(ctx, target.id);
+        } catch {}
+      }
       if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
-        const targetBindingError = validateHostSniTargetBinding(check, target);
+        if (isOriginLockdownHostnameCheck(check, target)) {
+          originLockdown = originBindings
+            ? resolveOriginLockdownBinding({
+              check,
+              target,
+              tenantId: ctx.tenantId,
+              ...originBindings,
+              deriveBindingScope,
+              currentOriginProof,
+            })
+            : { error: 'origin_binding_unavailable', status: 503, check_id: check.check_id };
+        }
+        const targetBindingError = validateHostSniTargetBinding(check, target, { originLockdown, originBindings });
         if (targetBindingError) {
           const denied = await denySafeStart(
             ctx,
@@ -1492,9 +1764,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
         };
       }
 
+      const isDemo = isExplicitDemoTenant(ctx.tenantId);
       const now = nowFn();
       const nowMs = now.getTime();
-      if ((group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs)) {
+      const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
+      if (!isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs, { tenantId: ctx.tenantId })) {
         return denySafeStart(
           ctx,
           'test_run.safe_window_denied',
@@ -1505,7 +1779,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const groupPolicy = effectiveSafetyConstraints(check, group);
+      const groupPolicy = effectiveSafetyConstraints(check, group, { tenantId: ctx.tenantId });
       const usage = typeof validationEvidence.readSafeAdmissionUsage === 'function'
         ? await validationEvidence.readSafeAdmissionUsage(ctx, { now: now.toISOString(), targetId, targetGroupId,
           customerCheckIds: CHECK_CATALOG.filter(isCustomerRunnable).map((item) => item.check_id) })
@@ -1517,6 +1791,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
           'safe_admission_usage_unavailable', 503);
       }
       const runsLastHour = usage.runs_last_hour;
+      const normalMaxRuns = group.safety_policy?.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
+      const hourlyCapBypassed = isDemo && (runsLastHour >= normalMaxRuns);
       if (runsLastHour >= groupPolicy.max_runs_per_hour) {
         return denySafeStart(
           ctx,
@@ -1532,6 +1808,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
 
       const priorRun = usage.prior_run;
+      const normalMinSeconds = group.safety_policy?.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS;
+      let minIntervalBypassed = false;
+      if (priorRun && isDemo && normalMinSeconds > 0) {
+        const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
+        if (elapsedMs < normalMinSeconds * 1000) {
+          minIntervalBypassed = true;
+        }
+      }
       if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
         const elapsedMs = nowMs - new Date(priorRun.created_at).getTime();
         if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {
@@ -1658,7 +1942,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         return denySafeStart(ctx, 'test_run.kill_switch_denied', targetGroupId,
           { check_id: check.check_id, phase: 'admission_commit' }, 'kill_switch_active', 423);
       }
-      if (!isWithinSafeTestWindow(group, nowFn().getTime())) {
+      if (!isDemo && !isWithinSafeTestWindow(group, nowFn().getTime(), { tenantId: ctx.tenantId })) {
         return denySafeStart(ctx, 'test_run.safe_window_denied', targetGroupId,
           { check_id: check.check_id, phase: 'admission_commit' }, 'safe_window_closed', 429);
       }
@@ -1702,7 +1986,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
               path: originScopeSnapshot.path ?? null,
             },
           }
-          : (stamp.provenance_json ?? null),
+          : (originLockdownProvenance(originLockdown)
+            ? { ...(stamp.provenance_json ?? {}), origin_lockdown: originLockdownProvenance(originLockdown) }
+            : (stamp.provenance_json ?? null)),
         origin_binding_id: originBindingId || null,
         retest_of_finding_id: retestFindingId || null,
         ...(retestComparisonContext ? { retest_comparison_context: retestComparisonContext } : {}),
@@ -1716,6 +2002,63 @@ export function createPostgresValidationServices(repositories, options = {}) {
         scan_id: runRecord.scan_id,
         scan_step_id: runRecord.scan_step_id,
       });
+
+      const targetDeclarations = await storedTargetDeclarations(ctx, target.id);
+      const missingInput = isDemo ? demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings, probeMode: runtimeConfig.probeMode }) : null;
+      const inputRequirementBypassed = missingInput ? `input_requirement:${missingInput.error}` : null;
+
+      const demoBypassedGates = [];
+      if (isDemo && !isCustomerRunnable(check)) demoBypassedGates.push('soc_gated');
+      if (safeWindowBypassed) demoBypassedGates.push('safe_window');
+      if (hourlyCapBypassed) demoBypassedGates.push('hourly_cap');
+      if (minIntervalBypassed) demoBypassedGates.push('min_interval');
+      if (inputRequirementBypassed) demoBypassedGates.push(inputRequirementBypassed);
+
+      if (demoBypassedGates.length > 0) {
+        await appendAudit(ctx, 'test_run.demo_gates_bypassed', 'test_run', runId, {
+          check_id: check.check_id,
+          bypassed: demoBypassedGates,
+        });
+      }
+
+      if (missingInput) {
+        const nowIso = nowFn().toISOString();
+        const explanationMessage = formatMissingInputMessage(missingInput.error);
+        const verdictRecord = {
+          id: newId('evidence'),
+          test_run_id: run.id,
+          target_id: run.target_id,
+          check_id: run.check_id,
+          verdict: 'inconclusive',
+          confidence: 'external_only',
+          explanation: explanationMessage,
+          explanation_reason: 'required_input_missing',
+          required_input: missingInput.error,
+          evidence_ids: [],
+          placement_confidence: {
+            explanation_reason: 'required_input_missing',
+            reason: 'required_input_missing',
+            required_input: missingInput.error,
+            requests_sent: 0,
+          },
+          created_at: nowIso,
+        };
+        const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+        await validationEvidence.updateTestRun(ctx, run.id, {
+          status: 'verdicted',
+          completed_at: nowIso,
+          probe_external_result: 'unsupported_target',
+          summary: { requests_sent: 0, required_input_missing: missingInput.error },
+        });
+        await appendAudit(ctx, 'verdict.published', 'test_run', run.id, {
+          verdict: 'inconclusive',
+          confidence: 'external_only',
+        });
+        await notifyRunTerminal(run, { reason: 'verdicted' });
+        incMetric('test_runs_started_total');
+        const finishedRun = await testRuns.getTestRun(ctx, run.id);
+        return { run: finishedRun, jobs_dispatched: 0, verdict };
+      }
 
       let probe;
       let probeEvent = null;
@@ -2021,6 +2364,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
       // Only customer lifecycle and assignment fields cross this boundary.
       // Evidence links and closure timestamps belong to the server writers.
       const patch = { ...planned.patch, updated_at };
+      if (planned.patch.status === 'open' || planned.patch.status === 'in_progress') {
+        patch.verification_basis = null;
+      }
       for (const key of ['assignee', 'notes']) {
         if (Object.hasOwn(body ?? {}, key)) patch[key] = body[key];
       }

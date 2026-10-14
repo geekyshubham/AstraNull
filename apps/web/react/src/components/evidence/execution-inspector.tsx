@@ -9,6 +9,10 @@ import { plainCheckName, plainVerdictLabel } from '../../lib/plain-language.mjs'
 import { ConfirmModal } from '../../lib/crud-ui';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 import { ProbeActivityView } from '../targets/probe-activity';
+import { RunProbeEvidence } from '../runs/probe-outcome-evidence';
+import { exposedVerdictLabel } from '../../lib/probe-evidence.mjs';
+import { requiredInputMissing } from '../../lib/missing-input.mjs';
+import { NotTestedNote } from '../runs/not-tested-note';
 import { Button } from '../ui/button';
 import { useRecordedActivity } from './use-recorded-activity';
 import { useInspectorScopeKey, useScanDisplaySelection } from './use-inspector';
@@ -114,6 +118,7 @@ export function ExecutionInspector({ config, session, reference, checks, onEvide
       activity={runActivity} paused={paused} onPause={() => setPaused((value) => !value)} maxRequests={maxRequests}
       onFollowActive={isScan && !follow ? () => select() : undefined}
     /> : null}
+    {!isScan && childId && bound && !activityDenied ? <RunProbeEvidence config={config} session={session} runId={childId} revision={runLive ? 0 : runActivity.revision} /> : null}
     {isScan && childId && snapshot && bound && !activityDenied ? <ChildEvidence config={config} session={session} targetId={targetId} checkId={checkId} runId={childId} revision={runActivity.revision} paused={paused} accessDenied={activityDenied} /> : null}
     <ConfirmModal open={confirm !== null} title={confirm?.kind === 'scan' ? 'Stop this scan?' : 'Stop this exact check?'}
       description={confirm?.kind === 'scan' ? 'Request cancellation of this scan and its running check. Queued checks cannot start. Completed evidence is kept; worker Stop requires acknowledgment.' : isScan ? 'Only this check is cancelled. Other checks in the scan may continue. A bounded in-flight request can finish before the worker acknowledges Stop.' : 'Only this exact run is cancelled. A bounded in-flight request can finish before the worker acknowledges Stop.'}
@@ -143,16 +148,19 @@ function ChildEvidence({ config, session, targetId, checkId, runId, revision, pa
     return () => controller.abort();
   }, [config, session, key, revision, paused, accessDenied, checkId, targetId, runId]);
   const model = !accessDenied && loaded.key === key ? loaded.model : null;
+  const answer = model?.answer ?? null;
+  const notTested = answer ? requiredInputMissing({ explanation_reason: answer.reason, required_input: answer.requiredInput, explanation: answer.explanation }) : null;
   return <section className="ei-observation" aria-label="Active child evidence">
     <strong>Exact child evidence and evaluation</strong>
     {loaded.key === key && loaded.error ? <p className="ei-note" role="alert">Evidence refresh failed. Recorded activity does not establish the verdict.</p> : null}
     <dl className="ei-kv">
       <div><dt>Raw observation</dt><dd>{model?.answer?.observed || 'Not recorded'}</dd></div>
       <div><dt>Evaluated expectation</dt><dd>{model?.answer?.expected || 'Not recorded'}</dd></div>
-      <div><dt>Final verdict</dt><dd>{model?.answer?.outcome ? plainVerdictLabel(model.answer.outcome) : 'Not recorded; activity is informational only'}</dd></div>
+      <div><dt>Final verdict</dt><dd>{notTested ? notTested.label : model?.answer?.outcome ? exposedVerdictLabel(checkId, model.answer.outcome) || plainVerdictLabel(model.answer.outcome) : 'Not recorded; activity is informational only'}</dd></div>
       <div><dt>Evidence references</dt><dd>{model?.primary?.evidenceIds.length ? model.primary.evidenceIds.map((id) => <a key={id} href={`#evidence-detail?id=${encodeURIComponent(id)}`}>{id} </a>) : 'No evidence references recorded'}</dd></div>
     </dl>
-    {model?.answer?.explanation ? <p className="ei-note">{model.answer.explanation}</p> : null}
+    {notTested ? <NotTestedNote info={notTested} targetId={targetId} showLabel={false} /> : model?.answer?.explanation ? <p className="ei-note">{model.answer.explanation}</p> : null}
+    {!paused ? <RunProbeEvidence config={config} session={session} runId={runId} revision={revision} /> : null}
     <p className="ei-note">External probes only. A bounded scenario is not capacity proof; unobserved paths and internal layers are not tested.</p>
   </section>;
 }

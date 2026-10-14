@@ -19,6 +19,7 @@ import {
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 import { assuranceWorld, addAssuredObservation } from '../helpers/assurance-fixtures.mjs';
+import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
 
 const ctx = { tenantId: 'ten_demo', userId: 'usr_profile', role: 'engineer' };
 const NOW = '2026-10-04T00:00:00.000Z';
@@ -509,7 +510,15 @@ describe('protection profile derivation', () => {
         },
         {
           check_id: 'app.stale',
-          run: { producer_kind: 'signed_probe', id: 'run_stale', status: 'completed', completed_at: STALE, check_version: '1.0.0' },
+          run: {
+            producer_kind: 'signed_probe',
+            id: 'run_stale',
+            status: 'completed',
+            completed_at: STALE,
+            check_version: '1.0.0',
+            grading_version: WAF_GRADING_VERSION,
+            signature_corpus_version: SIGNATURE_CORPUS_VERSION,
+          },
           verdict: { verdict: 'exposed', evidence_ids: ['ev_stale'] },
         },
         {

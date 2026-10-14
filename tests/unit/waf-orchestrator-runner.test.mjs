@@ -223,7 +223,7 @@ describe('waf orchestrator delegation outbox helpers', () => {
           status: DELEGATION_STATUS.PENDING_START,
           scenario: 'marker',
           waf_asset_id: 'waf_1',
-          check_id: 'waf.marker_rule.safe',
+          check_id: 'waf.http_method_policy_marker.safe',
         },
         {
           status: DELEGATION_STATUS.STARTING,
@@ -286,7 +286,7 @@ describe('waf orchestrator delegation outbox helpers', () => {
         status: DELEGATION_STATUS.PENDING_START,
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
       {
         status: DELEGATION_STATUS.STARTING,

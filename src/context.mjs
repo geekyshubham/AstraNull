@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ROLES } from './contracts/roles.mjs';
 import { verifyOidcBearerToken } from './lib/oidc.mjs';
+import { audit as appendDevAudit } from './audit.mjs';
 import { authenticateProbeWorker } from './services/probeCoordinator.mjs';
 import {
   auditServiceAccountAuthFailure,
@@ -101,6 +102,18 @@ function bearerSessionToken(headers) {
   return m ? m[1].trim() : null;
 }
 
+async function recordProbeWorkerAuthDenial(entry, runtimeConfig, services) {
+  try {
+    if (runtimeConfig.persistenceMode === 'postgres') {
+      await services?.audit?.appendAuditEvent?.(entry);
+    } else {
+      appendDevAudit(entry);
+    }
+  } catch {
+    // An unverifiable tenant id can make the audit write fail; the request is still refused.
+  }
+}
+
 /**
  * Resolve human API auth for /v1 and /internal routes (not health/metrics/static).
  * The probe-worker route uses signed worker auth instead of human sessions.
@@ -119,8 +132,10 @@ export async function resolveHumanApiAuth(headers, pathname, method, runtimeConf
       pathname,
       options.bodyText ?? '',
       runtimeConfig,
+      { env: options.env ?? process.env },
     );
     if (!auth.ok) {
+      if (auth.auditEntry) await recordProbeWorkerAuthDenial(auth.auditEntry, runtimeConfig, options.services);
       return { ok: false, status: auth.status, body: auth.body };
     }
     return {

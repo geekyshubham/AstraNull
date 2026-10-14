@@ -1,5 +1,5 @@
 import type { DataItem } from './types';
-export type FindingStatus = 'open' | 'in_progress' | 'accepted_risk' | 'accepted' | 'resolved' | 'closed' | 'false_positive';
+export type FindingStatus = 'open' | 'in_progress' | 'accepted_risk' | 'accepted' | 'fix_verified' | 'resolved' | 'closed' | 'false_positive';
 export const FINDING_STATUSES: readonly FindingStatus[];
 export const FINDING_STATUS_LABELS: Readonly<Record<FindingStatus, string>>;
 export const FINDING_STATUS_DESCRIPTIONS: Readonly<Record<FindingStatus, string>>;

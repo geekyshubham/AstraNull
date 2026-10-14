@@ -193,7 +193,7 @@ describe('protection findings in the dev pipeline', () => {
     }];
   });
 
-  it('creates once, records later observations without closing, and never mixes with verdict findings', () => {
+  it('creates once, closes on a complete passing retest, and never mixes with verdict findings', () => {
     const exp = expectation();
     const first = upsertProtectionFindingsFromEvaluation(CTX, firewallEvaluation(exp), { expectations: [exp] });
     assert.equal(first.ok, true);
@@ -206,12 +206,19 @@ describe('protection findings in the dev pipeline', () => {
     const passing = firewallEvaluation(exp, { id: 'fwc_pass', candidate: ['service_response_observed'], at: '2026-10-04T10:00:00.000Z' });
     const later = upsertProtectionFindingsFromEvaluation(CTX, passing, { expectations: [exp] });
     assert.equal(later.created.length, 0);
-    assert.equal(getStore().findings.find((row) => row.id === finding.id).status, 'open', 'a passing evaluation never closes');
+    assert.deepEqual(later.verified, [finding.id]);
+    const closed = getStore().findings.find((row) => row.id === finding.id);
+    assert.equal(closed.status, 'fix_verified');
+    assert.equal(closed.verifying_run_id, 'run_fwc_pass');
+    assert.equal(getStore().auditLog.filter((row) => row.resource_id === finding.id && row.action === 'finding.fix_verified').length, 1);
 
     const again = upsertProtectionFindingsFromEvaluation(CTX, firewallEvaluation(exp, { id: 'fwc_again', at: '2026-10-05T10:00:00.000Z' }), { expectations: [exp] });
-    assert.deepEqual(again.created, []);
-    assert.deepEqual(again.updated, [finding.id]);
-    assert.equal(getStore().findings.find((row) => row.id === finding.id).protection_validation.last_evaluation_id, 'fwc_again');
+    assert.equal(again.created.length, 1);
+    assert.deepEqual(again.updated, []);
+    assert.equal(getStore().findings.find((row) => row.id === finding.id).status, 'fix_verified');
+    const recurrence = getStore().findings.find((row) => row.id === again.created[0]);
+    assert.equal(recurrence.status, 'open');
+    assert.equal(recurrence.protection_validation.recurrence_of_finding_id, finding.id);
 
     const tampered = { ...firewallEvaluation(exp, { id: 'fwc_bad' }), evaluation_digest: 'f'.repeat(64) };
     assert.equal(upsertProtectionFindingsFromEvaluation(CTX, tampered, { expectations: [exp] }).ok, false);

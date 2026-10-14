@@ -3,6 +3,8 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import {
+  ASTRANULL_PROBE_USER_AGENT,
+  METHOD_POLICY_PROBE_KIND,
   pinnedFetch,
   pinnedWebSocketUpgrade,
   resolvePinnedDestination,
@@ -198,5 +200,76 @@ describe('pinned HTTP destination transport', () => {
   it('settles real 101 sockets and never follows upgrade redirects', { timeout: 6000 }, async () => {
     const output = await runProtocolTransportFixture('websocket');
     assert.match(output.stdout, /websocket:ok/);
+  });
+
+  it('sends the documented AstraNull probe User-Agent unless the caller sets one', async () => {
+    let seen;
+    await pinnedFetch('https://owned.example/check', { method: 'HEAD' }, {
+      vettedHost: 'owned.example',
+      vettedAddresses: ['203.0.113.10'],
+      httpsRequestFn: fakeRequest((options) => { seen = options.headers['User-Agent']; }),
+    }).then((res) => res.body.cancel());
+    assert.equal(seen, ASTRANULL_PROBE_USER_AGENT);
+    let custom;
+    await pinnedFetch('https://owned.example/check', {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'CustomProbe/9' },
+    }, {
+      vettedHost: 'owned.example',
+      vettedAddresses: ['203.0.113.10'],
+      httpsRequestFn: fakeRequest((options) => { custom = options.headers['User-Agent']; }),
+    }).then((res) => res.body.cancel());
+    assert.equal(custom, 'CustomProbe/9');
+  });
+
+  it('selects A or AAAA independently for pinned destinations', async () => {
+    const both = await resolvePinnedDestination('owned.example', {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => ['2001:db8::10'],
+    });
+    assert.deepEqual(both.families.ipv4, ['203.0.113.10']);
+    assert.deepEqual(both.families.ipv6, ['2001:db8::10']);
+    assert.equal(both.address, '203.0.113.10');
+    const v6 = await resolvePinnedDestination('owned.example', {
+      addressFamily: 'ipv6',
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => ['2001:db8::10'],
+    });
+    assert.equal(v6.address, '2001:db8::10');
+    assert.deepEqual(v6.addresses, ['2001:db8::10']);
+  });
+
+  it('permits TRACE and ASTRANULLPROBE only for method-policy probes and never with a body', async () => {
+    await assert.rejects(
+      () => pinnedFetch('https://owned.example/', { method: 'TRACE' }, {
+        vettedHost: 'owned.example',
+        vettedAddresses: ['203.0.113.10'],
+        httpsRequestFn: () => { throw new Error('must not send'); },
+      }),
+      (error) => error?.code === 'EHTTP_METHOD',
+    );
+    await assert.rejects(
+      () => pinnedFetch('https://owned.example/', {
+        method: 'TRACE',
+        probeKind: METHOD_POLICY_PROBE_KIND,
+        body: '',
+      }, {
+        vettedHost: 'owned.example',
+        vettedAddresses: ['203.0.113.10'],
+        httpsRequestFn: () => { throw new Error('must not send'); },
+      }),
+      (error) => error?.code === 'EHTTP_METHOD',
+    );
+    let seen;
+    const response = await pinnedFetch('https://owned.example/', {
+      method: 'ASTRANULLPROBE',
+      probeKind: METHOD_POLICY_PROBE_KIND,
+    }, {
+      vettedHost: 'owned.example',
+      vettedAddresses: ['203.0.113.10'],
+      httpsRequestFn: fakeRequest((options) => { seen = options.method; }),
+    });
+    assert.equal(seen, 'ASTRANULLPROBE');
+    await response.body.cancel();
   });
 });

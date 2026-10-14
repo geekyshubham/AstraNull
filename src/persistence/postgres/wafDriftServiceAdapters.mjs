@@ -1,5 +1,6 @@
 import { detectPostureDrifts } from '../../lib/wafPostureAssurance.mjs';
 import { loadRuntimeConfig } from '../../config.mjs';
+import { wafPostureEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import {
   computeDriftSeverity,
   createDriftScanResult,
@@ -151,7 +152,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   const newIdFn = options.newId ?? newId;
   const isWafPostureEnabled = typeof options.wafPostureEnabled === 'boolean'
     ? () => options.wafPostureEnabled
-    : () => loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+    : (tenantId) => wafPostureEnabledFor(loadRuntimeConfig(), tenantId);
 
   async function auditDriftDetected(ctx, driftEvent, metadata) {
     await auditRepo.appendAuditEvent({
@@ -226,7 +227,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
     connectorSnapshots = null,
     postureSnapshots = null,
   } = {}) {
-    const gate = wafFeatureGate(isWafPostureEnabled());
+    const gate = wafFeatureGate(isWafPostureEnabled(ctx?.tenantId));
     if (gate) return gate;
 
     const asset = (await wafRepo.listWafAssets(ctx)).find((row) => row.id === assetId) ?? null;
@@ -288,7 +289,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function runDriftScan(ctx) {
-      const gate = wafFeatureGate(isWafPostureEnabled());
+      const gate = wafFeatureGate(isWafPostureEnabled(ctx?.tenantId));
       if (gate) return gate;
 
       const started = Date.now();
@@ -353,8 +354,8 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function runScheduledDriftScans(ctx = {}) {
-    const gate = wafFeatureGate(isWafPostureEnabled());
-    if (gate) return gate;
+    const gate = wafFeatureGate(isWafPostureEnabled(ctx?.tenantId));
+    if (gate && !ctx?.tenantId) return gate;
 
     const scope = resolveScheduledTenantIds(ctx, { label: 'WAF drift scan runner' });
     if ('error' in scope) return scope;
@@ -380,7 +381,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function getLastScanResult(ctx) {
-      const gate = wafFeatureGate(isWafPostureEnabled());
+      const gate = wafFeatureGate(isWafPostureEnabled(ctx?.tenantId));
       if (gate) return gate;
 
       const latest = await wafRepo.getLatestWafDriftScanResult(ctx);

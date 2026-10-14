@@ -40,7 +40,7 @@ function raceRun(overrides = {}) {
     tenant_id: 'ten_demo',
     target_group_id: 'tg_1',
     target_id: 'tgt_1',
-    check_id: 'waf.http_method_policy_marker.safe',
+    check_id: 'dns.zone_transfer_exposure.safe',
     status: 'collecting',
     correlation: { nonce_hash: 'nh_1', window_ms: 120_000 },
     probe_external_result: 'connected',
@@ -60,9 +60,7 @@ const PROBE_EVENT = {
   producer_kind: 'signed_probe',
   nonce_hash: 'nh_1',
   timestamp: FIXED_NOW.toISOString(),
-  metadata: { external_result: 'connected', profile_kind: 'waf_class_marker_probe',
-    classifier_version: 'marker-comparison-v4', comparison_complete: true,
-    planned_marker_legs: 2, completed_marker_legs: 2, baseline_health: 'healthy',
+  metadata: { external_result: 'connected', profile_kind: 'dns_axfr_leak',
     observation_only: false, readiness_conclusion: true,
     safety_attestation: { probe_requests_sent: 3, destination_resolver_attempts: 0, requests_sent: 3, total_operations: 3 } },
 };
@@ -379,12 +377,12 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
   it('first finalizer wins: a second finalizer returns the incumbent and adds no audit', async () => {
     const shared = createSharedVerdictStore();
     // ADR-0008: both finalizers see the same external probe evidence (connected ->
-    // edge_exposed / severity medium). The single-writer invariant still holds.
+    // AXFR exposed / severity medium). The single-writer invariant still holds.
     const observed = buildRaceService(shared, { withObservation: true });
     const unobserved = buildRaceService(shared, { withObservation: false });
 
     const winner = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
-    assert.equal(winner.verdict, 'edge_exposed');
+    assert.equal(winner.verdict, 'exposed');
 
     const loserResult = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', {
       force: true,
@@ -393,18 +391,18 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     // Exactly one verdict was stored, and it is the first one published.
     assert.equal(shared.verdicts.size, 1);
     const stored = shared.verdicts.get('run_1');
-    assert.equal(stored.verdict, 'edge_exposed');
+    assert.equal(stored.verdict, 'exposed');
 
     // The losing finalizer observed the incumbent, not its own duplicate verdict.
     const loserVerdict = loserResult?.verdict ?? loserResult;
-    assert.equal(loserVerdict.verdict, 'edge_exposed');
+    assert.equal(loserVerdict.verdict, 'exposed');
     assert.equal(verdictWasInserted(loserVerdict), false);
 
     // Audit trail and finding severity both describe the stored verdict, exactly once.
     const audits = verdictAudits(shared);
     assert.equal(audits.length, 1);
     assert.equal(audits[0].action, 'verdict.published');
-    assert.equal(audits[0].metadata.verdict, 'edge_exposed');
+    assert.equal(audits[0].metadata.verdict, 'exposed');
     assert.equal(
       shared.audits.some((entry) => entry.action === 'verdict.finalized_no_observation'),
       false,
@@ -412,7 +410,7 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
 
     assert.equal(shared.findings.length, 1);
     assert.equal(shared.findings[0].severity, 'medium');
-    assert.match(shared.findings[0].title, /edge_exposed/);
+    assert.match(shared.findings[0].title, /exposed/);
   });
 
   it('no-observation finalizer wins: later observation replay cannot rewrite verdict, audit or finding', async () => {
@@ -421,7 +419,7 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     const observed = buildRaceService(shared, { withObservation: true });
 
     const winner = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', { force: true });
-    assert.equal(winner.verdict.verdict, 'edge_exposed');
+    assert.equal(winner.verdict.verdict, 'exposed');
 
     const loserVerdict = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(
       RACE_CTX,
@@ -429,18 +427,18 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     );
 
     assert.equal(shared.verdicts.size, 1);
-    assert.equal(shared.verdicts.get('run_1').verdict, 'edge_exposed');
+    assert.equal(shared.verdicts.get('run_1').verdict, 'exposed');
 
     // The second finalizer got the incumbent back instead of publishing a duplicate.
-    assert.equal(loserVerdict.verdict, 'edge_exposed');
+    assert.equal(loserVerdict.verdict, 'exposed');
     assert.equal(verdictWasInserted(loserVerdict), false);
 
     const audits = verdictAudits(shared);
     assert.equal(audits.length, 1);
     assert.equal(audits[0].action, 'verdict.published');
-    assert.equal(audits[0].metadata.verdict, 'edge_exposed');
+    assert.equal(audits[0].metadata.verdict, 'exposed');
 
-    // edge_exposed creates exactly one finding; the second finalizer must not duplicate it.
+    // exposed creates exactly one finding; the second finalizer must not duplicate it.
     assert.equal(shared.findings.length, 1);
   });
 
@@ -467,7 +465,7 @@ describe('concurrent verdict finalization is single-writer (createVerdictIfAbsen
     assert.equal(bVerdict.verdict, stored.verdict);
 
     // Findings, if any, match the stored verdict's severity.
-    if (stored.verdict === 'edge_exposed') {
+    if (stored.verdict === 'exposed') {
       assert.equal(shared.findings.length, 1);
       assert.equal(shared.findings[0].severity, 'medium');
     } else {
@@ -506,10 +504,10 @@ describe('verdict publication side effects are crash-repairable', () => {
 
     const repaired = await service.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
 
-    assert.equal(repaired.verdict, 'edge_exposed');
+    assert.equal(repaired.verdict, 'exposed');
     assert.equal(shared.verdicts.size, 1);
     assert.equal(verdictAudits(shared).length, 1);
-    assert.equal(verdictAudits(shared)[0].metadata.verdict, 'edge_exposed');
+    assert.equal(verdictAudits(shared)[0].metadata.verdict, 'exposed');
     assert.equal(shared.findings.length, 1);
     assert.equal(shared.findings[0].last_verdict_id, repaired.id);
     assert.equal(findingAudits(shared).length, 1);
@@ -532,7 +530,7 @@ describe('verdict publication side effects are crash-repairable', () => {
 
     const repaired = await service.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
 
-    assert.equal(repaired.verdict, 'edge_exposed');
+    assert.equal(repaired.verdict, 'exposed');
     assert.equal(verdictAudits(shared).length, 1);
     assert.equal(shared.findings.length, 1);
     assert.equal(shared.findingUpsertCalls, 2, 'failed write plus one successful repair');

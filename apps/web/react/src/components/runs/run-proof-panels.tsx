@@ -9,6 +9,7 @@ import {
 import { plainCodeLabel, plainVerdictLabel, plainVerdictShortLabel } from '../../lib/plain-language.mjs';
 import { formatDate } from '../../lib/utils';
 import { useScrollEdges } from '../../lib/scroll-edges';
+import { requiredInputMissing } from '../../lib/missing-input.mjs';
 import './runs-components.css';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
@@ -68,7 +69,10 @@ export function TrafficPathPanel({
   const verdict = getNestedString(detail, ['verdict', 'verdict'], '');
   const confidence = getNestedString(detail, ['verdict', 'confidence'], '');
   const signedProbeCount = events.filter(isSignedProbeEvidenceEvent).length;
-  const statusLine = verdict
+  const notTested = requiredInputMissing(detail);
+  const statusLine = notTested
+    ? 'Not tested, so no probe evidence exists for this run.'
+    : verdict
     ? `${plainVerdictLabel(verdict)}${confidence ? ` (${plainCodeLabel(confidence)} confidence)` : ''}. This summary uses only trusted external probe events recorded for the run.`
     : 'No final verdict is recorded. Evidence states reflect only trusted external probe events passed to this panel.';
 
@@ -109,6 +113,16 @@ export function VerdictExplanationPanel({
       <section className="verdict-explanation verdict-explanation--pending">
         <h3>{heading}</h3>
         <p className="muted">No final verdict evidence is recorded for this run yet.</p>
+      </section>
+    );
+  }
+
+  const notTested = requiredInputMissing(detail);
+  if (notTested) {
+    return (
+      <section className="verdict-explanation">
+        <h3>{heading}</h3>
+        <p className="muted">{notTested.label}. {notTested.message}</p>
       </section>
     );
   }

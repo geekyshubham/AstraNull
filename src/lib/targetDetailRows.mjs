@@ -1,4 +1,5 @@
-import { isConnectorsEnabledForTenant, loadRuntimeConfig } from '../config.mjs';
+import { loadRuntimeConfig } from '../config.mjs';
+import { connectorsEnabledFor, wafPostureEnabledFor } from './tenantFeatureAccess.mjs';
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { roleHasPermission } from '../contracts/roles.mjs';
@@ -137,8 +138,8 @@ function redactStoredYaml(value) {
 function connectorConfigAllowed(ctx) {
   try {
     const config = loadRuntimeConfig();
-    const enabled = config.featureFlags?.wafPostureEnabled === true
-      && isConnectorsEnabledForTenant(config, ctx?.tenantId);
+    const enabled = wafPostureEnabledFor(config, ctx?.tenantId)
+      && connectorsEnabledFor(config, ctx?.tenantId);
     if (!enabled) return { allowed: false, reason: 'feature_disabled' };
     if (!roleHasPermission(ctx?.role, 'waf:connector_read')) {
       return { allowed: false, reason: 'permission_denied' };

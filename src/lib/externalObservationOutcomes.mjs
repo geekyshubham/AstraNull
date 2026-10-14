@@ -57,6 +57,13 @@ export const CANARY_NONCE_REQUEST_HEADER = 'x-astranull-nonce';
 export const CANARY_ECHO_RESPONSE_HEADER = 'x-astranull-canary-echo';
 export const MARKER_ECHO_RESPONSE_HEADER = 'x-astranull-marker-echo';
 
+export const WAF_GRADING_VERSION = 'waf-grading.v2';
+export const SIGNATURE_CORPUS_VERSION = 'waf-signatures.2026-10-13.2';
+export const WAF_RESPONSE_OUTCOMES = Object.freeze([
+  'blocked', 'challenged', 'allowed', 'redirected', 'inconclusive', 'error',
+]);
+export const WAF_CHALLENGED_OUTCOME = 'challenged';
+
 const SUPPORTED_VERSIONS = new Set([EXTERNAL_OBSERVATION_SEMANTICS_VERSION, ...LEGACY_EXTERNAL_OBSERVATION_SEMANTICS_VERSIONS]);
 const OUTCOME_SET = new Set(EXTERNAL_OBSERVATION_OUTCOMES);
 const NO_RESPONSE_PATTERN = /abort|timeout|timedout|deadline/i;
@@ -65,44 +72,134 @@ const MTLS_REJECTION_PATTERN = /certificate_required|ALERT_CERTIFICATE_REQUIRED|
 const MAX_SIGNATURE_BODY = 8192;
 const EDGE_ADDRESS_FAMILIES = new Set(['cdn', 'waf']);
 
-/** Vendor block markers that name the control (G2); each needs more than a status code. */
-const VENDOR_DENIAL_SIGNATURES = Object.freeze([
+/** Vendor block markers that name the control (G2); `match` needs a WAF-specific anchor, `suspect` is generic proxy/CDN evidence only. */
+export const VENDOR_DENIAL_SIGNATURES = Object.freeze([
   {
     id: 'cloudflare_challenge',
     vendor: 'cloudflare',
+    challenge: true,
+    live_verified: true,
     match: ({ header }) => (header('cf-mitigated') ?? '').toLowerCase() === 'challenge',
+  },
+  {
+    id: 'cloudflare_js_challenge',
+    vendor: 'cloudflare',
+    challenge: true,
+    live_verified: true,
+    match: ({ header, body }) => Boolean(header('cf-ray'))
+      && /cdn-cgi\/challenge-platform|cf-browser-verification|_cf_chl_|just a moment[\s\S]{0,80}cloudflare|enable javascript and cookies to continue/i.test(body),
   },
   {
     id: 'cloudflare_block_page',
     vendor: 'cloudflare',
+    live_verified: true,
     match: ({ header, body }) => (/error code:?\s*(1020|100[6-9]|101[0-2])\b/i.test(body) || /attention required! \| cloudflare/i.test(body))
       && (Boolean(header('cf-ray')) || /cloudflare/i.test(body)),
   },
   {
+    id: 'captcha_interstitial',
+    vendor: null,
+    challenge: true,
+    live_verified: false,
+    match: ({ body }) => /verify (?:that )?you are human|complete the captcha to continue|checking your browser before/i.test(body)
+      && /recaptcha|h-?captcha|g-recaptcha|cf-turnstile/i.test(body),
+  },
+  {
     id: 'akamai_reference_18',
     vendor: 'akamai',
+    live_verified: true,
     match: ({ body }) => /access denied/i.test(body) && /reference\s*#18\.[0-9a-f]+/i.test(body),
   },
   {
     id: 'imperva_incident_id',
     vendor: 'imperva',
+    live_verified: true,
     match: ({ body }) => /incapsula incident id/i.test(body),
   },
   {
     id: 'aws_cloudfront_waf_block',
     vendor: 'aws',
+    live_verified: true,
     match: ({ status, header, body }) => status === 403 && Boolean(header('x-amz-cf-id')) && /request blocked/i.test(body),
+  },
+  {
+    id: 'aws_alb_waf_block',
+    vendor: 'aws',
+    live_verified: false,
+    match: ({ status, header, body }) => status === 403 && /awselb\/2\.0/i.test(header('server') ?? '')
+      && /request blocked by aws waf/i.test(body),
+    suspect: ({ status, header }) => status === 403 && /awselb\/2\.0/i.test(header('server') ?? ''),
+  },
+  {
+    id: 'aws_apigateway_waf_block',
+    vendor: 'aws',
+    live_verified: false,
+    match: ({ status, body }) => status === 403 && /request blocked by aws waf/i.test(body),
+    suspect: ({ status, header, body }) => status === 403 && (
+      /forbiddenexception/i.test(header('x-amzn-errortype') ?? '')
+      || (Boolean(header('x-amzn-requestid')) && /forbidden/i.test(body))
+    ),
+  },
+  {
+    id: 'gcp_cloud_armor_block',
+    vendor: 'google',
+    live_verified: false,
+    match: ({ status, header, body }) => status === 403 && /1\.1 google/i.test(header('via') ?? '')
+      && /cloud armor/i.test(body),
+    suspect: ({ status, header }) => status === 403 && /1\.1 google/i.test(header('via') ?? ''),
+  },
+  {
+    id: 'azure_frontdoor_waf_block',
+    vendor: 'azure',
+    live_verified: false,
+    match: ({ status, body }) => status === 403
+      && /azure (?:front door|application gateway)[\s\S]{0,80}(blocked|denied|waf)/i.test(body),
+    suspect: ({ status, header }) => status === 403 && (
+      Boolean(header('x-azure-ref'))
+      || /microsoft-azure-application-gateway/i.test(header('server') ?? '')
+    ),
+  },
+  {
+    id: 'fastly_ngwaf_block',
+    vendor: 'fastly',
+    live_verified: false,
+    match: ({ status, body }) => status === 406 && /fastly next-gen waf|signal sciences|sigsci/i.test(body),
+    suspect: ({ status, header }) => status === 406 && (
+      Boolean(header('x-served-by')) || /fastly/i.test(header('server') ?? '') || Boolean(header('x-timer'))
+    ),
+  },
+  {
+    id: 'modsecurity_default_block',
+    vendor: 'modsecurity',
+    live_verified: false,
+    match: ({ status, body }) => status === 403 && /this error was generated by mod_security|coraza waf/i.test(body),
+    suspect: ({ status, header }) => status === 403 && /mod_?security|coraza/i.test(header('server') ?? ''),
   },
   {
     id: 'f5_asm_rejection',
     vendor: 'f5',
+    live_verified: true,
     match: ({ body }) => /the requested url was rejected/i.test(body) && /support id/i.test(body),
   },
 ]);
 
-function headerGetter(source) {
+export function headerGetter(source) {
   if (typeof source === 'function') return (name) => normalizeHeader(source(name));
-  if (source?.headers?.get) return (name) => normalizeHeader(source.headers.get(name));
+  if (typeof source?.headers?.get === 'function') return (name) => normalizeHeader(source.headers.get(name));
+  if (typeof source?.get === 'function') return (name) => normalizeHeader(source.get(name));
+  if (source && typeof source === 'object') {
+    const headersObj = source.headers && typeof source.headers === 'object' && !Array.isArray(source.headers)
+      ? source.headers
+      : source;
+    const lowerMap = new Map();
+    for (const [k, v] of Object.entries(headersObj)) {
+      if (typeof k === 'string') lowerMap.set(k.toLowerCase(), v);
+    }
+    return (name) => {
+      if (typeof name !== 'string') return null;
+      return normalizeHeader(lowerMap.get(name.toLowerCase()));
+    };
+  }
   return () => null;
 }
 
@@ -140,32 +237,96 @@ export function baselineHealth(baseline) {
   return status >= 200 && status < 400 ? 'healthy' : 'unhealthy';
 }
 
-/** Customer-declared block or lockdown response: status plus body hash or header, matched exactly. */
+function declaredHeaderSpec(declared) {
+  if (typeof declared.header_name === 'string' && declared.header_name.trim()) {
+    return { name: declared.header_name, value: declared.header_value };
+  }
+  if (declared.header && typeof declared.header.name === 'string') return declared.header;
+  return null;
+}
+
+function declaredStatusMatches(declared, statusCode) {
+  if (Array.isArray(declared.status_codes) && declared.status_codes.length > 0) {
+    return declared.status_codes.some((code) => Number.isInteger(code) && code === statusCode);
+  }
+  if (Number.isInteger(declared.status_code)) return declared.status_code === statusCode;
+  return true;
+}
+
+// Compute deterministic digest of customer-declared denial signature specification.
+export function computeDeclaredSignatureDigest(declared) {
+  if (!declared || typeof declared !== 'object') return null;
+  const wantedHash = typeof declared.body_sha256 === 'string' ? declared.body_sha256.trim().toLowerCase() : '';
+  const wantedHeader = declaredHeaderSpec(declared);
+  if (!wantedHash && !wantedHeader) return null;
+  const statusCodes = Array.isArray(declared.status_codes)
+    ? [...declared.status_codes].filter((c) => Number.isInteger(c)).sort((a, b) => a - b)
+    : (Number.isInteger(declared.status_code) ? [declared.status_code] : []);
+  const payload = {
+    header_name: wantedHeader ? String(wantedHeader.name).trim().toLowerCase() : '',
+    header_value: wantedHeader ? String(wantedHeader.value ?? '').trim() : '',
+    body_sha256: wantedHash,
+    status_codes: statusCodes,
+  };
+  return sha256Hex(JSON.stringify(payload));
+}
+
+// Customer-declared block or lockdown response: status plus body hash or header, matched exactly.
 export function matchDeclaredDenialSignature({ statusCode = null, headers = null, bodyText = null, declared = null, bodyComplete = false } = {}) {
   if (!declared || typeof declared !== 'object') return null;
   const header = headerGetter(headers);
-  if (Number.isInteger(declared.status_code) && declared.status_code !== statusCode) return null;
+  if (!declaredStatusMatches(declared, statusCode)) return null;
   const wantedHash = typeof declared.body_sha256 === 'string' ? declared.body_sha256.trim().toLowerCase() : '';
-  const wantedHeader = declared.header && typeof declared.header.name === 'string' ? declared.header : null;
+  const wantedHeader = declaredHeaderSpec(declared);
   if (!wantedHash && !wantedHeader) return null;
   if (wantedHash && (bodyComplete !== true || !/^[a-f0-9]{64}$/.test(wantedHash) || typeof bodyText !== 'string' || sha256Hex(bodyText) !== wantedHash)) return null;
   if (wantedHeader) {
-    const observed = header(wantedHeader.name.toLowerCase());
+    const observed = header(String(wantedHeader.name).toLowerCase());
     if (observed == null || typeof wantedHeader.value !== 'string' || !wantedHeader.value.trim()) return null;
     if (observed !== wantedHeader.value.trim()) return null;
   }
-  return { kind: 'declared', id: typeof declared.id === 'string' && declared.id ? declared.id.slice(0, 64) : 'declared_response', vendor: null };
+  const basis = wantedHeader ? 'declared_header' : 'declared_body';
+  const declaration_digest = computeDeclaredSignatureDigest(declared);
+  return {
+    kind: 'declared',
+    id: typeof declared.id === 'string' && declared.id ? declared.id.slice(0, 64) : 'declared_response',
+    vendor: null,
+    basis,
+    declaration_digest,
+  };
 }
 
-/** Vendor block marker on one response, or null; a bare status code never matches. */
+/** Vendor block marker on one response, or null; a bare status code or a generic proxy/CDN header never matches. */
 export function matchVendorDenialSignature({ statusCode = null, headers = null, bodyText = '' } = {}) {
   const header = headerGetter(headers);
   const body = String(bodyText ?? '').slice(0, MAX_SIGNATURE_BODY);
   for (const rule of VENDOR_DENIAL_SIGNATURES) {
-    if (rule.match({ status: statusCode, header, body })) return { kind: 'vendor', id: rule.id, vendor: rule.vendor };
+    if (rule.match({ status: statusCode, header, body })) {
+      return {
+        kind: 'vendor',
+        id: rule.id,
+        vendor: rule.vendor,
+        ...(rule.challenge === true ? { challenge: true } : {}),
+      };
+    }
   }
   return null;
 }
+
+/** Unverified vendor rule matched only on generic proxy/CDN headers plus a denial status: a suspected block, never a block. */
+export function matchSuspectedVendorSignature({ statusCode = null, headers = null, bodyText = '' } = {}) {
+  if (matchVendorDenialSignature({ statusCode, headers, bodyText })) return null;
+  const header = headerGetter(headers);
+  const body = String(bodyText ?? '').slice(0, MAX_SIGNATURE_BODY);
+  for (const rule of VENDOR_DENIAL_SIGNATURES) {
+    if (rule.live_verified !== true && typeof rule.suspect === 'function' && rule.suspect({ status: statusCode, header, body })) {
+      return { kind: 'vendor_suspected', id: rule.id, vendor: rule.vendor, live_verified: false };
+    }
+  }
+  return null;
+}
+
+export const BLOCK_SUSPECTED_UNVERIFIED_SIGNATURE = 'block_suspected_unverified_signature';
 
 /** Declared signature first, then vendor markers. */
 export function matchControlDenialSignature({ statusCode = null, headers = null, bodyText = '', declared = null, bodyComplete = false } = {}) {
@@ -184,8 +345,11 @@ export function cdnEdgeSignal({ headers = null, directAddress = null } = {}) {
   if (header('x-iinfo')) return 'imperva_edge_headers';
   const address = String(directAddress ?? '').replace(/^\[|\]$/g, '').trim();
   if (address && isIP(address)) {
-    const hit = classifyEdgeByAddress([address]).find((row) => EDGE_ADDRESS_FAMILIES.has(row.family));
-    if (hit) return `${hit.family}_address_range:${hit.provider}`.slice(0, 64);
+    const hits = classifyEdgeByAddress([address]);
+    if (!hits.some((row) => row.family === 'cloud')) {
+      const hit = hits.find((row) => EDGE_ADDRESS_FAMILIES.has(row.family));
+      if (hit) return `${hit.family}_address_range:${hit.provider}`.slice(0, 64);
+    }
   }
   return null;
 }

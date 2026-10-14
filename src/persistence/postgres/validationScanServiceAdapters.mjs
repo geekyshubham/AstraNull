@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { scanTargetIds } from '../../lib/targetExecutionScope.mjs';
-import { CHECK_CATALOG, customerSelectableChecks, getCheckById, isCustomerRunnable } from '../../contracts/checks.mjs';
+import { CHECK_CATALOG, customerSelectableChecks, getCheckById, isCustomerRunnable, targetInputRefusal } from '../../contracts/checks.mjs';
 import {
   ACTIVE_SCAN_STATUSES,
   ACTIVE_STEP_STATUSES,
@@ -30,6 +30,7 @@ import { probeDispatchReady } from '../../config.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
 import { isWithinSafeTestWindow, normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
+import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'running', 'collecting']);
@@ -143,13 +144,13 @@ function stepAuditMetadata(step, extra = {}) {
   };
 }
 
-function resolveChecks(checkIds) {
-  const selectable = new Set(customerSelectableChecks(CHECK_CATALOG).map((check) => check.check_id));
+function resolveChecks(checkIds, ctx) {
+  const selectable = new Set(customerSelectableChecks(CHECK_CATALOG, { deferTargetRequirements: true, tenantId: ctx?.tenantId }).map((check) => check.check_id));
   const checks = [];
   for (const checkId of checkIds) {
     const check = getCheckById(checkId);
     if (!check) return { error: 'unknown_check', status: 400, check_id: checkId };
-    if (!isCustomerRunnable(check)) {
+    if (!isCustomerRunnable(check, ctx)) {
       return { error: 'soc_gated_check', status: 403, check_id: checkId, message: 'This check requires SOC governance.' };
     }
     if (!selectable.has(checkId)) {
@@ -293,7 +294,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
     }
     const group = await loadGroup(ctx, policyId);
     if (!group) return { error: 'target_group_not_found', status: 404 };
-    const resolved = resolveChecks(input.check_ids);
+    const resolved = resolveChecks(input.check_ids, ctx);
     if (resolved.error) return resolved;
     let targets = (group.targets ?? []).filter((target) => !target.deleted_at);
     if (input.target_ids) {
@@ -318,13 +319,25 @@ export function createPostgresValidationScanServices(repositories, options = {})
       return { error: 'target_not_found', status: 404 };
     }
     let plan;
+    const bindingsByTargetId = new Map();
+    if (typeof validationEvidence?.loadOriginLockdownBindings === 'function') {
+      for (const target of targets) {
+        try {
+          const loaded = await validationEvidence.loadOriginLockdownBindings(ctx, target.id);
+          if (loaded) bindingsByTargetId.set(target.id, loaded);
+        } catch {}
+      }
+    }
     try {
-      plan = planScanSteps({ checks: resolved.checks, targets, targetId: input.target_id });
+      plan = planScanSteps({ checks: resolved.checks, targets, targetId: input.target_id, targetInputRefusal, originBindings: bindingsByTargetId, tenantId: ctx?.tenantId });
     } catch (err) {
       return scanValidationResponse(err);
     }
     if (input.target_id && plan.excluded.length) {
       const first = plan.excluded[0];
+      if (first.reason !== 'target_kind_not_supported') {
+        return { error: 'check_requires_additional_input', status: 400, check_id: first.check_id, reason: first.reason, message: first.message };
+      }
       return {
         error: 'target_kind_not_supported',
         status: 400,
@@ -912,7 +925,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
     for (const policyId of policyIds) {
       const policy = await loadGroup(execCtx, policyId);
       if (!policy) return scheduleDenied(actor, state, 'target_execution_policy_unavailable', now);
-      if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(actor, state, 'safe_window_closed', now);
+      if (!isExplicitDemoTenant(state.scan.tenant_id) && (policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime(), { tenantId: state.scan.tenant_id })) return scheduleDenied(actor, state, 'safe_window_closed', now);
       for (const targetId of scanTargetIds(state.scan)) {
         if (await activeRunForGroup(execCtx, policy.id, targetId) || await activeScanForGroup(execCtx, policy.id, state.scan.id, targetId)) return scheduleDenied(actor, state, 'concurrent_run_blocked', now);
       }

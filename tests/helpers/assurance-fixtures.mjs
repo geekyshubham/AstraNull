@@ -1,6 +1,7 @@
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { deriveRunEvidenceStamp, approvedScenarioVersion } from '../../src/lib/checkDefinitionVersion.mjs';
 import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
+import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
 
 export const ASSURANCE_NOW = '2026-10-08T12:00:00.000Z';
 export const ASSURANCE_OBSERVED = '2026-10-07T12:00:00.000Z';
@@ -13,8 +14,8 @@ export function assuranceWorld({ targetCount = 1, checkCount = 1, tenantId = 'te
 export function addAssuredObservation(world, { target = world.targets[0], check = world.catalog[0], observedAt = ASSURANCE_OBSERVED, startedAt = observedAt, outcome = 'protected', id = `run_${world.runs.length + 1}`, policy = null } = {}) {
   const stamp = deriveRunEvidenceStamp(check, undefined, { probeMode: 'signed-worker', scenarioVersion: approvedScenarioVersion(check) });
   const nonce = `fixture_nonce_${id}`;
-  const run = { id, correlation: { nonce_hash: nonce }, tenant_id: world.tenantId, target_id: target.id, target_group_id: target.target_group_id, check_id: check.check_id, policy_id: policy?.id ?? null, status: 'verdicted', created_at: startedAt, started_at: startedAt, completed_at: observedAt, ...stamp, safety_constraints: { assurance_scope: deriveAssuranceScope({ target, policy, targetGroup: world.groups.find((row) => row.id === target.target_group_id) }) } };
-  const event = { id: `evt_${id}`, nonce_hash: nonce, tenant_id: world.tenantId, test_run_id: id, producer_kind: 'signed_probe', signal_type: 'probe_result', timestamp: observedAt, ingested_at: observedAt, metadata: { classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy', enforcement: ['protected', 'edge_protected'].includes(outcome) ? 'enforced' : 'not_enforced', evidence_complete: true, observation_only: false, readiness_conclusion: true } };
+  const run = { id, correlation: { nonce_hash: nonce }, tenant_id: world.tenantId, target_id: target.id, target_group_id: target.target_group_id, check_id: check.check_id, policy_id: policy?.id ?? null, status: 'verdicted', created_at: startedAt, started_at: startedAt, completed_at: observedAt, probe_metadata: { grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION }, ...stamp, safety_constraints: { assurance_scope: deriveAssuranceScope({ target, policy, targetGroup: world.groups.find((row) => row.id === target.target_group_id) }) } };
+  const event = { id: `evt_${id}`, nonce_hash: nonce, tenant_id: world.tenantId, test_run_id: id, producer_kind: 'signed_probe', signal_type: 'probe_result', timestamp: observedAt, ingested_at: observedAt, metadata: { grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION, classifier_version: 'marker-comparison-v4', comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy', enforcement: ['protected', 'edge_protected'].includes(outcome) ? 'enforced' : 'not_enforced', evidence_complete: true, observation_only: false, readiness_conclusion: true } };
   const verdict = { id: `vrd_${id}`, tenant_id: world.tenantId, test_run_id: id, verdict: outcome, created_at: observedAt, evidence_ids: [event.id] };
   world.runs.push(run); world.events.push(event); world.verdicts.push(verdict);
   return { run, event, verdict };

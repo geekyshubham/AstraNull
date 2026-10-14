@@ -6047,7 +6047,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         probe_job_id: 'pjob_pass',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
       {
         test_run_id: 'run_fail',
@@ -6060,7 +6060,7 @@ describe('postgres WAF orchestrator service adapters', () => {
     const results = buildRetestResultsFromDelegatedRuns(delegatedJobs, {
       run_pass: {
         status: 'verdicted',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
         probe_job_id: 'pjob_pass',
         verdict: { verdict: 'protected' },
       },
@@ -6182,7 +6182,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         probe_job_id: 'pjob_del_1',
         scenario: 'marker',
         waf_asset_id: 'waf_asset_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
       {
         test_run_id: 'run_del_2',
@@ -6244,7 +6244,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         probe_job_id: 'pjob_race_1',
         scenario: 'marker',
         waf_asset_id: 'waf_asset_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const runningPlanStaleRead = {
@@ -6472,7 +6472,7 @@ describe('postgres WAF orchestrator service adapters', () => {
     assert.equal(result.delegated_jobs.length, 1);
     assert.equal(result.delegated_jobs[0].test_run_id, 'run_waf_1');
     assert.equal(result.delegated_jobs[0].probe_job_id, 'pjob_waf_1');
-    assert.equal(startBody.check_id, 'waf.marker_rule.safe');
+    assert.equal(startBody.check_id, 'waf.http_method_policy_marker.safe');
     assert.equal(startBody.probe_profile.scenario_family, 'marker');
     assert.equal(startBody.target_group_id, 'tg_1');
     const claimCall = repoCalls.find((c) => c.method === 'claimValidationPlanExecution');
@@ -6546,7 +6546,7 @@ describe('postgres WAF orchestrator service adapters', () => {
     assert.equal(startCalls, 1);
     assert.equal(result.delegated_jobs.length, 1);
     assert.equal(result.delegated_jobs[0].test_run_id, 'run_multi_1');
-    assert.equal(startBody.check_id, 'waf.marker_rule.safe');
+    assert.equal(startBody.check_id, 'waf.http_method_policy_marker.safe');
     assert.equal(startBody.target_id, 'tgt_1');
     const finishCall = repoCalls.find((c) => c.method === 'finishValidationPlanExecution');
     assert.equal(finishCall.args[3].state, 'running');
@@ -6620,7 +6620,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_plan_existing',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
         executed_at: FIXED_NOW.toISOString(),
@@ -6760,7 +6760,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_existing',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
         executed_at: FIXED_NOW.toISOString(),
@@ -6944,7 +6944,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         probe_job_id: 'pjob_done',
         scenario: 'marker',
         waf_asset_id: 'waf_asset_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const { repositories, auditEvents, repoCalls } = createRecordingWafOrchestratorRepositories({
@@ -7193,7 +7193,7 @@ describe('postgres WAF orchestrator service adapters', () => {
     assert.equal(result.delegated_jobs.length, 1);
     assert.equal(result.delegated_jobs[0].test_run_id, 'run_retest_1');
     assert.equal(result.delegated_jobs[0].probe_job_id, 'pjob_retest_1');
-    assert.equal(startBody.check_id, 'waf.marker_rule.safe');
+    assert.equal(startBody.check_id, 'waf.http_method_policy_marker.safe');
     assert.equal(startBody.target_id, 'tgt_1');
     assert.equal(startBody.target_group_id, 'tg_1');
     assert.equal(startBody.probe_profile.scenario_family, 'marker');
@@ -7341,7 +7341,7 @@ describe('postgres WAF orchestrator service adapters', () => {
     assert.equal(result.verdict, undefined);
     assert.equal(result.delegated_jobs.length, 1);
     assert.equal(startCalls, 1);
-    assert.equal(startBody.check_id, 'waf.marker_rule.safe');
+    assert.equal(startBody.check_id, 'waf.http_method_policy_marker.safe');
     assert.equal(startBody.target_id, 'tgt_1');
     const finishCall = repoCalls.find((c) => c.method === 'finishRetestExecution');
     assert.equal(finishCall.args[3].status, 'running');
@@ -7374,7 +7374,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_rt_existing',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
       }),
@@ -7607,7 +7607,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         probe_job_id: 'pjob_close_1',
         scenario: 'marker',
         waf_asset_id: 'waf_asset_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const { repositories, auditEvents, repoCalls } = createRecordingWafOrchestratorRepositories({
@@ -7649,7 +7649,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         getTestRun: async (_ctx, runId) => ({
           id: runId,
           status: 'verdicted',
-          check_id: 'waf.marker_rule.safe',
+          check_id: 'waf.http_method_policy_marker.safe',
           probe_job_id: 'pjob_close_1',
           verdict: { verdict: 'pass', confidence: 0.9 },
         }),
@@ -7686,7 +7686,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_open_1',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
       }),
@@ -7728,7 +7728,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_close_1',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
       }),
@@ -7771,7 +7771,7 @@ describe('postgres WAF orchestrator service adapters', () => {
             probe_job_id: 'pjob_close_1',
             scenario: 'marker',
             waf_asset_id: 'waf_asset_1',
-            check_id: 'waf.marker_rule.safe',
+            check_id: 'waf.http_method_policy_marker.safe',
           },
         ],
       }),
@@ -7786,7 +7786,7 @@ describe('postgres WAF orchestrator service adapters', () => {
         getTestRun: async () => ({
           id: 'run_close_1',
           status: 'verdicted',
-          check_id: 'waf.marker_rule.safe',
+          check_id: 'waf.http_method_policy_marker.safe',
           probe_job_id: 'pjob_other',
           verdict: { verdict: 'pass' },
         }),

@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { loadRuntimeConfig } from '../config.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 import {
   assertCvePlaybookApprovable,
   assertCvePlaybookCoordinatedRetestAllowed,
@@ -30,9 +31,8 @@ import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { createWafValidation } from './wafPosture.mjs';
 
-function wafFeatureDisabled() {
-  const { featureFlags } = loadRuntimeConfig();
-  return featureFlags.wafPostureEnabled !== true;
+function wafFeatureDisabled(ctx) {
+  return !wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
 }
 
 function featureDisabledResponse() {
@@ -338,7 +338,7 @@ function buildOrRefreshPlaybook(ctx, item) {
 }
 
 export function listCvePipelineItems(ctx) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const items = getStore()
     .cvePipelineItems.filter((i) => i.tenant_id === ctx.tenantId)
@@ -357,7 +357,7 @@ function findPipelineItemByCveId(ctx, cveId) {
 }
 
 export function ingestCveFeed(ctx, feedItems = []) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   if (!Array.isArray(feedItems)) {
     return {
       error: 'invalid_cve_feed_request',
@@ -438,7 +438,7 @@ export function ingestCveFeed(ctx, feedItems = []) {
 }
 
 export function createCvePipelineItem(ctx, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   try {
     validateCvePipelineItem(body);
@@ -475,7 +475,7 @@ export function createCvePipelineItem(ctx, body = {}) {
 }
 
 export function triageCvePipelineItem(ctx, id) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, id);
   if (!item) {
@@ -513,7 +513,7 @@ export function triageCvePipelineItem(ctx, id) {
 }
 
 export function matchCveAssets(ctx, id) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, id);
   if (!item) {
@@ -587,7 +587,7 @@ export function matchCveAssets(ctx, id) {
 }
 
 export function createRecommendation(ctx, matchId, vendor) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const matchRecord = findAssetMatch(ctx, matchId);
   if (!matchRecord) {
@@ -653,7 +653,7 @@ export function createRecommendation(ctx, matchId, vendor) {
 }
 
 export function executeSafeCveValidation(ctx, pipelineItemId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, pipelineItemId);
   if (!item) {
@@ -776,7 +776,7 @@ export function executeSafeCveValidation(ctx, pipelineItemId, body = {}) {
 }
 
 export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, pipelineItemId);
   if (!item) {
@@ -1014,7 +1014,7 @@ export function executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
 }
 
 export function patchCveItemStage(ctx, id, stage) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, id);
   if (!item) {
@@ -1052,7 +1052,7 @@ export function patchCveItemStage(ctx, id, stage) {
 }
 
 export function getCveMitigationPlaybook(ctx, pipelineItemId) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, pipelineItemId);
   if (!item) {
@@ -1069,7 +1069,7 @@ export function getCveMitigationPlaybook(ctx, pipelineItemId) {
 }
 
 export function approveCveMitigationPlaybook(ctx, pipelineItemId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, pipelineItemId);
   if (!item) {
@@ -1178,7 +1178,7 @@ export function approveCveMitigationPlaybook(ctx, pipelineItemId, body = {}) {
 }
 
 export function executeCoordinatedCveRetest(ctx, pipelineItemId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const item = findPipelineItem(ctx, pipelineItemId);
   if (!item) {

@@ -483,7 +483,7 @@ describe('explanations never change external results', () => {
     const expectation = normalizeFirewallExpectation({
       destination_target_id: 'tgt_fw', protocol: 'tcp', port: 8080, expected: 'deny', source_perspective: 'public-worker-eu', change_id: 'CHG-1',
     }, { tenantId: TENANT });
-    const item = classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed'], candidate: ['service_response_observed', 'service_response_observed'], compatibility: { comparable: true, stale: false, reasons: [] } });
+    const item = classifyFirewallComparisonItem({ expectation, baseline: ['explicit_denial_observed', 'explicit_denial_observed'], candidate: ['service_response_observed', 'service_response_observed'], compatibility: { comparable: true, stale: false, reasons: [] } });
     const [explanation] = explainComparisonItems('firewall_change', [{ ...item, expectation_id: 'fwx_1' }], new Map([['fwx_1', enforcingCtx()]]));
     assert.equal(explanation.status, item.status);
     assert.equal(explanation.item_index, 0);

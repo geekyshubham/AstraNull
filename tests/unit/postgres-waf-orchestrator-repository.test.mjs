@@ -457,7 +457,7 @@ describe('postgres WAF orchestrator repository', () => {
         probe_job_id: 'pjob_rt_1',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const retestRow = {
@@ -615,7 +615,7 @@ describe('postgres WAF orchestrator repository', () => {
         reservation_id: 'res_1',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
         reserved_at: FIXED_NOW,
       },
     ];
@@ -679,7 +679,7 @@ describe('postgres WAF orchestrator repository', () => {
         probe_job_id: 'pjob_rt_1',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
         started_at: FIXED_NOW,
       },
     ];
@@ -940,7 +940,7 @@ describe('postgres WAF orchestrator repository', () => {
         probe_job_id: 'pjob_finish',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const retestRow = {
@@ -1068,7 +1068,7 @@ describe('postgres WAF orchestrator repository', () => {
         probe_job_id: 'pjob_close_1',
         scenario: 'marker',
         waf_asset_id: 'waf_1',
-        check_id: 'waf.marker_rule.safe',
+        check_id: 'waf.http_method_policy_marker.safe',
       },
     ];
     const retestRow = {
@@ -1374,7 +1374,7 @@ describe('postgres WAF orchestrator repository', () => {
           probe_job_id: 'pjob_existing',
           scenario: 'marker',
           waf_asset_id: 'waf_asset_1',
-          check_id: 'waf.marker_rule.safe',
+          check_id: 'waf.http_method_policy_marker.safe',
         },
       ],
       executed_at: fixed.toISOString(),
@@ -1472,7 +1472,7 @@ describe('postgres WAF orchestrator repository', () => {
           probe_job_id: 'pjob_existing',
           scenario: 'marker',
           waf_asset_id: 'waf_asset_1',
-          check_id: 'waf.marker_rule.safe',
+          check_id: 'waf.http_method_policy_marker.safe',
         },
       ],
       executed_at: fixed.toISOString(),

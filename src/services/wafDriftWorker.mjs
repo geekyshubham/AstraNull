@@ -1,6 +1,7 @@
 import { detectPostureDrifts } from '../lib/wafPostureAssurance.mjs';
 import { audit } from '../audit.mjs';
 import { loadRuntimeConfig } from '../config.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 import {
   computeDriftSeverity,
   createDriftScanResult,
@@ -32,8 +33,8 @@ function ensureStoreShape() {
   return store;
 }
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(ctx) {
+  const enabled = wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
   if (!enabled) return { skipped: true, reason: 'waf_feature_disabled' };
   return null;
 }
@@ -217,7 +218,7 @@ function recordScanResult(ctx, result) {
 }
 
 export function detectAssetDrift(ctx, assetId) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   ensureStoreShape();
@@ -277,7 +278,7 @@ export function detectAssetDrift(ctx, assetId) {
 }
 
 export function runDriftScan(ctx) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   const started = Date.now();
@@ -334,7 +335,7 @@ export function runDriftScan(ctx) {
 }
 
 export function runScheduledDriftScans(ctx = {}) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   ensureStoreShape();
@@ -359,7 +360,7 @@ export function runScheduledDriftScans(ctx = {}) {
 }
 
 export function getLastScanResult(ctx) {
-  const gate = wafFeatureGate();
+  const gate = wafFeatureGate(ctx);
   if (gate) return gate;
 
   ensureStoreShape();

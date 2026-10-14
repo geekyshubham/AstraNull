@@ -412,7 +412,7 @@ describe('vector catalog', () => {
         'http3_control_probe', 'waf_inspection_limit_probe', 'outside_in_waf_scan',
       ].map((kind) => [kind, maxProbeRequestsForKind(kind)])),
       {
-        reflection_service_probe: 2,
+        reflection_service_probe: 4,
         dns_wire_query: 3,
         http_method_matrix: 2,
         header_size_probe: 2,
@@ -544,8 +544,8 @@ describe('vector catalog', () => {
     assert.equal(graphql.exhausted_resource, 'computational');
 
     const axfr = getCheckById('dns.zone_transfer_exposure.safe');
-    assert.equal(axfr.probe_profile.max_requests, 2);
-    assert.equal(maxProbeRequestsForKind(axfr.probe_profile.kind), 2);
+    assert.equal(axfr.probe_profile.max_requests, 5);
+    assert.equal(maxProbeRequestsForKind(axfr.probe_profile.kind), 5);
 
     for (const checkId of [
       'reflect.quic_reflection_exposure.safe',

@@ -43,7 +43,7 @@ export type EvidenceContextModel = {
   provider: { confidence: number | null; conflict: boolean; corpus: string; source: string };
   ref: EvidenceInspectorRef | null;
   subject: Record<string, string>;
-  answer: { outcome: string; explanation: string; expected: string; observed: string } | null;
+  answer: { outcome: string; explanation: string; expected: string; observed: string; reason: string; requiredInput: string } | null;
   limitations: string[];
   primary: InspectorObservation | null;
   /** Immutable originating record ids for a finding, present even when it cites no evidence. */

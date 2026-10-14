@@ -5,6 +5,7 @@ import {
   countCustomerRunnableRunsLastHour as countRunsLastHourFromRuns,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
+  isWithinSafeTestWindowRaw,
   lastRunForTargetGroup as lastRunForTargetGroupFromRuns,
   normalizeSafetyPolicy,
   wouldExceedEventCap as wouldExceedEventCapFromCount,
@@ -15,6 +16,7 @@ export {
   DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
+  isWithinSafeTestWindowRaw,
   normalizeSafetyPolicy,
 };
 

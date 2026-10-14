@@ -3,10 +3,14 @@ import {
 import {
   customerSelectableChecks,
   checkRequiresAdditionalInput,
+  checkAdditionalInputReason,
+  demoMissingInputRefusal,
   evaluateCheckPrerequisites,
+  formatMissingInputMessage,
   getCheckById,
   isCustomerRunnable,
 } from '../contracts/checks.mjs';
+import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import { validateReviewedOperationSelection } from '../contracts/reviewedOperationBinding.mjs';
 import { targetDedupeKey } from '../contracts/targetManagement.mjs';
@@ -21,10 +25,12 @@ import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, probeEventHasProbeIo, probeResultCompletesEvidence } from './correlation.mjs';
-import { authorizeFindingWrite, upsertFindingFromVerdict } from './findings.mjs';
+import { controlDeclarationsFromTarget } from '../contracts/controlDeclarations.mjs';
+import { authorizeFindingWrite, applyPassingRetestToFindings, upsertFindingFromVerdict } from './findings.mjs';
 import {
   bindingRecordsFromStore,
   currentOriginProof,
+  deriveBindingScope,
   validateOriginBindingForRun,
 } from './originBindings.mjs';
 import { registerRetestLineage } from './retestLineage.mjs';
@@ -41,7 +47,13 @@ import {
   deriveRunEvidenceStamp,
   verdictExpectedBehaviorForRun,
 } from '../lib/checkDefinitionVersion.mjs';
-import { validateHostSniTargetBinding } from '../lib/probeJobs.mjs';
+import {
+  isOriginLockdownHostnameCheck,
+  originLockdownProvenance,
+  resolveOriginLockdownBinding,
+  validateHostSniTargetBinding,
+} from '../lib/probeJobs.mjs';
+import { buildVerdictReplay } from '../lib/verdictReplay.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { probeDispatchReady } from '../config.mjs';
 import { computeReadiness } from './readiness.mjs';
@@ -49,9 +61,12 @@ import { notifyRunTerminal } from './runTerminalHooks.mjs';
 import { normalizeCancelReason, withCheckSection } from '../contracts/validationScanManagement.mjs';
 import { isArchivedTarget, isArchivedTargetGroup } from './targetGroups.mjs';
 import {
+  DEFAULT_MAX_RUNS_PER_HOUR,
+  DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
   countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
   isWithinSafeTestWindow,
+  isWithinSafeTestWindowRaw,
   lastRunForTargetGroup,
   normalizeSafetyPolicy,
   wouldExceedEventCap,
@@ -61,8 +76,27 @@ import { assertSubscriptionLimit, getTenantAccount } from './subscriptions.mjs';
 
 export function listChecks(options = {}) {
   const catalog = getStore().checkCatalog ?? [];
-  if (options.scope === 'all') return catalog.map((check) => ({ ...withCheckSection(check), requires_additional_input: checkRequiresAdditionalInput(check) }));
-  return customerSelectableChecks(catalog).map(withCheckSection);
+  const tenantId = options.tenantId ?? options.target?.tenant_id;
+  const context = { target: options.target ?? null, declarations: options.declarations, originBindings: options.originBindings, tenantId };
+  if (options.scope === 'all') {
+    return catalog.map((check) => {
+      const requiresAdditionalInput = checkRequiresAdditionalInput(check, context);
+      return {
+        ...withCheckSection(check),
+        requires_additional_input: requiresAdditionalInput,
+        additional_input_reason: requiresAdditionalInput ? checkAdditionalInputReason(check, context) : null,
+      };
+    });
+  }
+  const selectable = customerSelectableChecks(catalog, context).map(withCheckSection);
+  if (options.target || options.tenantId) {
+    return selectable.map((check) => ({
+      ...check,
+      requires_additional_input: false,
+      additional_input_reason: null,
+    }));
+  }
+  return selectable;
 }
 
 const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
@@ -191,6 +225,32 @@ export function getTestRun(ctx, id) {
   // EVIDENCE-01 / ADR-0008: customer run detail must read external-only. Scrub the nested verdict
   // explanation / placement_confidence at this projection seam; stored rows are untouched.
   return scrubRunForCustomer({ ...run, verdict: verdict ?? null });
+}
+
+function devRunOriginBinding(run, target) {
+  const lockdownBindingId = run.provenance_json?.origin_lockdown?.binding_id ?? null;
+  return (getStore().originBindings ?? []).find((row) => row.tenant_id === run.tenant_id
+    && row.status !== 'archived' && row.status !== 'deleted'
+    && (row.id === run.origin_binding_id || (lockdownBindingId && row.id === lockdownBindingId)
+      || row.protected_target_id === target?.id || row.origin_target_id === target?.id))
+    ?? (run.origin_binding_id ? { id: run.origin_binding_id, status: 'active' } : null);
+}
+
+export function getVerdictReplay(ctx, id) {
+  const store = getStore();
+  const run = store.testRuns.find((r) => r.id === id && r.tenant_id === ctx.tenantId);
+  if (!run) return null;
+  const target = store.targets.find((t) => t.id === run.target_id && t.tenant_id === ctx.tenantId) ?? null;
+  const verdict = store.verdicts.find((v) => v.test_run_id === id && (v.tenant_id == null || v.tenant_id === ctx.tenantId));
+  const probeEvent = store.events.find((e) => e.test_run_id === run.id && e.tenant_id === ctx.tenantId
+    && e.signal_type === 'probe_result' && isTrustedProducerEvent(e) && e.nonce_hash === run.correlation?.nonce_hash);
+  return buildVerdictReplay({
+    run,
+    storedVerdict: verdict ?? null,
+    probeEvent: probeEvent ?? null,
+    declarations: controlDeclarationsFromTarget(target),
+    originBinding: devRunOriginBinding(run, target),
+  });
 }
 
 const MAX_EVENT_ID_LOOKUP = 32;
@@ -413,7 +473,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   if (!selection.legacy) return { error: 'reviewed_operation_execution_unavailable', status: 409 };
   const check = getCheckById(body.check_id);
   if (!check) return { error: 'unknown_check', status: 400 };
-  if (!isCustomerRunnable(check)) {
+  if (!isCustomerRunnable(check, ctx)) {
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -507,8 +567,29 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   const compatibilityError = targetKindCompatibilityError(check, target);
   if (compatibilityError) return compatibilityError;
 
+  let originLockdown = null;
+  const store = getStore();
+  const targetBindings = (store.originBindings ?? []).filter((row) =>
+    row.tenant_id === ctx.tenantId && row.status === 'active'
+    && (row.protected_target_id === target.id || row.origin_target_id === target.id)
+  );
+  const bindingRecords = bindingRecordsFromStore(store, ctx.tenantId);
   if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
-    const targetBindingError = validateHostSniTargetBinding(check, target);
+    if (isOriginLockdownHostnameCheck(check, target)) {
+      originLockdown = resolveOriginLockdownBinding({
+        check,
+        target,
+        tenantId: ctx.tenantId,
+        bindings: targetBindings,
+        records: bindingRecords,
+        deriveBindingScope,
+        currentOriginProof,
+      });
+    }
+    const targetBindingError = validateHostSniTargetBinding(check, target, {
+      originLockdown,
+      originBindings: { bindings: targetBindings, records: bindingRecords },
+    });
     if (targetBindingError) {
       const denied = denySafeStart(
         ctx,
@@ -572,8 +653,10 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     };
   }
 
-  const groupPolicy = normalizeSafetyPolicy(group.safety_policy);
-  if ((group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group)) {
+  const isDemo = isExplicitDemoTenant(ctx.tenantId);
+  const nowMs = Date.now();
+  const safeWindowBypassed = isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindowRaw(group, nowMs);
+  if (!isDemo && (group.safe_test_windows ?? []).length > 0 && !isWithinSafeTestWindow(group, nowMs, { tenantId: ctx.tenantId })) {
     return denySafeStart(
       ctx,
       'test_run.safe_window_denied',
@@ -584,7 +667,11 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     );
   }
 
-  if (countCustomerRunnableRunsLastHour(ctx.tenantId) >= groupPolicy.max_runs_per_hour) {
+  const normalMaxRuns = group.safety_policy?.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR;
+  const runsLastHour = countCustomerRunnableRunsLastHour(ctx.tenantId, nowMs);
+  const hourlyCapBypassed = isDemo && (runsLastHour >= normalMaxRuns);
+  const groupPolicy = normalizeSafetyPolicy(group.safety_policy, { tenantId: ctx.tenantId });
+  if (runsLastHour >= groupPolicy.max_runs_per_hour) {
     return denySafeStart(
       ctx,
       'test_run.safe_rate_denied',
@@ -598,8 +685,20 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     );
   }
 
+  const targetDeclarations = controlDeclarationsFromTarget(target);
+  const missingInput = isDemo ? demoMissingInputRefusal(check, { target, declarations: targetDeclarations, originBindings: { bindings: targetBindings, records: bindingRecords }, probeMode: runtimeConfig.probeMode }) : null;
+  const inputRequirementBypassed = missingInput ? `input_requirement:${missingInput.error}` : null;
+
+  const normalMinSeconds = group.safety_policy?.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS;
+  let minIntervalBypassed = false;
   const priorRun = getStore().testRuns.filter((run) => run.tenant_id === ctx.tenantId
     && run.target_id === targetId).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+  if (priorRun && isDemo && normalMinSeconds > 0) {
+    const elapsedMs = Date.now() - new Date(priorRun.created_at).getTime();
+    if (elapsedMs < normalMinSeconds * 1000) {
+      minIntervalBypassed = true;
+    }
+  }
   if (priorRun && groupPolicy.min_seconds_between_runs > 0) {
     const elapsedMs = Date.now() - new Date(priorRun.created_at).getTime();
     if (elapsedMs < groupPolicy.min_seconds_between_runs * 1000) {
@@ -617,6 +716,13 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       );
     }
   }
+
+  const demoBypassedGates = [];
+  if (isDemo && !isCustomerRunnable(check)) demoBypassedGates.push('soc_gated');
+  if (safeWindowBypassed) demoBypassedGates.push('safe_window');
+  if (hourlyCapBypassed) demoBypassedGates.push('hourly_cap');
+  if (minIntervalBypassed) demoBypassedGates.push('min_interval');
+  if (inputRequirementBypassed) demoBypassedGates.push(inputRequirementBypassed);
 
   const finalValidation = revalidateBeforeDispatch(
     ctx,
@@ -751,7 +857,9 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
           path: originScopeSnapshot.path ?? null,
         },
       }
-      : (stamp.provenance_json ?? null),
+      : (originLockdownProvenance(originLockdown)
+        ? { ...(stamp.provenance_json ?? {}), origin_lockdown: originLockdownProvenance(originLockdown) }
+        : (stamp.provenance_json ?? null)),
     origin_binding_id: originBindingId || null,
     retest_of_finding_id: retestFindingId || null,
   };
@@ -777,6 +885,71 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     resource_id: runId,
     metadata: { check_id: check.check_id, policy_id: run.policy_id, scan_id: run.scan_id, scan_step_id: run.scan_step_id },
   });
+
+  if (demoBypassedGates.length > 0) {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'test_run.demo_gates_bypassed',
+      resource_type: 'test_run',
+      resource_id: runId,
+      metadata: {
+        check_id: check.check_id,
+        bypassed: demoBypassedGates,
+      },
+    });
+  }
+
+  if (missingInput) {
+    const explanationMessage = formatMissingInputMessage(missingInput.error);
+    const verdict = {
+      id: newId('evidence'),
+      tenant_id: run.tenant_id,
+      test_run_id: run.id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      verdict: 'inconclusive',
+      confidence: 'external_only',
+      explanation: explanationMessage,
+      explanation_reason: 'required_input_missing',
+      required_input: missingInput.error,
+      evidence_ids: [],
+      severity: 'info',
+      placement_confidence: {
+        explanation_reason: 'required_input_missing',
+        reason: 'required_input_missing',
+        required_input: missingInput.error,
+        requests_sent: 0,
+      },
+      created_at: new Date().toISOString(),
+    };
+    getStore().verdicts.push(verdict);
+    run.status = 'verdicted';
+    run.completed_at = new Date().toISOString();
+    run.probe_external_result = 'unsupported_target';
+    run.summary = { requests_sent: 0, required_input_missing: missingInput.error };
+
+    audit({
+      tenant_id: run.tenant_id,
+      actor_user_id: 'system',
+      actor_role: 'system',
+      action: 'verdict.published',
+      resource_type: 'test_run',
+      resource_id: run.id,
+      metadata: {
+        verdict: verdict.verdict,
+        confidence: verdict.confidence,
+      },
+    });
+
+    computeReadiness(run.tenant_id);
+    notifyRunTerminal(run, { reason: 'verdicted' });
+    incMetric('test_runs_started_total');
+    persistStore();
+
+    return { run, jobs_dispatched: 0, verdict };
+  }
 
   const probeMode = runtimeConfig.probeMode ?? 'simulation';
   let probe;
@@ -971,9 +1144,32 @@ function finalizeVerdictIfReady(run, options = {}) {
   const expectedBehavior = verdictExpectedBehaviorForRun(run);
   const probeKind = getCheckById(run.check_id)?.probe_profile?.kind ?? null;
   const probeIoObserved = probeEventHasProbeIo(probeEvent);
+  const probeMetadata = probeEvent?.metadata ?? probeEvent?.metadata_json ?? {};
+  const originBinding = (store.originBindings ?? []).find((row) => row.tenant_id === run.tenant_id
+    && row.status !== 'archived' && row.status !== 'deleted'
+    && (row.id === run.origin_binding_id || row.protected_target_id === target?.id || row.origin_target_id === target?.id))
+    ?? (run.origin_binding_id ? { id: run.origin_binding_id, status: 'active' } : null);
+
+  const signedJob = (store.probeJobs ?? []).find((j) => j.test_run_id === run.id);
+  const signedDeclarations = signedJob?.probe_profile?.declarations ?? null;
+  const declarations = controlDeclarationsFromTarget(target) ?? signedDeclarations ?? null;
+
+  const safeProbeMetadata = { ...probeMetadata };
+  delete safeProbeMetadata.declarations;
+  delete safeProbeMetadata.expected_behavior;
+  delete safeProbeMetadata.declared_limit;
 
   // ADR-0008: verdicts are produced from external probe evidence only.
-  const result = correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved, probeMetadata: probeEvent?.metadata ?? probeEvent?.metadata_json });
+  const result = correlateExternalOnlyVerdict({
+    externalResult,
+    expectedBehavior,
+    probeKind,
+    probeIoObserved,
+    probeMetadata: safeProbeMetadata,
+    declarations,
+    originBinding,
+    checkId: run.check_id,
+  });
 
   const evidenceIds = store.events
     .filter((e) => e.test_run_id === run.id)
@@ -988,8 +1184,23 @@ function finalizeVerdictIfReady(run, options = {}) {
     verdict: result.verdict,
     confidence: result.confidence,
     explanation: result.explanation,
+    explanation_reason: result.explanation_reason ?? null,
     evidence_ids: evidenceIds,
     severity: result.severity,
+    grading_version: probeMetadata.grading_version ?? null,
+    signature_corpus_version: probeMetadata.signature_corpus_version ?? null,
+    source_perspective: probeMetadata.source_perspective ?? null,
+    exposure_basis: result.metadata?.exposure_basis ?? null,
+    ...(result.metadata?.port_results ? { port_results: result.metadata.port_results } : {}),
+    placement_confidence: {
+      explanation_reason: result.explanation_reason ?? null,
+      reason: result.explanation_reason ?? null,
+      grading_version: probeMetadata.grading_version ?? null,
+      signature_corpus_version: probeMetadata.signature_corpus_version ?? null,
+      source_perspective: probeMetadata.source_perspective ?? null,
+      exposure_basis: result.metadata?.exposure_basis ?? null,
+      ...(result.metadata?.port_results ? { port_results: result.metadata.port_results } : {}),
+    },
     created_at: new Date().toISOString(),
   };
   store.verdicts.push(verdict);
@@ -1017,6 +1228,10 @@ function finalizeVerdictIfReady(run, options = {}) {
       target,
     );
   }
+  applyPassingRetestToFindings(
+    { tenantId: run.tenant_id, userId: 'system', role: 'system' },
+    { verdict, run, target },
+  );
 
   computeReadiness(run.tenant_id);
   notifyRunTerminal(run, { reason: 'verdicted' });

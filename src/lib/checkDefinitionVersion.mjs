@@ -8,6 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { resolveExpectedBehaviorForCheck } from '../contracts/checks.mjs';
+import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from './externalObservationOutcomes.mjs';
 
 const LIVE_MARKERS = new Set(['live', 'latest', 'current', 'producer', 'live_external', 'user']);
 const IGNORED_BODY_FIELDS = ['version', 'check_version', 'scenario_version', 'producer_kind', 'live', 'expected_behavior'];
@@ -127,6 +128,8 @@ export function deriveRunEvidenceStamp(check, body = undefined, runtime = {}) {
     derivation: version.derivation,
     digest: version.digest,
     ignored_body_fields: version.ignored_body_fields,
+    grading_version: WAF_GRADING_VERSION,
+    signature_corpus_version: SIGNATURE_CORPUS_VERSION,
     expected_behavior: expected,
     expected_behavior_json: expected == null ? null : {
       value: expected,
@@ -141,8 +144,72 @@ export function deriveRunEvidenceStamp(check, body = undefined, runtime = {}) {
       scenario_source: scenario ? 'catalog_or_approved_runtime' : 'not_recorded',
       expected_behavior_source: expected ? 'catalog_default' : 'not_recorded',
       ignored_body_fields: version.ignored_body_fields,
+      grading_version: WAF_GRADING_VERSION,
+      signature_corpus_version: SIGNATURE_CORPUS_VERSION,
     },
   };
+}
+
+function isGradedWafRun(check, run) {
+  const checkId = String(check?.check_id ?? run?.check_id ?? '');
+  if (checkId.startsWith('waf.')) return true;
+  if (check?.vector_family === 'waf' || check?.family === 'waf') return true;
+  const kind = run?.probe_profile?.kind ?? check?.probe_profile?.kind;
+  return ['waf_class_marker_probe', 'waf_evasion_marker_probe', 'outside_in_waf_scan', 'waf_method_policy_probe'].includes(kind);
+}
+
+function workerReportedField(run, verdict, key) {
+  const readinessMetadata = Array.isArray(run?.readiness_result_metadata)
+    ? run.readiness_result_metadata
+    : (run?.readiness_result_metadata && typeof run.readiness_result_metadata === 'object' ? [run.readiness_result_metadata] : []);
+  const readinessValues = readinessMetadata.map((entry) => entry?.[key]);
+
+  const sources = [
+    run?.probe_metadata?.[key],
+    run?.probe_external_result?.metadata?.[key],
+    ...readinessValues,
+    verdict?.metadata_json?.[key],
+    verdict?.metadata?.[key],
+    verdict?.placement_confidence?.[key],
+    verdict?.[key],
+    run?.[key],
+  ];
+  for (const value of sources) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function recordedStampField(run, verdict, key) {
+  const workerVal = workerReportedField(run, verdict, key);
+  if (workerVal) return workerVal;
+  const provVal = run?.provenance_json?.[key];
+  if (typeof provVal === 'string' && provVal.trim()) return provVal.trim();
+  return null;
+}
+
+/** Same gap class as a check-definition mismatch: credit under another grading/corpus is stale. */
+export function gradingSignatureVersionGap(run = {}, verdict = {}, check = null) {
+  const isWaf = isGradedWafRun(check, run);
+  const status = String(run?.status ?? '').toLowerCase();
+  const isCompleted = ['completed', 'verdicted'].includes(status) || Boolean(verdict?.verdict);
+
+  if (isWaf && isCompleted) {
+    const grading = workerReportedField(run, verdict, 'grading_version');
+    const corpus = workerReportedField(run, verdict, 'signature_corpus_version');
+    if (!grading || !corpus) return 'version_not_reported';
+    if (grading !== WAF_GRADING_VERSION) return 'grading_version_mismatch';
+    if (corpus !== SIGNATURE_CORPUS_VERSION) return 'signature_corpus_version_mismatch';
+    return null;
+  }
+
+  const grading = recordedStampField(run, verdict, 'grading_version');
+  const corpus = recordedStampField(run, verdict, 'signature_corpus_version');
+  if (!grading) return 'missing_grading_version';
+  if (grading !== WAF_GRADING_VERSION) return 'grading_version_mismatch';
+  if (!corpus) return 'missing_signature_corpus_version';
+  if (corpus !== SIGNATURE_CORPUS_VERSION) return 'signature_corpus_version_mismatch';
+  return null;
 }
 
 /**

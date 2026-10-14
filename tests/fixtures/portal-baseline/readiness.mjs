@@ -7,6 +7,7 @@ import { addAssuredObservation } from '../../helpers/assurance-fixtures.mjs';
 
 const FROZEN = PORTAL_BASELINE_IDS.frozenAt;
 const NOW = new Date().toISOString();
+const SEEDED_RUN_START_OFFSET_MS = 61 * 60 * 1000;
 
 function resolveReadinessRun(store) {
   const ids = PORTAL_BASELINE_IDS;
@@ -44,8 +45,10 @@ export function applyPortalBaselineReadinessBoost(store, { observedAt = NOW } = 
   store.verdicts = store.verdicts.filter((verdict) => !String(verdict.test_run_id).startsWith(prefix));
   const world = { tenantId, targets, catalog,
     groups: store.targetGroups.filter((group) => group.tenant_id === tenantId), runs: [], events: [], verdicts: [] };
+  // Seeded history must not consume the tenant's live hourly safe-run budget, so each run starts outside that window.
+  const startedAt = new Date(Math.min(Date.parse(observedAt), Date.now() - SEEDED_RUN_START_OFFSET_MS)).toISOString();
   for (const target of targets) for (const check of catalog) {
-    const evidence = addAssuredObservation(world, { target, check, observedAt, id: `${prefix}${target.id}_${check.check_id}` });
+    const evidence = addAssuredObservation(world, { target, check, observedAt, startedAt, id: `${prefix}${target.id}_${check.check_id}` });
     Object.assign(evidence.event.metadata, { source_perspective: 'test-fixture', fixture_evidence: true });
   }
   store.testRuns.push(...world.runs); store.events.push(...world.events); store.verdicts.push(...world.verdicts);

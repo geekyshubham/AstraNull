@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { getCheckById } from '../../src/contracts/checks.mjs';
+import { CHECK_CATALOG, getCheckById } from '../../src/contracts/checks.mjs';
 import { CHECK_DELIVERY_INVENTORY, accountDeliveryReceipts } from '../fixtures/check-delivery-coverage.mjs';
 import { createCheckDeliveryFixtures, executeMemoryDelivery } from '../helpers/check-delivery-fixtures.mjs';
 import { assertExistingBehaviorCase } from '../helpers/existing-behavior-coverage.mjs';
@@ -28,7 +28,13 @@ function assertBranch(obligation, result, fixture) {
   assert.equal(readiness.coverage.passed_count, 0);
   if (obligation.branch === 'axfr_transfer') {
     assert.equal(findings.length, 1, 'actual complete zone transfer supports only its direct exposure finding');
-    assert.equal(verdict.verdict, 'edge_exposed');
+    assert.equal(verdict.verdict, 'exposed');
+  } else if (
+    obligation.kind === 'reflection_service_probe'
+    && obligation.branch === 'payload_bytes'
+    && outcome.metadata.protocol_identity_confirmed === true
+  ) {
+    assert.equal(findings.length, 1, 'protocol-validated reflector reply is a violation finding');
   } else assert.equal(findings.length, 0, 'negative/unconfirmed fixture is not exploitability proof');
   assert.ok(receipt.execution_receipt.digest);
   assert.ok(receipt.accepted_event.id && receipt.published_verdict.id);
@@ -105,7 +111,7 @@ describe('finite required branch obligations: actual first owned protocol slices
   it('missing required branches fail full acceptance even when definition accounting is separate', () => {
     const result = accountDeliveryReceipts(branchReceipts);
     assert.equal(result.complete, false);
-    assert.equal(result.gaps.length, 251, 'branch receipts never multiply default definition coverage');
+    assert.equal(result.gaps.length, CHECK_CATALOG.length, 'branch receipts never multiply default definition coverage');
     assert.ok(result.branch_gaps.length > 0, 'remaining promised branch obligations are explicit gaps');
     assert.deepEqual(result.errors, []);
   });

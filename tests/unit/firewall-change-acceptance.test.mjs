@@ -338,11 +338,16 @@ describe('expected deny', () => {
   });
 
   it('accepts an ICMP administratively-prohibited reply as control-specific denial', () => {
-    const item = only(evaluate([ssh()],
-      [sshSample({ result: 'connected' })],
-      [sshSample({ day: POST_DAY, result: 'error', metadata: { error_class: 'EHOSTUNREACH', icmp_type: 3, icmp_code: 13 } })]));
+    const deny = (opts) => sshSample({
+      day: POST_DAY,
+      result: 'error',
+      metadata: { error_class: 'EHOSTUNREACH', icmp_type: 3, icmp_code: 13, tcp_outcome: 'rejected_icmp', icmp: { kind: 'admin_prohibited' } },
+      ...opts,
+    });
+    const item = only(evaluate([ssh()], [sshSample({ result: 'connected' })], [deny(), deny({ minute: 1, worker: 'worker_eu_2' })]));
     assert.equal(item.status, 'improvement');
     assert.equal(item.post_state, 'satisfied');
+    assert.equal(item.expectation_met, true);
     assert.ok(item.reasons.includes('icmp_admin_prohibited'));
   });
 
@@ -354,6 +359,69 @@ describe('expected deny', () => {
     assert.equal(item.status, 'inconclusive');
     assert.ok(item.limitations.includes('udp_silence_ambiguous'));
     assert.ok(result.evaluation.limitations.includes('udp_silence_ambiguous'));
+  });
+
+  it('does not accept a single post-change reject sample', () => {
+    const item = only(evaluate([ssh()],
+      [sshSample({ result: 'connected' })],
+      [sshSample({ day: POST_DAY, result: 'error', metadata: { tcp_outcome: 'rejected_icmp', icmp: { kind: 'admin_prohibited' } } })]));
+    assert.equal(item.status, 'inconclusive');
+    assert.equal(item.post_state, 'unverified');
+    assert.equal(item.expectation_met, null);
+  });
+
+  it('accepts tcp rejected_icmp across two same-perspective samples', () => {
+    const reject = (opts) => sshSample({
+      day: POST_DAY,
+      result: 'error',
+      metadata: { tcp_outcome: 'rejected_icmp', icmp: { kind: 'host_unreachable' }, elapsed_ms: 20 },
+      ...opts,
+    });
+    const item = only(evaluate([ssh()], [sshSample({ result: 'connected' })], [reject(), reject({ minute: 1 })]));
+    assert.equal(item.status, 'improvement');
+    assert.equal(item.post_state, 'satisfied');
+    assert.equal(item.expectation_met, true);
+    assert.ok(item.reasons.includes('rejected_icmp'));
+  });
+
+  it('treats silence after a reachable baseline as consistent with a new deny rule', () => {
+    const item = only(evaluate([ssh()],
+      [sshSample({ result: 'connected' }), sshSample({ result: 'connected', minute: 1 })],
+      [sshSample({ day: POST_DAY, result: 'timeout' }), sshSample({ day: POST_DAY, minute: 1, result: 'timeout' })]));
+    assert.equal(item.status, 'improvement');
+    assert.equal(item.pre_state, 'violated');
+    assert.equal(item.post_state, 'not_observed');
+    assert.equal(item.expectation_met, true);
+    assert.ok(item.reasons.includes('consistent_with_new_deny_rule'));
+  });
+
+  it('leaves silence without a reachable baseline inconclusive', () => {
+    const item = only(evaluate([ssh()],
+      [sshSample({ result: 'timeout' }), sshSample({ result: 'timeout', minute: 1 })],
+      [sshSample({ day: POST_DAY, result: 'timeout' }), sshSample({ day: POST_DAY, minute: 1, result: 'timeout' })]));
+    assert.equal(item.status, 'inconclusive');
+    assert.equal(item.expectation_met, null);
+    assert.equal(item.pre_state, 'not_observed');
+    assert.equal(item.post_state, 'not_observed');
+  });
+
+  it('concludes a UDP regression when a validated reply follows two silent baselines', () => {
+    const udp = expectation({ protocol: 'udp', port: 53, expected: 'deny', destination_target_id: 'tgt_dns' });
+    const silent = (opts) => sample({ kind: 'udp_probe', target: 'tgt_dns', result: 'timeout', metadata: { udp_outcome: 'silent' }, ...opts });
+    const reply = (opts) => sample({
+      kind: 'udp_probe',
+      target: 'tgt_dns',
+      day: POST_DAY,
+      result: 'connected',
+      metadata: { udp_outcome: 'validated_reply', response_received: true },
+      ...opts,
+    });
+    const item = only(evaluate([udp], [silent(), silent({ minute: 1 })], [reply(), reply({ minute: 1 })]));
+    assert.equal(item.status, 'regression');
+    assert.equal(item.gap_kind, 'forbidden_service_newly_reachable');
+    assert.equal(item.pre_state, 'not_observed');
+    assert.equal(item.post_state, 'violated');
+    assert.ok(item.reasons.includes('udp_reply_after_silence'));
   });
 });
 

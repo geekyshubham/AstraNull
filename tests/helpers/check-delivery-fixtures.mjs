@@ -19,6 +19,7 @@ import { listPendingProbeJobsForWorker, reserveProbeExecution, ingestProbeResult
 import { computeReadiness } from '../../src/services/readiness.mjs';
 import { createOriginBinding } from '../../src/services/originBindings.mjs';
 import { RISKY_ADMIN_PORTS } from '../../src/lib/capabilityProbes.mjs';
+import { BENIGN_CLASS_MARKERS } from '../../src/lib/inertWafMarkers.mjs';
 import { executeProbeForJob, buildResultBody } from '../../workers/probe-worker.mjs';
 import { CHECK_DELIVERY_INVENTORY, deliveryFingerprint } from '../fixtures/check-delivery-coverage.mjs';
 import { createTlsFixture } from '../unit/protocol-transport-socket.fixture.mjs';
@@ -33,6 +34,43 @@ const byCheck = new Map(CHECK_DELIVERY_INVENTORY.rows.map((row) => [row.check_id
 let invocation = 0;
 const listen = (server) => new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(server.address().port)); });
 const close = (server) => new Promise((resolve) => server.close(resolve));
+function serializedProbePart(marker) {
+  const url = new URL('http://x.invalid/');
+  url.search = `probe=${encodeURIComponent(marker)}`;
+  return url.search.replace(/^\?/, '').split('&')[0];
+}
+const REFERENCE_PROBE_PARTS = new Set(Object.values(BENIGN_CLASS_MARKERS).map(serializedProbePart));
+
+function stripCacheBuster(url) {
+  const [path, qs] = String(url ?? '').split('?');
+  if (qs == null) return String(url ?? '');
+  const kept = qs.split('&').filter((part) => part && !part.startsWith('an_cb=')).join('&');
+  return kept ? `${path}?${kept}` : path;
+}
+
+function requestCarriesMarker(request) {
+  if (request.headers['x-astranull-marker']) return true;
+  const ua = request.headers['user-agent'] ?? '';
+  if (/sqlmap/i.test(ua) || /astranull-inert/i.test(ua)) return true;
+  if (request.headers.cookie && /astranull/i.test(request.headers.cookie)) return true;
+  const stripped = stripCacheBuster(request.url || '');
+  const qIndex = stripped.indexOf('?');
+  const path = qIndex === -1 ? stripped : stripped.slice(0, qIndex);
+  const query = qIndex === -1 ? '' : stripped.slice(qIndex + 1);
+  if (/(?:^|&)probe=/.test(query)) return true;
+  if (/astranull_/i.test(query) || /astranull/i.test(path)) return true;
+  return false;
+}
+
+function requestIsEvasionTransform(request) {
+  if (!requestCarriesMarker(request)) return false;
+  if (request.headers.cookie) return true;
+  const query = stripCacheBuster(request.url || '').split('?')[1] || '';
+  const parts = query.split('&').filter(Boolean);
+  if (parts.includes('probe=astranull-permitted')) return true;
+  if (parts.some((part) => part.startsWith('probe=') && !REFERENCE_PROBE_PARTS.has(part))) return true;
+  return false;
+}
 
 export function catalogSignedJob(check, target = { id: 'tgt_delivery', kind: 'fqdn', value: 'grpc.test' }, override = null) {
   const now = new Date(); const id = ++invocation;
@@ -57,9 +95,13 @@ function reflectionReply(profile, request) {
     assert.equal(reply[reply.length - 2], 5); reply[reply.length - 2] = 4; return reply;
   }
   if (['mdns_ptr_query', 'netbios_nbstat'].includes(profile)) {
-    const q = dnsQuestion(request); const fixed = Buffer.alloc(10); fixed.writeUInt16BE(q.qtype, 0); fixed.writeUInt16BE(1, 2); fixed.writeUInt16BE(1, 8);
-    const header = Buffer.from(request.subarray(0, 12)); header.writeUInt16BE(0x8000, 2); header.writeUInt16BE(1, 6);
-    return Buffer.concat([header, request.subarray(12, q.end), Buffer.from([0xc0, 0x0c]), fixed, Buffer.from([0])]);
+    try {
+      const q = dnsQuestion(request); const fixed = Buffer.alloc(10); fixed.writeUInt16BE(q.qtype, 0); fixed.writeUInt16BE(1, 2); fixed.writeUInt16BE(1, 8);
+      const header = Buffer.from(request.subarray(0, 12)); header.writeUInt16BE(0x8000, 2); header.writeUInt16BE(1, 6);
+      return Buffer.concat([header, request.subarray(12, q.end), Buffer.from([0xc0, 0x0c]), fixed, Buffer.from([0])]);
+    } catch {
+      return Buffer.from('owned fixture response; identity deliberately not established');
+    }
   }
   if (profile === 'portmap_dump') {
     const reply = Buffer.alloc(32); reply.writeUInt32BE(0x8000001c, 0); request.copy(reply, 4, 4, 8); reply.writeUInt32BE(1, 8); return reply;
@@ -89,7 +131,7 @@ export async function createCheckDeliveryFixtures() {
     socket.on('error', () => {});
   };
   function respond(request, response) {
-    const index = ordinal++;
+    ordinal += 1;
     rows.push({ transport: request.socket.encrypted ? 'https' : 'http', method: request.method, url: request.url, host: request.headers.host, servername: request.socket.servername ?? null, peer_address: request.socket.remoteAddress, peer_port: request.socket.remotePort, nonce: request.headers['x-astranull-nonce'], nonce_hash: request.headers['x-astranull-nonce-hash'], marker: request.headers['x-astranull-marker'], cookie: request.headers.cookie, bytes: 0, request_headers: { ...request.headers } });
     peerEvidence.push({ event: 'request_received', transport: request.socket.encrypted ? 'https' : 'http', method: request.method, path: request.url });
     if (mode === 'timeout') { peerEvidence.push({ event: 'response_withheld', transport: 'http' }); return; }
@@ -98,9 +140,20 @@ export async function createCheckDeliveryFixtures() {
     const semantic = ['waf_class_marker_probe', 'waf_evasion_marker_probe'].includes(activeCheck?.probe_profile?.kind);
     const entryPermittedHead = activeCheck?.probe_profile?.entry_path_scenario && request.method === 'HEAD'
       && !request.headers['x-astranull-marker'] && !request.url.includes('_probe=');
-    const deny = semantic && !entryPermittedHead && (index > 0 || mode === 'permitted_unhealthy') && !(mode === 'variant_allowed' && index === 2);
-    response.statusCode = mode === 'partial' && index === 2 ? 503 : deny ? 403 : 200;
-    if (deny && !(['variant_unsigned', 'unsigned_denial'].includes(mode) && index > 0) && !(mode === 'partial' && index === 2)) response.setHeader('cf-mitigated', 'challenge');
+    const marker = requestCarriesMarker(request);
+    const transformed = activeCheck?.probe_profile?.kind === 'waf_evasion_marker_probe' && requestIsEvasionTransform(request);
+    const deny = semantic && !entryPermittedHead && (mode === 'permitted_unhealthy' || (marker && !(mode === 'variant_allowed' && transformed)));
+    if (mode === 'challenged' && marker) {
+      response.statusCode = 403;
+      response.setHeader('cf-mitigated', 'challenge');
+    } else if (mode === 'partial' && transformed) {
+      response.statusCode = 503;
+    } else if (deny) {
+      response.statusCode = 403;
+      if (!['variant_unsigned', 'unsigned_denial'].includes(mode)) response.setHeader('x-waf-block', '1');
+    } else {
+      response.statusCode = 200;
+    }
     response.setHeader('Alt-Svc', 'h3=":443"; ma=60');
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('X-RateLimit-Limit', '10');
@@ -109,6 +162,22 @@ export async function createCheckDeliveryFixtures() {
   const httpServer = http.createServer({ maxHeaderSize: 16384 }, respond);
   const httpsServer = https.createServer({ key: cert.key, cert: cert.cert, maxHeaderSize: 16384 }, respond);
   for (const server of [httpServer, httpsServer]) {
+    server.on('clientError', (err, socket) => {
+      if (err.code === 'HPE_INVALID_METHOD' && err.rawPacket) {
+        const line = String(err.rawPacket).split('\r\n')[0] ?? '';
+        const [method, urlPath] = line.split(' ');
+        const transport = socket.encrypted ? 'https' : 'http';
+        rows.push({
+          transport, method, url: urlPath, host: null, servername: socket.servername ?? null,
+          peer_address: socket.remoteAddress, peer_port: socket.remotePort,
+          nonce: null, nonce_hash: null, marker: null, cookie: null, bytes: 0, request_headers: {},
+        });
+        peerEvidence.push({ event: 'request_received', transport, method, path: urlPath });
+        socket.end('HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
+      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    });
     server.on('connection', (socket) => {
       track(socket);
       if (activeCheck?.probe_profile?.kind === 'slow_header_probe') {
@@ -116,6 +185,28 @@ export async function createCheckDeliveryFixtures() {
         // A real owned peer enforces a small idle boundary; do not wait beyond the signed cap.
         const timer = setTimeout(() => socket.destroy(), 40);
         socket.once('close', () => clearTimeout(timer));
+      }
+    });
+    server.on('clientError', (err, socket) => {
+      if (err?.code === 'HPE_INVALID_METHOD' && activeCheck?.probe_profile?.kind === 'waf_method_policy_probe') {
+        const raw = String(err.rawPacket ?? '');
+        const [start, ...headerLines] = raw.split('\r\n');
+        const [method, url] = start.split(' ');
+        const request_headers = {};
+        for (const line of headerLines) {
+          const idx = line.indexOf(':');
+          if (idx > 0) request_headers[line.slice(0, idx).toLowerCase()] = line.slice(idx + 1).trim();
+        }
+        rows.push({
+          transport: socket?.encrypted ? 'https' : 'http',
+          method,
+          url: url || '/',
+          host: request_headers.host,
+          request_headers,
+        });
+      }
+      if (socket?.writable && !socket.writableEnded) {
+        socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
       }
     });
     server.on('upgrade', (request, socket) => {
@@ -216,7 +307,7 @@ export async function createCheckDeliveryFixtures() {
     const tlsKind = ['tls_session', 'tls_audit'].includes(kind);
     const h2Kind = ['http2_settings', 'http2_frame_probe', 'grpc_reflection_probe'].includes(kind);
     const udpKind = ['udp_probe', 'reflection_service_probe'].includes(kind) && check.probe_profile?.payload_profile !== 'portmap_dump';
-    const tcpKind = kind === 'tcp_connect' || kind === 'port_scan_bounded' || (kind === 'reflection_service_probe' && !udpKind);
+    const tcpKind = kind === 'tcp_connect' || kind === 'port_scan_bounded' || kind === 'connection_limit_probe' || (kind === 'reflection_service_probe' && !udpKind);
     const primary = targetKind ?? (check.supported_targets.includes('url') ? 'url' : check.supported_targets.includes('fqdn') ? 'fqdn' : check.supported_targets[0]);
     const rawTlsFault = (tlsKind || (h2Kind && kind !== 'grpc_reflection_probe')) && ['timeout', 'cancel', 'invalid_tls', 'invalid_h2'].includes(scenario);
     const protocolPort = rawTlsFault ? tcpPort : tlsKind ? tlsPort : h2Kind ? h2Port : udpKind ? udpPort : tcpKind ? tcpPort : httpsPort;
@@ -249,10 +340,26 @@ export async function createCheckDeliveryFixtures() {
     if (!dnsKind) {
       deps.createSocket = (type) => {
         assert.equal(type, 'udp4');
-        const socket = dgram.createSocket(type), send = socket.send.bind(socket);
+        const socket = dgram.createSocket(type);
+        const send = socket.send.bind(socket);
+        const connect = socket.connect.bind(socket);
         const ownerEpoch = epoch;
+        let connected = null;
         socket.once('close', () => { if (ownerEpoch === epoch) peerEvidence.push({ event: 'owned_client_socket_closed', transport: 'udp' }); });
+        socket.connect = (port, host, callback) => {
+          assert.equal(host, '127.0.0.1');
+          assert.equal(Number(port), target.port);
+          connected = { host, port: Number(port) };
+          return connect(port, host, callback);
+        };
         socket.send = (packet, port, host, callback) => {
+          if (typeof port === 'function' || (connected && host == null && typeof port !== 'number')) {
+            callback = typeof port === 'function' ? port : callback;
+            assert.equal(connected?.host, '127.0.0.1');
+            assert.equal(Number(connected?.port), target.port);
+            route('udp', connected, connected.port);
+            return send(packet, callback);
+          }
           assert.equal(host, '127.0.0.1'); assert.equal(Number(port), target.port);
           route('udp', { host, port }, Number(port));
           return send(packet, port, host, callback);
@@ -305,6 +412,25 @@ export async function createCheckDeliveryFixtures() {
       if (kind === 'http2_settings') deps.connectFn = (authority, options) => http2.connect(authority, options);
     }
     if (kind === 'dns_failover_posture') target.metadata_json = { secondary_nameservers: ['grpc.test'] };
+    if (kind === 'connection_limit_probe') {
+      target.metadata_json = {
+        ...(target.metadata_json ?? {}),
+        control_declarations: {
+          version: 1,
+          connection_limits: [{ protocol: 'tcp', port: tcpPort, max_connections_per_source: 1 }],
+        },
+      };
+    }
+    if (kind === 'rate_limit_canary_probe') {
+      const canaryPath = ['url', 'canary'].includes(target.kind) ? (new URL(target.value).pathname || '/') : '/signed/path';
+      target.metadata_json = {
+        ...(target.metadata_json ?? {}),
+        control_declarations: {
+          version: 1,
+          waf: { rate_limit_canary: { path: canaryPath, method: 'GET', threshold: 3, window_seconds: 10 } },
+        },
+      };
+    }
     return {
       target, deps, timeoutMs,
       wire: () => [...rows, ...dnsFixture.rows], routes: () => structuredClone(routes),
@@ -454,6 +580,24 @@ export function assertOwnedProtocolReceipt(check, receipt) {
       assert.equal(row.method, receipt.signed_profile.method ?? 'HEAD');
       assert.equal(row.url, receipt.signed_profile.path ?? (parsed ? `${parsed.pathname}${parsed.search}` : '/'));
     }
+  }
+  if (kind === 'waf_method_policy_probe') {
+    assert.ok(httpRows.some((row) => row.method === 'GET'));
+    assert.ok(httpRows.some((row) => row.method === 'TRACE'));
+    assert.ok(httpRows.some((row) => row.method === 'ASTRANULLPROBE'));
+    assert.equal(httpRows.some((row) => row.request_headers && Number(row.request_headers['content-length']) > 0), false);
+  }
+  if (kind === 'rate_limit_canary_probe') {
+    const gets = httpRows.filter((row) => row.method === 'GET');
+    assert.ok(gets.length > 0);
+    const cap = Number(receipt.outcome?.metadata?.threshold) + 2;
+    if (Number.isInteger(cap)) {
+      const phases = receipt.outcome?.metadata?.phases;
+      assert.ok(Array.isArray(phases) && phases.length <= cap);
+    }
+  }
+  if (kind === 'connection_limit_probe') {
+    assert.ok(wire.some((row) => row.transport === 'tcp_connect'));
   }
   if (['tls_session', 'tls_audit', 'http2_settings', 'http2_frame_probe', 'grpc_reflection_probe'].includes(kind)) {
     const peer = wire.find((row) => row.transport === (['tls_session', 'tls_audit'].includes(kind) ? 'tls_session' : 'h2_tls_session'));

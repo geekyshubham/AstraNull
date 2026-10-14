@@ -1,17 +1,24 @@
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
+import { demoMaxRunsPerHour, isExplicitDemoTenant } from './demoAutoVerify.mjs';
 
 export const DEFAULT_MAX_RUNS_PER_HOUR = 60;
 export const DEFAULT_MIN_SECONDS_BETWEEN_RUNS = 0;
 
-export function normalizeSafetyPolicy(policy = {}) {
+export function normalizeSafetyPolicy(policy = {}, { tenantId = null, env = process.env } = {}) {
+  const isDemo = isExplicitDemoTenant(tenantId, env);
+  const maxRuns = isDemo
+    ? demoMaxRunsPerHour(env)
+    : (policy.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR);
   return {
-    max_runs_per_hour: policy.max_runs_per_hour ?? DEFAULT_MAX_RUNS_PER_HOUR,
-    min_seconds_between_runs: policy.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS,
+    max_runs_per_hour: maxRuns,
+    min_seconds_between_runs: isDemo ? 0 : (policy.min_seconds_between_runs ?? DEFAULT_MIN_SECONDS_BETWEEN_RUNS),
   };
 }
 
-export function effectiveSafetyConstraints(check, group) {
-  const policy = normalizeSafetyPolicy(group?.safety_policy);
+export function effectiveSafetyConstraints(check, group, options = {}) {
+  const tenantId = options?.tenantId ?? group?.tenant_id;
+  const env = options?.env ?? process.env;
+  const policy = normalizeSafetyPolicy(group?.safety_policy, { tenantId, env });
   return {
     ...(check.safety_constraints ?? {}),
     max_runs_per_hour: policy.max_runs_per_hour,
@@ -19,7 +26,7 @@ export function effectiveSafetyConstraints(check, group) {
   };
 }
 
-export function isWithinSafeTestWindow(group, now = Date.now()) {
+export function isWithinSafeTestWindowRaw(group, now = Date.now()) {
   const windows = group?.safe_test_windows ?? [];
   if (!windows.length) return true;
   return windows.some((w) => {
@@ -28,6 +35,13 @@ export function isWithinSafeTestWindow(group, now = Date.now()) {
     if (Number.isNaN(start) || Number.isNaN(end)) return false;
     return now >= start && now <= end;
   });
+}
+
+export function isWithinSafeTestWindow(group, now = Date.now(), options = {}) {
+  const tenantId = options?.tenantId ?? group?.tenant_id;
+  const env = options?.env ?? process.env;
+  if (isExplicitDemoTenant(tenantId, env)) return true;
+  return isWithinSafeTestWindowRaw(group, now);
 }
 
 export function countCustomerRunnableRunsLastHour(runs, tenantId, now = Date.now()) {

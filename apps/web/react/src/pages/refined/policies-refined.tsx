@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { DomainPicker } from '../../components/targets/domain-picker';
 import { Badge } from '../../components/ui/badge';
+import { CheckClassChips } from '../../components/checks/check-class-chips';
 import { AnchorButton, Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Select, type SelectOption } from '../../components/ui/select';
@@ -1020,6 +1021,7 @@ export function PoliciesRefined(props: PoliciesRefinedProps) {
               Runs {href ? <a className="rf-check-link" href={href}>{check.name}</a> : check.name}
             </span>
             {check.checkId ? <span className="rf-mono rf-cell-meta">{check.checkId}</span> : null}
+            {check.record ? <CheckClassChips check={check.record} className="rf-cell-meta" /> : null}
             {str(item, ['expected_verdict']) ? (
               <span className="rf-cell-meta" title="Declared expectation, not observed evidence">
                 Expects: {plainExpectedVerdictLabel(str(item, ['expected_verdict']))}

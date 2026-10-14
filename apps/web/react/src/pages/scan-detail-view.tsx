@@ -9,6 +9,8 @@ import type { DataItem, PortalConfig, PortalData, PortalDataset, Session } from 
 import { formatDate, formatTargetKind } from '../lib/utils';
 // @ts-ignore Plain ESM keeps verdict labels directly testable with node:test.
 import { plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
+import { additionalInputReasonCopy, controlsHref, targetRequirementForReason } from '../lib/control-declarations.mjs';
+import { requiredInputMissing, requiredInputMissingHref } from '../lib/missing-input.mjs';
 import {
   SCAN_POLL_BASE_MS,
   SCAN_POLL_SCHEDULED_MS,
@@ -34,6 +36,7 @@ import {
   type ActivityItem,
 } from '../lib/validation-scan.mjs';
 import { Badge } from '../components/ui/badge';
+import { CheckClassChips } from '../components/checks/check-class-chips';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -187,6 +190,10 @@ function useScanPolling(config: PortalConfig, session: Session, scanId: string) 
   return { ...state, refresh };
 }
 
+function scanReasonText(reason: string) {
+  return additionalInputReasonCopy(reason)?.label ?? humanizeReason(reason);
+}
+
 function StepStatusCell({ step }: { step: DataItem }) {
   const status = getString(step, ['status']);
   const reason = getString(step, ['error_code']) || getString(step, ['skip_reason']);
@@ -196,7 +203,7 @@ function StepStatusCell({ step }: { step: DataItem }) {
         {isStepActive(step) ? <span className="scan-live-dot" aria-hidden="true" /> : null}
         <Badge tone={stepStatusTone(status)}>{stepStatusLabel(status)}</Badge>
       </span>
-      {reason ? <small className="muted">{humanizeReason(reason)}</small> : null}
+      {reason ? <small className="muted">{scanReasonText(reason)}</small> : null}
       {status === 'deferred' && step.eligible_at ? <small className="muted">Eligible {formatDate(step.eligible_at)}</small> : null}
     </span>
   );
@@ -221,6 +228,18 @@ function VerdictCell({ step }: { step: DataItem }) {
     return (
       <span className="scan-cell-stack">
         <span className="muted">{!isStepSettled(step) ? 'No verdict yet' : VERDICT_EXPECTED_STATUSES.has(getString(step, ['status']).toLowerCase()) ? 'Not recorded' : 'No verdict, step ended'}</span>
+        <StepRunLink step={step} />
+      </span>
+    );
+  }
+  const notTested = requiredInputMissing(step);
+  if (notTested) {
+    const href = requiredInputMissingHref(notTested, getString(step, ['target_id']));
+    return (
+      <span className="scan-cell-stack">
+        <strong>{notTested.label}</strong>
+        <small className="muted">{notTested.message}</small>
+        {href && notTested.cta ? <small><a className="detail-entity-link" href={href}>{notTested.cta}</a></small> : null}
         <StepRunLink step={step} />
       </span>
     );
@@ -343,6 +362,7 @@ export function ScanDetailView({
         <span className="scan-cell-stack">
           <strong>{getString(step, ['check_name', 'check_id'])}</strong>
           <code className="check-picker-row-id">{getString(step, ['check_id'])}</code>
+          <CheckClassChips check={step} />
           <small className="muted">{[getString(step, ['section_label']), getString(step, ['evidence_tier'])].filter(Boolean).join(' · ') || 'Section not recorded'}</small>
         </span>
       )
@@ -506,15 +526,20 @@ export function ScanDetailView({
             />
             {excluded.length > 0 ? (
               <details className="scan-excluded">
-                <summary>{excluded.length} incompatible check and target {excluded.length === 1 ? 'pair was' : 'pairs were'} recorded and not run</summary>
+                <summary>{excluded.length} check and target {excluded.length === 1 ? 'pair was' : 'pairs were'} recorded and not run</summary>
                 <ul role="note" aria-label="Excluded check and target pairs">
-                  {excluded.map((row, index) => (
-                    <li key={`${getString(row, ['check_id'])}-${getString(row, ['target_id'])}-${index}`}>
-                      <code className="check-picker-row-id">{getString(row, ['check_id'])}</code> on {getString(row, ['target_id'])}: {humanizeReason(getString(row, ['reason']))}
-                      {getString(row, ['target_kind']) ? ` (target kind ${getString(row, ['target_kind'])}` : ''}
-                      {Array.isArray(row.supported_targets) && row.supported_targets.length ? `, supports ${row.supported_targets.map(String).join(', ')})` : getString(row, ['target_kind']) ? ')' : ''}
-                    </li>
-                  ))}
+                  {excluded.map((row, index) => {
+                    const requirement = targetRequirementForReason(getString(row, ['reason']));
+                    const targetId = getString(row, ['target_id']);
+                    return (
+                      <li key={`${getString(row, ['check_id'])}-${targetId}-${index}`}>
+                        <code className="check-picker-row-id">{getString(row, ['check_id'])}</code> on {targetId}: {scanReasonText(getString(row, ['reason']))}
+                        {requirement ? null : getString(row, ['target_kind']) ? ` (target kind ${getString(row, ['target_kind'])}` : ''}
+                        {requirement ? null : Array.isArray(row.supported_targets) && row.supported_targets.length ? `, supports ${row.supported_targets.map(String).join(', ')})` : getString(row, ['target_kind']) ? ')' : ''}
+                        {requirement && targetId ? <> · <a className="detail-entity-link" href={controlsHref(targetId, requirement.section)}>{requirement.cta}</a></> : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </details>
             ) : null}

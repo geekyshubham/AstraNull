@@ -93,6 +93,54 @@ describe('ADR-0007 reflector probe guardrails (runtime)', () => {
     }
   });
 
+  it('maps a closed UDP port to timeout and an unvalidated reply to not_run', async () => {
+    const closed = recordingSockets();
+    const origSend = closed.createSocket;
+    const sockets = {
+      createSocket: (type) => {
+        const socket = origSend(type);
+        socket.send = (payload, port, host, cb) => {
+          closed.sends.push({ bytes: payload.length, port, host });
+          const err = Object.assign(new Error('port unreachable'), { code: 'ECONNREFUSED' });
+          cb?.(err);
+        };
+        return socket;
+      },
+      sends: closed.sends,
+      created: closed.created,
+    };
+    const closedResult = await probeReflectionService(job({ constraints: { timeout_ms: 60, max_requests: 1 } }), sockets);
+    assert.equal(closedResult.external_result, 'timeout');
+    assert.equal(closedResult.metadata.udp_outcome, 'port_unreachable');
+    assert.notEqual(closedResult.metadata.udp_outcome && closedResult.external_result === 'blocked', true);
+    const junk = recordingSockets({ reply: Buffer.alloc(200, 0x41) });
+    const unvalidated = await probeReflectionService(job({
+      probe_profile: { kind: 'reflection_service_probe', payload_profile: 'memcached_udp_stats' },
+      target: { value: `${PUBLIC_IP}:11211` },
+    }), junk);
+    assert.equal(unvalidated.external_result, 'not_run');
+    assert.equal(unvalidated.metadata.udp_outcome, 'unvalidated_reply');
+    assert.equal(unvalidated.metadata.reflector_confirmed, false);
+  });
+
+  it('sends up to 4 datagrams for a composite profile and never exceeds 4', async () => {
+    const sockets = recordingSockets();
+    const result = await probeReflectionService({
+      nonce_hash: 'composite',
+      check_id: 'reflect.dtls_sip_rdp_tftp_exposure.safe',
+      target: { value: `${PUBLIC_IP}:443` },
+      probe_profile: { kind: 'reflection_service_probe', payload_profile: 'dtls_sip_rdp_tftp' },
+      constraints: { timeout_ms: 200, max_requests: 1000 },
+    }, sockets);
+    assert.ok(sockets.sends.length <= 4, `sent ${sockets.sends.length}`);
+    assert.ok(result.requests_sent <= 4);
+    assert.equal(result.metadata.payload_profiles_declared.length, 4);
+    const ssdp = recordingSockets();
+    const single = await probeReflectionService(job({ constraints: { timeout_ms: 60, max_requests: 1000 } }), ssdp);
+    assert.ok(ssdp.sends.length <= 2);
+    assert.ok(single.requests_sent <= 2);
+  });
+
   it('guardrail 5: output is metadata only — no response bytes are retained or returned', async () => {
     const secret = Buffer.from('HTTP/1.1 200 OK\r\nST: upnp:rootdevice\r\nUSN: uuid:12345678-1234-1234-1234-123456789abc::upnp:rootdevice\r\nLOCATION: http://fixture.invalid/REFLECTED-RESPONSE-BODY-THAT-MUST-NOT-BE-KEPT\r\n\r\n');
     const sockets = recordingSockets({ reply: secret });

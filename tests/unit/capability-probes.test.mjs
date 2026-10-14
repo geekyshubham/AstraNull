@@ -37,6 +37,7 @@ import {
   probeOutsideInWafScan,
   probeWafClassMarker,
   probeDelegatedL7ResourcePosture,
+  probeWafMethodPolicy,
   executeCapabilityProbe,
 } from '../../src/lib/capabilityProbes.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
@@ -289,6 +290,33 @@ describe('capability probes P0/P1', () => {
     assert.equal(retargeted.external_result, 'error');
     assert.equal(retargeted.metadata.error_class, 'delegated_target_mismatch');
     assert.equal(retargeted.requests_sent, 0);
+
+    const traceRefused = await probeWafClassMarker({
+      ...base,
+      probe_profile: { kind: 'waf_class_marker_probe', marker_class: 'ssrf', max_requests: 1 },
+    }, {
+      signedJobVerified: true,
+      recordProbeLogicalAttempt: () => { reservations += 1; },
+      fetchFn: async () => { networkCalls += 1; return httpResponse(200); },
+      wafClassProbeFn: async ({ fetchFn }) => {
+        try { await fetchFn('https://edge.example.test/signed/path', { method: 'TRACE' }); } catch {}
+        return { posture: 'inconclusive', marker_results: [], requests_sent: 99 };
+      },
+    });
+    assert.equal(traceRefused.metadata.error_class, 'unsafe_delegated_http_request');
+    assert.equal(networkCalls, 0);
+
+    const methodPolicyTrace = await probeWafMethodPolicy({
+      ...base,
+      constraints: { max_requests: 8, timeout_ms: 1000 },
+      probe_profile: { kind: 'waf_method_policy_probe', max_requests: 8 },
+    }, {
+      signedJobVerified: true,
+      fetchFn: async (_url, init) => httpResponse(init.method === 'TRACE' || init.method === 'ASTRANULLPROBE' ? 403 : 200, {
+        'x-waf-block': '1',
+      }),
+    });
+    assert.notEqual(methodPolicyTrace.metadata.error_class, 'unsafe_delegated_http_request');
 
     for (const unsafeInit of [
       { method: 'POST', headers: { connection: 'close' }, body: 'inert' },

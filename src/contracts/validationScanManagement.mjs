@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { checkClassificationFields } from './checkClassification.mjs';
 import { targetKindCompatibilityError } from './checkTargetCompatibility.mjs';
 import { ATTACK_SURFACE_DOMAINS, ATTACK_VECTOR_REGISTRY } from './resourceExhaustionTaxonomy.mjs';
 import { nextPolicyRunAt, normalizePolicyTimezone, PolicyValidationError } from './testPolicyManagement.mjs';
@@ -212,7 +213,7 @@ export function requestSnapshotForCheck(check) {
   };
 }
 
-export function planScanSteps({ checks, targets, targetId = null }) {
+export function planScanSteps({ checks, targets, targetId = null, targetInputRefusal = null, originBindings = null, tenantId = null }) {
   const scopedTargets = targetId ? targets.filter((target) => target.id === targetId) : targets;
   const steps = [];
   const excluded = [];
@@ -227,6 +228,16 @@ export function planScanSteps({ checks, targets, targetId = null }) {
           target_kind: compatibility.target_kind,
           supported_targets: compatibility.supported_targets,
         });
+        continue;
+      }
+      const bindingsForTarget = originBindings instanceof Map
+        ? originBindings.get(target.id)
+        : (originBindings?.[target.id] ?? originBindings);
+      const inputRefusal = typeof targetInputRefusal === 'function'
+        ? targetInputRefusal(check, target, undefined, { originBindings: bindingsForTarget, tenantId: tenantId ?? target?.tenant_id })
+        : null;
+      if (inputRefusal) {
+        excluded.push({ check_id: check.check_id, target_id: target.id, reason: inputRefusal.error, message: inputRefusal.message });
         continue;
       }
       steps.push({
@@ -417,6 +428,7 @@ export function withCheckSection(check) {
     ...check,
     section_id: section?.section_id ?? null,
     section_label: section?.section_label ?? null,
+    ...checkClassificationFields(check),
   };
 }
 
@@ -466,6 +478,7 @@ export function projectScanStep({ step, check, target, run, verdict, events = []
     evidence_tier: check?.evidence_tier ?? null,
     section_id: section?.section_id ?? null,
     section_label: section?.section_label ?? null,
+    ...checkClassificationFields(check ?? { check_id: step.check_id }),
     target_id: step.target_id,
     target_kind: target?.kind ?? null,
     target_value: target?.value ?? null,
@@ -502,6 +515,12 @@ export function projectScanStep({ step, check, target, run, verdict, events = []
           explanation: verdict.explanation,
           severity: verdict.severity ?? null,
           placement_confidence: verdict.placement_confidence?.level ?? null,
+          ...((verdict.explanation_reason ?? verdict.placement_confidence?.explanation_reason) != null
+            ? { explanation_reason: verdict.explanation_reason ?? verdict.placement_confidence?.explanation_reason }
+            : {}),
+          ...((verdict.required_input ?? verdict.placement_confidence?.required_input ?? run?.summary?.required_input_missing) != null
+            ? { required_input: verdict.required_input ?? verdict.placement_confidence?.required_input ?? run?.summary?.required_input_missing }
+            : {}),
         }
       : null,
   };

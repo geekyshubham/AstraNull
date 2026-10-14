@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BookOpenCheck, ChevronDown, ChevronLeft, ChevronRight, Search, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
+import { requiredInputMissing } from '../lib/missing-input.mjs';
+import { CheckClassChips } from '../components/checks/check-class-chips';
+import { RuleCoveragePanel } from '../components/rule-coverage/rule-coverage';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -140,8 +143,9 @@ function readInitialPage() {
 function MappedCheckLatestRun({ run, evidence }: { run: DataItem | null; evidence: DataItem[] }) {
   if (!run) return <span className="vector-mapped-run muted small">Not run on this target</span>;
   const runId = getString(run, ['id']);
+  const notTested = requiredInputMissing(run);
   const verdictValue = hasEvidenceBackedVerdict(run, evidence) ? publishedRunVerdict(run) : '';
-  const outcome = verdictValue ? plainVerdictLabel(verdictValue) : plainCodeLabel(getString(run, ['status'], 'planned'));
+  const outcome = notTested ? notTested.label : verdictValue ? plainVerdictLabel(verdictValue) : plainCodeLabel(getString(run, ['status'], 'planned'));
   const when = formatDate(run.started_at ?? run.created_at);
   return (
     <span className="vector-mapped-run small">
@@ -637,6 +641,18 @@ export function VectorLibraryPage({
         </CardContent>
       </Card>
 
+      <Card className="vector-rule-coverage-card" id="rule-coverage">
+        <CardContent className="stack">
+          <RuleCoveragePanel config={config} session={session} />
+          {selectedTarget ? (
+            <p className="muted small row-actions">
+              <span>See the current status of each rule family on {getString(selectedTarget, ['value', 'hostname'], targetId)}.</span>
+              <AnchorButton size="sm" variant="secondary" href={`${buildDetailHref('target-detail', targetId)}&tab=coverage`}>Open target rule coverage</AnchorButton>
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
       <FormModal
         open={Boolean(selectedVector)}
         title={selectedVector ? plainCheckName(getString(selectedVector, ['canonical_name'], getString(selectedVector, ['vector_id']))) : 'Vector detail'}
@@ -682,6 +698,7 @@ export function VectorLibraryPage({
                         <li key={checkId}>
                           {check ? <a href={checkHref(checkId)}>{plainCheckName(getString(check, ['name'], checkId))}</a> : <span>{checkId}</span>}
                           <code className="traffic-path-label">{checkId}</code>
+                          {check ? <CheckClassChips check={check} /> : null}
                           {!check ? <span className="muted small"> not in the current catalog</span> : null}
                           {selectedTarget ? <MappedCheckLatestRun run={latestRun} evidence={data.evidence} /> : null}
                         </li>

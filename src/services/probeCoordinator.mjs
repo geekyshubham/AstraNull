@@ -3,6 +3,8 @@ import { audit } from '../audit.mjs';
 import { newId } from '../lib/ids.mjs';
 import {
   buildSignedProbeJobRecord,
+  isValidPerspectiveId,
+  jobClaimableByPerspective,
   signProbeJob,
   verifyProbeJobSignature,
   probeAuthority,
@@ -21,6 +23,7 @@ import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { executionReservation, probeExecutionReceipt, probeExecutionEvidenceReceipt, normalizeStopAcknowledgment, mergeProbeCapture } from '../lib/probeExecution.mjs';
 import { createProbeSourceResolver, probeSourceResolverFromEnv } from '../lib/probeSourcePerspective.mjs';
+import { perspectiveWorkerSecret, probePerspectiveEvidence } from '../lib/probePerspectiveRegistry.mjs';
 
 const PROBE_WORKER_SIG_VERSION = 'pw2';
 
@@ -36,21 +39,24 @@ function safeEqualUtf8(a, b) {
 
 export { signProbeJob, verifyProbeJobSignature };
 
-export function workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId) {
-  const base = `${PROBE_WORKER_SIG_VERSION}\n${method}\n${path}\n${timestamp}\n${bodyText ?? ''}\n${String(workerId ?? '')}`;
+export function workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId, perspectiveId) {
+  let payload = `${PROBE_WORKER_SIG_VERSION}\n${method}\n${path}\n${timestamp}\n${bodyText ?? ''}\n${String(workerId ?? '')}`;
   if (tenantId != null && tenantId !== '') {
-    return `${base}\n${String(tenantId)}`;
+    payload = `${payload}\n${String(tenantId)}`;
   }
-  return base;
+  if (perspectiveId != null && perspectiveId !== '') {
+    payload = `${payload}\nperspective:${String(perspectiveId)}`;
+  }
+  return payload;
 }
 
 export function signProbeWorkerRequest(
-  { method, path, timestamp, bodyText = '', tenantId, workerId },
+  { method, path, timestamp, bodyText = '', tenantId, workerId, perspectiveId },
   secret,
 ) {
   return createHmac('sha256', secret)
     .update(
-      workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId),
+      workerRequestSigningPayload(method, path, timestamp, bodyText, tenantId, workerId, perspectiveId),
       'utf8',
     )
     .digest('base64url');
@@ -58,12 +64,13 @@ export function signProbeWorkerRequest(
 
 export function probeWorkerAuthHeaders(
   workerId,
-  { method, path, bodyText = '', tenantId },
+  { method, path, bodyText = '', tenantId, perspectiveId },
   secret,
 ) {
   const timestamp = String(Math.floor(Date.now() / 1000));
+  const perspective = perspectiveId != null && perspectiveId !== '' ? String(perspectiveId) : undefined;
   const signature = signProbeWorkerRequest(
-    { method, path, timestamp, bodyText, tenantId, workerId },
+    { method, path, timestamp, bodyText, tenantId, workerId, perspectiveId: perspective },
     secret,
   );
   const headers = {
@@ -74,6 +81,7 @@ export function probeWorkerAuthHeaders(
   if (tenantId != null && tenantId !== '') {
     headers['x-probe-tenant-id'] = String(tenantId);
   }
+  if (perspective) headers['x-probe-perspective-id'] = perspective;
   return headers;
 }
 
@@ -102,7 +110,7 @@ export function createProbeJob(ctx, run, check, target, probeProfile, runtimeCon
   return job;
 }
 
-export function authenticateProbeWorker(headers, method, path, bodyText, runtimeConfig) {
+export function authenticateProbeWorker(headers, method, path, bodyText, runtimeConfig, { env = process.env } = {}) {
   if (runtimeConfig.probeMode !== 'signed-worker') {
     return {
       ok: false,
@@ -123,6 +131,15 @@ export function authenticateProbeWorker(headers, method, path, bodyText, runtime
   const timestamp = headers['x-probe-timestamp'];
   const signature = headers['x-probe-signature'];
   const tenantId = headers['x-probe-tenant-id'];
+  const rawPerspectiveId = headers['x-probe-perspective-id'];
+  const perspectiveId = rawPerspectiveId == null || rawPerspectiveId === '' ? null : String(rawPerspectiveId);
+  if (perspectiveId != null && !isValidPerspectiveId(perspectiveId)) {
+    return {
+      ok: false,
+      status: 401,
+      body: { error: 'unauthorized', message: 'Invalid x-probe-perspective-id.' },
+    };
+  }
   if (!workerId || !timestamp || !signature) {
     return {
       ok: false,
@@ -158,6 +175,16 @@ export function authenticateProbeWorker(headers, method, path, bodyText, runtime
     };
   }
 
+  let perspectiveSecret = null;
+  try {
+    perspectiveSecret = perspectiveId ? perspectiveWorkerSecret(perspectiveId, env) : null;
+  } catch {
+    return {
+      ok: false,
+      status: 503,
+      body: { error: 'probe_perspectives_unconfigured', message: 'Probe perspective registry is invalid.' },
+    };
+  }
   const expected = signProbeWorkerRequest(
     {
       method,
@@ -166,10 +193,30 @@ export function authenticateProbeWorker(headers, method, path, bodyText, runtime
       bodyText: bodyText ?? '',
       tenantId: tenantId != null && tenantId !== '' ? String(tenantId) : undefined,
       workerId: String(workerId),
+      perspectiveId: perspectiveId ?? undefined,
     },
-    secret,
+    perspectiveSecret ?? secret,
   );
   if (!safeEqualUtf8(signature, expected)) {
+    if (perspectiveSecret) {
+      return {
+        ok: false,
+        status: 403,
+        body: {
+          error: 'probe_perspective_unauthenticated',
+          message: 'This probe perspective requires requests signed with its own worker secret.',
+        },
+        auditEntry: {
+          tenant_id: String(tenantId),
+          actor_user_id: String(workerId).slice(0, 128),
+          actor_role: 'probe_worker',
+          action: 'probe_worker.perspective_auth_denied',
+          resource_type: 'probe_perspective',
+          resource_id: perspectiveId,
+          metadata: { method: String(method), path: String(path).slice(0, 256), perspective_id: perspectiveId },
+        },
+      };
+    }
     return {
       ok: false,
       status: 401,
@@ -183,6 +230,8 @@ export function authenticateProbeWorker(headers, method, path, bodyText, runtime
       workerId: String(workerId),
       role: 'probe_worker',
       tenantId: String(tenantId),
+      perspectiveId,
+      perspectiveAuthenticated: Boolean(perspectiveSecret),
     },
   };
 }
@@ -205,6 +254,7 @@ export function listPendingProbeJobsForWorker(workerCtx, runtimeConfig) {
   }
   const jobs = store.probeJobs.filter((job) => {
     if (job.status !== 'pending' || job.tenant_id !== tenantId) return false;
+    if (!jobClaimableByPerspective(job, workerCtx.perspectiveId)) return false;
     const run = store.testRuns.find(
       (entry) => entry.id === job.test_run_id && entry.tenant_id === tenantId,
     );
@@ -226,6 +276,7 @@ export function reserveProbeExecution(ctx, jobId, body) {
   if (Object.hasOwn(job.constraints ?? {}, 'reviewed_operation_binding')) {
     return { error: 'reviewed_operation_execution_unavailable', status: 409 };
   }
+  if (!jobClaimableByPerspective(job, ctx.perspectiveId)) return { error: 'probe_perspective_mismatch', status: 403 };
   if (!body || Object.keys(body).some((key) => key !== 'leased_at')) return { error: 'invalid_probe_execution', status: 400 };
   const run = store.testRuns.find((entry) => entry.id === job.test_run_id && entry.tenant_id === ctx.tenantId);
   if (isKillSwitchActiveForTenant(ctx.tenantId) || !['running', 'collecting'].includes(run?.status)) {
@@ -331,6 +382,10 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     return { error: 'job_not_open', status: 409 };
   }
 
+  if (!jobClaimableByPerspective(job, workerCtx?.perspectiveId)) {
+    return { error: 'probe_perspective_mismatch', status: 403 };
+  }
+
   if (job.status === 'leased' && job.leased_by !== workerCtx.workerId) {
     return {
       error: 'job_leased_to_another_worker',
@@ -387,6 +442,7 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
       probe_worker_id: workerCtx.workerId,
       source_perspective: (runtimeConfig.approvedProbeSources === undefined ? probeSourceResolverFromEnv()
         : createProbeSourceResolver({ registry: runtimeConfig.approvedProbeSources }))(workerCtx.workerId),
+      ...probePerspectiveEvidence(workerCtx),
       execution_receipt: probeExecutionEvidenceReceipt(job, workerCtx.workerId, safetyAttestation, externalResult),
       safety_attestation: safetyAttestation,
     },
@@ -421,6 +477,9 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
           external_result: externalResult,
           vector_family: job.vector_family,
           safety_attestation: safetyAttestation,
+          ...(workerMetadata.response_features != null
+            ? { response_features: workerMetadata.response_features }
+            : {}),
         },
         job.check_id,
       ),

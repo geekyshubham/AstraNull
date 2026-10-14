@@ -28,7 +28,7 @@ const VERDICT_COLUMNS = `id, tenant_id, test_run_id, target_id, check_id, verdic
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
   created_at, updated_at, closed_at, source, dedupe_key, finding_class, priority, protection_validation_json,
-  system_summary, risk_acceptance`;
+  system_summary, risk_acceptance, verifying_run_id, check_version, grading_version, verification_basis`;
 
 const HISTORY_TIME_SKIPS = new Set([
   'before_declaration', 'future_timestamp', 'declaration_time_unknown', 'invalid_timestamp',
@@ -229,6 +229,8 @@ function mapEvidenceRow(row) {
 
 function mapVerdictRow(row) {
   if (!row) return null;
+  const placement = asObject(row.placement_confidence_json);
+  const portResults = placement.port_results ?? (row.port_results ? asObject(row.port_results) : null);
   return {
     id: row.id,
     tenant_id: row.tenant_id,
@@ -238,14 +240,25 @@ function mapVerdictRow(row) {
     verdict: row.verdict,
     confidence: row.confidence ?? undefined,
     explanation: row.explanation ?? undefined,
+    explanation_reason: placement.explanation_reason ?? placement.reason ?? undefined,
+    required_input: placement.required_input ?? undefined,
     evidence_ids: asStringArray(row.evidence_ids),
-    placement_confidence: asObject(row.placement_confidence_json),
+    ...(portResults ? { port_results: portResults } : {}),
+    placement_confidence: placement,
     created_at: toIso(row.created_at),
   };
 }
 
 function placementConfidenceJson(record) {
-  return JSON.stringify(asObject(record.placement_confidence));
+  const pc = asObject(record.placement_confidence);
+  const copy = { ...pc };
+  if (record.explanation_reason !== undefined && copy.explanation_reason === undefined) {
+    copy.explanation_reason = record.explanation_reason;
+  }
+  if (record.required_input !== undefined && copy.required_input === undefined) {
+    copy.required_input = record.required_input;
+  }
+  return JSON.stringify(copy);
 }
 
 function mapRiskAcceptance(value) {
@@ -290,6 +303,12 @@ function mapFindingRow(row) {
     created_at: toIso(row.created_at),
     updated_at: row.updated_at == null ? null : toIso(row.updated_at),
     closed_at: row.closed_at == null ? null : toIso(row.closed_at),
+    verifying_run_id: row.verifying_run_id ?? null,
+    check_version: row.check_version ?? null,
+    grading_version: row.grading_version ?? null,
+    verification_basis: row.verification_basis ?? null,
+    declaration_digest: row.declaration_digest ?? asObject(row.protection_validation_json)?.declaration_digest ?? null,
+    declared_deny_ports: row.declared_deny_ports ?? asObject(row.protection_validation_json)?.declared_deny_ports ?? null,
     ...(row.source ? {
       source: row.source,
       dedupe_key: row.dedupe_key ?? null,
@@ -428,10 +447,18 @@ export function createValidationEvidenceRepository(pool) {
           (SELECT COALESCE(jsonb_agg(e), '[]'::jsonb) FROM
             (SELECT ${EVIDENCE_COLUMNS} FROM evidence_vault WHERE tenant_id = $1 AND created_at <= $2::timestamptz) e) AS evidence,
           (SELECT COALESCE(jsonb_agg(f), '[]'::jsonb) FROM
-            (SELECT tenant_id, target_id, status, severity, COUNT(*)::int AS count, MAX(created_at) AS created_at
+            (SELECT tenant_id, target_id, status, severity, COUNT(*)::int AS count, MAX(created_at) AS created_at,
+                    BOOL_AND(
+                      status = 'accepted_risk'
+                      AND (risk_acceptance->>'review_at') IS NOT NULL
+                      AND (risk_acceptance->>'review_at')::timestamptz <= $2::timestamptz
+                    ) AS acceptance_expired
              FROM findings WHERE tenant_id = $1 AND created_at <= $2::timestamptz
-               AND status IN ('open', 'in_progress', 'accepted_risk')
-             GROUP BY tenant_id, target_id, status, severity) f) AS findings,
+               AND (status IN ('open', 'in_progress') OR status = 'accepted_risk')
+             GROUP BY tenant_id, target_id, status, severity,
+               (status = 'accepted_risk' AND (risk_acceptance->>'review_at') IS NOT NULL
+                 AND (risk_acceptance->>'review_at')::timestamptz <= $2::timestamptz)
+            ) f) AS findings,
           (SELECT COALESCE(jsonb_agg(p), '[]'::jsonb) FROM
             (SELECT id, tenant_id, target_group_id, target_id, check_id, expected_verdict, safe_windows,
               enabled, state, schedule_revision, safety_policy_snapshot, created_at, updated_at
@@ -1617,11 +1644,11 @@ export function createValidationEvidenceRepository(pool) {
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
              status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
-             assignee, created_at, updated_at, system_summary
+             assignee, created_at, updated_at, system_summary, verifying_run_id, check_version, grading_version, verification_basis
            )
            VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16::timestamptz, $17::timestamptz, $18
+             $16::timestamptz, $17::timestamptz, $18, $19, $20, $21, $22
            )
            RETURNING ${FINDING_COLUMNS}`,
           [
@@ -1643,6 +1670,10 @@ export function createValidationEvidenceRepository(pool) {
             record.created_at,
             record.updated_at ?? null,
             record.system_summary ?? null,
+            record.verifying_run_id ?? null,
+            record.check_version ?? null,
+            record.grading_version ?? null,
+            record.verification_basis ?? null,
           ],
         );
         return mapFindingRow(rows[0]);
@@ -1666,11 +1697,12 @@ export function createValidationEvidenceRepository(pool) {
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
              status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
-             assignee, created_at, updated_at, system_summary
+             assignee, created_at, updated_at, system_summary, check_version, grading_version,
+             protection_validation_json
            )
            SELECT
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16::timestamptz, $17::timestamptz, $18
+             $16::timestamptz, $17::timestamptz, $18, $19, $20, $21::jsonb
            FROM verdicts incoming
            WHERE incoming.tenant_id = $2
              AND incoming.id = $14
@@ -1706,6 +1738,9 @@ export function createValidationEvidenceRepository(pool) {
              system_summary = EXCLUDED.system_summary,
              remediation_template = EXCLUDED.remediation_template,
              last_verdict_id = EXCLUDED.last_verdict_id,
+             check_version = COALESCE(EXCLUDED.check_version, findings.check_version),
+             grading_version = COALESCE(EXCLUDED.grading_version, findings.grading_version),
+             protection_validation_json = COALESCE(EXCLUDED.protection_validation_json, findings.protection_validation_json),
              updated_at = EXCLUDED.updated_at
            WHERE EXISTS (
              SELECT 1
@@ -1744,6 +1779,13 @@ export function createValidationEvidenceRepository(pool) {
             record.created_at,
             updatedAt,
             record.system_summary ?? null,
+            record.check_version ?? null,
+            record.grading_version ?? null,
+            record.protection_validation_json
+              ? JSON.stringify(record.protection_validation_json)
+              : (record.declaration_digest
+                ? JSON.stringify({ declaration_digest: record.declaration_digest, declared_deny_ports: record.declared_deny_ports ?? [] })
+                : null),
           ],
         );
         return mapFindingRow(rows[0] ?? null);
@@ -1779,6 +1821,26 @@ export function createValidationEvidenceRepository(pool) {
         if (patch.last_verdict_id !== undefined) {
           sets.push(`last_verdict_id = $${paramIndex}`);
           params.push(patch.last_verdict_id);
+          paramIndex += 1;
+        }
+        if (patch.verifying_run_id !== undefined) {
+          sets.push(`verifying_run_id = $${paramIndex}`);
+          params.push(patch.verifying_run_id);
+          paramIndex += 1;
+        }
+        if (patch.check_version !== undefined) {
+          sets.push(`check_version = $${paramIndex}`);
+          params.push(patch.check_version);
+          paramIndex += 1;
+        }
+        if (patch.grading_version !== undefined) {
+          sets.push(`grading_version = $${paramIndex}`);
+          params.push(patch.grading_version);
+          paramIndex += 1;
+        }
+        if (patch.verification_basis !== undefined) {
+          sets.push(`verification_basis = $${paramIndex}`);
+          params.push(patch.verification_basis);
           paramIndex += 1;
         }
         if (patch.evidence_ids !== undefined) {
@@ -2003,6 +2065,27 @@ export function createValidationEvidenceRepository(pool) {
       }
       const context = await history.loadBindingContext(ctx, [binding.origin_target_id, binding.protected_target_id]);
       return { binding, ...context };
+    },
+
+    async loadOriginLockdownBindings(ctx, protectedTargetId) {
+      const history = createTargetHistoryRepository(pool);
+      const bindings = await history.listBindings(ctx, { protected_target_id: protectedTargetId, status: 'active' });
+      const targetIds = [...new Set([protectedTargetId, ...bindings.map((row) => row.origin_target_id)])];
+      const records = await history.loadBindingContext(ctx, targetIds);
+      return { bindings, records };
+    },
+
+    async listLatestRunsPerCheckForTarget(ctx, targetId, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT DISTINCT ON (check_id) ${TEST_RUN_COLUMNS}
+           FROM test_runs
+           WHERE tenant_id = $1 AND target_id = $2
+           ORDER BY check_id, COALESCE(started_at, created_at) DESC, id DESC`,
+          [ctx.tenantId, targetId],
+        );
+        return rows.map(mapTestRunRow);
+      });
     },
 
     /**

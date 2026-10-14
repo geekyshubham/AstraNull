@@ -1,4 +1,5 @@
 import { audit } from '../audit.mjs';
+import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
 import { validateArtifactUploadBody } from '../lib/authorizationArtifactLedger.mjs';
 import { buildArtifactFromUpload } from '../lib/highScalePolicy.mjs';
 import { computeTargetGroupScopeHash } from '../lib/scopeHash.mjs';
@@ -6,14 +7,17 @@ import { newId } from '../lib/ids.mjs';
 import { redactObject } from '../lib/redact.mjs';
 import {
   getOffensiveSuiteById,
+  gradeCanarySinkBodyResults,
   listOffensiveSuites as listOffensiveSuiteCatalog,
   normalizeOffensiveSuiteResult,
   offensiveAuthorizationPackComplete,
   offensiveAuthorizationPackStatus,
+  planCanarySinkBodyTests,
   validateOffensiveRequestIntake,
   WAF_OFFENSIVE_REQUIRED_ARTIFACT_TYPES,
 } from '../contracts/wafOffensive.mjs';
 import { getStore, persistStore } from '../store.mjs';
+import { controlDeclarationsFromTarget } from '../contracts/controlDeclarations.mjs';
 import { isKillSwitchActiveForTenant } from './killSwitchState.mjs';
 import { createSocOffensiveWafValidation } from './wafPosture.mjs';
 
@@ -69,6 +73,163 @@ function refreshPackStatus(request) {
 
 export function listOffensiveSuites() {
   return { suites: listOffensiveSuiteCatalog() };
+}
+
+export const CANARY_SINK_PLAN_STATES = Object.freeze(['approved', 'scheduled']);
+export const CANARY_SINK_OBSERVATION_STATES = Object.freeze(['approved', 'scheduled', 'running', 'stopped']);
+
+function canarySinkRefusal(error, status, message, extra = {}) {
+  return { error, status, message, ...extra };
+}
+
+function canarySinkHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+// Binds a SOC canary-sink suite to the stored canary_sink declaration; `targets` must be the approved group only.
+export function resolveCanarySinkBinding({
+  request,
+  asset,
+  targets = [],
+  requestedTargetId = null,
+  currentScopeHash = null,
+  allowedStates = CANARY_SINK_PLAN_STATES,
+} = {}) {
+  if (!allowedStates.includes(request?.state)) {
+    return canarySinkRefusal('canary_sink_request_not_approved', 409,
+      'The SOC request must be approved or scheduled before a canary-sink body suite is planned or recorded.',
+      { state: request?.state ?? null });
+  }
+  if (!request.scope_hash || currentScopeHash !== request.scope_hash) {
+    return canarySinkRefusal('scope_hash_mismatch', 409, 'The target group changed after SOC approval.');
+  }
+  const assetTargetId = typeof asset?.target_id === 'string' && asset.target_id.trim() ? asset.target_id.trim() : null;
+  const requested = typeof requestedTargetId === 'string' && requestedTargetId.trim() ? requestedTargetId.trim() : null;
+  if (assetTargetId && requested && requested !== assetTargetId) {
+    return canarySinkRefusal('canary_sink_target_out_of_scope', 403, 'The target is not the WAF asset target of this SOC request.');
+  }
+  const targetId = assetTargetId ?? requested;
+  if (!targetId) {
+    return canarySinkRefusal('canary_sink_target_required', 400, 'target_id is required when the WAF asset has no bound target.');
+  }
+  const target = targets.find((row) => row?.id === targetId && !row.deleted_at);
+  if (!target) {
+    return canarySinkRefusal('canary_sink_target_out_of_scope', 403, 'The target is not in the approved scope of this SOC request.');
+  }
+  const sinkUrl = controlDeclarationsFromTarget(target)?.canary_sink?.url;
+  if (typeof sinkUrl !== 'string' || !sinkUrl) {
+    return canarySinkRefusal('canary_sink_not_declared', 409, 'The target has no declared canary_sink.');
+  }
+  return { ok: true, target_id: target.id, sink_url: sinkUrl };
+}
+
+export function planCanarySinkWithBinding(binding, body = {}) {
+  const requestedUrl = typeof body.canary_sink_url === 'string' && body.canary_sink_url.trim()
+    ? body.canary_sink_url
+    : binding.sink_url;
+  return planCanarySinkBodyTests({
+    canarySinkUrl: requestedUrl,
+    declaredCanarySinkUrl: binding.sink_url,
+    variants: body.variants,
+  });
+}
+
+function devCanarySinkBinding(ctx, req, requestedTargetId, allowedStates) {
+  return resolveCanarySinkBinding({
+    request: req,
+    asset: findAsset(ctx, req.waf_asset_id),
+    targets: (getStore().targets ?? []).filter((row) => row.tenant_id === ctx.tenantId
+      && row.target_group_id === req.target_group_id),
+    requestedTargetId,
+    currentScopeHash: computeTargetGroupScopeHash(ctx.tenantId, req.target_group_id),
+    allowedStates,
+  });
+}
+
+function auditCanarySink(ctx, requestId, action, metadata) {
+  audit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action,
+    resource_type: 'waf_offensive_request',
+    resource_id: requestId,
+    metadata,
+  });
+}
+
+function refuseDevCanarySink(ctx, requestId, phase, refusal, targetId = null) {
+  auditCanarySink(ctx, requestId, 'waf.offensive_canary_sink_body.refused', {
+    phase,
+    reason: refusal.error,
+    target_id: targetId,
+  });
+  persistStore();
+  return refusal;
+}
+
+export function planCanarySinkBody(ctx, requestId, body = {}) {
+  const req = findRequest(ctx, requestId);
+  if (!req) return null;
+  const binding = devCanarySinkBinding(ctx, req, body.target_id, CANARY_SINK_PLAN_STATES);
+  if (binding.error) return refuseDevCanarySink(ctx, requestId, 'plan', binding, body.target_id ?? null);
+  let plan;
+  try {
+    plan = planCanarySinkWithBinding(binding, body);
+  } catch (err) {
+    return refuseDevCanarySink(ctx, requestId, 'plan',
+      { error: err.code ?? 'invalid_canary_sink_plan', status: 400, message: err.message }, binding.target_id);
+  }
+  req.canary_sink_body_plan = plan;
+  req.canary_sink_body_target_id = binding.target_id;
+  req.canary_sink_body_results = null;
+  auditCanarySink(ctx, requestId, 'waf.offensive_canary_sink_body.planned', {
+    variant_count: plan.requests?.length ?? 0,
+    target_id: binding.target_id,
+    canary_sink_host: canarySinkHost(binding.sink_url),
+  });
+  persistStore();
+  return { plan, target_id: binding.target_id };
+}
+
+function devBoundStoredPlan(ctx, req, phase) {
+  const plan = req.canary_sink_body_plan;
+  if (!plan) {
+    return { refusal: refuseDevCanarySink(ctx, req.id, phase, canarySinkRefusal('canary_sink_plan_missing', 409,
+      'Plan a canary-sink body suite before recording observations.')) };
+  }
+  const binding = devCanarySinkBinding(ctx, req, req.canary_sink_body_target_id ?? null, CANARY_SINK_OBSERVATION_STATES);
+  if (binding.error) return { refusal: refuseDevCanarySink(ctx, req.id, phase, binding, req.canary_sink_body_target_id ?? null) };
+  if (plan.canary_sink_url !== binding.sink_url) {
+    return { refusal: refuseDevCanarySink(ctx, req.id, phase, canarySinkRefusal('canary_sink_declaration_changed', 409,
+      'The target canary_sink declaration changed after the suite was planned; plan again.'), binding.target_id) };
+  }
+  return { plan, binding };
+}
+
+export function recordCanarySinkBodyObservations(ctx, requestId, body = {}) {
+  const req = findRequest(ctx, requestId);
+  if (!req) return null;
+  const bound = devBoundStoredPlan(ctx, req, 'observations');
+  if (bound.refusal) return bound.refusal;
+  try {
+    const results = gradeCanarySinkBodyResults(bound.plan, body.observations);
+    req.canary_sink_body_results = results;
+    req.canary_sink_body_observations = Array.isArray(body.observations) ? body.observations : [];
+    auditCanarySink(ctx, requestId, 'waf.offensive_canary_sink_body.observed', {
+      variant_count: results.variant_results?.length ?? 0,
+      target_id: bound.binding.target_id,
+    });
+    persistStore();
+    return { results };
+  } catch (err) {
+    return refuseDevCanarySink(ctx, requestId, 'observations',
+      { error: err.code ?? 'invalid_canary_sink_observations', status: 400, message: err.message }, bound.binding.target_id);
+  }
 }
 
 export function createOffensiveRequest(ctx, body = {}) {
@@ -318,7 +479,7 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
         authorization_pack_status: req.authorization_pack_status,
       };
     }
-    if (distinctSocApprovalCount(req) < 2) {
+    if (!isExplicitDemoTenant(req.tenant_id) && distinctSocApprovalCount(req) < 2) {
       return { error: 'insufficient_soc_approvals', status: 409 };
     }
     if (isKillSwitchActiveForTenant(ctx.tenantId)) {
@@ -411,6 +572,15 @@ export function recordOffensiveSuiteResults(ctx, requestId, body = {}) {
     }
   }
 
+  if (body.canary_sink_body?.observations) {
+    const bound = devBoundStoredPlan(ctx, req, 'suite_results');
+    if (bound.refusal) return bound.refusal;
+    try {
+      req.canary_sink_body_results = gradeCanarySinkBodyResults(bound.plan, body.canary_sink_body.observations);
+    } catch (err) {
+      return { error: err.code ?? 'invalid_canary_sink_grade', status: 400, message: err.message };
+    }
+  }
   req.suite_results = normalized;
   req.results_recorded_at = new Date().toISOString();
   req.results_recorded_by = ctx.userId;
@@ -515,6 +685,7 @@ function formatOffensiveRequest(record) {
     scope_hash: record.scope_hash ?? null,
     waf_validation_run_id: record.waf_validation_run_id ?? null,
     suite_results: record.suite_results ?? [],
+    ...(record.canary_sink_body_results ? { canary_sink_body_results: record.canary_sink_body_results } : {}),
     created_at: record.created_at,
     created_by: record.created_by,
     ...(record.updated_at ? { updated_at: record.updated_at } : {}),

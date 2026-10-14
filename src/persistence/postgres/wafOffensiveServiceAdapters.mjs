@@ -1,9 +1,11 @@
 import { validateArtifactUploadBody } from '../../lib/authorizationArtifactLedger.mjs';
+import { isExplicitDemoTenant } from '../../lib/demoAutoVerify.mjs';
 import { buildArtifactFromUpload } from '../../lib/highScalePolicy.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { computeScopeHashFromTargets } from '../../lib/scopeHash.mjs';
 import {
   getOffensiveSuiteById,
+  gradeCanarySinkBodyResults,
   listOffensiveSuites as listOffensiveSuiteCatalog,
   normalizeOffensiveSuiteResult,
   offensiveAuthorizationPackComplete,
@@ -12,6 +14,12 @@ import {
   WAF_OFFENSIVE_REQUIRED_ARTIFACT_TYPES,
 } from '../../contracts/wafOffensive.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
+import {
+  CANARY_SINK_OBSERVATION_STATES,
+  CANARY_SINK_PLAN_STATES,
+  planCanarySinkWithBinding,
+  resolveCanarySinkBinding,
+} from '../../services/wafOffensive.mjs';
 import { WAF_OFFENSIVE_REPOSITORY_METHODS } from './wafOffensiveRepository.mjs';
 
 export const POSTGRES_WAF_OFFENSIVE_SERVICE_METHODS = Object.freeze([
@@ -25,6 +33,8 @@ export const POSTGRES_WAF_OFFENSIVE_SERVICE_METHODS = Object.freeze([
   'recordOffensiveSuiteResults',
   'upsertOffensivePostTestReport',
   'getOffensivePostTestReport',
+  'planCanarySinkBody',
+  'recordCanarySinkBodyObservations',
 ]);
 
 function assertRepositories(repositories, wafPostureServices) {
@@ -120,6 +130,14 @@ function formatOffensiveRequest(record) {
   };
 }
 
+function sinkHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 async function getTargetScope(coreCatalog, ctx, targetGroupId, client) {
   const group = await coreCatalog.getTargetGroup(ctx, targetGroupId, {
     ...LEAN_GROUP_LOOKUP,
@@ -141,6 +159,36 @@ export function createPostgresWafOffensiveServices(repositories, options = {}) {
   const auditRepo = repositories.audit;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
+
+  async function canarySinkBindingFor(ctx, record, requestedTargetId, allowedStates, client) {
+    if (!allowedStates.includes(record.state)) {
+      return resolveCanarySinkBinding({ request: record, allowedStates });
+    }
+    const asset = await wafRepo.getWafAsset(ctx, record.waf_asset_id);
+    const scope = await getTargetScope(coreCatalog, ctx, record.target_group_id, client);
+    if (scope.error) return { ...scope, message: 'The SOC request target group is not available.' };
+    return resolveCanarySinkBinding({
+      request: record,
+      asset,
+      targets: scope.targets,
+      requestedTargetId,
+      currentScopeHash: computeScopeHashFromTargets(record.target_group_id, scope.targets),
+      allowedStates,
+    });
+  }
+
+  async function refuseCanarySink(ctx, requestId, phase, refusal, targetId, client) {
+    await appendAudit(
+      auditRepo,
+      ctx,
+      'waf.offensive_canary_sink_body.refused',
+      'waf_offensive_request',
+      requestId,
+      { phase, reason: refusal.error, target_id: targetId ?? null },
+      client,
+    );
+    return refusal;
+  }
 
   return {
     async listOffensiveSuites() {
@@ -360,7 +408,7 @@ export function createPostgresWafOffensiveServices(repositories, options = {}) {
               authorization_pack_status: request.authorization_pack_status,
             };
           }
-          if (distinctSocApprovalCount(request) < 2) {
+          if (!isExplicitDemoTenant(request.tenant_id) && distinctSocApprovalCount(request) < 2) {
             return { error: 'insufficient_soc_approvals', status: 409 };
           }
           if (await killSwitchRepo.isKillSwitchActiveForTenant(ctx, { client })) {
@@ -518,6 +566,75 @@ export function createPostgresWafOffensiveServices(repositories, options = {}) {
       const report = await repo.getOffensiveReport(ctx, requestId);
       if (!report) return { error: 'report_not_found', status: 404 };
       return { report };
+    },
+
+    async planCanarySinkBody(ctx, requestId, body = {}) {
+      return repo.withLockedOffensiveRequest(ctx, requestId, async (record, { client }) => {
+        const binding = await canarySinkBindingFor(ctx, record, body.target_id, CANARY_SINK_PLAN_STATES, client);
+        if (binding.error) return refuseCanarySink(ctx, requestId, 'plan', binding, body.target_id ?? null, client);
+        let plan;
+        try {
+          plan = planCanarySinkWithBinding(binding, body);
+        } catch (err) {
+          return refuseCanarySink(ctx, requestId, 'plan',
+            { error: err.code ?? 'invalid_canary_sink_plan', status: 400, message: err.message }, binding.target_id, client);
+        }
+        const list = (record.suite_results ?? []).filter((row) => row?.kind !== 'canary_sink_body_plan');
+        list.push({ suite_id: 'canary_sink_body', kind: 'canary_sink_body_plan', plan, target_id: binding.target_id, results: null });
+        const now = nowFn().toISOString();
+        await repo.saveOffensiveRequest(ctx, { ...record, suite_results: list, updated_at: now }, { client });
+        await appendAudit(
+          auditRepo,
+          ctx,
+          'waf.offensive_canary_sink_body.planned',
+          'waf_offensive_request',
+          requestId,
+          { variant_count: plan.requests?.length ?? 0, target_id: binding.target_id, canary_sink_host: sinkHost(binding.sink_url) },
+          client,
+        );
+        return { plan, target_id: binding.target_id };
+      });
+    },
+
+    async recordCanarySinkBodyObservations(ctx, requestId, body = {}) {
+      return repo.withLockedOffensiveRequest(ctx, requestId, async (record, { client }) => {
+        const entry = (record.suite_results ?? []).find((row) => row?.kind === 'canary_sink_body_plan');
+        if (!entry?.plan) {
+          return refuseCanarySink(ctx, requestId, 'observations', {
+            error: 'canary_sink_plan_missing', status: 409, message: 'Plan a canary-sink body suite before recording observations.',
+          }, null, client);
+        }
+        const binding = await canarySinkBindingFor(ctx, record, entry.target_id ?? null, CANARY_SINK_OBSERVATION_STATES, client);
+        if (binding.error) return refuseCanarySink(ctx, requestId, 'observations', binding, entry.target_id ?? null, client);
+        if (entry.plan.canary_sink_url !== binding.sink_url) {
+          return refuseCanarySink(ctx, requestId, 'observations', {
+            error: 'canary_sink_declaration_changed',
+            status: 409,
+            message: 'The target canary_sink declaration changed after the suite was planned; plan again.',
+          }, binding.target_id, client);
+        }
+        let results;
+        try {
+          results = gradeCanarySinkBodyResults(entry.plan, body.observations);
+        } catch (err) {
+          return refuseCanarySink(ctx, requestId, 'observations',
+            { error: err.code ?? 'invalid_canary_sink_observations', status: 400, message: err.message }, binding.target_id, client);
+        }
+        const list = (record.suite_results ?? []).filter((row) => row?.kind !== 'canary_sink_body_plan');
+        list.push({ ...entry, results, observations: Array.isArray(body.observations) ? body.observations : [] });
+        const now = nowFn().toISOString();
+        await repo.saveOffensiveRequest(ctx, { ...record, suite_results: list, updated_at: now }, { client });
+        await appendAudit(
+          auditRepo,
+          ctx,
+          'waf.offensive_canary_sink_body.observed',
+          'waf_offensive_request',
+          requestId,
+          { variant_count: results.variant_results?.length ?? 0, target_id: binding.target_id },
+          client,
+        );
+        return { results };
+      });
     },
   };
 }

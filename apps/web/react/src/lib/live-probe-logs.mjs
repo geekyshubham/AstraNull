@@ -109,6 +109,9 @@ function formatVerdictEntry(id, at, row) {
   } else if (status === 'blocked') {
     tag = 'BLOCKED';
     tone = 'warn';
+  } else if (status === 'not_tested') {
+    tag = 'NOT TESTED';
+    tone = 'muted';
   }
 
   const label =
@@ -122,11 +125,13 @@ function formatVerdictEntry(id, at, row) {
       ? 'Inconclusive'
       : status === 'blocked'
       ? 'Blocked by safety gate'
+      : status === 'not_tested'
+      ? 'Not tested, nothing was sent'
       : status || 'Completed';
 
   const parts = [
     `Check outcome: ${label}`,
-    verdict && verdict !== status ? verdict : '',
+    verdict && verdict !== status && status !== 'not_tested' ? verdict : '',
   ].filter(Boolean).join(' · ');
 
   const fullMessage = explanation ? `${parts} — ${explanation}` : parts;

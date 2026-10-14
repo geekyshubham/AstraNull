@@ -16,6 +16,7 @@ import { observationAssuranceGap, versionGapFor } from './protectionCoverage.mjs
 import { currentAssuranceGap, ASSURANCE_SCOPE_VERSION } from './assuranceScope.mjs';
 import { checkMatchesScenario, deriveAttemptObservation } from './entryPathComparison.mjs';
 import { OBSERVATION_ONLY_PROBE_KINDS, evidenceTierForProbeKind } from './probeEvidenceTiers.mjs';
+import { controlDeclarationsFromTarget } from '../contracts/controlDeclarations.mjs';
 import {
   FIREWALL_UNRESOLVED_STATUSES,
   PATH_GAP_OUTCOMES,
@@ -768,6 +769,12 @@ export function buildProtectionValidationReport({
   const freshnessStates = [...rows.flatMap((row) => row.scenarios.map((scenario) => scenario.freshness)), ...firewallRows.map((row) => row.freshness)];
   const observedTimes = freshnessStates.map((entry) => entry.observed_at).filter(Boolean).sort();
 
+  const originDeclared = list(entryPaths).some((row) => row?.origin_binding_id || row?.relation_kind === 'origin')
+    || list(targets).some((target) => controlDeclarationsFromTarget(target)?.origin?.lockdown_expected === true);
+  const originLockdownCoverage = originDeclared
+    ? { status: 'declared', display: 'Declared', reason: null, applicable_count: rows.filter((row) => row.relation_kind === 'origin').length }
+    : { status: 'not_assessable', display: 'Not assessable', reason: 'no_origin_declared', applicable_count: 0, conclusive_count: 0 };
+
   const kindsPresent = [rows.length ? 'path_validation' : null, firewallRows.length ? 'firewall_change' : null].filter(Boolean);
   const limitations = normalizeLimitations([
     'external_only',
@@ -853,6 +860,7 @@ export function buildProtectionValidationReport({
       attribution: 'unattributed',
       layers: layerEnforcement,
     },
+    origin_lockdown: originLockdownCoverage,
     freshness: {
       window_seconds: freshnessWindowSeconds,
       ...countBy(freshnessStates.map((entry) => entry.state), ['fresh', 'stale', 'no_evidence']),

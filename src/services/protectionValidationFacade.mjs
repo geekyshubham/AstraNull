@@ -21,6 +21,7 @@ import {
 import { createFirewallAcceptanceRepository } from './protectionValidationFirewall.mjs';
 import { buildProtectionValidationReportProjection } from './reports.mjs';
 import { getTenantDeploymentFeatures } from './tenantDeploymentFeatures.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 
 const P = PROTECTION_VALIDATION_PERMISSIONS;
 const MATRIX_PATH_LIMIT = 200;
@@ -34,9 +35,9 @@ function hasPermission(ctx, permission) {
   return true;
 }
 
-/** Connector-derived configuration follows the target-detail gate: WAF posture, connectors, and waf:connector_read. */
+// Connector-derived configuration follows the target-detail gate: WAF posture, connectors, and waf:connector_read.
 export function configurationAccess(ctx, runtimeConfig) {
-  if (!runtimeConfig || runtimeConfig.featureFlags?.wafPostureEnabled !== true) return 'disabled';
+  if (!wafPostureEnabledFor(runtimeConfig, ctx?.tenantId)) return 'disabled';
   if (getTenantDeploymentFeatures(ctx, runtimeConfig).connectors !== true) return 'disabled';
   return hasPermission(ctx, 'waf:connector_read') ? 'granted' : 'redacted';
 }

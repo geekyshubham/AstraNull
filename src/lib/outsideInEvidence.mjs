@@ -111,6 +111,9 @@ export function scrubVerdictForCustomer(verdict) {
   if (typeof out.explanation === 'string') {
     out.explanation = scrubAgentPlacementText(out.explanation);
   }
+  if (!out.port_results && out.placement_confidence?.port_results) {
+    out.port_results = out.placement_confidence.port_results;
+  }
   if ('placement_confidence' in out) {
     out.placement_confidence = scrubPlacementConfidenceForCustomer(out.placement_confidence);
   }

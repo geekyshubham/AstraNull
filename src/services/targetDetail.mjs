@@ -234,6 +234,7 @@ function buildFindings(targetId, tenantId, query = {}) {
       state: f.status ?? f.state,
       opened_at: toIso(f.created_at ?? f.opened_at),
       owner_group: remediationOwnerForFinding(f.id, tenantId),
+      verification_basis: f.verification_basis ?? null,
     }));
 
   const limit = Number(query.findings_limit);

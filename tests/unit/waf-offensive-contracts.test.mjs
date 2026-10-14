@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   assertApprovedOffensiveSuiteIds,
+  gradeCanarySinkBodyResults,
   listOffensiveSuites,
   normalizeOffensiveSuiteResult,
   offensiveAuthorizationPackComplete,
+  planCanarySinkBodyTests,
   validateOffensiveRequestIntake,
 } from '../../src/contracts/wafOffensive.mjs';
 import { normalizeSocOffensiveWafValidationRequest } from '../../src/contracts/wafPosture.mjs';
@@ -82,5 +84,12 @@ describe('waf offensive contracts', () => {
     assert.equal(result.test_material_type, 'soc_gated_offensive_suite');
     assert.equal(result.scenario_family, 'sqli_offensive');
     assert.equal(result.passed, true);
+  });
+
+  it('exposes the SOC canary-sink body planner and grader', () => {
+    const plan = planCanarySinkBodyTests({ canarySinkUrl: 'https://sink.example.test/canary', variants: ['json'] });
+    assert.equal(plan.requests.length, 1);
+    const graded = gradeCanarySinkBodyResults(plan, [{ id: 'json_marker', blocked: true, status_code: 403 }]);
+    assert.equal(graded.variant_results[0].outcome, 'blocked');
   });
 });

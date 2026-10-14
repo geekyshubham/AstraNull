@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { scanIncludesTarget, scanTargetIds } from '../lib/targetExecutionScope.mjs';
 import { audit } from '../audit.mjs';
-import { customerSelectableChecks, getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
+import { isExplicitDemoTenant } from '../lib/demoAutoVerify.mjs';
+import { customerSelectableChecks, getCheckById, isCustomerRunnable, targetInputRefusal } from '../contracts/checks.mjs';
 import {
   ACTIVE_SCAN_STATUSES,
   ACTIVE_STEP_STATUSES,
@@ -35,6 +36,7 @@ import { isWithinSafeTestWindow, normalizeSafetyPolicy } from './safeTestPolicy.
 import { getTenantAccount } from './subscriptions.mjs';
 import { activeTargetGroupsForTenant, isArchivedTarget } from './targetGroups.mjs';
 import { cancelTestRun, getTestRun, startTestRun } from './testRuns.mjs';
+import { bindingRecordsFromStore } from './originBindings.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
 const advancing = new Set();
@@ -134,13 +136,13 @@ function stepAuditMetadata(step, extra = {}) {
   };
 }
 
-function resolveChecks(checkIds) {
-  const selectable = new Set(customerSelectableChecks(getStore().checkCatalog ?? []).map((check) => check.check_id));
+function resolveChecks(checkIds, ctx) {
+  const selectable = new Set(customerSelectableChecks(getStore().checkCatalog ?? [], { deferTargetRequirements: true, tenantId: ctx?.tenantId }).map((check) => check.check_id));
   const checks = [];
   for (const checkId of checkIds) {
     const check = getCheckById(checkId);
     if (!check) return { error: 'unknown_check', status: 400, check_id: checkId };
-    if (!isCustomerRunnable(check)) {
+    if (!isCustomerRunnable(check, ctx)) {
       return { error: 'soc_gated_check', status: 403, check_id: checkId, message: 'This check requires SOC governance.' };
     }
     if (!selectable.has(checkId)) {
@@ -156,7 +158,7 @@ function buildPlan(ctx, input) {
   const selected = firstId ? getStore().targets.find((target) => target.id === firstId && target.tenant_id === ctx.tenantId && !isArchivedTarget(target)) : null;
   const group = activeGroup(ctx, input.target_group_id ?? selected?.target_group_id);
   if (!group) return { error: 'target_group_not_found', status: 404 };
-  const resolved = resolveChecks(input.check_ids);
+  const resolved = resolveChecks(input.check_ids, ctx);
   if (resolved.error) return resolved;
   const targets = input.target_ids
     ? input.target_ids.map((id) => getStore().targets.find((target) => target.id === id && target.tenant_id === ctx.tenantId && !isArchivedTarget(target)))
@@ -167,13 +169,29 @@ function buildPlan(ctx, input) {
     return { error: 'target_not_found', status: 404 };
   }
   let plan;
+  const store = getStore();
+  const records = bindingRecordsFromStore(store, ctx.tenantId);
+  const bindingsByTargetId = new Map();
+  for (const target of targets) {
+    if (target?.id) {
+      const active = (store.originBindings ?? []).filter((b) =>
+        b && b.status === 'active'
+        && (b.tenant_id == null || b.tenant_id === ctx.tenantId)
+        && (b.protected_target_id === target.id || b.origin_target_id === target.id)
+      );
+      bindingsByTargetId.set(target.id, { bindings: active, records });
+    }
+  }
   try {
-    plan = planScanSteps({ checks: resolved.checks, targets, targetId: input.target_id });
+    plan = planScanSteps({ checks: resolved.checks, targets, targetId: input.target_id, targetInputRefusal, originBindings: bindingsByTargetId, tenantId: ctx.tenantId });
   } catch (err) {
     return scanValidationResponse(err);
   }
   if (input.target_id && plan.excluded.length) {
     const first = plan.excluded[0];
+    if (first.reason !== 'target_kind_not_supported') {
+      return { error: 'check_requires_additional_input', status: 400, check_id: first.check_id, reason: first.reason, message: first.message };
+    }
     return {
       error: 'target_kind_not_supported',
       status: 400,
@@ -647,7 +665,7 @@ function dispatchScheduledScan(ctx, scan, options = {}) {
   for (const policyId of policyIds) {
     const policy = activeGroup(execCtx, policyId);
     if (!policy) return scheduleDenied(ctx, scan, 'target_execution_policy_unavailable', now);
-    if ((policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime())) return scheduleDenied(ctx, scan, 'safe_window_closed', now);
+    if (!isExplicitDemoTenant(scan.tenant_id) && (policy.safe_test_windows ?? []).length && !isWithinSafeTestWindow(policy, now.getTime(), { tenantId: scan.tenant_id })) return scheduleDenied(ctx, scan, 'safe_window_closed', now);
     for (const targetId of scanTargetIds(scan)) {
       if (activeRunForGroup(scan.tenant_id, policy.id, targetId) || activeScanForGroup(scan.tenant_id, policy.id, scan.id, targetId)) return scheduleDenied(ctx, scan, 'concurrent_run_blocked', now);
     }

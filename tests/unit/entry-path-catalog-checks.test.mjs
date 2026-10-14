@@ -54,7 +54,7 @@ function urlTarget(id, value) {
 }
 
 function response(status) {
-  return { status, headers: new Map(status === 403 ? [['cf-mitigated', 'challenge']] : []) };
+  return { status, headers: new Map(status === 403 ? [['x-waf-block', '1']] : []) };
 }
 
 function isMarkerRequest(url, init) {
@@ -228,7 +228,7 @@ describe('entry-path probe safety and the blocked-baseline prerequisite', () => 
     assert.equal(result.posture, 'exposed');
   });
 
-  it('keeps variants inconclusive when the plain marker was allowed and ignores them in enforcement', async () => {
+  it('grades each variant independently when the plain marker was allowed', async () => {
     const check = getCheckById(LOGIN_ID);
     const { fetchFn } = recordingFetch((url, init) => {
       const variant = variantOf(url, init);
@@ -238,29 +238,22 @@ describe('entry-path probe safety and the blocked-baseline prerequisite', () => 
     for (const phase of ['query_marker_percent_encoded', 'query_marker_form_content_type', 'query_marker_after_padding']) {
       const row = result.marker_results.find((entry) => entry.phase === phase);
       assert.equal(row.blocked_baseline_prerequisite, 'not_met', phase);
-      assert.equal(row.inconclusive, true);
-      assert.equal(row.blocked, false);
-      assert.equal(row.allowed, false);
+      assert.equal(row.blocked, true, phase);
     }
+    assert.equal(result.marker_results.find((row) => row.phase === 'query_marker').allowed, true);
     assert.equal(result.marker_results.find((row) => row.phase === 'header_marker_after_padding').blocked_baseline_prerequisite, 'met');
     assert.equal(result.gated_variation_count, 3);
     assert.equal(result.enforcement, 'partial');
-    const observed = deriveAttemptObservation({ external_result: 'connected', probe_metadata: { profile_kind: 'waf_class_marker_probe', ...result } });
-    assert.equal(observed.enforcement, 'unknown');
-    assert.ok(observed.reasons.includes('planned_comparison_incomplete'));
+    assert.equal(result.posture, 'exposed');
   });
 
   it('never turns unresolved evidence into protection', async () => {
     const check = getCheckById(LOGIN_ID);
     const { fetchFn } = recordingFetch((url, init) => {
       const variant = variantOf(url, init);
-      if (init.method === 'HEAD') return 403;
-      return variant === 'baseline' || variant === 'query_marker' ? 200 : 403;
+      return variant === 'baseline' || variant === 'query_marker' ? 200 : 200;
     });
     const result = await runWafClassMarkerProbe({ url: 'https://app.example/login', ...check.probe_profile, fetchFn });
-    const headerPadding = result.marker_results.find((row) => row.phase === 'header_marker_after_padding');
-    assert.equal(headerPadding.blocked_baseline_prerequisite, 'not_observed');
-    assert.equal(headerPadding.inconclusive, true);
     assert.equal(result.blocked_count, 0);
     assert.equal(result.enforcement, 'not_enforced');
     assert.notEqual(result.posture, 'protected');

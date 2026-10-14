@@ -14,6 +14,7 @@ import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { addTarget } from './targetGroups.mjs';
 import { createWafAsset } from './wafPosture.mjs';
+import { externalDiscoveryEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 
 const INBOX_STATES = new Set(['candidate', 'needs_review']);
 const APPROVABLE_STATES = new Set(['candidate', 'needs_review']);
@@ -34,16 +35,16 @@ function contractError(err, fallbackStatus = 400) {
   };
 }
 
-function discoveryFeatureDisabled() {
-  return loadRuntimeConfig().featureFlags.externalDiscoveryEnabled !== true;
+function discoveryFeatureDisabled(ctx) {
+  return !externalDiscoveryEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
 }
 
 function featureDisabledResponse() {
   return { error: 'discovery_feature_disabled', status: 404 };
 }
 
-function guardDiscoveryEnabled() {
-  if (discoveryFeatureDisabled()) {
+function guardDiscoveryEnabled(ctx) {
+  if (discoveryFeatureDisabled(ctx)) {
     return featureDisabledResponse();
   }
   return null;
@@ -147,7 +148,7 @@ function resolveDiscoveryMode(ctx, body = {}) {
 }
 
 export function listEntities(ctx) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   return getStore()
@@ -156,7 +157,7 @@ export function listEntities(ctx) {
 }
 
 export function createEntity(ctx, body) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   try {
@@ -198,7 +199,7 @@ export function createEntity(ctx, body) {
 }
 
 export function listCandidates(ctx) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   return getStore()
@@ -207,7 +208,7 @@ export function listCandidates(ctx) {
 }
 
 export function ingestDiscoveryCandidates(ctx, source, records) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   try {
@@ -297,7 +298,7 @@ export function ingestDiscoveryCandidates(ctx, source, records) {
 }
 
 export function createCandidate(ctx, body) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   try {
@@ -345,7 +346,7 @@ export function createCandidate(ctx, body) {
 }
 
 export function approveCandidateToTarget(ctx, id, body = {}) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   const candidate = findCandidate(ctx, id);
@@ -405,7 +406,7 @@ export function approveCandidateToTarget(ctx, id, body = {}) {
 }
 
 export function rejectCandidate(ctx, id, body = {}) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   const candidate = findCandidate(ctx, id);
@@ -451,7 +452,7 @@ export function rejectCandidate(ctx, id, body = {}) {
 }
 
 export function patchCandidateState(ctx, id, state, body = {}) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
 
@@ -515,7 +516,7 @@ export function patchCandidateState(ctx, id, state, body = {}) {
 }
 
 export function getDiscoveryInbox(ctx) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   const items = getStore()
@@ -527,7 +528,7 @@ export function getDiscoveryInbox(ctx) {
 }
 
 export function getDiscoveryReportSummary(ctx) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
   const candidates = getStore().discoveryCandidates.filter(
@@ -539,7 +540,7 @@ export function getDiscoveryReportSummary(ctx) {
 }
 
 export function importCandidateToTargetGroup(ctx, id, body = {}) {
-  const disabled = guardDiscoveryEnabled();
+  const disabled = guardDiscoveryEnabled(ctx);
   if (disabled) return disabled;
   ensureStoreShape();
 

@@ -8,7 +8,9 @@ import {
   EDGE_DETECTION_CHECK_ID,
   ROW_STATUS_META,
   recommendedStarterRow,
-  wafCheckBlocking,
+  wafRuleEnforcement,
+  wafRuleSentences,
+  rowEvidenceState,
   assessEdgeEfficacy,
   buildCheckRows,
   declarationOnlyChecks,
@@ -116,9 +118,10 @@ describe('per-check status rows', () => {
 
   it('shows customer-facing check names, not raw catalog jargon', () => {
     const jwt = byId('waf.jwt_tamper_marker.safe');
-    assert.match(jwt.name, /API/);
+    assert.match(jwt.name, /Custom Canary Rule/);
     const [rendered] = buildCheckRows({ checks: [jwt] });
-    assert.doesNotMatch(rendered.name, /\bAPI\b/);
+    assert.match(rendered.name, /Custom Canary Rule/);
+    assert.doesNotMatch(rendered.name, /waf_class_marker/i);
   });
 
   it('groups rows by category with current graded failures first and observations separate', () => {
@@ -137,45 +140,116 @@ describe('per-check status rows', () => {
 });
 
 describe('WAF and CDN efficacy', () => {
-  const mk = (layer, status, name = `${layer}-${status}`) => ({ status, name, category: { layer } });
+  const NOW = Date.parse('2030-01-08T00:00:00.000Z');
+  const FRESH = '2030-01-07T00:00:00.000Z';
+  const OLD = '2029-12-01T00:00:00.000Z';
+  let seq = 0;
+  const mk = (layer, status, extra = {}) => {
+    seq += 1;
+    const categoryId = extra.categoryId ?? (layer === 'cdn' ? 'l7' : layer);
+    return {
+      checkId: extra.checkId ?? `${layer}.check_${seq}.safe`,
+      name: extra.name ?? `${layer}-${status}-${seq}`,
+      status,
+      verdict: extra.verdict ?? (status === 'passed' ? 'protected' : status === 'failed' ? 'exposed' : ''),
+      readinessCapable: extra.readinessCapable ?? true,
+      probeKind: extra.probeKind ?? (layer === 'waf' ? 'waf_class_marker_probe' : `kind_${seq}`),
+      markerClass: extra.markerClass ?? `class_${seq}`,
+      assuranceScope: extra.assuranceScope ?? 'managed_rule_marker',
+      runId: extra.runId ?? `run_${seq}`,
+      finishedAt: extra.finishedAt ?? FRESH,
+      startedAt: '',
+      category: { id: categoryId, layer },
+    };
+  };
   const edge = { waf: { status: 'detected', vendor: 'cloudflare' }, cdn: { status: 'detected', provider: 'cloudflare' } };
+  const assess = (rows, extra = {}) => assessEdgeEfficacy({ rows, edge, nowMs: NOW, ...extra });
 
-  it('reports protecting only when every tested class was blocked', () => {
-    const result = assessEdgeEfficacy({ rows: [mk('waf', 'passed'), mk('waf', 'passed'), mk('cdn', 'passed'), mk('waf', 'inconclusive')], edge });
-    assert.equal(result.waf.status, 'protecting');
-    assert.equal(result.waf.score, 100);
-    assert.equal(result.waf.inconclusive, 1);
-    assert.equal(result.cdn.status, 'protecting');
-    assert.match(efficacySentence(result.waf), /Blocked 2 of 2/);
+  it('needs three fresh concluded checks across two rule categories before saying Protecting', () => {
+    const tooFew = assess([mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'inconclusive')]);
+    assert.equal(tooFew.waf.status, 'insufficient');
+    assert.equal(tooFew.waf.label, 'Not enough evidence');
+    assert.match(efficacySentence(tooFew.waf), /Not enough evidence: 2 fresh concluded checks across 2 rule categories/);
+    assert.match(efficacySentence(tooFew.waf), /1 inconclusive/);
+    const oneCategory = assess([1, 2, 3].map(() => mk('waf', 'passed', { probeKind: 'waf_evasion_marker_probe' })));
+    assert.equal(oneCategory.waf.status, 'insufficient', 'three passes in one rule category are not enough');
+    const enough = assess([mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'inconclusive')]);
+    assert.equal(enough.waf.status, 'protecting');
+    assert.match(efficacySentence(enough.waf), /Held on 3 of 3 fresh concluded WAF checks · 1 inconclusive/);
   });
 
-  it('scores partial and not-protecting from exposed verdicts', () => {
-    const partial = assessEdgeEfficacy({ rows: [mk('waf', 'passed'), mk('waf', 'failed', 'SQLi marker')], edge });
+  it('one pass with many inconclusive results is never Protecting', () => {
+    const rows = [mk('waf', 'passed'), ...Array.from({ length: 28 }, () => mk('waf', 'inconclusive'))];
+    const result = assess(rows);
+    assert.equal(result.waf.status, 'insufficient');
+    assert.equal(result.waf.inconclusive, 28);
+  });
+
+  it('ignores stale and version-gapped verdicts', () => {
+    const stale = assess([mk('waf', 'passed', { finishedAt: OLD }), mk('waf', 'passed', { finishedAt: OLD }), mk('waf', 'passed', { finishedAt: OLD })]);
+    assert.equal(stale.waf.status, 'insufficient');
+    assert.equal(stale.waf.ignored, 3);
+    assert.match(efficacySentence(stale.waf), /3 not counted \(stale or older check version\)/);
+    const rows = [mk('waf', 'passed', { checkId: 'waf.a.safe', runId: 'r1' }), mk('waf', 'passed'), mk('waf', 'passed')];
+    const coverage = { pairs: [{ check_id: 'waf.a.safe', last_run_id: 'r1', state: 'partial', pair_reason: 'check_version_mismatch' }] };
+    const gapped = assess(rows, { coverage });
+    assert.equal(gapped.waf.tested, 2);
+    assert.equal(gapped.waf.ignored, 1);
+    assert.equal(rowEvidenceState(rows[0], { coverage, nowMs: NOW }), 'version_gap');
+    const serverStale = { pairs: [{ check_id: 'waf.a.safe', last_run_id: 'r1', state: 'stale' }] };
+    assert.equal(rowEvidenceState(rows[0], { coverage: serverStale, nowMs: NOW }), 'stale', 'server pair state wins over the row time');
+  });
+
+  it('scores partial and not-protecting from fresh exposed verdicts', () => {
+    const partial = assess([mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'failed', { name: 'SQLi marker' })]);
     assert.equal(partial.waf.status, 'partial');
-    assert.equal(partial.waf.score, 50);
     assert.deepEqual(partial.waf.exposedChecks, ['SQLi marker']);
-    assert.equal(assessEdgeEfficacy({ rows: [mk('cdn', 'failed')], edge }).cdn.status, 'not_protecting');
-    const weak = assessEdgeEfficacy({ rows: [mk('waf', 'passed'), mk('waf', 'failed', 'a'), mk('waf', 'failed', 'b')], edge });
-    assert.equal(weak.waf.status, 'mostly_exposed', 'blocking a minority of tested classes is not partial protection');
-    assert.equal(weak.waf.tone, 'danger');
+    assert.match(efficacySentence(partial.waf), /1 check reached your application/);
+    assert.equal(assess([mk('cdn', 'failed')]).cdn.status, 'not_protecting');
+    const weak = assess([mk('waf', 'passed'), mk('waf', 'failed'), mk('waf', 'failed')]);
+    assert.equal(weak.waf.status, 'mostly_exposed', 'blocking a minority of tested checks is not partial protection');
   });
 
-  it('downgrades to bypassable when the origin is reachable directly', () => {
-    const viaRow = assessEdgeEfficacy({ rows: [mk('waf', 'passed'), mk('cdn', 'passed'), mk('origin', 'failed')], edge });
-    assert.equal(viaRow.waf.status, 'bypassable');
-    assert.equal(viaRow.cdn.status, 'bypassable');
-    const viaEdge = assessEdgeEfficacy({ rows: [mk('waf', 'passed')], edge: { ...edge, network_firewall: { direct_origin_reachability: { status: 'exposed' } } } });
-    assert.equal(viaEdge.waf.status, 'bypassable');
+  it('never lets DNS, network or observation results make the CDN Protecting', () => {
+    const rows = [
+      mk('cdn', 'passed', { categoryId: 'dns', probeKind: 'dns_axfr_leak' }),
+      mk('cdn', 'passed', { categoryId: 'dns', probeKind: 'dns_axfr_leak' }),
+      mk('cdn', 'passed', { categoryId: 'l3_l4' }),
+      mk('cdn', 'passed', { readinessCapable: false }),
+    ];
+    const result = assess(rows);
+    assert.equal(result.cdn.tested, 0);
+    assert.equal(result.cdn.status, 'present_unmeasured');
   });
 
-  it('never claims efficacy without evidence, and falls back to fingerprint markers', () => {
+  it('says bypassable only from a fresh exposed origin-lockdown verdict', () => {
+    const base = [mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'passed')];
+    const genericOrigin = assess([...base, mk('origin', 'failed', { checkId: 'origin.direct_bypass.safe', verdict: 'edge_exposed', categoryId: 'origin' })]);
+    assert.equal(genericOrigin.waf.status, 'protecting', 'a direct 2xx elsewhere is not proof of the same application');
+    const viaEdge = assessEdgeEfficacy({ rows: base, edge: { ...edge, network_firewall: { direct_origin_reachability: { status: 'exposed' } } }, nowMs: NOW });
+    assert.equal(viaEdge.waf.status, 'protecting');
+    const lockdown = assess([...base, mk('origin', 'failed', { checkId: 'nfw.origin_lockdown.safe', verdict: 'exposed', categoryId: 'origin', readinessCapable: false })]);
+    assert.equal(lockdown.waf.status, 'bypassable');
+    assert.equal(lockdown.originExposed, true);
+    assert.match(efficacySentence(lockdown.waf), /origin-lockdown check found your origin answering directly/);
+    const staleLockdown = assess([...base, mk('origin', 'failed', { checkId: 'nfw.origin_lockdown.safe', verdict: 'exposed', finishedAt: OLD })]);
+    assert.equal(staleLockdown.originExposed, false);
+  });
+
+  it('never claims efficacy without evidence, and treats fingerprint markers as context only', () => {
     assert.equal(assessEdgeEfficacy({ rows: [], edge: null }).waf.status, 'unknown');
     assert.equal(assessEdgeEfficacy({ rows: [], edge }).waf.status, 'present_unmeasured');
     assert.equal(assessEdgeEfficacy({ rows: [], edge: { waf: { status: 'not_detected' }, cdn: { status: 'not_detected' } } }).cdn.status, 'absent');
-    const markers = assessEdgeEfficacy({ rows: [], edge: { ...edge, effectiveness: { tested_count: 3, blocked_count: 2, passed_count: 1 } } });
-    assert.equal(markers.waf.status, 'partial');
+    const markers = assessEdgeEfficacy({ rows: [], edge: { ...edge, effectiveness: { tested_count: 3, blocked_count: 3, passed_count: 0 } } });
+    assert.equal(markers.waf.status, 'insufficient');
     assert.equal(markers.waf.basis, 'fingerprint_markers');
+    assert.match(efficacySentence(markers.waf), /context, not proof/);
     assert.equal(markers.cdn.status, 'present_unmeasured');
+  });
+
+  it('no longer speaks of attack classes', () => {
+    const result = assess([mk('waf', 'passed'), mk('waf', 'passed'), mk('waf', 'failed')]);
+    assert.doesNotMatch(efficacySentence(result.waf), /attack class/i);
   });
 });
 
@@ -325,7 +399,8 @@ describe('readiness-capable rows and the recommended first check', () => {
     assert.equal(capable({ ...base, probe_profile: { ...base.probe_profile, readiness_conclusion: false } }), false);
     assert.ok(rows.some((entry) => entry.readinessCapable), 'the live catalog has verdict-capable checks');
     assert.ok(rows.some((entry) => !entry.readinessCapable), 'the live catalog has observation checks');
-    assert.equal(rows.filter((entry) => entry.readinessCapable && /rate_limit/.test(entry.probeKind)).length, 0);
+    assert.equal(rows.filter((entry) => entry.readinessCapable && /rate_limit/.test(entry.probeKind) && entry.probeKind !== 'rate_limit_canary_probe').length, 0);
+    assert.ok(buildCheckRows({ checks: CHECK_CATALOG }).some((entry) => entry.readinessCapable && entry.probeKind === 'rate_limit_canary_probe'), 'T7 rate-limit canary is verdict-capable');
   });
 
   it('recommends a not-run verdict-capable marker check and never a rate-limit or observation check', () => {
@@ -348,45 +423,63 @@ describe('readiness-capable rows and the recommended first check', () => {
   });
 });
 
-describe('WAF marker check blocking summary', () => {
-  const marker = (checkId, status, extra = {}) => ({ checkId, status, readinessCapable: true, category: CHECK_CATEGORIES.waf, finishedAt: '', startedAt: '', ...extra });
-
-  it('returns null when no benign marker check has a recorded result', () => {
-    assert.equal(wafCheckBlocking([]), null);
-    assert.equal(wafCheckBlocking([marker('waf.crlf_injection_marker.safe', 'not_run'), marker('waf.evasion_base64_wrap.safe', 'running')]), null);
-    assert.equal(wafCheckBlocking(buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) })), null);
+describe('WAF managed rules versus custom canary rules', () => {
+  const NOW = Date.parse('2030-01-08T00:00:00.000Z');
+  const marker = (checkId, status, extra = {}) => ({
+    checkId, status, readinessCapable: true, category: CHECK_CATEGORIES.waf, runId: `run_${checkId}`,
+    probeKind: 'waf_class_marker_probe', assuranceScope: 'custom_canary_rule', markerClass: checkId,
+    finishedAt: status === 'not_run' ? '' : '2030-01-07T00:00:00.000Z', startedAt: '', ...extra,
   });
 
-  it('counts stopped, allowed, inconclusive and not-run marker checks with the latest result time', () => {
-    const summary = wafCheckBlocking([
-      marker('waf.crlf_injection_marker.safe', 'passed', { finishedAt: '2030-01-01T00:10:00.000Z' }),
-      marker('waf.http_method_policy_marker.safe', 'passed', { finishedAt: '2030-01-01T00:20:00.000Z' }),
-      marker('waf.sqli_marker.safe', 'failed', { finishedAt: '2030-01-01T00:05:00.000Z' }),
-      marker('waf.evasion_base64_wrap.safe', 'inconclusive'),
-      marker('waf.xss_marker.safe', 'not_run'),
-    ]);
-    assert.deepEqual(summary, { stopped: 2, allowed: 1, inconclusive: 1, notRun: 1, applicable: 5, lastAt: '2030-01-01T00:20:00.000Z' });
+  it('returns null when no marker check has a recorded result', () => {
+    assert.equal(wafRuleEnforcement([]), null);
+    assert.equal(wafRuleEnforcement([marker('waf.crlf_injection_marker.safe', 'not_run'), marker('waf.evasion_base64_wrap.safe', 'running', { probeKind: 'waf_evasion_marker_probe' })]), null);
+    assert.equal(wafRuleEnforcement(buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) })), null);
+  });
+
+  it('splits managed rule markers from custom canary rules and rolls managed markers up by class', () => {
+    const rows = [
+      marker('waf.sqli_managed_marker.safe', 'passed', { assuranceScope: 'managed_rule_marker', markerClass: 'sqli' }),
+      marker('waf.entry_path_login_marker.safe', 'passed', { assuranceScope: 'managed_rule_marker', markerClass: 'sqli' }),
+      marker('waf.xss_managed_marker.safe', 'passed', { assuranceScope: 'managed_rule_marker', markerClass: 'xss' }),
+      marker('waf.path_traversal_managed_marker.safe', 'failed', { assuranceScope: 'managed_rule_marker', markerClass: 'path_traversal' }),
+      marker('waf.scanner_signature_marker.safe', 'inconclusive', { assuranceScope: 'managed_rule_marker', markerClass: 'scanner_user_agent' }),
+      marker('waf.ssrf_marker.safe', 'passed'),
+      marker('waf.xxe_marker.safe', 'passed'),
+      marker('waf.crlf_injection_marker.safe', 'failed'),
+      marker('waf.nosql_injection_marker.safe', 'passed', { finishedAt: '2029-01-01T00:00:00.000Z' }),
+      marker('waf.evasion_double_url.safe', 'passed', { probeKind: 'waf_evasion_marker_probe', assuranceScope: '' }),
+    ];
+    const summary = wafRuleEnforcement(rows, { nowMs: NOW });
+    assert.deepEqual(summary.managed, { enforced: 2, notEnforced: 1, inconclusive: 1, ignored: 0, notRun: 0, total: 4, tested: 3 });
+    assert.deepEqual(summary.custom, { enforced: 2, notEnforced: 1, inconclusive: 0, ignored: 1, notRun: 0, total: 4, tested: 3 });
+    assert.equal(summary.evasion.enforced, 1);
+    const lines = wafRuleSentences(summary);
+    assert.equal(lines[0].label, 'Managed rules enforced');
+    assert.equal(lines[0].ratio, '2 of 3 markers');
+    assert.match(lines[0].detail, /1 inconclusive/);
+    assert.equal(lines[1].label, 'Custom canary rules enforced');
+    assert.equal(lines[1].ratio, '2 of 3');
+    assert.match(lines[1].detail, /1 not counted/);
   });
 
   it('excludes fingerprint, rate-limit, enforcement, exploit and observation rows', () => {
-    const summary = wafCheckBlocking([
+    const summary = wafRuleEnforcement([
       marker('waf.crlf_injection_marker.safe', 'passed'),
-      marker(EDGE_DETECTION_CHECK_ID, 'passed'),
-      marker('waf.low_rate_limit.safe', 'failed'),
-      marker('waf.enforcement.safe', 'failed'),
+      marker(EDGE_DETECTION_CHECK_ID, 'passed', { probeKind: 'waf_fingerprint_observation' }),
+      marker('waf.low_rate_limit.safe', 'failed', { probeKind: 'rate_limit_sequence' }),
       marker('waf.log4shell_marker.safe', 'failed', { category: CHECK_CATEGORIES.exploit }),
       marker('waf.observed_marker.safe', 'failed', { readinessCapable: false }),
-      marker('l7.cors_posture.safe', 'failed'),
-    ]);
-    assert.deepEqual(summary, { stopped: 1, allowed: 0, inconclusive: 0, notRun: 0, applicable: 1, lastAt: '' });
+    ], { nowMs: NOW });
+    assert.equal(summary.custom.total, 1);
+    assert.equal(summary.managed.total, 0);
   });
 
-  it('every live WAF marker check is verdict-capable, so the summary can cover all of them', () => {
-    const rows = buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) });
-    const markers = rows.filter((entry) => /^waf\.(.+_marker|evasion_.+)\.safe$/.test(entry.checkId));
-    assert.ok(markers.length > 0);
-    const graded = rows.map((entry) => markers.includes(entry) ? { ...entry, status: 'passed' } : entry);
-    assert.equal(wafCheckBlocking(graded).stopped, markers.filter((entry) => entry.readinessCapable && entry.category.id === 'waf').length);
+  it('labels every live class marker as managed or custom canary from the catalog', () => {
+    const rows = buildCheckRows({ checks: individualChecks(CATALOG, DOMAIN) }).filter((entry) => entry.probeKind === 'waf_class_marker_probe');
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every((entry) => ['managed_rule_marker', 'custom_canary_rule'].includes(entry.assuranceScope)), 'every class marker carries an assurance scope');
+    assert.ok(rows.some((entry) => entry.assuranceScope === 'custom_canary_rule'));
   });
 });
 

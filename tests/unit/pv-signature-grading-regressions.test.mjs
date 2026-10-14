@@ -39,7 +39,7 @@ describe('declared API paths only get GET/HEAD-only checks', () => {
 });
 
 describe('signed vendor denial on the permitted baseline of a marker leg', () => {
-  it('records the baseline signature and classifies a must-not-be-reachable path as consistent enforcement', async () => {
+  it('records the baseline signature and stays inconclusive, never consistent enforcement', async () => {
     const probe = await runEntryPathMarkerProbe({
       url: 'https://app.example.test/login',
       entry_path_scenario: 'declared_login_path',
@@ -49,11 +49,12 @@ describe('signed vendor denial on the permitted baseline of a marker leg', () =>
     assert.equal(probe.permitted_baseline.health, 'unhealthy');
     assert.equal(probe.permitted_baseline.denial_signature?.id, 'cloudflare_challenge');
     const derived = deriveAttemptObservation({ external_result: 'not_run', probe_metadata: { profile_kind: 'waf_class_marker_probe', ...probe } });
-    assert.equal(derived.observation, 'explicit_denial_observed');
+    assert.equal(derived.observation, null);
+    assert.ok(derived.reasons.includes('permitted_baseline_signed_denial'));
     assert.equal(derived.denial_signature.id, 'cloudflare_challenge');
     const relation = { status: 'active', relation_kind: 'declared_login_url', expected_behavior: 'must_not_be_reachable', required_layers: [] };
-    const classified = classifyPathValidationItem({ relation, observation: derived.observation, enforcement: derived.enforcement });
-    assert.equal(classified.outcome, 'consistent_enforcement');
+    const classified = classifyPathValidationItem({ relation, observation: derived.observation ?? 'not_tested', enforcement: derived.enforcement });
+    assert.notEqual(classified.outcome, 'consistent_enforcement');
   });
 
   it('keeps an unsigned 403 baseline on a must-not-be-reachable path as reachability exposure', async () => {
@@ -123,7 +124,7 @@ describe('WAF enforcement probe reads a bounded GET body', () => {
 describe('evasion check versions', () => {
   it('bumps every waf.evasion_*.safe check for truthful wire and complete-comparison grading', () => {
     const evasion = CHECK_CATALOG.filter((check) => /^waf\.evasion_.+\.safe$/.test(check.check_id));
-    assert.equal(evasion.length, 41);
+    assert.equal(evasion.length, 44);
     assert.ok(evasion.every((check) => check.version === '1.1.1' && check.semantics_version === 'probe-catalog-v3'));
   });
 });

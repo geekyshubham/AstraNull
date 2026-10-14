@@ -20,7 +20,7 @@ describe('versioned conservative readiness', () => {
   it('publishes an explainable seven-day assessment, not capacity or all-path protection', () => {
     const world = assuranceWorld(); addAssuredObservation(world);
     const result = projectReadiness(world);
-    assert.equal(result.score, 100); assert.equal(result.assessment_version, 'readiness-assessment.v2');
+    assert.equal(result.score, 100); assert.equal(result.assessment_version, 'readiness-assessment.v3');
     assert.equal(RECENT_EVIDENCE_WINDOW_DAYS, 7); assert.equal(result.confidence, 'external_only');
     assert.equal(result.coverage.passed_count, 1); assert.equal(result.current_assurance.status, 'tested_scenarios_only');
     assert.ok(result.factors.every((entry) => entry.label && entry.detail));
@@ -76,12 +76,17 @@ describe('versioned conservative readiness', () => {
     const broad = projectReadiness({ ...world, catalog: CHECK_CATALOG });
     assert.ok(broad.coverage.applicable_count > 12); assert.ok(broad.score < 8);
   });
-  it('distinguishes severity and retains accepted-risk findings as unresolved', () => {
+  it('distinguishes severity and reports accepted-risk findings without subtracting', () => {
     const world = assuranceWorld(); addAssuredObservation(world);
     for (const [severity, expected] of [['low', 99], ['medium', 95], ['high', 90], ['critical', 80]]) {
-      world.findings = [{ id: 'f', tenant_id: world.tenantId, target_id: world.targets[0].id, severity, status: 'accepted_risk' }];
+      world.findings = [{ id: 'f', tenant_id: world.tenantId, target_id: world.targets[0].id, severity, status: 'open' }];
       assert.equal(projectReadiness(world).score, expected);
     }
+    world.findings[0].status = 'accepted_risk';
+    world.findings[0].risk_acceptance = { review_at: '2026-12-01T00:00:00.000Z' };
+    assert.equal(projectReadiness(world).score, 100);
+    assert.equal(projectReadiness(world).findings.accepted_risk_count, 1);
+    assert.equal(projectReadiness(world).findings.unresolved_count, 0);
     world.findings[0].status = 'closed'; assert.equal(projectReadiness(world).score, 100);
   });
   it('gives gaps and inconclusive results no positive credit without treating unknown as exposed', () => {
@@ -223,7 +228,8 @@ describe('versioned conservative readiness', () => {
     const findingCounts = [{ ...world.findings[0], count: 4 }, ...world.findings.slice(4, 7).map((row) => ({ ...row, count: 1 }))];
     const grouped = { ...world, findings: [], findingCounts, finding_counts_complete: true };
     assert.deepEqual(projectReadiness(grouped), projectReadiness(world));
-    assert.equal(projectReadiness(grouped).findings.unresolved_count, 5);
+    assert.equal(projectReadiness(grouped).findings.unresolved_count, 4);
+    assert.equal(projectReadiness(grouped).findings.accepted_risk_count, 1);
     assert.deepEqual(projectReadiness({ ...grouped, findings: world.findings }), projectReadiness(grouped), 'grouped counts replace raw records, never double-count them');
     assert.equal(projectReadiness({ ...grouped, findingCounts: [...findingCounts, { ...findingCounts[0], created_at: '2026-10-10T00:00:00.000Z' }] }).score, null);
     assert.equal(projectReadiness({ ...grouped, finding_counts_complete: false }).score, null);

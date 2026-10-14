@@ -118,7 +118,7 @@ export function isFindingSlaBreach(finding: DataItem, now = Date.now()) {
 }
 
 export function isFindingClosedWithin30Days(finding: DataItem, now = Date.now()) {
-  if (!['closed', 'resolved'].includes(findingStatus(finding))) return false;
+  if (!['closed', 'resolved', 'fix_verified'].includes(findingStatus(finding))) return false;
   const updated = parseFindingTimestamp(finding.updated_at ?? finding.created_at);
   if (updated === null) return false;
   return now - updated <= 30 * 24 * 60 * 60 * 1000;
@@ -177,7 +177,7 @@ export function filterFindingsByTab(
     case 'accepted-risk':
       return findings.filter((finding) => ['accepted', 'accepted_risk'].includes(findingStatus(finding)));
     case 'closed':
-      return findings.filter((finding) => ['closed', 'resolved'].includes(findingStatus(finding)));
+      return findings.filter((finding) => ['closed', 'resolved', 'fix_verified'].includes(findingStatus(finding)));
     case 'sla':
       return findings.filter((finding) => isFindingSlaBreach(finding, now));
     case 'target-group':
@@ -546,7 +546,7 @@ export function sortFindingRuleGroups(groups: FindingRuleGroup[], sort: FindingR
   return copy;
 }
 
-const STATUS_SUMMARY_ORDER = ['open', 'remediation_pending', 'accepted_risk', 'accepted', 'resolved', 'closed'];
+const STATUS_SUMMARY_ORDER = ['open', 'remediation_pending', 'accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed'];
 
 /** "2 open, 1 accepted risk" in lifecycle order; unknown statuses follow alphabetically. */
 export function summarizeFindingStatuses(statusCounts: Record<string, number>) {

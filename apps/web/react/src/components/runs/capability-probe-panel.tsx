@@ -1,5 +1,6 @@
 import { Badge } from '../ui/badge';
 import { ExplanationField } from './run-proof-panels';
+import { ProbeOutcomeEvidence } from './probe-outcome-evidence';
 import {
   capabilityProbeKindLabel,
   domXssValidationLabel,
@@ -316,7 +317,7 @@ function eventProofRows(event: DataItem, meta: DataItem): EvidenceRow[] {
   ].filter((row) => row.value !== '—');
 }
 
-export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
+export function CapabilityProbeResultCard({ event, verdictPortResults }: { event: DataItem; verdictPortResults?: unknown }) {
   const { meta, probeKind, externalResult } = probeEventMetadata(event);
   const rows = [
     ...eventProofRows(event, meta),
@@ -336,6 +337,7 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
         <Badge tone={externalResultTone(externalResult)} title={externalResult}>{plainCodeLabel(externalResult)}</Badge>
       </div>
       {errorClass ? <p className="muted small">Error: {plainCodeLabel(errorClass)}</p> : null}
+      <ProbeOutcomeEvidence metadata={meta} verdictPortResults={verdictPortResults} />
       <details className="technical-disclosure">
         <summary>Show technical probe evidence</summary>
         <div className="verdict-explanation-grid">
@@ -357,7 +359,8 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
   );
 }
 
-export function CapabilityProbeResultsPanel({ events }: { events: DataItem[] }) {
+/** `verdictPortResults` adds the published per-port result (violated or not) to the probe's per-port outcomes. */
+export function CapabilityProbeResultsPanel({ events, verdictPortResults }: { events: DataItem[]; verdictPortResults?: unknown }) {
   if (events.length === 0) {
     return <p className="muted small">No capability probe events were recorded for this run.</p>;
   }
@@ -365,7 +368,7 @@ export function CapabilityProbeResultsPanel({ events }: { events: DataItem[] }) 
   return (
     <div className="stack">
       {events.map((event, index) => (
-        <CapabilityProbeResultCard key={getString(event, ['id'], String(index))} event={event} />
+        <CapabilityProbeResultCard key={getString(event, ['id'], String(index))} event={event} verdictPortResults={verdictPortResults} />
       ))}
     </div>
   );

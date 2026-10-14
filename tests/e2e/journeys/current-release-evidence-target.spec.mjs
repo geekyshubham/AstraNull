@@ -630,7 +630,7 @@ test.describe('current release: server cohorts from dashboard analytics', () => 
 const ORIGIN_IP = 'tgt_origin_ip';
 const ORIGIN_PENDING = 'tgt_origin_pending';
 const MULTI_PORT = 'tgt_multi_port';
-const ORIGIN_CHECKS = ['origin.direct_reachability.safe', 'origin.direct_bypass.safe', 'origin.host_sni_bypass.safe', 'waf.origin_bypass.safe'];
+const ORIGIN_CHECKS = ['origin.direct_reachability.safe', 'origin.direct_bypass.safe', 'origin.host_sni_bypass.safe', 'waf.origin_bypass.safe', 'nfw.origin_lockdown.safe'];
 
 function seedHistory(store) {
   const base = store.targets.find((target) => target.id === ids.targetId);

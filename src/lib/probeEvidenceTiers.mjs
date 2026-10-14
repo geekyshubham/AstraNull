@@ -40,6 +40,8 @@ export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
   'host_sni_bypass',
   'origin_leak_scan',
   'port_scan_bounded',
+  'connection_limit_probe',
+  'waf_method_policy_probe',
 ]);
 
 const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
@@ -50,9 +52,31 @@ export const SEMANTIC_SAFE_PROBE_KINDS = Object.freeze([
   'outside_in_waf_scan',
   'waf_class_marker_probe',
   'waf_evasion_marker_probe',
+  'rate_limit_canary_probe',
 ]);
 
 const SEMANTIC_SAFE_PROBE_KIND_SET = new Set(SEMANTIC_SAFE_PROBE_KINDS);
+
+export const VERDICT_CAPABLE_PROBE_KINDS = Object.freeze([
+  ...SEMANTIC_SAFE_PROBE_KINDS,
+  'tcp_connect',
+  'udp_probe',
+  'port_scan_bounded',
+  'reflection_service_probe',
+  'connection_limit_probe',
+  'host_sni_bypass',
+  'waf_method_policy_probe',
+]);
+
+const VERDICT_CAPABLE_PROBE_KIND_SET = new Set(VERDICT_CAPABLE_PROBE_KINDS);
+
+export function isObservationOnlyProbeKind(probeKind) {
+  return OBSERVATION_ONLY_PROBE_KIND_SET.has(probeKind);
+}
+
+export function isVerdictCapableProbeKind(probeKind) {
+  return VERDICT_CAPABLE_PROBE_KIND_SET.has(probeKind);
+}
 
 export const EVIDENCE_TIERS = Object.freeze(['E0', 'E1', 'E2', 'E3', 'E4', 'E5']);
 
@@ -98,6 +122,11 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'waf.offensive_sqli.soc',
     'waf.offensive_ssti.soc',
     'waf.offensive_xss.soc',
+    'waf.body_json_marker.soc',
+    'waf.body_form_marker.soc',
+    'waf.body_multipart_marker.soc',
+    'waf.body_inspection_limit.soc',
+    'waf.response_dlp_canary.soc',
   ]),
   api_surface_scan: Object.freeze(['l7.api_surface_scan.safe']),
   bot_challenge_probe: Object.freeze(['l7.bot_challenge_marker.safe']),
@@ -129,6 +158,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'origin.direct_reachability.safe',
     'origin.host_sni_bypass.safe',
     'waf.origin_bypass.safe',
+    'nfw.origin_lockdown.safe',
   ]),
   http2_frame_probe: Object.freeze([
     'l7.hpack_bomb.readiness',
@@ -233,7 +263,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'origin.leak_scan.safe',
   ]),
   waf_fingerprint_observation: Object.freeze(['waf.fingerprint.safe']),
-  port_scan_bounded: Object.freeze(['l3.firewall_exposure_scan.safe']),
+  port_scan_bounded: Object.freeze(['l3.firewall_exposure_scan.safe', 'nfw.management_port_exposure.safe']),
   quic_reachability: Object.freeze([
     'protocol.http3_quic_exposure.safe',
     'reflect.quic_reflection_exposure.safe',
@@ -288,6 +318,9 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'l3.tcp_flag_anomaly.readiness',
     'reflect.redis_direct_exposure.safe',
     'reflect.tcp_middlebox_exposure.safe',
+    'nfw.declared_deny_tcp.safe',
+    'nfw.ipv6_parity.safe',
+    'nfw.perspective_allowlist.safe',
   ]),
   tls_audit: Object.freeze([
     'tls.full_audit.safe',
@@ -301,6 +334,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
   udp_probe: Object.freeze([
     'l3.forbidden_udp_port.safe',
     'l3.sip_voip_flood.readiness',
+    'nfw.declared_deny_udp.safe',
   ]),
   waf_enforcement_probe: Object.freeze([
     'l7.waf_marker_rule.safe',
@@ -325,6 +359,11 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'waf.ssrf_marker.safe',
     'waf.xpath_injection_marker.safe',
     'waf.xxe_marker.safe',
+    'waf.sqli_managed_marker.safe',
+    'waf.xss_managed_marker.safe',
+    'waf.path_traversal_managed_marker.safe',
+    'waf.ssti_marker.safe',
+    'waf.scanner_signature_marker.safe',
   ]),
   waf_evasion_marker_probe: Object.freeze([
     'waf.evasion_alt_charset.safe',
@@ -368,6 +407,9 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'waf.evasion_unicode_normalization.safe',
     'waf.evasion_whitespace.safe',
     'waf.evasion_xml_attribute.safe',
+    'waf.evasion_double_url.safe',
+    'waf.evasion_mixed_url.safe',
+    'waf.evasion_case_fold.safe',
   ]),
   waf_inspection_limit_probe: Object.freeze([
     'waf.inspection_limit.safe',
@@ -376,6 +418,9 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'l7.compressed_request_decompression.posture',
     'l7.request_parser_size.posture',
   ]),
+  connection_limit_probe: Object.freeze(['nfw.connection_limit.safe']),
+  waf_method_policy_probe: Object.freeze(['waf.http_method_policy_enforced.safe']),
+  rate_limit_canary_probe: Object.freeze(['waf.rate_limit_canary.validation']),
 });
 
 const TAXONOMY_PROBE_KIND_BY_CHECK_ID = new Map(

@@ -49,3 +49,10 @@ export function createProbeSourceResolver({ registry = null } = {}) {
 export function probeSourceResolverFromEnv(env = process.env) {
   return createProbeSourceResolver({ registry: approvedProbeSourcesFromEnv(env) });
 }
+
+/** Worker-reported source for probe results (CONTRACT §5). Existing registry resolver is unchanged. */
+export function sourcePerspectiveFromEnv(env = process.env) {
+  const id = String(env?.ASTRANULL_PROBE_PERSPECTIVE_ID ?? '').trim() || 'default';
+  const label = String(env?.ASTRANULL_PROBE_PERSPECTIVE_LABEL ?? '').trim() || id;
+  return Object.freeze({ id, label });
+}

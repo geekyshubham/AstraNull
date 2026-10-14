@@ -28,6 +28,8 @@ function restoreEnv() {
 function wafEnabledEnv() {
   return {
     ...process.env,
+    NODE_ENV: 'test',
+    ASTRANULL_AUTH_MODE: 'dev-headers',
     ASTRANULL_NO_PERSIST: '1',
     ASTRANULL_WAF_POSTURE_ENABLED: '1',
     ASTRANULL_CONNECTORS_ENABLED: '1',
@@ -2158,6 +2160,7 @@ describe('WAF orchestrator API (dev-json)', () => {
     assertSerializedSafe(executed.json, 'retest execute response');
 
     const delegatedRunId = executed.json.delegated_jobs[0].test_run_id;
+    const delegatedCheckId = executed.json.delegated_jobs[0].check_id;
 
     const notReady = await request(baseUrl, 'POST', `/v1/waf/retests/${retestId}/complete`, {
       headers: engineer,
@@ -2167,13 +2170,13 @@ describe('WAF orchestrator API (dev-json)', () => {
 
     const run = getStore().testRuns.find((r) => r.id === delegatedRunId);
     run.status = 'verdicted';
-    run.check_id = 'waf.marker_rule.safe';
+    run.check_id = delegatedCheckId;
     run.probe_job_id = executed.json.delegated_jobs[0].probe_job_id;
     getStore().verdicts.push({
       id: 'ver_integration_retest',
       tenant_id: 'ten_demo',
       test_run_id: delegatedRunId,
-      check_id: 'waf.marker_rule.safe',
+      check_id: delegatedCheckId,
       verdict: 'protected',
       confidence: 'medium',
       created_at: new Date().toISOString(),

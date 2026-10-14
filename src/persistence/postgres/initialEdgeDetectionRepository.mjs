@@ -22,10 +22,10 @@ export function createInitialEdgeDetectionRepository(pool) {
       return map(rows[0]);
     }),
     claim: (ctx, { limit, now }) => withTenantContext(pool, ctx.tenantId, async (client) => {
-      const { rows } = await client.query(`WITH due AS (
+      const { rows } = await client.query(`WITH due AS MATERIALIZED (
         SELECT tenant_id, target_id FROM target_initial_edge_detections
-        WHERE tenant_id = $1 AND next_attempt_at <= $2::timestamptz
-          AND (status = 'queued' OR (status = 'leased' AND lease_expires_at <= $2::timestamptz))
+        WHERE tenant_id = $1 AND next_attempt_at <= GREATEST($2::timestamptz, clock_timestamp())
+          AND (status = 'queued' OR (status = 'leased' AND lease_expires_at <= GREATEST($2::timestamptz, clock_timestamp())))
         ORDER BY next_attempt_at, target_id LIMIT $3 FOR UPDATE SKIP LOCKED
       ) UPDATE target_initial_edge_detections request SET status = 'leased', lease_token = $4,
         lease_expires_at = $2::timestamptz + interval '60 seconds', attempts = request.attempts + 1

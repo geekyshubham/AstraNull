@@ -720,7 +720,8 @@ describe('complete-reader Postgres/readiness parity', () => {
     const world = assuranceWorld({ targetCount: 2, checkCount: 2 }); addAssuredObservation(world);
     world.findings.push({ id: 'f', tenant_id: world.tenantId, severity: 'high', status: 'accepted_risk' });
     assert.deepEqual(await assess(world), { ...projectReadiness(world), persistence: 'postgres' });
-    assert.equal((await assess(world)).score, 15);
+    assert.equal((await assess(world)).score, 25);
+    assert.equal((await assess(world)).findings.accepted_risk_count, 1);
   });
   it('uses complete cohorts beyond the 500-run feed and never silently truncates the denominator', async () => {
     const world = assuranceWorld({ targetCount: 501 }); for (const target of world.targets) addAssuredObservation(world, { target });

@@ -1,0 +1,60 @@
+/* Probe outcome evidence: chips, per-placement table, network facts. Text carries meaning; tone reinforces. */
+
+.poe { display: grid; gap: var(--space-3); min-width: 0; font-size: var(--text-sm); }
+.poe-run { display: grid; gap: var(--space-3); padding: var(--space-4) 0; border-top: 1px solid var(--border-soft); }
+.poe-run-item { display: grid; gap: var(--space-2); }
+.poe-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.poe-label { margin: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.poe-muted { color: var(--fg-2); font-size: var(--text-xs); }
+.poe-sub { display: block; margin-top: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
+.poe-scope { margin: 0; color: var(--fg-2); line-height: 1.5; }
+.poe-footnote { margin: 0; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
+.poe-footnote b { color: var(--fg); font-weight: 600; }
+
+.poe-callout { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); margin: 0; padding: var(--space-3) var(--space-4); border: 1px solid color-mix(in oklab, var(--warn), transparent 50%); border-radius: var(--radius-md); line-height: 1.5; }
+.poe-callout > svg { margin-top: 3px; color: var(--warn); }
+.poe-callout[data-tone='danger'] { border-color: color-mix(in oklab, var(--danger), transparent 45%); }
+.poe-callout[data-tone='danger'] > svg { color: var(--danger); }
+
+.poe-table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-md); }
+.poe-table { min-width: 34rem; }
+.poe-table th, .poe-table td { vertical-align: top; }
+.poe-table code, .poe code { font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.poe-control-row th { font-weight: 500; color: var(--fg-2); }
+
+.poe-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr)); gap: var(--space-2) var(--space-4); margin: 0; }
+.poe-facts > div { display: grid; gap: var(--space-1); align-content: start; }
+.poe-facts dt { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.poe-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.poe-network { display: grid; gap: var(--space-3); }
+.poe-parity { display: grid; gap: var(--space-2); }
+.poe-parity ul { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.poe-parity li { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.poe-parity li b { min-width: 3rem; font-family: var(--font-mono); font-size: var(--text-xs); }
+.poe-methods { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0; list-style: none; }
+.poe-methods li { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+.poe-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin: 0; padding-top: var(--space-2); border-top: 1px dashed var(--border-soft); color: var(--fg-2); font-size: var(--text-xs); }
+.poe-meta > div { display: inline-flex; gap: var(--space-1); }
+.poe-meta dt::after { content: ':'; }
+.poe-meta dd { margin: 0; }
+
+.poe-term { position: relative; display: inline-flex; align-items: center; gap: var(--space-1); }
+.poe-help { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--fg-2); cursor: help; }
+.poe-help:hover { color: var(--fg); background: var(--wash-strong); }
+.poe-help:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 1px; }
+@media (pointer: coarse) { .poe-help { width: 44px; height: 44px; } }
+.poe-tip { position: absolute; top: calc(100% + var(--space-1)); left: 0; z-index: 5; display: none; width: max-content; max-width: min(22rem, 80vw); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); font-size: var(--text-xs); font-weight: 400; line-height: 1.45; text-transform: none; letter-spacing: normal; box-shadow: 0 6px 18px color-mix(in oklab, var(--bg), transparent 40%); }
+.poe-help:hover + .poe-tip, .poe-help:focus-visible + .poe-tip, .poe-tip:hover { display: block; }
+.poe-table tbody th { font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: normal; text-transform: none; color: var(--fg); text-align: start; }
+.poe-table tbody :is(th, td) { white-space: normal; }
+.poe-perspective { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: 0; }
+
+.poe-ports { display: grid; gap: var(--space-2); }
+.poe-table.poe-port-table { min-width: 24rem; }
+.poe-port-table tbody th { font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
+.poe-note { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border: 1px dashed var(--border); border-radius: var(--radius-md); color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
+.poe-note > svg { margin-top: 2px; color: var(--fg-2); }
+.poe-note b { color: var(--fg); font-weight: 600; }
+.poe-perspective-block { display: grid; gap: var(--space-2); }

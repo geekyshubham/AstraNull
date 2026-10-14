@@ -357,11 +357,11 @@ async function getJson(path: string, headers: Record<string, string>) {
 async function requestWithHeaders(
   path: string,
   headers: Record<string, string>,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {}
+  options: { method?: string; body?: unknown; signal?: AbortSignal; headers?: Record<string, string> } = {}
 ) {
   const response = await fetchWithRateLimitRetry(path, {
     method: options.method ?? 'GET',
-    headers,
+    headers: options.headers ? { ...headers, ...options.headers } : headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal
   });
@@ -383,7 +383,7 @@ export async function requestJson(
   config: PortalConfig,
   session: Session,
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {}
+  options: { method?: string; body?: unknown; signal?: AbortSignal; headers?: Record<string, string> } = {}
 ) {
   return requestWithHeaders(path, buildApiHeaders(config, session), options);
 }

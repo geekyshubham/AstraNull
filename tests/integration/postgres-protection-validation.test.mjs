@@ -13,6 +13,7 @@ import { getCheckById } from '../../src/contracts/checks.mjs';
 import { deriveRunEvidenceStamp, approvedScenarioVersion } from '../../src/lib/checkDefinitionVersion.mjs';
 import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
 import { projectProtectionMatrixRows } from '../../src/lib/protectionValidationReport.mjs';
+import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
 import { createAuditRepository } from '../../src/persistence/postgres/auditRepository.mjs';
 import { closePgPool, createPgPool } from '../../src/persistence/postgres/pool.mjs';
 import { createProtectionValidationRepository } from '../../src/persistence/postgres/protectionValidationRepository.mjs';
@@ -427,7 +428,8 @@ describe('actual PostgreSQL report scope and performed classification', () => {
           JSON.stringify({ assurance_scope: deriveAssuranceScope({ target, targetGroup: group, policy }) }), observed]);
       const metadata = { source_perspective: 'public-worker-eu', complete: true, classifier_version: 'marker-comparison-v4',
         comparison_complete: true, planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy',
-        permitted_baseline: { status_code: 200 }, marker_results: [{ blocked: true, allowed: false }], enforcement: 'enforced' };
+        permitted_baseline: { status_code: 200 }, marker_results: [{ blocked: true, allowed: false }], enforcement: 'enforced',
+        grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION };
       await pool.query(`INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json)
         VALUES ('event_report_live', $1, 'run_report_live', 'probe_result', 'signed_probe', 'nonce_report_live', $2, $2, $3::jsonb)`, [TENANT, observed, JSON.stringify(metadata)]);
       const relation = { ...normalizeEntryPathDeclaration({ owner: 'Report Team', purpose: 'Actual report regression', entry_target_id: target.id, relation_kind: 'primary_route',
@@ -441,13 +443,30 @@ describe('actual PostgreSQL report scope and performed classification', () => {
           run_status: 'verdicted', source_perspective: 'public-worker-eu',
         }] }] }), id: 'evaluation_report_live' };
       const repository = createProtectionValidationRepository(pool);
-      const input = () => repository.loadComparisonEvidence(CTX, { runIds: ['run_report_live'], asOf: NOW });
+      const input = async () => {
+        const loaded = await repository.loadComparisonEvidence(CTX, { runIds: ['run_report_live'], asOf: NOW });
+        for (const r of loaded.runs) {
+          const event = loaded.events.find((e) => e.test_run_id === r.id);
+          if (event) {
+            r.probe_metadata = event.metadata_json ?? event.metadata;
+          }
+        }
+        return loaded;
+      };
       const project = (evidenceInputs) => projectProtectionMatrixRows({ tenantId: TENANT, targets: [target],
         entryPaths: [relation], pathExpectations: [expectation], pathEvaluations: [evaluation], checkCatalog: [check], evidenceInputs, now: NOW }).rows[0];
       const first = await input();
       assert.deepEqual(first.groups.map((row) => row.id), [GROUP]);
       assert.deepEqual(first.policies.map((row) => row.id), [policy.id]);
       assert.equal(project(first).current_assurance.status, 'tested_path_scenario_only', JSON.stringify(project(first).current_assurance));
+      const unversioned = {
+        ...first,
+        runs: first.runs.map((r) => ({ ...r, probe_metadata: { ...r.probe_metadata, grading_version: undefined, signature_corpus_version: undefined } })),
+        events: first.events.map((e) => ({ ...e, metadata_json: { ...e.metadata_json, grading_version: undefined, signature_corpus_version: undefined } })),
+      };
+      const unversionedAssurance = project(unversioned).current_assurance;
+      assert.equal(unversionedAssurance.status, 'not_established');
+      assert.ok(unversionedAssurance.reasons.includes('version_not_reported'));
       const custody = JSON.stringify([first.runs, first.events, evaluation]);
       await pool.query(`UPDATE events SET nonce_hash = 'another_run_nonce' WHERE id = 'event_report_live'`);
       assert.ok(project(await input()).current_assurance.reasons.includes('referenced_signed_evidence_unverified'));

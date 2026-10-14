@@ -57,6 +57,8 @@ export const PROBE_EVENT_RESERVED_METADATA_KEYS = new Set([
   'probe_worker_id',
   'probe_job_id',
   'source_perspective',
+  'claimed_perspective_id',
+  'perspective_authenticated',
   'execution_receipt',
   'safety_attestation',
   'profile_kind',
@@ -69,6 +71,16 @@ export const PROBE_EVENT_RESERVED_METADATA_KEYS = new Set([
   'destination_vetting_resolver_attempts',
   'destination_resolver_attempts',
   'total_operations',
+  'declarations',
+  'expected_behavior',
+  'declared_limit',
+  'origin_binding',
+  'check_id',
+  'target_id',
+  'test_run_id',
+  'tenant_id',
+  'threshold',
+  'window_seconds',
 ]);
 
 function objectContainsRawPacketFields(value) {

@@ -87,7 +87,7 @@ test('a blocking WAF is graded protected', async () => {
   const fetchFn = async (url, init) => {
     calls += 1;
     const carriesMarker = String(url).includes('astranull') || Boolean(init?.headers?.['x-astranull-marker']);
-    return carriesMarker ? okResponse(403, { 'cf-mitigated': 'challenge' }) : okResponse(200);
+    return carriesMarker ? okResponse(403, { 'x-waf-block': '1' }) : okResponse(200);
   };
   const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'ssrf', fetchFn });
   assert.equal(result.posture, 'protected');
@@ -113,17 +113,21 @@ test('probe honours the request bound across all placements', async () => {
 
 test('probe honors a worker-reduced one-request cap and cannot grade baseline-only evidence', async () => {
   let calls = 0;
+  let seen = null;
   const result = await runWafClassMarkerProbe({
-    url: 'https://target.example/signed-path',
+    url: 'https://target.example/signed-path?keep=1',
     marker_class: 'crlf',
     max_requests: 1,
-    fetchFn: async () => { calls += 1; return okResponse(200); },
+    fetchFn: async (url) => { calls += 1; seen = String(url); return okResponse(200); },
   });
   assert.equal(calls, 1);
   assert.equal(result.requests_sent, 1);
   assert.equal(result.max_requests, 1);
   assert.equal(result.posture, 'inconclusive');
   assert.deepEqual(result.marker_results, []);
+  const called = new URL(seen);
+  assert.equal(called.pathname, '/signed-path');
+  assert.equal(called.searchParams.get('keep'), '1');
 });
 
 test('probe stops after the first transport failure', async () => {
@@ -235,23 +239,46 @@ test('one blocked marker plus an untested or inconclusive leg cannot earn full p
   for (const max_requests of [2, 3]) {
     let requests = 0;
     const result = await runWafClassMarkerProbe({ url: 'https://target.example/api', marker_class: 'ssrf', max_requests,
-      fetchFn: async () => (++requests === 1 ? okResponse(200) : okResponse(403, { 'cf-mitigated': 'challenge' })),
+      fetchFn: async () => (++requests === 1 ? okResponse(200) : okResponse(403, { 'x-waf-block': '1' })),
     });
     assert.equal(result.posture, 'inconclusive');
     assert.equal(result.comparison_complete, false);
-    assert.equal(result.completed_marker_legs < result.planned_marker_legs, true);
+    assert.equal(result.readiness_conclusion, false);
   }
 });
 
 
 test('an allowed partial marker sample or unhealthy baseline never earns exposure or readiness', async () => {
-  for (const baselineStatus of [200, 503]) {
-    let count = 0;
-    const result = await runWafClassMarkerProbe({ url: 'https://fixture.example.test/', marker_class: 'ssrf', max_requests: 2,
-      fetchFn: async () => okResponse(++count === 1 ? baselineStatus : 200) });
-    assert.equal(result.posture, 'inconclusive');
-    assert.equal(result.comparison_complete, false);
-    assert.equal(result.readiness_conclusion, false);
-    assert.equal(result.marker_results[0].allowed, baselineStatus === 200);
-  }
+  const unhealthy = await runWafClassMarkerProbe({ url: 'https://fixture.example.test/', marker_class: 'ssrf', max_requests: 2,
+    fetchFn: async () => okResponse(503) });
+  assert.equal(unhealthy.posture, 'inconclusive');
+  assert.equal(unhealthy.comparison_complete, false);
+  assert.equal(unhealthy.readiness_conclusion, false);
+
+  const baselineOnly = await runWafClassMarkerProbe({ url: 'https://fixture.example.test/', marker_class: 'ssrf', max_requests: 1,
+    fetchFn: async () => okResponse(200) });
+  assert.equal(baselineOnly.posture, 'inconclusive');
+  assert.equal(baselineOnly.comparison_complete, false);
+  assert.deepEqual(baselineOnly.marker_results, []);
+});
+
+test('scanner_user_agent is a User-Agent-only managed-rule marker', async () => {
+  assert.equal(WAF_CLASS_MARKERS.scanner_user_agent, 'sqlmap/1.8 (astranull-inert)');
+  assert.ok(isInertMarker(WAF_CLASS_MARKERS.scanner_user_agent));
+  const inits = [];
+  const result = await runWafClassMarkerProbe({
+    url: 'https://target.example/',
+    marker_class: 'scanner_user_agent',
+    fetchFn: async (url, init) => {
+      inits.push({ url: String(url), headers: init.headers });
+      const ua = init?.headers?.['user-agent'] ?? '';
+      return /sqlmap/i.test(ua) ? okResponse(403, { 'x-waf-block': '1' }) : okResponse(200);
+    },
+  });
+  assert.equal(result.assurance_scope, 'managed_rule_marker');
+  assert.deepEqual(result.placements.map((row) => row.placement), ['user_agent']);
+  const markerCalls = inits.filter((row) => /sqlmap/i.test(row.headers['user-agent'] ?? ''));
+  assert.equal(markerCalls.length, 1);
+  assert.equal(new URL(markerCalls[0].url).pathname, '/');
+  assert.equal([...new URL(markerCalls[0].url).searchParams.keys()].some((key) => key.startsWith('astranull_')), false);
 });

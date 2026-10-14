@@ -556,6 +556,8 @@ export function normalizeEvidenceContext(payload, input) {
         explanation: text(answer.explanation),
         expected: text(answer.expected_behavior),
         observed: text(answer.observed_behavior),
+        reason: text(answer.explanation_reason),
+        requiredInput: text(answer.required_input),
       }
       : null,
     limitations: list(answer?.limitations).map(text).filter(Boolean),
@@ -683,7 +685,7 @@ export function fallbackContextFromRecord(input, source) {
         ...base,
         subject: { target_id: runTarget, check_id: runCheck, test_run_id: ref.test_run_id, run_status: text(body.status) },
         answer: verdict
-          ? { outcome: text(verdict.verdict ?? verdict.result), explanation: text(verdict.explanation), limitations: ['external_only', 'bounded_check_not_capacity'] }
+          ? { outcome: text(verdict.verdict ?? verdict.result), explanation: text(verdict.explanation), explanation_reason: text(verdict.explanation_reason), required_input: text(record(body.summary)?.required_input_missing), limitations: ['external_only', 'bounded_check_not_capacity'] }
           : null,
         primary: { test_run_id: ref.test_run_id, verdict_id: text(verdict?.id ?? verdict?.verdict_id), evidence_ids: evidenceIds, observed_at: text(body.completed_at ?? verdict?.created_at ?? body.started_at), integrity: null },
         latest_distinct: null,

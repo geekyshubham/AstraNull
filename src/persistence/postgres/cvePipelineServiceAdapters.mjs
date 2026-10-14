@@ -1,4 +1,5 @@
 import { loadRuntimeConfig } from '../../config.mjs';
+import { wafPostureEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import {
   assertCvePlaybookApprovable,
   assertCvePlaybookCoordinatedRetestAllowed,
@@ -42,9 +43,8 @@ function contractError(err, fallbackStatus = 400) {
   };
 }
 
-function wafFeatureDisabled() {
-  const { featureFlags } = loadRuntimeConfig();
-  return featureFlags.wafPostureEnabled !== true;
+function wafFeatureDisabled(ctx) {
+  return !wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
 }
 
 function featureDisabledResponse() {
@@ -271,13 +271,13 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
 
   return {
     async listCvePipelineItems(ctx) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const items = await cveRepo.listCvePipelineItems(ctx);
       return { items: items.map((item) => formatPipelineItem(item)) };
     },
 
     async ingestCveFeed(ctx, feedItems = []) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       if (!Array.isArray(feedItems)) {
         return {
           error: 'invalid_cve_feed_request',
@@ -357,7 +357,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async createCvePipelineItem(ctx, body = {}) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       try {
         validateCvePipelineItem(body);
         const normalized = normalizeCvePipelineItem(body);
@@ -390,7 +390,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async triageCvePipelineItem(ctx, id) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, id);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -430,7 +430,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async matchCveAssets(ctx, id) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, id);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -499,7 +499,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async createRecommendation(ctx, matchId, vendor) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const matchRecord = await cveRepo.getCveAssetMatch(ctx, matchId);
       if (!matchRecord) {
         return { error: 'cve_asset_match_not_found', status: 404 };
@@ -564,7 +564,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async executeSafeCveValidation(ctx, pipelineItemId, body = {}) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, pipelineItemId);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -750,7 +750,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async executeCvePostMitigationRetest(ctx, pipelineItemId, body = {}) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, pipelineItemId);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -1063,7 +1063,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async patchCveItemStage(ctx, id, stage) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, id);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -1100,7 +1100,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async getCveMitigationPlaybook(ctx, pipelineItemId) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, pipelineItemId);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -1116,7 +1116,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async approveCveMitigationPlaybook(ctx, pipelineItemId, body = {}) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, pipelineItemId);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };
@@ -1207,7 +1207,7 @@ export function createPostgresCvePipelineServices(pool, options = {}) {
     },
 
     async executeCoordinatedCveRetest(ctx, pipelineItemId, body = {}) {
-      if (wafFeatureDisabled()) return featureDisabledResponse();
+      if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
       const item = await cveRepo.getCvePipelineItem(ctx, pipelineItemId);
       if (!item) {
         return { error: 'cve_pipeline_item_not_found', status: 404 };

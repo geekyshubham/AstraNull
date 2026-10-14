@@ -5,7 +5,7 @@ import { ConfirmModal, FormModal } from '../../lib/crud-ui';
 import { apiErrorMessage } from '../../lib/error-messages';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
-import { selectableChecks, summarizeSelection } from '../../lib/check-picker.mjs';
+import { selectableChecks, summarizeSelection, withTargetDependentChecks } from '../../lib/check-picker.mjs';
 import {
   MAX_SCAN_CHECKS,
   SCAN_RECURRENCE_CADENCES,
@@ -125,11 +125,55 @@ export function ValidationScanLauncher({
     return () => { cancelled = true; };
   }, [open, config, session, declaredTargets, initialTargets]);
 
+  const [declarationsByTarget, setDeclarationsByTarget] = useState<Record<string, DataItem | null>>({});
+  const [perspectiveCount, setPerspectiveCount] = useState(1);
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    void requestJson(config, session, '/v1/probe-perspectives')
+      .then((payload) => { if (!cancelled) setPerspectiveCount(itemArray((payload as DataItem).items).length); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [open, config, session]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const missing = form.targetIds.filter((id) => !(id in declarationsByTarget)).slice(0, 25);
+    if (!missing.length) return undefined;
+    let cancelled = false;
+    void Promise.all(missing.map((id) => requestJson(config, session, `/v1/targets/${encodeURIComponent(id)}/control-declarations`)
+      .then((payload) => [id, payload && typeof payload === 'object' ? payload as DataItem : null] as const)
+      .catch(() => [id, null] as const)))
+      .then((entries) => { if (!cancelled) setDeclarationsByTarget((current) => ({ ...current, ...Object.fromEntries(entries) })); });
+    return () => { cancelled = true; };
+  }, [open, config, session, form.targetIds, declarationsByTarget]);
+
+  const [catalogByTarget, setCatalogByTarget] = useState<Record<string, DataItem[] | null>>({});
+  useEffect(() => {
+    if (!open) return;
+    setCatalogByTarget({});
+    setDeclarationsByTarget({});
+  }, [open]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const missing = form.targetIds.filter((id) => !(id in catalogByTarget)).slice(0, 25);
+    if (!missing.length) return undefined;
+    let cancelled = false;
+    void Promise.all(missing.map((id) => requestJson(config, session, `/v1/checks?scope=all&target_id=${encodeURIComponent(id)}`)
+      .then((payload) => [id, itemArray((payload as DataItem)?.items)] as const)
+      .catch(() => [id, null] as const)))
+      .then((entries) => { if (!cancelled) setCatalogByTarget((current) => ({ ...current, ...Object.fromEntries(entries) })); });
+    return () => { cancelled = true; };
+  }, [open, config, session, form.targetIds, catalogByTarget]);
+  const pickerChecks = useMemo(
+    () => withTargetDependentChecks(checks, form.targetIds.map((id) => catalogByTarget[id])),
+    [checks, form.targetIds, catalogByTarget]
+  );
+
   const recurrenceOptions: SelectOption[] = [
     { value: 'none', label: 'Does not repeat' },
     ...SCAN_RECURRENCE_CADENCES.map((cadence) => ({ value: cadence, label: humanize(cadence) }))
   ];
-  const eligibleChecks = useMemo(() => selectableChecks(checks).checks, [checks]);
+  const eligibleChecks = useMemo(() => selectableChecks(pickerChecks).checks, [pickerChecks]);
   const selectedTargets = useMemo(() => targets.filter((target) => form.targetIds.includes(getString(target, ['id']))), [targets, form.targetIds]);
   const summary = useMemo(() => summarizeSelection({
     checks: eligibleChecks,
@@ -224,13 +268,16 @@ export function ValidationScanLauncher({
             <legend>Checks</legend>
             <div className="full">
               <CheckPicker
-                checks={checks}
+                checks={pickerChecks}
                 selectedIds={form.checkIds}
                 onChange={(next) => update({ checkIds: next })}
                 targets={selectedTargets}
                 scope="targets"
                 disabled={busy || !form.targetIds.length}
                 maxSelected={MAX_SCAN_CHECKS}
+                declarationsByTarget={declarationsByTarget}
+                catalogByTarget={catalogByTarget}
+                perspectiveCount={perspectiveCount}
               />
             </div>
             {fieldErrors.check_ids ? <p className="form-error full" role="alert">{fieldErrors.check_ids}</p> : null}

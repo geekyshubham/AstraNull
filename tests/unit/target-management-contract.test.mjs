@@ -63,4 +63,48 @@ describe('target management trust boundary', () => {
       'source',
     ]);
   });
+
+  it('strips control_declarations from free-form metadata', () => {
+    const result = sanitizeClientTargetMetadata({
+      notes: 'ok',
+      control_declarations: { version: 1, waf: { expected_action: 'block' } },
+    });
+    assert.equal(result.metadata.notes, 'ok');
+    assert.equal(result.metadata.control_declarations, undefined);
+    assert.ok(result.dropped_fields.includes('control_declarations'));
+  });
+
+  it('preserves stored control_declarations on a metadata-only patch', () => {
+    const current = {
+      kind: 'fqdn',
+      value: 'app.example.com',
+      metadata: {
+        notes: 'old',
+        control_declarations: { version: 1, waf: { expected_action: 'block' } },
+      },
+    };
+    const result = normalizeTargetInput({ metadata: { notes: 'new' } }, { current });
+    assert.equal(result.metadata.notes, 'new');
+    assert.deepEqual(result.metadata.control_declarations, { version: 1, waf: { expected_action: 'block' } });
+    assert.equal(result.dropped_fields.includes('control_declarations'), false);
+  });
+
+  it('drops a client-supplied control_declarations blob and keeps the stored document', () => {
+    const current = {
+      kind: 'fqdn',
+      value: 'app.example.com',
+      metadata: {
+        control_declarations: { version: 1, waf: { expected_action: 'block' } },
+      },
+    };
+    const result = normalizeTargetInput({
+      metadata: {
+        notes: 'new',
+        control_declarations: { version: 1, waf: { expected_action: 'challenge' } },
+      },
+    }, { current });
+    assert.equal(result.metadata.notes, 'new');
+    assert.deepEqual(result.metadata.control_declarations, { version: 1, waf: { expected_action: 'block' } });
+    assert.ok(result.dropped_fields.includes('control_declarations'));
+  });
 });

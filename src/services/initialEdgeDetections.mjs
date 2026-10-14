@@ -5,6 +5,7 @@ import { scanIncludesTarget } from '../lib/targetExecutionScope.mjs';
 import { isArchivedTarget } from './targetGroups.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import * as testRuns from './testRuns.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
 
 /** Initial observations share the normal run path and all its execution gates. */
 export function createInitialEdgeDetectionService(deps) {
@@ -25,7 +26,7 @@ export function createInitialEdgeDetectionService(deps) {
             if (latest && ['running', 'collecting', 'planned', 'verdicted', 'completed'].includes(latest.status)
               && Date.parse(latest.created_at) >= Date.parse(request.requested_at)) {
               outcome = { status: 'dispatched', test_run_id: latest.id, blocked_reason: null };
-            } else if (runtimeConfig?.featureFlags?.wafPostureEnabled !== true) outcome = { status: 'queued', blocked_reason: 'waf_feature_disabled' };
+            } else if (!wafPostureEnabledFor(runtimeConfig, ctx.tenantId)) outcome = { status: 'queued', blocked_reason: 'waf_feature_disabled' };
             else if (await deps.activeScan(actor, target)) outcome = { status: 'queued', blocked_reason: 'target_validation_active' };
             else if (deps.ownership && !(await deps.ownership(actor, target))) outcome = { status: 'queued', blocked_reason: 'ownership_not_verified' };
             else {

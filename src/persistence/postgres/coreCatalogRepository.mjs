@@ -4,7 +4,14 @@ import {
   targetTagsFromRecord,
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
+import {
+  CONTROL_DECLARATIONS_METADATA_KEY,
+  controlDeclarationsIfMatch,
+  controlDeclarationsRevision,
+  emptyControlDeclarations,
+} from '../../contracts/controlDeclarations.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { connectorsEnabledFor } from '../../lib/tenantFeatureAccess.mjs';
 import {
   DEMO_AUTO_VERIFY_SOURCE_KIND,
   DEMO_AUTO_VERIFY_STATE,
@@ -1418,12 +1425,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
         let authoritativeConnector = null;
         const authoritativeSnapshots = new Map();
         if (connector) {
-          const feature = await client.query(
-            `SELECT enabled FROM tenant_connector_features WHERE tenant_id = $1`,
-            [ctx.tenantId],
-          );
-          if (feature.rows[0]?.enabled !== true) {
-            return { error: 'connectors_feature_disabled', status: 404 };
+          if (!connectorsEnabledFor(null, ctx.tenantId)) {
+            const feature = await client.query(
+              `SELECT enabled FROM tenant_connector_features WHERE tenant_id = $1`,
+              [ctx.tenantId],
+            );
+            if (feature.rows[0]?.enabled !== true) {
+              return { error: 'connectors_feature_disabled', status: 404 };
+            }
           }
           const { rows: connectorRows } = await client.query(
             `SELECT id, provider, name, status, secret_id, last_success_at,
@@ -1719,6 +1728,50 @@ export function createCoreCatalogRepository(pool, options = {}) {
           deleted_by: deletedBy,
           paused_policy_count: pausedPolicyIds.length,
         };
+      });
+    },
+
+    async getTargetControlDeclarations(ctx, targetId) {
+      if (!ctx?.tenantId || !targetId) return null;
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT metadata_json FROM targets
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+          [targetId, ctx.tenantId],
+        );
+        if (!rows[0]) return null;
+        const metadata = asObject(rows[0].metadata_json);
+        const stored = metadata[CONTROL_DECLARATIONS_METADATA_KEY];
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return emptyControlDeclarations();
+        return stored;
+      });
+    },
+
+    async putTargetControlDeclarations(ctx, targetId, declarations, { ifMatch } = {}) {
+      if (!ctx?.tenantId || !targetId) return null;
+      return withCatalogMutation(pool, ctx, async (client) => {
+        const existing = await client.query(
+          `SELECT metadata_json FROM targets
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+           FOR UPDATE`,
+          [targetId, ctx.tenantId],
+        );
+        if (!existing.rows[0]) return null;
+        const metadata = asObject(existing.rows[0].metadata_json);
+        const stored = metadata[CONTROL_DECLARATIONS_METADATA_KEY];
+        const before = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : null;
+        const currentRevision = controlDeclarationsRevision(before);
+        if (!controlDeclarationsIfMatch(ifMatch, currentRevision)) {
+          return { error: 'declarations_conflict', status: 412, current: before ?? emptyControlDeclarations() };
+        }
+        const written = { ...declarations, revision: currentRevision + 1 };
+        const next = { ...metadata, [CONTROL_DECLARATIONS_METADATA_KEY]: written };
+        await client.query(
+          `UPDATE targets SET metadata_json = $3::jsonb
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+          [targetId, ctx.tenantId, JSON.stringify(next)],
+        );
+        return { before, declarations: written };
       });
     },
   };

@@ -31,6 +31,8 @@ import {
   FIREWALL_SIDE_STATE_LABELS,
   FIREWALL_STATUS_LABELS,
   FIREWALL_STATUS_TONES,
+  firewallItemStatus,
+  firewallReasonLabel,
   firewallDraftErrors,
   firewallExpectationBody,
   firewallScopeText,
@@ -645,14 +647,14 @@ function FirewallComparisonResult({
           const expanded = openItem === item.expectation_id;
           const retestRef = item.evidence_refs.find((ref) => ref.target_id === targetId && ref.check_id) ?? null;
           return (
-            <li key={item.expectation_id} className="pv-card" data-status={item.status}>
+            <li key={item.expectation_id} className="pv-card" data-status={firewallItemStatus(item)}>
               <div className="pv-card-head">
                 <div className="pv-card-title">
                   <strong>{firewallScopeText(expectationById.get(item.expectation_id))}</strong>
                   <span className="td-muted small">Before: {labelFrom(FIREWALL_SIDE_STATE_LABELS, item.pre_state)} · After: {labelFrom(FIREWALL_SIDE_STATE_LABELS, item.post_state)}{item.expectation_met === true ? ' · expectation met' : item.expectation_met === false ? ' · expectation not met' : ''}</span>
                 </div>
                 <div className="pv-actions">
-                  <Badge tone={toneFrom(FIREWALL_STATUS_TONES, item.status)}>{labelFrom(FIREWALL_STATUS_LABELS, item.status)}</Badge>
+                  <Badge tone={toneFrom(FIREWALL_STATUS_TONES, firewallItemStatus(item))}>{labelFrom(FIREWALL_STATUS_LABELS, firewallItemStatus(item))}</Badge>
                   {item.gap_kind ? <Badge tone="danger">{labelFrom(FIREWALL_GAP_LABELS, item.gap_kind)}</Badge> : null}
                   <Button size="sm" variant="ghost" aria-expanded={expanded} aria-controls={`pv-fw-item-${item.expectation_id}`} onClick={() => setOpenItem(expanded ? '' : item.expectation_id)}>{expanded ? 'Hide evidence' : 'Inspect'}</Button>
                 </div>
@@ -660,7 +662,7 @@ function FirewallComparisonResult({
               {expanded ? (
                 <div id={`pv-fw-item-${item.expectation_id}`} className="pv-section">
                   {item.gap_kind ? <p className="small">An observed acceptance gap for this sampled source and time. The responsible rule or root cause is not identified.</p> : null}
-                  {item.reasons.length ? <p className="small">Reasons: {item.reasons.map((reason) => reason.replace(/_/g, ' ')).join('; ')}.</p> : null}
+                  {item.reasons.length ? <p className="small">Reasons: {item.reasons.map(firewallReasonLabel).join('; ')}.</p> : null}
                   {item.compatibility_reasons.length ? <p className="small">{compatibilityView({ comparable: false, stale: false, reasons: item.compatibility_reasons }).reasons.map((reason) => reason.label).join('; ')}.</p> : null}
                   <LimitationList values={item.limitations} />
                   <EvidenceRefList refs={item.evidence_refs} focusPrefix={`pv-fwc-${comparison.id}-${item.expectation_id}`} />

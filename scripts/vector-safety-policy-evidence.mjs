@@ -34,7 +34,7 @@ const CUSTOMER_APPROVAL_LEVEL = 'customer_self_service';
 const SOC_APPROVAL_LEVEL = 'soc_request_only';
 
 const NEW_PROBE_KIND_SAFETY_RULES = Object.freeze({
-  reflection_service_probe: { max_requests: 2, required_fields: ['service_port', 'payload_profile', 'expected_response_shape'] },
+  reflection_service_probe: { max_requests: 4, required_fields: ['service_port', 'payload_profile', 'expected_response_shape'] },
   dns_wire_query: { max_requests: 3, required_fields: ['dns_qtype', 'dns_transport'] },
   http_method_matrix: { max_requests: 2, required_fields: [] },
   header_size_probe: { max_requests: 2, required_fields: ['oversize_header_bytes'] },

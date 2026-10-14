@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { assertPortalInitialLoad } from '../../helpers/portal-browser-failures.mjs';
 import AxeBuilder from '@axe-core/playwright';
-import { assessmentChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
+import { assessmentChecks, withTargetRunnableChecks } from '../../../apps/web/react/src/lib/domain-checks.mjs';
+import { targetRunnableIndex } from '../../../apps/web/react/src/lib/control-declarations.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import {
@@ -148,8 +149,9 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(observations.locator('.td-provider-row').filter({ hasText: 'Origin hosting' })).toContainText('Unknown');
     await expect(observations.locator('.td-provider-row').filter({ hasText: 'DNS provider' })).toContainText('Unknown');
     // Detection is not efficacy: only recorded marker counts appear, no client-side protection label.
-    await expect(observations.locator('.td-effectiveness')).toContainText('3 blocked');
-    await expect(page.locator('.target-detail-view')).not.toContainText(/Partially protecting|Protecting|Sources agree/);
+    await expect(observations.locator('.td-efficacy')).toContainText('3 markers blocked');
+    await expect(observations.locator('.td-efficacy')).toContainText('fresh concluded WAF checks');
+    await expect(page.locator('.target-detail-view')).not.toContainText(/Sources agree/);
 
     await page.getByRole('tab', { name: /Validate/ }).click();
     const panel = page.locator('.td-checks');
@@ -371,7 +373,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(panel.locator('input[name=target-run-check]:checked')).toHaveCount(0);
 
     await panel.getByRole('button', { name: /^Not run/ }).click();
-    const notRunIds = await panel.locator('.td-check[data-status="not_run"] input[name=target-run-check]').evaluateAll((inputs) => inputs.map((input) => input.value));
+    const notRunIds = await panel.locator('.td-check[data-status="not_run"] input[name=target-run-check]:not([disabled])').evaluateAll((inputs) => inputs.map((input) => input.value));
     expect(notRunIds.length).toBeGreaterThan(1);
     await panel.getByRole('button', { name: `Select not run (${notRunIds.length})`, exact: true }).click();
     await page.locator('.td-start-bar').getByRole('button', { name: `Review and start ${notRunIds.length}`, exact: true }).click();
@@ -460,7 +462,13 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     const headers = { 'x-tenant-id': PORTAL_BASELINE_IDS.tenantId, 'x-user-id': 'usr_owner', 'x-role': 'owner' };
     const selectable = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks`, { headers }).then((response) => response.json());
     const target = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/targets/${PORTAL_BASELINE_IDS.targetId}`, { headers }).then((response) => response.json());
-    expect(body.check_ids).toEqual(assessmentChecks(selectable.items, target.target).map((check) => check.check_id));
+    const targetCatalog = await page.request.get(`${getPortalPlaywrightBaseUrl()}/v1/checks?scope=all&target_id=${encodeURIComponent(PORTAL_BASELINE_IDS.targetId)}`, { headers }).then((response) => response.json());
+    const expected = assessmentChecks(withTargetRunnableChecks(selectable.items, targetCatalog.items), target.target, {
+      declarations: { version: 1 },
+      perspectiveCount: 1,
+      serverRunnableIndex: targetRunnableIndex(targetCatalog.items),
+    });
+    expect(body.check_ids).toEqual(expected.map((check) => check.check_id));
     expect(new Set(body.check_ids).size).toBe(body.check_ids.length);
     expect(accepted.steps.map((step) => step.check_id)).toEqual(body.check_ids);
     expect(new Set(accepted.steps.map((step) => step.target_id))).toEqual(new Set([PORTAL_BASELINE_IDS.targetId]));

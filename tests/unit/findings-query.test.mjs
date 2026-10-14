@@ -25,10 +25,10 @@ describe('finding status transitions', () => {
   });
 
   it('offers only reopen and start work from every closure state', () => {
-    for (const status of ['accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive']) {
+    for (const status of ['accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed', 'false_positive']) {
       assert.deepEqual(statusesOf(status), ['open', 'in_progress'], status);
     }
-    assert.deepEqual([...FINDING_CLOSURE_STATUSES].sort(), ['accepted', 'accepted_risk', 'closed', 'false_positive', 'resolved']);
+    assert.deepEqual([...FINDING_CLOSURE_STATUSES].sort(), ['accepted', 'accepted_risk', 'closed', 'false_positive', 'fix_verified', 'resolved']);
   });
 
   it('never offers the current status or the older accepted status', () => {

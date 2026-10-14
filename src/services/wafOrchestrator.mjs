@@ -2,13 +2,15 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { audit } from '../audit.mjs';
 import { loadRuntimeConfig } from '../config.mjs';
-import { getCheckById, WAF_SAFE_CHECK_IDS } from '../contracts/checks.mjs';
+import { wafPostureEnabledFor } from '../lib/tenantFeatureAccess.mjs';
+import { getCheckById, isCustomerRunnable, WAF_SAFE_CHECK_IDS } from '../contracts/checks.mjs';
 import {
   createBaselineApproval,
   createRetestRequest,
   createValidationPlan as normalizeValidationPlan,
   computeRetestVerdict,
   validateOrchestratorPlan,
+  SCENARIO_TO_CHECK,
 } from '../contracts/wafOrchestrator.mjs';
 import { newId } from '../lib/ids.mjs';
 import {
@@ -22,24 +24,14 @@ import {
 import { getStore, persistStore } from '../store.mjs';
 import { cancelTestRun, getTestRun, startTestRun } from './testRuns.mjs';
 
-const SCENARIO_TO_CHECK = Object.freeze({
-  marker: 'waf.marker_rule.safe',
-  fingerprint: 'waf.fingerprint.safe',
-  sqli_marker: 'waf.marker_rule.safe',
-  xss_marker: 'waf.marker_rule.safe',
-  rce_marker: 'waf.marker_rule.safe',
-  path_traversal_marker: 'waf.marker_rule.safe',
-  rate_limit_marker: 'waf.low_rate_limit.safe',
-  origin_bypass: 'waf.origin_bypass.safe',
-});
+const SOC_ORCHESTRATOR_CHECK_IDS = new Set(['waf.offensive_rce.soc']);
 
 const CANCELLABLE_STATES = new Set(['draft', 'scheduled', 'running']);
 const BASELINE_APPROVABLE_STATES = new Set(['proposed', 'draft']);
 const WAF_SAFE_CHECK_ID_SET = new Set(WAF_SAFE_CHECK_IDS);
 
-function wafFeatureDisabled() {
-  const { featureFlags } = loadRuntimeConfig();
-  return featureFlags.wafPostureEnabled !== true;
+function wafFeatureDisabled(ctx) {
+  return !wafPostureEnabledFor(loadRuntimeConfig(), ctx?.tenantId);
 }
 
 function featureDisabledResponse() {
@@ -173,14 +165,24 @@ function scenarioCheckId(scenarioId) {
   return SCENARIO_TO_CHECK[scenarioId] ?? null;
 }
 
-function validateWorkItemPreflight({ asset, scenario }, targets) {
+function validateWorkItemPreflight({ asset, scenario }, targets, ctx = null) {
   const checkId = scenarioCheckId(scenario);
   const check = checkId ? getCheckById(checkId) : null;
-  if (!check || !WAF_SAFE_CHECK_ID_SET.has(check.check_id)) {
+  if (!check || !(WAF_SAFE_CHECK_ID_SET.has(check.check_id)
+    || SOC_ORCHESTRATOR_CHECK_IDS.has(check.check_id))) {
     return {
       error: 'validation_plan_execution_failed',
       status: 422,
       message: 'Scenario does not map to an allowed safe WAF check.',
+    };
+  }
+  if (!isCustomerRunnable(check, ctx)) {
+    return {
+      error: 'soc_gated_check',
+      status: 403,
+      check_id: check.check_id,
+      scenario,
+      message: `Scenario '${scenario}' maps to SOC-only check ${check.check_id}; request it through the SOC offensive validation workflow instead of a self-serve plan.`,
     };
   }
 
@@ -197,9 +199,9 @@ function validateWorkItemPreflight({ asset, scenario }, targets) {
   return { check };
 }
 
-function preflightWorkItems(pendingItems, targets) {
+function preflightWorkItems(pendingItems, targets, ctx = null) {
   for (const item of pendingItems) {
-    const preflight = validateWorkItemPreflight(item, targets);
+    const preflight = validateWorkItemPreflight(item, targets, ctx);
     if (preflight.error) {
       return preflight;
     }
@@ -213,7 +215,7 @@ function delegateOneWorkItemViaStartTestRun(
   runtimeConfig,
 ) {
   const targets = targetsForTargetGroup(ctx, targetGroupId);
-  const preflight = validateWorkItemPreflight({ asset, scenario }, targets);
+  const preflight = validateWorkItemPreflight({ asset, scenario }, targets, ctx);
   if (preflight.error) {
     return preflight;
   }
@@ -263,7 +265,7 @@ function delegateOneWorkItemViaStartTestRun(
 }
 
 export function listValidationPlans(ctx) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const plans = getStore()
     .wafValidationPlans.filter((p) => p.tenant_id === ctx.tenantId)
@@ -276,7 +278,7 @@ function normalizeListFilter(value) {
 }
 
 export function listRetests(ctx, filters = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const driftEventId = normalizeListFilter(filters.drift_event_id);
   const wafAssetId = normalizeListFilter(filters.waf_asset_id);
@@ -296,7 +298,7 @@ export function listRetests(ctx, filters = {}) {
 }
 
 export function createValidationPlan(ctx, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   try {
     const normalized = normalizeValidationPlan({
@@ -344,7 +346,7 @@ export function createValidationPlan(ctx, body = {}) {
 }
 
 export function executeValidationPlan(ctx, planId, runtimeConfig = loadRuntimeConfig()) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const plan = findPlan(ctx, planId);
@@ -399,8 +401,20 @@ export function executeValidationPlan(ctx, planId, runtimeConfig = loadRuntimeCo
     };
   }
 
-  const planPreflightError = preflightWorkItems(workQueue, targets);
+  const planPreflightError = preflightWorkItems(workQueue, targets, ctx);
   if (planPreflightError) {
+    if (planPreflightError.error === 'soc_gated_check') {
+      audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId,
+        actor_role: ctx.role,
+        action: 'waf.validation_plan.blocked_soc_gated',
+        resource_type: 'waf_validation_plan',
+        resource_id: plan.id,
+        metadata: { check_id: planPreflightError.check_id, scenario: planPreflightError.scenario },
+      });
+      persistStore();
+    }
     return planPreflightError;
   }
 
@@ -537,7 +551,7 @@ export function executeValidationPlan(ctx, planId, runtimeConfig = loadRuntimeCo
 }
 
 export function cancelValidationPlan(ctx, planId) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const plan = findPlan(ctx, planId);
@@ -576,7 +590,7 @@ export function cancelValidationPlan(ctx, planId) {
 }
 
 export function approveBaseline(ctx, baselineId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const baseline = findBaseline(ctx, baselineId);
@@ -643,7 +657,7 @@ export function approveBaseline(ctx, baselineId, body = {}) {
 }
 
 export function requestRetest(ctx, driftEventId, body = {}) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const driftEvent = findDriftEvent(ctx, driftEventId);
@@ -710,7 +724,7 @@ function pendingRetestScenarios(retestPlan, delegatedJobs = []) {
 }
 
 export function executeRetest(ctx, retestId, _body = {}, runtimeConfig = loadRuntimeConfig()) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const retest = findRetestRequest(ctx, retestId);
@@ -878,7 +892,7 @@ export function executeRetest(ctx, retestId, _body = {}, runtimeConfig = loadRun
 }
 
 export function completeRetest(ctx, retestId) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
 
   const retest = findRetestRequest(ctx, retestId);
@@ -977,7 +991,7 @@ export function completeRetest(ctx, retestId) {
 }
 
 export function getScheduledPlans(ctx) {
-  if (wafFeatureDisabled()) return featureDisabledResponse();
+  if (wafFeatureDisabled(ctx)) return featureDisabledResponse();
   ensureStoreShape();
   const plans = getStore()
     .wafValidationPlans.filter(

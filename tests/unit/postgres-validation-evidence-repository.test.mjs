@@ -1290,7 +1290,8 @@ describe('complete readiness snapshot reader', () => {
     assert.match(sql, /t\.deleted_at IS NULL AND g\.deleted_at IS NULL AND g\.archived_at IS NULL/);
     assert.match(sql, /t\.created_at <= \$2::timestamptz AND g\.created_at <= \$2::timestamptz/);
     assert.match(sql, /COUNT\(\*\)::int AS count, MAX\(created_at\) AS created_at/);
-    assert.match(sql, /status IN \('open', 'in_progress', 'accepted_risk'\)/);
+    assert.match(sql, /status IN \('open', 'in_progress'\) OR status = 'accepted_risk'/);
+    assert.match(sql, /acceptance_expired/);
     assert.match(sql, /GROUP BY tenant_id, target_id, status, severity/);
     assert.doesNotMatch(sql, /\bLIMIT\b|loa_signatures|\bINSERT\b|\bUPDATE\b|\bDELETE\b/);
     assert.deepEqual(result.groups, groups); assert.deepEqual(result.targets, targets);

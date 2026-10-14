@@ -2,7 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Search, ShieldOff } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
+import { CheckClassChips, CheckClassLegend } from '../checks/check-class-chips';
 import type { DataItem } from '../../lib/types';
+import { checkPrerequisite, controlsHref, prerequisiteCta, prerequisiteSection, prerequisiteTone, targetRunnableIndex, type CheckPrerequisite } from '../../lib/control-declarations.mjs';
 import {
   checkProbeSummary,
   checkTargetCoverage,
@@ -34,6 +36,11 @@ export type CheckPickerProps = {
   targetId?: string;
   disabled?: boolean;
   maxSelected: number;
+  /** Stored control declarations per target id; a missing entry means "not loaded", so declaration-gated checks wait. */
+  declarationsByTarget?: Record<string, DataItem | null>;
+  /** Target-scoped catalogs (`GET /v1/checks?scope=all&target_id=`); the server's per-target answer wins over client guesses. */
+  catalogByTarget?: Record<string, DataItem[] | null>;
+  perspectiveCount?: number;
 };
 
 type RowState = {
@@ -41,6 +48,9 @@ type RowState = {
   id: string;
   enabled: boolean;
   compatText: string;
+  prerequisite: CheckPrerequisite | null;
+  declareHref: string;
+  declareLabel: string;
 };
 
 function SectionSelectAll({
@@ -57,7 +67,7 @@ function SectionSelectAll({
   onToggle: (ids: string[], checked: boolean) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
-  const enabledIds = rows.filter((row) => row.enabled).map((row) => row.id);
+  const enabledIds = rows.filter((row) => row.enabled && !row.prerequisite).map((row) => row.id);
   const selectedCount = enabledIds.filter((id) => selected.has(id)).length;
   const allSelected = enabledIds.length > 0 && selectedCount === enabledIds.length;
   const partiallySelected = selectedCount > 0 && !allSelected;
@@ -89,7 +99,10 @@ export function CheckPicker({
   scope,
   targetId = '',
   disabled = false,
-  maxSelected
+  maxSelected,
+  declarationsByTarget = {},
+  catalogByTarget = {},
+  perspectiveCount = 1,
 }: CheckPickerProps) {
   const baseId = useId();
   const [query, setQuery] = useState('');
@@ -103,30 +116,62 @@ export function CheckPicker({
   );
   const scopeReady = scope === 'targets' ? targets.length > 0 : Boolean(targetId);
   const limitReached = selectedIds.length >= maxSelected;
+  const runnableByTarget = useMemo(
+    () => Object.fromEntries(Object.entries(catalogByTarget).map(([id, items]) => [id, items ? targetRunnableIndex(items) : null])),
+    [catalogByTarget]
+  );
 
   function rowState(check: DataItem): RowState {
     const id = getString(check, ['check_id']);
     const coverage = checkTargetCoverage(check, scopedTargets);
     const supportedKinds = Array.isArray(check.supported_targets) ? check.supported_targets.map(String) : [];
+    const base = { check, id, prerequisite: null, declareHref: '', declareLabel: '' };
     if (!scopeReady) {
-      return { check, id, enabled: false, compatText: 'Choose an exact target first' };
+      return { ...base, enabled: false, compatText: 'Choose an exact target first' };
     }
     if (scopedTargets.length === 0) {
-      return { check, id, enabled: false, compatText: 'No active domains are selected' };
+      return { ...base, enabled: false, compatText: 'No active domains are selected' };
     }
     if (coverage.supported === 0) {
       return {
-        check,
-        id,
+        ...base,
         enabled: false,
         compatText: scope === 'target'
           ? `Not applicable to this target kind (supports ${supportedKinds.join(', ') || 'no declared kind'})`
           : `Applies to 0 of ${coverage.total} targets`
       };
     }
+    const supportedTargets = scopedTargets.filter((target) => coverage.supportedTargetIds.includes(getString(target, ['id'])));
+    const states = supportedTargets.map((target) => ({
+      target,
+      prerequisite: checkPrerequisite(check, {
+        declarations: declarationsByTarget[getString(target, ['id'])] ?? undefined,
+        perspectiveCount,
+        target,
+        serverRunnableIndex: runnableByTarget[getString(target, ['id'])] ?? null,
+      }),
+    }));
+    const waiting = states.filter((entry) => entry.prerequisite.state !== 'ready');
+    if (waiting.length) {
+      const first = waiting[0];
+      const section = prerequisiteSection(first.prerequisite);
+      const declareHref = section ? controlsHref(getString(first.target, ['id']), section) : '';
+      const declareLabel = section ? `${prerequisiteCta(first.prerequisite)} on ${getString(first.target, ['value'], 'this target')}` : '';
+      if (waiting.length === states.length) {
+        return { check, id, enabled: false, compatText: first.prerequisite.detail, prerequisite: first.prerequisite, declareHref, declareLabel };
+      }
+      return {
+        check,
+        id,
+        enabled: true,
+        compatText: `Ready on ${states.length - waiting.length} of ${states.length} targets; the rest record "${first.prerequisite.label.toLowerCase()}" and send nothing.`,
+        prerequisite: first.prerequisite,
+        declareHref,
+        declareLabel,
+      };
+    }
     return {
-      check,
-      id,
+      ...base,
       enabled: true,
       compatText: scope === 'target' ? 'Applies to the selected target' : `Applies to ${coverage.supported} of ${coverage.total} targets`
     };
@@ -179,6 +224,7 @@ export function CheckPicker({
           {excluded.total > 0 ? ` ${excluded.total} catalog ${excluded.total === 1 ? 'entry is' : 'entries are'} hidden for that reason.` : ''}
         </span>
       </p>
+      <CheckClassLegend />
       {limitReached ? (
         <p className="form-banner neutral" role="status">Selection limit reached. Remove a check to add another.</p>
       ) : null}
@@ -216,6 +262,8 @@ export function CheckPicker({
                         <span className="check-picker-row-title">
                           <strong>{getString(row.check, ['name'], row.id)}</strong>
                           {tier ? <Badge tone="muted" mono>{tier}</Badge> : null}
+                          <CheckClassChips check={row.check} />
+                          {row.prerequisite ? <Badge tone={prerequisiteTone(row.prerequisite)} title={row.prerequisite.detail}>{row.prerequisite.label}</Badge> : null}
                         </span>
                         <code className="check-picker-row-id">{row.id}</code>
                       </span>
@@ -226,6 +274,7 @@ export function CheckPicker({
                         {probe.maxRequests !== null ? ` · max ${probe.maxRequests} request${probe.maxRequests === 1 ? '' : 's'}` : ' · request bound not recorded'}
                       </span>
                       <span id={reasonId} className={`small ${row.enabled ? 'muted' : 'check-picker-incompatible'}`}>{row.compatText}</span>
+                      {row.declareHref ? <a className="detail-entity-link small" href={row.declareHref}>{row.declareLabel}</a> : null}
                     </span>
                   </li>
                 );

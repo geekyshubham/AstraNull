@@ -203,6 +203,15 @@ export function createPostgresTargetHistoryServices({ repository, audit = null }
       return { items, count: items.length };
     },
 
+    async loadOriginLockdownBindings(ctx, targetId) {
+      const allowed = gate(ctx, ['target_group:read'], 'origin_binding');
+      if (!allowed.ok) return { bindings: [], records: null };
+      const bindings = await repository.listBindings(ctx, { protected_target_id: targetId, status: 'active' });
+      const targetIds = [...new Set([targetId, ...bindings.map((row) => row.origin_target_id)])];
+      const records = await repository.loadBindingContext(ctx, targetIds);
+      return { bindings, records };
+    },
+
     async assessOriginReachability(ctx, bindingId) {
       const allowed = gate(ctx, ['target_group:read'], 'origin_binding');
       if (!allowed.ok) return denied(allowed);

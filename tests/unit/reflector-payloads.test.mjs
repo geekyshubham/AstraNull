@@ -89,6 +89,12 @@ const PAYLOAD_CASES = [
   ['generic_probe', (payload) => {
     assert.equal(payload.subarray(0, 14).toString('ascii'), 'ASTRANULL:udp:');
   }],
+  ['sip_options', (payload) => {
+    assert.equal(payload.subarray(0, 7).toString('ascii'), 'OPTIONS');
+  }],
+  ['rdp_udp_syn', (payload) => {
+    assert.equal(payload.readUInt32BE(0), 0xffffffff);
+  }],
 ];
 
 describe('reflector payload profiles', () => {
@@ -231,7 +237,7 @@ describe('bounded reflection golden response identity', () => {
     const request = requestFor('ws_discovery_probe');
     const id = /<w:MessageID>([^<]+)</.exec(request.toString())[1];
     const malformed = Buffer.from(`<ProbeMatches><RelatesTo>${id}</RelatesTo>schemas.xmlsoap.org/ws/2005/04/discovery`);
-    assert.equal(REFLECTOR_PAYLOADS.ws_discovery_probe.identity_supported, false);
+    assert.equal(REFLECTOR_PAYLOADS.ws_discovery_probe.identity_supported, true);
     assert.equal(check('ws_discovery_probe', request, malformed), false);
   });
 });

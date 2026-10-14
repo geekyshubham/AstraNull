@@ -94,7 +94,7 @@
 <body>
   <header class="page">
     <h1>AstraNull Check Library</h1>
-    <p>Reference for every check in <code>CHECK_CATALOG</code> (251 entries).
+    <p>Reference for every check in <code>CHECK_CATALOG</code> (273 entries).
     Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks require authorization and SOC execution.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
@@ -147,7 +147,7 @@
     </section>
     
     <section id="family-origin">
-      <h2>Origin &amp; bypass <span style="color:var(--muted);font-weight:400">(6)</span></h2>
+      <h2>Origin &amp; bypass <span style="color:var(--muted);font-weight:400">(7)</span></h2>
       <div class="checks">
     <article class="check" id="origin.direct_reachability.safe">
       <header>
@@ -322,10 +322,39 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>declared_apex_domain</li><li>declared_hostname_inventory</li></ul></details>
+    </article>
+    <article class="check" id="nfw.origin_lockdown.safe">
+      <header>
+        <h3>Origin Lockdown to Declared Binding (Safe)</h3>
+        <code class="check-id">nfw.origin_lockdown.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded Host/SNI request to a declared origin binding. Requires a declared origin binding and origin.lockdown_expected. exposed means the origin answered directly, outside the CDN, as the application for the target hostname: application identity must be confirmed, and a TCP handshake or bare 2xx is not enough. protected is not available from outside-in evidence.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Violation-only. Requires a declared origin binding and origin.lockdown_expected. exposed only when the origin, reached from a non-CDN address, returns a 2xx with confirmed application identity for the target hostname. A TCP handshake alone, unattributed denials, timeouts, refusals and CDN edge answers are inconclusive. A missing binding or declaration is needs_declaration. protected is never available.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: HEAD to declared direct IP using protected hostname as Host/SNI. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>host_sni_bypass</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>application_l7 <span class="muted">(registry: ATT-100)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>origin.lockdown_expected</li><li>origin_binding</li></ul></details>
     </article></div>
     </section>
     <section id="family-l3_l4">
-      <h2>L3/L4 network <span style="color:var(--muted);font-weight:400">(24)</span></h2>
+      <h2>L3/L4 network <span style="color:var(--muted);font-weight:400">(30)</span></h2>
       <div class="checks">
     <article class="check" id="l3.firewall_exposure_scan.safe">
       <header>
@@ -362,12 +391,12 @@
         <code class="check-id">l3.forbidden_tcp_port.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Forbidden TCP Port (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">One bounded TCP connect (two samples) for Forbidden TCP Port. Violation-only: exposed needs a declared TCP deny that a handshake violates; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Violation-only. exposed only when network_policy declares a deny for this TCP port and a TCP handshake completes from a non-CDN address with agreeing samples. Refusals, ICMP rejects, timeouts and silence are inconclusive because a deny cannot be proven from outside. Without a declared deny the result is an observation. protected is never available.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -396,7 +425,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One labeled UDP datagram (no amplification). Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>udp_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -420,12 +449,12 @@
         <code class="check-id">l3.basic_deny_rule.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Basic Deny-Rule Validation (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">One bounded TCP connect (two samples) against a declared deny rule. Runnable for a tcp host:port target or a target whose network_policy declares a TCP deny; the probe only ever picks a declared deny port, never an allow rule. Violation-only: protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Violation-only. exposed only when network_policy declares a deny for this TCP port and a TCP handshake completes from a non-CDN address with agreeing samples. Refusals, ICMP rejects, timeouts and silence are inconclusive because a deny cannot be proven from outside. Without a declared deny the result is an observation. protected is never available.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -435,13 +464,13 @@
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
-        <dd>ip, fqdn</dd>
+        <dd>ip, fqdn, tcp</dd>
         <dt>Evidence required</dt>
         <dd>probe_result</dd>
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_deny_rule_target</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_deny_rule_target</li><li>network_policy</li></ul></details>
     </article>
     <article class="check" id="l3.ipv6_reachability.safe">
       <header>
@@ -454,7 +483,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -570,7 +599,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One labeled UDP datagram (no amplification). Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>udp_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -739,12 +768,12 @@
         <code class="check-id">l3.tcp_flag_anomaly.readiness</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for TCP Flag Anomaly Handling (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Bounded external observation for TCP Flag Anomaly Handling (Safe). Not runnable until a TCP/UDP port is declared on the target or a catalog default_port is set. No protection, exposure or capacity conclusion is established.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Not runnable without a port: fqdn/ip targets carry none, so the probe sends zero requests. Declare a service port or use a TCP target.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -855,12 +884,12 @@
         <code class="check-id">l3.tcp_connection_flood.readiness</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for TCP Connection Flood Readiness (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Bounded external observation for TCP Connection Flood Readiness (Safe). Not runnable until a TCP/UDP port is declared on the target or a catalog default_port is set. No protection, exposure or capacity conclusion is established.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Not runnable without a port: fqdn/ip targets carry none, so the probe sends zero requests. Declare a service port or use a TCP target.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -918,7 +947,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -947,7 +976,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -976,7 +1005,7 @@
         <dt>What we detect</dt>
         <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -1022,6 +1051,180 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>ike_rate_limit_declaration</li></ul></details>
+    </article>
+    <article class="check" id="nfw.declared_deny_tcp.safe">
+      <header>
+        <h3>Declared TCP Deny (Safe)</h3>
+        <code class="check-id">nfw.declared_deny_tcp.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Two bounded TCP connect samples against a customer-declared deny rule. protected is not available from outside-in evidence. exposed requires a typed deny declaration and an unambiguous handshake from a non-CDN address.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>With a declared TCP deny, a connected or protocol-validated handshake from a non-CDN peer is exposed. Timeout, RST or ICMP reject without a deny declaration stays observation-only. protected is not available from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>tcp_connect</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>state_exhaustion <span class="muted">(registry: ATT-003)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>ip, fqdn, tcp</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>network_policy</li></ul></details>
+    </article>
+    <article class="check" id="nfw.declared_deny_udp.safe">
+      <header>
+        <h3>Declared UDP Deny (Safe)</h3>
+        <code class="check-id">nfw.declared_deny_udp.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Two bounded UDP samples against a customer-declared deny rule. protected is not available from outside-in evidence. exposed requires a typed deny declaration and a protocol-validated reply from a non-CDN address.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>With a declared UDP deny, a protocol-validated reply from a non-CDN peer is exposed. Silence without a deny declaration stays observation-only. protected is not available from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: One labeled UDP datagram (no amplification). Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>udp_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>volumetric <span class="muted">(registry: ATT-001)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>ip, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>network_policy</li></ul></details>
+    </article>
+    <article class="check" id="nfw.management_port_exposure.safe">
+      <header>
+        <h3>Management and Database Port Exposure (Safe)</h3>
+        <code class="check-id">nfw.management_port_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded scan of the vetted management/database port list (SSH, RDP, SQL, Kubernetes, Docker, LDAP, VNC). protected is not available from outside-in evidence. exposed requires a declared deny on an open port.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>An open management or database port with a matching declared deny is exposed. Open ports without a deny stay observation-only. protected is not available from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: TCP connect to capped port list on declared host. Max 15 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>port_scan_bounded</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>application_l7 <span class="muted">(registry: ATT-129)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_scan_host</li></ul></details>
+    </article>
+    <article class="check" id="nfw.ipv6_parity.safe">
+      <header>
+        <h3>IPv6/IPv4 Policy Parity (Safe)</h3>
+        <code class="check-id">nfw.ipv6_parity.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Probes A and AAAA separately within the same two-sample budget and records family parity. protected is not available from outside-in evidence. exposed requires a declared deny that one family violates.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>A parity mismatch plus a declared deny that one family violates is exposed. Reachability facts without a deny stay observation-only. protected is not available from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>tcp_connect</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>volumetric <span class="muted">(registry: ATT-124)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_ipv6_target</li><li>network_policy</li></ul></details>
+    </article>
+    <article class="check" id="nfw.connection_limit.safe">
+      <header>
+        <h3>Per-Source Connection Limit (Safe)</h3>
+        <code class="check-id">nfw.connection_limit.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Opens a bounded number of concurrent connections (hard cap 12) against a declared connection_limits budget. protected is not available from outside-in evidence. Missing connection_limits is needs_declaration.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>When connection_limits is declared, exceeding the per-source cap and still being admitted is exposed. Refusal at the cap is recorded; protected remains unavailable from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: Probe kind: connection_limit_probe Max 12 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>connection_limit_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>state_exhaustion <span class="muted">(registry: ATT-008)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip, tcp</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>connection_limits</li></ul></details>
+    </article>
+    <article class="check" id="nfw.perspective_allowlist.safe">
+      <header>
+        <h3>Multi-Perspective Allowlist (Safe)</h3>
+        <code class="check-id">nfw.perspective_allowlist.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Requires at least two registered probe perspectives with published egress IPs. One source cannot distinguish allow-only-from-X from deny-all. protected is not available from outside-in evidence. exposed requires a declared deny that one perspective violates.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Fewer than two registered perspectives: not runnable (needs two_perspectives). With two perspectives and a declared allow/deny, a handshake from a denied perspective is exposed. protected is not available from outside-in evidence.</dd>
+        <dt>How we detect</dt>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>tcp_connect</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>state_exhaustion <span class="muted">(registry: ATT-003)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>perspectives</li><li>network_policy</li></ul></details>
     </article></div>
     </section>
     <section id="family-path">
@@ -1245,7 +1448,7 @@
         <dt>What we detect</dt>
         <dd>Unauthorized AXFR (full zone download) on declared zone.</dd>
         <dt>How we detect</dt>
-        <dd>E3: One TCP-53 AXFR attempt; leak if zone transfers when unauthorized. Max 2 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dd>E3: One TCP-53 AXFR attempt; leak if zone transfers when unauthorized. Max 5 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
         <dd><code>dns_axfr_leak</code></dd>
         <dt>Evidence tier</dt>
@@ -1584,7 +1787,7 @@
     </article></div>
     </section>
     <section id="family-waf">
-      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(73)</span></h2>
+      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(83)</span></h2>
       <div class="checks">
     <article class="check" id="waf.fingerprint.safe">
       <header>
@@ -1733,14 +1936,14 @@
     </article>
     <article class="check" id="waf.http_method_policy_marker.safe">
       <header>
-        <h3>WAF HTTP Method/Protocol Policy Marker (Safe)</h3>
+        <h3>Custom Canary Rule: HTTP Method/Protocol Policy (Safe)</h3>
         <code class="check-id">waf.http_method_policy_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Benign method/header-policy marker to confirm the WAF flags malformed-request and protocol-policy signatures.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert HTTP Method/Protocol Policy token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1762,14 +1965,14 @@
     </article>
     <article class="check" id="waf.request_smuggling_marker.safe">
       <header>
-        <h3>WAF Request-Smuggling Marker (Safe)</h3>
+        <h3>Custom Canary Rule: Request Smuggling (Safe)</h3>
         <code class="check-id">waf.request_smuggling_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Inert request-smuggling signature marker (no conflicting CL/TE constructed) to confirm smuggling WAF rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert Request Smuggling token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1791,14 +1994,14 @@
     </article>
     <article class="check" id="waf.crlf_injection_marker.safe">
       <header>
-        <h3>WAF CRLF/Response-Splitting Marker (Safe)</h3>
+        <h3>Custom Canary Rule: CRLF/Response-Splitting (Safe)</h3>
         <code class="check-id">waf.crlf_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Encoded CRLF marker injecting a benign header token to confirm CRLF/response-splitting WAF rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert CRLF/Response-Splitting token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1820,14 +2023,14 @@
     </article>
     <article class="check" id="waf.open_redirect_marker.safe">
       <header>
-        <h3>WAF Open-Redirect / Parameter-Policy Marker (Safe)</h3>
+        <h3>Custom Canary Rule: Open Redirect / Parameter Policy (Safe)</h3>
         <code class="check-id">waf.open_redirect_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert Open Redirect / Parameter Policy token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1849,14 +2052,14 @@
     </article>
     <article class="check" id="waf.nosql_injection_marker.safe">
       <header>
-        <h3>WAF NoSQL Injection Marker (Safe)</h3>
+        <h3>Custom Canary Rule: NoSQL Injection (Safe)</h3>
         <code class="check-id">waf.nosql_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Inert NoSQL operator marker (matches nothing) to confirm NoSQL-operator WAF rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert NoSQL Injection token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1878,14 +2081,14 @@
     </article>
     <article class="check" id="waf.xpath_injection_marker.safe">
       <header>
-        <h3>WAF XPath/XML Injection Marker (Safe)</h3>
+        <h3>Custom Canary Rule: XPath/XML Injection (Safe)</h3>
         <code class="check-id">waf.xpath_injection_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Benign always-false XPath marker to confirm XPath/XML-injection WAF rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert XPath/XML Injection token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1907,14 +2110,14 @@
     </article>
     <article class="check" id="waf.jndi_ldap_marker.safe">
       <header>
-        <h3>WAF JNDI/LDAP (Log4Shell) Marker (Safe)</h3>
+        <h3>Custom Canary Rule: JNDI/LDAP (Safe)</h3>
         <code class="check-id">waf.jndi_ldap_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert JNDI/LDAP token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1936,14 +2139,14 @@
     </article>
     <article class="check" id="waf.csv_formula_marker.safe">
       <header>
-        <h3>WAF CSV/Formula &amp; Data-Channel Injection Marker (Safe)</h3>
+        <h3>Custom Canary Rule: CSV/Formula (Safe)</h3>
         <code class="check-id">waf.csv_formula_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert CSV/Formula token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1965,14 +2168,14 @@
     </article>
     <article class="check" id="waf.prototype_pollution_marker.safe">
       <header>
-        <h3>WAF Prototype-Pollution Marker (Safe)</h3>
+        <h3>Custom Canary Rule: Prototype Pollution (Safe)</h3>
         <code class="check-id">waf.prototype_pollution_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert Prototype Pollution token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -1994,14 +2197,14 @@
     </article>
     <article class="check" id="waf.deserialization_marker.safe">
       <header>
-        <h3>WAF Unsafe-Deserialization Marker (Safe)</h3>
+        <h3>Custom Canary Rule: Unsafe Deserialization (Safe)</h3>
         <code class="check-id">waf.deserialization_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Inert serialized-stream signature marker (not a functional gadget) to confirm deserialization WAF rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert Unsafe Deserialization token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2023,14 +2226,14 @@
     </article>
     <article class="check" id="waf.ssrf_marker.safe">
       <header>
-        <h3>WAF SSRF Marker (Safe)</h3>
+        <h3>Custom Canary Rule: SSRF (Safe)</h3>
         <code class="check-id">waf.ssrf_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert SSRF token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2052,14 +2255,14 @@
     </article>
     <article class="check" id="waf.xxe_marker.safe">
       <header>
-        <h3>WAF XXE Marker (Safe)</h3>
+        <h3>Custom Canary Rule: XXE (Safe)</h3>
         <code class="check-id">waf.xxe_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">An opaque inert marker token, with no lookup, external entity, formula or executable expression. Tests only an explicitly configured marker rule, not the named exploit mechanism.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert XXE token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2081,14 +2284,14 @@
     </article>
     <article class="check" id="waf.file_upload_marker.safe">
       <header>
-        <h3>WAF File-Upload Signature Marker (Safe)</h3>
+        <h3>Custom Canary Rule: File Upload (Safe)</h3>
         <code class="check-id">waf.file_upload_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Benign upload filename marker (harmless .txt, no code) to confirm the edge flags web-shell upload signatures.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert File Upload token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2110,14 +2313,14 @@
     </article>
     <article class="check" id="waf.jwt_tamper_marker.safe">
       <header>
-        <h3>WAF/API-Gateway JWT Tamper Marker (Safe)</h3>
+        <h3>Custom Canary Rule: JWT Tamper (Safe)</h3>
         <code class="check-id">waf.jwt_tamper_marker.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Inert alg:none JWT with no real claims/signature to confirm gateway JWT-tamper rejection rules.</p>
+      <p class="desc">Proves a customer rule written for AstraNull's inert JWT Tamper token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2146,7 +2349,7 @@
       <p class="desc">Bounded inert-marker validation of a customer-declared login URL: GET/HEAD only, no request body, no credentials, no account interaction, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, percent-encoded, with a form content type, and after bounded inspection-limit padding.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -2175,7 +2378,7 @@
       <p class="desc">Bounded inert-marker validation of a customer-declared API URL: GET/HEAD only with a JSON Accept header, no request body, no credentials, no redirects followed. Checks that the edge WAF blocks the benign marker in the query string and a benign header, double-encoded, with a JSON content type, and after bounded inspection-limit padding.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
         <dt>How we detect</dt>
         <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
         <dt>Probe kind</dt>
@@ -3702,6 +3905,296 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_content_security_policy</li></ul></details>
+    </article>
+    <article class="check" id="waf.sqli_managed_marker.safe">
+      <header>
+        <h3>WAF Managed-Rule Marker: SQLi (Safe)</h3>
+        <code class="check-id">waf.sqli_managed_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Sends the plain inert SQLi marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for SQLi on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.xss_managed_marker.safe">
+      <header>
+        <h3>WAF Managed-Rule Marker: XSS (Safe)</h3>
+        <code class="check-id">waf.xss_managed_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Sends the plain inert XSS marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for XSS on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.path_traversal_managed_marker.safe">
+      <header>
+        <h3>WAF Managed-Rule Marker: Path Traversal (Safe)</h3>
+        <code class="check-id">waf.path_traversal_managed_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Sends the plain inert path-traversal marker that managed OWASP rulesets recognise. A block is a scoped protected verdict for path traversal on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>data_exposure</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.ssti_marker.safe">
+      <header>
+        <h3>Custom Canary Rule: SSTI (Safe)</h3>
+        <code class="check-id">waf.ssti_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Proves a customer rule written for AstraNull's inert SSTI token. An opaque detection string is sent in query, path and header; a block means that customer-written canary rule fired. This does not prove managed-ruleset coverage or exploit mitigation.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and a control-specific denial of AstraNull's inert canary token required. All planned legs must complete conclusively. A block proves only that a customer rule matching this token is enforced on the probed path. An allow means that canary rule did not fire.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.scanner_signature_marker.safe">
+      <header>
+        <h3>WAF Scanner Signature Marker (Safe)</h3>
+        <code class="check-id">waf.scanner_signature_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Sends the inert scanner user-agent that managed bot/scanner rulesets recognise. A block is a scoped protected verdict for that signature on the probed path; an allow is a scoped exposed finding. GET/HEAD only, no request body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. A blocked managed-class marker supports a scoped protected verdict for that class on the probed path; an allowed marker is a scoped exposed finding. Marker acceptance is limited to this route and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert WAF class markers; no functional exploit payloads. Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_double_url.safe">
+      <header>
+        <h3>WAF Evasion — Double URL (Safe)</h3>
+        <code class="check-id">waf.evasion_double_url.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a double-URL-encode transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_mixed_url.safe">
+      <header>
+        <h3>WAF Evasion — Mixed URL (Safe)</h3>
+        <code class="check-id">waf.evasion_mixed_url.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a mixed URL-encoding transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_case_fold.safe">
+      <header>
+        <h3>WAF Evasion — Case Fold (Safe)</h3>
+        <code class="check-id">waf.evasion_case_fold.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a case-fold transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Healthy comparable permitted baseline and control-specific vendor/exact declared denial signatures required. All planned safe marker legs must complete conclusively for enforcement; incomplete or unhealthy comparisons remain inconclusive. Marker acceptance is limited to this route/token and does not establish exploit mitigation or DDoS capacity.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Bounded inert baseline/variant comparison for a named normalization transform. Max 4 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.http_method_policy_enforced.safe">
+      <header>
+        <h3>WAF HTTP Method Policy Enforced (Safe)</h3>
+        <code class="check-id">waf.http_method_policy_enforced.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">After a healthy permitted GET baseline, sends TRACE and one nonstandard token method (ASTRANULLPROBE), each with no request body, then a trailing GET, and grades whether the edge refuses them. Uses no customer declaration.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Verdict-capable. protected when both TRACE and the nonstandard token method are refused at the edge with a control-specific vendor or declared denial while the permitted GET baseline stays healthy and the trailing GET is still allowed. exposed when either method is allowed through the edge. inconclusive when the comparison is incomplete, the source is penalized, a block is only suspected, or only the origin rejects the method (405/501).</dd>
+        <dt>How we detect</dt>
+        <dd>E2: Probe kind: waf_method_policy_probe Max 8 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_method_policy_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E2</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.rate_limit_canary.validation">
+      <header>
+        <h3>WAF Rate-Limit Canary (Safe)</h3>
+        <code class="check-id">waf.rate_limit_canary.validation</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Hits a customer-declared low-threshold canary route and grades whether the edge rate-limits within the declared window. Requires waf.rate_limit_canary.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>When waf.rate_limit_canary is declared, exceeding the threshold within the window must produce a rate-limit or block. Missing declaration is needs_declaration. Incomplete comparison remains not_run.</dd>
+        <dt>How we detect</dt>
+        <dd>E3: Probe kind: rate_limit_canary_probe Max 8 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>rate_limit_canary_probe</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E3</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-175)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>waf.rate_limit_canary</li></ul></details>
     </article></div>
     </section>
     <section id="family-l7">
@@ -5668,10 +6161,10 @@
         <code class="check-id">reflect.ssdp_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for SSDP / UPnP Reflector Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether SSDP / UPnP Reflector Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5697,10 +6190,10 @@
         <code class="check-id">reflect.snmp_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for SNMP Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether SNMP Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5726,10 +6219,10 @@
         <code class="check-id">reflect.chargen_qotd_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for CHARGEN / QOTD / Echo Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether CHARGEN / QOTD / Echo Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5751,16 +6244,16 @@
     </article>
     <article class="check" id="reflect.mdns_netbios_wsdiscovery_exposure.safe">
       <header>
-        <h3>mDNS / NetBIOS / WS-Discovery Exposure (Safe)</h3>
+        <h3>mDNS / NetBIOS NBSTAT / WS-Discovery Composite Exposure (Safe)</h3>
         <code class="check-id">reflect.mdns_netbios_wsdiscovery_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for mDNS / NetBIOS / WS-Discovery Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether mDNS / NetBIOS NBSTAT / WS-Discovery Composite Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
-        <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: Probe kind: reflection_service_probe Max 4 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -5784,10 +6277,10 @@
         <code class="check-id">reflect.portmap_service_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Portmapper / RIPv1 / RPC Service Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether Portmapper / RIPv1 / RPC Service Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5809,16 +6302,16 @@
     </article>
     <article class="check" id="reflect.dtls_sip_rdp_tftp_exposure.safe">
       <header>
-        <h3>DTLS / SIP / RDP / TFTP Responder Exposure (Safe)</h3>
+        <h3>DTLS ClientHello / SIP OPTIONS / RDP-UDP / TFTP Composite Exposure (Safe)</h3>
         <code class="check-id">reflect.dtls_sip_rdp_tftp_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for DTLS / SIP / RDP / TFTP Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether DTLS ClientHello / SIP OPTIONS / RDP-UDP / TFTP Composite Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
-        <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: Probe kind: reflection_service_probe Max 4 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>reflection_service_probe</code></dd>
         <dt>Evidence tier</dt>
@@ -5871,12 +6364,12 @@
         <code class="check-id">reflect.tcp_middlebox_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for TCP Middlebox Reflection Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Bounded external observation for TCP Middlebox Reflection Exposure (Safe). Not runnable until a TCP/UDP port is declared on the target or a catalog default_port is set. No protection, exposure or capacity conclusion is established.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Not runnable without a port: fqdn/ip targets carry none, so the probe sends zero requests. Declare a service port or use a TCP target.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -5900,10 +6393,10 @@
         <code class="check-id">reflect.mssql_resolver_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for MSSQL Resolver Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether MSSQL Resolver Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5929,10 +6422,10 @@
         <code class="check-id">reflect.jenkins_discovery_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Jenkins / CI Discovery Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether Jenkins / CI Discovery Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5958,10 +6451,10 @@
         <code class="check-id">reflect.coap_iot_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for CoAP IoT Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether CoAP IoT Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -5987,10 +6480,10 @@
         <code class="check-id">reflect.legacy_device_discovery_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Legacy Device / Game Discovery Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether Legacy Device / Game Discovery Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6016,10 +6509,10 @@
         <code class="check-id">reflect.stun_turn_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for STUN / TURN Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether STUN / TURN Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6045,10 +6538,10 @@
         <code class="check-id">reflect.ipmi_bmc_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for IPMI / BMC Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether IPMI / BMC Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6074,12 +6567,12 @@
         <code class="check-id">reflect.redis_direct_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Open Redis Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">One bounded TCP connect (two samples) for Open Redis Exposure. Violation-only: exposed needs a declared TCP deny that a handshake violates; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Violation-only. exposed only when network_policy declares a deny for this TCP port and a TCP handshake completes from a non-CDN address with agreeing samples. Refusals, ICMP rejects, timeouts and silence are inconclusive because a deny cannot be proven from outside. Without a declared deny the result is an observation. protected is never available.</dd>
         <dt>How we detect</dt>
-        <dd>E2: One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
+        <dd>E2: One TCP connect attempt to declared host:port. Max 2 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
         <dd><code>tcp_connect</code></dd>
         <dt>Evidence tier</dt>
@@ -6103,10 +6596,10 @@
         <code class="check-id">reflect.openvpn_wireguard_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for OpenVPN / WireGuard Responder Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether OpenVPN / WireGuard Responder Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6132,10 +6625,10 @@
         <code class="check-id">reflect.slp_amplification_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for SLP Amplification Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether SLP Amplification Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6161,10 +6654,10 @@
         <code class="check-id">reflect.tp240_amplification_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for TP240 PhoneHome Amplification Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether TP240 PhoneHome Amplification Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6190,10 +6683,10 @@
         <code class="check-id">reflect.l2tp_reflection_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for L2TP Reflection Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether L2TP Reflection Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6219,10 +6712,10 @@
         <code class="check-id">reflect.natpmp_amplification_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for NAT-PMP Amplification Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether NAT-PMP Amplification Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6248,10 +6741,10 @@
         <code class="check-id">reflect.ipp_callback_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for CUPS/IPP Reflector Exposure (Safe). The advertised mechanism is unsupported by the approved safe transport and is not run. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether CUPS/IPP Reflector Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6281,10 +6774,10 @@
         <code class="check-id">amp.ntp_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for NTP Mode Restriction Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether NTP Mode Restriction Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6310,10 +6803,10 @@
         <code class="check-id">amp.cldap_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for CLDAP Exposure Posture (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether CLDAP Exposure Posture answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6339,10 +6832,10 @@
         <code class="check-id">amp.memcached_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded external observation for Memcached Exposure (Safe). Only the performed transport, response and protocol/configuration facts are recorded. No protection, exposure or capacity conclusion is established.</p>
+      <p class="desc">Sends one bounded, labelled request per payload profile (no amplification, no spoofing) to test whether Memcached Exposure answers from the internet. A protocol-validated reply is an open reflector; protected is never available.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Observation only (E2): status codes, headers, silence and advertised configuration cannot establish a control verdict. No readiness credit; an approved supported comparative scenario or SOC-governed evidence is required.</dd>
+        <dd>Exposure-only. exposed when the reply is protocol-validated as the named service, which is direct evidence of an open reflector reachable from the internet, or when a declared UDP deny for this port is answered. Silence, ICMP errors, unvalidated replies, CDN peers and disagreeing samples are inconclusive. protected is never available: silence cannot prove the service is filtered.</dd>
         <dt>How we detect</dt>
         <dd>E2: Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Observation only: this transport result remains inconclusive for readiness.</dd>
         <dt>Probe kind</dt>
@@ -6985,7 +7478,7 @@
     </article></div>
     </section>
     <section id="soc-gated">
-      <h2>SOC-gated &amp; high-scale <span style="color:var(--muted);font-weight:400">(17)</span></h2>
+      <h2>SOC-gated &amp; high-scale <span style="color:var(--muted);font-weight:400">(22)</span></h2>
       <p style="color:var(--muted)">Not runnable from customer test-runs API. Customer may <em>request</em>; SOC approves, schedules, and executes via governed adapter. No unmanaged attack traffic in-repo.</p>
       <div class="checks">
     <article class="check" id="l3.connection_table_exhaustion.request_only">
@@ -7480,11 +7973,156 @@
         <dd>soc_kill_switch, abort_criteria_met, provider_stop_signal, max_approved_duration</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>soc_authorization_pack</li><li>declared_l7_scope</li><li>provider_approval_artifact</li></ul></details>
+    </article>
+    <article class="check" id="waf.body_json_marker.soc">
+      <header>
+        <h3>WAF JSON Body Marker (SOC Only)</h3>
+        <code class="check-id">waf.body_json_marker.soc</code>
+        <span class="badge soc_gated">soc_gated</span>
+      </header>
+      <p class="desc">SOC-gated JSON request-body marker against a customer-deployed canary sink. Never customer self-serve; no worker sends a body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>SOC-gated JSON request-body marker against a customer-deployed canary sink. Never customer self-serve; no worker sends a body.</dd>
+        <dt>How we detect</dt>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>none</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E4</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>approval_artifact, soc_runbook_ack</dd>
+        <dt>Stop conditions</dt>
+        <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>waf_offensive_authorization_pack</li><li>declared_waf_asset</li><li>staging_isolation</li><li>canary_sink</li></ul></details>
+    </article>
+    <article class="check" id="waf.body_form_marker.soc">
+      <header>
+        <h3>WAF Form Body Marker (SOC Only)</h3>
+        <code class="check-id">waf.body_form_marker.soc</code>
+        <span class="badge soc_gated">soc_gated</span>
+      </header>
+      <p class="desc">SOC-gated application/x-www-form-urlencoded body marker against a customer-deployed canary sink. Never customer self-serve.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>SOC-gated application/x-www-form-urlencoded body marker against a customer-deployed canary sink. Never customer self-serve.</dd>
+        <dt>How we detect</dt>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>none</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E4</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>approval_artifact, soc_runbook_ack</dd>
+        <dt>Stop conditions</dt>
+        <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>waf_offensive_authorization_pack</li><li>declared_waf_asset</li><li>staging_isolation</li><li>canary_sink</li></ul></details>
+    </article>
+    <article class="check" id="waf.body_multipart_marker.soc">
+      <header>
+        <h3>WAF Multipart Body Marker (SOC Only)</h3>
+        <code class="check-id">waf.body_multipart_marker.soc</code>
+        <span class="badge soc_gated">soc_gated</span>
+      </header>
+      <p class="desc">SOC-gated multipart/form-data body marker against a customer-deployed canary sink. Never customer self-serve.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>SOC-gated multipart/form-data body marker against a customer-deployed canary sink. Never customer self-serve.</dd>
+        <dt>How we detect</dt>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>none</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E4</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>approval_artifact, soc_runbook_ack</dd>
+        <dt>Stop conditions</dt>
+        <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>waf_offensive_authorization_pack</li><li>declared_waf_asset</li><li>staging_isolation</li><li>canary_sink</li></ul></details>
+    </article>
+    <article class="check" id="waf.body_inspection_limit.soc">
+      <header>
+        <h3>WAF Body Inspection Limit (SOC Only)</h3>
+        <code class="check-id">waf.body_inspection_limit.soc</code>
+        <span class="badge soc_gated">soc_gated</span>
+      </header>
+      <p class="desc">SOC-gated canary-sink body markers with 8/16/64/128 KB padding to find inspection-limit fail-open. Never customer self-serve; no worker sends a body.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>SOC-gated canary-sink body markers with 8/16/64/128 KB padding to find inspection-limit fail-open. Never customer self-serve; no worker sends a body.</dd>
+        <dt>How we detect</dt>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>none</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E4</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>approval_artifact, soc_runbook_ack</dd>
+        <dt>Stop conditions</dt>
+        <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>waf_offensive_authorization_pack</li><li>declared_waf_asset</li><li>staging_isolation</li><li>canary_sink</li></ul></details>
+    </article>
+    <article class="check" id="waf.response_dlp_canary.soc">
+      <header>
+        <h3>WAF Response DLP Canary (SOC Only)</h3>
+        <code class="check-id">waf.response_dlp_canary.soc</code>
+        <span class="badge soc_gated">soc_gated</span>
+      </header>
+      <p class="desc">SOC-gated response-body DLP canary against a customer-deployed canary sink. Never customer self-serve.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>SOC-gated response-body DLP canary against a customer-deployed canary sink. Never customer self-serve.</dd>
+        <dt>How we detect</dt>
+        <dd>E4: Probe kind: none Max 1 request(s), timeout ≤ 5000ms. Verdict is limited to the bounded semantic fact described above.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>none</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>E4</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, url, ip</dd>
+        <dt>Evidence required</dt>
+        <dd>approval_artifact, soc_runbook_ack</dd>
+        <dt>Stop conditions</dt>
+        <dd>soc_kill_switch, abort_criteria_met, max_approved_requests</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>waf_offensive_authorization_pack</li><li>declared_waf_asset</li><li>staging_isolation</li><li>canary_sink</li></ul></details>
     </article></div>
     </section>
   </main>
   <footer>
-    AstraNull · Check catalog v1.2.1 · 234 safe + 17 SOC-gated
+    AstraNull · Check catalog v1.2.1 · 251 safe + 22 SOC-gated
   </footer>
 </body>
 </html>

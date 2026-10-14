@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { Activity, Bot, ChevronRight, CircleDashed, ClipboardList, FileCheck2, FileText, Info, Network, ShieldCheck, Siren, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { Badge, type BadgeProps } from '../components/ui/badge';
+import { CheckClassSummary } from '../components/checks/check-class-chips';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -31,8 +32,11 @@ import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../li
 import { formatAuditAction, formatDate, formatDurationSeconds, formatNumber, formatResourceTypeLabel, formatSeverityLabel, formatTimestamp, pluralize, scoreTone, sensitiveResourceLabel, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
 import { hasEvidenceBackedVerdict } from '../lib/run-verdict';
 import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
+import { VerdictReplay } from '../components/runs/verdict-replay';
 import { ConfirmModal, formatMutationSuccessMessage, useConfirmModal } from '../lib/crud-ui';
 import { RunTimelineViz, TrafficPathPanel, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
+import { NotTestedBadge, NotTestedNote } from '../components/runs/not-tested-note';
+import { requiredInputMissing } from '../lib/missing-input.mjs';
 import {
   isSignedProbeEvidenceEvent,
 } from '../lib/verdict-explanation';
@@ -882,8 +886,9 @@ function RunDetailView({
   const verdictValue = hasEvidenceBackedVerdict(entity, data.evidence)
     ? getNestedString(entity, ['verdict', 'verdict'], runVerdictValue(entity))
     : '';
-  const verdictDisplay = verdictValue ? plainVerdictShortLabel(verdictValue) : 'No result yet';
-  const verdictSub = verdictValue ? `${plainVerdictLabel(verdictValue)} · External-only confidence` : 'External-only confidence';
+  const runNotTested = requiredInputMissing(entity);
+  const verdictDisplay = runNotTested ? runNotTested.label : verdictValue ? plainVerdictShortLabel(verdictValue) : 'No result yet';
+  const verdictSub = runNotTested ? 'Nothing was sent · missing input' : verdictValue ? `${plainVerdictLabel(verdictValue)} · External-only confidence` : 'External-only confidence';
   const primaryFinding = relatedFindings[0] ?? null;
   const runNonceHash = getNestedString(entity, ['correlation', 'nonce_hash'], '');
   const tabOptions = [
@@ -951,7 +956,7 @@ function RunDetailView({
               tone="muted"
             />
             <MetricCard label="Check" value={checkDisplayName(data.checks, runCheckId)} sub={runFamily ? plainCodeLabel(runFamily, 'Family not recorded') : 'Family not recorded'} icon={FileCheck2} tone="muted" />
-            <MetricCard label="Verdict" value={verdictDisplay} sub={verdictSub} icon={ShieldCheck} tone={verdictValue ? verdictTone(verdictValue) : 'muted'} />
+            <MetricCard label="Verdict" value={verdictDisplay} sub={verdictSub} icon={ShieldCheck} tone={verdictValue && !runNotTested ? verdictTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
           </div>
           <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections"
@@ -977,9 +982,11 @@ function RunDetailView({
                       </div>
                     )}
                     <div className="kv-list">
-                      <div><span>Stored verdict</span>{verdictValue ? <VerdictBadge value={verdictValue} tone={verdictTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
+                      <div><span>Stored verdict</span>{runNotTested ? <Badge tone="muted">{runNotTested.label}</Badge> : verdictValue ? <VerdictBadge value={verdictValue} tone={verdictTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
                       <div><span>Trusted events</span><strong>{runEventEvidenceLoading || runEventEvidenceUnavailable ? '—' : trustedEvidenceEvents.length}</strong></div>
                     </div>
+                    {runNotTested ? <NotTestedNote info={runNotTested} targetId={runTargetId} showLabel={false} /> : null}
+                    {verdictValue ? <VerdictReplay config={config} session={session} runId={entityId} /> : null}
                   </CardContent>
                 </Card>
                 <Card>
@@ -1061,7 +1068,7 @@ function RunDetailView({
                   ) : probeEvents.length === 0 ? (
                     <EmptyState icon={Activity} title="No signed probe results recorded." body="A valid empty event log does not establish an outside observation." />
                   ) : (
-                    <CapabilityProbeResultsPanel events={probeEvents} />
+                    <CapabilityProbeResultsPanel events={probeEvents} verdictPortResults={verdict?.port_results ?? (verdict?.placement_confidence as DataItem | undefined)?.port_results} />
                   )}
                 </CardContent>
               </Card>
@@ -3750,6 +3757,8 @@ function CheckDetailPage({
         : <span className="mono">{observed}</span>;
     } },
     { key: 'outcome', label: 'Outcome', render: (item) => {
+      const notTested = requiredInputMissing(item);
+      if (notTested) return <NotTestedBadge info={notTested} />;
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
       return outcome
         ? <VerdictBadge value={outcome} tone={verdictTone(outcome)} />
@@ -3869,6 +3878,10 @@ function CheckDetailPage({
             <CardDescription>Catalog compatibility, not permission to run now. Ownership and rate gates apply at start.</CardDescription>
           </CardHeader>
           <CardContent className="stack-tight">
+            <div>
+              <p className="check-fact-label">What it tests</p>
+              <CheckClassSummary check={check} />
+            </div>
             <div>
               <p className="check-fact-label">Target kinds</p>
               {supportedTargets.length ? <div className="chip-row">{supportedTargets.map((kind) => <Badge key={kind} tone="muted">{spaced(kind)}</Badge>)}</div> : <p className="muted">Not recorded</p>}
@@ -4271,6 +4284,8 @@ function PolicyDetailPage({
     } },
     { key: 'status', label: 'Status', render: (run) => <StatusBadge value={getString(run, ['status'], '')} tone={runStatusBadgeTone(getString(run, ['status'], ''))} fallback="Not recorded" /> },
     { key: 'outcome', label: 'Outcome', render: (run) => {
+      const notTested = requiredInputMissing(run);
+      if (notTested) return <NotTestedBadge info={notTested} />;
       const outcome = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
       return outcome ? <VerdictBadge value={outcome} tone={verdictTone(outcome)} /> : <span className="muted">No evidence-backed result</span>;
     } },
@@ -4620,7 +4635,7 @@ export function DetailRoutePage({
         </div>
       );
     }
-    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} wafEdgeEnabled={data.deploymentFeatures?.waf_posture === true} protectionValidationEnabled={data.deploymentFeatures?.protection_validation === true} onRefresh={onRefresh} />;
+    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} wafEdgeEnabled={data.deploymentFeatures?.waf_posture === true} protectionValidationEnabled={data.deploymentFeatures?.protection_validation === true} deploymentFeatures={data.deploymentFeatures} onRefresh={onRefresh} />;
   }
 
   if (route === 'check-detail') {

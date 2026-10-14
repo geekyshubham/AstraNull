@@ -1,11 +1,14 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import {
+  additionalInputRefusal,
   buildProbeProfile,
   CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
+  isCustomerRunnable,
   normalizeProbeHttpPath,
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
+import { isExplicitDemoTenant } from './demoAutoVerify.mjs';
 import {
   API_DOC_PATHS,
   RISKY_ADMIN_PORTS,
@@ -13,6 +16,12 @@ import {
 } from './capabilityProbes.mjs';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
+import {
+  controlDeclarationsFromTarget,
+  declaredPortsForBoundedScan,
+  mapDeclaredBlockSignatureForProbe,
+  probeDeclarationsSubset,
+} from '../contracts/controlDeclarations.mjs';
 
 function stableStringify(value) {
   if (value === undefined) {
@@ -297,10 +306,81 @@ export function targetLiteralIpAddress(target) {
   return isIP(host) !== 0 ? host : null;
 }
 
-export function validateHostSniTargetBinding(check, target) {
+export const ORIGIN_LOCKDOWN_CHECK_ID = 'nfw.origin_lockdown.safe';
+
+export function isOriginLockdownHostnameCheck(check, target) {
+  return check?.check_id === ORIGIN_LOCKDOWN_CHECK_ID
+    && check?.probe_profile?.kind === 'host_sni_bypass'
+    && !targetLiteralIpAddress(target);
+}
+
+function originLockdownRefusal(check, error, status, message, extra = {}) {
+  return { error, status, check_id: check?.check_id ?? null, message, ...extra };
+}
+
+function publicOriginAddress(value) {
+  const address = typeof value === 'string' ? unbracketHost(value) : '';
+  if (!address || isIP(address) === 0) return null;
+  return assertProbeDestinationAllowed(address).ok ? address : null;
+}
+
+export { resolveOriginLockdownBinding } from './originLockdownResolution.mjs';
+
+
+export function originLockdownProvenance(resolved) {
+  if (!resolved?.ok) return null;
+  return {
+    binding_id: resolved.binding_id,
+    address: resolved.address,
+    host: resolved.host,
+    sni: resolved.sni,
+    port: resolved.port,
+    path: resolved.path,
+  };
+}
+
+export function runOriginLockdownScope(run, check, target) {
+  if (!isOriginLockdownHostnameCheck(check, target)) return null;
+  const stored = run?.provenance_json?.origin_lockdown;
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return null;
+  const scope = validatedOriginScopeSnapshot(stored);
+  const address = publicOriginAddress(stored.address);
+  const bindingId = typeof stored.binding_id === 'string' ? stored.binding_id.trim() : '';
+  if (!scope || !address || !bindingId) return null;
+  if (!isExactTargetHost(scope.host, targetLogicalHost(target))) return null;
+  return { ...scope, address, binding_id: bindingId };
+}
+
+export function validateHostSniTargetBinding(check, target, { originLockdown = null, originBindings = null } = {}) {
+  const isDemo = isExplicitDemoTenant(target?.tenant_id) && isCustomerRunnable(check);
+  if (check?.check_id === ORIGIN_LOCKDOWN_CHECK_ID) {
+    const doc = controlDeclarationsFromTarget(target);
+    if (!doc?.origin?.lockdown_expected) {
+      if (isDemo) return null;
+      return originLockdownRefusal(check, 'declared_origin_lockdown_required', 409,
+        'This check needs origin lockdown declared on the target.');
+    }
+    if (targetLiteralIpAddress(target)) return null;
+    if (originLockdown?.ok && publicOriginAddress(originLockdown.address)) return null;
+    if (originLockdown?.error) {
+      if (isDemo && (originLockdown.error === 'missing_declared_origin_binding' || originLockdown.error === 'ownership_not_verified' || originLockdown.error === 'declared_origin_lockdown_required')) {
+        return null;
+      }
+      return originLockdown;
+    }
+    if (isDemo) return null;
+    return originLockdownRefusal(check, 'missing_declared_origin_binding', 400,
+      'Origin lockdown on a hostname target requires one active origin binding that protects this target.');
+  }
+  const extra = additionalInputRefusal(check, process.env, { target, originBindings });
+  if (extra) {
+    if (isDemo) return null;
+    return extra;
+  }
   if (check?.probe_profile?.kind !== 'host_sni_bypass' || targetLiteralIpAddress(target)) {
     return null;
   }
+  if (isDemo) return null;
   return {
     error: 'missing_target_bound_direct_address',
     status: 400,
@@ -577,6 +657,53 @@ export class BoundRunScopeMissingError extends Error {
   }
 }
 
+export class OriginLockdownBindingMissingError extends Error {
+  constructor(checkId) {
+    super('origin_lockdown_binding_missing');
+    this.name = 'OriginLockdownBindingMissingError';
+    this.code = 'origin_lockdown_binding_missing';
+    this.check_id = checkId ?? null;
+  }
+}
+
+const PERSPECTIVE_ID_PATTERN = /^[a-z0-9-]{1,32}$/;
+export const PERSPECTIVE_ROUTED_CHECK_IDS = Object.freeze(['nfw.perspective_allowlist.safe']);
+
+export function isValidPerspectiveId(value) {
+  return typeof value === 'string' && PERSPECTIVE_ID_PATTERN.test(value);
+}
+
+// Declared denied perspectives first: only a denied perspective can observe an allowlist violation.
+export function requiredPerspectiveIdForJob(check, declarations) {
+  const fromCatalog = check?.probe_profile?.required_perspective_id;
+  if (isValidPerspectiveId(fromCatalog)) return fromCatalog;
+  if (!PERSPECTIVE_ROUTED_CHECK_IDS.includes(check?.check_id)) return null;
+  const perspectives = declarations?.perspectives;
+  const candidates = [
+    ...(Array.isArray(perspectives?.denied_perspective_ids) ? perspectives.denied_perspective_ids : []),
+    ...(Array.isArray(perspectives?.allowlisted_perspective_ids) ? perspectives.allowlisted_perspective_ids : []),
+  ];
+  return candidates.find(isValidPerspectiveId) ?? null;
+}
+
+export function jobClaimableByPerspective(job, perspectiveId) {
+  const required = job?.constraints?.required_perspective_id;
+  if (required == null || required === '') return true;
+  return isValidPerspectiveId(perspectiveId) && perspectiveId === required;
+}
+
+export function attachControlDeclarationsToProfile(profile, check, declarations) {
+  if (!declarations || typeof declarations !== 'object' || Array.isArray(declarations)) return profile;
+  const next = { ...profile, declarations: probeDeclarationsSubset(declarations, check) };
+  const mapped = mapDeclaredBlockSignatureForProbe(declarations);
+  if (mapped) next.declared_block_signature = mapped;
+  if (next.kind === 'port_scan_bounded') {
+    const ports = declaredPortsForBoundedScan(declarations);
+    if (ports.length) next.declared_ports = ports;
+  }
+  return next;
+}
+
 /**
  * @param {{
  *   run: { id: string, tenant_id: string, safety_constraints?: Record<string, unknown>, origin_binding_id?: unknown, provenance_json?: unknown },
@@ -584,6 +711,7 @@ export class BoundRunScopeMissingError extends Error {
  *   target: Record<string, unknown>,
  *   probeProfile?: unknown,
  *   ownershipBinding?: Record<string, unknown> | null,
+ *   declarations?: Record<string, unknown> | null,
  *   probeWorkerSecret: string,
  *   now: Date,
  *   newId: () => string,
@@ -595,6 +723,7 @@ export function buildSignedProbeJobRecord({
   target,
   probeProfile,
   ownershipBinding = null,
+  declarations = undefined,
   probeWorkerSecret,
   now,
   newId,
@@ -609,6 +738,11 @@ export function buildSignedProbeJobRecord({
     const approvedScope = runBoundOriginScope(run, check);
     if (!approvedScope) throw new BoundRunScopeMissingError(check?.check_id);
   }
+  const lockdownScope = runOriginLockdownScope(run, check, target);
+  if (isOriginLockdownHostnameCheck(check, target) && !lockdownScope) {
+    throw new OriginLockdownBindingMissingError(check?.check_id);
+  }
+  const storedDeclarations = declarations === undefined ? controlDeclarationsFromTarget(target) : declarations;
   const nonce = generateNonce();
   const nonce_hash = hashNonce(nonce);
   let resolvedProbeProfile = bindProbeProfileDestinationsToTarget(
@@ -626,6 +760,18 @@ export function buildSignedProbeJobRecord({
     // label here is what the worker executes and what the signature covers.
     resolvedProbeProfile = { ...resolvedProbeProfile, protected_host: bindingScope.host };
   }
+  if (lockdownScope) {
+    resolvedProbeProfile = {
+      ...resolvedProbeProfile,
+      protected_host: lockdownScope.host,
+      direct_ip: lockdownScope.address,
+    };
+  }
+  resolvedProbeProfile = attachControlDeclarationsToProfile(resolvedProbeProfile, check, storedDeclarations);
+  const requiredPerspectiveId = requiredPerspectiveIdForJob(check, storedDeclarations);
+  const signedOriginScope = bindingScope ?? (lockdownScope
+    ? { host: lockdownScope.host, sni: lockdownScope.sni, port: lockdownScope.port, path: lockdownScope.path }
+    : null);
   const baseConstraints = normalizeJobConstraints(
     run.safety_constraints,
     resolvedProbeProfile,
@@ -644,7 +790,8 @@ export function buildSignedProbeJobRecord({
     ...(ownershipBinding && typeof ownershipBinding === 'object'
       ? { ownership_binding: structuredClone(ownershipBinding) }
       : {}),
-    ...(bindingScope ? { origin_scope: { ...bindingScope } } : {}),
+    ...(signedOriginScope ? { origin_scope: { ...signedOriginScope } } : {}),
+    ...(requiredPerspectiveId ? { required_perspective_id: requiredPerspectiveId } : {}),
   };
   const job = {
     id: newId(),

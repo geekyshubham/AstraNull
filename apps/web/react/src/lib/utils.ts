@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { FIX_VERIFIED_BASIS_LABELS } from './finding-lifecycle.mjs';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -122,6 +123,7 @@ const FINDING_STATUS_ACTION_LABELS: Record<string, string> = {
   closed: 'Finding closed',
   resolved: 'Finding closed',
   false_positive: 'Marked false positive',
+  fix_verified: 'Fix verified by a passing re-check',
   open: 'Finding reopened',
   in_progress: 'Finding in progress'
 };
@@ -139,6 +141,10 @@ export function formatAuditAction(action: string, fallback = 'Unknown action', m
   const key = action.trim();
   if (!key) return fallback;
   if (key.toLowerCase() === 'finding.updated') return findingUpdateLabel(metadata);
+  if (key.toLowerCase() === 'finding.fix_verified') {
+    const basis = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? (metadata as Record<string, unknown>).verification_basis : undefined;
+    if (typeof basis === 'string' && basis in FIX_VERIFIED_BASIS_LABELS) return FIX_VERIFIED_BASIS_LABELS[basis as keyof typeof FIX_VERIFIED_BASIS_LABELS];
+  }
   return AUDIT_ACTION_LABELS[key.toLowerCase()] ?? sentenceCase(key.replace(/^target_group(?=[.:_]|$)/, 'target_policy'));
 }
 

@@ -258,7 +258,7 @@ function createHarness(overrides = {}) {
     },
     async getVerdictForRun(ctx, runId) {
       const run = runs.get(runId);
-      return run?.status === 'verdicted' ? { test_run_id: runId, verdict: 'protected', confidence: 'high', explanation: 'ok' } : null;
+      return run?.verdict ?? (run?.status === 'verdicted' ? { test_run_id: runId, verdict: 'protected', confidence: 'high', explanation: 'ok' } : null);
     },
     async listRunEvents() { return []; },
   };
@@ -958,5 +958,44 @@ describe('postgres validation scan service adapter', () => {
 
     const exact = await services.listValidationScans(CTX, { target_group_id: GROUP_ID, target_id: TARGET_A, limit: 1 });
     assert.deepEqual(exact.items.map((scan) => scan.id), ['scan_big_a']);
+  });
+
+  it('projects demo required_input_missing verdict with explanation_reason and required_input in postgres scan steps', async () => {
+    const harness = createHarness();
+    const scan = await harness.services.createValidationScan(CTX, {
+      target_group_id: GROUP_ID,
+      check_ids: [CHECK_ID],
+      target_id: TARGET_A,
+    }, RUNTIME_CONFIG, { now: NOW });
+    const step = [...harness.fake.steps.values()][0];
+    const runId = 'run_demo_input_missing';
+    harness.runs.set(runId, {
+      id: runId,
+      tenant_id: TENANT,
+      target_group_id: GROUP_ID,
+      target_id: TARGET_A,
+      check_id: 'nfw.declared_deny_tcp.safe',
+      status: 'verdicted',
+      summary: { requests_sent: 0, required_input_missing: 'declared_tcp_deny_required' },
+      verdict: {
+        id: 'vrd_demo_1',
+        test_run_id: runId,
+        verdict: 'inconclusive',
+        confidence: 'external_only',
+        explanation: 'No denied port is declared, so there was nothing to probe.',
+        explanation_reason: 'required_input_missing',
+        required_input: 'declared_tcp_deny_required',
+      },
+    });
+    harness.fake.steps.set(step.id, {
+      ...step,
+      status: 'verdicted',
+      test_run_id: runId,
+    });
+    const projected = await harness.services.getValidationScan(CTX, scan.id);
+    assert.equal(projected.steps.length, 1);
+    assert.equal(projected.steps[0].verdict.verdict, 'inconclusive');
+    assert.equal(projected.steps[0].verdict.explanation_reason, 'required_input_missing');
+    assert.equal(projected.steps[0].verdict.required_input, 'declared_tcp_deny_required');
   });
 });

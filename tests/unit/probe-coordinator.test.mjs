@@ -5,6 +5,7 @@ import { loadRuntimeConfig } from '../../src/config.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import {
   authenticateProbeWorker,
+  createProbeJob,
   ingestProbeResult,
   listPendingProbeJobsForWorker,
   probeWorkerAuthHeaders,
@@ -1421,6 +1422,84 @@ describe('signed probe coordinator', () => {
     );
     assert.equal(ok.ok, true);
     assert.equal(ok.workerCtx.tenantId, 'ten_demo');
+  });
+});
+
+describe('createProbeJob control declarations', () => {
+  afterEach(restoreEnv);
+
+  it('attaches the probe subset, declared_block_signature, and vetted declared_ports', () => {
+    freshStore();
+    seedAgent();
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    target.kind = 'fqdn';
+    target.value = 'app.example.com';
+    target.metadata = {
+      control_declarations: {
+        version: 1,
+        network_policy: [
+          { protocol: 'tcp', port: 22, action: 'deny', address_family: 'any' },
+          { protocol: 'tcp', port: 3306, action: 'deny', address_family: 'ipv4' },
+          { protocol: 'tcp', port: 9, action: 'allow', address_family: 'any' },
+        ],
+        waf: {
+          block_signature: { header_name: 'x-waf-block', header_value: 'edge-deny', status_codes: [403] },
+          expected_action: 'block',
+        },
+        origin: { lockdown_expected: true },
+      },
+    };
+    const check = getCheckById('waf.ssrf_marker.safe');
+    const run = {
+      id: 'run_decl',
+      tenant_id: 'ten_demo',
+      created_at: new Date().toISOString(),
+      safety_constraints: { max_events: 8, max_duration_seconds: 90 },
+    };
+    const job = createProbeJob(ctx, run, check, target, check.probe_profile, runtimeSignedWorker());
+    assert.equal(job.probe_profile.declarations.version, 1);
+    assert.equal(job.probe_profile.declarations.waf.expected_action, 'block');
+    assert.equal(job.probe_profile.declarations.network_policy, undefined);
+    assert.equal(job.probe_profile.declared_block_signature.header_name, 'x-waf-block');
+    assert.equal(job.probe_profile.declared_block_signature.header.value, 'edge-deny');
+    assert.equal(job.probe_profile.declared_block_signature.status_code, 403);
+    assert.equal(verifyProbeJobSignature(job, WORKER_SECRET), true);
+
+    const scan = getCheckById('l3.firewall_exposure_scan.safe');
+    const scanJob = createProbeJob(
+      ctx,
+      { ...run, id: 'run_scan' },
+      scan,
+      target,
+      scan.probe_profile,
+      runtimeSignedWorker(),
+    );
+    assert.deepEqual(scanJob.probe_profile.declared_ports, [22, 3306]);
+    assert.equal(scanJob.probe_profile.declarations.waf, undefined);
+    assert.equal(scanJob.probe_profile.declarations.network_policy.length, 3);
+  });
+
+  it('leaves jobs unchanged when the target has no declarations', () => {
+    freshStore();
+    seedAgent();
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    const check = getCheckById('waf.fingerprint.safe');
+    const job = createProbeJob(
+      ctx,
+      {
+        id: 'run_plain',
+        tenant_id: 'ten_demo',
+        created_at: new Date().toISOString(),
+        safety_constraints: { max_events: 3, max_duration_seconds: 90 },
+      },
+      check,
+      target,
+      check.probe_profile,
+      runtimeSignedWorker(),
+    );
+    assert.equal(job.probe_profile.declarations, undefined);
+    assert.equal(job.probe_profile.declared_block_signature, undefined);
+    assert.equal(job.probe_profile.declared_ports, undefined);
   });
 });
 

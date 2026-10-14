@@ -1,10 +1,11 @@
 import type { DataItem } from './types';
+import type { RequiredInputMissing } from './missing-input.mjs';
 
 export function retainedCoveragePairs(pairs: DataItem[]): DataItem[];
 
 export type CategoryIcon = 'shield' | 'bug' | 'server' | 'globe' | 'workflow' | 'lock' | 'network' | 'dns' | 'radio' | 'waves' | 'activity' | 'bell';
 export type CheckCategory = { id: string; label: string; layer: 'waf' | 'cdn' | 'origin' | 'ops' | 'other'; icon: CategoryIcon; how: string };
-export type RowStatus = 'passed' | 'failed' | 'inconclusive' | 'observed' | 'running' | 'queued' | 'waiting' | 'blocked' | 'skipped' | 'cancelled' | 'not_run';
+export type RowStatus = 'passed' | 'failed' | 'inconclusive' | 'not_tested' | 'observed' | 'running' | 'queued' | 'waiting' | 'blocked' | 'skipped' | 'cancelled' | 'not_run';
 export type Tone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 
 export type CheckRow = {
@@ -15,6 +16,8 @@ export type CheckRow = {
   tier: string;
   readinessCapable: boolean;
   probeKind: string;
+  markerClass: string;
+  assuranceScope: string;
   maxRequests: number | null;
   timeoutMs: number | null;
   category: CheckCategory;
@@ -23,6 +26,7 @@ export type CheckRow = {
   tone: Tone;
   verdict: string;
   explanation: string;
+  missingInput?: RequiredInputMissing | null;
   expectedBehavior?: string;
   reason: string;
   eligibleAt: string;
@@ -38,7 +42,7 @@ export type CheckRow = {
 
 export type CategoryGroup = { category: CheckCategory; rows: CheckRow[]; counts: Record<RowStatus, number> };
 
-export type EfficacyStatus = 'protecting' | 'partial' | 'mostly_exposed' | 'not_protecting' | 'bypassable' | 'present_unmeasured' | 'absent' | 'unknown';
+export type EfficacyStatus = 'protecting' | 'partial' | 'mostly_exposed' | 'not_protecting' | 'bypassable' | 'insufficient' | 'present_unmeasured' | 'absent' | 'unknown';
 export type LayerEfficacy = {
   layer: 'waf' | 'cdn';
   status: EfficacyStatus;
@@ -50,6 +54,8 @@ export type LayerEfficacy = {
   failed: number;
   tested: number;
   inconclusive: number;
+  ignored: number;
+  ruleCategories: number;
   score: number | null;
   basis: 'checks' | 'fingerprint_markers';
   originExposed: boolean;
@@ -72,25 +78,36 @@ export type EvidenceLayer = {
 export type EdgePhase = 'detected' | 'not_detected' | 'inconclusive' | 'error' | 'pending' | 'evaluating' | 'locked' | 'waiting' | 'no_result' | 'not_started' | string;
 
 export const EDGE_DETECTION_CHECK_ID: string;
+export const ORIGIN_LOCKDOWN_CHECK_ID: string;
+export const EFFICACY_MINIMUM: Readonly<{ concluded: number; ruleCategories: number }>;
+export type PrerequisiteContext = { declarations?: unknown; perspectiveCount?: number; serverRunnableIndex?: Map<string, { runnable: boolean; reason: string } | boolean> | null; serverSuppliesInput?: boolean } | null;
+export function withTargetRunnableChecks(checks: DataItem[], targetCatalog: DataItem[] | null | undefined, options?: { serverSuppliesInput?: boolean }): DataItem[];
+export function isViolationOnlyCheck(check: unknown): boolean;
 export const CHECK_CATEGORIES: Readonly<Record<string, CheckCategory>>;
 export const ROW_STATUS_META: Readonly<Record<RowStatus, { label: string; tone: Tone }>>;
 export const ROW_STATUS_ORDER: RowStatus[];
 export function categoryForCheck(check: DataItem | null | undefined): CheckCategory;
 export function isDeclarationOnlyCheck(check: DataItem | null | undefined): boolean;
-export function assessmentChecks(checks: DataItem[], target: DataItem | null): DataItem[];
-export function targetCheckRequirement(check: DataItem, target: DataItem | null): string;
-export function individualChecks(checks: DataItem[], target: DataItem | null): DataItem[];
-export function runAllChecks(checks: DataItem[], target: DataItem | null): DataItem[];
+export function assessmentChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
+export function targetCheckRequirement(check: DataItem, target: DataItem | null, context?: PrerequisiteContext): string;
+export function individualChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
+export function runAllChecks(checks: DataItem[], target: DataItem | null, context?: PrerequisiteContext): DataItem[];
 export function declarationOnlyChecks(checks: DataItem[], target: DataItem | null): DataItem[];
 export function latestRunByCheck(runs: DataItem[]): Map<string, DataItem>;
 export function buildCheckRows(input: { checks: DataItem[]; scan?: DataItem | null; runs?: DataItem[] }): CheckRow[];
 export function countRowStatuses(rows: CheckRow[]): Record<RowStatus, number>;
 export function recommendedStarterRow(rows: CheckRow[]): CheckRow | null;
-export type WafCheckBlocking = { stopped: number; allowed: number; inconclusive: number; notRun: number; applicable: number; lastAt: string };
-export function wafCheckBlocking(rows: CheckRow[]): WafCheckBlocking | null;
+export type RowEvidenceState = 'fresh' | 'stale' | 'version_gap' | 'none';
+export function rowEvidenceState(row: CheckRow, options?: { coverage?: DataItem | null; nowMs?: number }): RowEvidenceState;
+export type RuleTally = { enforced: number; notEnforced: number; inconclusive: number; ignored: number; notRun: number; total: number; tested: number };
+export type WafRuleEnforcement = { managed: RuleTally; custom: RuleTally; evasion: RuleTally; lastAt: string };
+export function wafRuleEnforcement(rows: CheckRow[], options?: { coverage?: DataItem | null; nowMs?: number }): WafRuleEnforcement | null;
+export type WafRuleSentence = { id: 'managed' | 'custom' | 'evasion'; label: string; ratio: string; detail: string; tally: RuleTally };
+export function wafRuleSentences(enforcement: WafRuleEnforcement | null): WafRuleSentence[];
 export function groupRowsByCategory(rows: CheckRow[]): CategoryGroup[];
 export function rowProgress(rows: CheckRow[]): { total: number; done: number; percent: number };
-export function assessEdgeEfficacy(input: { rows?: CheckRow[]; edge?: DataItem | null }): { waf: LayerEfficacy; cdn: LayerEfficacy; originExposed: boolean };
+export type EdgeEfficacy = { waf: LayerEfficacy; cdn: LayerEfficacy; originExposed: boolean };
+export function assessEdgeEfficacy(input: { rows?: CheckRow[]; edge?: DataItem | null; coverage?: DataItem | null; nowMs?: number }): EdgeEfficacy;
 export function efficacySentence(efficacy: LayerEfficacy): string;
 export function providerName(code: string, displayName?: string): string;
 export function providerLogoId(code: string): EvidenceLayer['logo'];
@@ -127,7 +144,7 @@ export type MarkerEffectiveness = {
   percentage: number | null;
   source: 'protection_profile' | 'edge_detection';
 };
-export type TargetTab = 'overview' | 'validate' | 'findings' | 'history' | 'subdomains';
+export type TargetTab = 'overview' | 'validate' | 'findings' | 'history' | 'subdomains' | 'controls' | 'coverage';
 export const PROVIDER_FAMILY_ORDER: readonly ProviderFamily[];
 export function providerFamilyRows(input: { protection_profile?: DataItem | null; edge_detection?: DataItem | null }): ProviderFamilyRow[];
 export function markerEffectiveness(input: { protection_profile?: DataItem | null; edge_detection?: DataItem | null }): MarkerEffectiveness | null;
@@ -178,3 +195,5 @@ export type PresentedObservation = {
 export function presentObservation(item: unknown): PresentedObservation | null;
 export function comparisonReasonLabel(reason: unknown): string;
 export function changeDirectionLabel(direction: unknown): string;
+export type CustomCanaryMember = { checkId: string; runId: string; verdict: string; observedAt: string; evidence: 'fresh' | 'stale' | 'version_gap'; label: string };
+export function customCanaryMembers(coverage: unknown, options?: { checks?: unknown[] }): CustomCanaryMember[];

@@ -47,9 +47,11 @@ import { findingStatusTone } from '../lib/status-tone';
 import { severityTone } from '../lib/severity-tone';
 import { FindingStatusBadge } from './refined/findings-refined';
 import { DetailBackLink } from '../components/layout/detail-back-link';
+import { VerdictReplay } from '../components/runs/verdict-replay';
 import { useEntityDocumentTitle } from '../components/layout/app-shell';
 import { FINDING_STATUS_DESCRIPTIONS, FINDING_STATUS_LABELS, findingStatusTransitions, type FindingStatus } from '../lib/findings-query.mjs';
 import { findingDecisionNote, findingStatusBucket } from '../lib/finding-groups.mjs';
+import { fixVerifiedBasis } from '../lib/finding-lifecycle.mjs';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -74,6 +76,9 @@ const findingDetailStyles = `
 .finding-detail-page .finding-lineage { display: grid; margin-top: var(--space-4); }
 .finding-detail-page .finding-lineage-item { display: grid; align-content: start; gap: var(--space-1); min-width: 0; padding: var(--space-3) 0; border-top: 1px solid var(--border-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .finding-detail-page .finding-lineage-label { color: var(--fg-2); font-size: var(--text-sm); font-weight: 600; }
+.finding-detail-page .finding-closure-basis { display: grid; gap: var(--space-1); }
+.finding-detail-page .finding-closure-basis > strong { color: var(--fg); font-weight: 600; line-height: 1.4; }
+.finding-detail-page .finding-closure-basis > span { color: var(--fg-2); line-height: 1.5; max-width: 72ch; }
 .finding-detail-page .finding-risk-reason { color: var(--fg-2); white-space: pre-wrap; }
 .finding-detail-page .finding-triage-group { display: grid; gap: var(--space-2); }
 .finding-detail-page .finding-triage-group-label { color: var(--fg); font-size: var(--text-sm); font-weight: 600; margin: 0; }
@@ -120,8 +125,8 @@ function ensureFindingDetailStyles() {
 
 type FindingDecisionStep = { id: string; label: string; done: boolean; meta: string };
 
-const DECISION_STATUSES = ['accepted_risk', 'accepted', 'resolved', 'closed', 'false_positive'];
-const CLOSED_OUTCOMES = ['resolved', 'closed', 'false_positive'];
+const DECISION_STATUSES = ['accepted_risk', 'accepted', 'fix_verified', 'resolved', 'closed', 'false_positive'];
+const CLOSED_OUTCOMES = ['fix_verified', 'resolved', 'closed', 'false_positive'];
 const REASONED_OUTCOMES: Partial<Record<FindingStatus, { title: string; confirmLabel: string; noteLabel: string }>> = {
   resolved: { title: 'Mark this finding resolved', confirmLabel: 'Mark resolved', noteLabel: 'Resolved' },
   false_positive: { title: 'Mark this finding a false positive', confirmLabel: 'Mark false positive', noteLabel: 'Marked false positive' },
@@ -218,7 +223,7 @@ function remStateTone(remStateClass: string, remState: string): StatTone {
   if (cls.includes('muted')) return 'muted';
   if (cls.includes('info')) return 'muted';
   const state = remState.trim().toLowerCase();
-  if (['resolved', 'delivered'].includes(state)) return 'success';
+  if (['resolved', 'delivered', 'fix_verified'].includes(state)) return 'success';
   if (state === 'accepted_risk') return 'muted';
   if (state === 'in_progress') return 'warn';
   if (['open', 'remediation_pending'].includes(state)) return 'warn';
@@ -325,6 +330,7 @@ export function FindingDetailView({
   const laterVerdictId = getString(entity, ['last_verdict_id'], '');
   const hasLaterVerdict = Boolean(laterVerdictId) && laterVerdictId !== originalVerdictId;
   const closedAt = lineage.closedAt || getString(entity, ['closed_at'], '');
+  const closureBasis = fixVerifiedBasis(entity, decisionHistory.items);
   const retestAction = resolveFindingRetestAction(entity);
   const retestCheck = data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? null;
   const retestBound = Number((retestCheck?.probe_profile as DataItem | undefined)?.max_requests);
@@ -877,6 +883,19 @@ export function FindingDetailView({
                   </span>
                   {riskAcceptance?.reason ? <span className="finding-risk-reason">{riskAcceptance.reason}</span> : null}
                 </>
+              ) : normalizedStatus === 'fix_verified' ? (
+                <span className="finding-closure-basis" data-basis={closureBasis.basis || 'unknown'}>
+                  <strong>{closureBasis.label}</strong>
+                  <span>
+                    {closedAt ? `Verified ${formatTimestamp(closedAt)}. ` : ''}
+                    {closureBasis.basis === 'violation_not_reproduced'
+                      ? 'A re-check from the same probe perspective took at least two agreeing samples, probed every declared port and did not reproduce the violation. Outside-in evidence cannot prove a port is denied, only that the recorded violation is gone.'
+                      : closureBasis.basis === 'passing_retest'
+                        ? 'A later passing check with the same scope and check version confirmed it.'
+                        : `A later re-check with the same scope and check version confirmed it.${canReadAudit ? '' : ' Audit readers can see how it was verified in the decision history.'}`}
+                    {getString(entity, ['verifying_run_id'], '') ? <> Verifying run <a className="detail-entity-link mono" href={buildDetailHref('run-detail', getString(entity, ['verifying_run_id'], ''))}>{getString(entity, ['verifying_run_id'], '')}</a>.</> : ' Verifying run not recorded.'}
+                  </span>
+                </span>
               ) : CLOSED_OUTCOMES.includes(normalizedStatus) ? (
                 <span>
                   {closedAt ? `Closed ${formatTimestamp(closedAt)}` : 'Closed; closure time not recorded'}
@@ -885,7 +904,7 @@ export function FindingDetailView({
               ) : normalizedStatus === 'accepted' ? (
                 <span>Accepted (older status set through the API){closedAt ? ` ${formatTimestamp(closedAt)}` : ''}</span>
               ) : <span className="muted">Not closed.</span>}
-              <span className="muted small">Closure is a recorded status change, not proof of a fix. Findings on other targets are never closed with this one.</span>
+              <span className="muted small">{normalizedStatus === 'fix_verified' ? 'Fix verified is set only by AstraNull after a re-check confirms it. Reopen it if the gap comes back.' : 'Closure is a recorded status change, not proof of a fix.'} Findings on other targets are never closed with this one.</span>
             </div>
           </section>
         </CardContent>
@@ -1081,6 +1100,7 @@ export function FindingDetailView({
           </CardHeader>
           <CardContent>
             <FindingExplanationPanel finding={entity} config={config} session={session} />
+            {testRunId ? <VerdictReplay config={config} session={session} runId={testRunId} /> : null}
           </CardContent>
         </Card>
       </div>

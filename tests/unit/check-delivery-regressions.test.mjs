@@ -33,7 +33,7 @@ describe('catalog-known no-execution selectors refuse before destination DNS', (
   }
 });
 
-describe('real signed semantic comparison and peer-settings regression proofs', () => {
+describe('real signed semantic comparison and peer-settings regression proofs', { concurrency: false }, () => {
   let fixtures;
   before(async () => { fixtures = await createCheckDeliveryFixtures(); });
   after(async () => { await fixtures?.close(); });
@@ -47,25 +47,40 @@ describe('real signed semantic comparison and peer-settings regression proofs', 
       assert.equal(result.outcome.metadata.permitted_baseline_health, 'healthy');
       assert.equal(result.outcome.metadata.enforcement, 'enforced');
       assert.equal(result.event.metadata.enforcement, 'enforced');
-      assert.equal(result.verdict.verdict, 'edge_protected');
+      assert.equal(result.verdict.verdict, 'protected');
       assert.equal(result.verdict.confidence, 'external_only');
       assert.equal(result.findings.length, 0);
       assert.equal(result.readiness.coverage.passed_count, 1);
       assert.equal(result.readiness.coverage.partial_count, 0);
-      assert.equal(result.receipt.actual_wire.filter((row) => row.transport === 'http').length, 3);
+      const httpRows = result.receipt.actual_wire.filter((row) => row.transport === 'http');
+      assert.equal(httpRows.length, 4);
+      for (const row of httpRows) assert.ok(row.url.includes('an_cb='), row.url);
     });
     for (const scenario of ['variant_allowed', 'partial', 'permitted_unhealthy', 'variant_unsigned']) {
-      it(`${check.check_id}/${scenario}: never enforced and never readiness pass`, async () => {
+      it(`${check.check_id}/${scenario}: never a completed protection verdict or readiness pass`, async () => {
         const result = await executeMemoryDelivery(check, fixtures.forCheck(check, { scenario }));
-        assert.notEqual(result.outcome.metadata.enforcement, 'enforced');
         assert.equal(result.readiness.coverage.passed_count, 0);
+        assert.notEqual(result.verdict.verdict, 'edge_protected');
         if (scenario === 'variant_allowed') {
-          assert.equal(result.outcome.external_result, 'connected');
-          assert.equal(result.outcome.metadata.enforcement, 'not_enforced');
-          // Allowing an inert marker is not exploitability proof.
+          assert.equal(result.outcome.metadata.reference_outcome, 'blocked');
+          assert.equal(result.outcome.metadata.transform_outcome, 'allowed');
+          assert.notEqual(result.outcome.metadata.enforcement, 'enforced');
+          if (result.outcome.metadata.observation_only) {
+            assert.equal(result.outcome.metadata.normalization_gap, false);
+            assert.notEqual(result.outcome.external_result, 'blocked');
+          } else {
+            assert.equal(result.outcome.external_result, 'connected');
+            assert.equal(result.outcome.metadata.normalization_gap, true);
+            assert.equal(result.outcome.metadata.enforcement, 'partial');
+          }
+        } else if (scenario === 'partial') {
+          // Unsigned transform is excluded; a blocked reference alone cannot complete the comparison.
+          assert.equal(result.outcome.external_result, 'not_run');
+          assert.equal(result.outcome.metadata.comparison_complete, false);
           assert.equal(result.verdict.verdict, 'inconclusive');
           assert.equal(result.findings.length, 0);
         } else {
+          assert.notEqual(result.outcome.metadata.enforcement, 'enforced');
           assert.equal(result.outcome.external_result, 'not_run');
           assert.equal(result.verdict.verdict, 'inconclusive');
           assert.equal(result.findings.length, 0);
