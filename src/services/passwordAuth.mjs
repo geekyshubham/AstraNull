@@ -242,7 +242,6 @@ function mintPasswordSession(runtimeConfig, user, now, sessionGeneration) {
       tenantId: user.tenant_id,
       userId: user.id,
       role: user.role,
-      email: user.email,
       exp,
     }, runtimeConfig.sessionSecret);
     return addPasswordClaimsToSignedSession(token, runtimeConfig.sessionSecret, sessionGeneration);
