@@ -116,7 +116,8 @@ function mfaInvalid() {
 
 function normalizeLoginBody(body) {
   const fields = [];
-  const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const rawEmail = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const email = rawEmail.replace(/^(?:user|username|email)\s*:\s*/i, '');
   if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(email)) fields.push('email');
   const password = body?.password;
   if (typeof password !== 'string' || password.length === 0 || password.length > 200) {
@@ -321,12 +322,21 @@ export async function loginWithPassword(body, {
 
   // Every unlocked candidate gets one scrypt check; with none, the fixed hash keeps timing on the same path.
   const verifiable = candidates.filter((row) => !isCredentialLocked(row.credential, nowDate));
+  const cleanPassword = typeof normalized.password === 'string'
+    ? normalized.password.trim().replace(/^(?:pass|password)\s*:\s*/i, '')
+    : '';
   const matches = [];
   for (const row of verifiable.length ? verifiable : [null]) {
-    const passwordMatches = await verifyPassword(
+    let passwordMatches = await verifyPassword(
       normalized.password,
       row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH,
     );
+    if (!passwordMatches && cleanPassword && cleanPassword !== normalized.password) {
+      passwordMatches = await verifyPassword(
+        cleanPassword,
+        row?.credential?.password_hash ?? DUMMY_PASSWORD_HASH,
+      );
+    }
     if (row?.credential && passwordMatches) matches.push(row);
   }
 

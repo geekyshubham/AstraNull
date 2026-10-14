@@ -263,7 +263,7 @@ describe('Ticket R10: close remaining demo gates and hardening', () => {
 
     const socCheck = demoSocChecks[0];
     const res = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: demoHeaders('admin', DEMO_TENANT),
+      headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic'),
       body: {
         target_group_id: DEMO_GROUP,
         target_id: 'tgt_demo_fqdn',

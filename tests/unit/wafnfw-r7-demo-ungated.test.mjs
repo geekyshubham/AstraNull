@@ -493,6 +493,8 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(isCustomerRunnable(socCheck, 'Astra-D1TrtI4HMTSrwKRW-9'), true);
     assert.equal(isCustomerRunnable(socCheck, { email: 'admin@demo.astranull.local' }), true);
     assert.equal(isCustomerRunnable(socCheck, { userId: 'admin@demo.astranull.local' }), true);
+    assert.equal(isCustomerRunnable(socCheck, { userId: 'usr_admin' }), true);
+    assert.equal(isCustomerRunnable(socCheck, { tenantId: DEMO_TENANT, userId: 'usr_admin' }), true);
 
     // Prod tenant is blocked by SOC gate
     const prodRes = await request(baseUrl, 'POST', '/v1/test-runs', {
@@ -506,9 +508,9 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
     assert.equal(prodRes.status, 403);
     assert.equal(prodRes.json.error, 'soc_gated_check');
 
-    // Generic demo tenant is blocked by SOC gate
+    // Generic demo tenant user is blocked by SOC gate
     const genericDemoRes = await request(baseUrl, 'POST', '/v1/test-runs', {
-      headers: demoHeaders('admin', DEMO_TENANT),
+      headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic'),
       body: {
         target_group_id: DEMO_GROUP,
         target_id: DEMO_TARGET,

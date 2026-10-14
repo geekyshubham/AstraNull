@@ -363,6 +363,33 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
 
       await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
         await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
+      });
+
+      // usr_admin (the db user id for admin@demo.astranull.local) also bypasses SOC gate in ten_demo
+      const demoSocUsrRes = await request(baseUrl, 'POST', '/v1/test-runs', {
+        headers: demoHeaders('admin', DEMO_TENANT, 'usr_admin'),
+        body: {
+          target_group_id: DEMO_GROUP,
+          target_id: DEMO_TARGET,
+          check_id: socCheck.check_id,
+        },
+      });
+      assert.equal(demoSocUsrRes.status, 201);
+
+      // Generic user in demo tenant without admin identity is blocked by SOC gate
+      const demoGenericRes = await request(baseUrl, 'POST', '/v1/test-runs', {
+        headers: demoHeaders('admin', DEMO_TENANT, 'usr_generic'),
+        body: {
+          target_group_id: DEMO_GROUP,
+          target_id: DEMO_TARGET,
+          check_id: socCheck.check_id,
+        },
+      });
+      assert.equal(demoGenericRes.status, 403);
+      assert.equal(demoGenericRes.json.error, 'soc_gated_check');
+
+      await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
+        await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
         await client.query(
           `INSERT INTO soc_kill_switch (tenant_id, active, reason, updated_at, updated_by)
            VALUES ($1, true, 'test kill switch', now(), 'usr_soc')

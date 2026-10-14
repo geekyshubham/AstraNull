@@ -471,7 +471,22 @@ function navigateSpa(destination: string) {
   window.location.href = destination;
 }
 
-function enterDemoPortal(portalPath: string) {
+async function enterDemoPortal(portalPath: string, config?: PortalConfig) {
+  if (config && config.authMode !== 'dev-headers' && config.passwordLoginEnabled) {
+    try {
+      const res = await fetch('/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ email: 'admin@demo.astranull.local', password: 'Astra-D1TrtI4HMTSrwKRW-9' })
+      });
+      if (res.ok) {
+        const json = (await res.json()) as Record<string, unknown>;
+        saveSession(sessionFromLoginResponse(json));
+        navigateSpa(portalPath);
+        return;
+      }
+    } catch {}
+  }
   saveSession({
     mode: 'dev-headers',
     principal: 'customer',
@@ -1021,7 +1036,7 @@ function BoundariesSection() {
 export function PublicLandingPage({ config }: PublicPageProps) {
   const productName = String(config.siteConfig.product_name ?? 'AstraNull');
   const signupEnabled = config.siteConfig.signup_enabled !== false;
-  const demoEnabled = config.authMode === 'dev-headers';
+  const demoEnabled = config.authMode === 'dev-headers' || (config.passwordLoginEnabled && config.bundledLoginEnabled !== true);
   const loginUrl = config.loginUrl;
 
   usePageMeta({
@@ -1101,7 +1116,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
             {signupEnabled ? <AnchorButton href="/signup">Request access</AnchorButton> : null}
             <AnchorButton href={loginUrl} variant={signupEnabled ? 'secondary' : 'default'}>Log in</AnchorButton>
             {demoEnabled ? (
-              <Button type="button" variant="ghost" onClick={() => enterDemoPortal(config.portalPath)}>
+              <Button type="button" variant="ghost" onClick={() => enterDemoPortal(config.portalPath, config)}>
                 Open demo workspace (sample data)
               </Button>
             ) : null}
@@ -1340,7 +1355,10 @@ function CredentialLoginPage({ config }: PublicPageProps) {
    * Returns 'step' when the server asks for an expected next step (code or workspace).
    */
   async function submitPasswordLogin(): Promise<'step' | 'done'> {
-    const body: Record<string, unknown> = { email: userId.trim(), password };
+    const rawEmail = userId.trim();
+    const cleanEmail = rawEmail.replace(/^(?:user|username|email)\s*:\s*/i, '');
+    const cleanPassword = password.trim().replace(/^(?:pass|password)\s*:\s*/i, '');
+    const body: Record<string, unknown> = { email: cleanEmail, password: cleanPassword || password };
     const scopedTenant = tenantId.trim();
     if (scopedTenant) body.tenant_id = scopedTenant;
     if (mfaRequired) body.totp = totp.trim();
@@ -1406,7 +1424,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
 
   function validate() {
     const next: { email?: string; password?: string; tenant?: string; totp?: string } = {};
-    const email = userId.trim();
+    const email = userId.trim().replace(/^(?:user|username|email)\s*:\s*/i, '');
     if (!email) {
       next.email = usePasswordLane
         ? 'Enter your work email.'
@@ -1659,13 +1677,27 @@ function CredentialLoginPage({ config }: PublicPageProps) {
             ) : null}
           </div>
         ) : null}
-        <div className={`auth-form-actions${isDevHeaders ? ' row-actions' : ''}`}>
+        <div className={`auth-form-actions${isDevHeaders || usePasswordLane ? ' row-actions' : ''}`}>
           <Button type="submit" loading={loading} loadingText="Signing in…">
             {mfaRequired ? 'Verify and continue' : 'Continue to portal'}
           </Button>
           {isDevHeaders ? (
-            <Button type="button" variant="secondary" onClick={() => enterDemoPortal(config.portalPath)}>
+            <Button type="button" variant="secondary" onClick={() => enterDemoPortal(config.portalPath, config)}>
               Skip: open as demo admin
+            </Button>
+          ) : usePasswordLane ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setUserId('admin@demo.astranull.local');
+                setPassword('Astra-D1TrtI4HMTSrwKRW-9');
+                setFieldErrors({});
+                clearMfaChallenge();
+                clearWorkspaceChoice();
+              }}
+            >
+              Fill demo credentials
             </Button>
           ) : null}
         </div>
