@@ -29,7 +29,7 @@ const DEMO_TARGET = 'tgt_r7_pg_demo_fqdn';
 const PROD_TARGET = 'tgt_r7_pg_prod_fqdn';
 const SECRET = randomBytes(32).toString('hex');
 
-const demoAdmin = () => demoHeaders('admin', DEMO_TENANT, 'usr_r7_demo_admin');
+const demoAdmin = () => demoHeaders('admin', DEMO_TENANT, 'admin@demo.astranull.local');
 const prodAdmin = () => demoHeaders('admin', PROD_TENANT, 'usr_r7_prod_admin');
 
 async function seed(ownerPool) {
@@ -343,6 +343,10 @@ describe('Ticket R7: demo tenant runs every customer check with no access or inp
       });
       assert.equal(prodSocRes.status, 403);
       assert.equal(prodSocRes.json.error, 'soc_gated_check');
+
+      await withTenantContext(ownerPool, DEMO_TENANT, async (client) => {
+        await client.query(`UPDATE test_runs SET status = 'verdicted' WHERE tenant_id = $1`, [DEMO_TENANT]);
+      });
 
       const demoSocRes = await request(baseUrl, 'POST', '/v1/test-runs', {
         headers: demoAdmin(),

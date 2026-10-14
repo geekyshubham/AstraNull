@@ -7,6 +7,7 @@ import { createPortalRevampRepository } from '../../src/persistence/postgres/por
 import { deriveAssuranceScope } from '../../src/lib/assuranceScope.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { approvedScenarioVersion, deriveRunEvidenceStamp } from '../../src/lib/checkDefinitionVersion.mjs';
+import { WAF_GRADING_VERSION, SIGNATURE_CORPUS_VERSION } from '../../src/lib/externalObservationOutcomes.mjs';
 import {
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
@@ -105,7 +106,7 @@ describe('postgres current-release target profile', () => {
         await pool.query(
           `INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, metadata_json)
            VALUES ($1, $2, 'run_reason', 'probe_result', 'signed_probe', $3, now(), $4::jsonb)`,
-          [id, TENANT, nonce, JSON.stringify({ error_class: error })],
+          [id, TENANT, nonce, JSON.stringify({ error_class: error, grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION })],
         );
       }
       await pool.query(`INSERT INTO verdicts (id, tenant_id, test_run_id, verdict, evidence_ids) VALUES ('verdict_reason', $1, 'run_reason', 'inconclusive', ARRAY['evt_reason'])`, [TENANT]);
@@ -132,7 +133,8 @@ describe('postgres current-release target profile', () => {
       await pool.query(`INSERT INTO events (id, tenant_id, test_run_id, signal_type, producer_kind, nonce_hash, timestamp, ingested_at, metadata_json)
         VALUES ('evidence_profile_live', $1, 'run_target_profile', 'probe_result', 'signed_probe', 'profile_nonce', now(), now(), $2::jsonb)`,
         [TENANT, JSON.stringify({ classifier_version: 'marker-comparison-v4', comparison_complete: true,
-          planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy', enforcement: 'enforced', evidence_complete: true })]);
+          planned_marker_legs: 2, completed_marker_legs: 2, permitted_baseline_health: 'healthy', enforcement: 'enforced', evidence_complete: true,
+          grading_version: WAF_GRADING_VERSION, signature_corpus_version: SIGNATURE_CORPUS_VERSION })]);
       await stampScope(pool, 'run_target_profile');
       const portal = createPortalRevampRepository(pool);
       await pool.query(
