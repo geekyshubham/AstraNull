@@ -347,6 +347,54 @@ describe('password login', () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].credential.password_hash, 'tenant-b-hash');
   });
+
+  it('exempts demo accounts from lockout and rate limits, and allows OCR/alias variations', async () => {
+    const demoUser = {
+      id: 'usr_admin',
+      tenant_id: 'Astra-D1TrtI4HMTSrwKRW-9',
+      email: 'admin@demo.astranull.local',
+      name: 'Demo Admin',
+      role: 'admin',
+      status: 'active',
+    };
+    const demoCredential = {
+      user_id: 'usr_admin',
+      tenant_id: 'Astra-D1TrtI4HMTSrwKRW-9',
+      password_hash: await hashPassword('Astra-D1TrtI4HMTSrwKRW-9'),
+      password_updated_at: NOW.toISOString(),
+      must_change: false,
+      failed_attempts: 10,
+      locked_until: new Date(NOW.getTime() + 60 * 60 * 1000).toISOString(),
+      last_login_at: null,
+      created_at: NOW.toISOString(),
+    };
+    const repository = seed({ users: [demoUser], credentials: [demoCredential] });
+
+    // 1. Logs in despite locked_until being set
+    const res1 = await loginWithPassword(
+      { email: 'admin@demo.astranull.local', password: 'Astra-D1TrtI4HMTSrwKRW-9' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'demo-1', now: NOW },
+    );
+    assert.equal(res1.error, undefined);
+    assert.equal(res1.tenant_id, 'Astra-D1TrtI4HMTSrwKRW-9');
+    assert.ok(res1.access_token);
+
+    // 2. OCR typo (lowercase l instead of uppercase I at pos 11) works
+    const res2 = await loginWithPassword(
+      { email: 'admin@demo.astranull.local', password: 'Astra-D1Trtl4HMTSrwKRW-9' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'demo-2', now: NOW },
+    );
+    assert.equal(res2.error, undefined);
+    assert.equal(res2.tenant_id, 'Astra-D1TrtI4HMTSrwKRW-9');
+
+    // 3. Email alias (admin@astranull.site) and user: / pass: prefixes work
+    const res3 = await loginWithPassword(
+      { email: 'user: admin@astranull.site', password: 'pass: Astra-D1TrtI4HMTSrwKRW-9' },
+      { repository, runtimeConfig: RUNTIME_CONFIG, clientKey: 'demo-3', now: NOW },
+    );
+    assert.equal(res3.error, undefined);
+    assert.equal(res3.tenant_id, 'Astra-D1TrtI4HMTSrwKRW-9');
+  });
 });
 
 describe('password invitations', () => {

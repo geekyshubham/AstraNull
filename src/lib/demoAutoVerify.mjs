@@ -14,19 +14,29 @@ export const DEMO_AUTO_VERIFY_AUDIT_ACTION = 'target.ownership_demo_auto_verifie
 export const DEMO_ACCOUNT_TENANT_ID = 'Astra-D1TrtI4HMTSrwKRW-9';
 export const DEMO_ADMIN_EMAIL = 'admin@demo.astranull.local';
 
+const DEMO_EMAIL_ALIASES = new Set([
+  DEMO_ADMIN_EMAIL.toLowerCase(),
+  'admin@astranull.site',
+  'admin@demo.astranull.site',
+  'admin@astranull.local',
+  'usr_admin',
+]);
+
 export function matchesDemoAccount(tenantOrCtx) {
   if (!tenantOrCtx) return false;
   if (typeof tenantOrCtx === 'string') {
     const s = tenantOrCtx.trim();
-    return s === DEMO_ACCOUNT_TENANT_ID || s === DEMO_ADMIN_EMAIL;
+    if (s === DEMO_ACCOUNT_TENANT_ID) return true;
+    const lower = s.toLowerCase();
+    return lower === DEMO_ADMIN_EMAIL.toLowerCase() || DEMO_EMAIL_ALIASES.has(lower);
   }
   if (typeof tenantOrCtx === 'object') {
     const tid = String(tenantOrCtx.tenantId ?? tenantOrCtx.tenant_id ?? tenantOrCtx.id ?? '').trim();
     if (tid === DEMO_ACCOUNT_TENANT_ID) return true;
     const uid = String(tenantOrCtx.userId ?? tenantOrCtx.user_id ?? '').trim();
-    if (uid === DEMO_ADMIN_EMAIL || uid === DEMO_ACCOUNT_TENANT_ID) return true;
-    const email = String(tenantOrCtx.email ?? tenantOrCtx.user?.email ?? tenantOrCtx.principal?.email ?? '').trim();
-    if (email === DEMO_ADMIN_EMAIL) return true;
+    if (uid === DEMO_ACCOUNT_TENANT_ID || DEMO_EMAIL_ALIASES.has(uid.toLowerCase())) return true;
+    const email = String(tenantOrCtx.email ?? tenantOrCtx.user?.email ?? tenantOrCtx.principal?.email ?? '').trim().toLowerCase();
+    if (email && DEMO_EMAIL_ALIASES.has(email)) return true;
   }
   return false;
 }

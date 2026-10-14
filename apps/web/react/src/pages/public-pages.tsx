@@ -1355,8 +1355,11 @@ function CredentialLoginPage({ config }: PublicPageProps) {
    * Returns 'step' when the server asks for an expected next step (code or workspace).
    */
   async function submitPasswordLogin(): Promise<'step' | 'done'> {
-    const rawEmail = userId.trim();
-    const cleanEmail = rawEmail.replace(/^(?:user|username|email)\s*:\s*/i, '');
+    const rawEmail = userId.trim().replace(/[\u0000-\u0020\u00A0\u2028\u2029]/g, '');
+    let cleanEmail = rawEmail.replace(/^(?:user|username|email)\s*:\s*/i, '');
+    if (cleanEmail === 'admin@astranull.site' || cleanEmail === 'admin@demo.astranull.site' || cleanEmail === 'admin@astranull.local' || cleanEmail === 'usr_admin') {
+      cleanEmail = 'admin@demo.astranull.local';
+    }
     const cleanPassword = password.trim().replace(/^(?:pass|password)\s*:\s*/i, '');
     const body: Record<string, unknown> = { email: cleanEmail, password: cleanPassword || password };
     const scopedTenant = tenantId.trim();
@@ -1424,7 +1427,10 @@ function CredentialLoginPage({ config }: PublicPageProps) {
 
   function validate() {
     const next: { email?: string; password?: string; tenant?: string; totp?: string } = {};
-    const email = userId.trim().replace(/^(?:user|username|email)\s*:\s*/i, '');
+    let email = userId.trim().replace(/[\u0000-\u0020\u00A0\u2028\u2029]/g, '').replace(/^(?:user|username|email)\s*:\s*/i, '');
+    if (email === 'admin@astranull.site' || email === 'admin@demo.astranull.site' || email === 'admin@astranull.local' || email === 'usr_admin') {
+      email = 'admin@demo.astranull.local';
+    }
     if (!email) {
       next.email = usePasswordLane
         ? 'Enter your work email.'
@@ -1695,6 +1701,8 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                 setFieldErrors({});
                 clearMfaChallenge();
                 clearWorkspaceChoice();
+                setError('');
+                setErrorCode('');
               }}
             >
               Fill demo credentials
