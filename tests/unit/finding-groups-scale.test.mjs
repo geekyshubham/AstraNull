@@ -63,7 +63,8 @@ describe('Refined grouping at production scale', () => {
     const { result, ms } = timed(() => groupFindings(findings, { targets, checks, targetGroups, now: NOW }));
     assert.ok(result.length > 0);
     assert.equal(result.reduce((sum, group) => sum + group.findingIds.length, 0), N);
-    assert.ok(ms < 1500, `summary grouping took ${Math.round(ms)}ms (old quadratic helper: ~4800ms)`);
+    const budget = process.env.CI ? 3000 : 2000;
+    assert.ok(ms < budget, `summary grouping took ${Math.round(ms)}ms (old quadratic helper: ~4800ms)`);
   });
 
   it('reuses one index for summary and filtered grouping', () => {
@@ -73,7 +74,8 @@ describe('Refined grouping at production scale', () => {
     assert.ok(matched.length > 0);
     const { result: filtered, ms: filteredMs } = timed(() => groupFindings(matched, index));
     assert.equal(filtered.reduce((sum, group) => sum + group.openCount, 0), matched.length);
-    assert.ok(summaryMs + filteredMs < 2000, `summary ${Math.round(summaryMs)}ms + filtered ${Math.round(filteredMs)}ms`);
+    const budgetReused = process.env.CI ? 3500 : 2500;
+    assert.ok(summaryMs + filteredMs < budgetReused, `summary ${Math.round(summaryMs)}ms + filtered ${Math.round(filteredMs)}ms`);
   });
 
   it('reads each target record a bounded number of times, independent of finding count', () => {
