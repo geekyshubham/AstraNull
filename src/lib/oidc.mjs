@@ -316,7 +316,8 @@ export async function verifyOidcBearerToken(token, oidc) {
   const role = pickRole(readClaimValue(payload, oidc.roleClaim), oidc);
   if (!role) return { error: 'invalid_role' };
 
-  return { tenantId, userId, role };
+  const email = claimString(payload, 'email');
+  return { tenantId, userId, role, ...(email ? { email } : {}) };
 }
 
 /**

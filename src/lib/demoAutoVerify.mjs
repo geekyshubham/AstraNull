@@ -13,9 +13,8 @@ export const DEMO_AUTO_VERIFY_AUDIT_ACTION = 'target.ownership_demo_auto_verifie
 
 export const DEMO_ACCOUNT_TENANT_ID = 'Astra-D1TrtI4HMTSrwKRW-9';
 export const DEMO_ADMIN_EMAIL = 'admin@demo.astranull.local';
-export const DEMO_ADMIN_USER_ID = 'usr_admin';
 
-export function matchesDemoAccount(tenantOrCtx, env = process.env) {
+export function matchesDemoAccount(tenantOrCtx) {
   if (!tenantOrCtx) return false;
   if (typeof tenantOrCtx === 'string') {
     const s = tenantOrCtx.trim();
@@ -28,7 +27,6 @@ export function matchesDemoAccount(tenantOrCtx, env = process.env) {
     if (uid === DEMO_ADMIN_EMAIL || uid === DEMO_ACCOUNT_TENANT_ID) return true;
     const email = String(tenantOrCtx.email ?? tenantOrCtx.user?.email ?? tenantOrCtx.principal?.email ?? '').trim();
     if (email === DEMO_ADMIN_EMAIL) return true;
-    if (uid === DEMO_ADMIN_USER_ID && (!tid || tid === 'ten_demo' || demoAutoVerifyTenants(env).has(tid))) return true;
   }
   return false;
 }

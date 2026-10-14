@@ -27,7 +27,8 @@ export function authContextFromHeaders(headers) {
   const userId = headers['x-user-id'] ?? DEMO_USER;
   let role = (headers['x-role'] ?? DEMO_ROLE).toLowerCase();
   if (!ROLES.includes(role)) role = 'viewer';
-  return { tenantId, userId, role };
+  const email = headers['x-user-email'] ? String(headers['x-user-email']).trim() : undefined;
+  return { tenantId, userId, role, ...(email ? { email } : {}) };
 }
 
 function safeEqualUtf8(a, b) {
@@ -46,7 +47,7 @@ function sessionSignature(secret, version, payloadB64) {
  * Mint HMAC-signed session tokens for tests and operators — not a production IdP.
  */
 export function mintSignedSessionToken(
-  { tenantId, userId, role, exp },
+  { tenantId, userId, role, exp, email },
   secret,
 ) {
   if (!secret || secret.length < 32) {
@@ -61,6 +62,7 @@ export function mintSignedSessionToken(
     userId,
     role: normalizedRole,
     exp: exp ?? Math.floor(Date.now() / 1000) + 3600,
+    ...(email ? { email: String(email).trim() } : {}),
   };
   const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const sig = sessionSignature(secret, SESSION_VERSION, payloadB64);
@@ -86,7 +88,12 @@ export function verifySignedSessionToken(token, secret) {
   if (Number(payload.exp) * 1000 < Date.now()) return { error: 'expired' };
   const role = String(payload.role).toLowerCase();
   if (!ROLES.includes(role)) return { error: 'invalid_role' };
-  return { tenantId: payload.tenantId, userId: payload.userId, role };
+  return {
+    tenantId: payload.tenantId,
+    userId: payload.userId,
+    role,
+    ...(payload.email ? { email: String(payload.email).trim() } : {}),
+  };
 }
 
 export function isProbeWorkerRoute(pathname, method) {
