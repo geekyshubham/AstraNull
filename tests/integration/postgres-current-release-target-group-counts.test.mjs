@@ -23,9 +23,13 @@ const ZERO_GROUP_ID = 'tg_tgc_zero';
 const FOREIGN_GROUP_ID = 'tg_tgc_foreign';
 
 async function createAppRolePool(adminPool, databaseName) {
-  await adminPool.query(
-    `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
-  );
+  try {
+    await adminPool.query(
+      `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
+    );
+  } catch (err) {
+    if (!err?.message?.includes('concurrently updated')) throw err;
+  }
   const url = new URL(
     databaseUrlWithDatabase(adminPool.options.connectionString, databaseName).replace(/^postgresql:/i, 'postgres:'),
   );

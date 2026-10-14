@@ -42,9 +42,13 @@ const CTX = { tenantId: TENANT, userId: 'usr_hist_writers', role: 'admin' };
 const OTHER_CTX = { tenantId: OTHER, userId: 'usr_hist_writers_other', role: 'admin' };
 
 async function createAppRolePool(adminPool, ownerDatabaseUrl) {
-  await adminPool.query(
-    `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
-  );
+  try {
+    await adminPool.query(
+      `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
+    );
+  } catch (err) {
+    if (!err?.message?.includes('concurrently updated')) throw err;
+  }
   const url = new URL(ownerDatabaseUrl.replace(/^postgresql:/i, 'postgres:'));
   url.username = APP_ROLE_NAME;
   url.password = APP_ROLE_PASSWORD;

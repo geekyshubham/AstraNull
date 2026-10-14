@@ -39,9 +39,13 @@ const OTHER_TENANT = { tenantId: TENANT_B, userId: 'usr_wof_b', role: 'soc' };
 
 async function createAppRolePool(ownerPool, databaseName) {
   await ensureHarnessAppRole(ownerPool);
-  await ownerPool.query(
-    `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
-  );
+  try {
+    await ownerPool.query(
+      `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
+    );
+  } catch (err) {
+    if (!err?.message?.includes('concurrently updated')) throw err;
+  }
   const url = new URL(
     databaseUrlWithDatabase(ownerPool.options.connectionString, databaseName)
       .replace(/^postgresql:/i, 'postgres:'),

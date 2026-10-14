@@ -581,10 +581,13 @@ describe('current-release backend history HTTP API', () => {
         );
       });
 
-      await ensureHarnessAppRole(ownerPool);
-      await ownerPool.query(
-        `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
-      );
+      try {
+        await ownerPool.query(
+          `ALTER ROLE ${APP_ROLE_NAME} WITH LOGIN PASSWORD '${APP_ROLE_PASSWORD}' NOSUPERUSER NOBYPASSRLS`,
+        );
+      } catch (err) {
+        if (!err?.message?.includes('concurrently updated')) throw err;
+      }
       const url = new URL(databaseUrlWithDatabase(
         ownerPool.options.connectionString,
         databaseName,
