@@ -9,9 +9,9 @@ import { ownershipProofFromStates } from '../lib/ownershipPolicy.mjs';
 import {
   SUBDOMAIN_DETECTION_BATCH,
   SUBDOMAIN_FINGERPRINT_CHECK_ID,
-  SUBDOMAIN_SOURCE,
+  SUBDOMAIN_SOURCE_LABELS,
   SubdomainSourceError,
-  fetchVirusTotalSubdomains,
+  fetchSubdomainsFromSource,
   hostnameOf,
   isDiscoveredSubdomain,
   isStrictSubdomain,
@@ -100,7 +100,12 @@ export async function listTargetSubdomains(ctx, parentTargetId, deps) {
       hostname: hostnameOf(parent),
       ownership_verified: parentProof(parent).verified,
     },
-    source: { name: SUBDOMAIN_SOURCE, configured: deps.config?.configured === true },
+    source: {
+      name: deps.config?.source ?? null,
+      label: SUBDOMAIN_SOURCE_LABELS[deps.config?.source] ?? null,
+      configured: deps.config?.configured === true,
+      reason: deps.config?.configured === true ? null : (deps.config?.reason ?? 'not_configured'),
+    },
     detection_enabled: deps.detectionEnabled !== false,
     items,
     count: items.length,
@@ -143,13 +148,11 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
 
   let discovered;
   try {
-    discovered = await fetchVirusTotalSubdomains(parentHost, {
-      apiKey: deps.config?.virusTotalApiKey,
-      maxResults: deps.config?.maxResults,
-      fetchFn: deps.fetchFn,
-    });
+    discovered = await fetchSubdomainsFromSource(parentHost, deps.config, { fetchFn: deps.fetchFn });
   } catch (error) {
-    if (error instanceof SubdomainSourceError) return fail(error.code, error.status, { message: error.message });
+    if (error instanceof SubdomainSourceError) {
+      return fail(error.code, error.status, { message: error.message, source: deps.config?.source ?? null });
+    }
     throw error;
   }
 
@@ -199,6 +202,7 @@ export async function enumerateTargetSubdomains(ctx, parentTargetId, deps) {
   return {
     parent_target_id: parent.id,
     source: discovered.source,
+    source_label: SUBDOMAIN_SOURCE_LABELS[discovered.source] ?? null,
     found: discovered.hostnames.length,
     reported_total: discovered.reported_total,
     truncated: discovered.truncated,

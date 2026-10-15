@@ -359,7 +359,7 @@ describe('react portal route access', () => {
   });
 
   it('keeps customer routes out of the non-impersonating staff surface', () => {
-    for (const route of ['dashboard', 'targets', 'finding-detail', 'settings', 'subscription']) {
+    for (const route of ['dashboard', 'targets', 'finding-detail', 'settings', 'support']) {
       assert.equal(
         canAccessRoute('admin', route, { principal: 'staff', staffRole: 'internal_admin' }),
         false,

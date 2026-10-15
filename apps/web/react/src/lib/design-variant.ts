@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 export type DesignVariant = 'classic' | 'refined';
 
 /** Pages that currently ship a Refined presentation. */
-export type VariantPage = 'test-policies' | 'runs' | 'findings';
+export type VariantPage = 'test-policies' | 'runs' | 'findings' | 'targets';
 
 const STORAGE_PREFIX = 'astranull.design-variant.';
 const HASH_PARAM = 'variant';

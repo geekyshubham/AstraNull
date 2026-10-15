@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Menu, Moon, Sun, X } from 'lucide-react';
+import { Globe, LogOut, Menu, Moon, PanelLeftClose, PanelLeftOpen, ShieldUser, Sun, UserRound, X } from 'lucide-react';
 import type { ReactNode, Ref } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSession } from '../../lib/api';
@@ -96,6 +96,16 @@ export function useEntityDocumentTitle(title?: string) {
 
 function sentenceStart(text: string) {
   return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text;
+}
+
+function roleLabelFor(role?: string) {
+  return sentenceStart(String(role ?? '').trim().replaceAll('_', ' '));
+}
+
+function accountInitials(label: string) {
+  const words = label.replace(/^ten_/i, '').split(/[\s_.-]+/).filter(Boolean);
+  const letters = words.length > 1 ? `${words[0][0]}${words[1][0]}` : (words[0] ?? '').slice(0, 2);
+  return letters.toUpperCase();
 }
 
 function documentTitleFor(route: RouteId, crumb: RouteCrumb, entityTitle: string | null) {
@@ -363,7 +373,18 @@ export function AppShell({
   }
 
   const collapseLabel = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
-  const CollapseIcon = sidebarCollapsed ? ChevronRight : ChevronLeft;
+  const CollapseIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
+  const roleLabel = roleLabelFor(isStaffPrincipal ? session.staff_role : session.role)
+    || (isStaffPrincipal ? 'Staff' : 'Role not recorded');
+  const workspaceLabel = tenantName || tenantId;
+  const signedInAs = isStaffPrincipal ? session.staff_id ?? session.user_id : session.user_id;
+  const accountTitle = [
+    isStaffPrincipal ? 'Staff session' : `Workspace ${tenantName ? `${tenantName} (${tenantId})` : tenantId}`,
+    signedInAs ? `Signed in as ${signedInAs}` : '',
+    `Role ${roleLabel}`,
+    environment ? `Environment ${environment}` : ''
+  ].filter(Boolean).join(' · ');
+  const avatarInitials = !isStaffPrincipal && (tenantName || tenantId !== 'unknown') ? accountInitials(workspaceLabel) : '';
 
   return (
     <div className={cn('app-shell', sidebarCollapsed && 'sidebar-collapsed')}>
@@ -380,13 +401,6 @@ export function AppShell({
         <div className="sidebar-head">
           <Brand />
           <div className="sidebar-head-actions">
-            <ShellIconButton
-              label={collapseLabel}
-              className="sidebar-collapse"
-              onClick={toggleSidebarCollapsed}
-            >
-              <CollapseIcon size={18} aria-hidden="true" focusable="false" />
-            </ShellIconButton>
             <ShellIconButton label="Close navigation" className="sidebar-close" buttonRef={closeButtonRef} onClick={() => setSidebarOpen(false)}>
               <X size={17} aria-hidden="true" focusable="false" />
             </ShellIconButton>
@@ -412,17 +426,35 @@ export function AppShell({
           ))}
         </nav>
         <div className="sidebar-foot">
-          {isStaffPrincipal ? (
-            <span>Staff session</span>
-          ) : (
-            <>
-              <span>
-                <b title={tenantId}>{tenantName || tenantId}</b>
+          <div className="sidebar-account" title={accountTitle}>
+            <span className="sidebar-avatar" aria-hidden="true">
+              {isStaffPrincipal ? (
+                <ShieldUser size={16} aria-hidden="true" focusable="false" />
+              ) : avatarInitials || <UserRound size={16} aria-hidden="true" focusable="false" />}
+            </span>
+            <span className="sidebar-account-copy">
+              {isStaffPrincipal ? (
+                <span className="sidebar-account-name">Staff session</span>
+              ) : (
+                <b className="sidebar-account-name" title={tenantId}>{tenantName || tenantId}</b>
+              )}
+              <span className="sidebar-account-meta">
+                {roleLabel}
                 {environment ? <> · {environment}</> : null}
               </span>
-              <span>Outside-in validation</span>
-            </>
-          )}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="sidebar-foot-btn sidebar-signout"
+              onClick={logout}
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut size={16} aria-hidden="true" focusable="false" />
+            </Button>
+          </div>
           {showRoleSwitcher ? (
             <Select
               label="Role (dev)"
@@ -433,12 +465,24 @@ export function AppShell({
             />
           ) : null}
           <div className="sidebar-foot-actions">
-            <AnchorButton href="/" variant="ghost" size="sm">
-              Public site
+            <AnchorButton
+              href="/"
+              variant="ghost"
+              size="sm"
+              className="sidebar-foot-btn sidebar-foot-link"
+              aria-label="Public site"
+              title="Public site"
+            >
+              <Globe size={16} aria-hidden="true" focusable="false" />
+              <span>Public site</span>
             </AnchorButton>
-            <Button type="button" variant="ghost" size="sm" onClick={logout}>
-              Sign out
-            </Button>
+            <ShellIconButton
+              label={collapseLabel}
+              className="sidebar-foot-btn sidebar-collapse"
+              onClick={toggleSidebarCollapsed}
+            >
+              <CollapseIcon size={16} aria-hidden="true" focusable="false" />
+            </ShellIconButton>
           </div>
         </div>
       </aside>

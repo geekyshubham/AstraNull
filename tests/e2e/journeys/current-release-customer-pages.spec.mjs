@@ -645,11 +645,12 @@ test.describe('current-release customer pages', () => {
     expect(writes).toEqual([]);
   });
 
-  test('plan and usage: named truthfully, no deferred high-scale usage, access is not configuration', async ({ page }) => {
+  test('plan and usage: retired page, old links land on the dashboard', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'subscription', sourceBaseUrl);
-    await expect(page.getByRole('heading', { level: 1, name: 'Plan & usage' })).toBeVisible();
-    await expect(page.getByText('High-scale requests')).toHaveCount(0);
+    await expect(page).toHaveURL(/#dashboard$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Plan & usage' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Plan & usage' })).toHaveCount(0);
   });
 
   test('release evidence: not a customer surface, even for the auditor role', async ({ page }) => {
@@ -764,7 +765,6 @@ test.describe('current-release customer pages', () => {
         [`audit?event=${SEEDED_AUDIT_ID}`, PORTAL_SESSION],
         ['settings?tab=privacy', PORTAL_SESSION],
         ['support', PORTAL_SESSION],
-        ['subscription', PORTAL_SESSION],
       ];
       const failures = [];
       for (const [hash, session] of routes) {
@@ -786,7 +786,7 @@ test.describe('current-release customer pages', () => {
     await page.setViewportSize({ width: 640, height: 800 });
     await injectPortalDevHeadersSession(page);
     const overflowing = [];
-    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'settings?tab=access', 'support', 'subscription', `checks?target=${PORTAL_BASELINE_IDS.targetId}`]) {
+    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'settings?tab=access', 'support', `checks?target=${PORTAL_BASELINE_IDS.targetId}`]) {
       await page.goto(`${sourceBaseUrl}/app#${hash}`, { waitUntil: 'networkidle' });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       if (overflow > 1) overflowing.push(`${hash}: ${overflow}px`);
@@ -815,7 +815,7 @@ test.describe('current-release customer pages', () => {
     const page = await context.newPage();
     await injectPortalDevHeadersSession(page);
     const small = [];
-    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'support', 'subscription', 'settings', `checks?target=${PORTAL_BASELINE_IDS.targetId}`, `integrations?focus=${RULE_ID}`]) {
+    for (const hash of ['targets', 'test-policies', `policy-detail?id=${BOUND_POLICY_ID}`, 'reports', 'report-detail?id=rpt_checkout_baseline', `notifications?focus=${FAILED_ATTEMPT_ID}`, `audit?event=${SEEDED_AUDIT_ID}`, 'support', 'settings', `checks?target=${PORTAL_BASELINE_IDS.targetId}`, `integrations?focus=${RULE_ID}`]) {
       await page.goto(`${sourceBaseUrl}/app#${hash}`, { waitUntil: 'networkidle' });
       const found = await page.evaluate(() => {
         const out = [];

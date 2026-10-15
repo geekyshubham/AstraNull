@@ -33,7 +33,6 @@ const ROUTES = [
   'audit',
   'settings',
   'support',
-  'subscription',
   'soc',
   'run-detail',
   'target-group-detail',
@@ -79,8 +78,6 @@ const EXPECTED_SNIPPETS = {
   soc: ['SOC role required', 'Kill switch'],
   settings: ['Organization profile', 'Secret vault', 'API keys', 'Data retention'],
   support: ['Support readiness', 'Support workflows', 'Kill switch'],
-  subscription: ['Entitlement breakdown', 'Usage against limits', 'Professional'],
-  'subscription-empty': ['No subscription configured', 'Contact your AstraNull support team', 'Not configured'],
   'high-scale': ['Lifecycle timeline', 'Authorization pack status'],
   admin: ['Entitlement grants', 'Tenant directory'],
   'tenant-detail': ['Tenant administration', 'Subscription', 'Support owner'],
@@ -832,8 +829,8 @@ async function run() {
     page.on('requestfailed', (req) => failedRequests.push(`${req.method()} ${req.url()} ${req.failure()?.errorText ?? ''}`));
 
     for (const scenario of [
-      { label: 'seeded', route: 'subscription', snippets: EXPECTED_SNIPPETS.subscription, forbidden: ['No subscription configured', 'Enterprise'] },
-      { label: 'empty', route: 'subscription-empty', snippets: EXPECTED_SNIPPETS['subscription-empty'], forbidden: ['Professional', 'Enterprise', 'Monthly developer-validation limit'] }
+      { label: 'seeded', forbidden: ['Plan & usage', 'Entitlement breakdown', 'Usage against limits'] },
+      { label: 'empty', forbidden: ['Plan & usage', 'No subscription configured'] }
     ]) {
       const step = `${viewport.name}:subscription-${scenario.label}`;
       try {
@@ -846,12 +843,9 @@ async function run() {
         await page.reload({ waitUntil: 'networkidle', timeout: 45000 });
         await page.goto(`${baseUrl}/app#subscription`, { waitUntil: 'networkidle', timeout: 45000 });
         await page.waitForTimeout(600);
-        const bodyText = await page.locator('body').innerText();
-        for (const snippet of scenario.snippets ?? []) {
-          if (!bodyIncludesSnippet(bodyText, snippet)) {
-            failures.push({ step, detail: `missing expected text: ${snippet}` });
-          }
-        }
+        const hash = await page.evaluate(() => window.location.hash);
+        if (hash !== '#dashboard') failures.push({ step, detail: `retired #subscription did not redirect to #dashboard (got ${hash})` });
+        const bodyText = await page.locator('main').innerText();
         for (const snippet of scenario.forbidden ?? []) {
           if (bodyText.toLowerCase().includes(snippet.toLowerCase())) {
             failures.push({ step, detail: `forbidden text detected: ${snippet}` });

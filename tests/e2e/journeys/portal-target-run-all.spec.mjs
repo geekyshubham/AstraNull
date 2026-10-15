@@ -171,7 +171,7 @@ test.describe('target workspace: recorded attribution, checks and reviewed runs 
     await expect(page.locator('.target-detail-view')).not.toContainText(/wafw00f|cdncheck/i);
     await expect(page).toHaveURL(/inspect=check_result&ev_target=tgt_checkout_2&ev_check=waf\.crlf_injection_marker\.safe&ev_run=run_fx_1/);
     await page.keyboard.press('Escape');
-    await panel.getByRole('button', { name: /^All/ }).click();
+    await panel.getByRole('group', { name: 'Filter checks by result' }).getByRole('button', { name: /^All/ }).click();
     await expect(panel.locator('.td-cat').filter({ hasText: 'Origin exposure' })).toBeVisible();
 
     expect(edgePosts, 'an existing detection is never re-queued automatically').toEqual([]);

@@ -13,7 +13,7 @@ import {
 } from './lib/secrets.mjs';
 import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
 import { loadEvidenceSigningConfig } from './lib/evidenceSigningConfig.mjs';
-import { boundedMaxResults } from './lib/subdomainEnumeration.mjs';
+import { boundedMaxResults, resolveSubdomainSource } from './lib/subdomainEnumeration.mjs';
 import { approvedProbeSourcesFromEnv } from './lib/probeSourcePerspective.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
@@ -724,9 +724,14 @@ export function loadRuntimeConfig(env = process.env) {
   const virusTotalApiKey = typeof env.ASTRANULL_VIRUSTOTAL_API_KEY === 'string'
     ? env.ASTRANULL_VIRUSTOTAL_API_KEY.trim()
     : '';
+  const resolvedSubdomainSource = resolveSubdomainSource({
+    requested: env.ASTRANULL_SUBDOMAIN_SOURCE,
+    virusTotalApiKey,
+  });
   const subdomainDiscovery = Object.freeze({
-    source: 'virustotal',
-    configured: virusTotalApiKey.length > 0,
+    source: resolvedSubdomainSource.source,
+    configured: resolvedSubdomainSource.configured,
+    reason: resolvedSubdomainSource.reason,
     virusTotalApiKey,
     maxResults: boundedMaxResults(env.ASTRANULL_SUBDOMAIN_MAX_RESULTS),
   });

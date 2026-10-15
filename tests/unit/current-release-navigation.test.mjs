@@ -104,9 +104,16 @@ describe('customer navigation (shared-shell P2, contract)', () => {
   });
 
   it('groups account tasks and uses plain labels', () => {
-    for (const id of ['settings', 'support', 'subscription']) assert.equal(ROUTE_BY_ID.get(id)?.group, 'account');
-    assert.equal(ROUTE_BY_ID.get('subscription')?.label, 'Plan & usage');
+    for (const id of ['settings', 'support']) assert.equal(ROUTE_BY_ID.get(id)?.group, 'account');
     assert.equal(ROUTE_BY_ID.get('checks')?.label, 'Check library');
+  });
+
+  it('retires the Plan & usage page and sends old #subscription links to the dashboard', () => {
+    assert.equal(ROUTE_BY_ID.has('subscription'), false);
+    assert.equal(NAV_ITEMS.some((item) => item.label === 'Plan & usage'), false);
+    assert.equal(resolvePortalRoute('/app', '#subscription'), 'dashboard');
+    assert.equal(resolvePortalRoute('/app', '#subscription?tab=usage'), 'dashboard');
+    assert.equal(resolvePortalRoute('/app', '#target-groups'), 'targets');
   });
 });
 

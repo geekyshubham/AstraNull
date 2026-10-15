@@ -1,17 +1,27 @@
 /**
  * Subdomain enumeration for declared domain targets (ADR-0015).
  *
- * Source is the official VirusTotal v3 API, authenticated with a deployment-owned API key.
- * Only hostnames are kept. Each one must sit strictly under the parent domain the customer
- * declared, so a source response cannot introduce an unrelated host.
+ * Sources are the official VirusTotal v3 API (deployment-owned key) or keyless public
+ * Certificate Transparency logs via crt.sh (ADR-0031). Only hostnames are kept. Each one must
+ * sit strictly under the parent domain the customer declared, so a source response cannot
+ * introduce an unrelated host.
  */
 import { normalizeTargetValue, targetTagsFromRecord } from '../contracts/targetManagement.mjs';
 
 export const SUBDOMAIN_PARENT_TAG_PREFIX = 'subdomain-of:';
-export const SUBDOMAIN_SOURCE = 'virustotal';
+export const SUBDOMAIN_SOURCE_VIRUSTOTAL = 'virustotal';
+export const SUBDOMAIN_SOURCE_CT = 'crtsh';
+export const SUBDOMAIN_SOURCE = SUBDOMAIN_SOURCE_VIRUSTOTAL;
+export const SUBDOMAIN_SOURCE_LABELS = Object.freeze({
+  [SUBDOMAIN_SOURCE_VIRUSTOTAL]: 'VirusTotal',
+  [SUBDOMAIN_SOURCE_CT]: 'Certificate Transparency logs (crt.sh)',
+});
 export const SUBDOMAIN_FINGERPRINT_CHECK_ID = 'waf.fingerprint.safe';
 
 export const VIRUSTOTAL_API_BASE = 'https://www.virustotal.com/api/v3/domains/';
+export const CRTSH_API_BASE = 'https://crt.sh/';
+export const CRTSH_REQUEST_TIMEOUT_MS = 30_000;
+export const CRTSH_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const VIRUSTOTAL_PAGE_SIZE = 40;
 export const SUBDOMAIN_DEFAULT_MAX_RESULTS = 200;
 export const SUBDOMAIN_MAX_RESULTS_CEILING = 1000;
@@ -195,6 +205,157 @@ export async function fetchVirusTotalSubdomains(parentHostname, options = {}) {
     truncated: stopReason !== null,
     stop_reason: stopReason,
   };
+}
+
+/** ASTRANULL_SUBDOMAIN_SOURCE: blank = VirusTotal with a key, else crt.sh; `disabled` turns it off. */
+export function resolveSubdomainSource({ requested, virusTotalApiKey } = {}) {
+  const value = lower(requested);
+  const hasKey = typeof virusTotalApiKey === 'string' && virusTotalApiKey.trim().length > 0;
+  if (!value) {
+    return hasKey
+      ? { source: SUBDOMAIN_SOURCE_VIRUSTOTAL, configured: true, reason: null }
+      : { source: SUBDOMAIN_SOURCE_CT, configured: true, reason: null };
+  }
+  if (value === 'disabled' || value === 'none' || value === 'off' || value === '0') {
+    return { source: null, configured: false, reason: 'disabled' };
+  }
+  if (value === SUBDOMAIN_SOURCE_VIRUSTOTAL) {
+    return hasKey
+      ? { source: SUBDOMAIN_SOURCE_VIRUSTOTAL, configured: true, reason: null }
+      : { source: SUBDOMAIN_SOURCE_VIRUSTOTAL, configured: false, reason: 'virustotal_api_key_missing' };
+  }
+  if (value === SUBDOMAIN_SOURCE_CT || value === 'ct' || value === 'certificate_transparency') {
+    return { source: SUBDOMAIN_SOURCE_CT, configured: true, reason: null };
+  }
+  return { source: null, configured: false, reason: 'invalid_source' };
+}
+
+const NOT_CONFIGURED_COPY = {
+  disabled: 'Subdomain discovery is disabled for this deployment.',
+  virustotal_api_key_missing: 'Subdomain discovery is set to VirusTotal, but no VirusTotal API key is configured for this deployment.',
+  invalid_source: 'Subdomain discovery has an unrecognized source configured for this deployment.',
+};
+
+export function subdomainSourceNotConfiguredError(reason) {
+  return new SubdomainSourceError(
+    'subdomain_source_not_configured',
+    NOT_CONFIGURED_COPY[reason] ?? 'Subdomain discovery is not configured for this deployment.',
+    503,
+  );
+}
+
+async function readCappedText(response, maxBytes) {
+  const declared = Number.parseInt(response.headers?.get?.('content-length') ?? '', 10);
+  if (Number.isFinite(declared) && declared > maxBytes) return { tooLarge: true };
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    if (typeof response.text === 'function') {
+      const body = await response.text();
+      return Buffer.byteLength(body) > maxBytes ? { tooLarge: true } : { text: body };
+    }
+    return { json: await response.json() };
+  }
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return { tooLarge: true };
+    }
+    chunks.push(value);
+  }
+  return { text: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8') };
+}
+
+function crtshUrl(domain) {
+  const url = new URL(CRTSH_API_BASE);
+  url.searchParams.set('q', `%.${domain}`);
+  url.searchParams.set('output', 'json');
+  url.searchParams.set('exclude', 'expired');
+  url.searchParams.set('deduplicate', 'Y');
+  return url;
+}
+
+/** One bounded crt.sh read of unexpired certificates; only strict-descendant subject names are kept. */
+export async function fetchCertificateTransparencySubdomains(parentHostname, options = {}) {
+  const fetchFn = options.fetchFn ?? fetch;
+  const maxResults = boundedMaxResults(options.maxResults);
+  const timeoutMs = options.timeoutMs ?? CRTSH_REQUEST_TIMEOUT_MS;
+  const maxBytes = options.maxBytes ?? CRTSH_MAX_RESPONSE_BYTES;
+  const parent = lower(parentHostname).replace(/\.$/, '');
+  const label = SUBDOMAIN_SOURCE_LABELS[SUBDOMAIN_SOURCE_CT];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let body;
+  try {
+    const response = await fetchFn(crtshUrl(parent), {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    if (response.status === 429) {
+      throw new SubdomainSourceError('subdomain_source_rate_limited', `${label} rate limit reached. Try again in a minute.`, 429);
+    }
+    if (response.status !== 200) {
+      throw new SubdomainSourceError('subdomain_source_failed', `${label} returned HTTP ${response.status}.`);
+    }
+    body = await readCappedText(response, maxBytes);
+  } catch (error) {
+    if (error instanceof SubdomainSourceError) throw error;
+    throw new SubdomainSourceError('subdomain_source_unreachable', `${label} did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (body.tooLarge) {
+    throw new SubdomainSourceError('subdomain_source_response_too_large', `${label} returned more certificate records than one import can read.`);
+  }
+  let payload = body.json;
+  if (body.text !== undefined) {
+    try {
+      payload = body.text.trim() ? JSON.parse(body.text) : [];
+    } catch {
+      throw new SubdomainSourceError('subdomain_source_failed', `${label} returned an unreadable response.`);
+    }
+  }
+  if (!Array.isArray(payload)) {
+    throw new SubdomainSourceError('subdomain_source_failed', `${label} returned an unreadable response.`);
+  }
+  const found = new Set();
+  let stopReason = null;
+  outer: for (const entry of payload) {
+    const names = [entry?.common_name, ...String(entry?.name_value ?? '').split(/\s+/)];
+    for (const name of names) {
+      const hostname = typeof name === 'string' ? normalizeSubdomainCandidate(name, parent) : null;
+      if (!hostname) continue;
+      found.add(hostname);
+      if (found.size >= maxResults) { stopReason = 'max_results'; break outer; }
+    }
+  }
+  return {
+    source: SUBDOMAIN_SOURCE_CT,
+    hostnames: [...found].sort(),
+    pages: 1,
+    reported_total: null,
+    truncated: stopReason !== null,
+    stop_reason: stopReason,
+  };
+}
+
+/** Enumerate through the deployment's resolved source; never calls a source that is not configured. */
+export async function fetchSubdomainsFromSource(parentHostname, config = {}, { fetchFn } = {}) {
+  if (config?.configured !== true) throw subdomainSourceNotConfiguredError(config?.reason);
+  if (config.source === SUBDOMAIN_SOURCE_CT) {
+    return fetchCertificateTransparencySubdomains(parentHostname, { fetchFn, maxResults: config.maxResults });
+  }
+  return fetchVirusTotalSubdomains(parentHostname, {
+    apiKey: config.virusTotalApiKey,
+    maxResults: config.maxResults,
+    fetchFn,
+  });
 }
 
 /**

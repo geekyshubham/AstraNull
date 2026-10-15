@@ -313,6 +313,15 @@ export function getTargetEdgeDetection(tenantId, targetId) {
   ) ?? null;
 }
 
+/** Current detections keyed by target id for every target in a tenant. */
+export function listTargetEdgeDetectionsForTenant(tenantId) {
+  const map = new Map();
+  for (const row of ensureCollection(getStore())) {
+    if (row.tenant_id === tenantId) map.set(row.target_id, row);
+  }
+  return map;
+}
+
 /** Current detections keyed by target id for every target in a group. */
 export function listTargetEdgeDetectionsForGroup(tenantId, targetGroupId) {
   const collection = ensureCollection(getStore());

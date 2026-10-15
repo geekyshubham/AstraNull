@@ -376,17 +376,6 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     summary: 'Support readiness, escalation paths, and runbook references.'
   },
   {
-    id: 'subscription',
-    label: 'Subscription',
-    route: '/app#subscription',
-    routeId: 'subscription',
-    audience: 'Customer',
-    group: 'governance',
-    source: 'pages/page-components.tsx',
-    status: 'React implemented',
-    summary: 'Plan, entitlements, limits, billing state, and effective dates.'
-  },
-  {
     id: 'admin',
     label: 'Admin Console',
     route: '/internal/admin#admin',
@@ -682,7 +671,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Internal management overview', surface: 'Admin Console', status: 'Visible', relationship: 'Shows pending sign-ups, approvals, tenants, support, and audit counts.' },
       { name: 'Staff signup queue', surface: 'Admin Console', status: 'Staff-only', relationship: 'Review, request info, approve, reject, and provision tenants.' },
       { name: 'Staff tenant operations', surface: 'Admin Console, Tenant Detail', status: 'Staff-only', relationship: 'Suspend, reactivate, view users, support notes, and lifecycle state.' },
-      { name: 'Staff subscription and entitlements', surface: 'Admin Console, Subscription', status: 'Partial', relationship: 'Shows plan and entitlement state while writes stay governed.' },
+      { name: 'Staff subscription and entitlements', surface: 'Admin Console', status: 'Partial', relationship: 'Shows plan and entitlement state while writes stay governed.' },
       { name: 'Staff user support', surface: 'Admin Console, Support', status: 'Partial', relationship: 'Invite resend, disable user, and support-note flows.' },
       { name: 'Internal approval queue', surface: 'Admin Console', status: 'Partial', relationship: 'Lists approval requests and decision context.' },
       { name: 'Break-glass status', surface: 'Internal services', status: 'Connected', relationship: 'Emergency access remains audited and separate from general UI.' }

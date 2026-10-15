@@ -132,3 +132,46 @@ export function checkClassificationFields(check) {
     declaration_only: declaration_only === true,
   };
 }
+
+export const CHECK_IMPACT_CLASSES = Object.freeze({
+  non_invasive: Object.freeze({
+    id: 'non_invasive',
+    label: 'Non-invasive',
+    summary: 'Ordinary, well-formed lookups or requests any client could send. No attack-shaped payloads and no pressure on connection state.',
+  }),
+  invasive: Object.freeze({
+    id: 'invasive',
+    label: 'Invasive',
+    summary: 'Bounded, attack-shaped traffic: WAF markers, malformed or oversized requests, request bursts, held connections, scans or bypass attempts. It can trigger WAF, IDS or SOC alerts.',
+  }),
+});
+
+const NON_INVASIVE_KINDS = new Set([
+  'metadata_marker',
+  'tcp_connect',
+  'dns_wire_query',
+  'dnssec_posture',
+  'dns_failover_posture',
+  'http_head',
+  'tls_audit',
+  'http2_settings',
+  'quic_reachability',
+  'ops_readiness',
+  'alert_webhook_ping',
+  'waf_fingerprint_observation',
+  'cors_posture_probe',
+  'websocket_upgrade_posture',
+]);
+
+const INVASIVE_FAMILIES = new Set(['amplification', 'reflection', 'exploit', 'high_scale']);
+
+/** Presentation-only traffic impact: unknown kinds and SOC-gated or amplification-shaped checks fail safe to invasive. */
+export function classifyCheckImpact(check) {
+  if (!check || typeof check !== 'object') return CHECK_IMPACT_CLASSES.invasive;
+  const family = String(check.vector_family ?? '');
+  const kind = String(check.probe_profile?.kind ?? check.request?.kind ?? '');
+  const checkId = String(check.check_id ?? '');
+  if (kind === 'metadata_marker') return CHECK_IMPACT_CLASSES.non_invasive;
+  if (check.safety_class === 'soc_gated' || INVASIVE_FAMILIES.has(family) || /(_any_|amplif)/.test(checkId)) return CHECK_IMPACT_CLASSES.invasive;
+  return NON_INVASIVE_KINDS.has(kind) ? CHECK_IMPACT_CLASSES.non_invasive : CHECK_IMPACT_CLASSES.invasive;
+}

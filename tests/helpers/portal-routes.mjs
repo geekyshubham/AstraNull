@@ -29,7 +29,6 @@ export const NAV_ROUTE_IDS = Object.freeze([
   'audit',
   'settings',
   'support',
-  'subscription',
 ]);
 
 /** Auditor-only customer routes. Release evidence left the portal (docs/ux/14 §3.1); auditor read is API-only. */

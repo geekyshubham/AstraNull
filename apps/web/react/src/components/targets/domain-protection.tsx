@@ -57,7 +57,8 @@ import { buildScanLiveLogs, generateCheckProbeLogs } from '../../lib/live-probe-
 import { Badge } from '../ui/badge';
 import { NotTestedNote } from '../runs/not-tested-note';
 import { AnchorButton, Button } from '../ui/button';
-import { CheckClassChips, CheckClassLegend } from '../checks/check-class-chips';
+import { CheckClassChips, CheckClassLegend, CheckImpactBadge, CheckImpactIcon } from '../checks/check-class-chips';
+import { CHECK_IMPACT_CLASSES, classifyCheckImpact, type CheckImpactId } from '../../lib/check-classification.mjs';
 import { Progress } from '../ui/progress';
 import { ProviderLogo, type ProviderLogoId } from '../integrations/provider-logos';
 import { LiveProbeTerminal } from './live-probe-terminal';
@@ -98,6 +99,13 @@ const TIER_COPY: Record<string, string> = {
 };
 
 type QueueFilter = 'all' | 'verdict' | RowStatus;
+type ImpactFilter = 'all' | CheckImpactId;
+
+const IMPACT_FILTERS: Array<{ id: ImpactFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'non_invasive', label: CHECK_IMPACT_CLASSES.non_invasive.label },
+  { id: 'invasive', label: CHECK_IMPACT_CLASSES.invasive.label },
+];
 
 const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -114,16 +122,6 @@ const FILTERS: Array<{ id: QueueFilter; label: string }> = [
   { id: 'not_run', label: 'Not run' },
 ];
 
-const ORIGIN_COPY: Record<string, { label: string; tone: 'muted' | 'danger' | 'success' | 'warn'; detail: string }> = {
-  not_tested: { label: 'Not tested', tone: 'muted', detail: 'No authorized check has tested a declared origin for this target.' },
-  reachable: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
-  exposed: { label: 'Origin response observed', tone: 'danger', detail: 'A declared origin answered the recorded direct request, so the direct path is reachable for that scope. Application identity is shown in the check evidence.' },
-  denied: { label: 'Explicit denial observed', tone: 'muted', detail: 'The declared origin explicitly denied the recorded direct request for this host, path, source and time. The responsible control is not identified.' },
-  unreachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'An earlier check version recorded no direct answer. Silence does not prove a firewall or lockdown is enforcing; rerun the current check version.' },
-  not_reachable: { label: 'No response; enforcement unverified', tone: 'warn', detail: 'The declared origin did not answer the recorded direct request. Silence does not prove a firewall or lockdown is enforcing.' },
-  inconclusive: { label: 'Inconclusive', tone: 'warn', detail: 'The recorded origin check did not reach a conclusion.' },
-  unknown: { label: 'Reachability recorded, no assurance', tone: 'muted', detail: 'A direct-origin reachability result is recorded, but no authorized origin binding exists, so it is not an origin lockdown.' },
-};
 
 function Spinner({ size = 16 }: { size?: number }) {
   return <LoaderCircle size={size} className="td-spin" aria-hidden="true" />;
@@ -132,8 +130,6 @@ function Spinner({ size = 16 }: { size?: number }) {
 export type ProviderObservationsProps = {
   rows: ProviderFamilyRow[];
   effectiveness: MarkerEffectiveness | null;
-  originStatus: string;
-  originDetail?: { assurance: string; reachabilityStatus: string; testedTargetId: string; scenarioId: string; limitations: string[] };
   evaluating: boolean;
   note?: ReactNode;
   action?: ReactNode;
@@ -149,7 +145,7 @@ export type ProviderObservationsProps = {
 };
 
 /** Flat, ruled list: one row per family, each from its own recorded source only. */
-export function ProviderObservations({ rows, effectiveness, originStatus, originDetail, evaluating, note, action, onInspect, efficacy = null, wafRules = null, canaryMembers = [], checkName, onOpenChecks }: ProviderObservationsProps) {
+export function ProviderObservations({ rows, effectiveness, evaluating, note, action, onInspect, efficacy = null, wafRules = null, canaryMembers = [], checkName, onOpenChecks }: ProviderObservationsProps) {
   const ruleLines = wafRuleSentences(wafRules);
   const edgeProxyRow = rows.find(
     (r) => (r.family === 'cdn' || r.family === 'waf') && r.status === 'detected'
@@ -157,13 +153,6 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
   const hasEdgeProxy = Boolean(edgeProxyRow);
   const detectedProxyName = edgeProxyRow?.providerName || (rows.find((r) => r.providerName)?.providerName ?? '');
 
-  const origin = hasEdgeProxy && originStatus === 'not_tested'
-    ? {
-        label: 'Masked (Not tested)',
-        tone: 'muted' as const,
-        detail: `Origin is masked behind ${detectedProxyName || 'the edge proxy'}. Bind an origin under Origin Relations to test direct reachability.`,
-      }
-    : (ORIGIN_COPY[originStatus] ?? { label: humanizeReason(originStatus) || 'Not recorded', tone: 'muted' as const, detail: '' });
   return (
     <section className="td-observations" aria-labelledby="td-observations-title" aria-busy={evaluating || undefined}>
       <header className="td-section-head">
@@ -238,20 +227,6 @@ export function ProviderObservations({ rows, effectiveness, originStatus, origin
             </li>
           );
         })}
-        <li className="td-provider-row" data-status={originStatus}>
-          <span className="td-provider-mark" aria-hidden="true"><Server size={18} /></span>
-          <span className="td-provider-copy">
-            <span className="td-provider-title">Origin exposure</span>
-            <span className="td-provider-value"><Badge tone={origin.tone}>{origin.label}</Badge></span>
-            <span className="td-provider-meta">
-              {origin.detail}
-              {originDetail && originDetail.reachabilityStatus && originDetail.reachabilityStatus !== 'not_tested' ? ` Recorded reachability: ${humanizeReason(originDetail.reachabilityStatus).toLowerCase()}${originDetail.testedTargetId ? ` for tested target ${originDetail.testedTargetId}` : ''}${originDetail.scenarioId ? `, scenario ${originDetail.scenarioId}` : ''}.` : ''}
-              {originDetail && originDetail.assurance && originDetail.assurance !== 'none' && originDetail.assurance !== 'not_recorded' ? ` Origin assurance: ${humanizeReason(originDetail.assurance).toLowerCase()}.` : ''}
-              {originDetail?.limitations?.length ? ` Limits: ${originDetail.limitations.map((item) => humanizeReason(item).toLowerCase()).join(', ')}.` : ''}
-            </span>
-          </span>
-          <span />
-        </li>
       </ul>
       <div className="td-efficacy" role="group" aria-labelledby="td-efficacy-title">
         <div className="td-efficacy-head">
@@ -354,6 +329,10 @@ function checkClassInput(row: CheckRow) {
   return { check_id: row.checkId, vector_family: row.category.id, probe_profile: { kind: row.probeKind } };
 }
 
+export function rowImpact(row: CheckRow): CheckImpactId {
+  return classifyCheckImpact(checkClassInput(row)).id;
+}
+
 function CheckQueueRow({
   row,
   selected,
@@ -415,7 +394,10 @@ function CheckQueueRow({
           <span className="td-check-name">
             <strong>{row.name}</strong>
             <code>{row.checkId}</code>
-            <CheckClassChips check={checkClassInput(row)} />
+            <span className="td-check-chips">
+              <CheckImpactBadge impact={rowImpact(row)} />
+              <CheckClassChips check={checkClassInput(row)} />
+            </span>
           </span>
           <span className="td-check-tier">{TIER_COPY[row.tier] ? `${TIER_COPY[row.tier]} · ` : ''}{resultType}</span>
           <Badge tone={liveNote ? 'muted' : row.tone}>{row.label}</Badge>
@@ -583,6 +565,7 @@ export function CheckQueue({
   const isReady = (checkId: string) => !prerequisites[checkId] || prerequisites[checkId].state === 'ready';
   const waitingCount = rows.filter((row) => !isReady(row.checkId)).length;
   const [filter, setFilter] = useState<QueueFilter>('all');
+  const [impact, setImpact] = useState<ImpactFilter>('all');
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const selection = useMemo(() => new Set(runSelection), [runSelection]);
   const counts = useMemo(() => {
@@ -593,9 +576,16 @@ export function CheckQueue({
     }
     return result;
   }, [rows]);
-  const matchesFilter = (row: CheckRow) => filter === 'all' || (filter === 'verdict' ? row.readinessCapable : row.status === filter);
-  const visibleRows = filter === 'all' ? rows : rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId);
-  const filteredIds = filter === 'all' ? [] : rows.filter(matchesFilter).map((row) => row.checkId).filter(isReady);
+  const impactCounts = useMemo(() => {
+    const result: Record<ImpactFilter, number> = { all: rows.length, non_invasive: 0, invasive: 0 };
+    for (const row of rows) result[rowImpact(row)] += 1;
+    return result;
+  }, [rows]);
+  const filtering = filter !== 'all' || impact !== 'all';
+  const matchesFilter = (row: CheckRow) => (impact === 'all' || rowImpact(row) === impact)
+    && (filter === 'all' || (filter === 'verdict' ? row.readinessCapable : row.status === filter));
+  const visibleRows = filtering ? rows.filter((row) => matchesFilter(row) || row.checkId === selectedCheckId) : rows;
+  const filteredIds = filtering ? rows.filter(matchesFilter).map((row) => row.checkId).filter(isReady) : [];
   const rankedGroups = useMemo(() => groupRowsByCategory(visibleRows), [visibleRows]);
   // While a run is live, results arrive row by row. Keep the order captured when it started so a
   // row never moves under the pointer or keyboard focus; the status-first order returns after.
@@ -647,7 +637,10 @@ export function CheckQueue({
   } else if (scan) {
     liveText = `Last scan ${humanizeReason(scanStatus).toLowerCase()}${typeof scan.completed_at === 'string' ? ` ${formatDate(scan.completed_at)}` : ''}: ${progress.done} of ${progress.total} checks finished.`;
   }
-  const filterLabel = FILTERS.find((entry) => entry.id === filter)?.label ?? '';
+  const filterLabel = [
+    impact !== 'all' ? CHECK_IMPACT_CLASSES[impact].label : '',
+    filter !== 'all' ? FILTERS.find((entry) => entry.id === filter)?.label ?? '' : '',
+  ].filter(Boolean).join(' · ');
 
   return (
     <section className="td-checks" id="td-all-checks" aria-labelledby="td-checks-title">
@@ -726,6 +719,31 @@ export function CheckQueue({
           </Button>
         </div>
       ) : null}
+      <div className="td-impact" role="group" aria-labelledby="td-impact-title" aria-describedby="td-impact-help">
+        <div className="td-impact-head">
+          <span className="td-label" id="td-impact-title">Traffic impact</span>
+          <div className="td-impact-switch">
+            {IMPACT_FILTERS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className="td-impact-option"
+                data-impact={entry.id}
+                aria-pressed={impact === entry.id}
+                onClick={() => setImpact(entry.id)}
+              >
+                {entry.id !== 'all' ? <CheckImpactIcon impact={entry.id} /> : null}
+                {entry.label}<span className="tabular-nums">{impactCounts[entry.id]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="td-muted td-impact-help" id="td-impact-help">
+          {impact === 'all'
+            ? `${impactCounts.non_invasive} non-invasive checks only observe with ordinary requests. ${impactCounts.invasive} invasive checks send bounded, attack-shaped traffic and can trigger WAF, IDS or SOC alerts, so tell your security team first.`
+            : CHECK_IMPACT_CLASSES[impact].summary}
+        </p>
+      </div>
       <div className="td-filters" role="group" aria-label="Filter checks by result">
         {FILTERS.filter((entry) => entry.id === 'all' || (counts[entry.id] ?? 0) > 0).map((entry) => (
           <button
@@ -739,7 +757,7 @@ export function CheckQueue({
             {entry.label}<span className="tabular-nums">{counts[entry.id] ?? 0}</span>
           </button>
         ))}
-        {canInclude && filter !== 'all' && filteredIds.length ? (
+        {canInclude && filtering && filteredIds.length ? (
           <Button size="sm" variant="ghost" className="td-filter-select" onClick={() => changeSelection(filteredIds, true)}>
             Select {filterLabel.toLowerCase()} ({filteredIds.length})
           </Button>
@@ -749,7 +767,7 @@ export function CheckQueue({
       {groups.map((group) => {
         const Icon = CATEGORY_ICONS[group.category.icon] ?? Shield;
         const holdsSelection = group.rows.some((row) => row.checkId === selectedCheckId);
-        const computedDefault = holdsSelection || filter !== 'all' || group.counts.failed > 0 || group.counts.running > 0 || rows.length <= 12;
+        const computedDefault = holdsSelection || filtering || group.counts.failed > 0 || group.counts.running > 0 || rows.length <= 12;
         if (defaultsRef.current[group.category.id] === undefined || holdsSelection) defaultsRef.current[group.category.id] = defaultsRef.current[group.category.id] || computedDefault;
         const defaultOpen = defaultsRef.current[group.category.id];
         const open = openCategories[group.category.id] ?? defaultOpen;

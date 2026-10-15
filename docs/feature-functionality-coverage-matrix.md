@@ -41,7 +41,7 @@ This matrix reconciles the codebase feature inventory with **where each capabili
 | Custody verify API-only | **Visible** — Reports, Evidence, Report detail (`/v1/custody/verify`) |
 | Agent revoke API-only | **Visible** — Agents fleet + `#agent-detail` Actions |
 | Run cancel/finalize not surfaced | **Visible** — `#runs` + ValidationSurfacePage |
-| Subscription/support pages missing | **Visible** — `#subscription`, `#support` |
+| Subscription/support pages missing | **Visible** — `#support`; `#subscription` removed 2026-10-15 and redirects to `#dashboard` |
 
 ## Route inventory (React)
 

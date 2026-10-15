@@ -3,7 +3,6 @@ import {
   Bell,
   CalendarClock,
   ClipboardList,
-  CreditCard,
   Crosshair,
   FileText,
   Gauge,
@@ -107,13 +106,6 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'account',
     description: 'Support readiness, escalation paths, runbook references, and non-production on-call posture.',
     icon: LifeBuoy
-  },
-  {
-    id: 'subscription',
-    label: 'Plan & usage',
-    group: 'account',
-    description: 'Plan, entitlements, limits, billing state, contract references, and effective dates.',
-    icon: CreditCard
   },
   {
     id: 'admin',
@@ -233,11 +225,24 @@ export const ROUTE_BY_ID = new Map<RouteId, NavItem>(
   [...NAV_ITEMS, ...DETAIL_ROUTE_ITEMS].map((item) => [item.id, item])
 );
 
-function routeIdFromHash(hash: string): RouteId | null {
+/** Retired hash routes and the live route each one now opens. */
+const RETIRED_HASH_ROUTES: Readonly<Record<string, RouteId>> = {
+  'target-group': 'targets',
+  'target-groups': 'targets',
+  'target-group-detail': 'targets',
+  subscription: 'dashboard'
+};
+
+function hashRoutePart(hash: string) {
   const raw = hash.replace(/^#/, '');
-  if (!raw) return null;
-  const routePart = raw.includes('?') ? raw.slice(0, raw.indexOf('?')) : raw;
-  if (routePart === 'target-groups' || routePart === 'target-group-detail') return 'targets';
+  return raw.includes('?') ? raw.slice(0, raw.indexOf('?')) : raw;
+}
+
+function routeIdFromHash(hash: string): RouteId | null {
+  const routePart = hashRoutePart(hash);
+  if (!routePart) return null;
+  const retired = RETIRED_HASH_ROUTES[routePart];
+  if (retired) return retired;
   return ROUTE_BY_ID.has(routePart as RouteId) ? routePart as RouteId : null;
 }
 
@@ -262,8 +267,9 @@ export function getRouteFromHash(): RouteId {
 
 export function getRouteFromLocation(): RouteId {
   const route = resolvePortalRoute(window.location.pathname, window.location.hash);
-  if (/^#target-groups?(?:\?|$)|^#target-group-detail(?:\?|$)/.test(window.location.hash)) {
-    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#targets`);
+  const retired = RETIRED_HASH_ROUTES[hashRoutePart(window.location.hash)];
+  if (retired) {
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#${retired}`);
   }
   return route;
 }

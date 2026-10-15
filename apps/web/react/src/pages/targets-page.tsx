@@ -32,6 +32,9 @@ import { useListReturnState, useRestoreListPosition } from '../components/eviden
 import { EVIDENCE_STATUS_TONE, latestEvidenceRunByTarget, latestRunVerdict } from '../lib/dashboard-metrics';
 // @ts-ignore Plain ESM keeps run-start role parity testable with node:test.
 import { canStartRun } from '../lib/run-permissions.mjs';
+import { useDesignVariant } from '../lib/design-variant';
+import { VariantSwitch } from '../components/ui/variant-switch';
+import { TargetsRefinedInventory, type TargetRowModel } from './refined/targets-refined';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
@@ -245,6 +248,9 @@ export function TargetsPage({
   onRefresh: () => Promise<void>;
 }) {
   const { confirm } = useConfirmModal();
+  const showVariantSwitch = session.principal === 'staff';
+  // Only staff persist a layout preference; `#targets?variant=refined` works for every viewer.
+  const [variant, setVariant] = useDesignVariant('targets', { persist: showVariantSwitch });
   const canWriteTargets = sessionHasPermission(session, 'target_group:write');
   const canWriteTargetsRef = useRef(canWriteTargets);
   canWriteTargetsRef.current = canWriteTargets;
@@ -467,6 +473,30 @@ export function TargetsPage({
     }
   }
 
+  /** Refined row model, built from the same helpers and gates as the Classic columns. */
+  function describeTarget(item: DataItem): TargetRowModel {
+    const id = getString(item, ['id'], '');
+    const state = verificationState(item);
+    const verification = item.verification && typeof item.verification === 'object' && !Array.isArray(item.verification) ? item.verification as DataItem : null;
+    const result = latestRunVerdict(latestRuns.get(id) ?? null);
+    return {
+      item,
+      id,
+      value: getString(item, ['value'], id),
+      kind: getString(item, ['kind'], 'unknown').toLowerCase(),
+      kindLabel: formatTargetKind(getString(item, ['kind'], ''), getString(item, ['value'], '')),
+      verified: isVerified(state),
+      verificationState: state,
+      verificationProvenance: resolveTargetVerificationProvenance(item, verification),
+      tags: targetTags(item),
+      source: sourceLabel(item),
+      rawSource: getString(item, ['source'], 'manual'),
+      createdAt: item.created_at ?? null,
+      lastRecorded: item.last_validation_at ?? item.last_validated_at ?? (result?.completedAt || null),
+      lastResult: result
+    };
+  }
+
   const columns: TableColumn<DataItem>[] = [
     {
       key: 'target',
@@ -595,6 +625,7 @@ export function TargetsPage({
           <p>Declared hostnames, IPs and endpoints. Each must prove ownership before any bounded check runs.</p>
         </div>
         <div className="row-actions">
+          {showVariantSwitch ? <VariantSwitch value={variant} onChange={setVariant} /> : null}
           <TargetCsvImportButton config={config} session={session} onImported={onRefresh} />
           {unverifiedCount > 0 ? <Button variant="secondary" onClick={() => setVerificationFilter('unverified')}>Show unverified</Button> : null}
           {canWriteTargets ? <Button onClick={(event) => (showAdd ? closeAddForm() : openAddForm(event.currentTarget))} aria-expanded={showAdd} aria-controls="target-declare-form"><Plus size={16} /> Add target</Button> : null}
@@ -615,7 +646,7 @@ export function TargetsPage({
         <TargetCohortList filters={cohort} config={config} session={session} inventory={targets} onClear={clearCohort} />
       ) : null}
 
-      {!cohort ? (<>
+      {!cohort && variant !== 'refined' ? (<>
       <div className="targets-summary" role="group" aria-label="Target inventory summary">
         <div className="targets-summary-cell"><span>Declared target records</span><strong>{formatNumber(units.records)}</strong><small>Every hostname, IP or endpoint you declared</small></div>
         <div className="targets-summary-cell"><span>Distinct hostnames</span><strong>{formatNumber(units.distinctHosts)}</strong><small>{units.nonHostRecords ? `${formatNumber(units.nonHostRecords)} IP or endpoint records not counted` : 'Normalized host identity'}</small></div>
@@ -672,7 +703,44 @@ export function TargetsPage({
         </Card>
       ) : null}
 
-      {!cohort ? (
+      {!cohort && variant === 'refined' ? (
+        <TargetsRefinedInventory
+          config={config}
+          session={session}
+          loaded={data.loaded}
+          loadError={data.loadErrors.targets}
+          onRetry={() => void onRefresh()}
+          totalCount={targets.length}
+          rows={filtered.map(describeTarget)}
+          units={units}
+          verifiedCount={verifiedCount}
+          unverifiedCount={unverifiedCount}
+          query={query}
+          onQueryChange={setQuery}
+          verificationFilter={verificationFilter}
+          onVerificationFilterChange={setVerificationFilter}
+          kindFilter={kindFilter}
+          kindOptions={targetKinds.map((kind) => ({ value: kind, label: formatTargetKind(kind) }))}
+          onKindFilterChange={setKindFilter}
+          tagFilter={tagFilter}
+          tagOptions={allTags}
+          onTagFilterChange={setTagFilter}
+          filtersActive={filtersActive}
+          onClearFilters={clearFilters}
+          runsUnavailable={runsUnavailable}
+          canWriteTargets={canWriteTargets}
+          canRunChecks={canRunChecks}
+          busy={busy}
+          showAdd={showAdd}
+          onAddTarget={openAddForm}
+          onEditTags={openTagEditor}
+          onRemove={(item) => void removeTarget(item)}
+          onRemember={rememberRow}
+          detailHref={(id) => buildDetailHref('target-detail', id)}
+        />
+      ) : null}
+
+      {!cohort && variant !== 'refined' ? (
       <Card>
         <CardHeader>
           <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(targets.length)} loaded target records. Open a target for its profile and checks; Verify ownership opens its own DNS record.</CardDescription></div>
