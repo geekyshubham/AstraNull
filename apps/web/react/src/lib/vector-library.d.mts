@@ -31,3 +31,16 @@ export interface VectorCheckGroup {
 }
 export function groupVectorsByCheck(vectors: DataItem[], checks: DataItem[]): { groups: VectorCheckGroup[]; unmapped: DataItem[] };
 export function latestRunForCheckOnTarget(runs: DataItem[], checkId: string, targetId: string): DataItem | null;
+export interface CheckCategory {
+  id: string;
+  label: string;
+  families: readonly string[];
+}
+export const CHECK_CATEGORIES: readonly CheckCategory[];
+export const MISC_CATEGORY_ID: 'misc';
+export function checkCategoryId(check: DataItem | null | undefined): string;
+export function categorizeCheckGroups(groups: VectorCheckGroup[], unmapped: DataItem[], category?: string): {
+  counts: Record<string, number>;
+  groups: VectorCheckGroup[];
+  unmapped: DataItem[];
+};

@@ -25,12 +25,7 @@ const E1_RUN_ID = 'run_exec_e1_declaration';
 // Server segment keys and the plain-language label each one reads as on the dashboard.
 const SEGMENT_LABELS = {
   detected: 'detected',
-  not_detected: 'not detected in the last observation',
-  inconclusive: 'inconclusive',
-  stale: 'stale observation',
-  conflict: 'conflicting signals',
-  not_checked: 'not checked',
-  not_recorded: 'not recorded',
+  not_detected: 'not detected',
 };
 
 function seedDeclarationOnlyRun(store) {
@@ -87,13 +82,7 @@ test.describe('portal executive clarity', () => {
     const posture = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target posture', exact: true }) });
     await expect(posture).toContainText('checkout.acme.com');
     await expect(page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'What to fix first', exact: true }) })).toBeVisible();
-    const activity = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Recent validation activity', exact: true }) });
-    await expect(activity).toContainText(PORTAL_BASELINE_IDS.readinessRunId);
-    // Each run names its check and target in plain language; the run ID stays as a small reference line.
-    const readinessRun = activity.getByRole('row').filter({ hasText: PORTAL_BASELINE_IDS.readinessRunId });
-    await expect(readinessRun).toContainText('checkout.acme.com');
-    await expect(readinessRun.getByRole('button', { name: /^View evidence for .+ on checkout\.acme\.com$/ })).toBeVisible();
-    await expect(activity).not.toContainText('Target not reported');
+    await expect(page.getByRole('heading', { name: 'Recent validation activity', exact: true })).toHaveCount(0);
 
     // The old Internet → Edge/CDN → WAF → Origin path inferred stages the server never observed.
     await expect(page.locator('.defense-path, .defense-stage')).toHaveCount(0);
@@ -111,12 +100,12 @@ test.describe('portal executive clarity', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
 
-    const region = page.getByRole('region', { name: 'Declared host protection observations' });
-    await expect(region).toContainText('Detection is not effectiveness, and unknown stays unknown.');
+    const region = page.getByRole('region', { name: 'WAF and CDN detection' });
+    await expect(region).toContainText('Unknown');
     for (const [label, body] of Object.entries(families)) {
       expect(body.complete).toBe(true);
-      for (const segment of body.segments) {
-        const name = `${label} observations ${SEGMENT_LABELS[segment.key]}: ${segment.count} distinct ${segment.count === 1 ? 'hostname' : 'hostnames'}. Open the matching list.`;
+      for (const segment of body.segments.filter((item) => SEGMENT_LABELS[item.key] && item.count > 0)) {
+        const name = `${label} ${SEGMENT_LABELS[segment.key]}: ${segment.count} hosts. Open the list.`;
         const link = region.getByRole('link', { name, exact: true });
         await expect(link, name).toHaveCount(1);
         await expect(link).toHaveAttribute('href', `#targets?family=${label.toLowerCase()}&family_status=${segment.key}&unit=hostname`);
@@ -126,10 +115,7 @@ test.describe('portal executive clarity', () => {
     const regionText = await region.innerText();
     expect(regionText).not.toMatch(/\bcloud\b|\borigin\b|blocked|protected/i);
     expect(regionText).not.toMatch(/\b(?:not_checked|not_detected|not_recorded|normalized_hostname|coverage_summary_not_populated)\b/);
-
-    await region.getByRole('group', { name: 'Count by' }).getByRole('button', { name: 'Declared target records' }).click();
-    const records = families.WAF.units.target_records;
-    await expect(region).toContainText(`of ${records} declared target ${records === 1 ? 'record' : 'records'}`);
+    expect(regionText).not.toMatch(/Conflicting signals|Stale observation|Not recorded/);
   });
 
   test('Dashboard and Target Detail do not overflow at 375, 768, 1024, or 1440 pixels', async ({ page }) => {
@@ -138,7 +124,7 @@ test.describe('portal executive clarity', () => {
       await page.setViewportSize(viewport);
       await gotoPortalRoute(page, 'dashboard', getPortalPlaywrightBaseUrl());
       await expect(page.getByRole('heading', { level: 1, name: 'Readiness overview' })).toBeVisible();
-      await expect(page.getByRole('region', { name: 'Declared host protection observations' })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'WAF and CDN detection' })).toBeVisible();
       await expectNoPageOverflow(page);
       if (viewport.width === 1440) {
         const postureCard = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target posture' }) });

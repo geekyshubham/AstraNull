@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Cloud,
-  CloudSun,
   Globe2,
   Play,
   Plus,
-  Route,
   Search,
   Server,
+  Tags,
   Target,
   Trash2
 } from 'lucide-react';
@@ -22,6 +20,7 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { DataTable, type TableColumn } from '../components/ui/table';
+import { RowActionsMenu, type RowAction } from '../components/ui/row-actions-menu';
 import { EmptyState } from '../components/ui/empty-state';
 import { Toast } from '../components/ui/toast';
 import { FormModal, useConfirmModal } from '../lib/crud-ui';
@@ -50,7 +49,8 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-intake-field { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); }
 .targets-page .targets-intake-field small { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
 .targets-page .targets-intake-form > .btn { justify-self: start; }
-.targets-page .target-validation { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+.targets-page .target-validation { display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+.targets-page .target-validation .target-date { color: var(--muted); }
 .targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }
 .targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(3, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }
 .targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
@@ -58,30 +58,30 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
 .targets-page .targets-filter select { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); padding: 8px 10px; }
 .targets-page .targets-result-count { margin: 0 0 var(--space-3); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }
-.targets-page .target-primary { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
-.targets-page .target-primary-icon, .targets-page .provider-mark { display: inline-grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }
-.targets-page .target-primary-copy, .targets-page .source-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.targets-page a.target-primary-copy { display: flex; align-items: flex-start; border-radius: var(--radius-sm); color: inherit; font-weight: 400; text-decoration: none; }
-.targets-page a.target-primary-copy strong { text-decoration: underline; text-decoration-color: var(--border-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.targets-page a.target-primary-copy:hover strong { text-decoration-color: currentColor; }
-.targets-page a.target-primary-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.targets-page .target-primary-copy strong { max-width: 18ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
-.targets-page .target-primary-copy span, .targets-page .source-cell small { color: var(--muted); font-size: var(--text-xs); }
-.targets-page .provider-line { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
-.targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }
-/* Actions stay on one line; the table scrolls horizontally inside its region instead of stacking buttons into tall rows. */
-.targets-page .target-row-actions { display: flex; flex-wrap: nowrap; gap: var(--space-2); width: max-content; }
-.targets-page .target-tag-chips { display: flex; flex-wrap: wrap; gap: var(--space-1-5); }
+.targets-page .target-primary { display: flex; min-width: 0; align-items: center; gap: var(--space-3); }
+.targets-page .target-primary-icon { display: inline-grid; width: 32px; height: 32px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }
+.targets-page .target-primary-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.targets-page a.target-primary-name { display: block; min-width: 0; max-width: 100%; border-radius: var(--radius-sm); color: inherit; font-weight: 400; text-decoration: none; }
+.targets-page a.target-primary-name strong { text-decoration: underline; text-decoration-color: var(--border-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.targets-page a.target-primary-name:hover strong { text-decoration-color: currentColor; }
+.targets-page a.target-primary-name:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.targets-page .target-primary-name strong { display: block; max-width: 40ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+.targets-page .target-primary-meta { display: flex; min-width: 0; align-items: center; gap: var(--space-1-5); color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
+.targets-page .target-tag-chip { display: inline-flex; min-width: 0; max-width: 22ch; align-items: center; gap: var(--space-1); overflow: hidden; padding: 1px var(--space-1-5); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--fg-2); font-family: var(--font-mono); text-overflow: ellipsis; }
+.targets-page .target-tag-more { flex: none; color: var(--muted); }
+.targets-page .target-row-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: var(--space-2); width: max-content; margin-left: auto; }
 .targets-page .targets-intake-tags { grid-column: 1 / -1; }
 .targets-page .field-error { color: var(--danger); font-size: var(--text-xs); }
 .targets-page .target-row-actions .btn { min-height: 34px; }
-.targets-page .targets-table-wrap .data-table { min-width: 960px; }
+.targets-page .targets-table-wrap .data-table { min-width: 760px; }
+.targets-page .targets-table-wrap .data-table td { padding-block: var(--space-2); vertical-align: middle; }
+.targets-page .targets-table-wrap .data-table :is(th, td):first-child { width: 100%; max-width: 0; }
+.targets-page .targets-table-wrap .data-table :is(th, td):not(:first-child) { white-space: nowrap; }
+.targets-page .targets-table-wrap .data-table thead th:last-child { text-align: right; }
 .targets-page .targets-table-wrap .data-table :is(th, td) { padding-inline: var(--space-2); }
 .targets-page .targets-table-wrap .data-table :is(th, td):first-child { padding-left: var(--space-4); }
 .targets-page .targets-table-wrap .data-table :is(th, td):last-child { padding-right: var(--space-4); }
-.targets-page .targets-table-wrap .verify-chip { white-space: normal; line-height: 1.35; }
-.targets-page .targets-table-wrap .source-cell small { white-space: normal; }
-.targets-page .targets-table-wrap .data-table thead th { white-space: normal; line-height: 1.3; }
+.targets-page .targets-table-wrap .verify-chip { white-space: nowrap; }
 @media (min-width: 901px) {
   .targets-page .table-scroller:has(> .targets-table-wrap)::after { display: none; }
   .targets-page .targets-table-wrap .data-table :is(th, td):last-child { position: sticky; right: 0; z-index: 1; box-shadow: inset 1px 0 0 var(--border-soft); }
@@ -90,8 +90,6 @@ const TARGETS_PAGE_STYLES = `
   .targets-page .targets-table-wrap .data-table tbody tr:is(:nth-child(even), .table-row-zebra) td:last-child { background: linear-gradient(var(--wash), var(--wash)), var(--surface); }
   .targets-page .targets-table-wrap .data-table tbody tr:hover td:last-child { background: linear-gradient(color-mix(in oklab, var(--accent), transparent 94%), color-mix(in oklab, var(--accent), transparent 94%)), var(--surface); }
 }
-.targets-page .targets-table-wrap .target-date { white-space: normal; }
-.targets-page .targets-table-wrap .target-date > span { white-space: nowrap; }
 @media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }
 @media (max-width: 900px) {
   .targets-page .target-row-actions .btn { min-height: 44px; }
@@ -200,41 +198,32 @@ function sourceLabel(item: DataItem) {
   return getString(metadata, ['source_app', 'app', 'source'], getString(item, ['source'], 'manual'));
 }
 
+function targetHostname(item: DataItem) {
+  const value = getString(item, ['value'], '').trim().toLowerCase();
+  try {
+    return /^[a-z][a-z0-9+.-]*:\/\//.test(value) ? new URL(value).hostname : value.replace(/\.$/, '');
+  } catch {
+    return value;
+  }
+}
+
+function visibleTargetTags(item: DataItem): string[] {
+  const host = targetHostname(item);
+  return targetTags(item).filter((tag) => {
+    const [key, ...rest] = tag.split(':');
+    return !(key === 'domain' && rest.join(':') === host);
+  });
+}
+
 function TableDate({ value }: { value: unknown }) {
-  const date = value ? new Date(typeof value === 'number' ? value : String(value)) : null;
-  if (!date || Number.isNaN(date.getTime())) return <span className="mono small">{formatDate(value)}</span>;
-  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  return <span className="mono small target-date" title={formatDate(value)}><span>{day}</span> <span>{time}</span></span>;
-}
-
-function providerKey(value: string) {
-  const key = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (key.includes('cloudflare')) return 'cloudflare';
-  if (key.includes('route53') || key.includes('route_53')) return 'route53';
-  if (key.includes('godaddy')) return 'godaddy';
-  if (key.includes('namecheap')) return 'namecheap';
-  if (key.includes('hetzner') || key === 'hdns') return 'hetzner_dns';
-  if (key.includes('google') || key === 'gcp') return 'gcp';
-  if (key.includes('azure')) return 'azure';
-  if (key.includes('aws')) return 'aws';
-  return key || 'manual';
-}
-
-function ProviderIcon({ source }: { source: string }) {
-  const key = providerKey(source);
-  const Icon = key === 'cloudflare'
-    ? CloudSun
-    : key === 'route53'
-      ? Route
-      : key === 'hetzner_dns'
-        ? Server
-        : ['gcp', 'azure', 'aws'].includes(key)
-          ? Cloud
-          : key === 'manual'
-            ? Target
-            : Globe2;
-  return <span className="provider-mark" aria-hidden="true"><Icon size={15} /></span>;
+  const ts = value ? new Date(typeof value === 'number' ? value : String(value)).getTime() : Number.NaN;
+  if (!Number.isFinite(ts)) return <span className="mono small target-date">{formatDate(value)}</span>;
+  const minutes = Math.round(Math.max(0, Date.now() - ts) / 60000);
+  const label = minutes < 1 ? 'just now'
+    : minutes < 60 ? `${minutes}m ago`
+      : minutes < 48 * 60 ? `${Math.round(minutes / 60)}h ago`
+        : `${Math.round(minutes / 1440)}d ago`;
+  return <span className="small target-date" title={formatDate(value)}>{label}</span>;
 }
 
 export function TargetsPage({
@@ -516,23 +505,33 @@ export function TargetsPage({
         const id = getString(item, ['id'], '');
         const value = getString(item, ['value'], id);
         const verified = isVerified(verificationState(item));
+        const childCount = subdomainGrouping.childCount.get(id) ?? 0;
+        const tags = visibleTargetTags(item);
+        const source = sourceLabel(item).replace(/_/g, ' ');
         return (
           <span className="target-primary">
             <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
-            <a
-              className="target-primary-copy detail-entity-link"
-              href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
-              data-focus-key={`target-name-${id}`}
-              onClick={() => rememberRow(id, `target-name-${id}`)}
-            >
-              <strong title={value}>{value}</strong>
-              <span>{formatTargetKind(getString(item, ['kind'], ''), getString(item, ['value'], ''))}</span>
-            </a>
-            {subdomainGrouping.childCount.get(id) ? (
-              <Badge tone="muted" title={`${subdomainGrouping.childCount.get(id)} subdomains are grouped under this domain; open it to review them`}>
-                {subdomainGrouping.childCount.get(id)} {subdomainGrouping.childCount.get(id) === 1 ? 'subdomain' : 'subdomains'}
-              </Badge>
-            ) : null}
+            <span className="target-primary-copy">
+              <a
+                className="target-primary-name detail-entity-link"
+                href={verified ? buildDetailHref('target-detail', id) : `${buildDetailHref('target-detail', id)}&tab=overview`}
+                title={`${value} · added from ${source}${item.created_at ? ` on ${formatDate(item.created_at)}` : ''}`}
+                data-focus-key={`target-name-${id}`}
+                onClick={() => rememberRow(id, `target-name-${id}`)}
+              >
+                <strong>{value}</strong>
+              </a>
+              <span className="target-primary-meta">
+                <span>{formatTargetKind(getString(item, ['kind'], ''), getString(item, ['value'], ''))}</span>
+                {childCount ? <span title={`${childCount} subdomains are grouped under this domain; open it to review them`}>{`· ${childCount} ${childCount === 1 ? 'subdomain' : 'subdomains'}`}</span> : null}
+                {tags.length ? (
+                  <span className="target-tag-chip" title={tags.join(', ')}>
+                    {tags[0]}
+                    {tags.length > 1 ? <span className="target-tag-more">{`+${tags.length - 1}`}</span> : null}
+                  </span>
+                ) : null}
+              </span>
+            </span>
           </span>
         );
       }
@@ -547,7 +546,7 @@ export function TargetsPage({
     },
     {
       key: 'validated',
-      label: 'Last validation',
+      label: 'Last result',
       render: (item) => {
         const run = latestRuns.get(getString(item, ['id'], '')) ?? null;
         const result = latestRunVerdict(run);
@@ -557,7 +556,6 @@ export function TargetsPage({
         }
         return (
           <span className="target-validation">
-            <TableDate value={recorded} />
             {runsUnavailable ? (
               <Badge tone={EVIDENCE_STATUS_TONE.none} title="Validation runs did not load, so the latest verdict is unknown">Unavailable</Badge>
             ) : (
@@ -565,30 +563,9 @@ export function TargetsPage({
                 {result ? result.label : 'Not recorded'}
               </Badge>
             )}
+            <TableDate value={recorded} />
           </span>
         );
-      }
-    },
-    {
-      key: 'tags',
-      label: 'Tags',
-      render: (item) => {
-        const tags = targetTags(item);
-        if (tags.length === 0) return <span className="muted">—</span>;
-        return (
-          <span className="target-tag-chips">
-            {tags.map((tag) => <Badge key={tag} tone="muted">{tag}</Badge>)}
-          </span>
-        );
-      }
-    },
-    {
-      key: 'source',
-      label: 'Added from',
-      render: (item) => {
-        const source = sourceLabel(item);
-        const rawSource = getString(item, ['source'], 'manual');
-        return <span className="provider-line"><ProviderIcon source={source} /><span className="source-cell"><strong>{source.replace(/_/g, ' ')}</strong>{rawSource !== source ? <small>{rawSource}</small> : null}{item.created_at ? <small>Added {formatDate(item.created_at)}</small> : null}</span></span>;
       }
     },
     {
@@ -599,6 +576,10 @@ export function TargetsPage({
         const value = getString(item, ['value'], id);
         const verified = isVerified(verificationState(item));
         const promptVerify = !verified && canWriteTargets;
+        const menuActions: RowAction[] = canWriteTargets ? [
+          { key: 'tags', label: 'Edit tags', ariaLabel: `Edit tags for ${value}`, icon: <Tags size={14} aria-hidden="true" />, onSelect: () => openTagEditor(item) },
+          { key: 'remove', label: 'Remove', ariaLabel: `Remove target ${value}`, icon: <Trash2 size={14} aria-hidden="true" />, tone: 'danger', disabled: busy === `remove-${id}`, onSelect: () => void removeTarget(item) }
+        ] : [];
         return (
           <span className="target-row-actions">
             {verified && canRunChecks ? (
@@ -623,9 +604,7 @@ export function TargetsPage({
             >
               {promptVerify ? 'Verify' : 'Open'}
             </AnchorButton>
-            {!canWriteTargets ? <span className="target-unknown">No changes for your role</span> : null}
-            {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openTagEditor(item)} aria-label={`Edit tags for ${getString(item, ['value'], id)}`}>Edit tags</Button> : null}
-            {canWriteTargets ? <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove target ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button> : null}
+            <RowActionsMenu label={`More actions for ${value}`} actions={menuActions} />
           </span>
         );
       }

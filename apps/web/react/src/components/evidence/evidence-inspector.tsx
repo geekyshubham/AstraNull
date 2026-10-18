@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, CircleAlert, CircleDashed, Lock, RefreshCw, SearchX } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Circle, CircleAlert, CircleDashed, Lock, RefreshCw, SearchX, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { requestJson } from '../../lib/api';
 import {
   EVIDENCE_INSPECTOR_EVENT,
@@ -39,6 +39,7 @@ import { sequencePosition, useInspectorSequence } from './inspector-sequence';
 import { ExecutionInspector } from './execution-inspector';
 import { NotTestedNote } from '../runs/not-tested-note';
 import { requiredInputMissing } from '../../lib/missing-input.mjs';
+import { evidenceStory, proofRows } from '../../lib/evidence-story.mjs';
 import { useInspectorScopeKey } from './use-inspector';
 import './evidence-inspector.css';
 
@@ -485,6 +486,33 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
   const canRetest = canStartRun(session.role) && (ref.entry === 'finding' || ref.entry === 'group_member') && Boolean(ref.finding_id);
   const statusText = state === 'loading' ? `Loading ${title.toLowerCase()}` : `${title} ${state.replace('_', ' ')}`;
 
+  const check = checkId ? data.checks.find((item) => str(item, ['check_id', 'id']) === checkId) ?? null : null;
+  const probeProfile = check?.probe_profile && typeof check.probe_profile === 'object' && !Array.isArray(check.probe_profile) ? check.probe_profile as DataItem : null;
+  const isFallback = load.key === loadKey && load.fallback;
+  const storyEntry = ref.entry === 'finding' || ref.entry === 'group_member' || ref.entry === 'check_result';
+  const story = storyEntry && model && answer
+    ? evidenceStory({
+      checkId,
+      vectorFamily: str(check, ['vector_family']),
+      outcome,
+      notTested: Boolean(notTested),
+      observationOnly: check?.observation_only === true || probeProfile?.observation_only === true,
+      remediation: str(check, ['remediation_template']) || subject.remediation_template || '',
+      explanation: answer.explanation,
+    })
+    : null;
+  const observedLabel = answer?.observed ? exposedVerdictLabel(checkId, answer.observed) || plainVerdictLabel(answer.observed) || humanize(answer.observed) : '';
+  const proof = story && model ? proofRows({
+    tone: story.tone,
+    observed: observedLabel,
+    expected: answer?.expected ? humanize(answer.expected) : '',
+    request: isFallback ? [] : model.request.fields,
+    response: isFallback ? [] : model.response.fields,
+    proof: model.proof,
+  }) : [];
+  const VerdictIcon = story?.tone === 'gap' ? TriangleAlert : story?.tone === 'pass' ? ShieldCheck : story?.tone === 'review' ? CircleAlert : CircleDashed;
+  const subtitle = [targetLabel, checkLabel].filter(Boolean).join(' · ');
+
   const identity = (
     <dl className="ei-identity">
       {targetLabel ? <div><dt>{targetLabel === targetId ? 'Target ID' : 'Target'}</dt><dd className="mono">{targetLabel}</dd></div> : null}
@@ -505,30 +533,30 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
 
   const actions: ReactNode[] = [];
   const hashParams = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+  if (canRetest) {
+    actions.push(
+      <AnchorButton key="retest" size="sm" variant="default" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id!)}&retest=review`}>Re-test</AnchorButton>,
+    );
+  }
+  if ((ref.entry === 'finding' || ref.entry === 'group_member') && ref.finding_id) {
+    actions.push(
+      <AnchorButton key="finding" size="sm" variant="secondary" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id)}`}>Open finding</AnchorButton>,
+    );
+  }
   const onSameTarget = window.location.hash.startsWith('#target-detail') && hashParams.get('id') === targetId;
   const onSameCheck = onSameTarget && Boolean(checkId) && hashParams.get('check') === checkId;
   if (targetId && ref.entry !== 'audit' && !(onSameTarget && (!checkId || ref.entry === 'provider' || onSameCheck))) {
     const checkParam = checkId ? `&tab=validate&check=${encodeURIComponent(checkId)}` : '';
     actions.push(
-      <AnchorButton key="target" size="sm" variant="secondary" href={`#target-detail?id=${encodeURIComponent(targetId)}${checkParam}`}>
-        {checkId ? 'Open this check on the target' : 'Open target'}
+      <AnchorButton key="target" size="sm" variant={actions.length ? 'ghost' : 'secondary'} href={`#target-detail?id=${encodeURIComponent(targetId)}${checkParam}`}>
+        {checkId ? 'Open target check' : 'Open target'}
       </AnchorButton>,
-    );
-  }
-  if ((ref.entry === 'finding' || ref.entry === 'group_member') && ref.finding_id) {
-    actions.push(
-      <AnchorButton key="finding" size="sm" variant="ghost" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id)}`}>Open full finding</AnchorButton>,
-    );
-  }
-  if (canRetest) {
-    actions.push(
-      <AnchorButton key="retest" size="sm" variant="ghost" href={`#finding-detail?id=${encodeURIComponent(ref.finding_id!)}&retest=review`}>Review retest</AnchorButton>,
     );
   }
   const onSameRun = window.location.hash.startsWith('#run-detail') && hashParams.get('id') === ref.test_run_id;
   if (ref.test_run_id && !onSameRun) {
     actions.push(
-      <AnchorButton key="run" size="sm" variant="ghost" href={`#run-detail?id=${encodeURIComponent(ref.test_run_id)}`}>Open full run</AnchorButton>,
+      <AnchorButton key="run" size="sm" variant="ghost" href={`#run-detail?id=${encodeURIComponent(ref.test_run_id)}`}>Open run</AnchorButton>,
     );
   }
   if (ref.entry === 'artifact' && ref.evidence_id) {
@@ -536,6 +564,11 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
       <AnchorButton key="artifact" size="sm" variant="ghost" href={`#evidence-detail?id=${encodeURIComponent(ref.evidence_id)}`}>Open artifact record</AnchorButton>,
     );
   }
+
+  const outcomeBadge = outcomeLabel ? (
+    <Badge tone={notTested ? 'muted' : ref.entry === 'provider' ? providerTone(outcome) : outcomeTone(outcome)}>{outcomeLabel}</Badge>
+  ) : null;
+  const disagree = (ref.entry === 'finding' || ref.entry === 'group_member') && outcomeTone(outcome) === 'success' && ['open', 'remediation_pending'].includes((subject.lifecycle ?? '').toLowerCase());
 
   return (
     <InspectorPanel
@@ -575,7 +608,7 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
               </Button>
             </nav>
           ) : null}
-          {identity}
+          {subtitle ? <p className="ei-subtitle">{subtitle}</p> : null}
         </>
       )}
       footer={actions.length ? <div className="ei-actions">{actions}</div> : undefined}
@@ -598,55 +631,75 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
         <ExecutionInspector key={workspaceKey} config={config} session={session} reference={ref} checks={data.checks} onEvidenceUpdate={refreshExecutionEvidence} />
       ) : null}
 
-      {load.key === loadKey && load.fallback && model && state !== 'no_refs' && state !== 'pending' ? (
-        <p className="ei-partial" role="note">
-          Partial view from the exact {ref.entry === 'provider' ? 'target record' : ref.entry === 'check_result' ? 'execution record' : 'record'}.
-          The evidence summary service did not answer, so request and response details are shown as not recorded here.
-          <Button size="sm" variant="ghost" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} aria-hidden="true" />Retry</Button>
-        </p>
-      ) : null}
-
       {model && state !== 'denied' && state !== 'not_found' ? (
         <>
-          <section className="ei-answer" aria-label="What happened">
-            {outcomeLabel ? (
-              <p className="ei-outcome">
-                <Badge tone={notTested ? 'muted' : ref.entry === 'provider' ? providerTone(outcome) : outcomeTone(outcome)}>{outcomeLabel}</Badge>
-                {ref.entry === 'provider' && ref.family ? <span className="ei-outcome-scope">{FAMILY_LABEL[ref.family]} only. Other layers are reported separately.</span> : null}
-              </p>
-            ) : (
-              <p className="ei-outcome"><NotRecorded>{state === 'pending' ? 'Verdict pending' : 'Outcome not recorded'}</NotRecorded></p>
-            )}
-            {notTested ? <NotTestedNote info={notTested} targetId={targetId} showLabel={false} /> : answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
-            {(ref.entry === 'finding' || ref.entry === 'group_member') && outcomeTone(outcome) === 'success' && ['open', 'remediation_pending'].includes((subject.lifecycle ?? '').toLowerCase()) ? (
-              <p className="ei-disagree" role="note">
-                This finding is still open, but its original recorded outcome reads as passing. The records disagree; review the evidence before deciding. No later result was substituted.
-              </p>
-            ) : null}
-            {model.limitations.length ? (
-              <ul className="ei-limitations">
-                {model.limitations.map((code) => <li key={code}>{limitationLabel(code)}</li>)}
-              </ul>
-            ) : null}
-          </section>
+          {story ? (
+            <section className="ei-verdict" data-tone={story.tone} aria-label="Conclusion">
+              <span className="ei-verdict-icon" aria-hidden="true"><VerdictIcon size={18} /></span>
+              <div className="ei-verdict-copy">
+                <span className="ei-kicker">{story.kicker}</span>
+                <h3 className="ei-headline">{story.headline}</h3>
+                <span className="ei-verdict-meta">
+                  {outcomeBadge}
+                  {model.primary?.observedAt ? <span>Observed {formatTimestamp(model.primary.observedAt)}</span> : null}
+                </span>
+              </div>
+            </section>
+          ) : (
+            <section className="ei-answer" aria-label="What happened">
+              {outcomeBadge ? (
+                <p className="ei-outcome">
+                  {outcomeBadge}
+                  {ref.entry === 'provider' && ref.family ? <span className="ei-outcome-scope">{FAMILY_LABEL[ref.family]} only. Other layers are reported separately.</span> : null}
+                </p>
+              ) : (
+                <p className="ei-outcome"><NotRecorded>{state === 'pending' ? 'Verdict pending' : 'Outcome not recorded'}</NotRecorded></p>
+              )}
+              {!notTested && answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
+            </section>
+          )}
 
-          {!(load.key === loadKey && load.fallback) && ref.entry !== 'provider' && ref.entry !== 'artifact' && ref.entry !== 'report' && ref.entry !== 'audit' ? (
-            <section className="ei-compare" aria-label="Expected versus observed">
-              <div><span className="ei-label">Expected</span><strong>{answer?.expected ? humanize(answer.expected) : <NotRecorded />}</strong></div>
-              <div><span className="ei-label">Observed</span><strong>{answer?.observed ? humanize(answer.observed) : <NotRecorded />}</strong></div>
+          {notTested ? <NotTestedNote info={notTested} targetId={targetId} showLabel={false} /> : null}
+
+          {disagree ? (
+            <p className="ei-disagree" role="note">
+              This finding is still open, but its original recorded outcome reads as passing. The records disagree; review the evidence before deciding. No later result was substituted.
+            </p>
+          ) : null}
+
+          {story && proof.length ? (
+            <section className="ei-story" aria-labelledby="ei-saw-title">
+              <h3 className="ei-story-title" id="ei-saw-title">What we saw</h3>
+              {story.tested ? <p className="ei-story-note">{story.tested}</p> : null}
+              <ul className="ei-proof">
+                {proof.map((row) => (
+                  <li key={row.key} data-tone={row.tone}>
+                    <span className="ei-proof-icon" aria-hidden="true">
+                      {row.tone === 'fail' ? <X size={16} /> : row.tone === 'pass' ? <Check size={16} /> : <Circle size={14} />}
+                    </span>
+                    <span className="ei-proof-copy">
+                      <strong>{row.title}</strong>
+                      {row.detail ? <span className="mono">{row.detail}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </section>
           ) : null}
 
-          {!(load.key === loadKey && load.fallback) && (ref.entry === 'check_result' || ref.entry === 'finding' || ref.entry === 'group_member') ? (
-            <section className="ei-exchange" aria-label="Request and response summary">
-              <div>
-                <h3>Request</h3>
-                <SummaryFields fields={model.request.fields} empty="Request summary not recorded for this result" />
-              </div>
-              <div>
-                <h3>Response</h3>
-                <SummaryFields fields={model.response.fields} empty="Response summary not recorded for this result" />
-              </div>
+          {story?.why ? (
+            <section className="ei-story" aria-labelledby="ei-why-title">
+              <h3 className="ei-story-title" id="ei-why-title">Why it matters</h3>
+              <p className="ei-story-body">{story.why}</p>
+            </section>
+          ) : null}
+
+          {story?.fix.length ? (
+            <section className="ei-story" aria-labelledby="ei-fix-title">
+              <h3 className="ei-story-title" id="ei-fix-title">How to fix</h3>
+              <ol className="ei-fix">
+                {story.fix.map((step) => <li key={step}>{step}</li>)}
+              </ol>
             </section>
           ) : null}
 
@@ -670,64 +723,104 @@ export function EvidenceInspectorHost({ config, session, data, locationKey }: Ev
             </section>
           ) : null}
 
-          {model.evaluation.fields.length ? (
-            <section className="ei-evaluation" aria-label={ref.entry === 'provider' ? 'Recorded fields' : 'Evaluation'}>
-              <h3>{ref.entry === 'provider' ? 'Recorded fields' : 'Evaluation'}</h3>
-              <SummaryFields
-                fields={model.evaluation.fields.map((field) => (field.key === 'provider' ? { ...field, value: providerName(field.value) } : field))}
-                empty="Evaluation reasons not recorded"
-              />
-            </section>
-          ) : null}
+          <details className="ei-technical" open={(!model.primary && model.runArtifacts > 0) || undefined}>
+            <summary>{storyEntry ? 'Technical details · Original evidence, run and records' : 'Technical details · Recorded observation and records'}</summary>
+            <div className="ei-technical-body">
+              {identity}
 
-          <section className="ei-provenance" aria-label="Provenance">
-            {model.primary ? (
-              <ObservationBlock
-                title={ref.entry === 'finding' || ref.entry === 'group_member' ? 'Original evidence' : 'Recorded observation'}
-                note={ref.entry === 'finding' || ref.entry === 'group_member' ? 'The observation that opened this finding.' : 'The exact record this result came from.'}
-                observation={model.primary}
-                missingIds={model.missingEvidenceIds}
-              />
-            ) : model.originating && (model.originating.testRunId || model.originating.verdictId) ? (
-              <ObservationBlock
-                title="Original evidence"
-                note={model.runArtifacts > 0
-                  ? 'The record that opened this finding. It cites no evidence reference; artifacts recorded for its run are listed under related records.'
-                  : 'The record that opened this finding. It cites no evidence reference.'}
-                observation={model.originating}
-              />
-            ) : state !== 'no_refs' && state !== 'pending' && ref.entry !== 'audit' ? <NotRecorded>No originating observation recorded</NotRecorded> : null}
-            {model.later ? (
-              <ObservationBlock
-                title="Later result, same target and check"
-                note="Shown separately. It does not replace the original evidence or close this finding."
-                observation={model.later}
-              />
-            ) : null}
-            {model.alternatives.length ? (
-              <details className="ei-alternatives" open={model.runArtifacts > 0 || undefined}>
-                <summary>{model.alternatives.length} related record{model.alternatives.length === 1 ? '' : 's'}</summary>
-                {model.alternatives.map((alt, index) => (
-                  <ObservationBlock
-                    key={`${alt.testRunId}-${index}`}
-                    title={alt.relationship === ORIGINATING_RUN_ARTIFACT ? 'Run artifact' : 'Related record'}
-                    note={relationshipLabel(alt.relationship)}
-                    observation={alt}
-                    onViewArtifact={alt.relationship === ORIGINATING_RUN_ARTIFACT ? viewRunArtifact : undefined}
+              {isFallback && state !== 'no_refs' && state !== 'pending' ? (
+                <p className="ei-partial" role="note">
+                  Partial view from the exact {ref.entry === 'provider' ? 'target record' : ref.entry === 'check_result' ? 'execution record' : 'record'}.
+                  The evidence summary service did not answer, so request and response details are shown as not recorded here.
+                  <Button size="sm" variant="ghost" onClick={() => setReload((value) => value + 1)}><RefreshCw size={14} aria-hidden="true" />Retry</Button>
+                </p>
+              ) : null}
+
+              {story && answer?.explanation ? <p className="ei-explanation">{answer.explanation}</p> : null}
+
+              {model.limitations.length ? (
+                <ul className="ei-limitations">
+                  {model.limitations.map((code) => <li key={code}>{limitationLabel(code)}</li>)}
+                </ul>
+              ) : null}
+
+              {!isFallback && ref.entry !== 'provider' && ref.entry !== 'artifact' && ref.entry !== 'report' && ref.entry !== 'audit' ? (
+                <section className="ei-compare" aria-label="Expected versus observed">
+                  <div><span className="ei-label">Expected</span><strong>{answer?.expected ? humanize(answer.expected) : <NotRecorded />}</strong></div>
+                  <div><span className="ei-label">Observed</span><strong>{answer?.observed ? humanize(answer.observed) : <NotRecorded />}</strong></div>
+                </section>
+              ) : null}
+
+              {!isFallback && storyEntry ? (
+                <section className="ei-exchange" aria-label="Request and response summary">
+                  <div>
+                    <h3>Request</h3>
+                    <SummaryFields fields={model.request.fields} empty="Request summary not recorded for this result" />
+                  </div>
+                  <div>
+                    <h3>Response</h3>
+                    <SummaryFields fields={model.response.fields} empty="Response summary not recorded for this result" />
+                  </div>
+                </section>
+              ) : null}
+
+              {model.evaluation.fields.length ? (
+                <section className="ei-evaluation" aria-label={ref.entry === 'provider' ? 'Recorded fields' : 'Evaluation'}>
+                  <h3>{ref.entry === 'provider' ? 'Recorded fields' : 'Evaluation'}</h3>
+                  <SummaryFields
+                    fields={model.evaluation.fields.map((field) => (field.key === 'provider' ? { ...field, value: providerName(field.value) } : field))}
+                    empty="Evaluation reasons not recorded"
                   />
-                ))}
-              </details>
-            ) : null}
-          </section>
+                </section>
+              ) : null}
 
-          <details className="ei-technical">
-            <summary>Technical record</summary>
-            <dl className="ei-kv">
-              {Object.entries(subject).map(([key, value]) => (
-                <div key={key}><dt>{humanize(key)}</dt><dd className="mono">{value}</dd></div>
-              ))}
-              <div><dt>Entry</dt><dd className="mono">{ref.entry}</dd></div>
-            </dl>
+              <section className="ei-provenance" aria-label="Provenance">
+                {model.primary ? (
+                  <ObservationBlock
+                    title={ref.entry === 'finding' || ref.entry === 'group_member' ? 'Opening observation' : 'Recorded observation'}
+                    note={ref.entry === 'finding' || ref.entry === 'group_member' ? 'The observation that opened this finding.' : 'The exact record this result came from.'}
+                    observation={model.primary}
+                    missingIds={model.missingEvidenceIds}
+                  />
+                ) : model.originating && (model.originating.testRunId || model.originating.verdictId) ? (
+                  <ObservationBlock
+                    title="Opening observation"
+                    note={model.runArtifacts > 0
+                      ? 'The record that opened this finding. It cites no evidence reference; artifacts recorded for its run are listed under related records.'
+                      : 'The record that opened this finding. It cites no evidence reference.'}
+                    observation={model.originating}
+                  />
+                ) : state !== 'no_refs' && state !== 'pending' && ref.entry !== 'audit' ? <NotRecorded>No originating observation recorded</NotRecorded> : null}
+                {model.later ? (
+                  <ObservationBlock
+                    title="Later result, same target and check"
+                    note="Shown separately. It does not replace the original evidence or close this finding."
+                    observation={model.later}
+                  />
+                ) : null}
+                {model.alternatives.length ? (
+                  <details className="ei-alternatives" open={model.runArtifacts > 0 || undefined}>
+                    <summary>{model.alternatives.length} related record{model.alternatives.length === 1 ? '' : 's'}</summary>
+                    {model.alternatives.map((alt, index) => (
+                      <ObservationBlock
+                        key={`${alt.testRunId}-${index}`}
+                        title={alt.relationship === ORIGINATING_RUN_ARTIFACT ? 'Run artifact' : 'Related record'}
+                        note={relationshipLabel(alt.relationship)}
+                        observation={alt}
+                        onViewArtifact={alt.relationship === ORIGINATING_RUN_ARTIFACT ? viewRunArtifact : undefined}
+                      />
+                    ))}
+                  </details>
+                ) : null}
+              </section>
+
+              <dl className="ei-kv">
+                {Object.entries(subject).map(([key, value]) => (
+                  <div key={key}><dt>{humanize(key)}</dt><dd className="mono">{value}</dd></div>
+                ))}
+                <div><dt>Entry</dt><dd className="mono">{ref.entry}</dd></div>
+              </dl>
+            </div>
           </details>
         </>
       ) : null}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react';
-import { CircleCheck, CircleDot, Clock, Search, ShieldMinus, SlidersHorizontal, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleDot, Clock, Search, ShieldMinus, SlidersHorizontal, TriangleAlert, X } from 'lucide-react';
 import { FindingCard } from '../../components/findings/finding-card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -29,7 +29,6 @@ import {
   FINDING_SEVERITY_CLASSES,
   FINDING_SEVERITY_CLASS_LABELS,
   FINDING_STATUS_DESCRIPTIONS,
-  FINDING_STATUS_GROUPS,
   FINDING_STATUS_LABELS,
   FINDINGS_LIMIT_MAX,
   findingSeverityClass,
@@ -74,6 +73,14 @@ type ViewMode = 'grouped' | 'all';
 type StatusFilter = FindingStatus | 'all';
 
 const EMPTY_FINDINGS: DataItem[] = [];
+
+type StatusSegment = { id: string; label: string; description: string; statuses: FindingStatus[] };
+const STATUS_SEGMENTS: StatusSegment[] = [
+  { id: 'open', label: 'Open', description: FINDING_STATUS_DESCRIPTIONS.open, statuses: ['open'] },
+  { id: 'in_progress', label: 'In progress', description: FINDING_STATUS_DESCRIPTIONS.in_progress, statuses: ['in_progress'] },
+  { id: 'accepted_risk', label: 'Accepted risk', description: FINDING_STATUS_DESCRIPTIONS.accepted_risk, statuses: ['accepted_risk', 'accepted'] },
+  { id: 'closed', label: 'Closed', description: 'Fix verified, resolved, closed or false positive', statuses: ['fix_verified', 'resolved', 'closed', 'false_positive'] },
+];
 // The server compares canonical severity classes (`S2` is `high`), so the filter offers each class once.
 const SEVERITY_OPTIONS = [
   { value: 'all', label: 'All severities' },
@@ -90,12 +97,12 @@ const SORT_KEYS: FindingGroupSortKey[] = ['severity', 'assets', 'recent', 'oldes
 const VIEW_STORAGE_KEY = 'astranull.findings-refined.view';
 const PAGE_SIZES = [25, 50, 100] as const;
 const SORT_OPTIONS: Array<{ value: FindingGroupSortKey; label: string }> = [
-  { value: 'severity', label: 'Worst severity' },
-  { value: 'assets', label: 'Most affected targets' },
-  { value: 'recent', label: 'Recently opened' },
-  { value: 'oldest', label: 'Oldest first' },
-  { value: 'sla', label: 'SLA remaining' },
-  { value: 'title', label: 'Title A to Z' }
+  { value: 'severity', label: 'Sort: Worst severity' },
+  { value: 'assets', label: 'Sort: Most affected targets' },
+  { value: 'recent', label: 'Sort: Recently opened' },
+  { value: 'oldest', label: 'Sort: Oldest first' },
+  { value: 'sla', label: 'Sort: SLA remaining' },
+  { value: 'title', label: 'Sort: Title A to Z' }
 ];
 
 function readStoredView(): ViewMode {
@@ -628,6 +635,26 @@ export function FindingsRefined(props: FindingsRefinedProps) {
       ? legacyAcceptedShownRef.current === true
       : estateTotals.state === 'loading' && legacyAcceptedShownRef.current !== null ? legacyAcceptedShownRef.current : true);
   const activeFilterCount = [search.trim() !== '', severityFilter !== 'all', targetFilter !== 'all'].filter(Boolean).length;
+  const statusSegments = STATUS_SEGMENTS.map((segment) => (segment.id === 'accepted_risk' && !showLegacyAccepted
+    ? { ...segment, statuses: segment.statuses.filter((status) => status !== 'accepted') }
+    : segment));
+  const activeSegment = statusSegments.find((segment) => segment.statuses.includes(statusFilter as FindingStatus)) ?? null;
+  const chooseSegment = (segment: StatusSegment) => {
+    if (segment.statuses.includes(statusFilter as FindingStatus)) return;
+    const withFindings = segment.statuses.find((status) => (statusTotals.totals[status] ?? 0) > 0);
+    setStatusFilter(withFindings ?? segment.statuses[0]);
+  };
+  const targetLabel = targetOptions.find((option) => option.value === targetFilter)?.label ?? targetFilter;
+  const activeChips = [
+    search.trim() ? { key: 'search', label: `Search: ${search.trim()}`, clear: () => setSearch('') } : null,
+    severityFilter !== 'all' ? { key: 'severity', label: `Severity: ${FINDING_SEVERITY_CLASS_LABELS[severityFilter as keyof typeof FINDING_SEVERITY_CLASS_LABELS] ?? severityFilter}`, clear: () => setSeverityFilter('all') } : null,
+    targetFilter !== 'all' ? { key: 'target', label: `Target: ${targetLabel}`, clear: () => setTargetFilter('all') } : null,
+  ].filter((chip): chip is { key: string; label: string; clear: () => void } => chip !== null);
+  const clearRefinements = () => {
+    setSearch('');
+    setSeverityFilter('all');
+    setTargetFilter('all');
+  };
 
   return (
     <div className="content refined rf-findings">
@@ -702,25 +729,49 @@ export function FindingsRefined(props: FindingsRefinedProps) {
         </div>
 
         <div className="rf-panel rf-findings-filters">
-          <div className="rf-status-groups" role="group" aria-label="Finding status filters">
-            <button type="button" className="rf-status-chip" aria-pressed={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>
-              All
-              <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, 'all')}</span>
-            </button>
-            {FINDING_STATUS_GROUPS.map((group) => (
-              <span key={group.id} className="rf-status-group" role="group" aria-labelledby={`rf-status-group-${group.id}`}>
-                <span className="rf-status-group-label" id={`rf-status-group-${group.id}`}>{group.label}</span>
-                {group.statuses.filter((status) => status !== 'accepted' || showLegacyAccepted).map((status) => (
-                  <button key={status} type="button" className="rf-status-chip" aria-pressed={statusFilter === status} title={FINDING_STATUS_DESCRIPTIONS[status]} onClick={() => setStatusFilter(status)}>
-                    {FINDING_STATUS_LABELS[status]}
-                    {status === 'accepted' ? <span className="sr-only">, older status set through the API</span> : null}
-                    <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, status)}</span>
-                  </button>
-                ))}
-              </span>
-            ))}
+          <div className="rf-filters-top">
+            <div className="rf-status-segmented" role="group" aria-label="Finding status filters">
+              {statusSegments.map((segment) => (
+                <button key={segment.id} type="button" className="rf-status-chip" aria-pressed={segment.statuses.includes(statusFilter as FindingStatus)} title={segment.description} onClick={() => chooseSegment(segment)}>
+                  {segment.label}
+                  <span className="rf-tab-count tabular-nums">{segmentCount(statusTotals, segment.statuses)}</span>
+                </button>
+              ))}
+              <button type="button" className="rf-status-chip" aria-pressed={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>
+                All
+                <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, 'all')}</span>
+              </button>
+            </div>
+            <p className="rf-result-count" aria-live="polite">
+              {matchTotal === null ? (
+                envelope ? 'This server did not report a total for these filters.' : 'Counting matching findings.'
+              ) : view === 'grouped' ? (
+                groupsComplete ? (
+                  <>
+                    <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
+                  </>
+                ) : (
+                  <span title="Groups and their counts are partial until every matching finding is read.">
+                    <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, still loading.
+                  </span>
+                )
+              ) : (
+                <><span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, newest first.</>
+              )}
+            </p>
           </div>
-          {statusTotals.state === 'error' ? <p className="rf-result-count" role="alert">Status counts are unavailable: {statusTotals.error}</p> : null}
+          {activeSegment && activeSegment.statuses.length > 1 ? (
+            <div className="rf-status-sub" role="group" aria-label={`${activeSegment.label} statuses`}>
+              {activeSegment.statuses.map((status) => (
+                <button key={status} type="button" className="rf-status-subchip" aria-pressed={statusFilter === status} title={FINDING_STATUS_DESCRIPTIONS[status]} onClick={() => setStatusFilter(status)}>
+                  {FINDING_STATUS_LABELS[status]}
+                  {status === 'accepted' ? <span className="sr-only">, older status set through the API</span> : null}
+                  <span className="rf-tab-count tabular-nums">{countLabel(statusTotals, status)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {statusTotals.state === 'error' ? <p className="rf-status-error" role="alert">Status counts are unavailable: {statusTotals.error}</p> : null}
           <Button
             type="button"
             size="sm"
@@ -745,7 +796,7 @@ export function FindingsRefined(props: FindingsRefinedProps) {
                   maxLength={200}
                   aria-label="Search findings by title, finding ID, check ID, target ID, group ID, or owner"
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Title, ID, target or owner"
+                  placeholder="Search title, target, ID or owner"
                 />
               </span>
             </label>
@@ -753,24 +804,17 @@ export function FindingsRefined(props: FindingsRefinedProps) {
             <Select label="Target" value={targetFilter} options={targetOptions} onChange={setTargetFilter} />
             {view === 'grouped' ? <Select label="Sort groups" value={sort} options={SORT_OPTIONS} onChange={(value) => setSort(value as FindingGroupSortKey)} /> : null}
           </div>
-          <p className="rf-result-count" aria-live="polite">
-            {matchTotal === null ? (
-              envelope ? 'This server did not report a total for these filters, so no count is shown.' : 'Counting matching findings.'
-            ) : view === 'grouped' ? (
-              groupsComplete ? (
-                <>
-                  <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} from <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
-                </>
-              ) : (
-                <>
-                  <span className="tabular-nums">{formatNumber(groupCount)}</span> {pluralize(groupCount, 'finding group')} built from <span className="tabular-nums">{formatNumber(grouped.items.length)}</span> of <span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}.
-                  {' Groups and their counts are partial until every matching finding is read.'}
-                </>
-              )
-            ) : (
-              <><span className="tabular-nums">{formatNumber(matchTotal)}</span> matching {pluralize(matchTotal, 'finding')}, newest first. Select a row to view its evidence.</>
-            )}
-          </p>
+          {activeChips.length ? (
+            <div className="rf-active-filters" role="group" aria-label="Active filters">
+              {activeChips.map((chip) => (
+                <button key={chip.key} type="button" className="rf-filter-chip" aria-label={`Remove filter ${chip.label}`} onClick={chip.clear}>
+                  <span className="rf-filter-chip-text">{chip.label}</span>
+                  <X size={12} aria-hidden="true" />
+                </button>
+              ))}
+              <button type="button" className="link-button rf-clear-filters" onClick={clearRefinements}>Clear all</button>
+            </div>
+          ) : null}
         </div>
 
         {live.pending ? (
@@ -851,6 +895,12 @@ export function FindingsRefined(props: FindingsRefinedProps) {
       </section>
     </div>
   );
+}
+
+function segmentCount(totals: StatusTotals, statuses: string[]) {
+  if (totals.state === 'loading') return '...';
+  const values = statuses.map((status) => totals.totals[status]);
+  return values.every((value) => typeof value === 'number') ? formatNumber(values.reduce<number>((sum, value) => sum + (value as number), 0)) : 'n/a';
 }
 
 function countLabel(totals: StatusTotals, status: string) {

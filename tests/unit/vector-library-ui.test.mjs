@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
+  CHECK_CATEGORIES,
+  MISC_CATEGORY_ID,
+  categorizeCheckGroups,
+  checkCategoryId,
   countCompatibleSafeChecks,
   evidenceCapabilityCopy,
   groupVectorsByCheck,
@@ -151,6 +155,53 @@ describe('check-first catalog grouping', () => {
   it('lists a vector under every covering check without inventing checks', () => {
     const { groups } = groupVectorsByCheck([{ vector_id: 'V1', safe_check_ids: ['waf.sqli.safe', 'waf.xss.safe'] }], checks);
     assert.deepEqual(groups.flatMap((group) => group.vectors.map((vector) => vector.vector_id)), ['V1', 'V1']);
+  });
+});
+
+describe('check library categories', () => {
+  const group = (checkId, family) => ({ checkId, check: { check_id: checkId, vector_family: family }, vectors: [] });
+  const groups = [
+    group('waf.a', 'waf'),
+    group('waf.b', 'waf'),
+    group('dns.a', 'dns'),
+    group('refl.a', 'reflection'),
+    group('amp.a', 'amplification'),
+    group('path.a', 'path'),
+    group('odd.a', 'brand_new_family'),
+  ];
+  const unmapped = [{ vector_id: 'V9' }, { vector_id: 'V10' }];
+
+  it('maps catalog vector families onto the chip categories and unknown families to miscellaneous', () => {
+    assert.equal(checkCategoryId({ vector_family: 'WAF' }), 'waf');
+    assert.equal(checkCategoryId({ vector_family: 'amplification' }), 'reflection');
+    assert.equal(checkCategoryId({ vector_family: 'high_scale' }), 'operations');
+    assert.equal(checkCategoryId({ vector_family: 'tls' }), 'protocol');
+    assert.equal(checkCategoryId({ vector_family: 'brand_new_family' }), MISC_CATEGORY_ID);
+    assert.equal(checkCategoryId(null), MISC_CATEGORY_ID);
+    const families = CHECK_CATEGORIES.flatMap((entry) => entry.families);
+    assert.equal(new Set(families).size, families.length);
+  });
+
+  it('counts check groups per category and folds unmapped vectors into miscellaneous', () => {
+    const { counts, groups: all, unmapped: allUnmapped } = categorizeCheckGroups(groups, unmapped);
+    assert.equal(counts.all, 7);
+    assert.equal(counts.waf, 2);
+    assert.equal(counts.reflection, 2);
+    assert.equal(counts.origin, 1);
+    assert.equal(counts.l7, 0);
+    assert.equal(counts[MISC_CATEGORY_ID], 3);
+    assert.equal(all.length, 7);
+    assert.equal(allUnmapped.length, 2);
+  });
+
+  it('filters to one category and only keeps unmapped vectors for all or miscellaneous', () => {
+    const waf = categorizeCheckGroups(groups, unmapped, 'waf');
+    assert.deepEqual(waf.groups.map((entry) => entry.checkId), ['waf.a', 'waf.b']);
+    assert.deepEqual(waf.unmapped, []);
+    assert.equal(waf.counts.waf, 2);
+    const misc = categorizeCheckGroups(groups, unmapped, MISC_CATEGORY_ID);
+    assert.deepEqual(misc.groups.map((entry) => entry.checkId), ['odd.a']);
+    assert.equal(misc.unmapped.length, 2);
   });
 });
 

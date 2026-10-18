@@ -96,7 +96,7 @@ describe('ui and api smoke', () => {
     assert.ok(reactAppJs.text.includes('Open check library'), 'React runs page routes operators into explicit vector, domain, and check selection');
     assert.ok(reactAppJs.text.includes('/v1/waf/coverage/summary'), 'React dashboard loads WAF coverage summary');
     assert.ok(reactAppJs.text.includes('/v1/high-scale-requests'), 'React portal references governed high-scale requests');
-    assert.ok(reactAppJs.text.includes('Vector coverage matrix'), 'Dashboard risk trends retains vector coverage panel');
+    assert.ok(reactAppJs.text.includes('Coverage by domain'), 'Dashboard risk trends retains the domain coverage panel');
     assert.equal(reactAppJs.text.includes('Workspace tabs'), false, 'React app must not render prototype SurfaceTabsPanel copy');
     assert.equal(reactAppJs.text.includes('React surfaces'), false, 'Public landing must not show fixed prototype surface counts');
 

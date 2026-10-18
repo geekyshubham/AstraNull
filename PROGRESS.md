@@ -1,5 +1,15 @@
 # AstraNull Progress Tracker
 
+## Portal UI review fixes (2026-10-18)
+
+- [x] Dashboard: readiness score no longer hidden when results sit on subdomains (domain rows roll up their subdomains; an open finding or the server's own posture counts as evidence); tenant badge, context summary, KPI sub-copy, "Evidence attached" chip and the Recent validation activity widget removed; "Open finding" is a real button; ownership chip and tags no longer wrap (one tag + "+N", redundant `domain:` tag hidden).
+- [x] Dashboard WAF/CDN: three statuses only (Detected, Not detected, Unknown with a breakdown tooltip); unit toggle removed.
+- [x] Risk trends: oldest open findings grouped by issue (one row per issue with target count); vector and resource matrices merged into one "Coverage by domain" tree (domain → subdomain → sub-subdomain, Attack type / Resource exhausted toggle, search, "Only hosts with results" filter, WAF column added). Logic in `lib/coverage-tree.mjs` (`tests/unit/coverage-tree.test.mjs`).
+- [x] Evidence drawer: verdict-first layout (conclusion banner, What we saw, Why it matters, How to fix) with IDs and records in one collapsed Technical details section; observation-only checks never read as a verdict (`lib/evidence-story.mjs`, `tests/unit/evidence-story.test.mjs`).
+- [x] Findings filter bar: segmented status control, one filter row, removable filter chips.
+- [x] Targets table: four columns (Target, Ownership, Last result, Actions) with an accessible row actions menu.
+- [x] Check library: target card removed (deep link kept as a chip), category chips, unmapped vectors shown as a Miscellaneous group, single-button vector rows.
+
 ## Efficacy lab false positives and avoidable inconclusives (2026-10-17, [ADR-0029](docs/adr/0029-violation-only-network-verdicts-and-truthful-waf-grading.md), [ADR-0034](docs/adr/0034-missing-control-findings-efficacy-and-remediation-assistant.md))
 
 - [x] Product: WAF traversal marker survives URL dot-segment normalization; signed worker keeps TLS issue evidence (expired/not-yet-valid certs gap, healthy cert stays an observation); IPv4/IPv6 attempts share one job deadline; AXFR `exposed` needs an explicit `axfr_leak` with probe I/O and `protected` needs per-nameserver refusal covering every nameserver (an `enforcement` label alone earns nothing); NFW kinds with no probe I/O or `error`/`not_run`/`timeout` are inconclusive; cross-family IPv4/IPv6 differences are parity, not sample disagreement.

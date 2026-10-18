@@ -35,6 +35,7 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
         await gotoPortalRoute(page, 'targets', baseUrl);
     await expectNoButton(page, 'Add target');
     await expect(page.getByRole('button', { name: /^Remove target / })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^More actions for / })).toHaveCount(0);
 
     await gotoPortalRoute(page, 'test-policies', baseUrl);
     await expectNoButton(page, 'Create schedule');

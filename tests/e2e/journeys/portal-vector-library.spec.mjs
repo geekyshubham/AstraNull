@@ -26,23 +26,33 @@ async function chooseFirstRealOption(scope, label) {
   await options.nth(1).click();
 }
 
+const SEARCH_PLACEHOLDER = 'Search checks and vectors by name, ID, protocol or control';
+
+function vectorRowButton(scope, vectorId) {
+  return scope.getByRole('button', { name: new RegExp(`\\(${vectorId}\\)$`) });
+}
+
+async function gotoChecksWithTarget(page) {
+  await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}&fit=safe_runnable`, { waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.locator('.vector-target-chip')).toContainText('checkout.acme.com', { timeout: 20_000 });
+}
+
 // Check-first catalog: a vector lives inside the check group that covers it. Search narrows the
 // catalog to that vector's check(s); expand the surfaced groups, then act on the nested vector row.
-async function openVectorAction(page, vectorId, actionLabel) {
-  await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill(vectorId);
+async function openVectorAction(page, vectorId) {
+  await page.getByPlaceholder(SEARCH_PLACEHOLDER).fill(vectorId);
   // Runnable vectors sit inside check groups; expand those that surfaced.
   const toggles = page.locator('.vector-check-toggle');
   await expect
-    .poll(async () => (await toggles.count()) + (await page.getByRole('button', { name: /not mapped to a runnable check/ }).count()))
+    .poll(async () => toggles.count())
     .toBeGreaterThan(0);
+  // Non-runnable vectors (SOC-gated, monitor-only) sit in the Miscellaneous group, which uses the same toggle.
   for (let index = 0, total = await toggles.count(); index < total; index += 1) {
     const toggle = toggles.nth(index);
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
   }
-  // Non-runnable vectors (SOC-gated, monitor-only) sit in the "not mapped to a runnable check" group.
-  const unmapped = page.getByRole('button', { name: /not mapped to a runnable check/ });
-  if ((await unmapped.count()) && (await unmapped.getAttribute('aria-expanded')) !== 'true') await unmapped.click();
-  await page.getByRole('button', { name: actionLabel, exact: true }).click();
+  await vectorRowButton(page, vectorId).click();
 }
 
 test.describe('target-first check library workflow', () => {
@@ -90,7 +100,7 @@ test.describe('target-first check library workflow', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Check library' })).toBeVisible({ timeout: 20_000 });
     const counts = page.getByLabel('Catalog and check counts');
     await expect(counts.locator('div').filter({ hasText: 'Catalog vectors' }).locator('dd').first()).toHaveText('721', { timeout: 20_000 });
-    await expect(counts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText('No target');
+    await expect(counts.locator('div').filter({ hasText: 'Fit this target' })).toHaveCount(0);
     await expect(page.locator('.design-variant-switch')).toHaveCount(0);
     await expect(page.locator('.vector-check-group').first()).toBeVisible({ timeout: 20_000 });
     expect(vectorReads).toHaveLength(8);
@@ -101,13 +111,12 @@ test.describe('target-first check library workflow', () => {
     expect(uniqueVectorReads.every((value) => new URLSearchParams(value).get('limit') === '100')).toBe(true);
     await expect(page.getByText(/Page 1 of \d+/)).toBeVisible();
 
-    await chooseFirstRealOption(page, 'Target');
-    await expect(page.getByText('Target selected', { exact: true })).toBeVisible();
+    await gotoChecksWithTarget(page);
     await expect(page).toHaveURL(/#checks\?target=/);
     await expect(counts.locator('div').filter({ hasText: 'Fit this target' }).locator('dd').first()).toHaveText(/^\d+$/);
 
     await expect(page.getByRole('button', { name: 'Fit for target', exact: true })).toContainText('Bounded check available');
-    await openVectorAction(page, 'EVA-004', 'Details for EVA-004');
+    await openVectorAction(page, 'EVA-004');
 
     const detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('What it checks');
@@ -156,14 +165,14 @@ test.describe('target-first check library workflow', () => {
     });
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
 
-    await openVectorAction(page, 'NET-016', 'Details for NET-016');
+    await openVectorAction(page, 'NET-016');
     let detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('SOC-gated only');
     await expect(detail).toContainText('supplemental declaration or transport evidence is not an exposure result');
     await expect(detail.getByRole('button', { name: 'Review run' })).toHaveCount(0);
     await detail.getByRole('button', { name: 'Close dialog' }).click();
 
-    await openVectorAction(page, 'AMP-073', 'Review AMP-073');
+    await openVectorAction(page, 'AMP-073');
     detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('Monitor only');
     await expect(detail).toContainText('no active outside-in result is claimed');
@@ -185,55 +194,50 @@ test.describe('target-first check library workflow', () => {
         body: JSON.stringify({ ...payload, items: [] }),
       });
     });
-    await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await chooseFirstRealOption(page, 'Target');
-    await expect(page.getByText('Target selected', { exact: true })).toBeVisible();
+    await gotoChecksWithTarget(page);
 
     removeTargets = true;
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(page.getByText(/from the link is not visible in this workspace\. No other target was substituted\./)).toBeVisible();
-    await expect(page.locator('.vector-target-note')).toContainText('Browsing without a target');
-    await expect(page.getByRole('button', { name: 'Target', exact: true })).toBeDisabled();
-    await page.getByRole('button', { name: 'Clear target' }).click();
+    await page.getByRole('button', { name: 'Clear target', exact: true }).click();
     await expect(page).not.toHaveURL(/target=/);
   });
 
   test('restores the target, search, and page from a shared address', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await page.goto(`${sourceBaseUrl}/app#checks?target=${PORTAL_BASELINE_IDS.targetId}&fit=all&q=AMP&page=2`, { waitUntil: 'networkidle' });
-    await expect(page.locator('.vector-target-note')).toContainText('checkout.acme.com', { timeout: 20_000 });
+    await expect(page.locator('.vector-target-chip')).toContainText('checkout.acme.com', { timeout: 20_000 });
     await expect(page.getByRole('button', { name: 'Fit for target', exact: true })).toContainText('Any fit');
-    await expect(page.getByPlaceholder('Name, ID, protocol, exposure, control')).toHaveValue('AMP');
+    await expect(page.getByPlaceholder(SEARCH_PLACEHOLDER)).toHaveValue('AMP');
     await expect(page.getByText(/^Page \d+ of \d+/)).toBeVisible();
   });
 
   test('narrows to bounded-check fit when a target is chosen and can show every fit', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await chooseFirstRealOption(page, 'Target');
+    await gotoChecksWithTarget(page);
     const fit = page.getByRole('button', { name: 'Fit for target', exact: true });
     await expect(fit).toContainText('Bounded check available');
     await expect(page).toHaveURL(/fit=safe_runnable/);
-    await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill('AMP-073');
+    await page.getByPlaceholder(SEARCH_PLACEHOLDER).fill('AMP-073');
     await expect(page.getByText('No checks match these filters.')).toBeVisible();
     await page.getByRole('button', { name: 'Show all fits', exact: true }).click();
     await expect(fit).toContainText('Any fit');
-    // AMP-073 is monitor-only, so it is listed under "not mapped to a runnable check" rather than a check group.
-    await expect(page.getByRole('button', { name: /not mapped to a runnable check/ })).toBeVisible();
+    // AMP-073 is monitor-only, so it is listed under Miscellaneous rather than a check group.
+    await expect(page.getByRole('button', { name: /no runnable check yet/ })).toBeVisible();
     await expect(page).toHaveURL(/fit=all/);
   });
 
-  test('restores focus to Details after detail closes by button or Escape', async ({ page }) => {
+  test('restores focus to the vector row after detail closes by button or Escape', async ({ page }) => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await page.getByPlaceholder('Name, ID, protocol, exposure, control').fill('APP-003');
+    await page.getByPlaceholder(SEARCH_PLACEHOLDER).fill('APP-003');
     const expandToggles = page.locator('.vector-check-toggle');
     await expect(expandToggles.first()).toBeVisible({ timeout: 20_000 });
     for (let index = 0, total = await expandToggles.count(); index < total; index += 1) {
       const toggle = expandToggles.nth(index);
       if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
     }
-    const review = page.getByRole('button', { name: 'Details for APP-003', exact: true });
+    const review = vectorRowButton(page, 'APP-003');
     await review.click();
     let detail = page.locator('dialog.form-modal[open]');
     await detail.getByRole('button', { name: 'Close dialog' }).click();
@@ -253,10 +257,9 @@ test.describe('target-first check library workflow', () => {
     page.on('request', (request) => {
       if (request.method() === 'POST' && /\/v1\/test-runs$/.test(request.url())) runPosts.push(request.url());
     });
-    await gotoPortalRoute(page, 'checks', sourceBaseUrl);
-    await chooseFirstRealOption(page, 'Target');
+    await gotoChecksWithTarget(page);
     await expect(page.getByLabel('Catalog and check counts')).toContainText('Review only');
-    await openVectorAction(page, 'EVA-004', 'Details for EVA-004');
+    await openVectorAction(page, 'EVA-004');
     const detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('only owners, admins, and engineers can start bounded checks');
     await expect(detail.getByRole('button', { name: 'Mapped bounded check' })).toHaveCount(0);

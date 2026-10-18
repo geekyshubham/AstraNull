@@ -810,7 +810,7 @@ describe('in-progress runs and originating-run artifacts (inspector honesty)', (
     assert.equal(normalizeEvidenceContext(null, findingRef).runArtifacts, 0);
   });
 
-  it('renders pending, run-artifact View and Open full run without any mutating request', () => {
+  it('renders pending, run-artifact View and Open run without any mutating request', () => {
     const host = read('apps/web/react/src/components/evidence/evidence-inspector.tsx');
     assert.match(host, /Collecting — verdict not yet correlated/);
     assert.match(host, /Probe responses below are observations, not a verdict\. Evidence is attached when the verdict is published\./);
@@ -818,7 +818,7 @@ describe('in-progress runs and originating-run artifacts (inspector honesty)', (
     assert.match(host, /This finding cites no evidence reference\. \$\{runArtifacts === 1 \? .1 artifact was recorded for its originating run and is. : `\$\{runArtifacts\} artifacts were recorded for its originating run and are`\} listed below\./);
     assert.match(host, /entry: 'artifact'/);
     assert.match(host, />View<\/Button>/);
-    assert.match(host, /Open full run/);
+    assert.match(host, />Open run</);
     assert.match(host, /validation_scan: 'Validation scan'/);
     assert.doesNotMatch(host, /Exact assessment|Assessment execution|so no artifact is shown/);
     assert.doesNotMatch(host, /formatDate\(/, 'inspector times carry a year via formatTimestamp');

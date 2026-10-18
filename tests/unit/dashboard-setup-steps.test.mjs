@@ -86,7 +86,8 @@ describe('dashboard first-run setup steps', () => {
   });
 
   it('shows no score, no donut and no factors before the first evidence-backed verdict', () => {
-    assert.match(DASHBOARD, /const evidenceMissing = !coverageUnavailable && targetsWithEvidence === 0;/);
+    assert.match(DASHBOARD, /const evidenceMissing = !coverageUnavailable && targetsWithEvidence === 0 && serverMeasured === 0 && \(openOverview\.total \?\? 0\) === 0;/);
+    assert.match(DASHBOARD, /rollUpPostureRows\(buildTargetPostureRows\(data, undefined, \{ openFindings: sampleRows, openCounts \}\), topLevelOf\)/);
     assert.match(DASHBOARD, /const noEvidence = evidenceMissing \|\| scoreStatus === 'not_applicable' \|\| scoreStatus === 'incomplete_inputs';/);
     assert.match(DASHBOARD, /const score = noEvidence \? null : publishedScore;/);
     assert.match(DASHBOARD, /hasEvidence: !noEvidence/);

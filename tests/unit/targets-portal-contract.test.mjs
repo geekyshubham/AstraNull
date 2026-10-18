@@ -10,18 +10,17 @@ describe('Targets portal contract', () => {
   it('renders the required inventory fields and safe add/edit/remove behavior', () => {
     const source = readPage('targets-page.tsx');
 
-    // Current release: kind moves into the target cell; ownership and last validation are columns.
-    for (const label of [
-      'Target',
-      'Ownership',
-      'Last validation',
-      'Tags',
-
-      'Added from',
-    ]) {
+    // Four columns: kind, subdomains and one tag chip live in the target cell; source moves into its title.
+    for (const label of ['Target', 'Ownership', 'Last result', 'Actions']) {
       assert.match(source, new RegExp(`label: '${label}'`));
     }
+    for (const removed of ['Tags', 'Added from', 'Last validation']) {
+      assert.doesNotMatch(source, new RegExp(`label: '${removed}'`), `${removed} is no longer its own column`);
+    }
     assert.match(source, /<span>\{formatTargetKind\(getString\(item, \['kind'\], ''\), getString\(item, \['value'\], ''\)\)\}<\/span>/, 'kind stays visible in the target cell');
+    assert.match(source, /key === 'domain' && rest\.join\(':'\) === host/, 'a domain: tag repeating the target hostname is hidden');
+    assert.match(source, /<RowActionsMenu label=\{`More actions for \$\{value\}`\} actions=\{menuActions\} \/>/, 'Edit tags and Remove live in the row overflow menu');
+    assert.match(source, /const menuActions: RowAction\[\] = canWriteTargets \?/, 'overflow actions stay behind target_group:write');
     assert.doesNotMatch(source, /function targetKindLabel/, 'kind labels come from the shared formatTargetKind');
     // Pending ownership is never counted as ready, and a missing timestamp is not "Never".
     assert.doesNotMatch(source, /Ready for validation/);

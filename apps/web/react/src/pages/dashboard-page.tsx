@@ -1,23 +1,22 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { requestJson } from '../lib/api';
 import { familyCoverageBuckets, inventoryUnits } from '../lib/domain-checks.mjs';
-import { computeSubdomainGrouping } from '../lib/subdomain-grouping';
+import { computeSubdomainGrouping, subdomainParentMap, topLevelAncestor } from '../lib/subdomain-grouping';
 import { useOpenInspector } from '../components/evidence/use-inspector';
 import {
   Activity,
+  ArrowUpRight,
   Check,
   ChevronRight,
   Eye,
   ListChecks,
-  Network,
   RefreshCw,
   Target,
   TriangleAlert
 } from 'lucide-react';
 import { ReadinessPostureDonut } from '../components/charts/readiness-posture-donut';
 import { ScoreTrend } from '../components/charts/score-trend';
-import { VectorHeatmap } from '../components/charts/vector-heatmap';
-import { ResourceMatrix } from '../components/charts/resource-matrix';
+import { CoverageTree } from '../components/charts/coverage-tree';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -30,10 +29,10 @@ import { FINDINGS_LIMIT_MAX, findingsComplete } from '../lib/findings-query.mjs'
 import {
   buildSetupSteps,
   buildTargetPostureRows,
-  classifyVerdict,
   EVIDENCE_STATUS_TONE,
   isTargetVerified,
   resolveRecentRuns,
+  rollUpPostureRows,
   severityDistributionFromCounts,
   severityShortLabel,
   type EvidenceStatus,
@@ -42,6 +41,7 @@ import {
 } from '../lib/dashboard-metrics';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { isFindingOpen } from '../lib/findings-helpers';
+import { createFindingGroupIndex, findingGroupHref, groupFindings } from '../lib/finding-groups.mjs';
 // @ts-ignore Plain ESM keeps run-start role parity testable with node:test.
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { buildDetailHref } from '../lib/route-params';
@@ -50,8 +50,8 @@ import type { BadgeTone, DataItem, PortalConfig, PortalData, ReadinessFactor, Se
 import { formatDate, formatNumber, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
 import { severityCountTone, severityTone } from '../lib/severity-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainCheckName, plainFindingTitle, plainInlineText, plainVerdictLabel, plainVerdictShortLabel } from '../lib/plain-language.mjs';
-import { PageContextSummary, PageHeader } from './page-components';
+import { dashboardReadinessMessage, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { PageHeader } from './page-components';
 import './dashboard-page.css';
 
 type UiBadgeTone = BadgeTone;
@@ -381,74 +381,54 @@ function useDeclaredHostCoverage(config: PortalConfig, session: Session, family:
 }
 
 function CoverageRow({ family, result, onRetry }: { family: CoverageFamily; result: CoverageResult; onRetry: () => void }) {
-  const title = family === 'waf' ? 'WAF observations' : 'CDN observations';
+  const title = family === 'waf' ? 'WAF' : 'CDN';
   if (result.state === 'loading') return <div className="coverage-row" aria-busy="true"><span className="coverage-title">{title}</span><div className="skeleton skeleton-row" /></div>;
-  if (result.state !== 'ready') {
+  const buckets = result.state === 'ready' ? familyCoverageBuckets(result.payload) : null;
+  if (!buckets || !buckets.complete || !buckets.denominator) {
+    const reason = result.state === 'unsupported' ? 'Not reported by this server.'
+      : result.state === 'denied' ? 'Your role cannot read target analytics.'
+        : result.state === 'error' ? 'Could not load.'
+          : !buckets?.complete ? 'Scope could not be read completely.' : 'No hosts declared yet.';
     return (
       <div className="coverage-row">
         <span className="coverage-title">{title}</span>
-        <span className="coverage-unavailable">
-          {result.state === 'unsupported' ? 'Unavailable: this server does not report declared-host coverage.' : result.state === 'denied' ? 'Access required to read target analytics.' : <>Unavailable: {result.message} <Button size="sm" variant="ghost" onClick={onRetry}>Retry</Button></>}
-        </span>
+        <span className="coverage-unavailable">{reason}{result.state === 'error' ? <> <Button size="sm" variant="ghost" onClick={onRetry}>Retry</Button></> : null}</span>
       </div>
     );
   }
-  const buckets = familyCoverageBuckets(result.payload);
-  const unitNoun = buckets.unit === 'target' ? 'declared target records' : 'distinct hostnames';
-  if (!buckets.complete) {
-    return (
-      <div className="coverage-row">
-        <span className="coverage-title">{title}</span>
-        <span className="coverage-unavailable">Unavailable: the server could not read the complete scope, so no partial count is shown.</span>
-      </div>
-    );
-  }
-  if (!buckets.denominator) {
-    return (
-      <div className="coverage-row">
-        <span className="coverage-title">{title}</span>
-        <span className="coverage-unavailable">Not applicable: no {unitNoun} in the current declared scope.</span>
-      </div>
-    );
-  }
-  const shown = buckets.parts.filter((part) => part.group !== 'unmeasured');
-  const unmeasuredParts = buckets.parts.filter((part) => part.group === 'unmeasured');
-  const barParts = [...shown, { key: 'unmeasured', label: 'Unknown or not checked', group: 'unmeasured', count: buckets.unmeasured, href: '' }];
+  const detected = buckets.parts.find((part) => part.group === 'detected');
+  const notDetected = buckets.parts.find((part) => part.group === 'not_detected');
+  const unknownParts = buckets.parts.filter((part) => part.group !== 'detected' && part.group !== 'not_detected' && part.count > 0);
+  const unknownCount = unknownParts.reduce((sum, part) => sum + part.count, 0);
+  const segments = [
+    { key: 'detected', label: 'Detected', count: detected?.count ?? 0, href: detected?.href ?? '' },
+    { key: 'not_detected', label: 'Not detected', count: notDetected?.count ?? 0, href: notDetected?.href ?? '' },
+    { key: 'unmeasured', label: 'Unknown', count: unknownCount, href: '' }
+  ];
+  const unknownDetail = unknownParts.map((part) => `${part.label} ${formatNumber(part.count)}`).join(' · ');
   return (
     <div className="coverage-row">
       <span className="coverage-title">{title}</span>
-      <span className="coverage-bar" role="img" aria-label={`${title}: ${barParts.map((part) => `${part.label} ${part.count}`).join(', ')}, of ${buckets.denominator} ${unitNoun}`}>
-        {barParts.filter((part) => part.count > 0).map((part) => <span key={part.key} className="coverage-seg" data-segment={part.group} style={{ flexGrow: part.count }} />)}
+      <span className="coverage-bar" role="img" aria-label={`${title}: ${segments.map((part) => `${part.label} ${part.count}`).join(', ')}, of ${buckets.denominator} hosts`}>
+        {segments.filter((part) => part.count > 0).map((part) => <span key={part.key} className="coverage-seg" data-segment={part.key} style={{ flexGrow: part.count }} />)}
       </span>
       <ul className="coverage-legend">
-        {shown.map((part) => (
+        {segments.map((part) => (
           <li key={part.key}>
-            <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} ${unitNoun}. Open the matching list.`}>
-              <span className="coverage-swatch" data-segment={part.group} aria-hidden="true" />
-              {part.label} <span className="tabular-nums">{formatNumber(part.count)}</span>
-            </a>
+            {part.href && part.count > 0 ? (
+              <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} hosts. Open the list.`}>
+                <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
+                {part.label} <span className="tabular-nums">{formatNumber(part.count)}</span>
+              </a>
+            ) : (
+              <span title={part.key === 'unmeasured' && unknownDetail ? unknownDetail : undefined}>
+                <span className="coverage-swatch" data-segment={part.key} aria-hidden="true" />
+                {part.label} <span className="tabular-nums">{formatNumber(part.count)}</span>
+              </span>
+            )}
           </li>
         ))}
-        <li className="coverage-legend-group">
-          <span className="coverage-swatch" data-segment="unmeasured" aria-hidden="true" />
-          <span className="coverage-legend-group-body">
-            <span className="coverage-legend-group-label">Unknown or not checked{'\u00a0'}<span className="tabular-nums">{formatNumber(buckets.unmeasured)}</span>:</span>
-            {unmeasuredParts.map((part, index) => (
-              <span key={part.key} className="coverage-legend-sub">
-                {index > 0 ? <span className="coverage-legend-sep" aria-hidden="true">·</span> : null}
-                <a href={part.href} aria-label={`${title} ${part.label.toLowerCase()}: ${formatNumber(part.count)} ${unitNoun}. Open the matching list.`}>{part.label} <span className="tabular-nums">{formatNumber(part.count)}</span></a>
-              </span>
-            ))}
-          </span>
-        </li>
       </ul>
-      <span className="coverage-meta">
-        of <span className="tabular-nums">{formatNumber(buckets.denominator)}</span> {unitNoun}
-        {' '}(same scope: {buckets.units.targetRecords === null ? 'not reported' : formatNumber(buckets.units.targetRecords)} declared target records, {buckets.units.normalizedHosts === null ? 'not reported' : formatNumber(buckets.units.normalizedHosts)} distinct hostnames)
-        {buckets.asOf ? ` · current as of ${formatDate(buckets.asOf)}` : ''}
-        {buckets.current ? '' : ' · scope not confirmed as current'}
-        {buckets.reconciled ? '' : ' · reported segments do not add up to the total; counts are shown as reported'}
-      </span>
     </div>
   );
 }
@@ -479,26 +459,21 @@ function useVerifiedTargetTotal(config: PortalConfig, session: Session, enabled:
   return enabled ? total : null;
 }
 
+function readinessRecordPosture(state: PortalData['state']): DataItem | null {
+  const readiness = (state?.readiness ?? null) as DataItem | null;
+  return readiness?.posture && typeof readiness.posture === 'object' && !Array.isArray(readiness.posture) ? readiness.posture as DataItem : null;
+}
+
 function finiteCount(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function DeclaredHostCoverage({ waf, cdn, unit, onUnit, onRetry }: { waf: CoverageResult; cdn: CoverageResult; unit: CoverageUnit; onUnit: (unit: CoverageUnit) => void; onRetry: () => void }) {
+function DeclaredHostCoverage({ waf, cdn, total, onRetry }: { waf: CoverageResult; cdn: CoverageResult; total: number | null; onRetry: () => void }) {
   return (
     <section className="declared-coverage" aria-labelledby="declared-coverage-title">
       <div className="declared-coverage-head">
-        <div>
-          <h2 id="declared-coverage-title">Declared host protection observations</h2>
-          <p>WAF and CDN fingerprints across your current declared scope, counted by the server. Detection is not effectiveness, and unknown stays unknown. Each count opens the exact matching list.</p>
-        </div>
-        <div className="coverage-unit" role="group" aria-label="Count by">
-          <button type="button" aria-label="Distinct hostnames" aria-pressed={unit === 'normalized_hostname'} onClick={() => onUnit('normalized_hostname')}>
-            <span className="coverage-unit-long" aria-hidden="true">Distinct hostnames</span><span className="coverage-unit-short" aria-hidden="true">Hostnames</span>
-          </button>
-          <button type="button" aria-label="Declared target records" aria-pressed={unit === 'declared_target'} onClick={() => onUnit('declared_target')}>
-            <span className="coverage-unit-long" aria-hidden="true">Declared target records</span><span className="coverage-unit-short" aria-hidden="true">Target records</span>
-          </button>
-        </div>
+        <h2 id="declared-coverage-title">WAF and CDN detection</h2>
+        <p>{total !== null ? `Edge fingerprints seen across ${formatNumber(total)} declared ${pluralize(total, 'host')}.` : 'Edge fingerprints seen across your declared hosts.'} Detection runs automatically when a host is added.</p>
       </div>
       <CoverageRow family="waf" result={waf} onRetry={onRetry} />
       <CoverageRow family="cdn" result={cdn} onRetry={onRetry} />
@@ -552,7 +527,7 @@ export function DashboardPage({
   const openInspector = useOpenInspector();
   // Finding counts on this page are server predicates, never the shell's first loaded page.
   const [findingsReload, setFindingsReload] = useState(0);
-  const [coverageUnit, setCoverageUnit] = useState<CoverageUnit>('normalized_hostname');
+  const coverageUnit: CoverageUnit = 'normalized_hostname';
   const [coverageReload, setCoverageReload] = useState(0);
   const wafCoverage = useDeclaredHostCoverage(config, session, 'waf', coverageUnit, coverageReload);
   const cdnCoverage = useDeclaredHostCoverage(config, session, 'cdn', coverageUnit, coverageReload);
@@ -578,12 +553,13 @@ export function DashboardPage({
   // Subdomains are grouped under their parent domain, so the scope counts below report
   // only top-level domains rather than every discovered subdomain (display-only).
   const subdomainGrouping = computeSubdomainGrouping(data.targets);
+  const subdomainParents = useMemo(() => subdomainParentMap(data.targets), [data.targets]);
+  const topLevelOf = (id: string) => topLevelAncestor(id, subdomainParents);
   const isTopLevelTarget = (target: DataItem) => !subdomainGrouping.hiddenIds.has(getString(target, ['id'], ''));
   const isTopLevelRow = (row: { id: string }) => !subdomainGrouping.hiddenIds.has(row.id);
   const topLevelTargetList = data.targets.filter(isTopLevelTarget);
   const units = inventoryUnits(topLevelTargetList);
   const recentRuns = resolveRecentRuns(data, 6);
-  const postureRows = buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts }).filter(isTopLevelRow).slice(0, 6);
   const findingSteps = buildNextSteps(data, openOverview.priority, countsUnavailable || (openOverview.state === 'error' && openOverview.priority.length === 0));
   const severity = openOverview.severity && openOverview.total !== null
     ? { critical: openOverview.severity.critical, high: openOverview.severity.high, other: openOverview.severity.medium + openOverview.severity.low + openOverview.severity.unrecorded, total: openOverview.total }
@@ -602,8 +578,9 @@ export function DashboardPage({
   const verifiedTargets: number | null = loadedIsWholeScope ? topLevelTargetList.filter(isTargetVerified).length : serverVerified;
   const verifiedShare = declaredTargets > 0 && verifiedTargets !== null ? Math.round((verifiedTargets / declaredTargets) * 100) : null;
 
-  // Evidence coverage: declared targets with at least one evidence-backed verdict.
-  const allPostureRows = buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts }).filter(isTopLevelRow);
+  // Each domain row folds in its subdomains, so a result recorded on a subdomain counts for its domain.
+  const allPostureRows = rollUpPostureRows(buildTargetPostureRows(data, undefined, { openFindings: sampleRows, openCounts }), topLevelOf).filter(isTopLevelRow);
+  const postureRows = allPostureRows.slice(0, 6);
   const targetsWithEvidence = new Set(
     allPostureRows.filter((row) => row.verdictStatus !== 'none').map((row) => row.id)
   ).size;
@@ -615,8 +592,10 @@ export function DashboardPage({
   const coverageUnavailable = targetsUnavailable || Boolean(data.loadErrors.runs);
   const coveragePercent = coverageUnavailable || declaredTargets === 0 ? null : Math.round((targetsWithEvidence / declaredTargets) * 100);
 
-  // No score is shown without an evidence-backed verdict or while the server marks its inputs incomplete.
-  const evidenceMissing = !coverageUnavailable && targetsWithEvidence === 0;
+  // No score without evidence: none in loaded runs, none in the server's own posture, and no open finding.
+  const serverPosture = readinessRecordPosture(data.state);
+  const serverMeasured = (finiteCount(serverPosture?.pass) ?? 0) + (finiteCount(serverPosture?.gap) ?? 0) + (finiteCount(serverPosture?.review) ?? 0);
+  const evidenceMissing = !coverageUnavailable && targetsWithEvidence === 0 && serverMeasured === 0 && (openOverview.total ?? 0) === 0;
   const noEvidence = evidenceMissing || scoreStatus === 'not_applicable' || scoreStatus === 'incomplete_inputs';
   const score = noEvidence ? null : publishedScore;
   const setupSteps: SetupStep[] = data.loadErrors.runs ? [] : buildSetupSteps(data, !evidenceMissing, buildDetailHref);
@@ -646,12 +625,6 @@ export function DashboardPage({
     hasEvidence: !noEvidence
   });
 
-  const tenantId = getString(data.tenant ?? {}, ['id', 'tenant_id']) || getString((data.state ?? {}) as DataItem, ['tenant_id']);
-  const tenantName = getString(data.tenant ?? {}, ['name', 'display_name']);
-  const tenantContext = tenantName || tenantId
-    ? <span title={tenantId || undefined}>{`Tenant · ${tenantName || tenantId}`}</span>
-    : undefined;
-
   const killSwitch = data.state?.kill_switch ?? null;
   const killSwitchActive = killSwitch?.active === true;
   const killSwitchReason = getString((killSwitch ?? {}) as DataItem, ['reason']);
@@ -668,12 +641,7 @@ export function DashboardPage({
               ? <a className="detail-entity-link" href={buildDetailHref('target-detail', row.id)} onClick={(event) => event.stopPropagation()}>{row.value}</a>
               : row.value}
           </strong>
-          <span className="posture-tags">
-            {row.tags.length > 0
-              ? row.tags.slice(0, 4).map((tag) => <span className="posture-tag" key={tag}>{tag}</span>)
-              : <span className="posture-tags-empty">No tags</span>}
-            {row.tags.length > 4 ? <span className="posture-tag">+{row.tags.length - 4}</span> : null}
-          </span>
+          <PostureMeta row={row} />
         </span>
       )
     },
@@ -684,17 +652,18 @@ export function DashboardPage({
         <span className="posture-verdict">
           <Badge
             tone={STATUS_TONE[row.verdictStatus]}
-            title={row.verdict
-              ? `${plainVerdictLabel(row.verdict)}${row.verdictRunId ? ` (run ${row.verdictRunId})` : ''}`
-              : row.verdictBasis === 'unbacked' ? 'A run finished without a recorded verdict or evidence, so it is not counted.' : 'No evidence-backed verdict yet'}
+            title={(row.hostCount ?? 1) > 1
+              ? `Worst result across ${formatNumber(row.hostCount ?? 1)} hosts in this domain; ${formatNumber(row.testedHostCount ?? 0)} have a result.`
+              : row.verdict
+                ? `${plainVerdictLabel(row.verdict)}${row.verdictRunId ? ` (run ${row.verdictRunId})` : ''}`
+                : row.verdictBasis === 'unbacked' ? 'A run finished without a recorded verdict or evidence, so it is not counted.' : 'No evidence-backed verdict yet'}
           >
-            {row.verdict
-              ? row.openFindings > 0 && classifyVerdict(row.verdict) === 'pass'
-                ? `Passed · ${row.openFindings} open`
-                : postureVerdictLabel(row.verdictStatus)
-              : row.verdictBasis === 'unbacked' ? 'Not recorded' : 'No result'}
+            {row.verdictStatus === 'none' && row.verdictBasis === 'unbacked'
+              ? 'Not recorded'
+              : row.openFindings > 0 && row.verdictStatus !== 'pass'
+                ? `${postureVerdictLabel(row.verdictStatus)} · ${formatNumber(row.openFindings)} open`
+                : postureVerdictLabel(row.verdictStatus)}
           </Badge>
-          {row.verdictBasis === 'earlier' ? <span className="posture-verdict-note">Earlier run; newest has no recorded verdict</span> : null}
         </span>
       )
     },
@@ -702,61 +671,6 @@ export function DashboardPage({
       key: 'verification',
       label: 'Ownership',
       render: (row) => <VerifyChip state={row.verificationState} />
-    }
-  ];
-
-  const targetById = new Map(data.targets.map((target) => [getString(target, ['id', 'target_id']), target] as const));
-  const checkById = new Map(data.checks.map((check) => [getString(check, ['check_id', 'id']), check] as const));
-
-  const runColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'run',
-      label: 'Run',
-      render: (item) => {
-        const checkId = getString(item, ['check_id']);
-        const check = checkById.get(checkId);
-        const checkName = plainCheckName(getString(check ?? null, ['name'], checkId)) || 'Validation run';
-        const target = targetById.get(getString(item, ['target_id']));
-        const targetName = getString(target ?? null, ['value', 'hostname'], getString(item, ['target_hostname', 'target_value'], 'Target not reported'));
-        const runId = getString(item, ['id']);
-        const inspect = runInspector(item);
-        return (
-          <span className="posture-target">
-            <strong>
-              {inspect ? (
-                <button
-                  type="button"
-                  className="link-button"
-                  data-focus-key={inspect.focusKey}
-                  aria-label={`View evidence for ${checkName} on ${targetName}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    inspect.open();
-                  }}
-                >
-                  {checkName}
-                </button>
-              ) : checkName}
-            </strong>
-            <small className="run-target" title={targetName}>{targetName}</small>
-            <small className="mono run-id" title={runId ? `Run ${runId}` : undefined}>{runId || 'Run ID not recorded'}</small>
-          </span>
-        );
-      }
-    },
-    {
-      key: 'verdict',
-      label: 'Verdict',
-      render: (item) => {
-        const raw = typeof item.verdict === 'string' ? item.verdict : getString(item.verdict as DataItem, ['verdict', 'status', 'result']);
-        const status = classifyVerdict(raw);
-        return <Badge tone={STATUS_TONE[status]} title={raw ? plainVerdictLabel(raw) : 'No verdict recorded'}>{raw ? plainVerdictShortLabel(raw) : 'No result yet'}</Badge>;
-      }
-    },
-    {
-      key: 'when',
-      label: 'When',
-      render: (item) => <span className="muted nowrap">{formatShortRelative(String(item.completed_at ?? item.started_at ?? item.created_at ?? ''))}</span>
     }
   ];
 
@@ -773,23 +687,20 @@ export function DashboardPage({
     };
   }
 
-  function runInspector(item: DataItem) {
-    const runId = getString(item, ['id']);
-    const targetId = getString(item, ['target_id']);
-    const checkId = getString(item, ['check_id']);
-    if (!runId || !targetId || !checkId) return null;
-    const focusKey = `dash-run-${runId}`;
-    return { focusKey, open: () => openInspector({ entry: 'check_result', target_id: targetId, check_id: checkId, test_run_id: runId }, focusKey) };
-  }
-
-  function runRowProps(item: DataItem) {
-    const inspect = runInspector(item);
-    if (!inspect) return {};
-    return { style: { cursor: 'pointer' as const }, onClick: inspect.open };
-  }
-
-  // Oldest open findings: the server's last pages of status=open, oldest first.
-  const agingFindings = openOverview.oldest.filter(isFindingOpen);
+  // Oldest open issues: identical findings across subdomains collapse into one group, oldest first.
+  const agingGroups = useMemo(() => {
+    const seen = new Set<string>();
+    const rows = [...openOverview.oldest, ...sampleRows].filter((finding) => {
+      const id = getString(finding, ['id']);
+      if (!isFindingOpen(finding) || (id && seen.has(id))) return false;
+      if (id) seen.add(id);
+      return true;
+    });
+    const index = createFindingGroupIndex({ targets: data.targets, checks: data.checks });
+    return groupFindings(rows, index)
+      .sort((left, right) => String(left.earliestOpenedAt ?? '9999').localeCompare(String(right.earliestOpenedAt ?? '9999')))
+      .slice(0, 6);
+  }, [openOverview.oldest, sampleRows, data.targets, data.checks]);
 
   // Severity split for the risk-trends findings panel from exact server counts per severity.
   const severityDist = severityDistributionFromCounts(openOverview.severity ?? { critical: 0, high: 0, medium: 0, low: 0, unrecorded: 0 });
@@ -802,7 +713,6 @@ export function DashboardPage({
     <div className="content dashboard-page">
       <PageHeader
         route="dashboard"
-        context={tenantContext}
         title="Readiness overview"
         description="Every verdict below traces to observed probe evidence or an explicit customer declaration. Validation runs from the outside in."
         actions={
@@ -818,14 +728,6 @@ export function DashboardPage({
           </>
         }
       />
-      <PageContextSummary>
-        <span className="tabular-nums">{targetsUnavailable ? UNAVAILABLE : formatNumber(declaredTargets)}</span>{' '}
-        {`declared ${pluralize(declaredTargets, 'target')}, `}
-        <span className="tabular-nums">{targetsUnavailable ? UNAVAILABLE : verifiedTargets === null ? '...' : formatNumber(verifiedTargets)}</span>{' '}
-        {`ownership verified, `}
-        <span className="tabular-nums">{data.loadErrors.evidence ? UNAVAILABLE : formatNumber(data.evidence.length)}</span>{' '}
-        {`evidence ${pluralize(data.evidence.length, 'record')}. All checks run bounded from the outside in.`}
-      </PageContextSummary>
       <Tabs
         value={tab}
         options={tabOptions}
@@ -853,7 +755,7 @@ export function DashboardPage({
               value={score !== null
                 ? <><span className="dashboard-kpi-score">{score}</span><span className="unit">/100</span></>
                 : <span className="dashboard-kpi-score"><span aria-hidden="true">—</span><span className="sr-only">No published score</span></span>}
-              sub={<><span className="dashboard-kpi-sub">{executive.headline}</span><span className="dashboard-kpi-sub dashboard-kpi-scope">{score === null ? executive.detail : 'Published workspace score from evidence in the last 30 days. Not a protection guarantee.'}</span></>}
+              sub={<span className="dashboard-kpi-sub" title={score === null ? executive.detail : 'Published workspace score from evidence in the last 30 days. Not a protection guarantee.'}>{executive.headline}</span>}
               onActivate={() => {
                 handleTabChange('risk-trends');
                 // The KPI unmounts with the overview panel; hand focus to the tab it opened.
@@ -893,7 +795,7 @@ export function DashboardPage({
 
           <div className="an-dash-grid">
             <div className="dash-area-coverage">
-              <DeclaredHostCoverage waf={wafCoverage} cdn={cdnCoverage} unit={coverageUnit} onUnit={setCoverageUnit} onRetry={() => setCoverageReload((value) => value + 1)} />
+              <DeclaredHostCoverage waf={wafCoverage} cdn={cdnCoverage} total={wafCoverage.state === 'ready' ? familyCoverageBuckets(wafCoverage.payload).denominator : null} onRetry={() => setCoverageReload((value) => value + 1)} />
             </div>
             <Card className="dash-area-readiness">
               <CardHeader>
@@ -991,11 +893,7 @@ export function DashboardPage({
                         <span className="fix-copy">
                           <strong>{step.title}</strong>
                           <span>{step.detail}</span>
-                          <span className="fix-evidence">
-                            {step.hasEvidence
-                              ? <Badge tone="muted">Evidence attached</Badge>
-                              : <Badge tone="warn">No evidence recorded</Badge>}
-                          </span>
+                          {step.hasEvidence ? null : <span className="fix-evidence"><Badge tone="warn">No evidence recorded</Badge></span>}
                         </span>
                         {step.findingId ? (
                           <span className="fix-actions">
@@ -1008,7 +906,7 @@ export function DashboardPage({
                             >
                               <Eye size={14} aria-hidden="true" />View evidence
                             </Button>
-                            <AnchorButton href={step.href} variant="ghost" size="sm" aria-label={`Open finding for ${step.title}`}>Finding</AnchorButton>
+                            <AnchorButton href={step.href} variant="secondary" size="sm" aria-label={`Open finding for ${step.title}`}>Open finding<ArrowUpRight size={14} aria-hidden="true" /></AnchorButton>
                           </span>
                         ) : (
                           <AnchorButton href={step.href} variant="secondary" size="sm" aria-label={`Open ${step.title}`}>Open</AnchorButton>
@@ -1050,25 +948,6 @@ export function DashboardPage({
               </CardContent>
             </Card>
 
-            <Card className="dash-area-activity">
-              <CardHeader>
-                <div>
-                  <CardTitle>Recent validation activity</CardTitle>
-                  <CardDescription>Latest recorded checks. Select a row to view that result and its evidence.</CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <DataTable
-                  columns={runColumns}
-                  items={recentRuns}
-                  loadError={data.loadErrors.runs}
-                  onRetry={() => void onRefresh()}
-                  getRowId={(item) => getString(item, ['id'])}
-                  getRowProps={(item) => runRowProps(item)}
-                  empty={<EmptyState icon={ListChecks} title="No recorded checks yet." body="Open a verified target, review a compatible check and start it." actionHref="#targets" actionLabel="Open targets" />}
-                />
-              </CardContent>
-            </Card>
           </div>
         </div>
       ) : null}
@@ -1141,24 +1020,22 @@ export function DashboardPage({
 
                     <section className="risk-findings-aging" aria-labelledby="risk-aging-title">
                       <div className="risk-findings-head">
-                        <h3 className="dash-subhead" id="risk-aging-title">Oldest open</h3>
-                        <span className="risk-findings-total">{`${formatNumber(agingFindings.length)} of ${formatNumber(severityDist.total)} shown`}</span>
+                        <h3 className="dash-subhead" id="risk-aging-title">Oldest open issues</h3>
+                        <span className="risk-findings-total">{`${formatNumber(agingGroups.length)} ${pluralize(agingGroups.length, 'issue')}`}</span>
                       </div>
                       <ol className="aging-list">
-                        {agingFindings.map((finding) => {
-                          const id = getString(finding, ['id']);
-                          const severityRaw = getString(finding, ['severity'], 'unknown');
+                        {agingGroups.map((group) => {
+                          const severityRaw = group.severity || 'unknown';
+                          const targets = group.openAssetCount;
                           return (
-                            <li key={id || plainFindingTitle(finding, data.targets, data.checks)} className="aging-row">
-                              <a className="aging-link" href={id ? buildDetailHref('finding-detail', id) : '#findings'}>
-                                <span className="aging-title">{plainFindingTitle(finding, data.targets, data.checks)}</span>
+                            <li key={group.key} className="aging-row">
+                              <a className="aging-link" href={findingGroupHref(group.key)}>
+                                <span className="aging-title">{group.title}</span>
                                 <span className="aging-meta">
                                   <Badge tone={severityTone(severityRaw)} title={formatSeverityLabel(severityRaw)}>{severityShortLabel(severityRaw)}</Badge>
-                                  {Number.isFinite(Date.parse(String(finding.created_at ?? ''))) ? (
-                                    <>
-                                      <span>{`Opened ${formatDate(finding.created_at)}`}</span>
-                                      <span className="aging-age">{formatShortRelative(String(finding.created_at))}</span>
-                                    </>
+                                  <span>{`${formatNumber(targets)} ${pluralize(targets, 'target')}${sampleComplete ? '' : '+'}`}</span>
+                                  {group.earliestOpenedAt ? (
+                                    <span className="aging-age" title={`Oldest opened ${formatDate(group.earliestOpenedAt)}`}>{formatShortRelative(group.earliestOpenedAt)}</span>
                                   ) : (
                                     <span>Open date not recorded</span>
                                   )}
@@ -1176,35 +1053,20 @@ export function DashboardPage({
 
             <Card>
               <CardHeader>
-                <CardTitle>Vector coverage matrix</CardTitle>
-                <CardDescription>Coverage by vector family and declared domain.</CardDescription>
+                <div>
+                  <CardTitle>Coverage by domain</CardTitle>
+                  <CardDescription>Latest evidence-backed result per domain. Expand a domain to see its subdomains.</CardDescription>
+                </div>
               </CardHeader>
               <CardContent>
-                <VectorHeatmap
-                  checks={data.checks}
-                  targets={data.targets}
-                  testPolicies={data.testPolicies}
-                  runs={data.runs}
-                  evidence={data.evidence}
-                />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Resource exhaustion matrix</CardTitle>
-                <CardDescription>Stored verdict posture by exhausted resource, target applicability, and 30-day evidence freshness.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResourceMatrix
+                <CoverageTree
                   checks={data.checks}
                   targets={data.targets}
                   runs={data.runs}
                   evidence={data.evidence}
-                  config={config}
-                  session={session}
-                  dataLoadError={[data.loadErrors.checks, data.loadErrors.targets, data.loadErrors.runs, data.loadErrors.evidence].filter(Boolean).join(' ') || null}
-                  onRefresh={onRefresh}
+                  openFindings={sampleRows}
+                  loadError={[data.loadErrors.checks, data.loadErrors.targets, data.loadErrors.runs].filter(Boolean).join(' ') || null}
+                  onRetry={() => void onRefresh()}
                 />
               </CardContent>
             </Card>
@@ -1212,6 +1074,20 @@ export function DashboardPage({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Subdomain count and one tag; a `domain:` tag that repeats the hostname is dropped. */
+function PostureMeta({ row }: { row: TargetPostureRow }) {
+  const tags = row.tags.filter((tag) => tag.toLowerCase() !== `domain:${row.value.toLowerCase()}`);
+  const subdomains = Math.max(0, (row.hostCount ?? 1) - 1);
+  if (!tags.length && !subdomains) return null;
+  return (
+    <span className="posture-meta">
+      {subdomains ? <span>{`${formatNumber(subdomains)} ${pluralize(subdomains, 'subdomain')}`}</span> : null}
+      {tags.length ? <span className="posture-tag" title={tags.join(', ')}>{tags[0]}</span> : null}
+      {tags.length > 1 ? <span className="posture-tag posture-tag-more" title={tags.join(', ')}>{`+${tags.length - 1}`}</span> : null}
+    </span>
   );
 }
 

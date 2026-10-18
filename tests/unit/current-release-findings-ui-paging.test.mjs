@@ -225,8 +225,8 @@ describe('dashboard: authoritative declared scope and width-aware layout', () =>
   });
 
   it('names each cohort count the way it is shown', () => {
-    assert.match(dashboard, /: \$\{formatNumber\(part\.count\)\} \$\{unitNoun\}\. Open the matching list\./);
-    assert.doesNotMatch(dashboard, /: \$\{part\.count\} \$\{unitNoun\}/);
+    assert.match(dashboard, /: \$\{formatNumber\(part\.count\)\} hosts\. Open the list\./);
+    assert.doesNotMatch(dashboard, /: \$\{part\.count\} hosts/);
   });
 
   it('reflows by the dashboard width so a docked inspector stacks the overview instead of squeezing it', () => {

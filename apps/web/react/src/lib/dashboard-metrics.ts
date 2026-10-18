@@ -184,7 +184,40 @@ export type TargetPostureRow = {
   /** Open findings recorded against this exact target. */
   openFindings: number;
   lastValidatedAt: string;
+  /** Set by rollUpPostureRows: hosts in this domain's subtree (itself included) and how many have a result. */
+  hostCount?: number;
+  testedHostCount?: number;
 };
+
+const ROLLUP_RANK: Record<EvidenceStatus, number> = { gap: 3, review: 2, pass: 1, none: 0 };
+
+/**
+ * One row per top-level domain: its subdomains' rows fold into it. Status is the worst result in
+ * the subtree, an open finding counts as an evidence-backed gap, and open findings are summed.
+ */
+export function rollUpPostureRows(rows: TargetPostureRow[], topLevelOf: (id: string) => string): TargetPostureRow[] {
+  const ownStatus = (row: TargetPostureRow): EvidenceStatus => (row.verdictStatus === 'none' && row.openFindings > 0 ? 'gap' : row.verdictStatus);
+  const byTop = new Map<string, TargetPostureRow[]>();
+  for (const row of rows) {
+    const top = topLevelOf(row.id);
+    byTop.set(top, [...(byTop.get(top) ?? []), row]);
+  }
+  const order: Record<EvidenceStatus, number> = { gap: 0, review: 1, none: 2, pass: 3 };
+  return rows
+    .filter((row) => topLevelOf(row.id) === row.id)
+    .map((row) => {
+      const members = byTop.get(row.id) ?? [row];
+      const status = members.reduce<EvidenceStatus>((worst, member) => (ROLLUP_RANK[ownStatus(member)] > ROLLUP_RANK[worst] ? ownStatus(member) : worst), 'none');
+      return {
+        ...row,
+        verdictStatus: status,
+        openFindings: members.reduce((sum, member) => sum + member.openFindings, 0),
+        hostCount: members.length,
+        testedHostCount: members.filter((member) => ownStatus(member) !== 'none').length
+      };
+    })
+    .sort((left, right) => order[left.verdictStatus] - order[right.verdictStatus] || left.value.localeCompare(right.value));
+}
 
 /**
  * One row per declared target with its latest evidence-backed verdict.

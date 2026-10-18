@@ -179,11 +179,13 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     await form.getByRole('button', { name: 'Add target', exact: true }).click();
     await expect(page).toHaveURL(/#target-detail\?id=/);
     await gotoPortalRoute(page, 'targets', baseUrl);
-    const removeButton = page.getByRole('button', { name: `Remove target ${domain}` });
-    await expect(removeButton).toBeVisible();
+    const moreActions = page.getByRole('button', { name: `More actions for ${domain}` });
+    await expect(moreActions).toBeVisible();
+    await moreActions.click();
+    const removeButton = page.getByRole('menuitem', { name: `Remove target ${domain}` });
     await removeButton.click();
     await page.locator('dialog[open]').getByRole('button', { name: 'Remove target', exact: true }).click();
-    await expect(removeButton).toHaveCount(0);
+    await expect(moreActions).toHaveCount(0);
   });
 
   test('target submit errors remain visible beyond five seconds and preserve the draft for retry', async ({ page }) => {

@@ -225,3 +225,45 @@ export function preferredRunnableCheck(vector, availability) {
   const semanticIds = new Set(values(vector?.semantic_safe_check_ids));
   return availability?.runnableChecks?.find((check) => semanticIds.has(text(check.check_id))) ?? null;
 }
+
+export const CHECK_CATEGORIES = Object.freeze([
+  Object.freeze({ id: 'waf', label: 'WAF', families: Object.freeze(['waf']) }),
+  Object.freeze({ id: 'l7', label: 'Application (L7)', families: Object.freeze(['l7']) }),
+  Object.freeze({ id: 'network', label: 'Network (L3/L4)', families: Object.freeze(['l3_l4']) }),
+  Object.freeze({ id: 'dns', label: 'DNS', families: Object.freeze(['dns']) }),
+  Object.freeze({ id: 'reflection', label: 'Reflection & amplification', families: Object.freeze(['reflection', 'amplification']) }),
+  Object.freeze({ id: 'origin', label: 'Origin', families: Object.freeze(['origin', 'path']) }),
+  Object.freeze({ id: 'protocol', label: 'TLS & protocol', families: Object.freeze(['tls', 'protocol']) }),
+  Object.freeze({ id: 'operations', label: 'Operations', families: Object.freeze(['operations', 'high_scale']) }),
+  Object.freeze({ id: 'exploit', label: 'Exploit & patterns', families: Object.freeze(['exploit', 'pattern']) }),
+]);
+
+export const MISC_CATEGORY_ID = 'misc';
+
+export function checkCategoryId(check) {
+  const family = text(check?.vector_family).toLowerCase();
+  const category = CHECK_CATEGORIES.find((entry) => entry.families.includes(family));
+  return category ? category.id : MISC_CATEGORY_ID;
+}
+
+export function categorizeCheckGroups(groups, unmapped, category = '') {
+  const list = Array.isArray(groups) ? groups : [];
+  const misc = Array.isArray(unmapped) ? unmapped : [];
+  const counts = { all: list.length, [MISC_CATEGORY_ID]: misc.length };
+  for (const entry of CHECK_CATEGORIES) counts[entry.id] = 0;
+  const miscGroups = [];
+  for (const group of list) {
+    const id = checkCategoryId(group?.check);
+    if (id === MISC_CATEGORY_ID) miscGroups.push(group);
+    else counts[id] += 1;
+  }
+  counts[MISC_CATEGORY_ID] += miscGroups.length;
+  const selected = text(category);
+  const visibleGroups = !selected
+    ? list
+    : selected === MISC_CATEGORY_ID
+      ? miscGroups
+      : list.filter((group) => checkCategoryId(group?.check) === selected);
+  const showMisc = !selected || selected === MISC_CATEGORY_ID;
+  return { counts, groups: visibleGroups, unmapped: showMisc ? misc : [] };
+}

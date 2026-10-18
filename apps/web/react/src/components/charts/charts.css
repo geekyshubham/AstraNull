@@ -176,3 +176,75 @@
 @media (prefers-reduced-motion: reduce) {
   .matrix-cell { transition: none; }
 }
+
+/* ---- Coverage tree: domains with nested subdomains, one view toggle ---- */
+.ctree { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); }
+.ctree-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.ctree-view { display: inline-flex; gap: var(--space-0-5); padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.ctree-view button {
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+.ctree-view button:hover { color: var(--fg); }
+.ctree-view button[aria-pressed='true'] { background: var(--surface-selected); color: var(--fg); }
+.ctree-view button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ctree-search {
+  display: inline-flex;
+  flex: 1 1 220px;
+  max-width: 320px;
+  min-height: 40px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-2);
+}
+.ctree-search:focus-within { border-color: var(--focus-color); box-shadow: var(--focus-ring); }
+.ctree-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); }
+.ctree-only { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--fg-2); font-size: var(--text-sm); cursor: pointer; }
+.ctree-table thead .heatmap-head.matrix-corner { min-width: 16rem; }
+.ctree-name { display: flex; min-height: 44px; align-items: center; gap: var(--space-1); min-width: 0; }
+.ctree-toggle {
+  display: inline-flex;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.ctree-toggle:hover { background: var(--surface-hover); color: var(--fg); }
+.ctree-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ctree-toggle svg { transition: transform var(--motion-fast) var(--ease-out-soft); }
+.ctree-toggle svg[data-open] { transform: rotate(90deg); }
+.ctree-toggle-spacer { flex: none; width: 28px; }
+.ctree-table tbody th { text-transform: none; letter-spacing: normal; font-family: var(--font-body); }
+.ctree-host { max-width: 22rem; overflow: hidden; color: var(--fg); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; letter-spacing: normal; text-transform: none; text-overflow: ellipsis; white-space: nowrap; }
+.ctree-host[data-depth]:not([data-depth='0']) { font-weight: 400; color: var(--fg-2); }
+.ctree-count { flex: none; padding: 0 var(--space-1-5); border-radius: var(--radius-pill); background: var(--wash); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }
+.ctree-cell { min-width: 7.5rem; }
+.ctree-cell[data-outcome='untested'],
+.ctree-cell[data-outcome='na'] { border: 1px solid var(--border-soft); background: transparent; color: var(--fg-2); }
+.ctree-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.ctree-legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0; list-style: none; color: var(--fg-2); font-size: var(--text-xs); }
+.ctree-legend li { display: inline-flex; align-items: center; gap: var(--space-1-5); }
+.ctree-legend .ctree-swatch { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-sm); background: currentColor; }
+.ctree-more td { padding-block: var(--space-1) var(--space-2); }
+.ctree-more .link-button { font-size: var(--text-sm); }
+.ctree-legend .ctree-swatch[data-outcome='untested'] { border: 1px solid var(--border-strong); background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .ctree-toggle svg { transition: none; }
+}
