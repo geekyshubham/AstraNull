@@ -158,6 +158,40 @@ export function sortVectorsByTargetFit(vectors, checks, target) {
     .map((entry) => entry.vector);
 }
 
+/**
+ * Check-first hierarchy for the catalog: group each vector under the checks that cover it
+ * (via safe_check_ids / mapped_check_ids), so the UI reads as checks with their vectors
+ * nested rather than a flat vector dump. Vectors with no mapped catalog check fall into a
+ * trailing `unmapped` bucket so nothing is hidden. Preserves the incoming vector order
+ * within each group (callers sort vectors first).
+ */
+export function groupVectorsByCheck(vectors, checks) {
+  const catalog = Array.isArray(checks) ? checks : [];
+  const checkById = new Map(catalog.map((check) => [text(check?.check_id), check]));
+  const groups = new Map();
+  const unmapped = [];
+  for (const vector of Array.isArray(vectors) ? vectors : []) {
+    const ids = [...new Set([...values(vector?.safe_check_ids), ...values(vector?.mapped_check_ids)])]
+      .filter((id) => checkById.has(id));
+    if (ids.length === 0) {
+      unmapped.push(vector);
+      continue;
+    }
+    for (const id of ids) {
+      let group = groups.get(id);
+      if (!group) {
+        group = { checkId: id, check: checkById.get(id), vectors: [] };
+        groups.set(id, group);
+      }
+      group.vectors.push(vector);
+    }
+  }
+  const ordered = [...groups.values()].sort((left, right) =>
+    text(left.check?.canonical_name ?? left.check?.name ?? left.checkId)
+      .localeCompare(text(right.check?.canonical_name ?? right.check?.name ?? right.checkId)));
+  return { groups: ordered, unmapped };
+}
+
 export function countCompatibleSafeChecks(pairs, checks) {
   const catalog = new Map((Array.isArray(checks) ? checks : []).map((check) => [text(check?.check_id), check]));
   const safeIds = new Set();

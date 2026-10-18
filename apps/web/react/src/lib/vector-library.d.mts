@@ -24,4 +24,10 @@ export function searchAndFilterVectors(vectors: DataItem[], options?: {
 export function preferredRunnableCheck(vector: DataItem, availability: VectorAvailability): DataItem | null;
 export function sortVectorsByTargetFit(vectors: DataItem[], checks: DataItem[], target: DataItem | null): DataItem[];
 export function countCompatibleSafeChecks(pairs: DataItem[], checks: DataItem[]): number;
+export interface VectorCheckGroup {
+  checkId: string;
+  check: DataItem;
+  vectors: DataItem[];
+}
+export function groupVectorsByCheck(vectors: DataItem[], checks: DataItem[]): { groups: VectorCheckGroup[]; unmapped: DataItem[] };
 export function latestRunForCheckOnTarget(runs: DataItem[], checkId: string, targetId: string): DataItem | null;

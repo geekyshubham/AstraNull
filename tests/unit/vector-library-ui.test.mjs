@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   countCompatibleSafeChecks,
   evidenceCapabilityCopy,
+  groupVectorsByCheck,
   latestRunForCheckOnTarget,
   preferredRunnableCheck,
   searchAndFilterVectors,
@@ -125,6 +126,31 @@ describe('portal vector-library truth and target selection', () => {
     assert.equal(latestRunForCheckOnTarget(runs, 'l7.rate.safe', 'tgt_exact')?.id, 'run_new');
     assert.equal(latestRunForCheckOnTarget(runs, 'l7.rate.safe', 'tgt_missing'), null);
     assert.equal(latestRunForCheckOnTarget(runs, '', 'tgt_exact'), null);
+  });
+});
+
+describe('check-first catalog grouping', () => {
+  const checks = [
+    { check_id: 'waf.sqli.safe', safety_class: 'safe', canonical_name: 'SQLi managed marker' },
+    { check_id: 'waf.xss.safe', safety_class: 'safe', canonical_name: 'XSS managed marker' },
+  ];
+  it('nests vectors under the checks that cover them and buckets the rest as unmapped', () => {
+    const vectors = [
+      { vector_id: 'V1', safe_check_ids: ['waf.sqli.safe'] },
+      { vector_id: 'V2', safe_check_ids: ['waf.sqli.safe'] },
+      { vector_id: 'V3', mapped_check_ids: ['waf.xss.safe'] },
+      { vector_id: 'V4', safe_check_ids: [] },
+      { vector_id: 'V5', safe_check_ids: ['soc.only.gated'] },
+    ];
+    const { groups, unmapped } = groupVectorsByCheck(vectors, checks);
+    assert.deepEqual(groups.map((group) => group.checkId), ['waf.sqli.safe', 'waf.xss.safe']);
+    assert.deepEqual(groups[0].vectors.map((vector) => vector.vector_id), ['V1', 'V2']);
+    assert.deepEqual(groups[1].vectors.map((vector) => vector.vector_id), ['V3']);
+    assert.deepEqual(unmapped.map((vector) => vector.vector_id), ['V4', 'V5']);
+  });
+  it('lists a vector under every covering check without inventing checks', () => {
+    const { groups } = groupVectorsByCheck([{ vector_id: 'V1', safe_check_ids: ['waf.sqli.safe', 'waf.xss.safe'] }], checks);
+    assert.deepEqual(groups.flatMap((group) => group.vectors.map((vector) => vector.vector_id)), ['V1', 'V1']);
   });
 });
 

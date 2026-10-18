@@ -8,7 +8,6 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { Select, type SelectOption } from '../components/ui/select';
-import { DataTable, type TableColumn } from '../components/ui/table';
 import { Toast } from '../components/ui/toast';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal } from '../lib/crud-ui';
@@ -24,10 +23,12 @@ import { formatDate, formatNumber, formatTargetKind } from '../lib/utils';
 import {
   countCompatibleSafeChecks,
   evidenceCapabilityCopy,
+  groupVectorsByCheck,
   latestRunForCheckOnTarget,
   preferredRunnableCheck,
   searchAndFilterVectors,
   sortVectorsByTargetFit,
+  vectorCheckSupportsTarget,
   vectorTargetAvailability,
   type VectorAvailability,
 } from '../lib/vector-library.mjs';
@@ -176,6 +177,8 @@ export function VectorLibraryPage({
   const [execution, setExecution] = useState('');
   const [targetAvailability, setTargetAvailability] = useState(initialTargetAvailability);
   const [page, setPage] = useState(readInitialPage);
+  const [expandedChecks, setExpandedChecks] = useState<Set<string>>(() => new Set());
+  const [showUnmapped, setShowUnmapped] = useState(false);
   const [targets, setTargets] = useState<DataItem[]>([]);
   const [targetsStatus, setTargetsStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
   const [targetsError, setTargetsError] = useState('');
@@ -291,9 +294,14 @@ export function VectorLibraryPage({
       setPage(0);
     }
   }, [section, capability, execution, targetAvailability, filterSignature]);
-  const pageCount = Math.max(1, Math.ceil(filteredVectors.length / PAGE_SIZE));
+  // Check-first hierarchy: the filtered vectors are grouped under the checks that cover them,
+  // so the catalog reads as checks with their vectors nested instead of a flat vector dump.
+  const catalogGroups = useMemo(() => groupVectorsByCheck(filteredVectors, data.checks), [filteredVectors, data.checks]);
+  const checkGroups = catalogGroups.groups;
+  const unmappedVectors = catalogGroups.unmapped;
+  const pageCount = Math.max(1, Math.ceil(checkGroups.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
-  const visibleVectors = filteredVectors.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const visibleCheckGroups = checkGroups.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const sectionOptions: SelectOption[] = [
     { value: '', label: 'All catalog sections' },
     ...[...new Set(vectors.map((vector) => getString(vector, ['section'])).filter(Boolean))]
@@ -330,6 +338,14 @@ export function VectorLibraryPage({
     setSelectedVector(vector);
     setSelectedCheckId('');
     setError('');
+  }
+
+  function toggleCheck(checkId: string) {
+    setExpandedChecks((current) => {
+      const next = new Set(current);
+      if (next.has(checkId)) next.delete(checkId); else next.add(checkId);
+      return next;
+    });
   }
 
   async function refresh() {
@@ -394,11 +410,11 @@ export function VectorLibraryPage({
     }
   }
 
-  const columns: TableColumn<DataItem>[] = [
-    {
-      key: 'vector',
-      label: 'Vector',
-      render: (vector) => (
+  const vectorRow = (vector: DataItem) => {
+    const evidence = evidenceCapabilityCopy(vector.evidence_capability);
+    const tier = getString(vector, ['evidence_tier'], '');
+    return (
+      <li key={getString(vector, ['vector_id'])} className="vector-check-vector">
         <span className="vector-primary">
           <button
             type="button"
@@ -411,36 +427,14 @@ export function VectorLibraryPage({
           <code className="traffic-path-label">{getString(vector, ['vector_id'], 'No ID')}</code>
           <small>{getString(vector, ['family'])} · {getString(vector, ['protocol_service'])}</small>
         </span>
-      ),
-    },
-    ...(selectedTarget ? [{
-      key: 'target',
-      label: `Fit for ${getString(selectedTarget, ['value'], 'target')}`,
-      render: (vector: DataItem) => {
-        const availability = vectorTargetAvailability(vector, data.checks, selectedTarget);
-        return <span className="vector-cell-stack"><Badge tone={availability.tone as Tone}>{availability.label}</Badge><small>{availability.detail}</small></span>;
-      },
-    }] : []),
-    {
-      key: 'evidence',
-      label: 'Evidence level',
-      render: (vector) => {
-        const copy = evidenceCapabilityCopy(vector.evidence_capability);
-        const tier = getString(vector, ['evidence_tier'], '');
-        return <Badge tone={copy.tone as Tone} title={copy.detail}>{tier ? `${tier} · ${copy.label}` : copy.label}</Badge>;
-      },
-    },
-    {
-      key: 'exposure',
-      label: 'What it evaluates',
-      render: (vector) => <span className="vector-cell-stack"><span className="vector-evaluates">{getString(vector, ['targeted_resource_or_assumption'], 'Not recorded')}</span></span>,
-    },
-    {
-      key: 'action',
-      label: 'Action',
-      render: (vector) => <Button size="sm" variant="secondary" onClick={() => openVector(vector)} aria-label={`Details for ${getString(vector, ['vector_id'])}`}>Details</Button>,
-    },
-  ];
+        <span className="vector-check-vector-meta">
+          <Badge tone={evidence.tone as Tone} title={evidence.detail}>{tier ? `${tier} · ${evidence.label}` : evidence.label}</Badge>
+          <span className="vector-evaluates">{getString(vector, ['targeted_resource_or_assumption'], 'Not recorded')}</span>
+          <Button size="sm" variant="secondary" onClick={() => openVector(vector)} aria-label={`Details for ${getString(vector, ['vector_id'])}`}>Details</Button>
+        </span>
+      </li>
+    );
+  };
 
   const detailAvailability = selectedVector ? vectorTargetAvailability(selectedVector, data.checks, selectedTarget) : null;
   const detailEvidence = selectedVector ? evidenceCapabilityCopy(selectedVector.evidence_capability) : null;
@@ -576,9 +570,9 @@ export function VectorLibraryPage({
       <Card className="vector-catalog-card">
         <CardHeader>
           <div>
-            <CardTitle>Vector catalog</CardTitle>
+            <CardTitle>Checks and the vectors they cover</CardTitle>
             <CardDescription>
-              {loading ? 'Loading catalog…' : `${formatNumber(filteredVectors.length)} of ${formatNumber(vectors.length)} vectors match.`}
+              {loading ? 'Loading catalog…' : `${formatNumber(checkGroups.length)} ${checkGroups.length === 1 ? 'check' : 'checks'} cover ${formatNumber(filteredVectors.length)} matching ${filteredVectors.length === 1 ? 'vector' : 'vectors'}. Expand a check to see the vectors it exercises.`}
             </CardDescription>
           </div>
         </CardHeader>
@@ -607,18 +601,14 @@ export function VectorLibraryPage({
             </div>
           ) : null}
           {loading ? <PortalLoadingSkeleton rows={6} label="Loading vector library" /> : (
-            <DataTable
-              className="vector-library-table"
-              columns={columns}
-              items={visibleVectors}
-              getRowId={(vector) => getString(vector, ['vector_id'])}
-              loadError={loadError}
-              onRetry={() => setReloadKey((value) => value + 1)}
-              empty={vectors.length > 0
-                ? (
+            loadError ? (
+              <EmptyState icon={BookOpenCheck} title="The catalog could not be loaded." body={loadError} actionLabel="Retry" onAction={() => setReloadKey((value) => value + 1)} />
+            ) : checkGroups.length === 0 ? (
+              unmappedVectors.length > 0 ? null
+                : vectors.length > 0 ? (
                   <EmptyState
                     icon={BookOpenCheck}
-                    title="No vectors match these filters."
+                    title="No checks match these filters."
                     body={activeFilters.join(' · ') || 'Adjust the search or filters.'}
                     actionLabel="Clear filters"
                     onAction={clearFilters}
@@ -626,18 +616,61 @@ export function VectorLibraryPage({
                       ? <Button variant="ghost" onClick={() => { setTargetAvailability(''); setPage(0); }}>Show all fits</Button>
                       : undefined}
                   />
-                )
-                : <EmptyState icon={BookOpenCheck} title="The vector catalog is empty." body="No catalog entries were returned for this workspace." />}
-            />
+                ) : <EmptyState icon={BookOpenCheck} title="The check catalog is empty." body="No catalog entries were returned for this workspace." />
+            ) : (
+              <ul className="vector-check-groups">
+                {visibleCheckGroups.map((group) => {
+                  const check = group.check as DataItem;
+                  const expanded = expandedChecks.has(group.checkId);
+                  const fits = selectedTarget ? vectorCheckSupportsTarget(check, selectedTarget) : null;
+                  const vectorCount = group.vectors.length;
+                  return (
+                    <li key={group.checkId} className="vector-check-group" data-expanded={expanded || undefined}>
+                      <div className="vector-check-head">
+                        <button
+                          type="button"
+                          className="vector-check-toggle"
+                          aria-expanded={expanded}
+                          aria-controls={`vc-${group.checkId}`}
+                          onClick={() => toggleCheck(group.checkId)}
+                        >
+                          <ChevronDown className="vector-check-chevron" size={16} aria-hidden="true" data-open={expanded || undefined} />
+                          <span className="vector-check-title">
+                            <strong>{plainCheckName(checkPresentation(check).name)}</strong>
+                            <code className="traffic-path-label">{group.checkId}</code>
+                          </span>
+                        </button>
+                        <span className="vector-check-meta">
+                          <CheckClassChips check={check} />
+                          <Badge tone="muted">{vectorCount} {vectorCount === 1 ? 'vector' : 'vectors'}</Badge>
+                          {selectedTarget ? <Badge tone={fits ? 'success' : 'muted'}>{fits ? 'Fits target' : 'Target not supported'}</Badge> : null}
+                          <AnchorButton size="sm" variant="secondary" href={checkHref(group.checkId)} aria-label={`Open check ${plainCheckName(checkPresentation(check).name)}`}>Open check</AnchorButton>
+                        </span>
+                      </div>
+                      {expanded ? <ul className="vector-check-vectors" id={`vc-${group.checkId}`}>{group.vectors.map(vectorRow)}</ul> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )
           )}
-          {!loading && filteredVectors.length > 0 ? (
-            <nav className="vector-pagination" aria-label="Vector catalog pages">
-              <span className="muted">Page {safePage + 1} of {pageCount} · rows {safePage * PAGE_SIZE + 1}-{Math.min((safePage + 1) * PAGE_SIZE, filteredVectors.length)} of {filteredVectors.length}</span>
+          {!loading && !loadError && checkGroups.length > 0 ? (
+            <nav className="vector-pagination" aria-label="Check catalog pages">
+              <span className="muted">Page {safePage + 1} of {pageCount} · checks {safePage * PAGE_SIZE + 1}-{Math.min((safePage + 1) * PAGE_SIZE, checkGroups.length)} of {checkGroups.length}</span>
               <span className="vector-pagination-actions">
                 <Button size="sm" variant="secondary" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}><ChevronLeft size={15} aria-hidden="true" /> Previous</Button>
                 <Button size="sm" variant="secondary" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next <ChevronRight size={15} aria-hidden="true" /></Button>
               </span>
             </nav>
+          ) : null}
+          {!loading && !loadError && unmappedVectors.length > 0 ? (
+            <div className="vector-unmapped">
+              <Button size="sm" variant="ghost" aria-expanded={showUnmapped} aria-controls="vector-unmapped-list" onClick={() => setShowUnmapped((open) => !open)}>
+                <ChevronDown className="vector-filter-chevron" size={14} aria-hidden="true" data-open={showUnmapped || undefined} />
+                {showUnmapped ? 'Hide' : 'Show'} {formatNumber(unmappedVectors.length)} {unmappedVectors.length === 1 ? 'vector' : 'vectors'} not mapped to a runnable check
+              </Button>
+              {showUnmapped ? <ul className="vector-check-vectors" id="vector-unmapped-list">{unmappedVectors.map(vectorRow)}</ul> : null}
+            </div>
           ) : null}
         </CardContent>
       </Card>
